@@ -641,6 +641,8 @@ pub enum DomainEventTypeValue {
     TitleUpdated,
     /// A title was rematched.
     TitleRematched,
+    /// A title completed a root move or library transfer.
+    TitleMoved,
     /// A title was deleted.
     TitleDeleted,
     /// Configuration changed.
@@ -730,6 +732,7 @@ impl DomainEventTypeValue {
             DomainEventType::TitleAdded => Self::TitleAdded,
             DomainEventType::TitleUpdated => Self::TitleUpdated,
             DomainEventType::TitleRematched => Self::TitleRematched,
+            DomainEventType::TitleMoved => Self::TitleMoved,
             DomainEventType::TitleDeleted => Self::TitleDeleted,
             DomainEventType::ConfigurationChanged => Self::ConfigurationChanged,
             DomainEventType::DiscoverySearchCompleted => Self::DiscoverySearchCompleted,
@@ -781,6 +784,7 @@ impl DomainEventTypeValue {
             Self::TitleAdded => DomainEventType::TitleAdded,
             Self::TitleUpdated => DomainEventType::TitleUpdated,
             Self::TitleRematched => DomainEventType::TitleRematched,
+            Self::TitleMoved => DomainEventType::TitleMoved,
             Self::TitleDeleted => DomainEventType::TitleDeleted,
             Self::ConfigurationChanged => DomainEventType::ConfigurationChanged,
             Self::DiscoverySearchCompleted => DomainEventType::DiscoverySearchCompleted,
@@ -1199,8 +1203,12 @@ impl RecapPolicyValue {
 pub enum ImportTransferPhaseValue {
     /// Archive contents are being extracted before file transfer.
     Extracting,
+    /// Waiting for a destination-volume copy slot.
+    Waiting,
     /// File bytes are being copied.
     Copying,
+    /// Reading back the destination to validate its contents.
+    Verifying,
     /// Transfer is finalizing metadata and filesystem state.
     Finalizing,
 }
@@ -1209,7 +1217,9 @@ impl From<ImportTransferPhase> for ImportTransferPhaseValue {
     fn from(value: ImportTransferPhase) -> Self {
         match value {
             ImportTransferPhase::Extracting => Self::Extracting,
+            ImportTransferPhase::Waiting => Self::Waiting,
             ImportTransferPhase::Copying => Self::Copying,
+            ImportTransferPhase::Verifying => Self::Verifying,
             ImportTransferPhase::Finalizing => Self::Finalizing,
         }
     }
@@ -1648,4 +1658,17 @@ pub enum PendingReleaseRoleValue {
     Primary,
     /// A lower-ranked active candidate retained as a fallback.
     Fallback,
+}
+
+/// How thoroughly a copied file is proven before its source may be touched.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum VerificationDepthValue {
+    /// Read the destination back in full and compare it against the CRC streamed
+    /// during the copy.
+    Full,
+    /// Compare the sampled head and tail content proof plus the file size. This
+    /// is also the floor full verification falls back to when a full read-back
+    /// cannot run.
+    Quick,
 }

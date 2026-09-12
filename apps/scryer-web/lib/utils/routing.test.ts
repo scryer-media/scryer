@@ -4,8 +4,13 @@ import test from "node:test";
 import {
   buildIndexerSettingsPath,
   buildOverviewDetailPath,
+  buildRulesPath,
   indexerSettingsTabFromPath,
+  indexerSettingsTabsFor,
+  maintenanceRulesSectionFromPath,
   resolveAppRoute,
+  rulesSectionFromPath,
+  rulesSectionsFor,
   type ParsedAppRoute,
 } from "./routing.ts";
 import { isMediaSettingsSection } from "./routes.ts";
@@ -35,6 +40,7 @@ test("facet settings sections that consume media settings trigger loading", () =
 
 test("canonical route families resolve to typed application state", () => {
   for (const path of [
+    "/api-explorer",
     "/dashboard",
     "/movies",
     "/series",
@@ -49,11 +55,17 @@ test("canonical route families resolve to typed application state", () => {
     "/automation/wanted/cutoff-unmet",
     "/automation/wanted/pending",
     "/automation/acquisition",
-    "/automation/rules",
+    "/automation/rules/scoring",
+    "/automation/rules/maintenance",
+    "/automation/rules/maintenance/candidates",
+    "/automation/rules/maintenance/history",
+    "/automation/rules/maintenance/gates",
+    "/automation/rules/request",
     "/automation/subtitles",
     "/automation/post-processing",
     "/integrations/indexers",
     "/integrations/download-clients",
+    "/integrations/proxies",
     "/integrations/media-servers",
     "/integrations/notifications",
     "/settings/profile",
@@ -113,11 +125,34 @@ test("0.16 route aliases redirect to canonical 0.17 paths", () => {
     ["/wanted/history", "/activity/history"],
     ["/history", "/activity/history"],
     ["/settings/acquisition", "/automation/acquisition"],
-    ["/settings/rules", "/automation/rules"],
+    ["/settings/rules", "/automation/rules/scoring"],
+    ["/settings/maintenance-rules", "/automation/rules/maintenance"],
+    ["/settings/maintenanceRules", "/automation/rules/maintenance"],
+    ["/settings/request-rules", "/automation/rules/request"],
+    ["/settings/requestRules", "/automation/rules/request"],
+    // Rules names the page, not a pane, so it lands on the first one.
+    ["/automation/rules", "/automation/rules/scoring"],
+    ["/automation/rules/scoring-rules", "/automation/rules/scoring"],
+    // Maintenance rules were a page of their own before they became a pane.
+    ["/automation/maintenance-rules", "/automation/rules/maintenance"],
+    ["/automation/maintenanceRules", "/automation/rules/maintenance"],
+    ["/automation/rules/maintenance-rules", "/automation/rules/maintenance"],
+    ["/automation/rules/maintenance/rules", "/automation/rules/maintenance"],
+    ["/automation/rules/request-rules", "/automation/rules/request"],
+    // Exclusions moved in with the gates.
+    ["/automation/rules/maintenance/exclusions", "/automation/rules/maintenance/gates"],
+    ["/automation/rules/maintenance/runs", "/automation/rules/maintenance/history"],
     ["/settings/subtitles", "/automation/subtitles"],
     ["/settings/post-processing", "/automation/post-processing"],
     ["/settings/post-procesing", "/automation/post-processing"],
     ["/settings/indexers", "/integrations/indexers"],
+    ["/settings/proxies", "/integrations/proxies"],
+    // Proxies were a pane of the Indexers page until they became a section of
+    // their own; both spellings of that pane are links people already have.
+    ["/integrations/indexers/proxies", "/integrations/proxies"],
+    ["/integrations/indexers/indexer-proxies", "/integrations/proxies"],
+    ["/integrations/indexer-proxies", "/integrations/proxies"],
+    ["/settings/indexer-proxies", "/integrations/proxies"],
     ["/settings/download-clients", "/integrations/download-clients"],
     ["/settings/downloadClients", "/integrations/download-clients"],
     ["/settings/media-servers", "/integrations/media-servers"],
@@ -204,7 +239,7 @@ test("the dashboard route is canonical and takes no subpaths", () => {
 test("the indexers page carries its panes as a third path segment", () => {
   for (const path of [
     "/integrations/indexers",
-    "/integrations/indexers/proxies",
+    "/integrations/indexers/search",
     "/integrations/indexers/seeding-profiles",
   ]) {
     const route = canonical(path);
@@ -227,7 +262,7 @@ test("seeding profiles are no longer a settings section of their own", () => {
 });
 
 test("indexer pane paths round-trip through the tab helpers", () => {
-  for (const tab of ["indexers", "proxies", "seedingProfiles"] as const) {
+  for (const tab of ["indexers", "search", "seedingProfiles"] as const) {
     assert.equal(
       indexerSettingsTabFromPath(buildIndexerSettingsPath(tab)),
       tab,
@@ -241,4 +276,91 @@ test("indexer pane paths round-trip through the tab helpers", () => {
     "indexers",
   );
   assert.equal(indexerSettingsTabFromPath("/settings/profile"), "indexers");
+  // Proxies left the page, so its old segment is no longer a pane.
+  assert.equal(
+    indexerSettingsTabFromPath("/integrations/indexers/proxies"),
+    "indexers",
+  );
+});
+
+test("the rules page carries all three kinds of rule as panes", () => {
+  assert.equal(canonical("/automation/rules/scoring").settingsSection, "rules");
+  assert.equal(
+    canonical("/automation/rules/request").settingsSection,
+    "requestRules",
+  );
+  for (const path of [
+    "/automation/rules/maintenance",
+    "/automation/rules/maintenance/candidates",
+    "/automation/rules/maintenance/history",
+    "/automation/rules/maintenance/gates",
+  ]) {
+    const route = canonical(path);
+    assert.equal(route.canonicalPath, path, path);
+    assert.equal(route.settingsSection, "maintenanceRules", path);
+  }
+  assert.deepEqual(resolveAppRoute("/automation/rules/nope"), {
+    kind: "not-found",
+  });
+  assert.deepEqual(resolveAppRoute("/automation/rules/maintenance/nope"), {
+    kind: "not-found",
+  });
+  // Scoring and request rules have no second level of panes, and maintenance
+  // stops at one.
+  assert.deepEqual(resolveAppRoute("/automation/rules/scoring/candidates"), {
+    kind: "not-found",
+  });
+  assert.deepEqual(resolveAppRoute("/automation/rules/request/decisions"), {
+    kind: "not-found",
+  });
+  assert.deepEqual(resolveAppRoute("/automation/rules/maintenance/gates/extra"), {
+    kind: "not-found",
+  });
+});
+
+test("rules pane paths round-trip through the section helpers", () => {
+  for (const section of ["scoring", "maintenance", "request"] as const) {
+    assert.equal(rulesSectionFromPath(buildRulesPath(section)), section, section);
+  }
+  for (const section of ["rules", "candidates", "history", "gates"] as const) {
+    const path = buildRulesPath("maintenance", section);
+    assert.equal(maintenanceRulesSectionFromPath(path), section, section);
+    assert.equal(rulesSectionFromPath(path), "maintenance", section);
+  }
+  // Anything that is not a known pane segment falls back to the default pane.
+  assert.equal(rulesSectionFromPath("/automation/rules"), "scoring");
+  assert.equal(rulesSectionFromPath("/automation/rules/unknown"), "scoring");
+  assert.equal(rulesSectionFromPath("/settings/profile"), "scoring");
+  assert.equal(maintenanceRulesSectionFromPath("/automation/rules/maintenance"), "rules");
+  assert.equal(maintenanceRulesSectionFromPath("/automation/rules/scoring"), "rules");
+  assert.equal(maintenanceRulesSectionFromPath("/settings/profile"), "rules");
+});
+
+test("indexerSettingsTabsFor drops search until experimental features are on", () => {
+  assert.deepEqual(indexerSettingsTabsFor(true), [
+    "indexers",
+    "search",
+    "seedingProfiles",
+  ]);
+  assert.deepEqual(indexerSettingsTabsFor(false), ["indexers", "seedingProfiles"]);
+  // The list and seeding profiles stay reachable either way, so a held search
+  // link has a pane to fall back to.
+  for (const enabled of [true, false]) {
+    assert.ok(indexerSettingsTabsFor(enabled).includes("indexers"));
+    assert.ok(indexerSettingsTabsFor(enabled).includes("seedingProfiles"));
+  }
+  assert.equal(buildIndexerSettingsPath("indexers"), "/integrations/indexers");
+});
+
+test("rulesSectionsFor drops maintenance and request rules until experimental features are on", () => {
+  assert.deepEqual(rulesSectionsFor(true), ["scoring", "maintenance", "request"]);
+  // One entry left means there is no kind to switch between, which is how the
+  // Rules page decides to drop its kind rail.
+  assert.deepEqual(rulesSectionsFor(false), ["scoring"]);
+  // Scoring stays reachable either way, and its path is unchanged.
+  for (const enabled of [true, false]) {
+    assert.ok(rulesSectionsFor(enabled).includes("scoring"));
+  }
+  assert.equal(buildRulesPath("scoring"), "/automation/rules/scoring");
+  assert.equal(buildRulesPath("request"), "/automation/rules/request");
 });

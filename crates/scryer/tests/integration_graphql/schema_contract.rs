@@ -560,45 +560,294 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // existing config option type: OBJECT 318->319, public types 615->616.
     // Account-security reauthentication adds three mutation roots without
     // changing the established factor-mutation payload contracts: mutation 194->197.
-    // OAuth-bound Jellyfin account linking adds one mutation root and reuses the
-    // existing linked-account payload: mutation 197->198.
+    // The maintenance-rule authoring surface adds four query roots (list, get,
+    // revisions, action catalog) and six mutation roots (create, matcher edit,
+    // metadata edit, delete, validate, preview), with nine payload objects, six
+    // inputs, and six enums: query 134->138, mutation 197->203, OBJECT 319->328,
+    // INPUT_OBJECT 173->179, ENUM 112->118, public types 616->637.
+    // The maintenance dark evaluator adds four query roots (candidates,
+    // evaluation runs, instance gates, exclusions) and five mutation roots
+    // (rule mode, instance gates, exclude, remove exclusion, run now), with six
+    // payload objects, three inputs, and one candidate-state enum:
+    // query 138->142, mutation 203->208, OBJECT 328->334, INPUT_OBJECT
+    // 179->182, ENUM 118->119, public types 637->647. MAINTENANCE_RULE_EVALUATION
+    // joins the existing job key enum, so it adds no type.
+    // The maintenance action executor adds the maintenanceActionRuns query
+    // root, the setMaintenanceRuleArming and runMaintenanceActionHandlerNow
+    // mutation roots, the action-run payload object, the arming input, and the
+    // arming enum: query 142->143, mutation 208->210, OBJECT 334->335,
+    // INPUT_OBJECT 182->183, ENUM 119->120, public types 647->650.
+    // LIFECYCLE_ACTION_HANDLING joins the existing job key enum.
+    // Media-server watch-signal sync adds no GraphQL surface of its own:
+    // MEDIA_SERVER_SIGNAL_SYNC joins the existing job key enum, so every count
+    // below is unchanged.
+    //
+    // ── The library-location feature line, merged in beside the maintenance
+    // line above. Its paragraphs below narrate that branch's own history, so
+    // their running totals are the location branch's totals; the asserted
+    // numbers at the bottom are the union of both branches over the shared
+    // base (query 134 + 9 maintenance + 7 location = 150; mutation 197 + 13 +
+    // 5 = 215; OBJECT 319 + 16 + 50 = 385; INPUT_OBJECT 173 + 10 + 10 = 193;
+    // ENUM 112 + 8 + 20 = 140; public types 616 + 34 + 80 = 730). ──
+    //
+    // Folder-match correction adds the changeTitleFolderPreview query root and
+    // the applyTitleFolderChange mutation root, four payload objects (preview,
+    // apply, title ref, displaced-title repair), two inputs, and three enums
+    // (ownership state, resolution, outcome): query +1, mutation +1, OBJECT +4,
+    // INPUT_OBJECT +2, ENUM +3, public types +9.
+    // The stated baseline had also drifted one feature behind before this change
+    // — an earlier query root, mutation root, payload object, input object, and
+    // enum landed without updating these numbers — so the totals below absorb
+    // that drift as well: query 134->136, mutation 197->199, OBJECT 319->324,
+    // INPUT_OBJECT 173->176, ENUM 112->116, public types 616->628.
+    // Root-move location operations add the locationOperationPreview and
+    // locationOperation query roots and the startLocationOperation /
+    // cancelLocationOperation / resumeLocationOperation mutation roots, with
+    // seventeen payload objects (preview, plan counts, per-kind count, plan
+    // section, plan item, selection classification, classification group,
+    // classified title, free-space estimate, verification statement, plan
+    // confirmation, operation, operation counters, title checkpoint, start,
+    // cancel, resume), three inputs (destination, preview, start), and seven
+    // enums (operation type, execution mode, operation state, title class, plan
+    // item kind, checkpoint state, confirmation requirement): query 136->138,
+    // mutation 199->202, OBJECT 324->341, INPUT_OBJECT 176->179, ENUM 116->123,
+    // public types 628->655. The LOCATION_OPERATION job key joins the existing
+    // JobKeyValue enum, so it adds no type.
+    // The dedup/rename asset listing (T090, FR-091, US8.1/US8.4) adds the
+    // locationOperationAssets query root and four payload objects (the listing,
+    // one title's assets, one renamed asset, one deduplicated asset): query
+    // 138->139, OBJECT 352->356, public types 673->677. The per-title state
+    // reuses the existing LocationTitleCheckpointStateValue, so ENUM is
+    // unchanged, and nothing is added to the operation payload itself: the
+    // per-file identities live in the stored plan, which a progress poll has no
+    // reason to load.
+    // The two root-scoped workflows (T064, US4 and US5, FR-020 to FR-029) add
+    // the locationRootChangePreview and locationRootConsolidationPreview query
+    // roots, thirteen payload objects (root-change preview, consolidation
+    // preview, title accounting, blocked title, root identity retention,
+    // content inventory, content bucket, content entry, sampled paths,
+    // retirement contract, retirement blocker, consolidation classification,
+    // default-root transfer), four inputs (the two preview inputs and the two
+    // start targets), and one enum for FR-027's three content classes:
+    // query 139->141, OBJECT 356->369, INPUT_OBJECT 179->183, ENUM 131->132,
+    // public types 678->696. No new mutation: both workflows confirm through
+    // the existing startLocationOperation, whose input gained the two
+    // root-scoped destination variants beside the selection it already carried.
+    //
+    // FR-020 is one settings action with two destinations, and the surface was
+    // folded to match it: `locationRootChangePreview` and
+    // `locationRootConsolidationPreview` became one `locationRootScopePreview`
+    // (query 150->149), and the four inputs became two —
+    // `LocationRootScopePreviewInput` and `LocationRootScopeTargetInput`
+    // replace `LocationRootChangePreviewInput`,
+    // `LocationRootConsolidationPreviewInput`, `LocationRootChangeTargetInput`
+    // and `LocationRootConsolidationTargetInput` (INPUT_OBJECT 191->189,
+    // public types 727->725). No object and no enum changed:
+    // `LocationRootScopePreviewPayload` was already one payload for both
+    // branches, and `StartLocationOperationInput` swapped its `rootChange` and
+    // `rootConsolidation` fields for one `rootScope`.
+    // OAuth-bound Jellyfin account linking (merged from main) adds one mutation
+    // root and reuses the existing linked-account payload: mutation +1, and its
+    // main-side census (OBJECT +1, INPUT_OBJECT +1) rides along.
+    // ── 0.19.9 through 0.19.11, merged from the release line on top of the
+    // totals above (the OAuth-bound Jellyfin link was already counted). ──
     // Multi-episode file deletion adds the deleteEpisodeFilesPreview query and
     // the deleteEpisodeFiles mutation, three payload objects, and two inputs:
-    // query 134->135, mutation 198->199, OBJECT 320->323,
-    // INPUT_OBJECT 174->176, public types 618->623.
+    // query +1, mutation +1, OBJECT +3, INPUT_OBJECT +2, public types +5.
     // Advanced monitoring adds the season/series-movie selection payload pair,
     // its input pair, and the anime-movie metadata payload behind the existing
-    // metadata series type: OBJECT 323->326, INPUT_OBJECT 176->178,
-    // public types 623->628. Query, mutation, and subscription roots are
-    // unchanged; ADVANCED joins the existing MonitorTypeValue enum.
+    // metadata series type: OBJECT +3, INPUT_OBJECT +2, public types +5.
+    // Query, mutation, and subscription roots are unchanged; ADVANCED joins the
+    // existing MonitorTypeValue enum.
     // Stored OAuth client kinds add one enum behind the existing registration
-    // payload and create input: ENUM 112->113, public types 628->629. Root,
-    // object, and input-object counts are unchanged.
+    // payload and create input: ENUM +1, public types +1.
+    // Totals: query 149->150, mutation 219->220, OBJECT 381->387,
+    // INPUT_OBJECT 194->198, ENUM 139->140, public types 726->737.
+    // The srrdb filename recovery switch is an additive field on the existing
+    // general settings payload and update input, so no census count moves.
+    // The instance-wide feature switches add the actor-only `instanceFeatures`
+    // query and its `InstanceFeaturesPayload`: query 150->151, OBJECT 387->388,
+    // public types 737->738. The two switches themselves are additive fields on
+    // the existing general settings payload and update input, so INPUT_OBJECT,
+    // ENUM, mutation, and subscription counts are unchanged.
+    // Admin-defined title tags add the `titleTagDefinitions` registry read,
+    // which any authenticated caller may make because the tag picker and the
+    // catalog filter both need the vocabulary: query 151->152.
+    // Request rules (spec 0003 section 7) add nine query roots: the three
+    // authoring reads (`requestRuleSets`, `requestRuleSet`,
+    // `requestRuleRevisions`), the instance gate, the two decision reads
+    // (`requestRuleDecision`, `requestRuleDecisions`), the Rules Context
+    // Reference document, the requester pre-flight, and `titleClaims`.
+    // Query 151->160.
     // In-library pending-import candidates add
     // MetadataSearchItemPayload.existingTitleId and
     // ResolvePendingImportInput.attachToExistingTitle. Both hang off existing
     // types, so no census counts change.
     // Caps-driven routing categories add IndexerConfigPayload.capsCategories
-    // and its IndexerCapsCategoryPayload element type: OBJECT 326->327,
-    // public types 629->630. Root-field, input-object, and enum counts are
+    // and its IndexerCapsCategoryPayload element type: OBJECT 407->408,
+    // public types 779->780. Root-field, input-object, and enum counts are
     // unchanged.
+    // Title-aware rule-editor previews add the `ruleSet` read and tracked rule
+    // packs add `trackedRulePacks`: query 161->163. Schema-2 maintenance
+    // sequences add the `maintenanceActionStepDescriptors` catalog read:
+    // query 163->164.
+    // Live transfer progress (0.20.0) adds four reads: the aggregate
+    // `locationTransferSummary`, the paged `locationTransferPage` and
+    // `locationTransferFiles`, and `locationTransferTitleDetail` for one
+    // title's exception. Failed-move recovery adds
+    // `locationOperationRetrySelection`, the prefilled Plan again selection.
+    // Query 164->169.
     assert_eq!(
-        query_field_count, 135,
+        query_field_count, 169,
         "query fields: {query_field_names:?}"
     );
+    // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
+    // keys are pinned on trust-on-first-use, so a legitimate server rekey needs
+    // an explicit operator-driven way to forget the pin. Every other proxy and
+    // download-client change in that work package is additive fields on types
+    // that already existed. 215->216.
+    // Indexer search (spec 0002) adds two mutations on the interactive-search
+    // job: issueInteractiveReleaseCandidateToken and queueUnlinkedRelease.
+    // 216->218.
+    // Admin-defined title tags add four mutations: the per-title patch
+    // (updateTitleTags) plus the three registry writes beside the delay
+    // profiles (create/update/deleteTitleTagDefinition). 220->224.
+    // Series-movie tags add a fifth, updateSeriesMovieTags, beside
+    // setSeriesMovieMonitored: a series movie is a link row rather than a
+    // title, so its tag patch takes link ids and cannot ride updateTitleTags.
+    // 224->225.
+    // Request rules add eleven mutations: six authoring roots (create, matcher
+    // edit, metadata edit, mode, delete, validate), the author-side preview,
+    // the instance gate, and the three administrator claim operations.
+    // 220->231.
+    // Title-aware rule-editor previews add `testRuleSet`; tracked rule packs
+    // add install, update preview, update, settings, copy, and delete actions:
+    // mutation 236->243.
+    // Failed-move recovery adds `abandonLocationOperation`, the way out of a
+    // stalled operation whose storage is not coming back: mutation 247->248.
     assert_eq!(
-        mutation_field_count, 199,
+        mutation_field_count, 248,
         "mutation fields: {mutation_field_names:?}"
     );
-    assert_eq!(subscription_field_count, 14);
-    assert_eq!(public_types.len(), 630);
-    assert_eq!(kind_count("OBJECT"), 327);
-    assert_eq!(kind_count("INPUT_OBJECT"), 178);
-    assert_eq!(kind_count("ENUM"), 113);
+    // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
+    // detection on the existing classified-title payload: five additive fields
+    // and one new enum for the match outcome (unique, none, ambiguous,
+    // same-name-without-identity), so ENUM 123->124 and public types 655->656.
+    // No new object, input, query, or mutation.
+    // Series↔anime facet conversion (T083, FR-057/FR-058) adds one field on the
+    // same classified-title payload plus the conversion payload, its per-setting
+    // payload, and the setting-disposition enum (becomes invalid, resets,
+    // changes meaning): OBJECT 341->343, ENUM 124->125, public types 656->659.
+    // The FR-060/FR-062 link and collection dispositions ride the existing plan
+    // items behind new reason codes, so they add no type.
+    // Merging into an existing destination title (T085, US7, FR-063 to FR-071)
+    // adds the FR-071 preview summary on the existing preview payload and the
+    // named candidates behind the ids-only ambiguous list. Nine payload objects
+    // (merge preview, blocked record, destination-wins entry, table
+    // disposition, role change, reserved-tag conflict, media-request repoint,
+    // dropped category, ambiguous candidate) and five enums (disposition,
+    // block reason, media role, role-change reason, post-merge work):
+    // OBJECT 343->352, ENUM 125->130, public types 659->673. No new query,
+    // mutation, or input: `merges` and `ambiguousDestinationCandidates` are
+    // additive fields on payloads that already exist.
+    // Retiring the direct root write (T093, FR-077/SC-009) deprecates the
+    // TitleOptionsInput.rootFolderId input field. Deprecated input fields drop
+    // out of default introspection the way deprecated output fields do, but
+    // this census counts types and root fields only, so every count below is
+    // unchanged.
+    // Reaching the "files are already there" adoption engine (T052, US3,
+    // FR-050 to FR-053) adds one enum, LocationExecutionModeInput, and an
+    // optional `mode` field on each of the two existing location inputs:
+    // ENUM 130->131, public types 677->678. The requestable enum is narrower
+    // than the reported LocationExecutionModeValue on purpose: CATALOG_ONLY is
+    // derived from a fileless selection (FR-076) and is never requestable.
+    // Query, mutation, subscription, OBJECT, and INPUT_OBJECT counts are
+    // unchanged: both fields join input objects that already exist.
+    // Descoping the merge engine to "media file records and history, everything
+    // else retires with the title" (FR-063 to FR-071) removes five merge payload
+    // objects (table disposition, reserved-tag conflict, media-request repoint,
+    // dropped category, destination-wins entry) and two merge enums (disposition,
+    // post-merge work); folding US4's root change and US5's consolidation onto
+    // one root-scoped planner replaces their two preview payloads with one
+    // (`LocationRootScopePreviewPayload`): OBJECT 385->379, ENUM 140->138,
+    // public types 730->722.
+    // Folding the surface to match — one `locationRootScopePreview` query and
+    // one `rootScope` start target in place of the change/consolidation pair —
+    // then removes two inputs: `LocationRootScopePreviewInput` and
+    // `LocationRootScopeTargetInput` replace the four
+    // `LocationRootChange*`/`LocationRootConsolidation*` inputs, so
+    // INPUT_OBJECT 193->191 and public types 722->720. Query fields drop by one
+    // (150->149) with the second preview root; OBJECT and ENUM are unchanged.
+    // Live transfer progress (0.20.0) adds three subscriptions that mirror the
+    // summary, page, and files reads so Activity can follow a transfer without
+    // polling: subscription 14->17.
+    assert_eq!(subscription_field_count, 17);
+    // Indexer search (spec 0002): the query subject on the interactive-search
+    // job and the unlinked grab add the types below on top of the proxies
+    // census. Combined with the location-surface fold above, the totals are
+    // public types 720->724, OBJECT 379->380, INPUT_OBJECT 191->193, and
+    // ENUM 138->139.
+    // Admin-defined title tags add four objects (the definition, the rewrite
+    // counts, and the mutation and deletion payloads that carry them) and three
+    // inputs (create, update, and the per-title tag patch): OBJECT 388->392,
+    // INPUT_OBJECT 198->201, public types 738->745. `TitleCatalogFilterInput.tags`
+    // and the `updateTitleTags` result are additive on types that already
+    // exist, and no enum joins the schema.
+    // Series-movie tags and the maintenance tag actions add one input,
+    // UpdateSeriesMovieTagsInput: INPUT_OBJECT 201->202, public types 745->746.
+    // Everything else in that work is additive on types that already exist -
+    // `tags` on the series-movie link payload, the action spec and the action
+    // input, `seriesMovieCount` on the tag definition, `seriesMovies` on the
+    // rewrite counts, `requiresTags` on the action descriptor - and the two new
+    // action kinds are values inside the existing MaintenanceActionKind enum,
+    // so OBJECT and ENUM are unchanged.
+    // Request rules add fourteen objects (rule set, revision, detail, delete
+    // payload, validation payload, reason, vote, decision, author preview,
+    // requester pre-flight, instance gates, title claim, media-request lease,
+    // and the request's submit-time metadata), eleven inputs (six authoring,
+    // the preview pair, the gate, and the three claim operations), and six
+    // enums (evaluation mode, decision outcome, vote, and the three lifecycle
+    // claim enums): OBJECT 388->402, INPUT_OBJECT 198->209, ENUM 140->146,
+    // public types 738->769. The additive fields on the existing media-request
+    // payload and its three inputs add no type.
+    // Provider config schemas add the field-condition payload (visibleWhen /
+    // requiredWhen on a plugin config field) and its operator enum:
+    // OBJECT 406->407, ENUM 146->147, public types 777->779. The `advanced`
+    // flag is an additive field on the existing config-field payload.
+    // Rule-editor scoring previews add seven payload objects and two inputs;
+    // tracked rule packs add four payload objects and one input. Together they
+    // move OBJECT 408->419, INPUT_OBJECT 213->216, and public types 780->794;
+    // the additions introduce no enum or scalar types.
+    // Native media analysis adds 25 payload objects, two disc-selection inputs,
+    // and three enums for diagnostics and provenance: public types 794->824.
+    // Four mutations list episode targets, inspect diagnostics, select disc
+    // titles, and map episodes; query and subscription roots are unchanged.
+    // Schema-2 maintenance sequences add seven objects (the sequence, its
+    // steps, descriptors, progress, checkpoints, and job receipts), three
+    // input objects, and two enums for step kind and search condition:
+    // public types 824->836, OBJECT 444->451, INPUT_OBJECT 218->221, and
+    // ENUM 150->152.
+    // Live transfer progress adds the snapshot, title, and file payloads
+    // (`LocationTransferSnapshotPayload`, `LocationTransferTitlePayload`,
+    // `LocationTransferFilePayload`); conflict resolution during transfers
+    // adds the per-title `LocationTitleFoldersPayload` on the preview; and
+    // failed-move recovery adds `LocationRetrySelectionPayload` with its
+    // `LocationRetryTitlePayload` rows and `AbandonLocationOperationPayload`:
+    // OBJECT 451->458, public types 836->843. Reason codes and the third
+    // requestable mode are additive fields and enum values on types that
+    // already existed, so INPUT_OBJECT and ENUM counts are unchanged.
+    assert_eq!(public_types.len(), 843);
+    assert_eq!(kind_count("OBJECT"), 458);
+    assert_eq!(kind_count("INPUT_OBJECT"), 221);
+    assert_eq!(kind_count("ENUM"), 152);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
+    assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
+    assert!(mutation_field_names.contains(&"diagnoseMediaFile"));
+    assert!(mutation_field_names.contains(&"selectMediaFileDiscTitle"));
+    assert!(mutation_field_names.contains(&"mapMediaFileDiscEpisodes"));
     assert!(query_field_names.contains(&"backupSettings"));
-    assert!(query_field_names.contains(&"indexerProxyConfigs"));
+    assert!(query_field_names.contains(&"proxyConfigs"));
     assert!(query_field_names.contains(&"indexerDownloadClientMappingCatalog"));
     assert!(query_field_names.contains(&"externalImportSetupSecretDraft"));
     assert!(query_field_names.contains(&"externalImportSetupSecretDraftStatus"));
@@ -607,6 +856,66 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(query_field_names.contains(&"canCreateMyApiKeys"));
     assert!(query_field_names.contains(&"applicationUpgradeStatus"));
     assert!(query_field_names.contains(&"activeImportStreams"));
+    assert!(query_field_names.contains(&"changeTitleFolderPreview"));
+    assert!(mutation_field_names.contains(&"applyTitleFolderChange"));
+    assert!(public_type_names.contains(&"ChangeTitleFolderPreviewPayload"));
+    assert!(public_type_names.contains(&"ChangeTitleFolderPayload"));
+    assert!(public_type_names.contains(&"DisplacedTitleRepairPayload"));
+    assert!(query_field_names.contains(&"ruleSet"));
+    assert!(query_field_names.contains(&"trackedRulePacks"));
+    assert!(query_field_names.contains(&"maintenanceActionStepDescriptors"));
+    assert!(public_type_names.contains(&"MaintenanceActionSequence"));
+    assert!(public_type_names.contains(&"MaintenanceActionSequenceInput"));
+    assert!(public_type_names.contains(&"MaintenanceActionStepDescriptor"));
+    assert!(mutation_field_names.contains(&"testRuleSet"));
+    assert!(mutation_field_names.contains(&"installTrackedRulePack"));
+    assert!(mutation_field_names.contains(&"previewTrackedRulePackUpdate"));
+    assert!(mutation_field_names.contains(&"updateTrackedRulePack"));
+    assert!(mutation_field_names.contains(&"setTrackedRulePackSettings"));
+    assert!(mutation_field_names.contains(&"copyTrackedRulePackRule"));
+    assert!(mutation_field_names.contains(&"uninstallTrackedRulePack"));
+    assert!(public_type_names.contains(&"TestRuleSetInput"));
+    assert!(public_type_names.contains(&"TrackedRulePackPriorityInput"));
+    assert!(query_field_names.contains(&"locationOperationPreview"));
+    assert!(query_field_names.contains(&"locationOperation"));
+    assert!(query_field_names.contains(&"locationOperationAssets"));
+    assert!(public_type_names.contains(&"LocationOperationAssetListingPayload"));
+    assert!(public_type_names.contains(&"LocationOperationTitleAssetsPayload"));
+    assert!(public_type_names.contains(&"LocationOperationRenamedAssetPayload"));
+    assert!(public_type_names.contains(&"LocationOperationDeduplicatedAssetPayload"));
+    assert!(mutation_field_names.contains(&"startLocationOperation"));
+    assert!(mutation_field_names.contains(&"cancelLocationOperation"));
+    assert!(mutation_field_names.contains(&"resumeLocationOperation"));
+    assert!(public_type_names.contains(&"LocationOperationPreviewPayload"));
+    assert!(public_type_names.contains(&"LocationOperationPayload"));
+    assert!(public_type_names.contains(&"LocationTitleCheckpointPayload"));
+    assert!(public_type_names.contains(&"StartLocationOperationInput"));
+    assert!(public_type_names.contains(&"TitleLocationClassValue"));
+    // US3: the requestable mode is its own enum, reachable from both location
+    // inputs, and distinct from the reported LocationExecutionModeValue.
+    assert!(public_type_names.contains(&"LocationExecutionModeInput"));
+    assert!(public_type_names.contains(&"LocationExecutionModeValue"));
+    // US4 and US5: FR-020's one settings action is one query with two
+    // destinations, and one payload whose variant-only sections say which
+    // destination the server planned.
+    assert!(query_field_names.contains(&"locationRootScopePreview"));
+    assert!(!query_field_names.contains(&"locationRootChangePreview"));
+    assert!(!query_field_names.contains(&"locationRootConsolidationPreview"));
+    assert!(public_type_names.contains(&"LocationRootScopePreviewPayload"));
+    assert!(public_type_names.contains(&"LocationRootScopePreviewInput"));
+    assert!(public_type_names.contains(&"LocationRootScopeTargetInput"));
+    assert!(public_type_names.contains(&"LocationTitleAccountingPayload"));
+    assert!(public_type_names.contains(&"LocationBlockedTitlePayload"));
+    assert!(public_type_names.contains(&"LocationRootIdentityRetentionPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentInventoryPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentBucketPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentEntryPayload"));
+    assert!(public_type_names.contains(&"LocationRootContentClassValue"));
+    assert!(public_type_names.contains(&"LocationSampledPathsPayload"));
+    assert!(public_type_names.contains(&"LocationRootRetirementContractPayload"));
+    assert!(public_type_names.contains(&"LocationRootRetirementBlockerPayload"));
+    assert!(public_type_names.contains(&"LocationConsolidationClassificationPayload"));
+    assert!(public_type_names.contains(&"LocationDefaultRootTransferPayload"));
     assert!(mutation_field_names.contains(&"cancelActiveImport"));
     assert!(mutation_field_names.contains(&"startApplicationUpgrade"));
     assert!(mutation_field_names.contains(&"accountSecurityPasswordVerify"));
@@ -630,28 +939,28 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"MediaServerPlaybackLinkPayload"));
     assert!(public_type_names.contains(&"PendingImportReasonClassValue"));
     assert!(mutation_field_names.contains(&"clearExternalImportSetupSecretDraft"));
-    assert!(mutation_field_names.contains(&"createIndexerProxyConfig"));
+    assert!(mutation_field_names.contains(&"createProxyConfig"));
     assert!(mutation_field_names.contains(&"setIndexerDownloadClientMapping"));
     assert!(query_field_names.contains(&"seedingProfiles"));
     assert!(mutation_field_names.contains(&"createSeedingProfile"));
     assert!(mutation_field_names.contains(&"setIndexerSeedingProfile"));
     assert!(public_type_names.contains(&"SeedingProfilePayload"));
     assert!(public_type_names.contains(&"IndexerDownloadClientMappingCatalogPayload"));
-    assert!(mutation_field_names.contains(&"deleteIndexerProxyConfig"));
+    assert!(mutation_field_names.contains(&"deleteProxyConfig"));
     assert!(mutation_field_names.contains(&"saveExternalImportSetupSecretDraft"));
     assert!(mutation_field_names.contains(&"beginManualImportSelection"));
     assert!(mutation_field_names.contains(&"cancelExternalImportArrSourceWarmup"));
     assert!(mutation_field_names.contains(&"setUserLoginEnabled"));
-    assert!(mutation_field_names.contains(&"testIndexerProxyConfig"));
-    assert!(mutation_field_names.contains(&"updateIndexerProxyConfig"));
+    assert!(mutation_field_names.contains(&"testProxyConfig"));
+    assert!(mutation_field_names.contains(&"updateProxyConfig"));
     assert!(mutation_field_names.contains(&"updateBackupSettings"));
     assert!(public_type_names.contains(&"BackupSettingsPayload"));
-    assert!(public_type_names.contains(&"CreateIndexerProxyConfigInput"));
-    assert!(public_type_names.contains(&"DeleteIndexerProxyConfigPayload"));
-    assert!(public_type_names.contains(&"IndexerProxyConfigPayload"));
-    assert!(public_type_names.contains(&"IndexerProxyTestResultPayload"));
+    assert!(public_type_names.contains(&"CreateProxyConfigInput"));
+    assert!(public_type_names.contains(&"DeleteProxyConfigPayload"));
+    assert!(public_type_names.contains(&"ProxyConfigPayload"));
+    assert!(public_type_names.contains(&"ProxyTestResultPayload"));
     assert!(public_type_names.contains(&"SaveExternalImportSetupSecretDraftInput"));
-    assert!(public_type_names.contains(&"UpdateIndexerProxyConfigInput"));
+    assert!(public_type_names.contains(&"UpdateProxyConfigInput"));
     assert!(public_type_names.contains(&"ExternalImportSetupSecretDraftPayload"));
     assert!(public_type_names.contains(&"RuntimeInfoPayload"));
     assert!(public_type_names.contains(&"RuntimePathStyleValue"));
@@ -692,6 +1001,33 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"TriggerWantedSearchInput"));
     assert!(!public_type_names.contains(&"ResetWantedItemPayload"));
 
+    // The maintenance dark-evaluator contract a later web wave is built
+    // against; these names are pinned, not incidental.
+    assert!(query_field_names.contains(&"maintenanceCandidates"));
+    assert!(query_field_names.contains(&"maintenanceEvaluationRuns"));
+    assert!(query_field_names.contains(&"maintenanceInstanceGates"));
+    assert!(query_field_names.contains(&"maintenanceExclusions"));
+    assert!(mutation_field_names.contains(&"setMaintenanceRuleMode"));
+    assert!(mutation_field_names.contains(&"setMaintenanceInstanceGates"));
+    assert!(mutation_field_names.contains(&"excludeMaintenanceSubject"));
+    assert!(mutation_field_names.contains(&"removeMaintenanceExclusion"));
+    assert!(mutation_field_names.contains(&"runMaintenanceEvaluationNow"));
+    assert!(public_type_names.contains(&"MaintenanceCandidate"));
+    assert!(public_type_names.contains(&"MaintenanceCandidateState"));
+    assert!(public_type_names.contains(&"MaintenanceEvaluationRun"));
+    assert!(public_type_names.contains(&"MaintenanceInstanceGates"));
+    assert!(public_type_names.contains(&"MaintenanceExclusion"));
+    assert!(public_type_names.contains(&"DeleteMaintenanceExclusionPayload"));
+    assert!(public_type_names.contains(&"MaintenanceEvaluationTriggerPayload"));
+
+    // The maintenance action-executor contract the same web wave binds to.
+    assert!(query_field_names.contains(&"maintenanceActionRuns"));
+    assert!(mutation_field_names.contains(&"setMaintenanceRuleArming"));
+    assert!(mutation_field_names.contains(&"runMaintenanceActionHandlerNow"));
+    assert!(public_type_names.contains(&"MaintenanceActionRun"));
+    assert!(public_type_names.contains(&"MaintenanceEffectArming"));
+    assert!(public_type_names.contains(&"SetMaintenanceRuleArmingInput"));
+
     // 0.17.0 API surface trim (root wave): dead root fields and their
     // exclusive snapshot payload types are gone.
     assert!(!query_field_names.contains(&"discoverySyncStatus"));
@@ -718,6 +1054,83 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingKey"));
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingConfidence"));
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingDisposition"));
+}
+
+/// US3/FR-076: a client may ask for a managed move, for adoption of files that
+/// are already there, or for adoption of files the user moved, and may not ask
+/// for the catalog-only fast path. That is a schema-level guarantee, not a
+/// resolver check, so it is asserted against the published input enum.
+#[tokio::test]
+async fn graphql_introspection_location_mode_is_requestable_but_never_catalog_only() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"
+        {
+          modeInput: __type(name: "LocationExecutionModeInput") {
+            kind
+            enumValues { name }
+          }
+          modeValue: __type(name: "LocationExecutionModeValue") {
+            enumValues { name }
+          }
+          previewInput: __type(name: "LocationOperationPreviewInput") {
+            inputFields { name type { kind name ofType { kind name } } }
+          }
+          startInput: __type(name: "StartLocationOperationInput") {
+            inputFields { name type { kind name ofType { kind name } } }
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+
+    assert_eq!(body["data"]["modeInput"]["kind"], "ENUM");
+    let requestable = body["data"]["modeInput"]["enumValues"]
+        .as_array()
+        .expect("LocationExecutionModeInput should expose enumValues")
+        .iter()
+        .map(|value| value["name"].as_str().expect("enum value name"))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        requestable,
+        vec![
+            "MOVE_WITH_SCRYER",
+            "FILES_ALREADY_THERE",
+            "USER_MOVED_FILES"
+        ],
+        "only the three modes a caller may ask for: {body}"
+    );
+
+    // The reported enum keeps the derived value the input enum refuses.
+    let reported = body["data"]["modeValue"]["enumValues"]
+        .as_array()
+        .expect("LocationExecutionModeValue should expose enumValues")
+        .iter()
+        .map(|value| value["name"].as_str().expect("enum value name"))
+        .collect::<Vec<_>>();
+    assert!(
+        reported.contains(&"CATALOG_ONLY"),
+        "the fileless fast path is still reported: {body}"
+    );
+
+    // Optional on both inputs: an existing client that never sends the field
+    // keeps asking for the managed move it always asked for.
+    for input_alias in ["previewInput", "startInput"] {
+        let mode = body["data"][input_alias]["inputFields"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{input_alias} should expose inputFields"))
+            .iter()
+            .find(|field| field["name"] == "mode")
+            .unwrap_or_else(|| panic!("{input_alias}.mode should exist: {body}"));
+        assert_eq!(mode["type"]["kind"], "ENUM", "{input_alias}.mode");
+        assert_eq!(
+            mode["type"]["name"], "LocationExecutionModeInput",
+            "{input_alias}.mode"
+        );
+    }
 }
 
 #[tokio::test]
@@ -1659,6 +2072,8 @@ async fn graphql_introspection_begin_manual_import_selection_uses_input_object()
             "videoWidth",
             "videoHeight",
             "durationSeconds",
+            "disc",
+            "report",
         ]
     );
 
@@ -3991,7 +4406,6 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     };
 
     for (input_alias, field_name) in [
-        ("searchReleases", "titleId"),
         ("queueDownload", "titleId"),
         ("queueBestRelease", "titleId"),
         ("retryImport", "importId"),
@@ -4020,6 +4434,8 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     }
 
     for (input_alias, field_name) in [
+        // Nullable since spec 0002: a search names either a title or a query.
+        ("searchReleases", "titleId"),
         ("searchReleases", "seriesMovieLinkId"),
         ("pauseDownload", "clientId"),
         ("resumeDownload", "clientId"),
@@ -5546,6 +5962,10 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
         .collect();
     assert!(general_names.contains(&"keepHistoryForever"));
     assert!(general_names.contains(&"historyRetentionDays"));
+    assert!(general_names.contains(&"experimentalFeaturesEnabled"));
+    assert!(general_names.contains(&"apiExplorerEnabled"));
+    assert!(general_names.contains(&"personalizedDiscoveryEnabled"));
+    assert!(general_names.contains(&"srrdbFilenameRecoveryEnabled"));
 
     let media_fields = body["data"]["mediaSettings"]["fields"]
         .as_array()
@@ -5750,4 +6170,8 @@ async fn graphql_introspection_exposes_typed_settings_fields() {
         .collect();
     assert!(general_input_names.contains(&"keepHistoryForever"));
     assert!(general_input_names.contains(&"historyRetentionDays"));
+    assert!(general_input_names.contains(&"experimentalFeaturesEnabled"));
+    assert!(general_input_names.contains(&"apiExplorerEnabled"));
+    assert!(general_input_names.contains(&"personalizedDiscoveryEnabled"));
+    assert!(general_input_names.contains(&"srrdbFilenameRecoveryEnabled"));
 }

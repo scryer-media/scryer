@@ -10,9 +10,42 @@ impl AppUseCase {
         provider_type: &str,
         config_json: Option<&str>,
         indexer_id: Option<&str>,
-        indexer_proxy_config_id_override: Option<Option<&str>>,
+        proxy_config_id_override: Option<Option<&str>>,
     ) -> AppResult<()> {
+        if let Some(indexer_id) = self
+            .probe_indexer_connection(
+                actor,
+                provider_type,
+                config_json,
+                indexer_id,
+                proxy_config_id_override,
+            )
+            .await?
+        {
+            self.services
+                .integrations
+                .indexer_configs
+                .clear_last_error(&indexer_id)
+                .await?;
+            self.publish_indexers_changed();
+        }
+        Ok(())
+    }
+
+    /// Validate the proposed connection without clearing the saved config's
+    /// health. A save clears health only after its remaining checks succeed.
+    pub(crate) async fn probe_indexer_connection(
+        &self,
+        actor: &User,
+        provider_type: &str,
+        config_json: Option<&str>,
+        indexer_id: Option<&str>,
+        proxy_config_id_override: Option<Option<&str>>,
+    ) -> AppResult<Option<String>> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+
+        self.ensure_provider_plugin_not_blocked(provider_type)
             .await?;
 
         let fields = self.indexer_config_fields_for_provider_type(provider_type)?;
@@ -82,38 +115,40 @@ impl AppUseCase {
             }
         }
 
-        let indexer_proxy_config_id = match indexer_proxy_config_id_override {
+        let proxy_config_id = match proxy_config_id_override {
             Some(Some(id)) => Some(id.to_string()),
             Some(None) => None,
             None => persisted_config
                 .as_ref()
-                .and_then(|config| config.indexer_proxy_config_id.clone()),
+                .and_then(|config| config.proxy_config_id.clone()),
         };
-        let indexer_proxy_config = if let Some(indexer_proxy_config_id) =
-            indexer_proxy_config_id.as_deref()
-        {
-            if provider_type.trim().eq_ignore_ascii_case("prowlarr")
-                || persisted_config
-                    .as_ref()
-                    .is_some_and(IndexerConfig::is_prowlarr_nab_proxy)
+        let proxy_config = if let Some(proxy_config_id) = proxy_config_id.as_deref() {
+            let proxy_config = self
+                .services
+                .integrations
+                .proxy_configs
+                .get_by_id(proxy_config_id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Validation("Proxy configuration was not found.".to_string())
+                })?;
+            if !proxy_config.is_enabled {
+                return Err(AppError::Validation(
+                    "Proxy is disabled for this indexer.".to_string(),
+                ));
+            }
+            // Prowlarr owns challenge handling for the indexers it fronts, so
+            // a challenge solver can never sit in front of it. Transport and
+            // tunnel proxies only carry bytes and remain allowed.
+            if proxy_config.is_challenge_solver()
+                && (provider_type.trim().eq_ignore_ascii_case("prowlarr")
+                    || persisted_config
+                        .as_ref()
+                        .is_some_and(IndexerConfig::is_prowlarr_nab_proxy))
             {
                 return Err(AppError::Validation(
                     "Prowlarr indexers cannot use challenge solvers; Prowlarr owns challenge handling."
                         .to_string(),
-                ));
-            }
-            let proxy_config = self
-                .services
-                .integrations
-                .indexer_proxy_configs
-                .get_by_id(indexer_proxy_config_id)
-                .await?
-                .ok_or_else(|| {
-                    AppError::Validation("Indexer proxy configuration was not found.".to_string())
-                })?;
-            if !proxy_config.is_enabled {
-                return Err(AppError::Validation(
-                    "Indexer proxy is disabled for this indexer.".to_string(),
                 ));
             }
             Some(proxy_config)
@@ -138,7 +173,7 @@ impl AppUseCase {
             enable_interactive_search: true,
             enable_auto_search: true,
             disabled_until: None,
-            indexer_proxy_config_id,
+            proxy_config_id,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -174,21 +209,13 @@ impl AppUseCase {
                 let result = client.validate_connection().await?;
                 validate_indexer_connection_result(result)?;
             }
-            if let Some(config) = persisted_config.as_ref() {
-                self.services
-                    .integrations
-                    .indexer_configs
-                    .clear_last_error(&config.id)
-                    .await?;
-                self.publish_indexers_changed();
-            }
-            return Ok(());
+            return Ok(persisted_config.map(|config| config.id));
         }
 
         let client = provider
             .client_for_provider_with_accounting(
                 &temp_config,
-                indexer_proxy_config.as_ref(),
+                proxy_config.as_ref(),
                 accounting.as_ref(),
             )
             .ok_or_else(|| {
@@ -214,6 +241,7 @@ impl AppUseCase {
                 None,
                 None,
                 None,
+                None, // a connection probe has no subject, so no year
                 vec![],
                 None,
                 tokio_util::sync::CancellationToken::new(),
@@ -237,16 +265,7 @@ impl AppUseCase {
             ));
         }
 
-        if let Some(config) = persisted_config.as_ref() {
-            self.services
-                .integrations
-                .indexer_configs
-                .clear_last_error(&config.id)
-                .await?;
-            self.publish_indexers_changed();
-        }
-
-        Ok(())
+        Ok(persisted_config.map(|config| config.id))
     }
 
     pub async fn preview_managed_indexer_children(
@@ -321,7 +340,7 @@ impl AppUseCase {
             enable_interactive_search: false,
             enable_auto_search: false,
             disabled_until: None,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -894,6 +913,7 @@ mod tests {
             _season: Option<u32>,
             _episode: Option<u32>,
             _absolute_episode: Option<u32>,
+            _year: Option<i32>,
             _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
             _learning_context: Option<crate::IndexerSearchLearningContext>,
             _cancel_token: tokio_util::sync::CancellationToken,
@@ -1438,7 +1458,7 @@ mod tests {
         fn client_for_provider_with_accounting(
             &self,
             config: &IndexerConfig,
-            _proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+            _proxy_config: Option<&scryer_domain::ProxyConfig>,
             accounting: Option<&crate::IndexerAccountingContext>,
         ) -> Option<Arc<dyn IndexerClient>> {
             self.seen_client_accounting
@@ -1540,6 +1560,7 @@ mod tests {
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         }
     }
 
@@ -1555,6 +1576,7 @@ mod tests {
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         }
     }
 
@@ -1625,6 +1647,129 @@ mod tests {
             },
             Arc::new(FacetRegistry::new()),
         )
+    }
+
+    fn test_app_with_proxy_configs(
+        indexer_configs: Arc<dyn IndexerConfigRepository>,
+        plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
+        settings: Arc<dyn SettingsRepository>,
+        proxy_configs: Arc<dyn crate::ProxyConfigRepository>,
+    ) -> AppUseCase {
+        let services = AppServices::builder(
+            Arc::new(NullTitleRepository),
+            Arc::new(NullShowRepository),
+            Arc::new(NullUserRepository),
+            indexer_configs,
+            Arc::new(NullIndexerClient),
+            Arc::new(NullDownloadClient),
+            Arc::new(NullDownloadClientConfigRepository),
+            Arc::new(NullReleaseAttemptRepository),
+            settings,
+            Arc::new(NullQualityProfileRepository),
+            String::new(),
+        )
+        .with_proxy_config_store(proxy_configs);
+        let services = if let Some(plugin_provider) = plugin_provider {
+            services
+                .with_plugin_provider(plugin_provider)
+                .build_partial_for_tests()
+        } else {
+            services.build_partial_for_tests()
+        };
+
+        AppUseCase::new(
+            services,
+            JwtAuthConfig {
+                issuer: "test".to_string(),
+                access_ttl_seconds: 3600,
+                jwt_signing_salt: "test-salt".to_string(),
+            },
+            Arc::new(FacetRegistry::new()),
+        )
+    }
+
+    /// A proxy repository holding exactly one enabled challenge solver.
+    struct SolverProxyRepository(scryer_domain::ProxyConfig);
+
+    fn solver_proxy_config(id: &str) -> scryer_domain::ProxyConfig {
+        let now = Utc::now();
+        scryer_domain::ProxyConfig {
+            id: id.to_string(),
+            name: "Solver".into(),
+            provider_type: scryer_domain::ProxyProviderType::Byparr,
+            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
+            base_url: "http://solver.internal:8191".into(),
+            request_timeout_seconds: 5,
+            is_enabled: true,
+            username_encrypted: None,
+            password_encrypted: None,
+            remote_dns: false,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[async_trait]
+    impl crate::ProxyConfigRepository for SolverProxyRepository {
+        async fn list(
+            &self,
+            _: Option<scryer_domain::ProxyProviderType>,
+        ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
+            Ok(vec![self.0.clone()])
+        }
+        async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+            Ok((id == self.0.id).then(|| self.0.clone()))
+        }
+        async fn create(
+            &self,
+            config: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
+            Ok(config)
+        }
+        async fn update(
+            &self,
+            config: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
+            Ok(config)
+        }
+        async fn delete(&self, _: &str) -> AppResult<()> {
+            Ok(())
+        }
+        async fn record_health(
+            &self,
+            _: &str,
+            _: scryer_domain::ProxyHealthStatus,
+            _: Option<String>,
+            _: Option<chrono::DateTime<Utc>>,
+        ) -> AppResult<()> {
+            Ok(())
+        }
+        async fn pin_host_key(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
+            Ok(true)
+        }
+        async fn clear_host_key(&self, _: &str) -> AppResult<()> {
+            Ok(())
+        }
     }
 
     async fn wait_for_plan_sync_calls(provider: &RecordingPluginProvider, expected_calls: usize) {
@@ -1729,10 +1874,11 @@ mod tests {
             searchable_capabilities(),
             Arc::new(RecordingIndexerClient::new(false)),
         ));
-        let app = test_app(
+        let app = test_app_with_proxy_configs(
             Arc::new(RecordingIndexerConfigRepo::new()),
             Some(provider),
             Arc::new(NullSettingsRepository),
+            Arc::new(SolverProxyRepository(solver_proxy_config("solver"))),
         );
         let input = NewIndexerConfig {
             name: "Prowlarr".into(),
@@ -1742,7 +1888,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: Some("solver".into()),
+            proxy_config_id: Some("solver".into()),
             download_client_id: None,
             config_json: Some(r#"{"base_url":"http://localhost:9696"}"#.into()),
         };
@@ -1774,7 +1920,7 @@ mod tests {
             .create_indexer_config(
                 &test_admin(),
                 NewIndexerConfig {
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     ..input
                 },
             )
@@ -1785,7 +1931,7 @@ mod tests {
                 &test_admin(),
                 IndexerConfigUpdate {
                     id: created.id,
-                    indexer_proxy_config_id: Some(Some("solver".into())),
+                    proxy_config_id: Some(Some("solver".into())),
                     ..Default::default()
                 },
             )
@@ -1827,7 +1973,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(
                         r#"{"feed_url":"https://ipt.beelyrics.net/t.rss?u=2203846"}"#.to_string(),
@@ -1870,7 +2016,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 config_json: Some(
                     r#"{"feed_url":"https://ipt.beelyrics.net/t.rss?u=2203846"}"#.to_string(),
@@ -1916,7 +2062,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(
                         r#"{"base_url":"https://api.nzbgeek.info/","api_key":"bad-key"}"#
@@ -1949,7 +2095,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -1997,7 +2143,7 @@ mod tests {
                     is_enabled: None,
                     enable_interactive_search: None,
                     enable_auto_search: None,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     seeding_profile_id: None,
                     managed_parent_config_id: None,
@@ -2043,7 +2189,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2092,7 +2238,7 @@ mod tests {
                     is_enabled: None,
                     enable_interactive_search: None,
                     enable_auto_search: None,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     seeding_profile_id: None,
                     managed_parent_config_id: None,
@@ -2126,7 +2272,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2174,7 +2320,7 @@ mod tests {
                 is_enabled: None,
                 enable_interactive_search: None,
                 enable_auto_search: None,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -2209,7 +2355,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2290,7 +2436,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2367,7 +2513,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2475,7 +2621,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2597,7 +2743,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2670,7 +2816,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
                 },
@@ -2711,7 +2857,7 @@ mod tests {
             is_enabled: false,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -2747,7 +2893,7 @@ mod tests {
                     is_enabled: Some(true),
                     enable_interactive_search: None,
                     enable_auto_search: None,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     seeding_profile_id: None,
                     managed_parent_config_id: None,
@@ -3256,7 +3402,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
                 },
@@ -3302,7 +3448,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
                 },
@@ -3339,7 +3485,7 @@ mod tests {
                     is_enabled: true,
                     enable_interactive_search: true,
                     enable_auto_search: true,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     config_json: Some(r#"{"base_url":"https://manager.example"}"#.to_string()),
                 },
@@ -3386,7 +3532,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3415,7 +3561,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: Some("parent".to_string()),
@@ -3476,7 +3622,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3507,7 +3653,7 @@ mod tests {
                 is_enabled: false,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: Some("parent".to_string()),
@@ -3665,7 +3811,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3727,7 +3873,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3758,7 +3904,7 @@ mod tests {
                 is_enabled: false,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3817,7 +3963,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3846,7 +3992,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -3907,7 +4053,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -4003,7 +4149,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -4080,7 +4226,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -4106,7 +4252,7 @@ mod tests {
             is_enabled: false,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: Some(parent.id.clone()),
@@ -4143,7 +4289,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: Some(parent.id.clone()),
@@ -4351,7 +4497,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: false,
             enable_auto_search: false,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -4379,7 +4525,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: Some(parent.id.clone()),
@@ -4464,7 +4610,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -4528,7 +4674,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: false,
                 enable_auto_search: false,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -4557,7 +4703,7 @@ mod tests {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: Some("parent".to_string()),

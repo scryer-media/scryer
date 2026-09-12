@@ -1,0 +1,270 @@
+//! Mutations that start, cancel, and resume location operations (US2, FR-030,
+//! FR-033, FR-081, FR-083).
+//!
+//! Starting is a confirmation, not a submission: the client sends back the
+//! fingerprint it previewed and the server rebuilds the plan from current state,
+//! so a caller can never confirm one plan and execute another.
+
+use async_graphql::{Context, ID, Object, Result as GqlResult};
+use scryer_application::AppError;
+use scryer_application::location::classify::DestinationRequest;
+use scryer_application::location::model::LocationExecutionMode;
+use scryer_application::location::operations::{
+    LocationAbandonDecision, LocationResumeDecision, StartRootMoveRequest,
+};
+use scryer_application::location::preview::{PlanConfirmationRequest, PlanFingerprint};
+use scryer_application::location::root_scope_execution::{RootScopeCall, StartRootScopeRequest};
+
+use crate::context::{actor_from_ctx, app_from_ctx, to_gql_error};
+use crate::mappers::{
+    from_abandoned_location_operation, from_canceled_location_operation,
+    from_resumed_location_operation, from_started_location_operation,
+    location_destination_into_application, location_execution_mode_into_application,
+    root_scope_destination,
+};
+use crate::types::{
+    AbandonLocationOperationPayload, CancelLocationOperationPayload, LocationDestinationInput,
+    LocationRootScopeTargetInput, ResumeLocationOperationPayload, StartLocationOperationInput,
+    StartLocationOperationPayload,
+};
+
+/// The one destination form a start confirms.
+///
+/// `StartLocationOperationInput` offers two and the schema cannot say "pick
+/// exactly one", so this is where that is said. Sending none, or both, is a
+/// request that does not describe a plan, and it is refused before the
+/// application is asked to rebuild anything.
+enum StartLocationTarget {
+    Selection {
+        title_ids: Vec<String>,
+        destination: DestinationRequest,
+    },
+    RootScope(LocationRootScopeTargetInput),
+}
+
+fn start_location_target(
+    title_ids: Option<Vec<ID>>,
+    destination: Option<LocationDestinationInput>,
+    root_scope: Option<LocationRootScopeTargetInput>,
+) -> GqlResult<StartLocationTarget> {
+    let names_a_selection = title_ids.is_some() || destination.is_some();
+    match (names_a_selection, root_scope) {
+        (false, Some(target)) => Ok(StartLocationTarget::RootScope(target)),
+        (true, None) => Ok(StartLocationTarget::Selection {
+            // A client that predates the root-scoped variants always sends
+            // both, so it lands here with exactly the request it always sent.
+            title_ids: title_ids
+                .unwrap_or_default()
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
+            destination: location_destination_into_application(destination.unwrap_or(
+                LocationDestinationInput {
+                    library_id: None,
+                    root_id: None,
+                },
+            )),
+        }),
+        _ => Err(to_gql_error(AppError::Validation(
+            "name exactly one of a title selection or a root-scoped target".to_string(),
+        ))),
+    }
+}
+
+#[derive(Default)]
+pub(crate) struct LocationMutations;
+
+#[Object]
+impl LocationMutations {
+    /// Confirm a previewed location operation and start it in the background.
+    ///
+    /// The plan is rebuilt server side and compared against the fingerprint the
+    /// client previewed; a stale fingerprint, or a selection that still holds
+    /// blocked or unresolved titles, is refused instead of started.
+    ///
+    /// The mode is confirmed the same way everything else is: it rebuilds the
+    /// plan, so confirming `FILES_ALREADY_THERE` against a managed-move
+    /// fingerprint fails the comparison rather than running the other workflow.
+    /// An adoption whose destination is missing or ambiguous media is refused
+    /// here, because its rebuilt plan is blocked (FR-052).
+    ///
+    /// A root change (US4) and a root consolidation (US5) confirm through the
+    /// same mutation, the same `rootScope` target, and the same
+    /// typed-confirmation field; only the destination inside that target
+    /// differs. Exactly one of the two destination forms may be named.
+    async fn start_location_operation(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Previewed destination form (a title selection or a root-scoped target), mode, plan fingerprint, and typed confirmation when one is required."
+        )]
+        input: StartLocationOperationInput,
+    ) -> GqlResult<StartLocationOperationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let mode = location_execution_mode_into_application(input.mode);
+        let confirmation = PlanConfirmationRequest {
+            fingerprint: PlanFingerprint(input.plan_fingerprint),
+            typed_confirmation: input.typed_confirmation,
+        };
+        let target = start_location_target(input.title_ids, input.destination, input.root_scope)?;
+        let accepted = match target {
+            StartLocationTarget::Selection {
+                title_ids,
+                destination,
+            } => {
+                let request = StartRootMoveRequest {
+                    title_ids,
+                    destination,
+                    confirmation,
+                };
+                match mode {
+                    LocationExecutionMode::UserMovedFiles => {
+                        app.start_manual_move(&actor, request).await
+                    }
+                    LocationExecutionMode::FilesAlreadyThere => {
+                        app.start_adoption(&actor, request).await
+                    }
+                    _ => app.start_root_move(&actor, request).await,
+                }
+                .map_err(to_gql_error)
+            }
+            // The root-scoped planner refuses an unsupported mode itself, by
+            // name, so the mode travels through the shared mapper and the
+            // refusal reaches the client as a routable code.
+            StartLocationTarget::RootScope(target) => {
+                let destination =
+                    root_scope_destination(target.destination_path, target.destination_root_id)
+                        .map_err(to_gql_error)?;
+                app.start_root_scope(
+                    &actor,
+                    StartRootScopeRequest {
+                        call: RootScopeCall {
+                            library_id: target.library_id.to_string(),
+                            root_id: target.root_id.to_string(),
+                            destination,
+                            mode,
+                        },
+                        confirmation,
+                    },
+                )
+                .await
+                .map_err(to_gql_error)
+            }
+        }?;
+        // A just-accepted operation has no checkpoints yet; they are written as
+        // each title enters the run.
+        let checkpoints = app
+            .location_operation_checkpoints(&accepted.operation.id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_started_location_operation(
+            &accepted.operation,
+            &checkpoints,
+            &accepted.plan.fingerprint,
+        ))
+    }
+
+    /// Request cancellation; the operation stops at its next title checkpoint.
+    ///
+    /// Titles already finished stay where the operation put them: cancelling is
+    /// a safe stop, never a rollback.
+    async fn cancel_location_operation(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity to stop at its next title checkpoint.")]
+        id: ID,
+    ) -> GqlResult<CancelLocationOperationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let requested = app
+            .cancel_location_operation(&actor, &operation_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_canceled_location_operation(&operation_id, requested))
+    }
+
+    /// Give up on an operation nobody is running: mark it failed, close its
+    /// Activity run, and release the titles and roots it owns.
+    ///
+    /// Nothing on disk is touched. Finished titles stay where the operation
+    /// put them, and the operation can be retried from its last verified
+    /// checkpoint once the storage is back. An operation whose runner is still
+    /// alive is refused; cancel it instead.
+    async fn abandon_location_operation(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity to mark failed and release.")] id: ID,
+    ) -> GqlResult<AbandonLocationOperationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let payload = match app
+            .abandon_location_operation(&actor, &operation_id)
+            .await
+            .map_err(to_gql_error)?
+        {
+            LocationAbandonDecision::Abandoned => {
+                from_abandoned_location_operation(&operation_id, true, None)
+            }
+            LocationAbandonDecision::NotAbandoned(reason) => {
+                from_abandoned_location_operation(&operation_id, false, Some(reason))
+            }
+        };
+        Ok(payload)
+    }
+
+    /// Pick an interrupted operation back up from its last verified checkpoint,
+    /// or retry a failed or canceled one from the same place.
+    ///
+    /// Finished titles are never reprocessed: a retry repeats only the titles
+    /// that did not settle, after reopening the operation so Activity shows it
+    /// as queued again. An operation that already finished, or was stored
+    /// without its plan, is reported as not resumed rather than restarted from
+    /// the beginning.
+    async fn resume_location_operation(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity to resume from its checkpoints.")] id: ID,
+    ) -> GqlResult<ResumeLocationOperationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let Some(operation) = app
+            .location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(from_resumed_location_operation(
+                &operation_id,
+                false,
+                Some("this operation no longer exists".to_string()),
+            ));
+        };
+        // FR-083 applies to a resume exactly as it applies to a start.
+        app.require_location_operation_permission(&actor, &operation)
+            .await
+            .map_err(to_gql_error)?;
+
+        // The reason comes from the application layer: it is the half that
+        // knows whether the operation is finished, has no stored plan, or is
+        // sitting on a volume that is not mounted right now.
+        let plan = match app
+            .resume_location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        {
+            LocationResumeDecision::Resume(plan) => *plan,
+            LocationResumeDecision::NotResumable(reason) => {
+                return Ok(from_resumed_location_operation(
+                    &operation_id,
+                    false,
+                    Some(reason),
+                ));
+            }
+        };
+        app.spawn_location_operation(operation_id.clone(), plan);
+        Ok(from_resumed_location_operation(&operation_id, true, None))
+    }
+}

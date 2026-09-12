@@ -26,6 +26,9 @@ const fields: ConfigFieldDef[] = [
       },
     ],
     helpText: null,
+    visibleWhen: null,
+    requiredWhen: null,
+    advanced: false,
   },
   {
     key: "base_url",
@@ -38,6 +41,9 @@ const fields: ConfigFieldDef[] = [
     hostBinding: null,
     options: [],
     helpText: null,
+    visibleWhen: null,
+    requiredWhen: null,
+    advanced: false,
   },
   {
     key: "api_path",
@@ -50,6 +56,9 @@ const fields: ConfigFieldDef[] = [
     hostBinding: null,
     options: [],
     helpText: null,
+    visibleWhen: null,
+    requiredWhen: null,
+    advanced: false,
   },
 ];
 

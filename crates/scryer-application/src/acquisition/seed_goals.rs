@@ -869,7 +869,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: seeding_profile_id.map(str::to_string),
             managed_parent_config_id: None,

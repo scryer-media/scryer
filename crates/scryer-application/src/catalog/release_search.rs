@@ -29,6 +29,10 @@ struct PreparedReleaseScoringInputs {
     primary_episode_ids: Option<Option<HashSet<String>>>,
     indexer_priority_by_name: HashMap<String, i64>,
     now: chrono::DateTime<chrono::Utc>,
+    /// One mutable evaluator bound to this prepared scoring snapshot. Search
+    /// page processing is sequential, so it can safely reuse Regorus's input
+    /// buffers for every candidate without crossing task boundaries.
+    rule_evaluation_batch: crate::canonical_scoring::RuleEvaluationBatch,
 }
 
 pub(crate) struct ScoredSearchOutcome {
@@ -439,7 +443,7 @@ fn record_query_coverage_outcomes(
     }
 }
 
-fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option<String> {
+pub(crate) fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option<String> {
     let (reason, retry_after) = match outcome {
         IndexerSearchOutcome::Complete { .. } => return None,
         IndexerSearchOutcome::Partial {
@@ -891,6 +895,13 @@ impl AppUseCase {
         prepared: &mut Option<PreparedReleaseScoringInputs>,
         preserve_duplicate_sources: bool,
     ) -> AppResult<Vec<IndexerSearchResult>> {
+        let mut timer = crate::rules::metrics::StageTimer::new(
+            "scan_batch",
+            crate::rules::metrics::Purpose::Live,
+        );
+        timer.outcome("error");
+        metrics::counter!("scryer_scoring_batch_candidates_total", "purpose" => "live")
+            .increment(raw_results.len() as u64);
         if prepared.is_none() {
             let blocklist = self.load_title_release_blocklist_signatures(title_id).await;
             let (has_usenet_client, has_torrent_client, client_preferred_source_kind) =
@@ -919,6 +930,10 @@ impl AppUseCase {
             let canonical_context = self
                 .resolve_canonical_scoring_context(&scored_title, quality_profile)
                 .await;
+            let rule_evaluation_batch = crate::canonical_scoring::RuleEvaluationBatch::from_context(
+                &canonical_context
+                    .view(crate::quality_profile::CoverageSizeBasis::default(), false),
+            );
             let catalog_episodes = self
                 .services
                 .catalog
@@ -959,6 +974,7 @@ impl AppUseCase {
                 primary_episode_ids: None,
                 indexer_priority_by_name,
                 now: chrono::Utc::now(),
+                rule_evaluation_batch,
             });
         }
         let prepared = prepared
@@ -1134,12 +1150,17 @@ impl AppUseCase {
             // pack penalty, the listing-metadata rule inputs — is gone from the
             // number; what survives of it orders the results, in
             // `acquisition::scoring`, and never crosses a comparison.
-            let scored_release = crate::canonical_scoring::score_release(
+            let scoring_context = prepared
+                .canonical_context
+                .view(candidate_size_basis, false)
+                .without_rules();
+            let scored_release = crate::canonical_scoring::score_release_in_batch(
                 &crate::canonical_scoring::ReleaseEvidence::announced(
                     scored_release_metadata.clone(),
                     result.size_bytes,
                 ),
-                &prepared.canonical_context.view(candidate_size_basis, false),
+                &scoring_context,
+                &mut prepared.rule_evaluation_batch,
             );
             let decision = scored_release.announced_decision;
 
@@ -1255,6 +1276,7 @@ impl AppUseCase {
         });
         scored.truncate(200);
 
+        timer.outcome("ok");
         Ok(scored)
     }
 
@@ -1291,6 +1313,7 @@ impl AppUseCase {
             episode,
             numbering_context,
             absolute_episode,
+            year,
             tagged_aliases,
             search_subject_kind,
             cancel_token,
@@ -1465,6 +1488,7 @@ impl AppUseCase {
                     episode,
                     numbering_context,
                     absolute_episode,
+                    year,
                     tagged_aliases,
                     learning_context,
                     query_cancel_token,
@@ -1777,6 +1801,13 @@ impl AppUseCase {
             episode: subject.episode,
             numbering_context: subject.numbering_context.clone(),
             absolute_episode: subject.absolute_episode,
+            // `title` here is the *search* title — for a series-movie link it is
+            // the derived movie record, whose facet and year both come from the
+            // movie. Reading the year and the facet gate off the same record is
+            // what keeps a series year from ever being sent as a release year.
+            year: (title.facet == MediaFacet::Movie)
+                .then_some(title.year)
+                .flatten(),
             tagged_aliases: &tagged_aliases,
             search_subject_kind: subject.subject_kind,
             parse_context: &subject.title_evidence.parse_context,
@@ -2222,6 +2253,10 @@ pub(crate) struct ReleaseSearchRequest<'a> {
     pub(crate) episode: Option<u32>,
     pub(crate) numbering_context: crate::IndexerSearchNumberingContext,
     pub(crate) absolute_episode: Option<u32>,
+    /// Movie release year, when the searched title is a movie that has one.
+    /// Series years never travel here: a season/episode search has no single
+    /// release year, so passing the series year would be a guess.
+    pub(crate) year: Option<i32>,
     pub(crate) tagged_aliases: &'a [TaggedAlias],
     pub(crate) search_subject_kind: ReleaseSearchSubjectKind,
     pub(crate) parse_context: &'a ReleaseParseContext,

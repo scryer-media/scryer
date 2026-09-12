@@ -162,7 +162,24 @@ pub struct WeaverSubscriptionBridgeClient {
 
 impl WeaverSubscriptionBridgeClient {
     pub fn from_config(config: &DownloadClientConfig) -> AppResult<Self> {
-        let download_client = WeaverDownloadClient::from_config(config)?;
+        Self::from_config_with_proxy(config, None)
+    }
+
+    /// Build a bridge client whose HTTP polling fallback egresses through the
+    /// operator's assigned proxy.
+    ///
+    /// The subscription itself is a `graphql-ws` WebSocket dialled outside
+    /// reqwest, so no proxy applies to it. The fallback is ordinary HTTP and
+    /// does honour the assignment; a proxy that cannot produce a client (a
+    /// tunnel, today) fails here, which makes the client un-bridgeable and
+    /// leaves the router's own proxied polling in charge.
+    pub fn from_config_with_proxy(
+        config: &DownloadClientConfig,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> AppResult<Self> {
+        let http_client = super::native_download_client_http_client(&config.name, proxy_config)?;
+        let download_client =
+            WeaverDownloadClient::from_config(config)?.with_http_client(http_client);
         let remote_path_mappings =
             match parse_download_client_remote_path_mappings(&config.config_json) {
                 Ok(mappings) => Some(mappings),
@@ -802,6 +819,7 @@ mod tests {
             last_seen_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            proxy_config_id: None,
         }
     }
 

@@ -18,6 +18,7 @@ import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
+import { Badge } from "@/components/ui/badge";
 import {
   Table,
   TableBody,
@@ -338,6 +339,7 @@ function DynamicConfigField({
               ? "number"
               : "text"
         }
+        ignorePasswordManagers={field.fieldType === "PASSWORD"}
         required={field.required}
         placeholder={field.defaultValue ?? ""}
       />
@@ -589,7 +591,24 @@ export function SettingsNotificationsSection({
                         <span className="rounded border border-border bg-muted/40 px-2 py-0.5 text-xs text-muted-foreground">
                           {targetLabel}
                         </span>
+                        {channel?.blockedReason ? (
+                          <Badge
+                            tone="negative"
+                            data-ui="settings-notification-channel-blocked"
+                            title={channel.blockedReason}
+                          >
+                            {t("settings.pluginBlocked")}
+                          </Badge>
+                        ) : null}
                       </div>
+                      {channel?.blockedReason ? (
+                        <div
+                          data-ui="settings-notification-channel-blocked-reason"
+                          className="mt-1 whitespace-normal break-words text-xs text-destructive"
+                        >
+                          {channel.blockedReason}
+                        </div>
+                      ) : null}
                     </TableCell>
                     <TableCell>
                       <PluginVisualLabel
@@ -603,10 +622,23 @@ export function SettingsNotificationsSection({
                       />
                     </TableCell>
                     <TableCell className="text-center">
-                      <RenderBooleanIcon
-                        value={target.isEnabled}
-                        label={`${t("label.enabled")}: ${target.name}`}
-                      />
+                      {channel?.blockedReason ? (
+                        // Still switched on, still configured, not running: a
+                        // checkmark here would claim the opposite.
+                        <span
+                          data-ui="settings-notification-channel-enabled-blocked"
+                          title={channel.blockedReason}
+                          aria-label={`${t("settings.pluginBlocked")}: ${target.name}`}
+                          className="text-xs font-medium text-destructive"
+                        >
+                          {t("settings.pluginBlockedNotRunning")}
+                        </span>
+                      ) : (
+                        <RenderBooleanIcon
+                          value={target.isEnabled}
+                          label={`${t("label.enabled")}: ${target.name}`}
+                        />
+                      )}
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="inline-flex items-center gap-2">

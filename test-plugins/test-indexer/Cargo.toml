@@ -1,15 +1,17 @@
 [workspace]
+members = ["descriptor"]
 
 [package]
 name = "test-indexer"
 version = "0.1.0"
 edition = "2024"
+publish = false
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-extism-pdk = "1.4"
 scryer-plugin-sdk = { path = "../../crates/scryer-plugin-sdk" }
-serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+test-indexer-descriptor = { path = "descriptor" }
+wit-bindgen = { version = "0.61", features = ["async"] }

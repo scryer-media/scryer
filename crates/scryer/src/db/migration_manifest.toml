@@ -1823,3 +1823,489 @@ engine = "sqlite"
 through_version = 198
 file = "postgres/baselines/0198_baseline.sql"
 engine = "postgres"
+
+[[migration]]
+version = 212
+description = "maintenance rule sets and immutable matcher revisions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0212_maintenance_rule_sets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0212_maintenance_rule_sets.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 213
+description = "maintenance evaluation runs, lifecycle candidates, and rule exclusions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0213_maintenance_evaluation_candidates.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0213_maintenance_evaluation_candidates.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 214
+description = "maintenance effect arming and lifecycle action runs"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0214_maintenance_action_execution.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0214_maintenance_action_execution.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 215
+description = "media server watch signals and per-connection sync state"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0215_media_server_signals.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0215_media_server_signals.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 216
+description = "synthetic stable library root ids"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0216_synthetic_root_ids.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0216_synthetic_root_ids.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "migrate_synthetic_root_ids"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 217
+description = "persist full file hashes on media files"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0217_media_file_full_hashes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0217_media_file_full_hashes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 218
+description = "location operation persistence"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0218_location_operations.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0218_location_operations.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 219
+description = "first-class proxies for indexers and download clients"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0219_first_class_proxies.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0219_first_class_proxies.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 220
+description = "wireguard proxy configuration"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0220_wireguard_proxies.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0220_wireguard_proxies.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 221
+description = "admin-defined title tag registry"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0221_title_tag_definitions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0221_title_tag_definitions.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "adopt_existing_title_tag_definitions"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 222
+description = "request rule sets, revisions, and decision traces"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0222_request_rule_sets.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0222_request_rule_sets.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 223
+description = "lifecycle claims for title leases and keeps"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0223_lifecycle_claims.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0223_lifecycle_claims.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 224
+description = "media request policy provenance and lease columns"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0224_media_request_policy.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0224_media_request_policy.sql"
+engine = "postgres"
+
+[[migration]]
+version = 225
+description = "tracked_rule_packs"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0225_tracked_rule_packs.sql"
+engine = "sqlite"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0225_tracked_rule_packs.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 226
+description = "application compatibility repair journal"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0226_application_compatibility_journal.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0226_application_compatibility_journal.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 227
+description = "pending title tag rename recovery"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0227_pending_title_tag_renames.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0227_pending_title_tag_renames.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 228
+description = "rule set evaluation metadata"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0228_rule_set_evaluation_metadata.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0228_rule_set_evaluation_metadata.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 229
+description = "maintenance episode and season subject identity"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0229_maintenance_subjects.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0229_maintenance_subjects.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 230
+description = "media analysis revision and attempts"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0230_media_analysis_revision.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0230_media_analysis_revision.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 231
+description = "maintenance storage root selection and destructive rearm review"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0231_maintenance_storage_roots.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0231_maintenance_storage_roots.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 232
+description = "maintenance action sequence persistence"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0232_maintenance_action_sequences.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0232_maintenance_action_sequences.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 233
+description = "pending title tag delete recovery"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0233_pending_title_tag_deletions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0233_pending_title_tag_deletions.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 234
+description = "location transfer progress and paginated title summaries"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0234_location_transfer_progress.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0234_location_transfer_progress.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 235
+description = "durable location file conflict resolutions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0235_location_file_resolutions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0235_location_file_resolutions.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 236
+description = "keep spellfix vocabulary aligned with title search terms"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0236_title_search_spellfix_cleanup.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0236_title_search_spellfix_cleanup.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 237
+description = "location operation reason codes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0237_location_operation_reason_codes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0237_location_operation_reason_codes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 238
+description = "discovery item relevance and popularity scores"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0238_discovery_item_relevance_scores.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0238_discovery_item_relevance_scores.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 239
+description = "rule pack customization policy"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0239_rule_pack_customizable.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0239_rule_pack_customizable.sql"
+engine = "postgres"
+scope = "all"

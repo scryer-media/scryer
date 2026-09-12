@@ -12,7 +12,10 @@ import {
 } from "lucide-react";
 import { useClient } from "urql";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { FacetSelect, FacetTags } from "@/components/common/facet-select";
 import { InfoHelp } from "@/components/common/info-help";
+import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
+import { LOWERCASE_FACET_IDS } from "@/lib/facets/selection";
 import {
   RULE_TEMPLATES,
   RULE_TEMPLATE_CATEGORIES,
@@ -33,11 +36,7 @@ import { IconButton } from "@/components/ui/icon-button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
-import {
-  Input,
-  integerInputProps,
-  sanitizeDigits,
-} from "@/components/ui/input";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   LazyRegoEditor,
@@ -65,8 +64,9 @@ import { isUserOwnedRuleSet } from "@/lib/utils/rule-sets";
 import { trashLocalePacks } from "@/lib/utils/trash-packs";
 
 type SettingsRulesSectionProps = {
+  canManageTrackedPacks: boolean;
   isEditorOpen: boolean;
-  editorMode: "create" | "edit";
+  editorMode: "create" | "edit" | "copy";
   editingRuleSetId: string | null;
   ruleSetDraft: RuleSetDraft;
   setRuleSetDraft: React.Dispatch<React.SetStateAction<RuleSetDraft>>;
@@ -94,17 +94,18 @@ type SettingsRulesSectionProps = {
   translationDiagnostics: string[];
   focusEditor: boolean;
   onEditorFocused: () => void;
+  testScoring?: (options: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+  }) => React.ReactNode;
+  trackedRulePacks?: React.ReactNode;
+  installTrackedRulePack: (packId: string, templateIds: string[]) => Promise<void> | void;
+  installingRulePackId: string | null;
 };
 
 const ArrCustomFormatImportDialog = React.lazy(
   () => import("@/components/views/settings/arr-custom-format-import-dialog"),
 );
-
-const FACET_OPTIONS = [
-  { value: "movie", label: "Movie" },
-  { value: "series", label: "Series" },
-  { value: "anime", label: "Anime" },
-];
 
 type RefField = { field: string; type: string; descKey: string };
 
@@ -299,7 +300,8 @@ import rego.v1
 
 # Return a map of score codes to point deltas.
 # Positive values boost the release, negative values penalize it.
-# Use scryer.block_score() to hard-block a release.
+# scryer.block_score() contributes -10000; other rules can offset it.
+# Mandatory profile requirements still apply.
 
 score_entry["dual_audio_bonus"] := 500 if {
     input.release.is_dual_audio
@@ -644,47 +646,34 @@ function TrashLocalePacksCard({
   );
 }
 
-function FacetBadges({ facets }: { facets: string[] }) {
-  if (facets.length === 0) {
-    return (
-      <Badge tone="info" className="capitalize">
-        Global
-      </Badge>
-    );
-  }
-  return (
-    <div className="flex gap-1">
-      {facets.map((f) => (
-        <Badge key={f} tone="neutral" className="capitalize">
-          {f}
-        </Badge>
-      ))}
-    </div>
-  );
-}
-
 type CommunityPack = {
   id: string;
   name: string;
   description: string;
   author: string;
   version: string;
+  customizable?: boolean | null;
 };
 type CommunityTemplate = {
   id: string;
   title: string;
   description: string;
   category: string;
-  regoSource: string;
   appliedFacets: string[];
 };
 
 function RuleLibrary({
   onApply,
   defaultOpen,
+  onInstallCommunityPack,
+  installingRulePackId,
+  canManage,
 }: {
   onApply: (template: RuleTemplate) => void;
   defaultOpen?: boolean;
+  onInstallCommunityPack: (packId: string, templateIds: string[]) => Promise<void> | void;
+  installingRulePackId: string | null;
+  canManage: boolean;
 }) {
   const t = useTranslate();
   const client = useClient();
@@ -704,6 +693,7 @@ function RuleLibrary({
     [],
   );
   const [packLoading, setPackLoading] = React.useState(false);
+  const [selectedTemplateIds, setSelectedTemplateIds] = React.useState<string[]>([]);
 
   React.useEffect(() => {
     if (tab === "community" && !communityPacksLoaded) {
@@ -723,6 +713,7 @@ function RuleLibrary({
   const loadPack = React.useCallback(
     async (pack: CommunityPack) => {
       setSelectedPack(pack);
+      setSelectedTemplateIds([]);
       setPackLoading(true);
       try {
         const { data } = await client
@@ -852,20 +843,51 @@ function RuleLibrary({
                   {t("label.loading")}
                 </p>
               ) : (
-                <TemplateGrid
-                  templates={packTemplates.map((t) => ({
-                    id: t.id,
-                    title: t.title,
-                    description: t.description,
-                    category: t.category,
-                    regoSource: t.regoSource,
-                    appliedFacets: t.appliedFacets,
-                  }))}
-                  onApply={(tpl) => {
-                    onApply(tpl);
-                    setOpen(false);
-                  }}
-                />
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Choose the rules to enable after installation. Rules stay managed{selectedPack.customizable !== false ? " and can be copied individually for customization." : "."}
+                  </p>
+                  {selectedPack.customizable === false ? <p className="text-xs text-muted-foreground">Managed by the pack author.</p> : null}
+                  <p className="text-xs text-muted-foreground">
+                    Existing custom copies are not adopted or disabled when this pack is installed.
+                  </p>
+                  <div className="grid grid-cols-1 gap-2 @[420px]:grid-cols-2 @[640px]:grid-cols-3">
+                    {packTemplates.map((template) => {
+                      const checked = selectedTemplateIds.includes(template.id);
+                      const checkboxId = selectorId("settings-rules-library-template-install", template.id);
+                      return (
+                        <label key={template.id} className="flex cursor-pointer gap-3 rounded-lg border border-border bg-card/50 p-3">
+                          <Checkbox
+                            id={checkboxId}
+                            checked={checked}
+                            disabled={!canManage}
+                            onCheckedChange={(value) => setSelectedTemplateIds((current) => (
+                              value === true
+                                ? [...current, template.id]
+                                : current.filter((id) => id !== template.id)
+                            ))}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium">{template.title}</span>
+                            <span className="mt-1 block text-xs text-muted-foreground line-clamp-2">{template.description}</span>
+                            <span className="mt-2 flex flex-wrap gap-1">
+                              <Badge tone="neutral" className="text-[10px]">{template.category}</Badge>
+                              {template.appliedFacets.map((facet) => <Badge key={facet} tone="info" className="text-[10px]">{facet}</Badge>)}
+                            </span>
+                          </span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                  {canManage ? <Button
+                    id={selectorId("settings-rules-library-pack-install", selectedPack.id)}
+                    type="button"
+                    disabled={installingRulePackId === selectedPack.id}
+                    onClick={() => void onInstallCommunityPack(selectedPack.id, selectedTemplateIds)}
+                  >
+                    {installingRulePackId === selectedPack.id ? "Installing…" : "Install pack"}
+                  </Button> : null}
+                </div>
               )}
             </div>
           ) : (
@@ -893,6 +915,7 @@ function RuleLibrary({
                     <Badge tone="info" className="text-[10px]">
                       {pack.author}
                     </Badge>
+                    {pack.customizable === false ? <Badge tone="neutral" className="text-[10px]">Managed</Badge> : null}
                     <span className="text-[10px] text-muted-foreground">
                       v{pack.version}
                     </span>
@@ -949,6 +972,7 @@ function TemplateGrid({
 }
 
 export function SettingsRulesSection({
+  canManageTrackedPacks,
   isEditorOpen,
   editorMode,
   editingRuleSetId,
@@ -971,9 +995,14 @@ export function SettingsRulesSection({
   translationDiagnostics,
   focusEditor,
   onEditorFocused,
+  testScoring,
+  trackedRulePacks,
+  installTrackedRulePack,
+  installingRulePackId,
 }: SettingsRulesSectionProps) {
   const t = useTranslate();
   const [isArrImportOpen, setIsArrImportOpen] = React.useState(false);
+  const [isTestScoringOpen, setIsTestScoringOpen] = React.useState(false);
   const validationDiagnostics = React.useMemo(
     () => getRuleValidationDiagnostics(validationResult, ruleSetDraft.regoSource),
     [ruleSetDraft.regoSource, validationResult],
@@ -989,16 +1018,24 @@ export function SettingsRulesSection({
           <CardTitle className="text-base text-foreground">
             {t("settings.rules")}
           </CardTitle>
-          <Button
-            id="settings-rules-arr-custom-format-import"
-            type="button"
-            variant="secondary"
-            onClick={() => setIsArrImportOpen(true)}
-            disabled={mutatingRuleSetId !== null}
-          >
-            <FileInput className="mr-2 h-4 w-4" />
-            {t("settings.arrImportAction")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <RegoAiPromptDialog
+              id="settings-rules-ai-prompt"
+              ruleKind="scoring"
+              inputContract={ruleInputContract}
+              outputContract={'Define one or more score entries, for example: score_entry["stable_identifier"] := 100 if { input.release != null }'}
+            />
+            <Button
+              id="settings-rules-arr-custom-format-import"
+              type="button"
+              variant="secondary"
+              onClick={() => setIsArrImportOpen(true)}
+              disabled={mutatingRuleSetId !== null}
+            >
+              <FileInput className="mr-2 h-4 w-4" />
+              {t("settings.arrImportAction")}
+            </Button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <Table>
@@ -1007,9 +1044,6 @@ export function SettingsRulesSection({
                 <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.ruleDescription")}</TableHead>
                 <TableHead>{t("settings.ruleAppliedFacets")}</TableHead>
-                <TableHead className="text-center">
-                  {t("settings.rulePriority")}
-                </TableHead>
                 <TableHead className="text-center">
                   {t("label.enabled")}
                 </TableHead>
@@ -1029,6 +1063,11 @@ export function SettingsRulesSection({
                     <span id={selectorId("settings-rule-name", record.name)}>
                       {record.name}
                     </span>
+                    {record.disabledReason ? (
+                      <p className="mt-1 max-w-md text-sm font-normal text-amber-400">
+                        {record.disabledReason}
+                      </p>
+                    ) : null}
                     {record.isManaged && record.managedKey ? (
                       <ManagedBadge managedKey={record.managedKey} />
                     ) : null}
@@ -1037,10 +1076,7 @@ export function SettingsRulesSection({
                     {record.description || "—"}
                   </TableCell>
                   <TableCell>
-                    <FacetBadges facets={record.appliedFacets} />
-                  </TableCell>
-                  <TableCell className="text-center">
-                    {record.priority}
+                    <FacetTags values={record.appliedFacets} emptyLabel="Global" />
                   </TableCell>
                   <TableCell className="text-center">
                     <RenderBooleanIcon
@@ -1059,7 +1095,7 @@ export function SettingsRulesSection({
                         }
                         tone={record.enabled ? "disabled" : "enabled"}
                         onClick={() => void toggleRuleSetEnabled(record)}
-                        disabled={mutatingRuleSetId === record.id}
+                        disabled={mutatingRuleSetId === record.id || (!record.enabled && Boolean(record.disabledReason))}
                       >
                         <Power className="h-4 w-4" />
                       </IconButton>
@@ -1099,7 +1135,7 @@ export function SettingsRulesSection({
               ))}
               {ruleSetRecords.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-muted-foreground">
+                  <TableCell colSpan={5} className="text-muted-foreground">
                     {t("settings.noRulesFound")}
                   </TableCell>
                 </TableRow>
@@ -1112,16 +1148,41 @@ export function SettingsRulesSection({
       {isEditorOpen ? (
         <>
           <Card>
-            <CardHeader>
+            <CardHeader className="flex items-center justify-between gap-3">
               <CardTitle className="text-base">
-                {editingRuleSetId
+                {editorMode === "copy"
+                  ? t("settings.ruleCopyAsCustom")
+                  : editingRuleSetId
                   ? t("settings.ruleUpdate")
                   : t("settings.ruleCreate")}
               </CardTitle>
+              {/* A copy is always created enabled, so the toggle would be a
+                  control over nothing. */}
+              {editorMode !== "copy" ? (
+                <label className="flex shrink-0 items-center gap-3">
+                  <Checkbox
+                    id="settings-rule-enabled"
+                    size="large"
+                    checked={ruleSetDraft.enabled}
+                    onCheckedChange={(value) =>
+                      setRuleSetDraft((prev) => ({
+                        ...prev,
+                        enabled: value === true,
+                      }))
+                    }
+                  />
+                  <span className="text-sm">{t("label.enabled")}</span>
+                </label>
+              ) : null}
             </CardHeader>
             <CardContent>
               <form id="settings-rule-form" className="space-y-3" onSubmit={submitRuleSet}>
-                <div className="grid gap-3 md:grid-cols-3">
+                {ruleSetRecords.find((record) => record.id === editingRuleSetId)?.disabledReason ? (
+                  <p role="status" className="rounded-md border border-amber-500/30 p-3 text-sm text-amber-400">
+                    {ruleSetRecords.find((record) => record.id === editingRuleSetId)?.disabledReason}
+                  </p>
+                ) : null}
+                <div className="grid gap-3 md:grid-cols-2">
                   <label>
                     <Label className="mb-2 block">{t("label.name")}</Label>
                     <Input
@@ -1151,23 +1212,6 @@ export function SettingsRulesSection({
                         }))
                       }
                       placeholder="Block releases over 100 GiB"
-                    />
-                  </label>
-                  <label>
-                    <Label className="mb-2 block">
-                      {t("settings.rulePriority")}
-                    </Label>
-                    <Input
-                      id="settings-rule-priority"
-                      {...integerInputProps}
-                      value={ruleSetDraft.priority}
-                      onChange={(e) =>
-                        setRuleSetDraft((prev) => ({
-                          ...prev,
-                          priority: Number(sanitizeDigits(e.target.value)) || 0,
-                        }))
-                      }
-                      placeholder="0"
                     />
                   </label>
                 </div>
@@ -1210,48 +1254,18 @@ export function SettingsRulesSection({
                   <p className="mb-2 text-xs text-muted-foreground">
                     {t("settings.ruleAppliedFacetsHelp")}
                   </p>
-                  <div className="flex items-center gap-4">
-                    {FACET_OPTIONS.map((opt) => (
-                      <label
-                        key={opt.value}
-                        className="flex items-center gap-2"
-                      >
-                        <Checkbox
-                          id={selectorId("settings-rule-facet", opt.value)}
-                          checked={ruleSetDraft.appliedFacets.includes(
-                            opt.value,
-                          )}
-                          onCheckedChange={(value) => {
-                            setRuleSetDraft((prev) => {
-                              const next =
-                                value === true
-                                  ? [...prev.appliedFacets, opt.value]
-                                  : prev.appliedFacets.filter(
-                                      (f) => f !== opt.value,
-                                    );
-                              return { ...prev, appliedFacets: next };
-                            });
-                          }}
-                        />
-                        <span className="text-sm">{opt.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <label className="flex items-center gap-2">
-                  <Checkbox
-                    id="settings-rule-enabled"
-                    checked={ruleSetDraft.enabled}
-                    onCheckedChange={(value) =>
+                  <FacetSelect
+                    idPrefix="settings-rule-facet"
+                    values={LOWERCASE_FACET_IDS}
+                    selected={ruleSetDraft.appliedFacets}
+                    onChange={(next) => {
                       setRuleSetDraft((prev) => ({
                         ...prev,
-                        enabled: value === true,
-                      }))
-                    }
+                        appliedFacets: next,
+                      }));
+                    }}
                   />
-                  <span className="text-sm">{t("label.enabled")}</span>
-                </label>
+                </div>
 
                 {validationResult ? (
                   <div
@@ -1286,6 +1300,8 @@ export function SettingsRulesSection({
                   >
                     {mutatingRuleSetId !== null
                       ? t("label.saving")
+                      : editorMode === "copy"
+                        ? t("settings.ruleCopyAsCustom")
                       : editingRuleSetId
                         ? t("settings.ruleUpdate")
                         : t("settings.ruleCreate")}
@@ -1301,6 +1317,16 @@ export function SettingsRulesSection({
                       ? t("settings.ruleValidating")
                       : t("settings.ruleValidate")}
                   </Button>
+                  {testScoring ? (
+                    <Button
+                      id="settings-rule-test"
+                      type="button"
+                      variant="secondary"
+                      onClick={() => setIsTestScoringOpen((open) => !open)}
+                    >
+                      Test
+                    </Button>
+                  ) : null}
                   <Button
                     id="settings-rule-cancel"
                     type="button"
@@ -1311,6 +1337,14 @@ export function SettingsRulesSection({
                   </Button>
                 </div>
               </form>
+              {testScoring ? (
+                <div className="mt-3">
+                  {testScoring({
+                    open: isTestScoringOpen,
+                    onOpenChange: setIsTestScoringOpen,
+                  })}
+                </div>
+              ) : null}
             </CardContent>
           </Card>
           {editorMode === "edit" ? (
@@ -1341,12 +1375,16 @@ export function SettingsRulesSection({
         mutatingRuleSetId={mutatingRuleSetId}
         toggleRuleSetEnabled={toggleRuleSetEnabled}
       />
+      {trackedRulePacks}
           </div>
         </div>
         <div className="@container w-full space-y-4 xl:w-[44%] xl:max-w-[880px] xl:shrink-0">
           <RuleLibrary
             defaultOpen={ruleSetRecords.length === 0}
             onApply={applyTemplate}
+            onInstallCommunityPack={installTrackedRulePack}
+            installingRulePackId={installingRulePackId}
+            canManage={canManageTrackedPacks}
           />
           <RulesContextReference />
         </div>

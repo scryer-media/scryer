@@ -1,6 +1,6 @@
 use regorus::{Engine, Value};
 
-/// Block score constant matching `quality_profile::BLOCK_SCORE`.
+/// Strong recoverable penalty matching `quality_profile::BLOCK_SCORE`.
 const BLOCK_SCORE: i64 = -10_000;
 
 /// Register all Scryer-specific builtins on the engine.

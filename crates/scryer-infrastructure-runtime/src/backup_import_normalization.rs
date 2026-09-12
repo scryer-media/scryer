@@ -1,5 +1,3 @@
-use std::collections::{BTreeMap, BTreeSet};
-
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use chrono::{DateTime, Utc};
 use scryer_application::{AppError, AppResult};
@@ -30,30 +28,10 @@ pub fn strip_nonportable_backup_fields(table: &str, object: &mut JsonMap<String,
     }
 }
 
-pub fn validate_restore_manifest_table_set(
-    row_counts: &BTreeMap<String, u64>,
-    export_tables: &[String],
-) -> AppResult<()> {
-    let expected_tables = export_tables.iter().cloned().collect::<BTreeSet<_>>();
-    let manifest_tables = row_counts.keys().cloned().collect::<BTreeSet<_>>();
-    if manifest_tables == expected_tables {
-        return Ok(());
-    }
-
-    let missing = expected_tables
-        .difference(&manifest_tables)
-        .cloned()
-        .collect::<Vec<_>>();
-    let unexpected = manifest_tables
-        .difference(&expected_tables)
-        .cloned()
-        .collect::<Vec<_>>();
-    Err(AppError::Validation(format!(
-        "backup bundle table set does not match the current restore catalog: missing [{}], unexpected [{}]",
-        missing.join(", "),
-        unexpected.join(", ")
-    )))
-}
+// The restore table-set gate lives beside the catalog it validates against so
+// that inspect-time callers, which cannot reach this crate, run the identical
+// check. Re-exported here to keep every existing caller and test unchanged.
+pub use scryer_application::validate_restore_manifest_table_set;
 
 pub fn normalize_import_object_for_target(
     table: &str,
@@ -584,7 +562,7 @@ mod tests {
             "settings_values".to_string(),
         ];
 
-        let error = validate_restore_manifest_table_set(&row_counts, &export_tables)
+        let error = validate_restore_manifest_table_set(&row_counts, &export_tables, None)
             .expect_err("non-export catalog tables should invalidate the bundle");
         assert!(error.to_string().contains("title_image_blobs"));
         assert!(error.to_string().contains("title_image_variants"));
@@ -602,9 +580,76 @@ mod tests {
             "settings_values".to_string(),
         ];
 
-        let error = validate_restore_manifest_table_set(&row_counts, &export_tables)
+        let error = validate_restore_manifest_table_set(&row_counts, &export_tables, None)
             .expect_err("unknown tables should stay invalid");
         assert!(error.to_string().contains("mystery_cache"));
+    }
+
+    #[test]
+    fn restore_manifest_validation_dates_missing_transfer_tables_and_combines_legacy_changes() {
+        let introduced = [
+            ("rule_pack_installations", 225),
+            ("rule_pack_members", 225),
+            ("location_transfer_progress", 234),
+            ("location_transfer_titles", 234),
+            ("location_file_resolutions", 235),
+        ];
+        let mut export_tables = vec!["titles".to_string()];
+        export_tables.extend(introduced.iter().map(|(table, _)| table.to_string()));
+        for source_version in [224, 225, 233, 234, 235, 236] {
+            let mut row_counts = BTreeMap::from_iter([("titles".to_string(), 1)]);
+            row_counts.extend(introduced.iter().filter_map(|(table, version)| {
+                (source_version >= *version).then(|| (table.to_string(), 0))
+            }));
+            let key = format!("{source_version:04}_fixture");
+            validate_restore_manifest_table_set(&row_counts, &export_tables, Some(&key))
+                .expect("only tables introduced after this backup may be absent");
+            for (table, version) in introduced {
+                if source_version >= version {
+                    let mut incomplete = row_counts.clone();
+                    incomplete.remove(table);
+                    assert!(
+                        validate_restore_manifest_table_set(
+                            &incomplete,
+                            &export_tables,
+                            Some(&key)
+                        )
+                        .is_err(),
+                        "{table} must be present at migration {source_version}"
+                    );
+                }
+            }
+            row_counts.remove("titles");
+            assert!(
+                validate_restore_manifest_table_set(&row_counts, &export_tables, Some(&key))
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn restore_manifest_validation_allows_only_pre_0225_missing_rule_pack_tables() {
+        let row_counts = BTreeMap::from_iter([("settings_values".to_string(), 1)]);
+        let export_tables = vec![
+            "rule_pack_installations".to_string(),
+            "rule_pack_members".to_string(),
+            "settings_values".to_string(),
+        ];
+
+        validate_restore_manifest_table_set(&row_counts, &export_tables, Some("0224_prior_change"))
+            .expect("known pre-0225 bundles should restore into the newer schema");
+
+        let error = validate_restore_manifest_table_set(
+            &row_counts,
+            &export_tables,
+            Some("0225_tracked_rule_packs"),
+        )
+        .expect_err("new bundles must include the rule pack tables");
+        assert!(error.to_string().contains("rule_pack_installations"));
+
+        let error = validate_restore_manifest_table_set(&row_counts, &export_tables, None)
+            .expect_err("bundles without migration metadata remain strict");
+        assert!(error.to_string().contains("rule_pack_members"));
     }
 
     #[test]

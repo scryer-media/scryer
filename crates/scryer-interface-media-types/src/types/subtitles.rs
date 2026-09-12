@@ -183,6 +183,8 @@ pub enum TitleHistoryEventTypeValue {
     FileDeleted,
     /// File was renamed.
     FileRenamed,
+    /// Title completed a root move or library transfer.
+    TitleMoved,
     /// Download was ignored.
     DownloadIgnored,
     /// Title or file was rematched.
@@ -208,6 +210,7 @@ impl TitleHistoryEventTypeValue {
             Self::FileRecycled => TitleHistoryEventType::FileRecycled,
             Self::FileDeleted => TitleHistoryEventType::FileDeleted,
             Self::FileRenamed => TitleHistoryEventType::FileRenamed,
+            Self::TitleMoved => TitleHistoryEventType::TitleMoved,
             Self::DownloadIgnored => TitleHistoryEventType::DownloadIgnored,
             Self::Rematched => TitleHistoryEventType::Rematched,
             Self::SeedingStarted => TitleHistoryEventType::SeedingStarted,

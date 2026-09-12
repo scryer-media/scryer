@@ -3,8 +3,8 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use scryer_application::{
     AppResult, IndexerArtifactLease, IndexerArtifactResolutionRequest, IndexerArtifactResolver,
-    IndexerConfigRepository, IndexerProxyConfigRepository, IndexerStatsTracker,
-    PreparedIndexerArtifact, ResolvedDownloadArtifact, StagedNzbStore, extract_magnet_info_hash,
+    IndexerConfigRepository, IndexerPluginProvider, IndexerStatsTracker, PreparedIndexerArtifact,
+    ProxyConfigRepository, ResolvedDownloadArtifact, StagedNzbStore, extract_magnet_info_hash,
     is_valid_magnet_uri,
 };
 use tokio::sync::Semaphore;
@@ -28,14 +28,14 @@ pub struct AcquisitionIndexerArtifactResolver {
 impl AcquisitionIndexerArtifactResolver {
     pub fn new(
         indexer_configs: Arc<dyn IndexerConfigRepository>,
-        indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
+        proxy_configs: Arc<dyn ProxyConfigRepository>,
         staged_nzb_store: Arc<dyn StagedNzbStore>,
         staged_nzb_pipeline_limit: Arc<Semaphore>,
     ) -> Self {
         Self {
             artifact_transport: IndexerArtifactTransport::new(
                 Arc::clone(&indexer_configs),
-                Arc::clone(&indexer_proxy_configs),
+                Arc::clone(&proxy_configs),
             ),
             staged_nzb_store,
             staged_nzb_pipeline_limit,
@@ -49,6 +49,18 @@ impl AcquisitionIndexerArtifactResolver {
         self.artifact_transport = self
             .artifact_transport
             .with_indexer_stats_tracker(indexer_stats);
+        self
+    }
+
+    /// Let indexers that own an authenticated grab flow resolve their own
+    /// artifacts ahead of the host's direct, proxied, and solver fetches.
+    pub fn with_indexer_plugin_provider(
+        mut self,
+        indexer_plugin_provider: Arc<dyn IndexerPluginProvider>,
+    ) -> Self {
+        self.artifact_transport = self
+            .artifact_transport
+            .with_indexer_plugin_provider(indexer_plugin_provider);
         self
     }
 
@@ -126,6 +138,25 @@ impl IndexerArtifactResolver for AcquisitionIndexerArtifactResolver {
             .as_deref()
             .map(str::trim)
             .filter(|id| !id.is_empty());
+        let prepared = self
+            .resolve_transport_artifact(indexer_id, source, request)
+            .await;
+        // Proxy health observed by the fetch above drains through the one
+        // shared ledger, whichever way the fetch ended.
+        if indexer_id.is_some() {
+            self.artifact_transport.flush_proxy_health().await;
+        }
+        prepared
+    }
+}
+
+impl AcquisitionIndexerArtifactResolver {
+    async fn resolve_transport_artifact(
+        &self,
+        indexer_id: Option<&str>,
+        source: &str,
+        request: &IndexerArtifactResolutionRequest,
+    ) -> AppResult<PreparedIndexerArtifact> {
         let artifact = match self
             .artifact_transport
             .fetch_response_with_cancellation(indexer_id, source, &request.cancellation)

@@ -10,6 +10,7 @@ const translate = (key: string) =>
     "episode.fileOnDisk": "On disk",
     "mediaFile.pendingScan": "Pending scan",
     "mediaFile.scanFailed": "Scan failed",
+    "mediaFile.reviewRequired": "Review required",
     "episode.missing": "Missing",
   })[key] ?? key;
 
@@ -36,6 +37,10 @@ test("episode availability maps every compact state to its collapsed-row pill", 
   assert.deepEqual(
     episodeAvailabilityPill(availability("SCAN_FAILED"), translate),
     { tone: "negative", label: "Scan failed" },
+  );
+  assert.deepEqual(
+    episodeAvailabilityPill(availability("REVIEW_REQUIRED"), translate),
+    { tone: "warning", label: "Review required" },
   );
   assert.deepEqual(
     episodeAvailabilityPill(availability("MISSING"), translate),

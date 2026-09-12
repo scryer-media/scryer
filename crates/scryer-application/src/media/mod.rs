@@ -1,5 +1,9 @@
 pub(crate) mod analyzer;
 pub(crate) mod audio_requirements;
+pub(crate) mod disc_analysis;
+pub(crate) mod discs;
 pub(crate) mod language;
 pub(crate) mod language_data;
+pub(crate) mod metrics;
+pub(crate) mod refresh;
 pub(crate) mod release_labels;

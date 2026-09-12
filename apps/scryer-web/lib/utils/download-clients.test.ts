@@ -23,6 +23,9 @@ function configField(
     hostBinding: overrides.hostBinding ?? null,
     options: overrides.options ?? [],
     helpText: overrides.helpText ?? null,
+    visibleWhen: overrides.visibleWhen ?? null,
+    requiredWhen: overrides.requiredWhen ?? null,
+    advanced: overrides.advanced ?? false,
   };
 }
 
@@ -39,6 +42,7 @@ function draft(overrides: Partial<DownloadClientDraft>): DownloadClientDraft {
     password: "",
     remotePathMappings: "",
     configValues: {},
+    proxyConfigId: null,
     isEnabled: true,
     ...overrides,
   };

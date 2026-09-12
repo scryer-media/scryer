@@ -1,9 +1,7 @@
 use crate::MediaInfoError;
 use crate::codec;
 use crate::types::{RawContainer, RawTrack, TrackKind};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::io::{Read, SeekFrom};
 
 const MAX_SCAN_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_TAGS: usize = 8_192;
@@ -23,9 +21,10 @@ struct FlvMetadata {
     audio_bitrate_bps: Option<i64>,
 }
 
-pub(crate) fn parse_flv(path: &Path) -> Result<RawContainer, MediaInfoError> {
-    let mut file = File::open(path)?;
-    let file_len = file.metadata()?.len();
+pub(crate) fn parse_flv_source(
+    mut file: &mut dyn crate::source::MediaSource,
+) -> Result<RawContainer, MediaInfoError> {
+    let file_len = file.len();
     let mut header = [0_u8; 9];
     file.read_exact(&mut header)
         .map_err(|_| parse_error("truncated FLV header"))?;
@@ -48,59 +47,88 @@ pub(crate) fn parse_flv(path: &Path) -> Result<RawContainer, MediaInfoError> {
     let mut max_timestamp_ms = 0_u32;
     let scan_end = data_offset.saturating_add(4).saturating_add(MAX_SCAN_BYTES);
 
-    for _ in 0..MAX_TAGS {
-        let tag_start = file.stream_position()?;
-        if tag_start >= file_len || tag_start >= scan_end {
-            break;
-        }
-        let mut tag_header = [0_u8; 11];
-        match file.read_exact(&mut tag_header) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(error) => return Err(error.into()),
-        }
-        let tag_type = tag_header[0] & 0x1f;
-        let payload_len = u24_be(&tag_header[1..4]) as usize;
-        let timestamp = u24_be(&tag_header[4..7]) | (u32::from(tag_header[7]) << 24);
-        if payload_len > MAX_TAG_PAYLOAD
-            || file
-                .stream_position()?
-                .checked_add(payload_len as u64 + 4)
-                .is_none_or(|end| end > file_len || end > scan_end)
-        {
-            break;
-        }
-        let mut payload = vec![0_u8; payload_len];
-        file.read_exact(&mut payload)?;
-        let previous_tag_size = read_u32_be(&mut file)?;
-        if previous_tag_size != 11_u32.saturating_add(payload_len as u32) {
-            if resynchronize_tags(&mut file, tag_start.saturating_add(1), file_len, scan_end)? {
-                continue;
+    // Tags carry the tracks themselves, so a budget exhausted mid-scan must end
+    // the scan, not the parse: whatever tags were already read still describe
+    // the file, and an empty result is rejected below on its own merits.
+    let scanned = (|| -> Result<(), MediaInfoError> {
+        for _ in 0..MAX_TAGS {
+            let tag_start = file.stream_position()?;
+            if tag_start >= file_len || tag_start >= scan_end {
+                break;
             }
-            break;
-        }
-        max_timestamp_ms = max_timestamp_ms.max(timestamp);
-
-        match tag_type {
-            8 => parse_audio_tag(&payload, &mut audio_track)?,
-            9 => parse_video_tag(&payload, &mut video_track)?,
-            18 => {
-                // Script metadata is advisory. A malformed script tag must not
-                // discard valid media tags already found.
-                let _ = parse_script_metadata(&payload, &mut metadata);
+            let mut tag_header = [0_u8; 11];
+            match file.read_exact(&mut tag_header) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(error) => return Err(error.into()),
             }
-            _ => {}
+            let tag_type = tag_header[0] & 0x1f;
+            let payload_len = u24_be(&tag_header[1..4]) as usize;
+            let timestamp = u24_be(&tag_header[4..7]) | (u32::from(tag_header[7]) << 24);
+            if payload_len > MAX_TAG_PAYLOAD
+                || file
+                    .stream_position()?
+                    .checked_add(payload_len as u64 + 4)
+                    .is_none_or(|end| end > file_len || end > scan_end)
+            {
+                break;
+            }
+            let mut payload = vec![0_u8; payload_len];
+            file.read_exact(&mut payload)?;
+            let previous_tag_size = read_u32_be(&mut file)?;
+            if previous_tag_size != 11_u32.saturating_add(payload_len as u32) {
+                if resynchronize_tags(&mut file, tag_start.saturating_add(1), file_len, scan_end)? {
+                    continue;
+                }
+                break;
+            }
+            max_timestamp_ms = max_timestamp_ms.max(timestamp);
+
+            match tag_type {
+                8 => parse_audio_tag(&payload, &mut audio_track)?,
+                9 => parse_video_tag(&payload, &mut video_track)?,
+                18 => {
+                    // Script metadata is advisory. A malformed script tag must not
+                    // discard valid media tags already found.
+                    let _ = parse_script_metadata(&payload, &mut metadata);
+                }
+                _ => {}
+            }
+
+            let have_video_details = video_track.as_ref().is_some_and(|track: &RawTrack| {
+                track.width.is_some() || track.codec_private.is_some()
+            });
+            let have_audio_details = audio_track.as_ref().is_some_and(|track: &RawTrack| {
+                if track.codec_name.as_deref() == Some("aac") {
+                    track.codec_private.is_some()
+                } else {
+                    track.channels.is_some() && track.metadata.sample_rate.is_some()
+                }
+            });
+            if have_video_details && have_audio_details && metadata.duration_seconds.is_some() {
+                break;
+            }
         }
 
-        let have_video_details = video_track
-            .as_ref()
-            .is_some_and(|track: &RawTrack| track.width.is_some() || track.codec_private.is_some());
-        let have_audio_details = audio_track.as_ref().is_some_and(|track: &RawTrack| {
-            track.codec_name.as_deref() != Some("aac") || track.codec_private.is_some()
+        Ok(())
+    })();
+    let mut details = scryer_media_types::AnalysisDetails::default();
+    if let Err(error) = scanned {
+        if !file.exhausted() {
+            return Err(error);
+        }
+        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.budget_exhausted = true;
+        details
+            .report
+            .warnings
+            .push(scryer_media_types::ProbeWarning {
+            code: "flv_tag_scan_budget".into(),
+            message:
+                "FLV tag scanning stopped when the media byte or I/O-operation budget was exhausted"
+                    .into(),
+            ..Default::default()
         });
-        if have_video_details && have_audio_details && metadata.duration_seconds.is_some() {
-            break;
-        }
     }
 
     let mut tracks = Vec::new();
@@ -108,6 +136,9 @@ pub(crate) fn parse_flv(path: &Path) -> Result<RawContainer, MediaInfoError> {
         video.width = video.width.or(metadata.width);
         video.height = video.height.or(metadata.height);
         video.frame_rate_fps = video.frame_rate_fps.or(metadata.frame_rate_fps);
+        video.metadata.declared_frame_rate = metadata
+            .frame_rate_fps
+            .and_then(scryer_media_types::Rational::from_f64);
         video.bit_rate_bps = video.bit_rate_bps.or(metadata.video_bitrate_bps);
         tracks.push(video);
     }
@@ -125,6 +156,7 @@ pub(crate) fn parse_flv(path: &Path) -> Result<RawContainer, MediaInfoError> {
         .or_else(|| (max_timestamp_ms != 0).then_some(f64::from(max_timestamp_ms) / 1_000.0));
 
     Ok(RawContainer {
+        details,
         format_name: "flv".into(),
         duration_seconds,
         num_chapters: Some(0),
@@ -158,6 +190,9 @@ fn parse_video_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), Medi
             if let Some((width, height)) = parse_flv1_dimensions(payload) {
                 current.width = Some(width);
                 current.height = Some(height);
+                // Sorenson H.263's supported picture versions encode 8-bit 4:2:0.
+                current.metadata.bit_depth = Some(8);
+                current.metadata.pixel_format = Some("yuv420p".into());
             }
         }
         4 if current.width.is_none() => {
@@ -193,9 +228,12 @@ fn parse_audio_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), Medi
     };
     let codec_id = flags >> 4;
     let codec_name = match codec_id {
-        0 => "pcm_u8",
+        0 | 3 if flags & 2 == 0 => "pcm_u8",
+        // Deprecated format 0 uses the author's platform byte order, which
+        // cannot be recovered from the machine performing this inspection.
+        0 => "pcm_s16",
         1 => "adpcm_swf",
-        2 => "mp3",
+        2 | 14 => "mp3",
         3 => "pcm_s16le",
         4..=6 => "nellymoser",
         7 => "pcm_alaw",
@@ -204,19 +242,44 @@ fn parse_audio_tag(data: &[u8], track: &mut Option<RawTrack>) -> Result<(), Medi
         11 => "speex",
         _ => return Ok(()),
     };
-    let channels = if codec_id == 11 {
-        1
-    } else {
-        i32::from(flags & 1) + 1
+    let channels = match codec_id {
+        4 | 5 | 11 => Some(1),
+        // AAC and MPEG audio carry authoritative channel counts in their headers.
+        2 | 10 | 14 => None,
+        _ => Some(i32::from(flags & 1) + 1),
     };
-    let current =
-        track.get_or_insert_with(|| raw_track(TrackKind::Audio, codec_name, Some(channels)));
+    let current = track.get_or_insert_with(|| raw_track(TrackKind::Audio, codec_name, channels));
     if current.codec_name.as_deref() != Some(codec_name) {
         return Ok(());
     }
+    current.metadata.sample_rate = current.metadata.sample_rate.or(match codec_id {
+        4 | 11 => Some(16_000),
+        5 | 7 | 8 | 14 => Some(8_000),
+        2 | 10 => None,
+        _ => Some([5_512, 11_025, 22_050, 44_100][usize::from((flags >> 2) & 3)]),
+    });
+    if codec_id != 10 {
+        current.metadata.channel_layout = current.metadata.channel_layout.clone().or_else(|| {
+            current.channels.and_then(|channels| match channels {
+                1 => Some("mono".into()),
+                2 => Some("stereo".into()),
+                _ => None,
+            })
+        });
+    }
+    if matches!(codec_id, 0 | 3) {
+        current.metadata.sample_bit_depth = Some(if flags & 2 == 0 { 8 } else { 16 });
+        current.metadata.sample_format = match codec_name {
+            "pcm_u8" => Some("u8".into()),
+            "pcm_s16le" => Some("s16le".into()),
+            _ => None,
+        };
+    }
     match codec_id {
-        2 if current.bit_rate_bps.is_none() => {
-            current.bit_rate_bps = find_mp3_bitrate(payload);
+        2 | 14 if current.metadata.estimated_bitrate_bps.is_none() => {
+            if let Some(header) = crate::ts::find_mpeg_audio_header(payload) {
+                header.apply(current);
+            }
         }
         10 if payload.is_empty() => return Err(parse_error("truncated FLV AAC packet header")),
         10 if payload[0] == 0 => {
@@ -447,32 +510,7 @@ fn parse_aac_config(data: &[u8]) -> Option<AacConfig> {
     Some(AacConfig { channels })
 }
 
-fn find_mp3_bitrate(data: &[u8]) -> Option<i64> {
-    const MPEG1_LAYER3: [u16; 16] = [
-        0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
-    ];
-    const MPEG2_LAYER3: [u16; 16] = [
-        0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
-    ];
-    data.windows(4).find_map(|header| {
-        if header[0] != 0xff || header[1] & 0xe0 != 0xe0 || header[1] & 0x06 != 0x02 {
-            return None;
-        }
-        let version = (header[1] >> 3) & 0x03;
-        if version == 1 {
-            return None;
-        }
-        let index = (header[2] >> 4) as usize;
-        let kbps = if version == 3 {
-            MPEG1_LAYER3[index]
-        } else {
-            MPEG2_LAYER3[index]
-        };
-        (kbps != 0).then_some(i64::from(kbps) * 1_000)
-    })
-}
-
-fn read_tail_timestamp(file: &mut File, file_len: u64) -> Option<u32> {
+fn read_tail_timestamp(file: &mut dyn crate::source::MediaSource, file_len: u64) -> Option<u32> {
     if file_len < 15 {
         return None;
     }
@@ -493,7 +531,11 @@ fn read_tail_timestamp(file: &mut File, file_len: u64) -> Option<u32> {
     read_tag_timestamp_at(file, preceding_start, preceding_size)
 }
 
-fn read_tag_timestamp_at(file: &mut File, start: u64, expected_size: u64) -> Option<u32> {
+fn read_tag_timestamp_at(
+    file: &mut dyn crate::source::MediaSource,
+    start: u64,
+    expected_size: u64,
+) -> Option<u32> {
     file.seek(SeekFrom::Start(start)).ok()?;
     let mut header = [0_u8; 11];
     file.read_exact(&mut header).ok()?;
@@ -505,7 +547,7 @@ fn read_tag_timestamp_at(file: &mut File, start: u64, expected_size: u64) -> Opt
 }
 
 fn resynchronize_tags(
-    file: &mut File,
+    file: &mut dyn crate::source::MediaSource,
     start: u64,
     file_len: u64,
     scan_end: u64,
@@ -545,6 +587,7 @@ fn tag_layout_end(data: &[u8], offset: usize) -> Option<usize> {
 
 fn raw_track(kind: TrackKind, codec: &str, channels: Option<i32>) -> RawTrack {
     RawTrack {
+        metadata: Default::default(),
         kind,
         codec_id: codec.into(),
         codec_name: Some(codec.into()),
@@ -565,7 +608,7 @@ fn raw_track(kind: TrackKind, codec: &str, channels: Option<i32>) -> RawTrack {
     }
 }
 
-fn read_u32_be(reader: &mut impl Read) -> Result<u32, MediaInfoError> {
+fn read_u32_be(reader: &mut (impl Read + ?Sized)) -> Result<u32, MediaInfoError> {
     let mut data = [0_u8; 4];
     reader.read_exact(&mut data)?;
     Ok(u32::from_be_bytes(data))
@@ -674,6 +717,41 @@ mod tests {
     use super::*;
 
     #[test]
+    fn budget_exhausted_mid_tag_scan_keeps_the_tags_already_read() {
+        // FLV discovers tracks from the tag stream itself, so a budget that dies
+        // mid-scan has to end the scan, not the parse.
+        let fixture = include_bytes!("../tests/media/flv_h264_aac.flv").as_slice();
+        let analysis = (8_u64..64)
+            .filter_map(|limit| {
+                let mut source = std::io::Cursor::new(fixture);
+                let analysis = crate::analyze_source_with_limits(
+                    &mut source,
+                    "flv",
+                    crate::AnalyzeOptions::default(),
+                    64 * 1024 * 1024,
+                    limit,
+                )
+                .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
+                analysis
+                    .details
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.code == "flv_tag_scan_budget")
+                    .then_some(analysis)
+            })
+            .next()
+            .expect("some io limit must exhaust the budget inside the tag scan");
+        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
+        assert!(crate::is_valid_video(&analysis));
+        assert!(analysis.details.report.budget_exhausted);
+        assert_eq!(
+            analysis.details.report.status,
+            scryer_media_types::ProbeStatus::Incomplete
+        );
+    }
+
+    #[test]
     fn parses_all_fixed_flv1_dimensions() {
         let fixed = [
             (2_u8, (352, 288)),
@@ -701,6 +779,81 @@ mod tests {
     #[test]
     fn parses_aac_stereo_channel_configuration() {
         assert_eq!(parse_aac_config(&[0x12, 0x10]).unwrap().channels, Some(2));
+    }
+
+    #[test]
+    fn audio_flags_preserve_pcm_precision_and_codec_specific_rates() {
+        for (flags, codec, rate, channels, depth) in [
+            (0x3c, "pcm_u8", 44_100, 1, Some(8)),
+            (0x3f, "pcm_s16le", 44_100, 2, Some(16)),
+            (0x02, "pcm_s16", 5_512, 1, Some(16)),
+            (0x4f, "nellymoser", 16_000, 1, None),
+            (0x5f, "nellymoser", 8_000, 1, None),
+            (0xbf, "speex", 16_000, 1, None),
+            (0x7c, "pcm_alaw", 8_000, 1, None),
+            (0x8c, "pcm_mulaw", 8_000, 1, None),
+        ] {
+            let mut track = None;
+            parse_audio_tag(&[flags, 0], &mut track).unwrap();
+            let track = track.unwrap();
+            assert_eq!(track.codec_name.as_deref(), Some(codec));
+            assert_eq!(track.channels, Some(channels));
+            assert_eq!(track.metadata.sample_rate, Some(rate));
+            assert_eq!(track.metadata.sample_bit_depth, depth);
+            assert_eq!(
+                track.metadata.channel_layout.as_deref(),
+                Some(if channels == 1 { "mono" } else { "stereo" })
+            );
+            if codec == "pcm_s16" {
+                assert!(track.metadata.sample_format.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn flv_inspection_continues_past_audio_tags_without_a_complete_header() {
+        fn tag(bytes: &mut Vec<u8>, kind: u8, payload: &[u8]) {
+            bytes.push(kind);
+            bytes.extend_from_slice(&(payload.len() as u32).to_be_bytes()[1..]);
+            bytes.extend_from_slice(&[0; 7]);
+            bytes.extend_from_slice(payload);
+            bytes.extend_from_slice(&(11 + payload.len() as u32).to_be_bytes());
+        }
+        let mut bytes = b"FLV\x01\x05\x00\x00\x00\x09\x00\x00\x00\x00".to_vec();
+        let mut script = b"\x02\x00\x0aonMetaData\x03\x00\x08duration\x00".to_vec();
+        script.extend_from_slice(&2.0_f64.to_be_bytes());
+        script.extend_from_slice(&[0, 0, 9]);
+        tag(&mut bytes, 18, &script);
+        tag(&mut bytes, 9, &[0x12, 0, 0, 0x80, 1, 0]);
+        tag(&mut bytes, 8, &[0x2c, 0]);
+        tag(&mut bytes, 8, &[0x2c, 0xff, 0xfb, 0x94, 0]);
+        let result = parse_flv_source(&mut std::io::Cursor::new(bytes)).unwrap();
+        assert_eq!(result.tracks[0].width, Some(352));
+        assert_eq!(result.tracks[0].metadata.bit_depth, Some(8));
+        assert_eq!(
+            result.tracks[0].metadata.pixel_format.as_deref(),
+            Some("yuv420p")
+        );
+        assert_eq!(result.tracks[1].metadata.sample_rate, Some(48_000));
+        assert_eq!(result.tracks[1].channels, Some(2));
+    }
+
+    #[test]
+    fn compressed_audio_requires_configuration_and_does_not_measure_bitrate_from_one_frame() {
+        let mut aac = None;
+        parse_audio_tag(&[0xaf, 1, 0], &mut aac).unwrap();
+        let aac = aac.unwrap();
+        assert!(aac.channels.is_none());
+        assert!(aac.metadata.sample_rate.is_none());
+        assert!(aac.metadata.channel_layout.is_none());
+        let mut mp3 = None;
+        parse_audio_tag(&[0x2c, 0xff, 0xfb, 0x94, 0x00], &mut mp3).unwrap();
+        let mp3 = mp3.unwrap();
+        assert_eq!(mp3.channels, Some(2));
+        assert_eq!(mp3.metadata.sample_rate, Some(48_000));
+        assert_eq!(mp3.metadata.channel_layout.as_deref(), Some("stereo"));
+        assert!(mp3.bit_rate_bps.is_none());
+        assert_eq!(mp3.metadata.estimated_bitrate_bps, Some(128_000));
     }
 
     #[test]

@@ -45,11 +45,15 @@ use std::collections::HashSet;
 #[derive(Clone, Debug, Default)]
 pub(crate) struct TitleIdentityAmbiguity {
     pub(crate) shared_lookup_keys: Vec<String>,
+    pub(crate) spelling_index: Option<Arc<crate::title_matching::relaxed::SpellingIndex>>,
 }
 
 impl TitleIdentityAmbiguity {
     pub(crate) fn from_shared_keys(shared_lookup_keys: Vec<String>) -> Self {
-        Self { shared_lookup_keys }
+        Self {
+            shared_lookup_keys,
+            spelling_index: None,
+        }
     }
 
     fn from_year_qualified_canonical_key(canonical_key: &str, title_year: Option<i32>) -> Self {
@@ -67,6 +71,9 @@ impl TitleIdentityAmbiguity {
     }
 
     fn merge(&mut self, other: Self) {
+        if other.spelling_index.is_some() {
+            self.spelling_index = other.spelling_index;
+        }
         for key in other.shared_lookup_keys {
             if !self.shared_lookup_keys.contains(&key) {
                 self.shared_lookup_keys.push(key);
@@ -91,6 +98,7 @@ impl TitleIdentityAmbiguity {
 
 #[derive(Clone, Debug)]
 pub(crate) struct CanonicalTitleEvidence {
+    pub(crate) spelling_identity: crate::title_matching::relaxed::SpellingIdentity,
     pub(crate) lookup_keys: Vec<String>,
     pub(crate) canonical_key: String,
     pub(crate) year: Option<i32>,
@@ -117,10 +125,13 @@ impl CanonicalTitleEvidence {
 /// check can tell a shared bare key from a unique alias.
 #[derive(Clone, Debug)]
 pub(crate) struct TitleEvidenceMatch {
+    pub(crate) spelling: Option<crate::title_matching::relaxed::SpellingMatch>,
     /// The canonical lookup key that actually matched.
     pub(crate) matched_key: String,
     /// The release carries the title's year.
     pub(crate) year_corroborated: bool,
+    /// Consistent raw/indexer ID evidence already established during spelling proof.
+    pub(crate) id_corroborated: bool,
     /// A one-word alias is too weak to establish identity without an external
     /// id (or the title year, represented by `year_corroborated`).
     pub(crate) requires_external_id: bool,
@@ -166,6 +177,8 @@ pub(crate) enum ReleaseAutoDecisionCode {
     TitleMismatch,
     EpisodeMismatch,
     EpisodeNotMonitored,
+    AcquisitionPaused,
+    AcquisitionStateUnavailable,
     CategoryMismatch,
     AmbiguousIdentity,
     QualityBlocked,
@@ -200,6 +213,8 @@ impl ReleaseAutoDecisionCode {
             "title_mismatch" => Some(Self::TitleMismatch),
             "episode_mismatch" => Some(Self::EpisodeMismatch),
             "episode_not_monitored" => Some(Self::EpisodeNotMonitored),
+            "acquisition_paused" => Some(Self::AcquisitionPaused),
+            "acquisition_state_unavailable" => Some(Self::AcquisitionStateUnavailable),
             // Deliberately the same string the pre-submission gate records on
             // failed attempts, so both category vetoes read alike.
             "category_mismatch" => Some(Self::CategoryMismatch),
@@ -234,6 +249,8 @@ impl ReleaseAutoDecisionCode {
             Self::TitleMismatch => "title_mismatch",
             Self::EpisodeMismatch => "episode_mismatch",
             Self::EpisodeNotMonitored => "episode_not_monitored",
+            Self::AcquisitionPaused => "acquisition_paused",
+            Self::AcquisitionStateUnavailable => "acquisition_state_unavailable",
             Self::CategoryMismatch => "category_mismatch",
             Self::AmbiguousIdentity => "ambiguous_identity",
             Self::QualityBlocked => "quality_blocked",
@@ -268,6 +285,10 @@ impl ReleaseAutoDecisionCode {
             // not match" and "one of these episodes is unmonitored" call for
             // different operator actions.
             Self::EpisodeNotMonitored => "release covers an episode this library is not monitoring",
+            Self::AcquisitionPaused => "acquisition is paused for content covered by this release",
+            Self::AcquisitionStateUnavailable => {
+                "acquisition state could not be checked; try again"
+            }
             Self::CategoryMismatch => "indexer category contradicts the target title",
             Self::AmbiguousIdentity => {
                 "canonical title is ambiguous and no disambiguator was present"
@@ -445,6 +466,7 @@ fn canonical_title_evidence_for_episode(
     let ambiguity =
         TitleIdentityAmbiguity::from_year_qualified_canonical_key(&canonical_key, title.year);
     CanonicalTitleEvidence {
+        spelling_identity: crate::title_matching::relaxed::SpellingIdentity::new(title),
         lookup_keys,
         canonical_key,
         year: title.year,
@@ -649,6 +671,11 @@ pub(crate) fn context_free_identity_anchor_keys(raw_title: &str) -> Vec<String> 
     let neutral = crate::parse_release_metadata(raw_title);
     let mut extracted = neutral.normalized_title_variants.clone();
     extracted.push(neutral.normalized_title.clone());
+    if !raw_title.is_ascii() {
+        // Parser tokens fold Latin accents for classification. Those folded
+        // tokens cannot prove exact identity for an accented release.
+        extracted = crate::title_matching::relaxed::neutral_spelling_anchors(raw_title).0;
+    }
 
     // Year tokens in the raw name re-attach to the extraction: a boundary
     // heuristic reads `Signal.Runner.2049.2160p` as title `Signal Runner`, but
@@ -775,11 +802,20 @@ pub(crate) fn match_parsed_release_to_title_evidence(
     parsed: &ParsedReleaseMetadata,
     evidence: &CanonicalTitleEvidence,
 ) -> Option<TitleEvidenceMatch> {
+    match_parsed_release_with_asserted_ids(parsed, evidence, None)
+}
+
+pub(crate) fn match_parsed_release_with_asserted_ids(
+    parsed: &ParsedReleaseMetadata,
+    evidence: &CanonicalTitleEvidence,
+    asserted_ids: Option<bool>,
+) -> Option<TitleEvidenceMatch> {
     let root_or_episode_year = parsed.year.is_some_and(|parsed_year| {
         evidence.year == Some(parsed_year) || evidence.episode_release_years.contains(&parsed_year)
     });
     let mut evidence_match =
-        contextual_release_matches_title_evidence(parsed, evidence, root_or_episode_year)?;
+        contextual_release_matches_title_evidence(parsed, evidence, root_or_episode_year)
+            .or_else(|| relaxed_release_matches_title_evidence(parsed, evidence, asserted_ids))?;
 
     if let (Some(parsed_year), Some(expected_year)) = (parsed.year, evidence.year)
         && parsed_year != expected_year
@@ -798,6 +834,84 @@ pub(crate) fn match_parsed_release_to_title_evidence(
     }
 
     Some(evidence_match)
+}
+
+fn relaxed_release_matches_title_evidence(
+    parsed: &ParsedReleaseMetadata,
+    evidence: &CanonicalTitleEvidence,
+    asserted_ids: Option<bool>,
+) -> Option<TitleEvidenceMatch> {
+    let (forms, neutral) =
+        crate::title_matching::relaxed::neutral_spelling_forms(&parsed.raw_title);
+    let anchors = forms.iter().map(|(key, _)| key.clone()).collect::<Vec<_>>();
+    let raw_ids = evidence.spelling_identity.parsed_ids(&neutral);
+    let ids = match (asserted_ids, raw_ids) {
+        (Some(false), _) | (_, Some(false)) => Some(false),
+        (Some(true), _) | (_, Some(true)) => Some(true),
+        _ => None,
+    };
+    let matched = crate::title_matching::relaxed::find_spelling_match(
+        &anchors,
+        &evidence.spelling_identity,
+        evidence.ambiguity.spelling_index.as_deref(),
+        neutral.year,
+        ids,
+        &evidence.episode_release_years,
+    )?;
+    // Only now may context contain the observed spelling. It is ephemeral and
+    // mapped back to the catalog alias that independently proved identity.
+    let mut context = evidence.parse_context.clone();
+    context.aliases.push(crate::release_parser::ContextAlias {
+        name: forms
+            .iter()
+            .find(|(key, _)| key == &matched.observed)?
+            .1
+            .clone(),
+    });
+    let analysis = crate::analyze_release_for_target(&parsed.raw_title, &context);
+    let candidate = analysis.best_candidate()?;
+    let confirmed = candidate.context_title_matches.iter().any(|hit| {
+        hit.kind != crate::release_parser::ContextTitleMatchKind::EpisodeTitle
+            && crate::title_matching::canonical_lookup_key(&hit.raw) == matched.observed
+            && candidate.zones.title_zones.iter().any(|zone| {
+                hit.token_range.start_token >= zone.start_token
+                    && hit.token_range.end_token <= zone.end_token
+            })
+    });
+    if !confirmed {
+        return None;
+    }
+    let year_corroborated = neutral.year.is_some()
+        && (neutral.year == evidence.year
+            || neutral
+                .year
+                .is_some_and(|year| evidence.episode_release_years.contains(&year))
+            || evidence.alias_release_years.get(&matched.key).copied() == neutral.year);
+    tracing::debug!(
+        matched_alias = matched.key,
+        observed = matched.observed,
+        distance = matched.distance,
+        locale = matched.locale,
+        exact = matched.exact,
+        year_corroborated,
+        id_corroborated = ids == Some(true),
+        "release title spelling confirmed"
+    );
+    Some(TitleEvidenceMatch {
+        matched_key: matched.key.clone(),
+        year_corroborated,
+        id_corroborated: ids == Some(true),
+        requires_external_id: !year_corroborated
+            && ids != Some(true)
+            && (!matched.exact
+                || (matched.observed.split_whitespace().count() == 1
+                    && matched.key != evidence.canonical_key
+                    && matched.observed
+                        != crate::import_title_resolution::strip_trailing_year_key(
+                            &evidence.canonical_key,
+                        ))),
+        spelling: Some(matched),
+    })
 }
 
 fn contextual_release_matches_title_evidence(
@@ -851,7 +965,7 @@ fn contextual_release_matches_title_evidence(
             })
         })
         .filter_map(|context_match| {
-            let normalized = crate::title_matching::canonical_lookup_key(&context_match.normalized);
+            let normalized = crate::title_matching::canonical_lookup_key(&context_match.raw);
             let matched_key = evidence_key_for_normalized(evidence, &normalized)?;
             let canonical_shape =
                 crate::import_title_resolution::strip_trailing_year_key(&evidence.canonical_key);
@@ -861,6 +975,8 @@ fn contextual_release_matches_title_evidence(
                 && normalized != evidence.canonical_key
                 && normalized != canonical_shape;
             Some(TitleEvidenceMatch {
+                spelling: None,
+                id_corroborated: false,
                 matched_key,
                 year_corroborated,
                 requires_external_id: is_single_word_alias && !year_corroborated,
@@ -899,7 +1015,23 @@ pub(crate) fn candidate_title_match(
         &parsed_owned
     };
 
-    match_parsed_release_to_title_evidence(parsed, evidence).map(|evidence_match| {
+    let identity = &evidence.spelling_identity;
+    let asserted_ids = strict_external_id_agreement(
+        &candidate.response_attributes,
+        identity.tvdb_id.as_deref(),
+        identity.tmdb_id.as_deref(),
+        identity.imdb_id.as_deref(),
+    );
+    match_parsed_release_with_asserted_ids(parsed, evidence, asserted_ids).map(|evidence_match| {
+        if let Some(spelling) = &evidence_match.spelling {
+            tracing::debug!(
+                release = candidate.title,
+                alias = spelling.key,
+                locale = spelling.locale,
+                distance = spelling.distance,
+                "candidate title spelling evidence"
+            );
+        }
         CandidateTitleMatch {
             evidence_match: Some(evidence_match),
         }
@@ -920,8 +1052,8 @@ pub(crate) fn candidate_presents_identity_disambiguator(
     external_id_agreement: Option<bool>,
 ) -> bool {
     if let Some(evidence_match) = title_match.evidence_match.as_ref() {
-        // The release carries the title's year.
-        if evidence_match.year_corroborated {
+        // Preserve independently proven raw IDs as well as release years.
+        if evidence_match.year_corroborated || evidence_match.id_corroborated {
             return true;
         }
         // The matched key is an alias unique to this title within the library
@@ -977,6 +1109,21 @@ pub(crate) fn external_id_agreement(
     imdb_id: Option<&str>,
 ) -> Option<bool> {
     external_id_comparison(response, tvdb_id, tmdb_id, imdb_id).agreement()
+}
+
+/// Relaxed spelling proof requires all comparable id assertions to agree.
+pub(crate) fn strict_external_id_agreement(
+    response: &IndexerResponseAttributes,
+    tvdb_id: Option<&str>,
+    tmdb_id: Option<&str>,
+    imdb_id: Option<&str>,
+) -> Option<bool> {
+    let comparison = external_id_comparison(response, tvdb_id, tmdb_id, imdb_id);
+    if comparison.conflicts.is_empty() {
+        comparison.agreement()
+    } else {
+        Some(false)
+    }
 }
 
 fn numeric_external_id_values(
@@ -1201,7 +1348,7 @@ pub(crate) fn serialize_decision_explanation(candidate: &IndexerSearchResult) ->
             decision
                 .scoring_log
                 .iter()
-                .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta}))
+                .map(|entry| serde_json::json!({"code": entry.code, "delta": entry.delta, "kind": entry.kind}))
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
@@ -1849,9 +1996,7 @@ impl AppUseCase {
     /// catches the mismatch.
     pub(crate) async fn title_identity_ambiguity(&self, title: &Title) -> TitleIdentityAmbiguity {
         match self.monitored_title_matcher().await {
-            Ok(matcher) => TitleIdentityAmbiguity::from_shared_keys(
-                matcher.shared_lookup_keys(&title.id, &canonical_title_lookup_keys(title)),
-            ),
+            Ok(matcher) => matcher.identity_ambiguity(title),
             Err(error) => {
                 tracing::debug!(
                     title_id = title.id.as_str(),
@@ -1938,6 +2083,61 @@ impl AppUseCase {
         }
 
         search_title
+    }
+
+    async fn paused_acquisition_scopes(&self, title_id: &str) -> AppResult<Vec<SubmissionScope>> {
+        Ok(self
+            .services
+            .workflow
+            .acquisition_scope_states
+            .list_acquisition_scope_states(crate::AcquisitionScopeStatesQuery {
+                title_id: Some(title_id.to_string()),
+                statuses: vec![crate::AcquisitionScopeStatus::Paused.as_str().to_string()],
+                limit: i64::MAX,
+                ..Default::default()
+            })
+            .await?
+            .into_iter()
+            .map(|row| {
+                SubmissionScope::from_persisted(
+                    title_id,
+                    row.episode_id,
+                    row.collection_id,
+                    row.series_movie_link_id,
+                    None,
+                )
+            })
+            .collect())
+    }
+
+    pub(crate) async fn ensure_acquisition_scope_unpaused(
+        &self,
+        title_id: &str,
+        scope: &SubmissionScope,
+    ) -> AppResult<()> {
+        let paused = self.paused_acquisition_scopes(title_id).await?;
+        if paused.is_empty() {
+            return Ok(());
+        }
+        let episodes = self
+            .services
+            .catalog
+            .shows
+            .list_episodes_for_title(title_id)
+            .await?;
+        if paused.iter().any(|paused_scope| {
+            crate::catalog_workflow::submission_scopes_overlap(
+                title_id,
+                paused_scope,
+                scope,
+                &episodes,
+            )
+        }) {
+            return Err(AppError::Validation(
+                "Acquisition is paused for content covered by this release. Resume it before searching.".into(),
+            ));
+        }
+        Ok(())
     }
 
     pub(crate) async fn evaluate_search_results_for_subject(
@@ -2156,7 +2356,39 @@ impl AppUseCase {
             unmonitored_episode_ids: &unmonitored_episode_ids,
         };
 
+        // Preserve discovery results, but refuse automatic admission of a pack
+        // or batch that includes a paused sibling outside the selected targets.
+        let paused_scopes = self.paused_acquisition_scopes(&title.id).await;
+        if let Err(error) = &paused_scopes {
+            tracing::warn!(title_id = title.id, %error, "automatic admission could not read acquisition pauses");
+        }
         for candidate in &mut results {
+            if paused_scopes.is_err() {
+                annotate_auto_decision(
+                    candidate,
+                    ReleaseAutoDecisionCode::AcquisitionStateUnavailable,
+                );
+                continue;
+            }
+            let scope = candidate
+                .coverage_scope
+                .as_ref()
+                .unwrap_or(&subject.submission_scope);
+            let paused = match &paused_scopes {
+                Ok(scopes) => scopes.iter().any(|paused_scope| {
+                    crate::catalog_workflow::submission_scopes_overlap(
+                        &title.id,
+                        paused_scope,
+                        scope,
+                        &catalog_episodes,
+                    )
+                }),
+                Err(_) => unreachable!("failed state read was handled above"),
+            };
+            if paused {
+                annotate_auto_decision(candidate, ReleaseAutoDecisionCode::AcquisitionPaused);
+                continue;
+            }
             if candidate.auto_decision_code.as_deref().is_some_and(|code| {
                 code == ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str()
                     || code == ReleaseAutoDecisionCode::AnimeNumberingAmbiguous.as_str()
@@ -2633,6 +2865,368 @@ mod tests {
     use super::*;
     use scryer_domain::{MediaFacet, TaggedAlias, Title};
 
+    fn spelling_title(name: &str, language: &str) -> Title {
+        let mut title = make_title();
+        title.name = name.to_string();
+        title.facet = MediaFacet::Movie;
+        title.year = Some(2019);
+        title.metadata_language = Some(language.to_string());
+        title.aliases.clear();
+        title.tagged_aliases.clear();
+        title.external_ids.clear();
+        title.imdb_id = Some("tt8404614".to_string());
+        title
+    }
+
+    fn spelling_evidence(title: &Title, library: &[Title]) -> CanonicalTitleEvidence {
+        let matcher = crate::import_title_resolution::MonitoredTitleMatcher::new(library.to_vec());
+        canonical_title_evidence(title).with_ambiguity(matcher.identity_ambiguity(title))
+    }
+
+    #[test]
+    fn multilingual_spelling_preserves_roman_volume_identity() {
+        let mut title = spelling_title("Nymphomaniac Volume I", "eng");
+        title.year = Some(2013);
+        let evidence = spelling_evidence(&title, std::slice::from_ref(&title));
+        let matcher =
+            crate::import_title_resolution::MonitoredTitleMatcher::new(vec![title.clone()]);
+        for numeral in ["II", "Ⅱ", "IV"] {
+            let raw = format!("Nymphomaniac.Volume.{numeral}.2013.1080p.BluRay.x264-GROUP");
+            let mut candidate = make_candidate(&raw, None);
+            assert!(
+                candidate_title_match(&candidate, &evidence).is_none(),
+                "{raw}"
+            );
+            assert!(
+                matcher
+                    .resolve_movie(&crate::parse_release_metadata(&raw))
+                    .is_none()
+            );
+            candidate.response_attributes.imdb_id = title.imdb_id.clone();
+            assert!(
+                candidate_title_match(&candidate, &evidence).is_none(),
+                "ID must not change the volume"
+            );
+        }
+        assert!(
+            candidate_title_match(
+                &make_candidate("Nymphomaniac.Volume.I.2013.1080p.BluRay.x264-GROUP", None),
+                &evidence
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn multilingual_spelling_raw_ids_survive_automatic_eligibility() {
+        let title = spelling_title("Die zwei Päpste", "deu");
+        let mut subject = numbering_scoped_subject(&title, None, None);
+        subject.subject_kind = ReleaseSearchSubjectKind::Title;
+        subject.title_evidence = spelling_evidence(&title, std::slice::from_ref(&title));
+        let mut candidate =
+            make_candidate("Die.zwei.Paepste.1080p.WEB.H265.IMDB.tt8404614-GRP", None);
+        candidate.quality_profile_decision = Some(allowed_quality_decision(479));
+        let matched =
+            candidate_title_match(&candidate, &subject.title_evidence).expect("raw ID proof");
+        let proof = matched.evidence_match.as_ref().unwrap();
+        assert!(proof.id_corroborated);
+        assert!(!proof.year_corroborated);
+        assert!(!proof.requires_external_id);
+        assert_eq!(
+            decision_for(&title, &subject, &candidate),
+            ReleaseAutoDecisionCode::Eligible
+        );
+        let mut shared = subject.title_evidence.clone();
+        shared.ambiguity.shared_lookup_keys = shared.lookup_keys.clone();
+        assert!(candidate_presents_identity_disambiguator(
+            &shared, &matched, None
+        ));
+        candidate.response_attributes.imdb_id = Some("tt0000001".into());
+        assert!(candidate_title_match(&candidate, &subject.title_evidence).is_none());
+    }
+
+    #[test]
+    fn multilingual_spelling_uses_only_the_requested_episode_air_year() {
+        let mut title = spelling_title("Die Höhle der Löwen", "deu");
+        title.facet = MediaFacet::Series;
+        title.year = Some(2014);
+        let episode = Episode {
+            id: "episode-16-1".into(),
+            title_id: title.id.clone(),
+            collection_id: None,
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".into()),
+            season_number: Some("16".into()),
+            episode_label: None,
+            title: None,
+            air_date: Some("2024-09-02".into()),
+            duration_seconds: None,
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        let matcher =
+            crate::import_title_resolution::MonitoredTitleMatcher::new(vec![title.clone()]);
+        let evidence = canonical_title_evidence_for_episode(&title, Some(&episode))
+            .with_ambiguity(matcher.identity_ambiguity(&title));
+        let mut subject = numbering_scoped_subject(&title, Some(16), Some(1));
+        subject.title_evidence = evidence.clone();
+        for spelling in ["Die.Höhle.der.Löwen", "Die.Hoehle.der.Loewen"] {
+            let mut candidate =
+                make_candidate(&format!("{spelling}.2024.S16E01.1080p.WEB.H265-GRP"), None);
+            candidate.quality_profile_decision = Some(allowed_quality_decision(479));
+            let matched = candidate_title_match(&candidate, &evidence).expect(spelling);
+            assert!(matched.evidence_match.unwrap().year_corroborated);
+            assert_eq!(
+                decision_for(&title, &subject, &candidate),
+                ReleaseAutoDecisionCode::Eligible
+            );
+        }
+        let mut wrong_year =
+            make_candidate("Die.Hoehle.der.Loewen.2025.S16E01.1080p.WEB.H265-GRP", None);
+        wrong_year.response_attributes.imdb_id = title.imdb_id.clone();
+        assert!(candidate_title_match(&wrong_year, &evidence).is_none());
+        let raw = "Die.Hoehle.der.Loewen.2024.S16E01.1080p.WEB.H265-GRP";
+        assert!(
+            candidate_title_match(
+                &make_candidate(raw, None),
+                &spelling_evidence(&title, std::slice::from_ref(&title))
+            )
+            .is_none()
+        );
+        // A different series start year is not grounds to ignore a collider
+        // when corroboration came from the requested episode's air year.
+        let mut rival = title.clone();
+        rival.id = "rival".into();
+        rival.name = "Die Hoehle der Loewen".into();
+        rival.year = Some(2020);
+        rival.monitored = false;
+        let matcher =
+            crate::import_title_resolution::MonitoredTitleMatcher::new(vec![title.clone(), rival]);
+        let colliding = canonical_title_evidence_for_episode(&title, Some(&episode))
+            .with_ambiguity(matcher.identity_ambiguity(&title));
+        assert!(candidate_title_match(&make_candidate(raw, None), &colliding).is_none());
+    }
+
+    #[test]
+    fn multilingual_spelling_accepts_both_reported_releases_at_grab_and_import() {
+        let title = spelling_title("Die zwei Päpste", "deu");
+        let library = vec![title.clone()];
+        let evidence = spelling_evidence(&title, &library);
+        let mut subject = numbering_scoped_subject(&title, None, None);
+        subject.subject_kind = ReleaseSearchSubjectKind::Title;
+        subject.title_evidence = evidence.clone();
+        let matcher = crate::import_title_resolution::MonitoredTitleMatcher::new(library);
+        for raw in [
+            "Die.zwei.Paepste.2019.GERMAN.DL.1080p.HDR.WEB.H265-TSCC",
+            "Die.zwei.Paepste.2019.GERMAN.DL.iNTERNAL.HDR.1080p.WEB.h265-TMSF",
+        ] {
+            let mut candidate = make_candidate(raw, None);
+            candidate.quality_profile_decision = Some(allowed_quality_decision(479));
+            assert_eq!(
+                decision_for(&title, &subject, &candidate),
+                ReleaseAutoDecisionCode::Eligible
+            );
+            let matched = candidate_title_match(&candidate, &evidence).expect(raw);
+            let proof = matched.evidence_match.unwrap();
+            let spelling = proof.spelling.expect("spelling evidence");
+            assert_eq!(spelling.key, "die zwei päpste");
+            assert_eq!(spelling.locale, Some("de-u-co-phonebk"));
+            assert!(proof.year_corroborated);
+            let parsed = crate::parse_release_metadata(raw);
+            assert_eq!(
+                matcher
+                    .resolve_movie(&parsed)
+                    .expect("import match")
+                    .title
+                    .id,
+                title.id
+            );
+            assert!(match_parsed_release_to_title_evidence(&parsed, &evidence).is_some());
+        }
+    }
+
+    #[test]
+    fn multilingual_spelling_requires_corroboration_and_available_collision_index() {
+        let title = spelling_title("Die zwei Päpste", "deu");
+        let evidence = spelling_evidence(&title, std::slice::from_ref(&title));
+        for raw in [
+            "Die.zwei.Paepste.1080p.WEB.H265-GRP",
+            "Die.zwei.Paepste.2020.1080p.WEB.H265-GRP",
+            "Die.zwei.Paepste.2.2019.1080p.WEB.H265-GRP",
+            "Other.Die.zwei.Paepste.2019.1080p.WEB.H265-GRP",
+        ] {
+            assert!(
+                candidate_title_match(&make_candidate(raw, None), &evidence).is_none(),
+                "{raw}"
+            );
+        }
+        let raw = "Die.zwei.Paepste.2019.1080p.WEB.H265-GRP";
+        assert!(
+            candidate_title_match(
+                &make_candidate(raw, None),
+                &canonical_title_evidence(&title)
+            )
+            .is_none()
+        );
+        let mut candidate = make_candidate("Die.zwei.Paepste.1080p.WEB.H265-GRP", None);
+        candidate.response_attributes.imdb_id = Some("tt8404614".to_string());
+        assert!(candidate_title_match(&candidate, &evidence).is_some());
+        candidate.response_attributes.imdb_id = Some("tt0000001".to_string());
+        assert!(candidate_title_match(&candidate, &evidence).is_none());
+    }
+
+    #[test]
+    fn multilingual_spelling_rejects_unmonitored_competitors_and_near_ties() {
+        let title = spelling_title("The Silver Harbor", "eng");
+        let mut rival = spelling_title("The Silver Harbour", "eng");
+        rival.id = "rival".to_string();
+        rival.monitored = false;
+        let evidence = spelling_evidence(&title, &[title.clone(), rival]);
+        assert!(
+            candidate_title_match(
+                &make_candidate("The.Silver.Harbour.2019.1080p.WEB.H265-GRP", None),
+                &evidence
+            )
+            .is_none()
+        );
+        assert!(
+            candidate_title_match(
+                &make_candidate("The.Silver.Harboar.2019.1080p.WEB.H265-GRP", None),
+                &evidence
+            )
+            .is_none()
+        );
+        let alone = spelling_evidence(&title, std::slice::from_ref(&title));
+        assert!(
+            candidate_title_match(
+                &make_candidate("The.Silver.Harbour.2019.1080p.WEB.H265-GRP", None),
+                &alone
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn multilingual_spelling_native_cjk_typos_require_ids_and_minimum_length() {
+        for (language, expected, observed) in [
+            (
+                "jpn",
+                "静かな夜に遠い空を見上げる物語",
+                "静かな夜に遠い海を見上げる物語",
+            ),
+            (
+                "zho",
+                "我们一起走过漫长而安静的夜晚",
+                "我们一起走过漫长而安静的夜间",
+            ),
+            (
+                "kor",
+                "우리가함께걸었던아름다운밤의이야기",
+                "우리가함께걸었던아름다운달의이야기",
+            ),
+        ] {
+            let title = spelling_title(expected, language);
+            let evidence = spelling_evidence(&title, std::slice::from_ref(&title));
+            let mut candidate =
+                make_candidate(&format!("{observed}.2019.1080p.WEB.H265-GRP"), None);
+            assert!(
+                candidate_title_match(&candidate, &evidence).is_none(),
+                "{language}"
+            );
+            candidate.response_attributes.imdb_id = title.imdb_id.clone();
+            assert!(
+                candidate_title_match(&candidate, &evidence).is_some(),
+                "{language}"
+            );
+        }
+        let title = spelling_title("大地", "zho");
+        let evidence = spelling_evidence(&title, std::slice::from_ref(&title));
+        let mut candidate = make_candidate("天地.2019.1080p.WEB.H265-GRP", None);
+        candidate.response_attributes.imdb_id = title.imdb_id.clone();
+        assert!(candidate_title_match(&candidate, &evidence).is_none());
+    }
+
+    #[test]
+    fn multilingual_spelling_exact_native_marks_survive_the_parser() {
+        for (language, title_name) in [
+            ("eng", "The Harbor"),
+            ("deu", "Die zwei Päpste"),
+            ("fra", "Le cœur de Chloé"),
+            ("spa", "El último día"),
+            ("ita", "L’amore in città"),
+            ("por", "Coração de açúcar"),
+            ("rus", "Майский вечер"),
+            ("zho", "流浪地球"),
+            ("jpn", "ガラスの城"),
+            ("kor", "한글 이야기"),
+        ] {
+            let title = spelling_title(title_name, language);
+            // Exact spelling remains usable without loading the relaxed index.
+            let evidence = canonical_title_evidence(&title);
+            assert!(
+                candidate_title_match(
+                    &make_candidate(&format!("{title_name}.2019.1080p.WEB.H265-GRP"), None),
+                    &evidence
+                )
+                .is_some(),
+                "{language}"
+            );
+        }
+    }
+
+    #[test]
+    fn multilingual_spelling_recovers_locale_forms_and_cyrillic_typos() {
+        for (language, expected, observed) in [
+            ("fra", "Le cœur de Chloé", "Le.coeur.de.Chloe"),
+            ("spa", "El último día", "El.ultimo.dia"),
+            ("ita", "L’amore in città", "L'amore.in.citta"),
+            ("ita", "L’amore nella città", "L'amore.nella.citxà"),
+            ("por", "Coração de açúcar", "Coracao.de.acucar"),
+            ("rus", "Далёкий тихий берег", "Далекий.тихий.берег"),
+        ] {
+            let title = spelling_title(expected, language);
+            let evidence = spelling_evidence(&title, std::slice::from_ref(&title));
+            let raw = format!("{observed}.2019.1080p.WEB.H265-GRP");
+            assert!(
+                candidate_title_match(&make_candidate(&raw, None), &evidence).is_some(),
+                "{language}: {raw}"
+            );
+        }
+        let mut title = spelling_title("The Two Popes", "eng");
+        title.aliases.push("Die zwei Päpste".to_string());
+        title.tagged_aliases.push(TaggedAlias {
+            name: "Die zwei Päpste".to_string(),
+            language: "deu".to_string(),
+        });
+        let evidence = spelling_evidence(&title, std::slice::from_ref(&title));
+        assert_eq!(
+            evidence
+                .spelling_identity
+                .names
+                .iter()
+                .find(|name| name.key == "die zwei päpste")
+                .unwrap()
+                .language
+                .as_deref(),
+            Some("deu")
+        );
+        assert!(
+            candidate_title_match(
+                &make_candidate("Die.zwei.Paepste.2019.1080p.WEB.H265-GRP", None),
+                &evidence
+            )
+            .is_some()
+        );
+    }
+
     #[test]
     fn active_pending_overlap_temporarily_delays_an_automatic_search() {
         assert_eq!(
@@ -2784,6 +3378,8 @@ mod tests {
 
     fn make_media_file(release_title: &str, episode_id: Option<&str>) -> TitleMediaFile {
         TitleMediaFile {
+            analysis_details: Default::default(),
+            analysis_attempt: None,
             id: "media-file-1".to_string(),
             title_id: "title-1".to_string(),
             episode_id: episode_id.map(str::to_string),
@@ -2794,6 +3390,7 @@ mod tests {
             announced_size_bytes: None,
             source_signature_scheme: None,
             source_signature_value: None,
+            content_hashes: None,
             quality_label: Some("720p".to_string()),
             scan_status: "scanned".to_string(),
             created_at: Utc::now().to_rfc3339(),

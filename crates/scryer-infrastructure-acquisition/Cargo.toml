@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-acquisition"
-version = "0.19.16"
+version = "0.20.0"
 edition.workspace = true
 publish = false
 build = "build.rs"
@@ -36,7 +36,13 @@ unicode-normalization = "0.1"
 zstd = { version = "0.13", default-features = false }
 
 [dev-dependencies]
+# Thread-local recorder for asserting emitted metric names, labels and values
+# without installing a global recorder.
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
+# The in-process SSH server double, so tunnel tests prove egress really
+# travelled through a tunnel rather than merely failing to go direct.
+scryer-tunnel = { workspace = true, features = ["test-support"] }
 tempfile = "3"
 tracing-subscriber = { workspace = true }
 wiremock = { workspace = true }

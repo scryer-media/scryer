@@ -54,8 +54,12 @@ import {
 import { autoBackupSettingsQuery, backupSettingsQuery, backupsQuery } from "@/lib/graphql/queries";
 import { scryerFetch } from "@/lib/graphql/urql-client";
 import { useSettingsSubscription } from "@/lib/hooks/use-settings-subscription";
-import { getRuntimeBasePath } from "@/lib/runtime-config";
+import { buildAppUrl } from "@/lib/runtime-config";
 import { formatUiDateTime } from "@/lib/utils/date-format";
+import {
+  readResponseErrorMessage,
+  saveDownloadResponse,
+} from "@/lib/utils/save-download-response";
 import type {
   AutoBackupSettings,
   BackupSettings,
@@ -146,14 +150,6 @@ const BACKUPS_INSET_CLASS =
   "rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)]";
 const BACKUPS_MUTED_TEXT_CLASS = "text-[var(--scry-muted3)]";
 
-type SaveFilePickerWindow = Window & {
-  showSaveFilePicker?: (options: {
-    suggestedName: string;
-  }) => Promise<{
-    createWritable: () => Promise<WritableStream<Uint8Array>>;
-  }>;
-};
-
 function mutationErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof Error && error.message.trim()) {
     return error.message.trim();
@@ -163,60 +159,6 @@ function mutationErrorMessage(error: unknown, fallback: string): string {
 
 function nonWhitespaceCharacterCount(value: string): number {
   return Array.from(value.trim()).filter((char) => !/\s/u.test(char)).length;
-}
-
-function buildAppUrl(path: string): string {
-  const basePath = getRuntimeBasePath();
-  return basePath === "/" ? path : `${basePath}${path}`;
-}
-
-async function readResponseErrorMessage(response: Response, fallback: string): Promise<string> {
-  const contentType = response.headers.get("content-type") ?? "";
-  if (contentType.includes("application/json")) {
-    const payload = await response.json().catch(() => null) as {
-      error?: string;
-      error_id?: string;
-    } | null;
-    const message = payload?.error?.trim();
-    if (message) {
-      const errorId = payload?.error_id?.trim();
-      return errorId ? `${message}. Reference ID: ${errorId}` : message;
-    }
-  }
-
-  const text = await response.text().catch(() => "");
-  return text.trim() || fallback;
-}
-
-async function saveDownloadResponse(response: Response, filename: string): Promise<void> {
-  const windowWithPicker = window as SaveFilePickerWindow;
-  if (response.body && typeof windowWithPicker.showSaveFilePicker === "function") {
-    try {
-      const handle = await windowWithPicker.showSaveFilePicker({
-        suggestedName: filename,
-      });
-      const writable = await handle.createWritable();
-      await response.body.pipeTo(writable);
-      return;
-    } catch (error) {
-      if (error instanceof DOMException && error.name === "AbortError") {
-        return;
-      }
-      throw error;
-    }
-  }
-
-  const blob = await response.blob();
-  const downloadUrl = window.URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = downloadUrl;
-  link.download = filename;
-  document.body.append(link);
-  link.click();
-  link.remove();
-  window.setTimeout(() => {
-    window.URL.revokeObjectURL(downloadUrl);
-  }, 0);
 }
 
 function sortBackups(backups: BackupInfoRecord[]): BackupInfoRecord[] {
@@ -918,7 +860,6 @@ export function SettingsBackupsContainer() {
                       <div className={`flex min-w-0 items-center gap-3 px-4 py-3 sm:max-w-xl ${BACKUPS_INSET_CLASS}`}>
                         <Checkbox
                           id="auto-backups-clear-key"
-                          className="size-5 rounded-md"
                           checked={clearAutoBackupKey}
                           disabled={
                             autoBackupSaving || autoBackupSettings.enabled || autoBackupKey.length > 0
@@ -1266,6 +1207,7 @@ export function SettingsBackupsContainer() {
               <Input
                 id={selectorId("settings-backups-create-password")}
                 type="password"
+                ignorePasswordManagers
                 value={password}
                 onChange={(event) => {
                   const nextPassword = event.target.value;
@@ -1284,6 +1226,7 @@ export function SettingsBackupsContainer() {
               <Input
                 id={selectorId("settings-backups-create-confirm-password")}
                 type="password"
+                ignorePasswordManagers
                 value={confirmPassword}
                 onChange={(event) => setConfirmPassword(event.target.value)}
                 placeholder={t("settings.backupsConfirmPassword")}

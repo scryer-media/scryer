@@ -1,0 +1,1602 @@
+{
+  "sections": [
+    {
+      "titleKey": "settings.refReqSectionInput",
+      "path": "input",
+      "fields": [
+        {
+          "field": "schema_version",
+          "type": "number",
+          "descKey": "settings.refReqInputSchemaVersion"
+        },
+        {
+          "field": "evaluation_time",
+          "type": "string",
+          "descKey": "settings.refReqInputEvaluationTime"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionNow",
+      "path": "input.now",
+      "fields": [
+        {
+          "field": "weekday",
+          "type": "string",
+          "descKey": "settings.refReqNowWeekday"
+        },
+        {
+          "field": "hour_utc",
+          "type": "number",
+          "descKey": "settings.refReqNowHourUtc"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionRequester",
+      "path": "input.requester",
+      "fields": [
+        {
+          "field": "user_id",
+          "type": "string",
+          "descKey": "settings.refReqRequesterUserId"
+        },
+        {
+          "field": "username",
+          "type": "string",
+          "descKey": "settings.refReqRequesterUsername"
+        },
+        {
+          "field": "account_kind",
+          "type": "string",
+          "descKey": "settings.refReqRequesterAccountKind"
+        },
+        {
+          "field": "app_permissions",
+          "type": "string[]",
+          "descKey": "settings.refReqRequesterAppPermissions"
+        },
+        {
+          "field": "library_permissions",
+          "type": "string[]",
+          "descKey": "settings.refReqRequesterLibraryPermissions"
+        },
+        {
+          "field": "linked_providers",
+          "type": "string[]",
+          "descKey": "settings.refReqRequesterLinkedProviders"
+        },
+        {
+          "field": "created_at",
+          "type": "string?",
+          "descKey": "settings.refReqRequesterCreatedAt"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionLibrary",
+      "path": "input.library",
+      "fields": [
+        {
+          "field": "id",
+          "type": "string",
+          "descKey": "settings.refReqLibraryId"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refReqLibraryName"
+        },
+        {
+          "field": "facet",
+          "type": "string",
+          "descKey": "settings.refReqLibraryFacet"
+        },
+        {
+          "field": "is_default",
+          "type": "bool",
+          "descKey": "settings.refReqLibraryIsDefault"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionRequest",
+      "path": "input.request",
+      "fields": [
+        {
+          "field": "origin",
+          "type": "string",
+          "descKey": "settings.refReqRequestOrigin"
+        },
+        {
+          "field": "title",
+          "type": "string",
+          "descKey": "settings.refReqRequestTitle"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refReqRequestYear"
+        },
+        {
+          "field": "external_ids",
+          "type": "object",
+          "descKey": "settings.refReqRequestExternalIds"
+        },
+        {
+          "field": "quality_profile_id",
+          "type": "string?",
+          "descKey": "settings.refReqRequestQualityProfileId"
+        },
+        {
+          "field": "quality_profile_name",
+          "type": "string?",
+          "descKey": "settings.refReqRequestQualityProfileName"
+        },
+        {
+          "field": "monitor_type",
+          "type": "string?",
+          "descKey": "settings.refReqRequestMonitorType"
+        },
+        {
+          "field": "monitor_selection_season_count",
+          "type": "number?",
+          "descKey": "settings.refReqRequestMonitorSelectionSeasonCount"
+        },
+        {
+          "field": "lease_forever",
+          "type": "bool",
+          "descKey": "settings.refReqRequestLeaseForever"
+        },
+        {
+          "field": "lease_days",
+          "type": "number?",
+          "descKey": "settings.refReqRequestLeaseDays"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionExternalIds",
+      "path": "input.request.external_ids",
+      "fields": [
+        {
+          "field": "tmdb",
+          "type": "string?",
+          "descKey": "settings.refReqExternalIdsTmdb"
+        },
+        {
+          "field": "imdb",
+          "type": "string?",
+          "descKey": "settings.refReqExternalIdsImdb"
+        },
+        {
+          "field": "tvdb",
+          "type": "string?",
+          "descKey": "settings.refReqExternalIdsTvdb"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionFacts",
+      "path": "input.facts",
+      "fields": [
+        {
+          "field": "age_rating",
+          "type": "number",
+          "descKey": "settings.refReqFactsAgeRating"
+        },
+        {
+          "field": "certifications",
+          "type": "object[]",
+          "descKey": "settings.refReqFactsCertifications"
+        },
+        {
+          "field": "certification_label",
+          "type": "string",
+          "descKey": "settings.refReqFactsCertificationLabel"
+        },
+        {
+          "field": "certification_rank",
+          "type": "number",
+          "descKey": "settings.refReqFactsCertificationRank"
+        },
+        {
+          "field": "commonsense_recommended",
+          "type": "bool",
+          "descKey": "settings.refReqFactsCommonsenseRecommended"
+        },
+        {
+          "field": "genres",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsGenres"
+        },
+        {
+          "field": "canonical_tag_keys",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsCanonicalTagKeys"
+        },
+        {
+          "field": "themes",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsThemes"
+        },
+        {
+          "field": "is_adult",
+          "type": "bool",
+          "descKey": "settings.refReqFactsIsAdult"
+        },
+        {
+          "field": "rating",
+          "type": "number",
+          "descKey": "settings.refReqFactsRating"
+        },
+        {
+          "field": "ratings_by_source",
+          "type": "object",
+          "descKey": "settings.refReqFactsRatingsBySource"
+        },
+        {
+          "field": "tmdb_vote_average",
+          "type": "number",
+          "descKey": "settings.refReqFactsTmdbVoteAverage"
+        },
+        {
+          "field": "tmdb_vote_count",
+          "type": "number",
+          "descKey": "settings.refReqFactsTmdbVoteCount"
+        },
+        {
+          "field": "popularity",
+          "type": "number",
+          "descKey": "settings.refReqFactsPopularity"
+        },
+        {
+          "field": "runtime_minutes",
+          "type": "number",
+          "descKey": "settings.refReqFactsRuntimeMinutes"
+        },
+        {
+          "field": "original_language",
+          "type": "string",
+          "descKey": "settings.refReqFactsOriginalLanguage"
+        },
+        {
+          "field": "country",
+          "type": "string",
+          "descKey": "settings.refReqFactsCountry"
+        },
+        {
+          "field": "network",
+          "type": "string",
+          "descKey": "settings.refReqFactsNetwork"
+        },
+        {
+          "field": "studio",
+          "type": "string",
+          "descKey": "settings.refReqFactsStudio"
+        },
+        {
+          "field": "content_status",
+          "type": "string",
+          "descKey": "settings.refReqFactsContentStatus"
+        },
+        {
+          "field": "release_date",
+          "type": "string",
+          "descKey": "settings.refReqFactsReleaseDate"
+        },
+        {
+          "field": "first_aired",
+          "type": "string",
+          "descKey": "settings.refReqFactsFirstAired"
+        },
+        {
+          "field": "release_age_days",
+          "type": "number",
+          "descKey": "settings.refReqFactsReleaseAgeDays"
+        },
+        {
+          "field": "award_count",
+          "type": "number",
+          "descKey": "settings.refReqFactsAwardCount"
+        },
+        {
+          "field": "quality_profile_tiers",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsQualityProfileTiers"
+        },
+        {
+          "field": "quality_profile_max_resolution",
+          "type": "number",
+          "descKey": "settings.refReqFactsQualityProfileMaxResolution"
+        },
+        {
+          "field": "quality_profile_allows_upgrades",
+          "type": "bool",
+          "descKey": "settings.refReqFactsQualityProfileAllowsUpgrades"
+        },
+        {
+          "field": "exists_in_library_ids",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsExistsInLibraryIds"
+        },
+        {
+          "field": "previous_request_count",
+          "type": "number",
+          "descKey": "settings.refReqFactsPreviousRequestCount"
+        },
+        {
+          "field": "previously_denied",
+          "type": "bool",
+          "descKey": "settings.refReqFactsPreviouslyDenied"
+        },
+        {
+          "field": "previously_approved",
+          "type": "bool",
+          "descKey": "settings.refReqFactsPreviouslyApproved"
+        },
+        {
+          "field": "pending_request_count",
+          "type": "number",
+          "descKey": "settings.refReqFactsPendingRequestCount"
+        },
+        {
+          "field": "approved_last_30d",
+          "type": "number",
+          "descKey": "settings.refReqFactsApprovedLast30d"
+        },
+        {
+          "field": "denied_last_30d",
+          "type": "number",
+          "descKey": "settings.refReqFactsDeniedLast30d"
+        },
+        {
+          "field": "total_approved",
+          "type": "number",
+          "descKey": "settings.refReqFactsTotalApproved"
+        },
+        {
+          "field": "active_lease_count",
+          "type": "number",
+          "descKey": "settings.refReqFactsActiveLeaseCount"
+        },
+        {
+          "field": "days_since_last_request",
+          "type": "number",
+          "descKey": "settings.refReqFactsDaysSinceLastRequest"
+        },
+        {
+          "field": "library_title_count",
+          "type": "number",
+          "descKey": "settings.refReqFactsLibraryTitleCount"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionCertifications",
+      "path": "input.facts.certifications[]",
+      "fields": [
+        {
+          "field": "country",
+          "type": "string",
+          "descKey": "settings.refReqCertCountry"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqCertValue"
+        },
+        {
+          "field": "source",
+          "type": "string",
+          "descKey": "settings.refReqCertSource"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionObservations",
+      "path": "input.observations",
+      "fields": [
+        {
+          "field": "age_rating",
+          "type": "object",
+          "descKey": "settings.refReqFactsAgeRating"
+        },
+        {
+          "field": "certifications",
+          "type": "object",
+          "descKey": "settings.refReqFactsCertifications"
+        },
+        {
+          "field": "certification_label",
+          "type": "object",
+          "descKey": "settings.refReqFactsCertificationLabel"
+        },
+        {
+          "field": "certification_rank",
+          "type": "object",
+          "descKey": "settings.refReqFactsCertificationRank"
+        },
+        {
+          "field": "commonsense_recommended",
+          "type": "object",
+          "descKey": "settings.refReqFactsCommonsenseRecommended"
+        },
+        {
+          "field": "genres",
+          "type": "object",
+          "descKey": "settings.refReqFactsGenres"
+        },
+        {
+          "field": "canonical_tag_keys",
+          "type": "object",
+          "descKey": "settings.refReqFactsCanonicalTagKeys"
+        },
+        {
+          "field": "themes",
+          "type": "object",
+          "descKey": "settings.refReqFactsThemes"
+        },
+        {
+          "field": "is_adult",
+          "type": "object",
+          "descKey": "settings.refReqFactsIsAdult"
+        },
+        {
+          "field": "rating",
+          "type": "object",
+          "descKey": "settings.refReqFactsRating"
+        },
+        {
+          "field": "ratings_by_source",
+          "type": "object",
+          "descKey": "settings.refReqFactsRatingsBySource"
+        },
+        {
+          "field": "tmdb_vote_average",
+          "type": "object",
+          "descKey": "settings.refReqFactsTmdbVoteAverage"
+        },
+        {
+          "field": "tmdb_vote_count",
+          "type": "object",
+          "descKey": "settings.refReqFactsTmdbVoteCount"
+        },
+        {
+          "field": "popularity",
+          "type": "object",
+          "descKey": "settings.refReqFactsPopularity"
+        },
+        {
+          "field": "runtime_minutes",
+          "type": "object",
+          "descKey": "settings.refReqFactsRuntimeMinutes"
+        },
+        {
+          "field": "original_language",
+          "type": "object",
+          "descKey": "settings.refReqFactsOriginalLanguage"
+        },
+        {
+          "field": "country",
+          "type": "object",
+          "descKey": "settings.refReqFactsCountry"
+        },
+        {
+          "field": "network",
+          "type": "object",
+          "descKey": "settings.refReqFactsNetwork"
+        },
+        {
+          "field": "studio",
+          "type": "object",
+          "descKey": "settings.refReqFactsStudio"
+        },
+        {
+          "field": "content_status",
+          "type": "object",
+          "descKey": "settings.refReqFactsContentStatus"
+        },
+        {
+          "field": "release_date",
+          "type": "object",
+          "descKey": "settings.refReqFactsReleaseDate"
+        },
+        {
+          "field": "first_aired",
+          "type": "object",
+          "descKey": "settings.refReqFactsFirstAired"
+        },
+        {
+          "field": "release_age_days",
+          "type": "object",
+          "descKey": "settings.refReqFactsReleaseAgeDays"
+        },
+        {
+          "field": "award_count",
+          "type": "object",
+          "descKey": "settings.refReqFactsAwardCount"
+        },
+        {
+          "field": "quality_profile_tiers",
+          "type": "object",
+          "descKey": "settings.refReqFactsQualityProfileTiers"
+        },
+        {
+          "field": "quality_profile_max_resolution",
+          "type": "object",
+          "descKey": "settings.refReqFactsQualityProfileMaxResolution"
+        },
+        {
+          "field": "quality_profile_allows_upgrades",
+          "type": "object",
+          "descKey": "settings.refReqFactsQualityProfileAllowsUpgrades"
+        },
+        {
+          "field": "exists_in_library_ids",
+          "type": "object",
+          "descKey": "settings.refReqFactsExistsInLibraryIds"
+        },
+        {
+          "field": "previous_request_count",
+          "type": "object",
+          "descKey": "settings.refReqFactsPreviousRequestCount"
+        },
+        {
+          "field": "previously_denied",
+          "type": "object",
+          "descKey": "settings.refReqFactsPreviouslyDenied"
+        },
+        {
+          "field": "previously_approved",
+          "type": "object",
+          "descKey": "settings.refReqFactsPreviouslyApproved"
+        },
+        {
+          "field": "pending_request_count",
+          "type": "object",
+          "descKey": "settings.refReqFactsPendingRequestCount"
+        },
+        {
+          "field": "approved_last_30d",
+          "type": "object",
+          "descKey": "settings.refReqFactsApprovedLast30d"
+        },
+        {
+          "field": "denied_last_30d",
+          "type": "object",
+          "descKey": "settings.refReqFactsDeniedLast30d"
+        },
+        {
+          "field": "total_approved",
+          "type": "object",
+          "descKey": "settings.refReqFactsTotalApproved"
+        },
+        {
+          "field": "active_lease_count",
+          "type": "object",
+          "descKey": "settings.refReqFactsActiveLeaseCount"
+        },
+        {
+          "field": "days_since_last_request",
+          "type": "object",
+          "descKey": "settings.refReqFactsDaysSinceLastRequest"
+        },
+        {
+          "field": "library_title_count",
+          "type": "object",
+          "descKey": "settings.refReqFactsLibraryTitleCount"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsAgeRating",
+      "path": "input.observations.age_rating",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsAgeRatingValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsCertifications",
+      "path": "input.observations.certifications",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refReqFactsCertificationsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsCertificationLabel",
+      "path": "input.observations.certification_label",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqFactsCertificationLabelValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsCertificationRank",
+      "path": "input.observations.certification_rank",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsCertificationRankValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsCommonsenseRecommended",
+      "path": "input.observations.commonsense_recommended",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refReqFactsCommonsenseRecommendedValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsGenres",
+      "path": "input.observations.genres",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsGenresValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsCanonicalTagKeys",
+      "path": "input.observations.canonical_tag_keys",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsCanonicalTagKeysValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsThemes",
+      "path": "input.observations.themes",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsThemesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsIsAdult",
+      "path": "input.observations.is_adult",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refReqFactsIsAdultValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsRating",
+      "path": "input.observations.rating",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsRatingValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsRatingsBySource",
+      "path": "input.observations.ratings_by_source",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object",
+          "descKey": "settings.refReqFactsRatingsBySourceValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsTmdbVoteAverage",
+      "path": "input.observations.tmdb_vote_average",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsTmdbVoteAverageValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsTmdbVoteCount",
+      "path": "input.observations.tmdb_vote_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsTmdbVoteCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsPopularity",
+      "path": "input.observations.popularity",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsPopularityValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsRuntimeMinutes",
+      "path": "input.observations.runtime_minutes",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsRuntimeMinutesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsOriginalLanguage",
+      "path": "input.observations.original_language",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqFactsOriginalLanguageValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsCountry",
+      "path": "input.observations.country",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqFactsCountryValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsNetwork",
+      "path": "input.observations.network",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqFactsNetworkValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsStudio",
+      "path": "input.observations.studio",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqFactsStudioValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsContentStatus",
+      "path": "input.observations.content_status",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqFactsContentStatusValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsReleaseDate",
+      "path": "input.observations.release_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqFactsReleaseDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsFirstAired",
+      "path": "input.observations.first_aired",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqFactsFirstAiredValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsReleaseAgeDays",
+      "path": "input.observations.release_age_days",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsReleaseAgeDaysValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsAwardCount",
+      "path": "input.observations.award_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsAwardCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsQualityProfileTiers",
+      "path": "input.observations.quality_profile_tiers",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsQualityProfileTiersValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsQualityProfileMaxResolution",
+      "path": "input.observations.quality_profile_max_resolution",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsQualityProfileMaxResolutionValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsQualityProfileAllowsUpgrades",
+      "path": "input.observations.quality_profile_allows_upgrades",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refReqFactsQualityProfileAllowsUpgradesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsExistsInLibraryIds",
+      "path": "input.observations.exists_in_library_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refReqFactsExistsInLibraryIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsPreviousRequestCount",
+      "path": "input.observations.previous_request_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsPreviousRequestCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsPreviouslyDenied",
+      "path": "input.observations.previously_denied",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refReqFactsPreviouslyDeniedValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsPreviouslyApproved",
+      "path": "input.observations.previously_approved",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refReqFactsPreviouslyApprovedValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsPendingRequestCount",
+      "path": "input.observations.pending_request_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsPendingRequestCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsApprovedLast30d",
+      "path": "input.observations.approved_last_30d",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsApprovedLast30dValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsDeniedLast30d",
+      "path": "input.observations.denied_last_30d",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsDeniedLast30dValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsTotalApproved",
+      "path": "input.observations.total_approved",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsTotalApprovedValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsActiveLeaseCount",
+      "path": "input.observations.active_lease_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsActiveLeaseCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsDaysSinceLastRequest",
+      "path": "input.observations.days_since_last_request",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsDaysSinceLastRequestValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqFactsLibraryTitleCount",
+      "path": "input.observations.library_title_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refReqObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refReqFactsLibraryTitleCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refReqObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refReqObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refReqSectionObsCertifications",
+      "path": "input.observations.certifications.value[]",
+      "fields": [
+        {
+          "field": "country",
+          "type": "string",
+          "descKey": "settings.refReqCertCountry"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refReqCertValue"
+        },
+        {
+          "field": "source",
+          "type": "string",
+          "descKey": "settings.refReqCertSource"
+        }
+      ]
+    }
+  ]
+}

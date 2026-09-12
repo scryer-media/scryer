@@ -120,6 +120,22 @@ impl LibraryRepository for MockLibraryRepo {
         Ok(library)
     }
 
+    /// Replace-on-write of a library's root list, with the real store's
+    /// identity semantics.
+    ///
+    /// `update_library_tx` reads the stored root ids **before** it rewrites the
+    /// rows and re-keys them by normalized path, so a root whose path is
+    /// resubmitted lands back on the id it already had; only a genuinely new
+    /// path is allocated one (FR-078, `existing_root_ids_by_normalized_path_tx`).
+    /// A mock that allocated a fresh id for every submitted root would make
+    /// every `update` look like "delete every root, create new ones" — exactly
+    /// the identity change synthetic root ids exist to prevent, and exactly the
+    /// bug a story test over a consolidation (US5) has to be able to catch.
+    ///
+    /// The real store's second guard — refusing to remove a root any title still
+    /// references — is not reproduced here, because this double holds no titles.
+    /// The consolidation tail asks that question itself, before it calls
+    /// `update`, so the story tests still exercise the rule.
     async fn update(
         &self,
         library_id: &str,
@@ -132,11 +148,66 @@ impl LibraryRepository for MockLibraryRepo {
             .iter_mut()
             .find(|library| library.id == library_id)
             .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+        let existing_root_ids: HashMap<String, String> = library
+            .roots
+            .iter()
+            .map(|root| {
+                (
+                    scryer_domain::normalize_library_root_path(&root.path),
+                    root.id.clone(),
+                )
+            })
+            .collect();
+        let now = Utc::now();
         library.name = name;
         library.slug = slug;
-        library.roots = mock_library_roots(library_id, roots);
-        library.updated_at = Utc::now();
+        library.roots = roots
+            .into_iter()
+            .map(|root| {
+                let id = existing_root_ids
+                    .get(&scryer_domain::normalize_library_root_path(&root.path))
+                    .cloned()
+                    .unwrap_or_else(|| Id::new().0);
+                scryer_domain::LibraryRoot {
+                    id,
+                    library_id: library_id.to_string(),
+                    path: root.path,
+                    is_default: root.is_default,
+                    created_at: now,
+                    updated_at: now,
+                }
+            })
+            .collect();
+        library.updated_at = now;
         Ok(library.clone())
+    }
+
+    /// The in-place path flip a root change performs (FR-021): the row keeps
+    /// its id, its library, and its default flag, and only `path` moves. The
+    /// real store's behaviour, which is the whole reason this is its own port
+    /// method rather than an `update` with a rewritten root list.
+    async fn set_root_path(&self, root_id: &str, path: &str) -> AppResult<Library> {
+        let mut libraries = self.libraries.lock().await;
+        if libraries.iter().any(|library| {
+            library
+                .roots
+                .iter()
+                .any(|root| root.id != root_id && root.path == path)
+        }) {
+            return Err(AppError::Validation(format!(
+                "library root '{path}' is already configured"
+            )));
+        }
+        let now = Utc::now();
+        for library in libraries.iter_mut() {
+            if let Some(root) = library.roots.iter_mut().find(|root| root.id == root_id) {
+                root.path = path.to_string();
+                root.updated_at = now;
+                library.updated_at = now;
+                return Ok(library.clone());
+            }
+        }
+        Err(AppError::NotFound(format!("library root {root_id}")))
     }
 
     async fn delete_library(&self, library_id: &str) -> AppResult<bool> {
@@ -207,6 +278,7 @@ impl LibraryRepository for MockLibraryRepo {
 
 #[derive(Default)]
 pub(super) struct MockShowRepo {
+    pub(super) fail_monitoring: Mutex<bool>,
     pub(super) anime_numbering_bridges: Mutex<HashMap<String, scryer_domain::AnimeNumberingBridge>>,
     pub(super) collections: Arc<Mutex<Vec<Collection>>>,
     pub(super) episodes: Arc<Mutex<Vec<Episode>>>,
@@ -333,6 +405,47 @@ impl ShowRepository for MockShowRepo {
         Ok(())
     }
 
+    async fn update_series_movie_link_user_tags(
+        &self,
+        link_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<scryer_domain::SeriesMovieLink> {
+        let mut links = self.series_movie_links.lock().await;
+        let link = links
+            .iter_mut()
+            .find(|item| item.id == link_id)
+            .ok_or_else(|| AppError::NotFound(format!("series movie link {link_id}")))?;
+        // Same order as the store: removals first, reserved entries untouched,
+        // and the bag assembled before it is assigned because the mock has no
+        // transaction to roll a refused write back.
+        let mut next_tags = link
+            .tags
+            .iter()
+            .filter(|tag| {
+                crate::is_reserved_title_tag(tag) || !remove.iter().any(|removed| removed == *tag)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for label in add {
+            if !next_tags.iter().any(|tag| tag == label) {
+                next_tags.push(label.clone());
+            }
+        }
+        let user_tag_count = next_tags
+            .iter()
+            .filter(|tag| !crate::is_reserved_title_tag(tag))
+            .count();
+        if user_tag_count > crate::MAX_USER_TAGS_PER_TITLE {
+            return Err(AppError::Validation(format!(
+                "a title can carry at most {} tags; this change would leave it with {user_tag_count}",
+                crate::MAX_USER_TAGS_PER_TITLE
+            )));
+        }
+        link.tags = next_tags;
+        Ok(link.clone())
+    }
+
     async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>> {
         let collections = self.collections.lock().await;
         Ok(collections
@@ -437,6 +550,9 @@ impl ShowRepository for MockShowRepo {
         collection_id: &str,
         monitored: bool,
     ) -> AppResult<()> {
+        if *self.fail_monitoring.lock().await {
+            return Err(AppError::Repository("fixture monitoring failure".into()));
+        }
         let mut episodes = self.episodes.lock().await;
         for episode in episodes.iter_mut() {
             if episode.collection_id.as_deref() == Some(collection_id) {
@@ -532,6 +648,9 @@ impl ShowRepository for MockShowRepo {
     }
 
     async fn update_episode(&self, episode_id: &str, update: EpisodeUpdate) -> AppResult<Episode> {
+        if update.monitored.is_some() && *self.fail_monitoring.lock().await {
+            return Err(AppError::Repository("fixture monitoring failure".into()));
+        }
         let mut episodes = self.episodes.lock().await;
         let item = episodes
             .iter_mut()

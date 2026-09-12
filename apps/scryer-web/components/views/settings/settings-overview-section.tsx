@@ -1,6 +1,7 @@
 import * as React from "react";
 import { AlertTriangle, ChevronDown, Loader2, Rocket, ShieldPlus, Trash2, Upload } from "lucide-react";
 import { Link } from "react-router";
+import { InfoHelp } from "@/components/common/info-help";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,12 +18,16 @@ import {
   mergeTrustedCertificateEntries,
   readTrustedCertificateEntriesFromFiles,
 } from "@/lib/utils/certificates";
-import { parseUiDateTimeFormat } from "@/lib/utils/settings-mutation-inputs";
+import {
+  parseUiDateTimeFormat,
+  parseVerificationDepth,
+} from "@/lib/utils/settings-mutation-inputs";
 import type {
   GeneralSettings,
   GeneralSettingsUpdate,
   TrustedCertificateEntry,
   UiDateTimeFormat,
+  VerificationDepth,
 } from "@/lib/types/settings";
 
 type SettingsOverviewSectionProps = {
@@ -40,7 +45,12 @@ type SettingsOverviewSectionProps = {
   generalSaving: boolean;
   imageCacheClearing: boolean;
   onClearImageCache: () => void;
+  onExperimentalFeaturesChange: (enabled: boolean) => void;
   onGeneralSettingsCommit: (update: GeneralSettingsUpdate) => void;
+  verificationDepth: VerificationDepth;
+  verificationLoading: boolean;
+  verificationSaving: boolean;
+  onVerificationDepthChange: (depth: VerificationDepth) => void;
 };
 
 export function SettingsOverviewSection({
@@ -57,7 +67,12 @@ export function SettingsOverviewSection({
   generalSaving,
   imageCacheClearing,
   onClearImageCache,
+  onExperimentalFeaturesChange,
   onGeneralSettingsCommit,
+  verificationDepth,
+  verificationLoading,
+  verificationSaving,
+  onVerificationDepthChange,
 }: SettingsOverviewSectionProps) {
   const t = useTranslate();
   const [advancedTrustOpen, setAdvancedTrustOpen] = React.useState(false);
@@ -187,6 +202,83 @@ export function SettingsOverviewSection({
 
       <div className="space-y-4 border-t border-border pt-6">
         <div className="space-y-1">
+          <h3 className="text-sm font-semibold">{t("settings.featuresHeader")}</h3>
+        </div>
+
+        {generalLoading ? (
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            {t("label.loading")}
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center gap-3">
+              <Label>{t("settings.experimentalFeaturesLabel")}</Label>
+              <SettingsToggleSwitch
+                checked={generalSettings.experimentalFeaturesEnabled}
+                ariaLabel={t("settings.experimentalFeaturesLabel")}
+                disabled={generalSaving}
+                onChange={onExperimentalFeaturesChange}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Label>{t("settings.apiExplorerLabel")}</Label>
+              <InfoHelp text={t("settings.apiExplorerHelp")} ariaLabel={t("settings.apiExplorerLabel")} />
+              <SettingsToggleSwitch
+                checked={generalSettings.apiExplorerEnabled}
+                ariaLabel={t("settings.apiExplorerLabel")}
+                disabled={generalSaving}
+                onChange={(nextValue) => {
+                  updateGeneralSettings({ apiExplorerEnabled: nextValue });
+                  onGeneralSettingsCommit({ apiExplorerEnabled: nextValue });
+                }}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Label>{t("settings.personalizedDiscoveryLabel")}</Label>
+                <InfoHelp
+                  text={t("settings.personalizedDiscoveryHelp")}
+                  ariaLabel={t("settings.personalizedDiscoveryLabel")}
+                />
+              </div>
+              <SettingsToggleSwitch
+                checked={generalSettings.personalizedDiscoveryEnabled}
+                ariaLabel={t("settings.personalizedDiscoveryLabel")}
+                disabled={generalSaving}
+                onChange={(nextValue) => {
+                  updateGeneralSettings({ personalizedDiscoveryEnabled: nextValue });
+                  onGeneralSettingsCommit({ personalizedDiscoveryEnabled: nextValue });
+                }}
+              />
+            </div>
+
+            <div className="flex items-center gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <Label>{t("settings.srrdbFilenameRecoveryLabel")}</Label>
+                <InfoHelp
+                  text={t("settings.srrdbFilenameRecoveryHelp")}
+                  ariaLabel={t("settings.srrdbFilenameRecoveryLabel")}
+                />
+              </div>
+              <SettingsToggleSwitch
+                checked={generalSettings.srrdbFilenameRecoveryEnabled}
+                ariaLabel={t("settings.srrdbFilenameRecoveryLabel")}
+                disabled={generalSaving}
+                onChange={(nextValue) => {
+                  updateGeneralSettings({ srrdbFilenameRecoveryEnabled: nextValue });
+                  onGeneralSettingsCommit({ srrdbFilenameRecoveryEnabled: nextValue });
+                }}
+              />
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="space-y-4 border-t border-border pt-6">
+        <div className="space-y-1">
           <h3 className="text-sm font-semibold">{t("settings.historyRetentionTitle")}</h3>
           <p className="text-muted-foreground">
             {t("settings.historyRetentionHelp")}
@@ -295,6 +387,46 @@ export function SettingsOverviewSection({
 
           </>
         )}
+      </div>
+
+      <div
+        id="settings-general-verification-depth-section"
+        className="space-y-4 border-t border-border pt-6"
+      >
+        <div className="space-y-1">
+          <h3 className="text-sm font-semibold">{t("settings.verificationDepthTitle")}</h3>
+          <p className="text-muted-foreground">{t("settings.verificationDepthHelp")}</p>
+          <p className="text-muted-foreground">{t("settings.verificationDepthScope")}</p>
+        </div>
+        <SingleSelectField
+          id="settings-general-verification-depth"
+          label={t("settings.verificationDepthLabel")}
+          value={verificationDepth}
+          disabled={verificationLoading || verificationSaving}
+          onValueChange={(value) => {
+            const depth = parseVerificationDepth(value);
+            if (depth) {
+              onVerificationDepthChange(depth);
+            }
+          }}
+          placeholder={t("settings.verificationDepthLabel")}
+          description={
+            verificationDepth === "QUICK"
+              ? t("settings.verificationDepthQuickHelp")
+              : t("settings.verificationDepthFullHelp")
+          }
+          triggerClassName="w-72"
+          options={[
+            {
+              value: "FULL",
+              label: t("settings.verificationDepthFull"),
+            },
+            {
+              value: "QUICK",
+              label: t("settings.verificationDepthQuick"),
+            },
+          ]}
+        />
       </div>
 
       <div

@@ -1,5 +1,9 @@
 import type { ConfigFieldDef } from "../types/index.ts";
 import { providerConfigRecordToValues } from "./provider-config.ts";
+import {
+  isConfigFieldRequired,
+  isConfigFieldVisible,
+} from "./provider-config-fields.ts";
 import { normalizeIndexerConfigValues } from "./url-input.ts";
 
 export function setupIndexerConfigFields(fields: ConfigFieldDef[]) {
@@ -54,6 +58,11 @@ export function serializeSetupIndexerConfigValues(
   }
 
   for (const field of setupIndexerConfigFields(fields)) {
+    // Hidden fields keep their draft value so toggling the field they depend on
+    // does not lose typing, but they are not part of what gets saved.
+    if (!isConfigFieldVisible(field, values)) {
+      continue;
+    }
     let value =
       values[field.key] ??
       field.defaultValue ??
@@ -83,7 +92,9 @@ export function findMissingSetupIndexerField(
   values: Record<string, string>,
 ): ConfigFieldDef | null {
   for (const field of setupIndexerConfigFields(fields)) {
-    if (!field.required) {
+    // A field the form is hiding is never missing, and one raised by
+    // `required_when` is, even though it declared `required: false`.
+    if (!isConfigFieldRequired(field, values)) {
       continue;
     }
     const value =

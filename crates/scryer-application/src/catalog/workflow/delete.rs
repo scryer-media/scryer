@@ -35,6 +35,10 @@ pub(crate) enum MediaFileDiskDeletion {
     Keep,
     /// Delete from disk after validating this file's own preview fingerprint.
     DeleteConfirmed(DeleteExecutionConfirmation),
+    DeleteByPolicy {
+        plan: crate::library::user_delete::PolicyMediaFileDeletePlan,
+        authorization: crate::PolicyDeleteAuthorization,
+    },
     /// Delete from disk; an aggregate preview covering this file was already
     /// validated by the caller.
     DeletePreapproved,
@@ -85,6 +89,10 @@ struct EpisodeFileDeletionSummary {
     delete_from_disk: bool,
     deleted_file_ids: Vec<String>,
     failed: Vec<DeleteEpisodeFileFailure>,
+    /// Episodes the run stopped monitoring because their files were deleted.
+    unmonitored_episode_ids: Vec<String>,
+    /// Seasons that followed their episodes out of monitoring.
+    unmonitored_collection_ids: Vec<String>,
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -172,6 +180,14 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        // Deleting a title an operation is mid-move would strip the catalog
+        // record out from under it (FR-084).
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_DELETE_ENTRY,
+                &title.id,
+            )
+            .await?;
 
         if delete_files_on_disk {
             let delete_confirmation = delete_confirmation.ok_or_else(|| {
@@ -190,6 +206,58 @@ impl AppUseCase {
             )
             .await?;
         }
+
+        self.delete_title_logical_cleanup(
+            &title,
+            actor,
+            TitleLogicalDeleteOptions {
+                purge_recycle_bin_entries: true,
+                append_title_deleted_event: true,
+            },
+        )
+        .await?;
+
+        Ok(())
+    }
+
+    /// Maintenance-policy variant of [`Self::delete_title`] with files on disk
+    /// (RFC 137 §9.6). The same fresh-manifest fingerprint check applies; the
+    /// human typed confirmation is replaced by the typed policy authorization,
+    /// and the actor recorded on the logical cleanup is the system actor the
+    /// action handler runs as. Only the maintenance action executor calls this.
+    pub(crate) async fn delete_title_by_policy(
+        &self,
+        actor: &User,
+        id: &str,
+        preview_fingerprint: &str,
+        authorization: &crate::PolicyDeleteAuthorization,
+    ) -> AppResult<()> {
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {}", id)))?;
+        self.require_library_permission(
+            actor,
+            &title.library_id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+        // A scheduled destructive action is a delete like any other: a title an
+        // operation is mid-move stays out of reach (FR-084). The executor's
+        // safety recheck holds the candidate before it gets here; this is the
+        // choke point's own guarantee for any caller that did not.
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::MAINTENANCE_DELETE_ENTRY,
+                &title.id,
+            )
+            .await?;
+
+        self.execute_delete_title_files_by_policy(id, preview_fingerprint, authorization)
+            .await?;
 
         self.delete_title_logical_cleanup(
             &title,
@@ -446,6 +514,15 @@ impl AppUseCase {
             .get_by_id(&item.title_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {}", item.title_id)))?;
+        // The bulk job does not route through `delete_title`, so it carries its
+        // own check (FR-084). One item's refusal leaves the rest of the batch
+        // alone.
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_DELETE_JOB_ENTRY,
+                &title.id,
+            )
+            .await?;
 
         if delete_files_on_disk {
             let preview_fingerprint = item
@@ -566,7 +643,14 @@ impl AppUseCase {
         )
         .await?;
         self.delete_title_row(title, actor, options.append_title_deleted_event)
-            .await
+            .await?;
+        // Last, and only once the rows are gone: a lifecycle claim is a hold on
+        // a title, and there is no title left to hold (spec 0003 FR-044).
+        // Releasing first would open a window in which a maintenance action
+        // could act on a title whose claim had already been withdrawn.
+        self.release_lifecycle_claims_for_deleted_title(&title.id)
+            .await;
+        Ok(())
     }
 }
 impl AppUseCase {
@@ -880,9 +964,10 @@ impl AppUseCase {
             .await
     }
 
-    /// Delete one media file's disk paths (per `disk_deletion`), catalog row,
-    /// dependents, and any movie collection that pointed at it. The caller is
-    /// responsible for the `ManageTitles` permission check.
+    /// Delete one media file's disk paths (per `disk_deletion`) and catalog
+    /// row. Policy maintenance retains parent records; other deletions also
+    /// remove any matching movie collection. The caller is responsible for
+    /// the `ManageTitles` permission check.
     pub(crate) async fn delete_media_file_authorized(
         &self,
         actor: &User,
@@ -891,25 +976,41 @@ impl AppUseCase {
     ) -> AppResult<()> {
         let owned_file_id = media_file.id.clone();
         let file_id = owned_file_id.as_str();
-        let delete_from_disk = !matches!(disk_deletion, MediaFileDiskDeletion::Keep);
-        let matching_movie_collection_ids = self
-            .services
-            .catalog
-            .shows
-            .list_collections_for_title(&media_file.title_id)
-            .await?
-            .into_iter()
-            .filter(|collection| {
-                collection.ordered_path.as_deref() == Some(media_file.file_path.as_str())
-            })
-            .filter_map(|collection| {
-                if collection.collection_type == scryer_domain::CollectionType::Movie {
-                    Some(collection.id)
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>();
+        let delete_from_disk = !matches!(&disk_deletion, MediaFileDiskDeletion::Keep);
+        let preserve_parent_records = matches!(
+            &disk_deletion,
+            MediaFileDiskDeletion::DeleteByPolicy { .. }
+        );
+        // Removing a file (or its disk copy) under an in-flight move would
+        // invalidate the plan the operation is executing (FR-084). The bulk
+        // deletion job routes through here too.
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::MEDIA_FILE_DELETE_ENTRY,
+                &media_file.title_id,
+            )
+            .await?;
+        let matching_movie_collection_ids = if preserve_parent_records {
+            Vec::new()
+        } else {
+            self.services
+                .catalog
+                .shows
+                .list_collections_for_title(&media_file.title_id)
+                .await?
+                .into_iter()
+                .filter(|collection| {
+                    collection.ordered_path.as_deref() == Some(media_file.file_path.as_str())
+                })
+                .filter_map(|collection| {
+                    if collection.collection_type == scryer_domain::CollectionType::Movie {
+                        Some(collection.id)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
 
         match disk_deletion {
             MediaFileDiskDeletion::Keep => {}
@@ -923,6 +1024,9 @@ impl AppUseCase {
                     typed_confirmation.as_deref(),
                 )
                 .await?;
+            }
+            MediaFileDiskDeletion::DeleteByPolicy { plan, authorization } => {
+                self.execute_delete_media_file_by_policy(file_id, &plan, &authorization).await?;
             }
             MediaFileDiskDeletion::DeletePreapproved => {
                 self.execute_delete_media_file_preapproved(file_id).await?;
@@ -1141,6 +1245,10 @@ impl AppUseCase {
     ) {
         let total = items.len();
         let mut outcome = DeleteEpisodeFilesOutcome::default();
+        // Tracked per episode rather than per file so a multi-file episode is
+        // only unmonitored when every one of its requested files is gone.
+        let mut deleted_episode_ids = std::collections::BTreeSet::new();
+        let mut failed_episode_ids = std::collections::BTreeSet::new();
 
         for item in &items {
             let _ = self
@@ -1165,6 +1273,7 @@ impl AppUseCase {
                 .await;
 
             if let Some(error) = item.error.as_deref() {
+                failed_episode_ids.insert(item.episode_id.clone());
                 outcome.failed.push(DeleteEpisodeFileFailure {
                     file_id: item.file_id.clone(),
                     error: error.to_string(),
@@ -1175,8 +1284,12 @@ impl AppUseCase {
                 .delete_preapproved_media_file(&actor, &item.file_id, delete_from_disk)
                 .await
             {
-                Ok(()) => outcome.deleted_file_ids.push(item.file_id.clone()),
+                Ok(()) => {
+                    deleted_episode_ids.insert(item.episode_id.clone());
+                    outcome.deleted_file_ids.push(item.file_id.clone());
+                }
                 Err(error) => {
+                    failed_episode_ids.insert(item.episode_id.clone());
                     warn!(
                         error = %error,
                         title_id = %title_id,
@@ -1192,10 +1305,20 @@ impl AppUseCase {
             }
         }
 
+        let fully_deleted_episode_ids = deleted_episode_ids
+            .difference(&failed_episode_ids)
+            .cloned()
+            .collect::<std::collections::BTreeSet<_>>();
+        let (unmonitored_episode_ids, unmonitored_collection_ids) = self
+            .unmonitor_deleted_episodes(&actor, &title_id, &fully_deleted_episode_ids)
+            .await;
+
         info!(
             title_id = %title_id,
             deleted = outcome.deleted_file_ids.len(),
             failed = outcome.failed.len(),
+            unmonitored_episodes = unmonitored_episode_ids.len(),
+            unmonitored_seasons = unmonitored_collection_ids.len(),
             delete_from_disk = %delete_from_disk,
             "episode media files deleted"
         );
@@ -1205,6 +1328,8 @@ impl AppUseCase {
             delete_from_disk,
             deleted_file_ids: outcome.deleted_file_ids,
             failed: outcome.failed,
+            unmonitored_episode_ids,
+            unmonitored_collection_ids,
         };
         // Same ladder as the title-deletion job: a run that deleted nothing is
         // a failure, a partial batch is a warning.
@@ -1241,6 +1366,141 @@ impl AppUseCase {
         {
             warn!(error = %error, title_id = %title_id, "failed to finish episode file deletion job");
         }
+    }
+
+    /// Stop monitoring what the run actually deleted, returning the episode and
+    /// season ids that were unmonitored.
+    ///
+    /// Deleting an episode's file is the user saying they no longer want it, so
+    /// leaving it monitored would just have the next search fetch it again. A
+    /// season follows once nothing under it is monitored any more, which is the
+    /// state that checking a whole season and deleting its files leaves behind;
+    /// a partly deleted season stays monitored for the episodes it still has.
+    /// The title is deliberately untouched — the same boundary
+    /// [`Self::unmonitor_maintenance_child`] keeps for scoped deletions.
+    ///
+    /// This is bookkeeping on top of deletions that already happened, so every
+    /// failure here is logged and skipped: the run still reports the file
+    /// outcome it achieved instead of failing over monitoring it could not
+    /// write.
+    async fn unmonitor_deleted_episodes(
+        &self,
+        actor: &User,
+        title_id: &str,
+        episode_ids: &std::collections::BTreeSet<String>,
+    ) -> (Vec<String>, Vec<String>) {
+        let mut unmonitored_episode_ids = Vec::new();
+        if episode_ids.is_empty() {
+            return (unmonitored_episode_ids, Vec::new());
+        }
+
+        for episode_id in episode_ids {
+            match self.set_episode_monitored(actor, episode_id, false).await {
+                Ok(_) => unmonitored_episode_ids.push(episode_id.clone()),
+                Err(error) => warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    episode_id = %episode_id,
+                    "failed to unmonitor episode after deleting its files"
+                ),
+            }
+        }
+
+        if unmonitored_episode_ids.is_empty() {
+            return (unmonitored_episode_ids, Vec::new());
+        }
+
+        // Read the title's episodes and seasons back after the writes above so
+        // the "nothing left monitored" check sees persisted state, including
+        // episodes this run never touched.
+        let episodes = match self
+            .services
+            .catalog
+            .shows
+            .list_episodes_for_title(title_id)
+            .await
+        {
+            Ok(episodes) => episodes,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    "failed to read episodes back; seasons left monitored"
+                );
+                return (unmonitored_episode_ids, Vec::new());
+            }
+        };
+        let collections = match self
+            .services
+            .catalog
+            .shows
+            .list_collections_for_title(title_id)
+            .await
+        {
+            Ok(collections) => collections,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    "failed to read seasons back; seasons left monitored"
+                );
+                return (unmonitored_episode_ids, Vec::new());
+            }
+        };
+
+        // Only seasons this run emptied of monitored episodes are considered, so
+        // a season that was already fully unmonitored is left alone.
+        let touched_collection_ids = episodes
+            .iter()
+            .filter(|episode| unmonitored_episode_ids.contains(&episode.id))
+            .filter_map(|episode| episode.collection_id.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+
+        // Decided in full before the first write: no borrow of `episodes` or
+        // `collections` may be alive across an await, or this future stops
+        // being spawnable.
+        let mut drained_collection_ids = Vec::new();
+        for collection in collections
+            .iter()
+            .filter(|collection| collection.monitored)
+            .filter(|collection| touched_collection_ids.contains(&collection.id))
+        {
+            let mut has_episode = false;
+            let mut keeps_monitored_episode = false;
+            for episode in &episodes {
+                if episode.collection_id.as_deref() != Some(collection.id.as_str()) {
+                    continue;
+                }
+                has_episode = true;
+                if episode.monitored {
+                    keeps_monitored_episode = true;
+                    break;
+                }
+            }
+            if has_episode && !keeps_monitored_episode {
+                drained_collection_ids.push(collection.id.clone());
+            }
+        }
+        drop(episodes);
+        drop(collections);
+
+        let mut unmonitored_collection_ids = Vec::new();
+        for collection_id in drained_collection_ids {
+            match self
+                .set_collection_monitored(actor, &collection_id, false)
+                .await
+            {
+                Ok(_) => unmonitored_collection_ids.push(collection_id),
+                Err(error) => warn!(
+                    error = %error,
+                    title_id = %title_id,
+                    collection_id = %collection_id,
+                    "failed to unmonitor season after deleting its episode files"
+                ),
+            }
+        }
+
+        (unmonitored_episode_ids, unmonitored_collection_ids)
     }
 
     async fn update_episode_file_deletion_progress(

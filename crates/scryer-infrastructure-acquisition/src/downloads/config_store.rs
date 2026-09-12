@@ -12,13 +12,13 @@ use crate::encryption::EncryptionKey;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
 const DOWNLOAD_CLIENT_COLUMNS: &str = "id, name, client_type, config_json, is_enabled, status,
-    client_priority, last_error, last_seen_at, created_at, updated_at";
+    client_priority, last_error, last_seen_at, proxy_config_id, created_at, updated_at";
 
 const DOWNLOAD_CLIENT_INSERT_SQL: &str = "INSERT INTO download_clients (
     id, name, client_type, config_json, is_enabled, status,
-    client_priority, last_error, last_seen_at, created_at, updated_at
+    client_priority, last_error, last_seen_at, proxy_config_id, created_at, updated_at
 ) VALUES (
-    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
 )";
 
 #[derive(Clone)]
@@ -122,6 +122,12 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
         if let Some(is_enabled) = update.is_enabled {
             assignments.push("is_enabled = {}".to_string());
             args.push(SqlArg::Bool(is_enabled));
+        }
+        // Tri-state: an omitted patch leaves the assignment alone, `Some(None)`
+        // clears it, `Some(Some(id))` sets it.
+        if let Some(proxy_config_id) = update.proxy_config_id.as_ref() {
+            assignments.push("proxy_config_id = {}".to_string());
+            args.push(SqlArg::OptText(proxy_config_id.clone()));
         }
 
         if assignments.len() == 1 {
@@ -247,6 +253,7 @@ fn download_client_insert_args(
         SqlArg::I64(config.client_priority),
         SqlArg::OptText(config.last_error.clone()),
         SqlArg::OptTimestamp(config.last_seen_at),
+        SqlArg::OptText(config.proxy_config_id.clone()),
         SqlArg::Timestamp(config.created_at),
         SqlArg::Timestamp(config.updated_at),
     ])
@@ -297,6 +304,7 @@ fn row_to_download_client_config(
         status: DownloadClientStatus::parse(&status_raw).unwrap_or_default(),
         last_error: row.opt_text("last_error")?,
         last_seen_at: row.opt_timestamp("last_seen_at")?,
+        proxy_config_id: row.opt_text("proxy_config_id")?,
         created_at: row.timestamp("created_at")?,
         updated_at: row.timestamp("updated_at")?,
     })
@@ -388,5 +396,101 @@ mod tests {
                 .await
                 .expect("rolled-back mapping should load");
         assert_eq!(missing_mapping.as_deref(), Some("missing-client"));
+    }
+
+    #[tokio::test]
+    async fn proxy_assignment_round_trips_and_patches_as_a_tri_state() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        sqlx::query(
+            "CREATE TABLE download_clients (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                client_type TEXT NOT NULL,
+                config_json TEXT NOT NULL,
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL DEFAULT 'idle',
+                client_priority INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                last_seen_at TEXT,
+                proxy_config_id TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("download_clients table should be created");
+
+        let store = DownloadClientConfigStore::new(
+            StoreDatastore::Sqlite {
+                pool: pool.clone(),
+                writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+            },
+            Arc::new(RwLock::new(None)),
+        );
+
+        let now = Utc::now();
+        let created = store
+            .create(DownloadClientConfig {
+                id: "client-1".to_string(),
+                name: "Seedbox SAB".to_string(),
+                client_type: "sabnzbd".to_string(),
+                config_json: "{}".to_string(),
+                client_priority: 0,
+                is_enabled: true,
+                status: DownloadClientStatus::Healthy,
+                last_error: None,
+                last_seen_at: None,
+                proxy_config_id: Some("proxy-1".to_string()),
+                created_at: now,
+                updated_at: now,
+            })
+            .await
+            .expect("client should insert");
+        assert_eq!(created.proxy_config_id.as_deref(), Some("proxy-1"));
+
+        let loaded = store
+            .get_by_id("client-1")
+            .await
+            .expect("client should load")
+            .expect("client should exist");
+        assert_eq!(loaded.proxy_config_id.as_deref(), Some("proxy-1"));
+
+        // An omitted patch leaves the assignment alone.
+        let renamed = store
+            .update(DownloadClientConfigUpdate {
+                id: "client-1".to_string(),
+                name: Some("Renamed".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("rename should succeed");
+        assert_eq!(renamed.proxy_config_id.as_deref(), Some("proxy-1"));
+
+        // An explicit null clears it.
+        let cleared = store
+            .update(DownloadClientConfigUpdate {
+                id: "client-1".to_string(),
+                proxy_config_id: Some(None),
+                ..Default::default()
+            })
+            .await
+            .expect("clearing should succeed");
+        assert_eq!(cleared.proxy_config_id, None);
+
+        // And a value sets it again.
+        let reassigned = store
+            .update(DownloadClientConfigUpdate {
+                id: "client-1".to_string(),
+                proxy_config_id: Some(Some("proxy-2".to_string())),
+                ..Default::default()
+            })
+            .await
+            .expect("reassignment should succeed");
+        assert_eq!(reassigned.proxy_config_id.as_deref(), Some("proxy-2"));
     }
 }

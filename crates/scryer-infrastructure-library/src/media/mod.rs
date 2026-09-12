@@ -1,10 +1,12 @@
 pub mod canonical_tags;
 pub mod images;
 pub mod libraries;
+pub mod lifecycle_claims;
 pub(crate) mod monitor_selections;
 pub mod requests;
 pub mod search;
 pub mod servers;
 pub mod shows;
+pub mod signals;
 pub mod title_credits;
 pub mod titles;

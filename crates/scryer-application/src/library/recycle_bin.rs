@@ -12,7 +12,7 @@ pub const RECYCLE_STATUS_QUARANTINED: &str = "quarantined";
 
 const RECYCLE_ROOT_SENTINEL: &str = ".scryer-recycle-root";
 const DEFAULT_RETENTION_DAYS: u32 = 7;
-const RECYCLE_DIR_NAME: &str = ".scryer-recycle";
+pub(crate) const RECYCLE_DIR_NAME: &str = ".scryer-recycle";
 
 /// Configuration for the recycle bin, resolved from application settings.
 #[derive(Clone, Debug)]
@@ -599,22 +599,6 @@ async fn recycle_source_to_destination(
     }
 }
 
-fn lexically_normalize_for_policy(path: &Path) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
-            std::path::Component::RootDir => normalized.push(component.as_os_str()),
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            std::path::Component::Normal(segment) => normalized.push(segment),
-        }
-    }
-    normalized
-}
-
 #[cfg(not(windows))]
 fn contains_non_windows_separator_ambiguity(path: &Path) -> bool {
     path.components().any(|component| match component {
@@ -632,8 +616,8 @@ pub(crate) fn path_is_under_configured_root(path: &Path, root: &Path) -> bool {
         return false;
     }
 
-    let normalized_path = lexically_normalize_for_policy(path);
-    let normalized_root = lexically_normalize_for_policy(root);
+    let normalized_path = crate::stored_paths::lexically_normalize(path);
+    let normalized_root = crate::stored_paths::lexically_normalize(root);
     crate::catalog_workflow::library_path_is_under_root(
         normalized_path.to_string_lossy().as_ref(),
         normalized_root.to_string_lossy().as_ref(),

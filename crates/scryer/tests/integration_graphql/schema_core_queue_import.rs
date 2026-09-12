@@ -1808,6 +1808,7 @@ async fn graphql_traverses_core_graph_relationships() {
         &ctx.media_files,
         &file_id,
         scryer_application::MediaFileAnalysis {
+            details: Default::default(),
             video_codec: None,
             video_width: Some(1920),
             video_height: Some(1080),
@@ -2181,7 +2182,12 @@ async fn graphql_manual_import_schema_exposes_candidate_only_contract() {
     assert_eq!(field_names("queueInput"), ["selectionId", "files"]);
     assert_eq!(
         field_names("mappingInput"),
-        ["candidateId", "episodeId", "seriesMovieLinkId"]
+        [
+            "candidateId",
+            "episodeId",
+            "seriesMovieLinkId",
+            "discSelection"
+        ]
     );
     assert_eq!(
         field_names("selectionInput"),

@@ -27,18 +27,22 @@ import {
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import { IconButton } from "@/components/ui/icon-button";
 import {
-  SearchCatalogResultButton,
+  SearchCatalogResultCard,
   SearchEmptyState,
   SearchFooterTip,
   SearchMetadataPosterButton,
   SearchRouteCommandButton,
   SearchSectionLoading,
 } from "@/components/root/global-search-parts";
+import type { LibraryRecord } from "@/lib/types/titles";
 import {
+  buildCatalogLibraryMembers,
+  buildCatalogResultPresentation,
   buildCatalogSearchSections,
   buildGlobalSearchTabs,
   buildMetadataResultCounts,
   buildMetadataSearchActionState,
+  metadataSearchItemFromCatalogTitle,
   countHiddenCatalogResultsForFilters,
   countHiddenRouteCommandResultsForFilters,
   countMetadataResults,
@@ -290,6 +294,10 @@ export const RootHeader = React.memo(function RootHeader({
     () => buildCatalogSearchSections(catalogSearchResults, globalSearch),
     [catalogSearchResults, globalSearch],
   );
+  const catalogLibraryMembers = React.useMemo(
+    () => buildCatalogLibraryMembers(catalogSearchResults),
+    [catalogSearchResults],
+  );
   const metadataResultCounts = React.useMemo(
     () => buildMetadataResultCounts(metadataSearchResults),
     [metadataSearchResults],
@@ -426,13 +434,17 @@ export const RootHeader = React.memo(function RootHeader({
     trimmedGlobalSearch,
     visibleCatalogResultCount,
   ]);
+  // `libraries` narrows the dialog to the libraries that may take the title;
+  // absent, the dialog offers every library of the facet the viewer may use.
   const [addDialogTarget, setAddDialogTarget] = React.useState<{
     result: MetadataTvdbSearchItem;
     facet: Facet;
+    libraries?: LibraryRecord[];
   } | null>(null);
   const [requestDialogTarget, setRequestDialogTarget] = React.useState<{
     result: MetadataTvdbSearchItem;
     facet: Facet;
+    libraries?: LibraryRecord[];
   } | null>(null);
   const closingRequestDialogAfterSuccessfulActionRef = React.useRef(false);
   const isAddDialogConfigReady = addDialogTarget
@@ -440,16 +452,24 @@ export const RootHeader = React.memo(function RootHeader({
     : true;
 
   const handleOpenAddDialog = React.useCallback(
-    (result: MetadataTvdbSearchItem, facet: Facet) => {
-      setAddDialogTarget({ result, facet });
+    (
+      result: MetadataTvdbSearchItem,
+      facet: Facet,
+      libraries?: LibraryRecord[],
+    ) => {
+      setAddDialogTarget({ result, facet, libraries });
       void ensureCatalogConfigReady(facet);
     },
     [ensureCatalogConfigReady],
   );
 
   const handleOpenRequestDialog = React.useCallback(
-    (result: MetadataTvdbSearchItem, facet: Facet) => {
-      setRequestDialogTarget({ result, facet });
+    (
+      result: MetadataTvdbSearchItem,
+      facet: Facet,
+      libraries?: LibraryRecord[],
+    ) => {
+      setRequestDialogTarget({ result, facet, libraries });
     },
     [],
   );
@@ -1068,49 +1088,84 @@ export const RootHeader = React.memo(function RootHeader({
     (items: import("@/lib/types").TitleRecord[], facet: Facet) => {
       return items.map((title) => {
         const targetView: ViewId = viewFromFacet(facet);
-        const tvdbId = (title.externalIds ?? [])
-          .find((externalId) => externalId.source.toLowerCase() === "tvdb")
-          ?.value.trim();
         const posterUrl = selectPosterVariantUrl(title.posterUrl, "w70");
         const facetLabel = sectionLabelForFacet(t, facet);
-        const libraryLabel = title.libraryName?.trim() || null;
-        const statusLabel = title.contentStatus?.trim() || null;
-        const secondaryParts = [
-          title.year ? String(title.year) : null,
-          libraryLabel && libraryLabel !== facetLabel ? libraryLabel : null,
-          statusLabel,
-          tvdbId ? `TVDB ${tvdbId}` : null,
-        ].filter(Boolean);
-        const viewTitleLabel = `${t("search.view")}: ${title.name}`;
+        const presentation = buildCatalogResultPresentation({
+          title,
+          libraryMembers: catalogLibraryMembers,
+          manageableLibraries: librariesByFacet[facet],
+          requestableLibraries: requestableLibrariesByFacet[facet],
+          canAdd: catalogQualityProfileOptions.length > 0,
+        });
+        const searchItem = presentation.action
+          ? metadataSearchItemFromCatalogTitle(title)
+          : null;
+        const action =
+          presentation.action && searchItem
+            ? {
+                kind: presentation.action,
+                label:
+                  presentation.action === "add"
+                    ? t("search.addToAnotherLibrary")
+                    : t("search.requestForAnotherLibrary"),
+                onClick: () => {
+                  if (presentation.action === "add") {
+                    handleOpenAddDialog(
+                      searchItem,
+                      facet,
+                      presentation.addableLibraries,
+                    );
+                    return;
+                  }
+                  handleOpenRequestDialog(
+                    searchItem,
+                    facet,
+                    presentation.requestableLibraries,
+                  );
+                },
+              }
+            : null;
         return (
-          <SearchCatalogResultButton
+          <SearchCatalogResultCard
             id={selectorId("global-search-catalog-result", facet, title.id)}
             key={title.id}
-            onClick={() => {
-              resetGlobalSearch();
-              globalSearchInputRef.current?.blur();
-              onOpenOverview?.(targetView, {
-                id: title.id,
-                slug: title.slug ?? null,
-                libraryId: title.libraryId,
-                librarySlug: title.librarySlug ?? null,
-              });
-            }}
-            onKeyDown={handleSearchResultKeyDown}
-            ariaLabel={viewTitleLabel}
+            action={action}
+            chooseLibraryLabel={t("search.chooseLibraryToView", {
+              name: title.name,
+            })}
             createdAt={title.createdAt}
             emptyLabel={t("label.noArt")}
             externalIds={title.externalIds}
             facet={facet}
             facetLabel={facetLabel}
+            libraries={presentation.members.map((member) => ({
+              titleId: member.id,
+              libraryId: member.libraryId,
+              libraryName: member.libraryName?.trim() || facetLabel,
+            }))}
             metadataFetchedAt={title.metadataFetchedAt}
+            monitored={title.monitored}
             monitoredLabel={
               title.monitored ? t("search.monitored") : t("search.unmonitored")
             }
+            onKeyDown={handleSearchResultKeyDown}
+            onView={(library) => {
+              const member =
+                presentation.members.find(
+                  (candidate) => candidate.id === library.titleId,
+                ) ?? title;
+              resetGlobalSearch();
+              globalSearchInputRef.current?.blur();
+              onOpenOverview?.(targetView, {
+                id: member.id,
+                slug: member.slug ?? null,
+                libraryId: member.libraryId,
+                librarySlug: member.librarySlug ?? null,
+              });
+            }}
             posterAlt={t("media.posterAlt", { name: title.name })}
             posterUrl={posterUrl}
             resultAttribute="data-global-search-result"
-            secondaryParts={secondaryParts}
             surface="desktop"
             titleId={title.id}
             titleName={title.name}
@@ -1121,9 +1176,15 @@ export const RootHeader = React.memo(function RootHeader({
       });
     },
     [
+      catalogLibraryMembers,
+      catalogQualityProfileOptions.length,
       globalSearchInputRef,
+      handleOpenAddDialog,
+      handleOpenRequestDialog,
       handleSearchResultKeyDown,
+      librariesByFacet,
       onOpenOverview,
+      requestableLibrariesByFacet,
       resetGlobalSearch,
       t,
     ],
@@ -1854,6 +1915,7 @@ export const RootHeader = React.memo(function RootHeader({
           addDialogTarget?.facet ?? "SERIES",
         )}
         manageableLibraries={
+          addDialogTarget?.libraries ??
           librariesByFacet[addDialogTarget?.facet ?? "SERIES"]
         }
         rootFolderOptions={
@@ -1867,6 +1929,7 @@ export const RootHeader = React.memo(function RootHeader({
         result={requestDialogTarget?.result ?? EMPTY_SEARCH_RESULT}
         facet={requestDialogTarget?.facet ?? "SERIES"}
         requestableLibraries={
+          requestDialogTarget?.libraries ??
           requestableLibrariesByFacet[requestDialogTarget?.facet ?? "SERIES"]
         }
         qualityProfileOptions={catalogQualityProfileOptions}

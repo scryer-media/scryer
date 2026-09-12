@@ -18,6 +18,7 @@ fn download_client(
         client_priority: 0,
         created_at: now,
         updated_at: now,
+        proxy_config_id: None,
     }
 }
 
@@ -164,7 +165,7 @@ async fn indexer_create_and_update_persist_mapping_atomically() {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: None,
                 config_json: Some(
                     serde_json::json!({
@@ -190,7 +191,7 @@ async fn indexer_create_and_update_persist_mapping_atomically() {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: None,
+                proxy_config_id: None,
                 download_client_id: Some("weaver".to_string()),
                 config_json: Some(
                     serde_json::json!({

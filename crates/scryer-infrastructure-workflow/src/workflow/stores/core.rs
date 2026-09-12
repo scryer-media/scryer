@@ -52,6 +52,21 @@ pub async fn append_domain_events(
     datastore: &StoreDatastore,
     events: Vec<NewDomainEvent>,
 ) -> AppResult<Vec<DomainEvent>> {
+    append_domain_events_with_replay(datastore, events, false).await
+}
+
+pub async fn append_domain_events_once(
+    datastore: &StoreDatastore,
+    events: Vec<NewDomainEvent>,
+) -> AppResult<Vec<DomainEvent>> {
+    append_domain_events_with_replay(datastore, events, true).await
+}
+
+async fn append_domain_events_with_replay(
+    datastore: &StoreDatastore,
+    events: Vec<NewDomainEvent>,
+    allow_replay: bool,
+) -> AppResult<Vec<DomainEvent>> {
     SqlRuntime::run_in_transaction(datastore, "append_domain_events", move |tx| {
         let events = events.clone();
         Box::pin(async move {
@@ -68,12 +83,20 @@ pub async fn append_domain_events(
                 let projections = derive_domain_event_projections(event_type, &payload);
                 SqlRuntime::execute(
                     SqlExec::Tx(tx),
-                    "INSERT INTO domain_events (
+                    &[
+                        "INSERT INTO domain_events (
                         event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
                         title_id, facet, correlation_id, causation_id, schema_version,
                         stream_kind, stream_id, event_type, payload_json, import_status,
                         media_file_delete_reason, download_id
                      ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                        if allow_replay {
+                            " ON CONFLICT(event_id) DO NOTHING"
+                        } else {
+                            ""
+                        },
+                    ]
+                    .concat(),
                     &[
                         SqlArg::Text(event.event_id.clone()),
                         SqlArg::Timestamp(event.occurred_at),
@@ -1075,6 +1098,10 @@ pub fn build_title_history_filter_sql(
                             DomainEventType::TitleRematched.as_str().into(),
                         ));
                     }
+                    TitleHistoryEventType::TitleMoved => {
+                        parts.push("event_type = {}".to_string());
+                        args.push(SqlArg::Text(DomainEventType::TitleMoved.as_str().into()));
+                    }
                     TitleHistoryEventType::SeedingStarted => {
                         parts.push("event_type = {}".to_string());
                         args.push(SqlArg::Text(
@@ -1185,6 +1212,7 @@ pub fn build_dashboard_activity_stats_sql(
 }
 
 pub const TITLE_HISTORY_PAGE_DOMAIN_EVENT_TYPES: &[DomainEventType] = &[
+    DomainEventType::TitleMoved,
     DomainEventType::TitleRematched,
     DomainEventType::ReleaseGrabbed,
     DomainEventType::ImportCompleted,

@@ -10,16 +10,18 @@ use aws_lc_rs::digest;
 use reqwest::Client;
 use scryer_application::{
     AnimeEpisodeMapping, AnimeMapping, AnimeMovie, AppError, AppResult, BulkArtworkUrlResult,
-    BulkMetadataResult, DiscoveryCollectionCompletionInput, DiscoveryCollectionCompletionResult,
-    DiscoveryContextChangesInput, DiscoveryContextChangesResult, DiscoveryContextSnapshotAckResult,
+    BulkMetadataResult, ContentCertification, ContentRating, DiscoveryCollectionCompletionInput,
+    DiscoveryCollectionCompletionResult, DiscoveryContextChangesInput,
+    DiscoveryContextChangesResult, DiscoveryContextSnapshotAckResult,
     DiscoveryContextSnapshotPageResult, DiscoveryContextSnapshotStatusResult,
     DiscoveryContextSnapshotSubmitInput, DiscoveryContextSnapshotSubmitResult,
     DiscoveryDashboardResult, DiscoveryPublicFeedInput, DiscoveryRelatedResult, EpisodeArtworkUrls,
-    EpisodeMetadata, MetadataGateway, MetadataSearchItem, MetadataSearchQuery, MovieMetadata,
-    MovieTitleBulkResult, MovieTitleRef, MultiMetadataSearchResult, RateLimitCooldownAction,
-    RichMetadataSearchItem, SeasonMetadata, SeriesArtworkUrls, SeriesMetadata, SettingsRepository,
-    SmgScryerUpdateNotice, TitleArtworkUrls, TitleCredit, TitleExternalRating, TitleRatingSummary,
-    TitleRecommendationsInput, TitleResolution,
+    EpisodeMetadata, MdblistSummary, MetadataGateway, MetadataSearchItem, MetadataSearchQuery,
+    MovieMetadata, MovieTitleBulkResult, MovieTitleRef, MultiMetadataSearchResult,
+    RateLimitCooldownAction, RichMetadataSearchItem, SeasonMetadata, SeriesArtworkUrls,
+    SeriesMetadata, SettingsRepository, SmgScryerUpdateNotice, TitleArtworkUrls, TitleAward,
+    TitleCredit, TitleExternalRating, TitleRatingSummary, TitleRecommendationsInput,
+    TitleResolution,
 };
 use scryer_domain::{
     AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, CanonicalMediaTag,
@@ -117,6 +119,7 @@ const OP_METADATA_BULK: &str = "MetadataBulk";
 const OP_TITLES: &str = "Titles";
 const OP_RESOLVE_TITLES: &str = "ResolveTitles";
 const OP_SEARCH_TITLES: &str = "SearchTitles";
+const OP_SEARCH_TITLES_MULTI: &str = "SearchTitlesMulti";
 const OP_SEARCH_TITLES_BATCH: &str = "SearchTitlesBatch";
 const OP_TITLE_RECOMMENDATIONS: &str = "TitleRecommendations";
 const OP_DISCOVER_PUBLIC_FEED: &str = "DiscoverPublicFeed";
@@ -511,6 +514,7 @@ pub struct MetadataGatewayClient {
     titles_hash: String,
     resolve_titles_hash: String,
     search_titles_hash: String,
+    search_titles_multi_hash: String,
     discover_public_feed_hash: String,
     title_recommendations_hash: String,
     collection_completions_hash: String,
@@ -536,6 +540,7 @@ impl MetadataGatewayClient {
         let titles_hash = apq_hash(graphql_docs::TITLES_QUERY);
         let resolve_titles_hash = apq_hash(graphql_docs::RESOLVE_TITLES_QUERY);
         let search_titles_hash = apq_hash(graphql_docs::SEARCH_TITLES_QUERY);
+        let search_titles_multi_hash = apq_hash(graphql_docs::SEARCH_TITLES_MULTI_QUERY);
         let discover_public_feed_hash = apq_hash(graphql_docs::DISCOVER_PUBLIC_FEED_QUERY);
         let title_recommendations_hash = apq_hash(graphql_docs::TITLE_RECOMMENDATIONS_QUERY);
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
@@ -600,6 +605,7 @@ impl MetadataGatewayClient {
             titles_hash,
             resolve_titles_hash,
             search_titles_hash,
+            search_titles_multi_hash,
             discover_public_feed_hash,
             title_recommendations_hash,
             collection_completions_hash,
@@ -630,6 +636,7 @@ impl MetadataGatewayClient {
         let titles_hash = apq_hash(graphql_docs::TITLES_QUERY);
         let resolve_titles_hash = apq_hash(graphql_docs::RESOLVE_TITLES_QUERY);
         let search_titles_hash = apq_hash(graphql_docs::SEARCH_TITLES_QUERY);
+        let search_titles_multi_hash = apq_hash(graphql_docs::SEARCH_TITLES_MULTI_QUERY);
         let discover_public_feed_hash = apq_hash(graphql_docs::DISCOVER_PUBLIC_FEED_QUERY);
         let title_recommendations_hash = apq_hash(graphql_docs::TITLE_RECOMMENDATIONS_QUERY);
         let collection_completions_hash = apq_hash(graphql_docs::COLLECTION_COMPLETIONS_QUERY);
@@ -673,6 +680,7 @@ impl MetadataGatewayClient {
             titles_hash,
             resolve_titles_hash,
             search_titles_hash,
+            search_titles_multi_hash,
             discover_public_feed_hash,
             title_recommendations_hash,
             collection_completions_hash,
@@ -2343,6 +2351,12 @@ fn movie_metadata_from_item(m: MovieItem) -> MovieMetadata {
         tmdb_release_date: m.tmdb_release_date,
         ratings: rating_summary_from_gateway(m.rating, m.rating_sources, m.external_ratings),
         credits: credits_from_gateway(m.credits),
+        genres: genres_from_gateway(m.genres),
+        content_ratings: content_ratings_from_gateway(m.content_ratings),
+        mdblist: mdblist_from_gateway(m.mdblist),
+        awards: awards_from_gateway(m.awards),
+        tmdb_vote_average: m.tmdb_vote_average.filter(|value| value.is_finite()),
+        tmdb_vote_count: m.tmdb_vote_count,
     }
 }
 
@@ -2465,6 +2479,10 @@ fn series_metadata_from_item(s: SeriesItem) -> SeriesMetadata {
         anime_numbering_bridge: anime_numbering_bridge_from_gateway(s.anime_numbering_bridge),
         ratings: rating_summary_from_gateway(s.rating, s.rating_sources, s.external_ratings),
         credits: credits_from_gateway(s.credits),
+        genres: genres_from_gateway(s.genres),
+        content_ratings: content_ratings_from_gateway(s.content_ratings),
+        mdblist: mdblist_from_gateway(s.mdblist),
+        awards: awards_from_gateway(s.awards),
     }
 }
 
@@ -2489,24 +2507,24 @@ fn build_bulk_artwork_url_query(movie_ids: &[i64], series_ids: &[i64], language:
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtworkItem, InstanceAuth, MetadataGatewayClient, MetadataSearchQuery, MovieTitleRef,
-        MtlsState, OP_DISCOVER_PUBLIC_FEED, OP_GET_MOVIE, OP_GET_SERIES, OP_METADATA_BULK,
-        OP_SEARCH_TVDB, OP_SEARCH_TVDB_BATCH, OP_SEARCH_TVDB_MULTI, OP_SEARCH_TVDB_RICH,
-        SearchTvdbBatchResult, SearchTvdbResponse, SmgEnrollmentConfig,
-        apply_instance_auth_headers_with_nonce, apq_cache_key, apq_hash,
+        ArtworkItem, InstanceAuth, MetadataGatewayClient, MetadataSearchQuery, MovieItem,
+        MovieTitleRef, MtlsState, OP_DISCOVER_PUBLIC_FEED, OP_GET_MOVIE, OP_GET_SERIES,
+        OP_METADATA_BULK, OP_SEARCH_TVDB, OP_SEARCH_TVDB_BATCH, OP_SEARCH_TVDB_MULTI,
+        OP_SEARCH_TVDB_RICH, SearchTvdbBatchResult, SearchTvdbResponse, SeriesItem,
+        SmgEnrollmentConfig, apply_instance_auth_headers_with_nonce, apq_cache_key, apq_hash,
         build_bulk_artwork_url_query, build_search_tvdb_batch_query, canonical_request_host,
         canonical_request_path_and_query, compatibility_poll_phase, enrollment_retry_delay,
         is_version_incompatible_response, map_metadata_gateway_outbound_error,
-        next_version_compatibility_poll_delay_at, normalize_artwork_url,
+        movie_metadata_from_item, next_version_compatibility_poll_delay_at, normalize_artwork_url,
         normalize_optional_artwork_url, parse_version_compatibility_incompatible,
-        parse_version_compatibility_success, pick_artwork_url, sha256_hex,
-        validate_search_tvdb_batch_echo,
+        parse_version_compatibility_success, pick_artwork_url, series_metadata_from_item,
+        sha256_hex, validate_search_tvdb_batch_echo,
     };
     use base64::Engine as _;
     use scryer_application::{
         AppError, DiscoveryContextChangeType, DiscoveryContextChangedSubjectInput,
-        DiscoveryContextChangesInput, DiscoveryPublicFeedInput, DiscoverySubjectInput,
-        MetadataGateway, TitleCredit,
+        DiscoveryContextChangesInput, DiscoveryContextMediumMixInput, DiscoveryPublicFeedInput,
+        DiscoverySubjectInput, MetadataGateway, TitleCredit,
     };
     use serde_json::json;
     use std::sync::atomic::Ordering;
@@ -2552,6 +2570,7 @@ mod tests {
             "resolve_titles" => {
                 json!({ "refs": (1..=50).map(|id| json!({ "id": id })).collect::<Vec<_>>(), "kind": "movie", "createMissing": false })
             }
+            "search_titles_multi" => json!({ "query": "Fixture", "limit": 25, "language": "eng" }),
             "search_titles" => {
                 json!({ "query": "Fixture", "kind": "movie", "limit": 25, "language": "eng", "year": 2024 })
             }
@@ -2622,6 +2641,11 @@ mod tests {
                 "search_titles",
                 super::OP_SEARCH_TITLES,
                 graphql_docs::SEARCH_TITLES_QUERY,
+            ),
+            (
+                "search_titles_multi",
+                super::OP_SEARCH_TITLES_MULTI,
+                graphql_docs::SEARCH_TITLES_MULTI_QUERY,
             ),
             (
                 "search_titles_batch",
@@ -2700,7 +2724,7 @@ mod tests {
             let encoded = serde_json::to_vec_pretty(&corpus).expect("serialize fixture corpus");
             std::fs::write(path, encoded).expect("write fixture corpus");
         }
-        assert_eq!(corpus.len(), 28);
+        assert_eq!(corpus.len(), 29);
         assert_eq!(
             corpus[6]["variables"]["movieTvdbIds"]
                 .as_array()
@@ -2714,7 +2738,7 @@ mod tests {
             Some(50)
         );
         assert_eq!(
-            corpus[25]["query"]
+            corpus[26]["query"]
                 .as_str()
                 .expect("movie query")
                 .matches(": movie(")
@@ -2722,7 +2746,7 @@ mod tests {
             100
         );
         assert_eq!(
-            corpus[26]["query"]
+            corpus[27]["query"]
                 .as_str()
                 .expect("series query")
                 .matches(": series(")
@@ -2730,12 +2754,12 @@ mod tests {
             100
         );
         assert_eq!(
-            corpus[27]["query"]
+            corpus[28]["query"]
                 .as_str()
                 .expect("combined query")
                 .matches(": movie(")
                 .count()
-                + corpus[27]["query"]
+                + corpus[28]["query"]
                     .as_str()
                     .expect("combined query")
                     .matches(": series(")
@@ -3079,6 +3103,212 @@ mod tests {
                 .all(|query| query.contains("original_language"))
         );
         assert!(queries.iter().all(|query| !query.contains("target_key")));
+    }
+
+    /// The request rule surface reads these groups (plan §3.2). If a selection is dropped from a
+    /// document the facts silently become empty everywhere, so pin the selections themselves.
+    #[test]
+    fn request_fact_selections_are_present_in_every_title_document() {
+        let queries = [
+            graphql_docs::GET_MOVIE_QUERY,
+            graphql_docs::GET_SERIES_QUERY,
+            graphql_docs::TITLES_QUERY,
+        ];
+        for query in queries {
+            for selection in [
+                "genres",
+                "content_ratings",
+                "certifications",
+                "age_rating_source",
+                "mdblist",
+                "commonsense",
+                "awards",
+                "claim_side",
+            ] {
+                assert!(
+                    query.contains(selection),
+                    "expected `{selection}` in {query}"
+                );
+            }
+        }
+        for query in [graphql_docs::GET_MOVIE_QUERY, graphql_docs::TITLES_QUERY] {
+            assert!(query.contains("tmdb_vote_average"));
+            assert!(query.contains("tmdb_vote_count"));
+        }
+    }
+
+    fn minimal_movie_item_fields() -> serde_json::Value {
+        json!({
+            "tvdb_id": 4242,
+            "name": "Fixture Feature",
+            "slug": "fixture-feature",
+            "year": 2024,
+            "status": "released",
+            "overview": "",
+            "poster_url": "",
+            "language": "eng",
+            "runtime_minutes": 101,
+            "sort_title": "fixture feature",
+            "imdb_id": "",
+            "studio": "Fixture Pictures",
+            "tmdb_release_date": "2024-03-01"
+        })
+    }
+
+    fn minimal_series_item_fields() -> serde_json::Value {
+        json!({
+            "tvdb_id": 5151,
+            "name": "Fixture Serial",
+            "sort_name": "fixture serial",
+            "slug": "fixture-serial",
+            "status": "continuing",
+            "year": 2023,
+            "first_aired": "2023-04-05",
+            "overview": "",
+            "network": "Fixture Network",
+            "runtime_minutes": 42,
+            "poster_url": "",
+            "country": "usa",
+            "aliases": [],
+            "seasons": [],
+            "episodes": []
+        })
+    }
+
+    fn merge_json(mut base: serde_json::Value, extra: serde_json::Value) -> serde_json::Value {
+        let target = base.as_object_mut().expect("base object");
+        for (key, value) in extra.as_object().expect("extra object") {
+            target.insert(key.clone(), value.clone());
+        }
+        base
+    }
+
+    fn widened_smg_fields() -> serde_json::Value {
+        json!({
+            "genres": ["Drama", "  Thriller  ", "   "],
+            "content_ratings": [
+                {
+                    "country": "usa",
+                    "certifications": [
+                        {"value": "PG-13", "source": "tmdb", "release_type": 3},
+                        {"value": "  ", "source": "tmdb", "release_type": null}
+                    ],
+                    "age_rating": 13,
+                    "age_rating_source": "tmdb"
+                },
+                {"country": "deu", "certifications": [], "age_rating": null,
+                 "age_rating_source": null}
+            ],
+            "mdblist": {
+                "mdblist_id": "mdb-1",
+                "trakt_id": 9001,
+                "score": 74.0,
+                "score_average": 71.5,
+                "age_rating": 13,
+                "certification": "PG-13",
+                "commonsense": true
+            },
+            "awards": [
+                {"award_qid": "Q1", "award_label": "Fixture Prize", "year": 2025,
+                 "recipient_qid": "Q2", "recipient_label": "Fixture Feature",
+                 "claim_side": "winner"},
+                {"award_qid": "", "award_label": "", "year": null, "recipient_qid": "",
+                 "recipient_label": "", "claim_side": ""}
+            ]
+        })
+    }
+
+    #[test]
+    fn movie_mapper_carries_the_widened_request_facts() {
+        let payload = merge_json(
+            merge_json(minimal_movie_item_fields(), widened_smg_fields()),
+            json!({"tmdb_vote_average": 7.4, "tmdb_vote_count": 1234}),
+        );
+        let item: MovieItem = serde_json::from_value(payload).expect("movie item should decode");
+
+        let movie = movie_metadata_from_item(item);
+
+        assert_eq!(
+            movie.genres,
+            vec!["Drama".to_string(), "Thriller".to_string()]
+        );
+        // The empty German row carried neither a certification nor an age, so it is dropped
+        // rather than stored as a shaped-but-factless entry.
+        assert_eq!(movie.content_ratings.len(), 1);
+        assert_eq!(movie.content_ratings[0].country, "usa");
+        assert_eq!(movie.content_ratings[0].certifications.len(), 1);
+        assert_eq!(movie.content_ratings[0].certifications[0].value, "PG-13");
+        assert_eq!(
+            movie.content_ratings[0].certifications[0].release_type,
+            Some(3)
+        );
+        assert_eq!(movie.content_ratings[0].age_rating, Some(13));
+        let mdblist = movie.mdblist.expect("mdblist should map");
+        assert_eq!(mdblist.mdblist_id, "mdb-1");
+        assert_eq!(mdblist.commonsense, Some(true));
+        assert_eq!(mdblist.certification, "PG-13");
+        assert_eq!(movie.awards.len(), 1);
+        assert_eq!(movie.awards[0].award_label, "Fixture Prize");
+        assert_eq!(movie.awards[0].claim_side, "winner");
+        assert_eq!(movie.tmdb_vote_average, Some(7.4));
+        assert_eq!(movie.tmdb_vote_count, Some(1234));
+    }
+
+    #[test]
+    fn movie_mapper_defaults_the_widened_facts_when_smg_omits_them() {
+        let item: MovieItem =
+            serde_json::from_value(minimal_movie_item_fields()).expect("movie item should decode");
+
+        let movie = movie_metadata_from_item(item);
+
+        assert!(movie.genres.is_empty());
+        assert!(movie.content_ratings.is_empty());
+        assert!(movie.mdblist.is_none());
+        assert!(movie.awards.is_empty());
+        assert_eq!(movie.tmdb_vote_average, None);
+        assert_eq!(movie.tmdb_vote_count, None);
+        assert_eq!(movie.name, "Fixture Feature");
+    }
+
+    #[test]
+    fn series_mapper_carries_the_widened_request_facts() {
+        let payload = merge_json(minimal_series_item_fields(), widened_smg_fields());
+        let item: SeriesItem = serde_json::from_value(payload).expect("series item should decode");
+
+        let series = series_metadata_from_item(item);
+
+        assert_eq!(
+            series.genres,
+            vec!["Drama".to_string(), "Thriller".to_string()]
+        );
+        assert_eq!(series.content_ratings.len(), 1);
+        assert_eq!(
+            series.content_ratings[0].age_rating_source.as_deref(),
+            Some("tmdb")
+        );
+        assert_eq!(
+            series
+                .mdblist
+                .as_ref()
+                .and_then(|mdblist| mdblist.score_average),
+            Some(71.5)
+        );
+        assert_eq!(series.awards.len(), 1);
+        assert_eq!(series.awards[0].recipient_label, "Fixture Feature");
+    }
+
+    #[test]
+    fn series_mapper_defaults_the_widened_facts_when_smg_omits_them() {
+        let item: SeriesItem = serde_json::from_value(minimal_series_item_fields())
+            .expect("series item should decode");
+
+        let series = series_metadata_from_item(item);
+
+        assert!(series.genres.is_empty());
+        assert!(series.content_ratings.is_empty());
+        assert!(series.mdblist.is_none());
+        assert!(series.awards.is_empty());
+        assert_eq!(series.first_aired, "2023-04-05");
     }
 
     #[tokio::test]
@@ -3535,6 +3765,11 @@ mod tests {
                 include_owned: true,
                 include_unresolved: false,
                 context_fingerprint: Some("current".to_string()),
+                medium_mix: DiscoveryContextMediumMixInput {
+                    live_action: 1,
+                    animation: 0,
+                    anime: 0,
+                },
             })
             .await
             .expect("incremental discovery reload should succeed through APQ POST");
@@ -4765,6 +5000,91 @@ mod tests {
         reset_title_id_capability_probe();
     }
 
+    #[tokio::test]
+    async fn search_titles_multi_returns_all_facets_in_one_request_and_clamps_limits() {
+        let server = MockServer::start().await;
+        let item = |id: i64, tvdb: Option<i64>, source: &str, kind: &str| {
+            json!({
+                "title_id": id, "tvdb_id": tvdb, "primary_source": source,
+                "imdb_id": "", "type": kind, "name": "作品", "slug": "fixture",
+                "year": 0, "status": "Released", "overview": "日本語の概要",
+                "poster_url": "", "language": "jpn", "runtime_minutes": 90,
+                "popularity": 1.0, "sort_title": "作品",
+                "external_ids": [{"source": source, "kind": kind, "id": "42", "key": format!("{source}:{kind}:42")}]
+            })
+        };
+        Mock::given(method("GET"))
+            .and(path("/graphql"))
+            .and(query_param("operationName", super::OP_SEARCH_TITLES_MULTI))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data": {
+                "searchTitlesMulti": {
+                    "movies": [item(101, None, "tmdb", "movie")],
+                    "series": [item(102, Some(42), "tvdb", "series")],
+                    "anime": [item(103, Some(43), "tvdb", "series")]
+                }
+            }})))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = unsigned_gateway_client(format!("{}/graphql", server.uri()));
+        for limit in [100, 0] {
+            let result = client
+                .search_titles_multi("作品", limit, "jpn")
+                .await
+                .unwrap();
+            assert_eq!(result.movies[0].smg_id, Some(101));
+            assert!(result.movies[0].tvdb_id.is_empty());
+            assert_eq!(result.movies[0].primary_source.as_deref(), Some("tmdb"));
+            assert_eq!(result.movies[0].external_ids[0].source, "tmdb");
+            assert_eq!(result.movies[0].external_ids[0].value, "42");
+            assert_eq!(result.movies[0].overview.as_deref(), Some("日本語の概要"));
+            assert_eq!(result.movies[0].year, None);
+            assert_eq!(result.movies[0].poster_url, None);
+            assert_eq!(result.series[0].tvdb_id, "42");
+            assert_eq!(result.anime[0].smg_id, Some(103));
+        }
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        for (request, limit) in requests
+            .iter()
+            .zip([super::METADATA_GATEWAY_MAX_TITLE_SEARCH_LIMIT, 1])
+        {
+            let variables = request
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "variables")
+                .unwrap()
+                .1;
+            let variables: serde_json::Value = serde_json::from_str(&variables).unwrap();
+            assert_eq!(
+                variables,
+                json!({"query": "作品", "limit": limit, "language": "jpn"})
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn search_titles_multi_returns_errors_without_legacy_requests() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/graphql"))
+            .and(query_param("operationName", super::OP_SEARCH_TITLES_MULTI))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(unknown_root_field_error("searchTitlesMulti")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = unsigned_gateway_client(format!("{}/graphql", server.uri()));
+        let error = client
+            .search_titles_multi("fixture", 25, "eng")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("Cannot query field"));
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
+    }
+
     #[test]
     fn gateway_year_normalization_rejects_non_positive_sentinels() {
         assert_eq!(super::normalize_gateway_year(Some(2026)), Some(2026));
@@ -4995,6 +5315,19 @@ struct SearchTitlesResponse {
 #[derive(Deserialize)]
 struct SearchTitlesResult {
     results: Vec<TitleSearchItem>,
+}
+
+#[derive(Deserialize)]
+struct SearchTitlesMultiResponse {
+    #[serde(rename = "searchTitlesMulti")]
+    search_titles_multi: SearchTitlesMultiResult,
+}
+
+#[derive(Deserialize)]
+struct SearchTitlesMultiResult {
+    movies: Vec<TitleSearchItem>,
+    series: Vec<TitleSearchItem>,
+    anime: Vec<TitleSearchItem>,
 }
 
 #[derive(Deserialize)]
@@ -5253,9 +5586,21 @@ struct MovieItem {
     #[serde(default)]
     tmdb_popularity: Option<f64>,
     #[serde(default)]
+    tmdb_vote_average: Option<f64>,
+    #[serde(default)]
+    tmdb_vote_count: Option<i64>,
+    #[serde(default)]
     anidb_id: Option<i64>,
     #[serde(default)]
     canonical_tags: Vec<CanonicalTagItem>,
+    #[serde(default)]
+    genres: Vec<String>,
+    #[serde(default)]
+    content_ratings: Vec<ContentRatingItem>,
+    #[serde(default)]
+    mdblist: Option<MdblistItem>,
+    #[serde(default)]
+    awards: Vec<AwardItem>,
     studio: String,
     tmdb_release_date: Option<String>,
     #[serde(default)]
@@ -5324,6 +5669,134 @@ struct CreditItem {
     billing_order: i32,
     #[serde(default)]
     episode_count: Option<i32>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct ContentCertificationItem {
+    #[serde(default)]
+    value: String,
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    release_type: Option<i32>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct ContentRatingItem {
+    #[serde(default)]
+    country: String,
+    #[serde(default)]
+    certifications: Vec<ContentCertificationItem>,
+    #[serde(default)]
+    age_rating: Option<i32>,
+    #[serde(default)]
+    age_rating_source: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct MdblistItem {
+    #[serde(default)]
+    mdblist_id: String,
+    #[serde(default)]
+    trakt_id: Option<i64>,
+    #[serde(default)]
+    score: Option<f64>,
+    #[serde(default)]
+    score_average: Option<f64>,
+    #[serde(default)]
+    age_rating: Option<i32>,
+    #[serde(default)]
+    certification: String,
+    #[serde(default)]
+    commonsense: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+struct AwardItem {
+    #[serde(default)]
+    award_qid: String,
+    #[serde(default)]
+    award_label: String,
+    #[serde(default)]
+    year: Option<i32>,
+    #[serde(default)]
+    recipient_qid: String,
+    #[serde(default)]
+    recipient_label: String,
+    #[serde(default)]
+    claim_side: String,
+}
+
+fn content_ratings_from_gateway(items: Vec<ContentRatingItem>) -> Vec<ContentRating> {
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let country = item.country.trim().to_string();
+            let certifications = item
+                .certifications
+                .into_iter()
+                .filter_map(|certification| {
+                    let value = certification.value.trim().to_string();
+                    (!value.is_empty()).then(|| ContentCertification {
+                        value,
+                        source: certification.source.trim().to_string(),
+                        release_type: certification.release_type,
+                    })
+                })
+                .collect::<Vec<_>>();
+            // A country row with neither a certification nor an age carries no fact; dropping it
+            // keeps `content_ratings` empty-means-nothing-known rather than empty-shaped rows.
+            (!certifications.is_empty() || item.age_rating.is_some()).then(|| ContentRating {
+                country,
+                certifications,
+                age_rating: item.age_rating,
+                age_rating_source: item
+                    .age_rating_source
+                    .map(|source| source.trim().to_string())
+                    .filter(|source| !source.is_empty()),
+            })
+        })
+        .collect()
+}
+
+fn mdblist_from_gateway(item: Option<MdblistItem>) -> Option<MdblistSummary> {
+    item.map(|item| MdblistSummary {
+        mdblist_id: item.mdblist_id.trim().to_string(),
+        trakt_id: item.trakt_id,
+        score: item.score,
+        score_average: item.score_average,
+        age_rating: item.age_rating,
+        certification: item.certification.trim().to_string(),
+        commonsense: item.commonsense,
+    })
+}
+
+fn awards_from_gateway(items: Vec<AwardItem>) -> Vec<TitleAward> {
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let award_qid = item.award_qid.trim().to_string();
+            let award_label = item.award_label.trim().to_string();
+            (!award_qid.is_empty() || !award_label.is_empty()).then(|| TitleAward {
+                award_qid,
+                award_label,
+                year: item.year,
+                recipient_qid: item.recipient_qid.trim().to_string(),
+                recipient_label: item.recipient_label.trim().to_string(),
+                claim_side: item.claim_side.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+fn genres_from_gateway(genres: Vec<String>) -> Vec<String> {
+    genres
+        .into_iter()
+        .filter_map(|genre| {
+            let genre = genre.trim();
+            (!genre.is_empty()).then(|| genre.to_string())
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -5598,6 +6071,14 @@ struct SeriesItem {
     country: String,
     #[serde(default)]
     canonical_tags: Vec<CanonicalTagItem>,
+    #[serde(default)]
+    genres: Vec<String>,
+    #[serde(default)]
+    content_ratings: Vec<ContentRatingItem>,
+    #[serde(default)]
+    mdblist: Option<MdblistItem>,
+    #[serde(default)]
+    awards: Vec<AwardItem>,
     #[serde(default)]
     rating: Option<f64>,
     #[serde(default)]
@@ -6073,125 +6554,10 @@ impl MetadataGateway for MetadataGatewayClient {
             .await?;
         let s = data.series.series;
 
-        Ok(SeriesMetadata {
-            target_key: None,
-            tvdb_id: s.tvdb_id,
-            name: s.name,
-            sort_name: s.sort_name,
-            slug: s.slug,
-            year: normalize_gateway_year(s.year),
-            content_status: s.status,
-            first_aired: s.first_aired,
-            overview: s.overview,
-            network: s.network,
-            runtime_minutes: s.runtime_minutes,
-            poster_url: normalize_artwork_url(&s.poster_url),
-            background_url: pick_artwork_url(&s.artworks, "background"),
-            original_language: s.original_language,
-            country: s.country,
-            canonical_tags: canonical_tags_from_gateway(s.canonical_tags),
-            aliases: s.aliases,
-            tagged_aliases: s
-                .tagged_aliases
-                .into_iter()
-                .map(|ta| scryer_domain::TaggedAlias {
-                    name: ta.name,
-                    language: ta.language,
-                })
-                .collect(),
-            seasons: s
-                .seasons
-                .into_iter()
-                .map(|season| SeasonMetadata {
-                    tvdb_id: season.tvdb_id,
-                    number: season.number,
-                    label: season.label,
-                    episode_type: season.episode_type,
-                })
-                .collect(),
-            episodes: s
-                .episodes
-                .into_iter()
-                .map(|ep| EpisodeMetadata {
-                    tvdb_id: ep.tvdb_id,
-                    episode_number: ep.episode_number,
-                    name: ep.name,
-                    aired: ep.aired,
-                    runtime_minutes: ep.runtime_minutes,
-                    is_filler: ep.is_filler,
-                    is_recap: ep.is_recap,
-                    overview: ep.overview,
-                    absolute_number: ep.absolute_number,
-                    season_number: ep.season_number,
-                    image_url: ep.image_url,
-                })
-                .collect(),
-            anime_mappings: s
-                .anime_mappings
-                .into_iter()
-                .map(|m| AnimeMapping {
-                    mal_id: m.mal_id,
-                    mal_dub_id: m.mal_dub_id,
-                    anilist_id: m.anilist_id,
-                    anidb_id: m.anidb_id,
-                    kitsu_id: m.kitsu_id,
-                    simkl_id: m.simkl_id,
-                    thetvdb_id: m.thetvdb_id,
-                    themoviedb_id: m.themoviedb_id,
-                    imdb_id: m.imdb_id,
-                    trakt_id: m.trakt_id,
-                    alt_tvdb_id: m.alt_tvdb_id,
-                    thetvdb_season: m.thetvdb_season,
-                    thetvdb_part: m.thetvdb_part,
-                    score: m.score,
-                    anime_media_type: m.anime_media_type.unwrap_or_default(),
-                    global_media_type: m.global_media_type.unwrap_or_default(),
-                    status: m.status.unwrap_or_default(),
-                    mapping_type: m.mapping_type.unwrap_or_default(),
-                    episode_mappings: m
-                        .episode_mappings
-                        .into_iter()
-                        .map(|e| AnimeEpisodeMapping {
-                            tvdb_season: e.tvdb_season,
-                            episode_start: e.episode_start,
-                            episode_end: e.episode_end,
-                        })
-                        .collect(),
-                })
-                .collect(),
-            anime_movies: s
-                .anime_movies
-                .into_iter()
-                .map(|movie| AnimeMovie {
-                    movie_tvdb_id: movie.movie_tvdb_id,
-                    movie_tmdb_id: movie.movie_tmdb_id,
-                    movie_imdb_id: movie.movie_imdb_id,
-                    movie_mal_id: movie.movie_mal_id,
-                    movie_anidb_id: movie.movie_anidb_id,
-                    name: movie.name,
-                    slug: movie.slug,
-                    year: normalize_gateway_year(movie.year),
-                    content_status: movie.content_status,
-                    overview: movie.overview,
-                    poster_url: movie.poster_url,
-                    language: movie.language,
-                    runtime_minutes: movie.runtime_minutes,
-                    sort_title: movie.sort_title,
-                    imdb_id: movie.imdb_id,
-                    studio: movie.studio,
-                    digital_release_date: movie.digital_release_date,
-                    association_confidence: movie.association_confidence,
-                    continuity_status: movie.continuity_status,
-                    movie_form: movie.movie_form,
-                    placement: movie.placement,
-                    confidence: movie.confidence,
-                    signal_summary: movie.signal_summary,
-                })
-                .collect(),
-            anime_numbering_bridge: anime_numbering_bridge_from_gateway(s.anime_numbering_bridge),
-            ratings: rating_summary_from_gateway(s.rating, s.rating_sources, s.external_ratings),
-            credits: credits_from_gateway(s.credits),
-        })
+        // One mapper, one place: `get_metadata_bulk` and `get_series` deserialize the same
+        // `SeriesItem`, so a widened selection cannot land in one read path and be dropped
+        // by the other.
+        Ok(series_metadata_from_item(s))
     }
 
     async fn get_metadata_bulk(
@@ -6436,6 +6802,34 @@ impl MetadataGateway for MetadataGatewayClient {
             return Ok(Vec::new());
         }
         self.resolve_movie_title_refs(refs, create_missing).await
+    }
+
+    async fn search_titles_multi(
+        &self,
+        query: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<MultiMetadataSearchResult> {
+        let limit = limit.clamp(1, METADATA_GATEWAY_MAX_TITLE_SEARCH_LIMIT);
+        let data: SearchTitlesMultiResponse = self
+            .execute_graphql_apq(
+                OP_SEARCH_TITLES_MULTI,
+                graphql_docs::SEARCH_TITLES_MULTI_QUERY,
+                &self.search_titles_multi_hash,
+                json!({ "query": query, "limit": limit, "language": language }),
+            )
+            .await?;
+        let convert = |items: Vec<TitleSearchItem>| {
+            items
+                .into_iter()
+                .map(rich_metadata_from_title_search_item)
+                .collect()
+        };
+        Ok(MultiMetadataSearchResult {
+            movies: convert(data.search_titles_multi.movies),
+            series: convert(data.search_titles_multi.series),
+            anime: convert(data.search_titles_multi.anime),
+        })
     }
 
     async fn search_titles(

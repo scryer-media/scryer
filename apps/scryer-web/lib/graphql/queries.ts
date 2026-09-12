@@ -1,3 +1,5 @@
+import { MEDIA_ANALYSIS_FIELDS, MEDIA_DISC_FIELDS } from "../types/media-analysis.ts";
+
 export const DISCOVERY_ITEM_FIELDS = `
     id
     targetKey
@@ -303,6 +305,7 @@ const SERIES_SIDE_PANEL_MOVIE_LINK_FIELDS = `
       monitoringOverride
       metadataActive
       monitored
+      tags
       movie {
         id
         title
@@ -369,7 +372,13 @@ const SERIES_SIDE_PANEL_COLLECTION_FIELDS = `
       episodeRecordsTotal
       createdAt`;
 
-const TITLE_MEDIA_FILE_FIELDS = `
+export const TITLE_MEDIA_FILE_FIELDS = `
+      analysis { ${MEDIA_ANALYSIS_FIELDS} }
+      analysisAttempt {
+        revision attemptedAt succeeded
+        report { status bytesRead seeks elapsedMs budgetExhausted warnings { code message streamId offset } }
+        disc { ${MEDIA_DISC_FIELDS} }
+      }
       id
       titleId
       episodeId
@@ -393,6 +402,8 @@ const TITLE_MEDIA_FILE_FIELDS = `
       audioBitrateKbps
       audioLanguages
       audioStreams {
+        profile
+        name
         codec
         channels
         language
@@ -591,6 +602,7 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     libraryId
     librarySlug
     monitored
+    tags
     playbackLinks {
       connectionId
       displayName
@@ -781,6 +793,9 @@ const PROVIDER_TYPE_FIELDS = `
       hostBinding
       options { value label configOverrides { key value } }
       helpText
+      visibleWhen { key op values }
+      requiredWhen { key op values }
+      advanced
     }`;
 
 export const SUBTITLE_SETTINGS_FIELDS = `
@@ -825,6 +840,7 @@ const NOTIFICATION_CHANNEL_FIELDS = `
     }
     storedSecretKeys
     isEnabled
+    blockedReason
     createdAt
     updatedAt`;
 
@@ -1000,6 +1016,19 @@ export const seriesCollectionEpisodesQuery = `query SeriesCollectionEpisodes($id
   }
 }`;
 
+/** Minimal collection lookup used by the rule-editor scoring preview. */
+export const ruleSetTestTitleCollectionsQuery = `query RuleSetTestTitleCollections($id: ID!) {
+  title(id: $id) {
+    id
+    collections {
+      id
+      label
+      collectionIndex
+      collectionType
+    }
+  }
+}`;
+
 export const episodeCollectionRefQuery = `query EpisodeCollectionRef($titleId: ID!, $episodeId: ID!) {
   episode(titleId: $titleId, episodeId: $episodeId) {
     id
@@ -1068,6 +1097,37 @@ export const deleteTitlePreviewQuery = `query DeleteTitlePreview($titleId: ID!) 
   }
 }`;
 
+// Folder-match correction: describes what claiming a candidate folder would do.
+// Read-only — nothing is changed and no file is ever moved.
+export const changeTitleFolderPreviewQuery = `query ChangeTitleFolderPreview($input: ChangeTitleFolderPreviewInput!) {
+  changeTitleFolderPreview(input: $input) {
+    title {
+      id
+      name
+      folderPath
+    }
+    facet
+    libraryId
+    libraryName
+    currentRootId
+    currentRootPath
+    selectedFolderPath
+    selectedRootId
+    selectedRootPath
+    ownership
+    currentOwner {
+      id
+      name
+      folderPath
+    }
+    currentFolderTrackedMediaCount
+    selectedFolderTrackedMediaCount
+    filesWillMove
+    noOp
+    availableResolutions
+  }
+}`;
+
 export const deleteTitlesPreviewQuery = `query DeleteTitlesPreview($input: DeleteTitlesPreviewInput!) {
   deleteTitlesPreview(input: $input) {
     preview {${DELETE_PREVIEW_FIELDS}
@@ -1130,6 +1190,7 @@ export const externalSubtitleBlocklistEntriesQuery = `query ExternalSubtitleBloc
 
 export const RELEASE_SEARCH_RESULT_FIELDS = `
     source
+    indexerId
     title
     link
     downloadUrl
@@ -1187,12 +1248,14 @@ export const RELEASE_SEARCH_RESULT_FIELDS = `
       scoringLog {
         code
         delta
+        kind
         source
         ruleSetName
       }
     }
     seeders
     peers
+    grabs
     infoHash
     freeleech
     downloadVolumeFactor
@@ -1233,8 +1296,10 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
     indexers {
       indexerId
       name
+      priority
       status
       resultCount
+      elapsedMs
       failureReason
     }
     startedAt
@@ -2098,7 +2163,7 @@ export const indexersQuery = `query Indexers($providerType: String) {
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     seedingProfileId
     hasProwlarrSeedCriteria
@@ -2134,13 +2199,25 @@ export const indexerProviderTypesQuery = `query IndexerProviderTypes {
   }
 }`;
 
-const indexerProxyConfigFieldSelection = `
+const proxyConfigFieldSelection = `
     id
     name
     providerType
     protocol
     baseUrl
     requestTimeoutSeconds
+    hasCredentials
+    remoteDns
+    hasPrivateKey
+    peerPublicKey
+    hasPresharedKey
+    tunnelPublicKey
+    tunnelAddresses
+    tunnelDnsServers
+    tunnelMtu
+    tunnelKeepaliveSeconds
+    hostKeyFingerprint
+    hostKeyPinnedAt
     isEnabled
     lastHealthStatus
     lastErrorMessage
@@ -2148,8 +2225,8 @@ const indexerProxyConfigFieldSelection = `
     createdAt
     updatedAt`;
 
-export const indexerProxyConfigsQuery = `query IndexerProxyConfigs {
-  indexerProxyConfigs {${indexerProxyConfigFieldSelection}
+export const proxyConfigsQuery = `query ProxyConfigs {
+  proxyConfigs {${proxyConfigFieldSelection}
   }
 }`;
 
@@ -2292,6 +2369,7 @@ const downloadClientFieldSelection = `
     baseUrl
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
+    proxyConfigId
     isEnabled
     status
     lastError
@@ -2304,7 +2382,7 @@ const indexerFieldSelection = `
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     seedingProfileId
     hasProwlarrSeedCriteria
@@ -2491,6 +2569,8 @@ export const downloadClientsInitQuery = `query DownloadClientsInit {
   }
   downloadClientProviderTypes {${PROVIDER_TYPE_FIELDS}
   }
+  proxyConfigs {${proxyConfigFieldSelection}
+  }
   runtimeInfo {
     runtimePathStyle
   }
@@ -2501,10 +2581,21 @@ export const libraryDownloadClientsQuery = `query LibraryDownloadClients {
   }
 }`;
 
+/**
+ * The settings page's refresh. It reads the same full selection the init query
+ * does, so a save does not blank the columns the list renders (base URL,
+ * status, the assigned proxy); the slim `DownloadClients` document stays for
+ * callers that only need a name for an id.
+ */
+export const settingsDownloadClientsQuery = `query SettingsDownloadClients {
+  downloadClientConfigs {${downloadClientFieldSelection}
+  }
+}`;
+
 export const indexersInitQuery = `query IndexersInit($providerType: String) {
   indexers(providerType: $providerType) {${indexerFieldSelection}
   }
-  indexerProxyConfigs {${indexerProxyConfigFieldSelection}
+  proxyConfigs {${proxyConfigFieldSelection}
   }
   indexerProviderTypes {${PROVIDER_TYPE_FIELDS}
   }
@@ -2642,6 +2733,10 @@ export const acquisitionSettingsQuery = `query AcquisitionSettings {
 
 export const generalSettingsQuery = `query GeneralSettings {
   generalSettings {
+    apiExplorerEnabled
+    experimentalFeaturesEnabled
+    personalizedDiscoveryEnabled
+    srrdbFilenameRecoveryEnabled
     keepHistoryForever
     historyRetentionDays
     imageCacheMaxSizeMb
@@ -2790,6 +2885,21 @@ export const delayProfilesQuery = `query DelayProfiles {
     tags
     priority
     enabled
+  }
+}`;
+
+export const TITLE_TAG_DEFINITION_FIELDS = `
+    id
+    label
+    description
+    titleCount
+    seriesMovieCount
+    createdAt`;
+
+/// Readable by any authenticated caller: the picker and the catalog filter both
+/// need the vocabulary, and the vocabulary says nothing about any one title.
+export const titleTagDefinitionsQuery = `query TitleTagDefinitions {
+  titleTagDefinitions {${TITLE_TAG_DEFINITION_FIELDS}
   }
 }`;
 
@@ -3178,6 +3288,14 @@ export const scryerVersionQuery = `query ScryerVersion {
   scryerVersion
 }`;
 
+export const instanceFeaturesQuery = `query InstanceFeatures {
+  instanceFeatures {
+    apiExplorerEnabled
+    experimentalFeaturesEnabled
+    personalizedDiscoveryEnabled
+  }
+}`;
+
 export const serviceLogsQuery = `query ServiceLogs($limit: Int) {
   serviceLogs(limit: $limit) {
     generatedAt
@@ -3312,6 +3430,16 @@ export const recycleBinSettingsQuery = `query RecycleBinSettings {
   }
 }`;
 
+/**
+ * The verification depth applied to download-client import copies. Location
+ * operations force full depth and ignore this.
+ */
+export const verificationSettingsQuery = `query VerificationSettings {
+  verificationSettings {
+    depth
+  }
+}`;
+
 export const pluginAutoUpdateSettingsQuery = `query PluginAutoUpdateSettings {
   pluginAutoUpdateSettings {
     enabled
@@ -3354,15 +3482,483 @@ export const ruleSetsQuery = `query RuleSets {
     id
     name
     description
-    regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
     managedTagFilter
     createdAt
     updatedAt
+  }
+}`;
+
+export const ruleSetQuery = `query RuleSet($id: ID!) {
+  ruleSet(id: $id) {
+    id
+    name
+    description
+    regoSource
+    enabled
+    priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
+    appliedFacets
+    isManaged
+    managedKey
+    managedTagFilter
+    createdAt
+    updatedAt
+  }
+}`;
+
+// ── Maintenance Rules ─────────────────────────────────────────────────
+
+export const MAINTENANCE_RULE_SET_FIELDS = `
+    id
+    name
+    description
+    enabled
+    evaluationMode
+    destructiveRearmRequired
+    libraryIds
+    subjectKind
+    currentRevisionNumber
+    graceDays
+    actionSpec {
+      kind
+      schemaVersion
+      targetQualityProfileId
+      tags
+    }
+    actionSequence {
+      schemaVersion
+      steps {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+    }
+    createdAt
+    updatedAt`;
+
+const maintenanceRuleRevisionFieldSelection = `
+    id
+    ruleSetId
+    revisionNumber
+    regoSource
+    graceDays
+    storageRootId
+    matcherContentHash
+    createdBy
+    createdAt`;
+
+/// The list is the only rule-set document that reads `effectArming`: the field
+/// is not on the shared selection because every mutation payload also embeds
+/// that selection, and arming is refetched from the list after a mutation
+/// rather than read back off it.
+export const maintenanceRuleSetsQuery = `query MaintenanceRuleSets {
+  maintenanceRuleSets {${MAINTENANCE_RULE_SET_FIELDS}
+    effectArming
+  }
+}`;
+
+/// Detail payload shared by the rule-set query and every mutation that returns
+/// a rule set with its current revision and action.
+export const MAINTENANCE_RULE_SET_DETAIL_FIELDS = `
+    ruleSet {${MAINTENANCE_RULE_SET_FIELDS}
+    }
+    revision {${maintenanceRuleRevisionFieldSelection}
+    }
+    actionSpec {
+      kind
+      schemaVersion
+      targetQualityProfileId
+      tags
+    }
+    actionSequence {
+      schemaVersion
+      steps {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+    }`;
+
+export const maintenanceRuleSetQuery = `query MaintenanceRuleSet($id: ID!) {
+  maintenanceRuleSet(id: $id) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const maintenanceRuleRevisionsQuery = `query MaintenanceRuleRevisions($ruleSetId: ID!) {
+  maintenanceRuleRevisions(ruleSetId: $ruleSetId) {${maintenanceRuleRevisionFieldSelection}
+  }
+}`;
+
+export const maintenanceActionDescriptorsQuery = `query MaintenanceActionDescriptors {
+  maintenanceActionDescriptors {
+    kind
+    supportedRuleScopes
+    supportedSubjects
+    riskClass
+    effectClasses
+    timingMode
+    allowedRepeatModes
+    requiresTargetQualityProfile
+    requiresTags
+    supportsStorageScope
+  }
+}`;
+
+export const maintenanceActionStepDescriptorsQuery = `query MaintenanceActionStepDescriptors {
+  maintenanceActionStepDescriptors {
+    id
+    kind
+    label
+    supportedSubjects
+    parameterSchema
+    effectClasses
+    riskClass
+    requires
+    terminal
+    completionPolicy
+    storageRootAllowed
+  }
+}`;
+
+/// Candidates. This admin surface always passes `includeShadow: true`: with the
+/// result-display gate closed the server otherwise returns nothing, and an
+/// operator deciding whether to open that gate has to see what shadow
+/// evaluation actually found first.
+export const maintenanceCandidatesQuery = `query MaintenanceCandidates($ruleSetId: ID, $states: [MaintenanceCandidateState!], $libraryId: ID, $includeShadow: Boolean, $limit: Int) {
+  maintenanceCandidates(ruleSetId: $ruleSetId, states: $states, libraryId: $libraryId, includeShadow: $includeShadow, limit: $limit) {
+    id
+    ruleSetId
+    ruleName
+      fileCount
+      totalSizeBytes
+      storageRootFileCount
+      storageRootTotalSizeBytes
+    revisionNumber
+    subjectKind
+    subjectId
+    subjectLabel
+    titleId
+    titleName
+    libraryId
+    facet
+    state
+    stateReason
+    reasonCodes
+    actionKind
+    actionSequence {
+      schemaVersion
+      steps {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+    }
+    sequenceSteps {
+      step {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+      run {
+        stepId
+        stepKind
+        state
+        attempt
+        holdReason
+        error
+        createdAt
+        updatedAt
+        finishedAt
+      }
+      receipts {
+        dispatchAttempt
+        logicalRequestKey
+        jobRunId
+        state
+        createdAt
+        updatedAt
+      }
+    }
+    graceDays
+    matchGeneration
+    firstMatchedAt
+    lastMatchedAt
+    dueAt
+    heldSince
+    updatedAt
+  }
+}`;
+
+export const maintenanceEvaluationRunsQuery = `query MaintenanceEvaluationRuns($ruleSetId: ID, $limit: Int) {
+  maintenanceEvaluationRuns(ruleSetId: $ruleSetId, limit: $limit) {
+    id
+    ruleSetId
+    revisionNumber
+    status
+    startedAt
+    finishedAt
+    evaluatedCount
+    matchedCount
+    noMatchCount
+    unknownCount
+    errorCount
+    durationMs
+    error
+  }
+}`;
+
+export const maintenanceActionRunsQuery = `query MaintenanceActionRuns($ruleSetId: ID, $candidateId: ID, $limit: Int) {
+  maintenanceActionRuns(ruleSetId: $ruleSetId, candidateId: $candidateId, limit: $limit) {
+    id
+    ruleSetId
+    candidateId
+    detail
+    subjectKind
+    subjectId
+    subjectLabel
+    titleId
+    titleName
+    actionKind
+    actionSequence {
+      schemaVersion
+      steps {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+    }
+    sequenceSteps {
+      step {
+        id
+        kind
+        parameters {
+          includeDescendants
+          targetQualityProfileId
+          searchCondition
+          tags
+        }
+      }
+      run {
+        stepId
+        stepKind
+        state
+        attempt
+        holdReason
+        error
+        createdAt
+        updatedAt
+        finishedAt
+      }
+      receipts {
+        dispatchAttempt
+        logicalRequestKey
+        jobRunId
+        state
+        createdAt
+        updatedAt
+      }
+    }
+    matchGeneration
+    attempt
+    status
+    holdReason
+    error
+    startedAt
+    finishedAt
+  }
+}`;
+
+/// Reading the gates requires system-settings management. A reader without it
+/// gets a GraphQL error rather than a partial answer, so the caller catches it
+/// and renders the panel read-locked instead of failing the whole section.
+export const maintenanceInstanceGatesQuery = `query MaintenanceInstanceGates {
+  maintenanceInstanceGates {
+    evaluationEnabled
+    resultDisplayEnabled
+    presentationEffectsEnabled
+    reversibleEffectsEnabled
+    destructiveEffectsEnabled
+  }
+}`;
+
+export const MAINTENANCE_EXCLUSION_FIELDS = `
+    id
+    ruleSetId
+    subjectKind
+    subjectId
+    subjectLabel
+    titleId
+    titleName
+    reason
+    createdBy
+    createdAt`;
+
+export const maintenanceExclusionsQuery = `query MaintenanceExclusions($ruleSetId: ID) {
+  maintenanceExclusions(ruleSetId: $ruleSetId) {${MAINTENANCE_EXCLUSION_FIELDS}
+  }
+}`;
+
+// ── Request Rules ─────────────────────────────────────────────────────
+//
+// Request rules are saved DISABLED and nothing evaluates until three separate
+// controls agree: the instance gate (system-settings), the rule's own mode
+// (catalog settings), and the requester's library permission.
+
+export const REQUEST_RULE_SET_FIELDS = `
+    id
+    name
+    description
+    enabled
+    evaluationMode
+    libraryIds
+    currentRevisionNumber
+    decisionCount
+    createdAt
+    updatedAt`;
+
+const requestRuleRevisionFieldSelection = `
+    id
+    ruleSetId
+    revisionNumber
+    regoSource
+    matcherContentHash
+    createdBy
+    createdAt`;
+
+/// Detail payload shared by the rule-set query and every mutation that returns
+/// a rule set with its current revision.
+export const REQUEST_RULE_SET_DETAIL_FIELDS = `
+    ruleSet {${REQUEST_RULE_SET_FIELDS}
+    }
+    revision {${requestRuleRevisionFieldSelection}
+    }`;
+
+/// The full trace, votes included. Only ever asked for on the surfaces that
+/// carry the authority to see them: the recent-decisions table (catalog
+/// settings), the author preview, and a request read by a manager of its
+/// library. A requester asking the same question receives the same shape with
+/// `votes` empty — there is no flag saying which you got.
+export const REQUEST_RULE_DECISION_FIELDS = `
+    id
+    requestId
+    evaluatedAt
+    mode
+    effectiveOutcome
+    policyOutcome
+    fallbackReason
+    inputSchemaVersion
+    votes {
+      ruleSetId
+      ruleSetName
+      revisionNumber
+      vote
+      held
+      reasonCodes
+      tags
+      error
+    }
+    reasons {
+      code
+      ruleName
+    }
+    tags`;
+
+export const requestRuleSetsQuery = `query RequestRuleSets {
+  requestRuleSets {${REQUEST_RULE_SET_FIELDS}
+  }
+}`;
+
+export const requestRuleSetQuery = `query RequestRuleSet($id: ID!) {
+  requestRuleSet(id: $id) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const requestRuleRevisionsQuery = `query RequestRuleRevisions($ruleSetId: ID!) {
+  requestRuleRevisions(ruleSetId: $ruleSetId) {${requestRuleRevisionFieldSelection}
+  }
+}`;
+
+export const requestRuleInstanceGatesQuery = `query RequestRuleInstanceGates {
+  requestRuleInstanceGates {
+    evaluationEnabled
+  }
+}`;
+
+export const requestRuleDecisionsQuery = `query RequestRuleDecisions($limit: Int, $outcome: RequestDecisionOutcomeValue) {
+  requestRuleDecisions(limit: $limit, outcome: $outcome) {${REQUEST_RULE_DECISION_FIELDS}
+  }
+}`;
+
+/// The requester's own pre-flight. It takes the submit input verbatim, which is
+/// what makes the answer it gives the same one the submit path will reach, and
+/// it carries no field a vote could travel in.
+export const previewMyRequestDecisionQuery = `query PreviewMyRequestDecision($input: SubmitMediaRequestInput!) {
+  previewMyRequestDecision(input: $input) {
+    outcome
+    metadataPartial
+    evaluationMode
+    fallbackReason
+    tags
+    reasons {
+      code
+      ruleName
+    }
+  }
+}`;
+
+export const TITLE_CLAIM_FIELDS = `
+    id
+    titleId
+    libraryId
+    producer
+    producerRef
+    kind
+    state
+    durationDays
+    startsAt
+    expiresAt
+    createdBy
+    createdAt
+    updatedAt
+    releasedReason`;
+
+export const titleClaimsQuery = `query TitleClaims($titleId: ID!) {
+  titleClaims(titleId: $titleId) {${TITLE_CLAIM_FIELDS}
   }
 }`;
 
@@ -3375,6 +3971,7 @@ export const rulePackRegistryQuery = `query RulePackRegistry {
     description
     author
     version
+    customizable
   }
 }`;
 
@@ -3384,8 +3981,33 @@ export const rulePackTemplatesQuery = `query RulePackTemplates($packId: String!)
     title
     description
     category
-    regoSource
     appliedFacets
+  }
+}`;
+
+export const trackedRulePacksQuery = `query TrackedRulePacks {
+  trackedRulePacks {
+    packId
+    name
+    version
+    digest
+    revision
+    availableVersion
+    autoUpdate
+    autoUpdateAvailable
+    lastError
+    lastUpdated
+    customizable
+    members {
+      templateId
+      ruleSetId
+      removed
+      enabled
+      priority
+      name
+      description
+      appliedFacets
+    }
   }
 }`;
 
@@ -3489,6 +4111,7 @@ export const navigationBadgeCountsQuery = `query NavigationBadgeCounts {
     }
     activityImportCount
     pluginUpdateCount
+    pluginBlockedCount
   }
 }`;
 
@@ -3839,6 +4462,18 @@ export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, 
     createdByUserId
     createdAt
     updatedAt
+    requestedLeaseDays
+    approvedLeaseDays
+    policyTags
+    lease {
+      requestedDays
+      approvedDays
+      state
+      startsAt
+      expiresAt
+    }
+    decision {${REQUEST_RULE_DECISION_FIELDS}
+    }
   }
 }`;
 
@@ -3900,6 +4535,18 @@ export const myMediaRequestsQuery = `query MyMediaRequests($facet: MediaFacetVal
     createdByUserId
     createdAt
     updatedAt
+    requestedLeaseDays
+    approvedLeaseDays
+    policyTags
+    lease {
+      requestedDays
+      approvedDays
+      state
+      startsAt
+      expiresAt
+    }
+    decision {${REQUEST_RULE_DECISION_FIELDS}
+    }
   }
 }`;
 
@@ -4045,6 +4692,491 @@ export const indexerDownloadClientMappingCatalogQuery = `query IndexerDownloadCl
       protocolFamilies
       supportsMapping
       compatibleClientIds
+    }
+  }
+}`;
+
+const LOCATION_PLAN_ITEM_FIELDS = `
+      kind
+      titleId
+      mediaFileId
+      sourcePath
+      destinationPath
+      sizeBytes
+      sameVolume
+      reasonCode
+      detail`;
+
+export const locationOperationPreviewQuery = `query LocationOperationPreview($input: LocationOperationPreviewInput!) {
+  locationOperationPreview(input: $input) {
+    folders { titleId source destination }
+    planFingerprint
+    operationType
+    mode
+    sourceLibraryId
+    destinationLibraryId
+    sourceRootId
+    destinationRootId
+    selection
+    counts {
+      itemsTotal
+      titlesTotal
+      filesTotal
+      bytesTotal
+      byKind {
+        kind
+        count
+      }
+    }
+    sections {
+      kind
+      itemsTotal
+      bytesTotal
+      complete
+      items {${LOCATION_PLAN_ITEM_FIELDS}
+      }
+    }
+    classification {
+      titlesTotal
+      blocksStart
+      groups {
+        class
+        count
+        titles {
+          titleId
+          class
+          sourceLibraryId
+          sourceRootId
+          sourceFolderPath
+          destinationLibraryId
+          destinationRootId
+          reasonCode
+          reason
+          destinationIdentityMatch
+          mergeTargetTitleId
+          mergeTargetTitleName
+          sameNamedDestinationTitleId
+          sameNamedDestinationTitleName
+          ambiguousDestinationTitleIds
+          ambiguousDestinationCandidates {
+            titleId
+            titleName
+            sharedIdentities
+          }
+        }
+      }
+    }
+    freeSpace {
+      destinationRequiredBytes
+      destinationTotalRequiredBytes
+      destinationAvailableBytes
+      recycleRequiredBytes
+      recycleAvailableBytes
+      sameVolumeMove
+      recycleOnOtherVolume
+      recycleSharesDestinationVolume
+      recyclingAvailable
+      probed
+      sufficient
+    }
+    verification {
+      depth
+      files
+      bytes
+      applies
+    }
+    confirmation {
+      requirement
+      typedPhrase
+      typedPrompt
+    }
+    warnings
+    blocksStart
+    merges {
+      sourceTitleId
+      destinationTitleId
+      destinationTitleName
+      sourceLibraryId
+      destinationLibraryId
+      blocked
+      blockedRecords {
+        table
+        reason
+        sourceId
+        detail
+      }
+      mediaFilesRepointed
+      roleChanges {
+        fileId
+        sourceEpisodeId
+        destinationEpisodeId
+        previousRole
+        newRole
+        reason
+        detail
+        episodeLabel
+        fileName
+      }
+      historyRowsCarried
+      sourceRecordsDropped
+    }
+  }
+}`;
+
+export const LOCATION_OPERATION_FIELDS = `
+    id
+    operationType
+    mode
+    state
+    initiatedByUserId
+    sourceLibraryId
+    destinationLibraryId
+    sourceRootId
+    destinationRootId
+    planFingerprint
+    verificationDepth
+    verificationFallbackCount
+    counters {
+      titlesTotal
+      titlesProcessed
+      titlesBlocked
+      filesTotal
+      filesProcessed
+      bytesTotal
+      bytesProcessed
+      merges
+      dedups
+      renames
+      noOps
+      unresolved
+    }
+    detail
+    reasonCode
+    jobRunId
+    workflowOperationId
+    cancelRequested
+    cancelRequestedAt
+    confirmedAt
+    startedAt
+    createdAt
+    updatedAt
+    completedAt
+    titleCheckpoints {
+      titleId
+      sequence
+      state
+      classification
+      sourceLibraryId
+      sourceRootId
+      sourceFolderPath
+      destinationLibraryId
+      destinationRootId
+      destinationFolderPath
+      mergedIntoTitleId
+      mergedIntoTitleName
+      filesTotal
+      filesVerified
+      bytesTotal
+      bytesVerified
+      detail
+      reasonCode
+      startedAt
+      updatedAt
+      completedAt
+    }`;
+
+export const locationOperationQuery = `query LocationOperation($id: ID!) {
+  locationOperation(id: $id) {${LOCATION_OPERATION_FIELDS}
+  }
+}`;
+
+const LOCATION_TRANSFER_FIELDS = `
+  generation revision progressBasisPoints etaSeconds totalCount hasMore
+  operation {${LOCATION_OPERATION_FIELDS}}
+  titles { titleId name state filesTotal filesDone bytesTotal copyBytes verificationBytes copying verifying currentFile hasException }
+`;
+export const locationOperationRetrySelectionQuery = `query LocationOperationRetrySelection($id: ID!) {
+  locationOperationRetrySelection(id: $id) {
+    operationId
+    mode
+    verificationDepth
+    destinationLibraryId
+    destinationRootId
+    titles { titleId titleName sourceLibraryId sourceRootId sourceFolderPath }
+    catalogBlockedTitleIds
+  }
+}`;
+export const locationTransferSummaryQuery = `query LocationTransferSummary($id: ID!) {
+  locationTransferSummary(id: $id) {${LOCATION_TRANSFER_FIELDS}}
+}`;
+export const locationTransferPageQuery = `query LocationTransferPage($id: ID!, $offset: Int!) {
+  locationTransferPage(id: $id, offset: $offset) {${LOCATION_TRANSFER_FIELDS}}
+}`;
+export const locationTransferSummarySubscription = `subscription LocationTransferSummaryLive($id: ID!) {
+  locationTransferSummary(id: $id) {${LOCATION_TRANSFER_FIELDS}}
+}`;
+export const locationTransferPageSubscription = `subscription LocationTransferPageLive($id: ID!, $offset: Int!) {
+  locationTransferPage(id: $id, offset: $offset) {${LOCATION_TRANSFER_FIELDS}}
+}`;
+const LOCATION_TRANSFER_FILE_FIELDS = `${LOCATION_TRANSFER_FIELDS}
+  files { sourcePath originalDestinationPath destinationPath sizeBytes state copyBytes verificationBytes verificationTotalBytes reasonCode detail }
+`;
+export const locationTransferFilesQuery = `query LocationTransferFiles($id: ID!, $titleId: ID!, $offset: Int!) {
+  locationTransferFiles(id: $id, titleId: $titleId, offset: $offset) {${LOCATION_TRANSFER_FILE_FIELDS}}
+}`;
+export const locationTransferFilesSubscription = `subscription LocationTransferFilesLive($id: ID!, $titleId: ID!, $offset: Int!) {
+  locationTransferFiles(id: $id, titleId: $titleId, offset: $offset) {${LOCATION_TRANSFER_FILE_FIELDS}}
+}`;
+export const locationTransferTitleDetailQuery = `query LocationTransferTitleDetail($id: ID!, $titleId: ID!) {
+  locationTransferTitleDetail(id: $id, titleId: $titleId)
+}`;
+
+/**
+ * Which files the operation renamed and deduplicated (FR-091). Read separately
+ * from the operation row because the per-file identities live in the stored
+ * plan, which the two-second progress poll has no reason to load.
+ */
+export const locationOperationAssetsQuery = `query LocationOperationAssets($id: ID!) {
+  locationOperationAssets(id: $id) {
+    operationId
+    renamesTotal
+    renamesDone
+    dedupsTotal
+    dedupsDone
+    titles {
+      titleId
+      titleName
+      sequence
+      settled
+      checkpointState
+      renames {
+        sourcePath
+        sourceName
+        destinationPath
+        destinationName
+        provenanceLabel
+        mediaFileId
+        sizeBytes
+        done
+      }
+      dedups {
+        sourcePath
+        sourceName
+        survivingPath
+        survivingName
+        done
+      }
+    }
+  }
+}`;
+
+/**
+ * The plan fields both root-scoped previews share (US4, US5). Narrower than the
+ * move dialog's selection: a root-scoped plan has no per-title classification
+ * entries to read, and the titles that need naming come from the accounting
+ * ledger instead (FR-023).
+ */
+const LOCATION_ROOT_PLAN_FIELDS = `
+    planFingerprint
+    operationType
+    mode
+    sourceLibraryId
+    destinationLibraryId
+    sourceRootId
+    destinationRootId
+    counts {
+      itemsTotal
+      titlesTotal
+      filesTotal
+      bytesTotal
+      byKind {
+        kind
+        count
+      }
+    }
+    sections {
+      kind
+      itemsTotal
+      bytesTotal
+      complete
+      items {${LOCATION_PLAN_ITEM_FIELDS}
+      }
+    }
+    classification {
+      titlesTotal
+      blocksStart
+      groups {
+        class
+        count
+      }
+    }
+    freeSpace {
+      destinationRequiredBytes
+      destinationTotalRequiredBytes
+      destinationAvailableBytes
+      recycleRequiredBytes
+      recycleAvailableBytes
+      sameVolumeMove
+      recycleOnOtherVolume
+      recycleSharesDestinationVolume
+      recyclingAvailable
+      probed
+      sufficient
+    }
+    verification {
+      depth
+      files
+      bytes
+      applies
+    }
+    confirmation {
+      requirement
+      typedPhrase
+      typedPrompt
+    }
+    warnings
+    blocksStart`;
+
+/** The every-title ledger, with no exclude affordance to offer (FR-023). */
+const LOCATION_TITLE_ACCOUNTING_FIELDS = `
+    assignedTotal
+    relocating
+    catalogOnly
+    blocked
+    accountsForEveryTitle
+    blocksStart
+    blockedTitles {
+      titleId
+      titleName
+      reason
+      reasonCode
+    }`;
+
+/** FR-027's three buckets plus the directory facts cleanup may act on. */
+const LOCATION_ROOT_CONTENT_FIELDS = `
+    managed {
+      class
+      total
+      bytesTotal
+      complete
+      entries {
+        path
+        sizeBytes
+        class
+        canonicalSidecar
+      }
+    }
+    companions {
+      class
+      total
+      bytesTotal
+      complete
+      entries {
+        path
+        sizeBytes
+        class
+        canonicalSidecar
+      }
+    }
+    unknown {
+      class
+      total
+      bytesTotal
+      complete
+      entries {
+        path
+        sizeBytes
+        class
+        canonicalSidecar
+      }
+    }
+    unknownBytes
+    blocksSourceRemoval
+    entryCount
+    prunableDirectories {
+      total
+      complete
+      paths
+    }
+    retainedDirectories {
+      total
+      complete
+      paths
+    }`;
+
+/** What happens to the old location afterwards (FR-028, FR-031, FR-087). */
+const LOCATION_ROOT_RETIREMENT_FIELDS = `
+    sourceRootPath
+    destinationRootPath
+    retireConfigurationAfterRecycling
+    recycleAllowlistPaths {
+      total
+      complete
+      paths
+    }
+    requiresVerificationBeforeSourceRemoval
+    emptyDirectoriesOnly
+    removableDirectories {
+      total
+      complete
+      paths
+    }
+    retainedDirectories {
+      total
+      complete
+      paths
+    }
+    permitsSourceRemoval
+    blockers {
+      code
+      detail
+    }`;
+
+/**
+ * FR-020's **Change root**, both destinations: replacing one root's path with a
+ * new location, or folding it into another root of the same library.
+ *
+ * One query, because it is one settings action. Name exactly one of
+ * `destinationPath` and `destinationRootId`; a path that is already a root of
+ * this library resolves to that root and is planned as a fold. One payload,
+ * too: `retention` comes back for a path change and `classification` /
+ * `defaultTransfer` for a fold, so the branch the server planned is readable
+ * off the response.
+ */
+export const locationRootScopePreviewQuery = `query LocationRootScopePreview($input: LocationRootScopePreviewInput!) {
+  locationRootScopePreview(input: $input) {
+    plan {${LOCATION_ROOT_PLAN_FIELDS}
+    }
+    accounting {${LOCATION_TITLE_ACCOUNTING_FIELDS}
+    }
+    retention {
+      rootId
+      keepsRootId
+      wasLibraryDefault
+      remainsLibraryDefault
+      retainedRole
+      retainedTitleAssignments
+    }
+    classification {
+      movingIntoUnusedFolders
+      mergingWithDestinationTitles
+      folderNameCollisions
+      mediaCollisions
+      dedupEligibleFiles
+      companionCollisions
+      untrackedSourceEntries
+      catalogOnly
+      blocked
+    }
+    defaultTransfer {
+      sourceWasDefault
+      destinationWasDefault
+      destinationBecomesDefault
+      transfersTheDefault
+    }
+    content {${LOCATION_ROOT_CONTENT_FIELDS}
+    }
+    retirement {${LOCATION_ROOT_RETIREMENT_FIELDS}
     }
   }
 }`;

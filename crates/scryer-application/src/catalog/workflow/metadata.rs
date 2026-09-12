@@ -296,6 +296,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_LANGUAGE_EDIT_ENTRY,
+                title_id,
+            )
+            .await?;
         let language = language
             .filter(|language| !language.trim().is_empty())
             .map(|language| {
@@ -504,6 +510,34 @@ impl AppUseCase {
             .await
     }
 
+    /// Refuse a direct `rootFolderId` write on a title that already has tracked
+    /// files (FR-077, SC-009).
+    ///
+    /// Only a real change is refused: re-submitting the root the title already
+    /// sits on is not a move, and clients that echo the whole options object
+    /// back on every save must keep working. A title with no tracked files stays
+    /// on the direct path, because its root is a catalog pointer and changing it
+    /// is the FR-076 catalog-only reassignment, not filesystem work.
+    async fn refuse_direct_root_write_for_tracked_title(
+        &self,
+        title: &Title,
+        resolved_root_folder_id: &str,
+    ) -> AppResult<()> {
+        if resolved_root_folder_id == title.root_folder_id {
+            return Ok(());
+        }
+        let tracked_files = self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await?;
+        if tracked_files.is_empty() {
+            return Ok(());
+        }
+        Err(AppError::direct_root_write_retired(&title.name, &title.id))
+    }
+
     pub async fn update_title_metadata_with_root_folder_id(
         &self,
         actor: &User,
@@ -531,6 +565,12 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_METADATA_EDIT_ENTRY,
+                id,
+            )
+            .await?;
         let _profile_reference_guard = self
             .runtime
             .catalog
@@ -559,9 +599,19 @@ impl AppUseCase {
             ),
             None => None,
         };
+        if let Some(resolved_root_folder_id) = resolved_root_folder_id.as_deref() {
+            self.refuse_direct_root_write_for_tracked_title(&title, resolved_root_folder_id)
+                .await?;
+        }
         let mut tags = tags.map(|tags| crate::helpers::normalize_tags(&tags));
         if let Some(tags) = tags.as_mut() {
             self.canonicalize_title_quality_profile_tags(tags).await?;
+            // The whole-bag write is the other door into `titles.tags`, and it
+            // has to be gated exactly like the tag patch is. Reserved `scryer:`
+            // entries pass through untouched — this path is how per-title
+            // options are stored — but an unprefixed label the registry does not
+            // define is refused by name.
+            self.require_registered_title_tags(tags).await?;
         }
 
         let title = self
@@ -597,6 +647,14 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        // Which file a title serves is part of the state an operation
+        // reconciles at its title checkpoint (FR-084).
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::MEDIA_FILE_PRIMARY_ENTRY,
+                &title.id,
+            )
+            .await?;
 
         let media_files = self
             .services
@@ -722,6 +780,12 @@ impl AppUseCase {
         )
         .await?;
 
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_REMATCH_ENTRY,
+                title_id,
+            )
+            .await?;
         let (replacement_identity_ids, requested_movie_ref) = match existing_title.facet {
             MediaFacet::Movie => {
                 if target_smg_id.is_some_and(|id| id <= 0) {

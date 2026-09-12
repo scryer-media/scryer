@@ -307,3 +307,170 @@ async fn graphql_batch_request_not_supported_via_single() {
     let body = gql(&ctx, "{ titles { items { id } } }", json!({})).await;
     assert_no_errors(&body);
 }
+
+// ── Title-less interactive search (spec 0002) ────────────────────────────
+
+#[tokio::test]
+async fn graphql_query_subject_interactive_search_starts_and_polls() {
+    let ctx = TestContext::new().await;
+
+    let start = gql(
+        &ctx,
+        r#"mutation($input: SearchReleasesInput!) {
+            startInteractiveReleaseSearch(input: $input) {
+                id
+                state
+                results { title indexerId grabs }
+                indexers { indexerId name priority status resultCount elapsedMs failureReason }
+            }
+        }"#,
+        json!({ "input": { "query": "paperman", "kind": "RAW" } }),
+    )
+    .await;
+    assert_no_errors(&start);
+    let payload = &start["data"]["startInteractiveReleaseSearch"];
+    assert_eq!(payload["state"], "RUNNING");
+    let job_id = payload["id"].as_str().expect("job id").to_string();
+
+    // No indexers are configured in the shared TestContext, so the job settles
+    // almost immediately.
+    let mut state = payload["state"].as_str().unwrap_or_default().to_string();
+    for _ in 0..50 {
+        let poll = gql(
+            &ctx,
+            r#"query($id: ID!) {
+                interactiveReleaseSearch(id: $id) {
+                    id
+                    state
+                    results { title indexerId grabs }
+                    indexers { priority elapsedMs }
+                }
+            }"#,
+            json!({ "id": job_id }),
+        )
+        .await;
+        assert_no_errors(&poll);
+        let job = &poll["data"]["interactiveReleaseSearch"];
+        assert!(!job.is_null(), "job should be pollable: {poll}");
+        state = job["state"].as_str().expect("state").to_string();
+        if state != "RUNNING" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(state, "COMPLETED");
+}
+
+#[tokio::test]
+async fn graphql_candidate_token_mutation_refuses_a_release_outside_the_search() {
+    let ctx = TestContext::new().await;
+    let title_id = add_test_title(&ctx, "Token Round Trip", "MOVIE").await;
+
+    let start = gql(
+        &ctx,
+        r#"mutation($input: SearchReleasesInput!) {
+            startInteractiveReleaseSearch(input: $input) { id state }
+        }"#,
+        json!({ "input": { "query": "paperman", "kind": "RAW" } }),
+    )
+    .await;
+    assert_no_errors(&start);
+    let job_id = start["data"]["startInteractiveReleaseSearch"]["id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
+
+    let issued = gql(
+        &ctx,
+        r#"mutation($input: IssueInteractiveReleaseCandidateTokenInput!) {
+            issueInteractiveReleaseCandidateToken(input: $input) {
+                title
+                candidateToken
+                queueScope { __typename }
+            }
+        }"#,
+        json!({
+            "input": {
+                "searchId": job_id,
+                "downloadUrl": "https://example.invalid/not-in-this-search.nzb",
+                "titleId": title_id,
+            }
+        }),
+    )
+    .await;
+    let errors = issued["errors"]
+        .as_array()
+        .expect("expected graphql errors");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("release is no longer in this search"),
+        "unexpected error: {issued}"
+    );
+}
+
+#[tokio::test]
+async fn graphql_unlinked_grab_refuses_a_release_outside_the_search() {
+    let ctx = TestContext::new().await;
+
+    let start = gql(
+        &ctx,
+        r#"mutation($input: SearchReleasesInput!) {
+            startInteractiveReleaseSearch(input: $input) { id state }
+        }"#,
+        json!({ "input": { "query": "paperman", "kind": "RAW" } }),
+    )
+    .await;
+    assert_no_errors(&start);
+    let job_id = start["data"]["startInteractiveReleaseSearch"]["id"]
+        .as_str()
+        .expect("job id")
+        .to_string();
+
+    // The release lookup runs before the client is resolved, so a release the
+    // operator never saw is refused whatever download client is named.
+    let grabbed = gql(
+        &ctx,
+        r#"mutation($input: QueueUnlinkedReleaseInput!) {
+            queueUnlinkedRelease(input: $input) { downloadId clientName sourceTitle }
+        }"#,
+        json!({
+            "input": {
+                "searchId": job_id,
+                "downloadUrl": "https://example.invalid/not-in-this-search.nzb",
+                "downloadClientId": "dc-unknown",
+            }
+        }),
+    )
+    .await;
+    let errors = grabbed["errors"]
+        .as_array()
+        .expect("expected graphql errors");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("release is no longer in this search"),
+        "unexpected error: {grabbed}"
+    );
+}
+
+#[tokio::test]
+async fn graphql_one_shot_search_releases_requires_a_title() {
+    let ctx = TestContext::new().await;
+    let body = gql(
+        &ctx,
+        r#"query($input: SearchReleasesInput!) { searchReleases(input: $input) { title } }"#,
+        json!({ "input": { "query": "paperman", "kind": "RAW" } }),
+    )
+    .await;
+    let errors = body["errors"].as_array().expect("expected graphql errors");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("searchReleases requires a title id"),
+        "unexpected error: {body}"
+    );
+}

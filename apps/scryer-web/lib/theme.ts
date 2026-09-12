@@ -4,6 +4,15 @@ export const THEME_CYCLE_ORDER = [...SELECTABLE_THEMES, "system"] as const;
 
 export type ThemePreference = (typeof THEME_CYCLE_ORDER)[number];
 
+// Keep old browser preferences readable without retaining a separate theme.
+export const THEME_CLASS_NAMES = { light: "light", dark: "dark", pride: "dark" };
+
+export function migrateStoredTheme(storage: Pick<Storage, "getItem" | "setItem">): void {
+  if (storage.getItem("theme") === "pride") {
+    storage.setItem("theme", "dark");
+  }
+}
+
 export function getNextTheme(theme?: string): ThemePreference {
   const currentTheme = THEME_CYCLE_ORDER.includes(theme as ThemePreference)
     ? (theme as ThemePreference)
@@ -12,25 +21,12 @@ export function getNextTheme(theme?: string): ThemePreference {
   return THEME_CYCLE_ORDER[(currentIndex + 1) % THEME_CYCLE_ORDER.length];
 }
 
-export function getThemeLabel(theme?: string): string {
-  switch (theme) {
-    case "light":
-      return "Light";
-    case "dark":
-      return "Dark";
-    case "pride":
-      return "Pride";
-    default:
-      return "System";
-  }
-}
-
 export function isDarkTheme(theme?: string): boolean {
   return theme === "dark" || theme === "pride";
 }
 
-/** Server enum wire value for the UI theme (mirrors GraphQL `UiThemeValue`). */
-export type UiThemeValue = "LIGHT" | "DARK" | "PRIDE" | "SYSTEM";
+/** Active server enum wire values emitted by the UI. */
+export type UiThemeValue = "LIGHT" | "DARK" | "SYSTEM";
 
 /**
  * Map a next-themes lowercase preference (the client theme-provider / CSS-class
@@ -40,8 +36,6 @@ export function toUiThemeValue(theme?: string): UiThemeValue {
   switch (theme) {
     case "light":
       return "LIGHT";
-    case "pride":
-      return "PRIDE";
     case "system":
       return "SYSTEM";
     default:
@@ -53,12 +47,10 @@ export function toUiThemeValue(theme?: string): UiThemeValue {
  * Map a server `UiThemeValue` enum to the next-themes lowercase preference used
  * by the client theme provider and CSS classes.
  */
-export function fromUiThemeValue(value?: string): "light" | "dark" | "pride" | "system" {
+export function fromUiThemeValue(value?: string): ThemePreference {
   switch (value) {
     case "LIGHT":
       return "light";
-    case "PRIDE":
-      return "pride";
     case "SYSTEM":
       return "system";
     default:

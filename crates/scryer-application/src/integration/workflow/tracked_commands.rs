@@ -1159,7 +1159,7 @@ async fn process_tracked_download_snapshot(
             "warning",
         ];
         for (label, &count) in labels.iter().zip(&counts) {
-            metrics::gauge!("scryer_download_queue_items", "state" => *label).set(count as f64);
+            metrics::gauge!(crate::services::DOWNLOAD_QUEUE_ITEMS, "state" => *label).set(count as f64);
         }
     }
 
@@ -1361,6 +1361,46 @@ async fn reconcile_deleted_client_bindings(
 /// giving the binding the benefit of the doubt until the next snapshot.
 const ABSENT_SOURCE_HISTORY_SCAN_ROUNDS: usize = 8;
 
+/// Where the bounded absence scan left off per job, so the next reconcile
+/// pass resumes instead of re-reading the same first pages. History longer
+/// than one pass's budget is then still walked to its end over successive
+/// passes; a job proven present or absent, or a cursor that stops advancing,
+/// clears its entry.
+static ABSENT_SOURCE_HISTORY_CURSORS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, usize>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn absent_source_cursor_key(locator: &crate::ClientJobLocator) -> String {
+    format!(
+        "{}|{}|{}",
+        locator.client_id.as_deref().unwrap_or(""),
+        locator.client_type,
+        locator.item_id
+    )
+}
+
+fn load_absent_source_cursor(locator: &crate::ClientJobLocator) -> usize {
+    ABSENT_SOURCE_HISTORY_CURSORS
+        .lock()
+        .map(|cursors| cursors.get(&absent_source_cursor_key(locator)).copied())
+        .ok()
+        .flatten()
+        .unwrap_or(0)
+}
+
+fn store_absent_source_cursor(locator: &crate::ClientJobLocator, offset: Option<usize>) {
+    if let Ok(mut cursors) = ABSENT_SOURCE_HISTORY_CURSORS.lock() {
+        match offset {
+            Some(offset) if offset > 0 => {
+                cursors.insert(absent_source_cursor_key(locator), offset);
+            }
+            _ => {
+                cursors.remove(&absent_source_cursor_key(locator));
+            }
+        }
+    }
+}
+
 pub(crate) async fn reconcile_authoritatively_absent_source(
     app: &AppUseCase,
     tracker: &mut crate::tracked_downloads::TrackedDownloadService,
@@ -1394,7 +1434,7 @@ pub(crate) async fn reconcile_authoritatively_absent_source(
     // offset so a bounded scan can continue; follow that cursor here, or a job
     // behind the first history page could never be proven absent and its
     // binding would block replacement downloads forever.
-    let mut history_offset = 0usize;
+    let mut history_offset = load_absent_source_cursor(source_identity);
     let mut proven_absent = false;
     for _ in 0..ABSENT_SOURCE_HISTORY_SCAN_ROUNDS {
         match app
@@ -1408,12 +1448,18 @@ pub(crate) async fn reconcile_authoritatively_absent_source(
                 proven_absent = true;
                 break;
             }
-            Ok(crate::DownloadClientObservation::Present(_)) => return,
+            Ok(crate::DownloadClientObservation::Present(_)) => {
+                store_absent_source_cursor(source_identity, None);
+                return;
+            }
             Ok(crate::DownloadClientObservation::Unknown { reason, next_history_offset }) => {
                 if next_history_offset > history_offset {
                     history_offset = next_history_offset;
                     continue;
                 }
+                // No progress: the client is unreadable, or history shrank
+                // beneath a resumed cursor. Start over next pass.
+                store_absent_source_cursor(source_identity, None);
                 tracing::debug!(download_id = %binding.download_id, reason, history_offset,
                     "client state unknown; preserving download binding");
                 return;
@@ -1426,10 +1472,15 @@ pub(crate) async fn reconcile_authoritatively_absent_source(
         }
     }
     if !proven_absent {
+        // Resume from here next pass rather than re-reading the same prefix,
+        // so a history longer than one pass's budget is still walked to its
+        // end.
+        store_absent_source_cursor(source_identity, Some(history_offset));
         tracing::debug!(download_id = %binding.download_id, history_offset,
-            "history scan budget exhausted without proving absence; preserving download binding");
+            "history scan budget exhausted without proving absence; preserving download binding until the next pass resumes the scan");
         return;
     }
+    store_absent_source_cursor(source_identity, None);
     match authoritatively_absent_download_disposition(app, tracker, source_identity, &binding).await
     {
         AuthoritativelyAbsentDownloadDisposition::Preserve => return,
@@ -1950,6 +2001,25 @@ pub async fn start_download_queue_poller_with_options(
                         .mark_refresh_failed(error)
                         .await;
                 }
+                // Freshness is republished every tick, viewer or not: this is
+                // the age of the snapshot currently being served, sampled at a
+                // known cadence instead of whenever someone opens the queue.
+                metrics::gauge!(crate::services::DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS).set(
+                    app.runtime
+                        .acquisition
+                        .download_queue_snapshot
+                        .snapshot()
+                        .await
+                        .updated_at
+                        .map(|updated_at| {
+                            chrono::Utc::now()
+                                .signed_duration_since(updated_at)
+                                .num_milliseconds()
+                                .max(0) as f64
+                                / 1_000.0
+                        })
+                        .unwrap_or(0.0),
+                );
                 let crate::ports::DownloadClientSnapshotOutcome {
                     items,
                     authoritative_client_ids,
@@ -1981,7 +2051,10 @@ pub async fn start_download_queue_poller_with_options(
                     "poller",
                 )
                 .await;
-                metrics::histogram!("scryer_download_client_refresh_duration_seconds")
+                // Whole-tick wall time. Per-client refresh timing is labelled
+                // and emitted by the router seam
+                // (`scryer_download_client_refresh_duration_seconds`).
+                metrics::histogram!(crate::services::DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS)
                     .record(client_refresh_started_at.elapsed().as_secs_f64());
                 reconcile_excluded_client_recent_history(
                     &app,

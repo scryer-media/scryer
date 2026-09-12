@@ -19,7 +19,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleRecord } from "@/lib/types";
 import type { LibraryRootRecord } from "@/lib/types/titles";
 import type { ParsedQualityProfile } from "@/lib/types/quality-profiles";
-import { AVAILABLE_LANGUAGES } from "@/lib/i18n";
+import { METADATA_LANGUAGES } from "@/lib/i18n";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import {
   DISABLED_TITLE_EDIT_VALUE,
@@ -31,6 +31,14 @@ import {
   initialTitleEditDraft,
   type TitleEditDraft,
 } from "@/lib/utils/title-edit-dialog";
+import { TitleTagsPicker } from "@/components/common/title-tags-picker";
+import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
+import type { BulkTitleTagsDraft, TitleTagsDelta } from "@/lib/types/title-tags";
+import {
+  buildBulkTitleTagsDelta,
+  emptyBulkTitleTagsDraft,
+  hasBulkTitleTagsChanges,
+} from "@/lib/utils/title-tags";
 
 const UNCHANGED_VALUE = UNCHANGED_TITLE_EDIT_VALUE;
 const INHERIT_VALUE = INHERIT_TITLE_EDIT_VALUE;
@@ -45,7 +53,25 @@ type BulkTitleEditDialogProps = {
   qualityProfiles: ParsedQualityProfile[];
   rootFolders: LibraryRootRecord[];
   busy: boolean;
-  onSubmit: (changes: TitleOptionUpdates) => Promise<void> | void;
+  /**
+   * Applies the staged edits. Option changes go out as the per-title batch they
+   * always did; the tag delta goes out as one `updateTitleTags` call carrying
+   * every selected id, and is empty whenever both tag pickers are.
+   */
+  onSubmit: (
+    changes: TitleOptionUpdates,
+    tagChanges: TitleTagsDelta,
+  ) => Promise<void> | void;
+  /**
+   * Destination library shown beside the destination root (FR-010). Null when
+   * the selection spans libraries, which is the FR-017 disabled case.
+   */
+  destinationLibraryName?: string | null;
+  /**
+   * When set, the root control is a **destination** control: changing it opens
+   * the move workflow rather than staging a root rewrite (FR-011).
+   */
+  onRequestMove?: (rootFolderId: string) => void;
 };
 
 function initialDraftState(): TitleEditDraft {
@@ -61,6 +87,8 @@ export function BulkTitleEditDialog({
   rootFolders,
   busy,
   onSubmit,
+  destinationLibraryName,
+  onRequestMove,
 }: BulkTitleEditDialogProps) {
   const t = useTranslate();
   const initialDraft = React.useMemo(
@@ -68,10 +96,18 @@ export function BulkTitleEditDialog({
     [],
   );
   const [draft, setDraft] = React.useState<TitleEditDraft>(initialDraft);
+  const [tagDraft, setTagDraft] = React.useState<BulkTitleTagsDraft>(
+    emptyBulkTitleTagsDraft,
+  );
+  // Deferred until the dialog is open: this component is mounted with the media
+  // page, and the vocabulary is only ever needed once someone opens it.
+  const { definitions: tagDefinitions, loading: tagDefinitionsLoading } =
+    useTitleTagDefinitions({ enabled: open });
 
   const isMovieView = view === "movies";
   const isAnimeView = view === "anime";
-  const hasPendingChange = hasTitleEditChanges(draft, initialDraft);
+  const hasPendingChange =
+    hasTitleEditChanges(draft, initialDraft) || hasBulkTitleTagsChanges(tagDraft);
   const folderLabel = React.useCallback(
     (path: string) => path.split("/").filter(Boolean).pop() ?? path,
     [],
@@ -92,6 +128,7 @@ export function BulkTitleEditDialog({
       return;
     }
     setDraft(initialDraft);
+    setTagDraft(emptyBulkTitleTagsDraft());
   }, [initialDraft, open]);
 
   const monitorOptions = React.useMemo(
@@ -133,12 +170,17 @@ export function BulkTitleEditDialog({
     [draft, initialDraft],
   );
 
+  const buildTagChanges = React.useCallback(
+    () => buildBulkTitleTagsDelta(tagDraft),
+    [tagDraft],
+  );
+
   const handleSubmit = React.useCallback(() => {
     if (!hasPendingChange || busy) {
       return;
     }
-    void Promise.resolve(onSubmit(buildChanges()));
-  }, [buildChanges, busy, hasPendingChange, onSubmit]);
+    void Promise.resolve(onSubmit(buildChanges(), buildTagChanges()));
+  }, [buildChanges, buildTagChanges, busy, hasPendingChange, onSubmit]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -178,15 +220,62 @@ export function BulkTitleEditDialog({
             </Select>
           </EditableField>
 
-          <EditableField label={t("title.rootFolder")}>
+          {/* FR-010: the destination library sits beside the destination root.
+              This control only ever names the selection's own library — the
+              destination library is chosen in the move workflow itself, which
+              is where a cross-library transfer is previewed (FR-017). */}
+          {onRequestMove ? (
+            <EditableField label={t("move.destinationLibrary")}>
+              <Select value="__current__" disabled>
+                <SelectTrigger
+                  id="bulk-title-edit-destination-library"
+                  aria-label={t("move.destinationLibrary")}
+                  className="h-9 w-full text-sm"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__current__">
+                    {destinationLibraryName?.trim() ||
+                      t("move.destinationMixedSourceLibraries")}
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                {destinationLibraryName
+                  ? t("move.destinationLibraryInMoveWorkflow")
+                  : t("move.destinationMixedSourceLibraries")}
+              </p>
+            </EditableField>
+          ) : null}
+
+          <EditableField
+            label={
+              onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")
+            }
+          >
             <Select
               value={draft.rootFolderId}
-              onValueChange={(value) =>
-                setDraft((previous) => ({ ...previous, rootFolderId: value }))
-              }
-              disabled={busy}
+              onValueChange={(value) => {
+                if (onRequestMove) {
+                  // Changing the destination opens the move workflow; the bulk
+                  // save never rewrites roots in place (FR-011).
+                  if (value !== UNCHANGED_VALUE) {
+                    onRequestMove(value);
+                  }
+                  return;
+                }
+                setDraft((previous) => ({ ...previous, rootFolderId: value }));
+              }}
+              disabled={busy || (Boolean(onRequestMove) && sortedRootFolders.length === 0)}
             >
-              <SelectTrigger className="h-9 w-full font-[var(--font-code)] text-sm">
+              <SelectTrigger
+                id="bulk-title-edit-destination-root"
+                aria-label={
+                  onRequestMove ? t("move.destinationRoot") : t("title.rootFolder")
+                }
+                className="h-9 w-full font-[var(--font-code)] text-sm"
+              >
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -204,6 +293,11 @@ export function BulkTitleEditDialog({
                 ))}
               </SelectContent>
             </Select>
+            {onRequestMove ? (
+              <p className="text-xs text-muted-foreground">
+                {t("move.destinationRootHelp")}
+              </p>
+            ) : null}
           </EditableField>
 
           <EditableField label={t("search.addConfigMonitorType")}>
@@ -245,7 +339,7 @@ export function BulkTitleEditDialog({
                 <SelectItem value={UNCHANGED_VALUE}>
                   {t("label.unchanged")}
                 </SelectItem>
-                {AVAILABLE_LANGUAGES.map((language) => (
+                {METADATA_LANGUAGES.map((language) => (
                   <SelectItem key={language.code} value={language.code}>
                     {language.label}
                   </SelectItem>
@@ -395,6 +489,41 @@ export function BulkTitleEditDialog({
               </Select>
             </EditableField>
           ) : null}
+
+          {/* Both pickers are registry-backed and additive: they patch the
+              selection rather than replacing each title's bag, so a title
+              already carrying a queued label is simply left alone. A label held
+              by one picker is hidden from the other, because adding and
+              removing the same label in one submit is not an intent. */}
+          <EditableField label={t("title.bulkAddTags")}>
+            <TitleTagsPicker
+              value={tagDraft.add}
+              onChange={(labels) =>
+                setTagDraft((previous) => ({ ...previous, add: labels }))
+              }
+              definitions={tagDefinitions}
+              loading={tagDefinitionsLoading}
+              disabled={busy}
+              idPrefix="bulk-title-edit-add"
+              excludedLabels={tagDraft.remove}
+              emptyValueText={t("label.unchanged")}
+            />
+          </EditableField>
+
+          <EditableField label={t("title.bulkRemoveTags")}>
+            <TitleTagsPicker
+              value={tagDraft.remove}
+              onChange={(labels) =>
+                setTagDraft((previous) => ({ ...previous, remove: labels }))
+              }
+              definitions={tagDefinitions}
+              loading={tagDefinitionsLoading}
+              disabled={busy}
+              idPrefix="bulk-title-edit-remove"
+              excludedLabels={tagDraft.add}
+              emptyValueText={t("label.unchanged")}
+            />
+          </EditableField>
         </div>
 
         <DialogFooter>

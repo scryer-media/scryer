@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  ChevronRight,
   Edit,
   Logs,
   Lock,
@@ -10,16 +11,23 @@ import {
   Trash2,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { DownloadClientConfigField } from "@/components/common/download-client-config-field";
 import {
   IndexerErrorHistoryModal,
   type IndexerErrorHistoryScope,
 } from "@/components/common/indexer-error-history-modal";
 import { PluginVisualLabel } from "@/components/common/plugin-visual";
+import { ProxyAssignmentSelect } from "@/components/common/proxy-assignment-select";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Checkbox, CheckboxField } from "@/components/ui/checkbox";
-import { Input, signedIntegerInputProps } from "@/components/ui/input";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -28,7 +36,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import {
   Table,
@@ -43,14 +50,17 @@ import { visibleIndexerConfigFields } from "@/lib/types";
 import type {
   IndexerRecord,
   IndexerDraft,
-  IndexerProxyDraft,
-  IndexerProxyRecord,
+  ProxyRecord,
   ProviderTypeInfo,
   ConfigFieldDef,
   IndexerDownloadClientMappingCatalog,
   IndexerDownloadClientMappingCatalogResource,
 } from "@/lib/types";
 import { selectorId } from "@/lib/utils/dom-ids";
+import {
+  resolveConfigFieldsForValues,
+  splitAdvancedConfigFields,
+} from "@/lib/utils/provider-config-fields";
 import { applyIndexerConfigOption } from "@/lib/utils/indexer-setup";
 import { cn } from "@/lib/utils";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
@@ -98,21 +108,7 @@ type SettingsIndexersSectionProps = {
     indexerId: string,
     seedingProfileId: string | null,
   ) => Promise<void> | void;
-  indexerProxyConfigs: IndexerProxyRecord[];
-  indexerProxyDraft: IndexerProxyDraft;
-  setIndexerProxyDraft: React.Dispatch<React.SetStateAction<IndexerProxyDraft>>;
-  editingProxyId: string | null;
-  isProxyEditorOpen: boolean;
-  mutatingProxyId: string | null;
-  testingProxyId: string | null;
-  submitIndexerProxy: (
-    event: React.FormEvent<HTMLFormElement>,
-  ) => Promise<void> | void;
-  resetIndexerProxyDraft: () => void;
-  startCreateIndexerProxy: () => void;
-  editIndexerProxy: (proxy: IndexerProxyRecord) => void;
-  testIndexerProxy: (proxy: IndexerProxyRecord) => Promise<void> | void;
-  deleteIndexerProxy: (proxy: IndexerProxyRecord) => Promise<void> | void;
+  proxyConfigs: ProxyRecord[];
   editIndexer: (indexer: IndexerRecord) => void;
   toggleIndexerEnabled: (indexer: IndexerRecord) => Promise<void> | void;
   deleteIndexer: (indexer: IndexerRecord) => Promise<void> | void;
@@ -129,6 +125,21 @@ const FALLBACK_PROVIDER_OPTIONS = [
   { value: "nzbgeek", label: "NZBGeek Indexer" },
   { value: "newznab", label: "Newznab Indexer" },
 ];
+
+function selectedIndexerPresetName(
+  fields: ConfigFieldDef[],
+  key: string,
+  value: string,
+): string | null {
+  const selectedOption = fields
+    .find((field) => field.key === key)
+    ?.options.find((option) => option.value === value);
+  return selectedOption?.configOverrides?.some(
+    (override) => override.key === "base_url",
+  )
+    ? selectedOption.label
+    : null;
+}
 
 function formatIndexerProviderTypeLabel(
   providerType: string,
@@ -200,14 +211,6 @@ function formatRelativeTime(isoDate: string): string {
   }
 
   return relative;
-}
-
-function formatIndexerProxyHealth(status: string | null | undefined): string {
-  if (!status) return "Unknown";
-  const normalized = status.toLowerCase();
-  if (normalized === "healthy") return "Healthy";
-  if (normalized === "unhealthy") return "Unhealthy";
-  return "Unknown";
 }
 
 function IndexerStatusCell({
@@ -289,125 +292,72 @@ function IndexerStatusCell({
   );
 }
 
-function DynamicConfigField({
-  field,
-  value,
-  hasStoredSecretValue = false,
-  onChange,
-}: {
+/// The Indexers form renders the same declarations the download-client form
+/// does, so it shares that renderer rather than keeping a second copy that
+/// silently lags behind it — this one had no TAG or PATH branch, and would have
+/// needed a third FILTERED_SELECT branch. Only the id prefix is pinned, because
+/// selectors depend on it.
+function DynamicConfigField(props: {
   field: ConfigFieldDef;
   value: string;
   hasStoredSecretValue?: boolean;
   onChange: (key: string, value: string) => void;
 }) {
-  const t = useTranslate();
-  const fieldId = selectorId("settings-indexer-field", field.key);
-  const requiredMarker = field.required ? (
-    <span aria-hidden="true" className="text-destructive">
-      *
-    </span>
-  ) : null;
-
-  if (field.fieldType === "BOOL") {
-    return (
-      <CheckboxField
-        id={fieldId}
-        checked={value === "true"}
-        onCheckedChange={(checkedValue) =>
-          onChange(field.key, checkedValue === true ? "true" : "false")
-        }
-        label={field.label}
-        labelAccessory={requiredMarker}
-        description={field.helpText}
-        className="items-center"
-        checkboxClassName="mt-0"
-      />
-    );
-  }
-
-  if (field.fieldType === "SELECT" && field.options.length > 0) {
-    return (
-      <label>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
-          {field.label}
-          {requiredMarker}
-        </Label>
-        <Select
-          value={value || field.defaultValue || ""}
-          onValueChange={(v) => onChange(field.key, v)}
-        >
-          <SelectTrigger id={fieldId} className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {field.options.map((opt) => (
-              <SelectItem key={opt.value} value={opt.value}>
-                {opt.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        {field.helpText ? (
-          <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
-        ) : null}
-      </label>
-    );
-  }
-
-  if (field.fieldType === "MULTILINE") {
-    return (
-      <label>
-        <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
-          {field.label}
-          {requiredMarker}
-        </Label>
-        <Textarea
-          id={fieldId}
-          value={value}
-          onChange={(e) => onChange(field.key, e.target.value)}
-          required={field.required && !hasStoredSecretValue}
-          placeholder={field.defaultValue ?? ""}
-          rows={6}
-        />
-        {field.helpText ? (
-          <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
-        ) : null}
-      </label>
-    );
-  }
-
   return (
-    <label>
-      <Label className="mb-2 inline-flex items-center gap-2" htmlFor={fieldId}>
-        {field.label}
-        {requiredMarker}
-      </Label>
-      <Input
-        id={fieldId}
-        value={value}
-        onChange={(e) => onChange(field.key, e.target.value)}
-        {...(field.fieldType === "NUMBER" ? signedIntegerInputProps : {})}
-        type={
-          field.fieldType === "PASSWORD"
-            ? "password"
-            : field.fieldType === "NUMBER"
-              ? "number"
-              : "text"
-        }
-        required={field.required && !hasStoredSecretValue}
-        placeholder={
-          hasStoredSecretValue
-            ? t("form.apiKeyStoredPlaceholder")
-            : field.defaultValue ?? ""
-        }
-      />
-      {field.helpText ? (
-        <p className="mt-1 text-xs text-muted-foreground">{field.helpText}</p>
-      ) : null}
-    </label>
+    <DownloadClientConfigField {...props} idPrefix="settings-indexer-field" />
   );
 }
 
+/// One provider's fields: everything that is not a checkbox in a grid, then the
+/// checkboxes in a row under it. Used once for the standard fields and once
+/// inside the advanced disclosure so the two groups lay out identically.
+function ProviderConfigFieldGroup({
+  fields,
+  draft,
+  onChange,
+}: {
+  fields: ConfigFieldDef[];
+  draft: IndexerDraft;
+  onChange: (key: string, value: string) => void;
+}) {
+  if (fields.length === 0) {
+    return null;
+  }
+  const boolFields = fields.filter((field) => field.fieldType === "BOOL");
+  const valueFor = (field: ConfigFieldDef, fallback: string) =>
+    draft.configValues[field.key] ?? field.defaultValue ?? fallback;
+
+  return (
+    <div className="space-y-3">
+      <div className="grid gap-3 md:grid-cols-3">
+        {fields
+          .filter((field) => field.fieldType !== "BOOL")
+          .map((field) => (
+            <DynamicConfigField
+              key={field.key}
+              field={field}
+              value={valueFor(field, "")}
+              hasStoredSecretValue={draft.storedSecretKeys.includes(field.key)}
+              onChange={onChange}
+            />
+          ))}
+      </div>
+      {boolFields.length > 0 ? (
+        <div className="flex items-center gap-6">
+          {boolFields.map((field) => (
+            <DynamicConfigField
+              key={field.key}
+              field={field}
+              value={valueFor(field, "false")}
+              hasStoredSecretValue={draft.storedSecretKeys.includes(field.key)}
+              onChange={onChange}
+            />
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
 function IndexerDownloadClientSelect({
   model,
   selectId,
@@ -833,19 +783,7 @@ export function SettingsIndexersSection({
   seedingProfileOptions,
   mutatingIndexerSeedingProfileIds,
   setIndexerSeedingProfile,
-  indexerProxyConfigs,
-  indexerProxyDraft,
-  setIndexerProxyDraft,
-  editingProxyId,
-  isProxyEditorOpen,
-  mutatingProxyId,
-  testingProxyId,
-  submitIndexerProxy,
-  resetIndexerProxyDraft,
-  startCreateIndexerProxy,
-  editIndexerProxy,
-  testIndexerProxy,
-  deleteIndexerProxy,
+  proxyConfigs,
   editIndexer,
   toggleIndexerEnabled,
   deleteIndexer,
@@ -879,32 +817,16 @@ export function SettingsIndexersSection({
     return counts;
   }, [settingsIndexers]);
   const proxiesById = React.useMemo(() => {
-    return new Map(indexerProxyConfigs.map((proxy) => [proxy.id, proxy]));
-  }, [indexerProxyConfigs]);
-  const selectedIndexerProxyId = indexerDraft.indexerProxyConfigId;
-  const selectedIndexerProxy = selectedIndexerProxyId
-    ? proxiesById.get(selectedIndexerProxyId) ?? null
-    : null;
-  const selectedIndexerProxyMissing =
-    Boolean(selectedIndexerProxyId) && !selectedIndexerProxy;
-  const selectableIndexerProxies = React.useMemo(() => {
-    if (!selectedIndexerProxyId) {
-      return indexerProxyConfigs.filter((proxy) => proxy.isEnabled);
-    }
-    return indexerProxyConfigs.filter(
-      (proxy) => proxy.isEnabled || proxy.id === selectedIndexerProxyId,
-    );
-  }, [indexerProxyConfigs, selectedIndexerProxyId]);
+    return new Map(proxyConfigs.map((proxy) => [proxy.id, proxy]));
+  }, [proxyConfigs]);
   React.useEffect(() => {
-    if (!isManagedSyncProvider || !indexerDraft.indexerProxyConfigId) {
+    if (!isManagedSyncProvider || !indexerDraft.proxyConfigId) {
       return;
     }
     setIndexerDraft((previous) =>
-      previous.indexerProxyConfigId
-        ? { ...previous, indexerProxyConfigId: null }
-        : previous,
+      previous.proxyConfigId ? { ...previous, proxyConfigId: null } : previous,
     );
-  }, [indexerDraft.indexerProxyConfigId, isManagedSyncProvider, setIndexerDraft]);
+  }, [indexerDraft.proxyConfigId, isManagedSyncProvider, setIndexerDraft]);
   // Protocol families for the provider the editor is currently on: seeding
   // profiles only apply to torrent-capable indexers.
   const draftProtocolFamilies = React.useMemo(
@@ -951,19 +873,64 @@ export function SettingsIndexersSection({
 
   const selectedProviderFields = React.useMemo(
     () =>
-      visibleIndexerConfigFields(
-        normalizedProviderType,
-        (selectedProvider?.configFields ?? []).filter(
-          (field) => field.valueSource !== "HOST_BINDING",
-        ),
-      ),
-    [normalizedProviderType, selectedProvider],
+      visibleIndexerConfigFields(selectedProvider?.configFields ?? []),
+    [selectedProvider],
   );
+
+  // Conditions are resolved against the draft, so a field appears or becomes
+  // required the moment the field it depends on changes.
+  const { standard: standardProviderFields, advanced: advancedProviderFields } =
+    React.useMemo(
+      () =>
+        splitAdvancedConfigFields(
+          resolveConfigFieldsForValues(
+            selectedProviderFields,
+            indexerDraft.configValues,
+          ),
+        ),
+      [indexerDraft.configValues, selectedProviderFields],
+  );
+  const [advancedConfigOpen, setAdvancedConfigOpen] = React.useState(false);
+  const [hasCustomizedName, setHasCustomizedName] = React.useState(false);
+  const wasEditorOpen = React.useRef(false);
+
+  React.useEffect(() => {
+    if (isEditorOpen && !wasEditorOpen.current) {
+      const currentPresetName = selectedProviderFields
+        .map((field) =>
+          selectedIndexerPresetName(
+            selectedProviderFields,
+            field.key,
+            indexerDraft.configValues[field.key] ?? field.defaultValue ?? "",
+          ),
+        )
+        .find((name): name is string => name !== null);
+      setHasCustomizedName(
+        editorMode === "edit" && currentPresetName !== indexerDraft.name,
+      );
+    } else if (!isEditorOpen) {
+      setHasCustomizedName(false);
+    }
+    wasEditorOpen.current = isEditorOpen;
+  }, [
+    editorMode,
+    indexerDraft.configValues,
+    indexerDraft.name,
+    isEditorOpen,
+    selectedProviderFields,
+  ]);
 
   const handleConfigValueChange = React.useCallback(
     (key: string, value: string) => {
+      const presetName = selectedIndexerPresetName(
+        selectedProviderFields,
+        key,
+        value,
+      );
       setIndexerDraft((prev) => ({
         ...prev,
+        name:
+          !hasCustomizedName && presetName !== null ? presetName : prev.name,
         configValues: applyIndexerConfigOption(
           selectedProviderFields,
           prev.configValues,
@@ -972,7 +939,7 @@ export function SettingsIndexersSection({
         ),
       }));
     },
-    [selectedProviderFields, setIndexerDraft],
+    [hasCustomizedName, selectedProviderFields, setIndexerDraft],
   );
 
   const handleProviderTypeChange = React.useCallback(
@@ -983,14 +950,8 @@ export function SettingsIndexersSection({
       const nextMappingCompatibility =
         indexerDownloadClientMappingCatalogResource.catalog?.providerCompatibility.find(
           (provider) => provider.providerType === nextProviderType,
-        );
+      );
       setIndexerDraft((prev: IndexerDraft) => {
-        const previousProvider = providerTypes.find(
-          (providerType) => providerType.providerType === prev.providerType,
-        );
-        const shouldAutofillName =
-          prev.name.trim().length === 0 ||
-          prev.name === (previousProvider?.name ?? prev.providerType);
         const nextConfigValues: Record<string, string> = {};
         for (const field of nextProvider?.configFields ?? []) {
           if (field.valueSource === "HOST_BINDING") {
@@ -1002,7 +963,6 @@ export function SettingsIndexersSection({
         return {
           ...prev,
           providerType: nextProviderType,
-          name: shouldAutofillName ? (nextProvider?.name ?? prev.name) : prev.name,
           downloadClientId:
             nextMappingCompatibility?.supportsMapping === false
               ? null
@@ -1024,247 +984,10 @@ export function SettingsIndexersSection({
     ],
   );
 
-  const showProxies = indexerSettingsTab === "proxies";
   const showIndexers = indexerSettingsTab === "indexers";
 
   return (
     <div id="settings-indexers-section" className="flex flex-col gap-4 text-sm">
-      {showProxies ? (
-      <div id="settings-indexer-proxies-panel" className="space-y-4">
-      <div id="settings-indexer-proxies-card" className="rounded border border-border">
-        <div className="flex items-center justify-between border-b border-border px-3 py-2">
-          <CardTitle className="flex items-center gap-2 text-base">
-            {t("settings.indexerProxies")}
-          </CardTitle>
-        </div>
-        <div className="overflow-x-auto">
-          <Table id="settings-indexer-proxies-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{t("label.name")}</TableHead>
-                <TableHead>Provider</TableHead>
-                <TableHead>{t("settings.baseUrl")}</TableHead>
-                <TableHead className="text-center">{t("label.enabled")}</TableHead>
-                <TableHead>Health</TableHead>
-                <TableHead>Last error</TableHead>
-                <TableHead className="text-right">{t("label.actions")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {indexerProxyConfigs.map((proxy) => (
-                <TableRow key={proxy.id} id={selectorId("settings-indexer-proxy-row", proxy.name)} data-ui="settings-table-row">
-                  <TableCell className="font-medium">{proxy.name}</TableCell>
-                  <TableCell>
-                    {proxy.providerType === "trawl" ? "Trawl" : "Byparr"}
-                  </TableCell>
-                  <TableCell className="max-w-[280px] truncate">{proxy.baseUrl}</TableCell>
-                  <TableCell className="text-center">
-                    <RenderBooleanIcon
-                      value={proxy.isEnabled}
-                      label={`${t("label.enabled")}: ${proxy.name}`}
-                    />
-                  </TableCell>
-                  <TableCell>{formatIndexerProxyHealth(proxy.lastHealthStatus)}</TableCell>
-                  <TableCell>
-                    {proxy.lastErrorAt ? (
-                      <span title={proxy.lastErrorAt}>
-                        {formatRelativeTime(proxy.lastErrorAt)}
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <div className="flex justify-end gap-2">
-                      <IndexerActionButton
-                        id={selectorId("settings-indexer-proxy-test", proxy.name)}
-                        tone="search"
-                        onClick={() => void testIndexerProxy(proxy)}
-                        disabled={testingProxyId === proxy.id || mutatingProxyId === proxy.id}
-                        label="Test"
-                      >
-                        <RefreshCw
-                          className={cn(
-                            "h-4 w-4",
-                            testingProxyId === proxy.id && "animate-spin",
-                          )}
-                        />
-                      </IndexerActionButton>
-                      <IndexerActionButton
-                        id={selectorId("settings-indexer-proxy-edit", proxy.name)}
-                        tone="edit"
-                        onClick={() => editIndexerProxy(proxy)}
-                        disabled={mutatingProxyId !== null}
-                        label={t("label.edit")}
-                      >
-                        <Edit className="h-4 w-4" />
-                      </IndexerActionButton>
-                      <IndexerActionButton
-                        id={selectorId("settings-indexer-proxy-delete", proxy.name)}
-                        tone="delete"
-                        onClick={() => void deleteIndexerProxy(proxy)}
-                        disabled={mutatingProxyId === proxy.id}
-                        label={t("label.delete")}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </IndexerActionButton>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {indexerProxyConfigs.length === 0 ? (
-                <TableRow id="settings-indexer-proxies-empty-row">
-                  <TableCell colSpan={7} className="text-muted-foreground">
-                    No indexer proxies configured.
-                  </TableCell>
-                </TableRow>
-              ) : null}
-            </TableBody>
-          </Table>
-        </div>
-      </div>
-      {isProxyEditorOpen ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">
-              {editingProxyId ? "Update indexer proxy" : "Connect indexer proxy"}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-        <form
-          id="settings-indexer-proxy-form"
-          className="grid gap-3 md:grid-cols-[10rem_minmax(0,1fr)_minmax(0,1.4fr)_10rem_auto_auto]"
-          onSubmit={submitIndexerProxy}
-        >
-          <label>
-            <Label className="mb-2 block" htmlFor="settings-indexer-proxy-provider-type">
-              Provider
-            </Label>
-            <Select
-              value={indexerProxyDraft.providerType}
-              disabled={editingProxyId !== null}
-              onValueChange={(value) => {
-                if (value !== "byparr" && value !== "trawl") return;
-                setIndexerProxyDraft((prev) => ({
-                  ...prev,
-                  providerType: value,
-                }));
-              }}
-            >
-              <SelectTrigger id="settings-indexer-proxy-provider-type" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="byparr">Byparr</SelectItem>
-                <SelectItem value="trawl">Trawl</SelectItem>
-              </SelectContent>
-            </Select>
-          </label>
-          <label>
-            <Label className="mb-2 block" htmlFor="settings-indexer-proxy-name">
-              {t("label.name")}
-            </Label>
-            <Input
-              id="settings-indexer-proxy-name"
-              value={indexerProxyDraft.name}
-              onChange={(event) =>
-                setIndexerProxyDraft((prev) => ({
-                  ...prev,
-                  name: event.target.value,
-                }))
-              }
-              required
-            />
-          </label>
-          <label>
-            <Label className="mb-2 block" htmlFor="settings-indexer-proxy-base-url">
-              {t("settings.baseUrl")}
-            </Label>
-            <Input
-              id="settings-indexer-proxy-base-url"
-              value={indexerProxyDraft.baseUrl}
-              onChange={(event) =>
-                setIndexerProxyDraft((prev) => ({
-                  ...prev,
-                  baseUrl: event.target.value,
-                }))
-              }
-              required
-            />
-          </label>
-          <label>
-            <Label className="mb-2 block" htmlFor="settings-indexer-proxy-timeout">
-              Timeout
-            </Label>
-            <Input
-              id="settings-indexer-proxy-timeout"
-              min={1}
-              max={120}
-              {...signedIntegerInputProps}
-              value={indexerProxyDraft.requestTimeoutSeconds}
-              onChange={(event) =>
-                setIndexerProxyDraft((prev) => ({
-                  ...prev,
-                  requestTimeoutSeconds:
-                    Number.parseInt(event.target.value, 10) || 1,
-                }))
-              }
-            />
-          </label>
-          <label className="flex items-center gap-2 self-end pb-2">
-            <Checkbox
-              id="settings-indexer-proxy-enabled"
-              checked={indexerProxyDraft.isEnabled}
-              onCheckedChange={(value) =>
-                setIndexerProxyDraft((prev) => ({
-                  ...prev,
-                  isEnabled: value === true,
-                }))
-              }
-            />
-            <span>{t("label.enabled")}</span>
-          </label>
-          <div className="flex items-end gap-2">
-            <Button
-              id="settings-indexer-proxy-save"
-              type="submit"
-              disabled={mutatingProxyId !== null}
-            >
-              {mutatingProxyId
-                ? t("label.saving")
-                : editingProxyId
-                  ? "Update proxy"
-                  : "Create proxy"}
-            </Button>
-            {editingProxyId ? (
-              <Button
-                id="settings-indexer-proxy-cancel"
-                type="button"
-                variant="outline"
-                onClick={resetIndexerProxyDraft}
-                disabled={mutatingProxyId !== null}
-              >
-                {t("label.cancel")}
-              </Button>
-            ) : null}
-          </div>
-        </form>
-          </CardContent>
-        </Card>
-      ) : (
-        <div className="flex justify-center">
-          <AddNewButton
-            id="settings-indexer-proxy-create"
-            icon={Plus}
-            label="Connect indexer proxy"
-            onClick={startCreateIndexerProxy}
-            disabled={mutatingProxyId !== null}
-          />
-        </div>
-      )}
-      </div>
-      ) : null}
-
       {showIndexers ? (
       <>
       <div id="settings-indexers-table-card" className="rounded border border-border">
@@ -1304,7 +1027,7 @@ export function SettingsIndexersSection({
               <TableRow>
                 <TableHead>{t("label.name")}</TableHead>
                 <TableHead>{t("settings.indexerProvider")}</TableHead>
-                <TableHead>Proxy</TableHead>
+                <TableHead>{t("settings.proxyAssignment")}</TableHead>
                 <TableHead>
                   {t("settings.indexerDownloadClient")}
                 </TableHead>
@@ -1332,8 +1055,8 @@ export function SettingsIndexersSection({
                   ? indexersById.get(indexer.managedParentConfigId)?.name
                   : null;
                 const managedChildCount = managedChildCounts.get(indexer.id) ?? 0;
-                const assignedProxy = indexer.indexerProxyConfigId
-                  ? proxiesById.get(indexer.indexerProxyConfigId) ?? null
+                const assignedProxy = indexer.proxyConfigId
+                  ? proxiesById.get(indexer.proxyConfigId) ?? null
                   : null;
                 return (
                 <TableRow
@@ -1382,12 +1105,14 @@ export function SettingsIndexersSection({
                       >
                         {assignedProxy.name}
                       </span>
-                    ) : indexer.indexerProxyConfigId ? (
+                    ) : indexer.proxyConfigId ? (
                       <span className="text-[var(--scry-warning-text)]">
-                        Missing proxy
+                        {t("settings.proxyMissing")}
                       </span>
                     ) : (
-                      <span className="text-muted-foreground">Direct</span>
+                      <span className="text-muted-foreground">
+                        {t("settings.proxyDirect")}
+                      </span>
                     )}
                   </TableCell>
                   <TableCell>
@@ -1559,12 +1284,27 @@ export function SettingsIndexersSection({
       {isEditorOpen ? (
         <>
           <Card>
-            <CardHeader>
+            <CardHeader className="flex items-center justify-between gap-3">
               <CardTitle className="text-base">
                 {editingIndexerId
                   ? t("settings.indexerUpdate")
                   : t("settings.indexerCreate")}
               </CardTitle>
+              <label className="flex shrink-0 items-center gap-3">
+                <Checkbox
+                  id="settings-indexer-enabled"
+                  size="large"
+                  checked={indexerDraft.isEnabled}
+                  disabled={mutatingIndexerId !== null}
+                  onCheckedChange={(checked) =>
+                    setIndexerDraft((prev) => ({
+                      ...prev,
+                      isEnabled: checked === true,
+                    }))
+                  }
+                />
+                <span className="text-sm font-medium">{t("label.enabled")}</span>
+              </label>
             </CardHeader>
             <CardContent>
               <form id="settings-indexer-form" className="space-y-3" onSubmit={submitIndexer}>
@@ -1612,12 +1352,13 @@ export function SettingsIndexersSection({
                 <Input
                   id="settings-indexer-name"
                   value={indexerDraft.name}
-                  onChange={(event) =>
+                  onChange={(event) => {
+                    setHasCustomizedName(true);
                     setIndexerDraft((prev: IndexerDraft) => ({
                       ...prev,
                       name: event.target.value,
-                    }))
-                  }
+                    }));
+                  }}
                   required
                   placeholder={t("form.indexerNamePlaceholder")}
                 />
@@ -1626,47 +1367,18 @@ export function SettingsIndexersSection({
 
             <div className="grid gap-3 md:grid-cols-2">
             {!isManagedSyncProvider ? (
-              <div className="space-y-2">
-              <Label className="block" htmlFor="settings-indexer-proxy-select">
-                Indexer proxy
-              </Label>
-              <Select
-                value={selectedIndexerProxyId ?? "none"}
-                onValueChange={(value) =>
+              <ProxyAssignmentSelect
+                selectId="settings-indexer-proxy-select"
+                label={t("settings.proxyAssignment")}
+                proxies={proxyConfigs}
+                value={indexerDraft.proxyConfigId}
+                onChange={(proxyConfigId) =>
                   setIndexerDraft((prev: IndexerDraft) => ({
                     ...prev,
-                    indexerProxyConfigId: value === "none" ? null : value,
+                    proxyConfigId,
                   }))
                 }
-              >
-                <SelectTrigger id="settings-indexer-proxy-select" className="w-full">
-                  <SelectValue placeholder="Direct (no proxy)" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Direct (no proxy)</SelectItem>
-                  {selectedIndexerProxyMissing ? (
-                    <SelectItem value={selectedIndexerProxyId ?? "missing"} disabled>
-                      Missing proxy
-                    </SelectItem>
-                  ) : null}
-                  {selectableIndexerProxies.map((proxy) => (
-                    <SelectItem key={proxy.id} value={proxy.id}>
-                      {proxy.name}
-                      {proxy.isEnabled ? "" : " (disabled)"}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {selectedIndexerProxyMissing ? (
-                <p className="text-xs text-[var(--scry-warning-text)]">
-                  Assigned proxy was not found.
-                </p>
-              ) : selectedIndexerProxy && !selectedIndexerProxy.isEnabled ? (
-                <p className="text-xs text-[var(--scry-warning-text)]">
-                  Assigned proxy is disabled.
-                </p>
-              ) : null}
-              </div>
+              />
             ) : null}
             {indexerDownloadClientMappingCatalogResource.catalog ? (
               <IndexerDownloadClientSelect
@@ -1701,16 +1413,15 @@ export function SettingsIndexersSection({
                 onRetry={refreshIndexerDownloadClientMappingCatalog}
               />
             )}
-            {indexerDownloadClientMappingCatalogResource.catalog ? (
+            {indexerDownloadClientMappingCatalogResource.catalog &&
+            !isManagedSyncProvider &&
+            supportsSeedingProfileAssignment(draftProtocolFamilies) ? (
               <IndexerSeedingProfileSelect
                 selectId="settings-indexer-seeding-profile-form"
                 label={t("settings.seedingProfileColumn")}
                 value={indexerDraft.seedingProfileId}
                 options={seedingProfileOptions}
-                supported={
-                  !isManagedSyncProvider &&
-                  supportsSeedingProfileAssignment(draftProtocolFamilies)
-                }
+                supported
                 isPending={mutatingIndexerId !== null}
                 showLabel
                 onChange={(seedingProfileId) =>
@@ -1728,45 +1439,42 @@ export function SettingsIndexersSection({
                 <Label className="text-sm font-medium">
                   {t("settings.indexerConfig")}
                 </Label>
-                <div className="grid gap-3 md:grid-cols-3">
-                  {selectedProviderFields
-                    .filter((f) => f.fieldType !== "BOOL")
-                    .map((field) => (
-                      <DynamicConfigField
-                        key={field.key}
-                        field={field}
-                        value={
-                          indexerDraft.configValues[field.key] ??
-                          field.defaultValue ??
-                          ""
-                        }
-                        hasStoredSecretValue={indexerDraft.storedSecretKeys.includes(
-                          field.key,
-                        )}
+                <ProviderConfigFieldGroup
+                  fields={standardProviderFields}
+                  draft={indexerDraft}
+                  onChange={handleConfigValueChange}
+                />
+                {advancedProviderFields.length > 0 ? (
+                  <Collapsible
+                    open={advancedConfigOpen}
+                    onOpenChange={setAdvancedConfigOpen}
+                  >
+                    <CollapsibleTrigger asChild>
+                      <button
+                        id="settings-indexer-advanced-toggle"
+                        type="button"
+                        className="flex items-center gap-1.5 rounded-[8px] py-1 text-sm font-medium text-[var(--scry-muted)] transition-colors hover:text-[var(--scry-ink2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <ChevronRight
+                          className={cn(
+                            "h-4 w-4 transition-transform",
+                            advancedConfigOpen && "rotate-90",
+                          )}
+                        />
+                        {t("settings.advancedConfig")}
+                        <span className="text-[var(--scry-faint)]">
+                          ({advancedProviderFields.length})
+                        </span>
+                      </button>
+                    </CollapsibleTrigger>
+                    <CollapsibleContent className="pt-3">
+                      <ProviderConfigFieldGroup
+                        fields={advancedProviderFields}
+                        draft={indexerDraft}
                         onChange={handleConfigValueChange}
                       />
-                    ))}
-                </div>
-                {selectedProviderFields.some((f) => f.fieldType === "BOOL") ? (
-                  <div className="flex items-center gap-6">
-                    {selectedProviderFields
-                      .filter((f) => f.fieldType === "BOOL")
-                      .map((field) => (
-                        <DynamicConfigField
-                          key={field.key}
-                          field={field}
-                          value={
-                            indexerDraft.configValues[field.key] ??
-                            field.defaultValue ??
-                            "false"
-                          }
-                          hasStoredSecretValue={indexerDraft.storedSecretKeys.includes(
-                            field.key,
-                          )}
-                          onChange={handleConfigValueChange}
-                        />
-                      ))}
-                  </div>
+                    </CollapsibleContent>
+                  </Collapsible>
                 ) : null}
               </div>
             ) : null}
@@ -1775,12 +1483,15 @@ export function SettingsIndexersSection({
               <p className="text-sm text-muted-foreground">
                 {t("settings.indexerManagedParentHint")}
               </p>
-            ) : (
-              <div className="flex items-center gap-6">
-                <label className="flex items-center gap-2">
+            ) : null}
+            {!isManagedSyncProvider ? (
+              <div className="flex flex-wrap items-center gap-6">
+                <label className="flex items-center gap-3">
                   <Checkbox
                     id="settings-indexer-enable-interactive-search"
+                    size="large"
                     checked={indexerDraft.enableInteractiveSearch}
+                    disabled={mutatingIndexerId !== null}
                     onCheckedChange={(value) =>
                       setIndexerDraft((prev: IndexerDraft) => ({
                         ...prev,
@@ -1788,14 +1499,16 @@ export function SettingsIndexersSection({
                       }))
                     }
                   />
-                  <span className="text-sm">
+                  <span className="text-sm font-medium">
                     {t("settings.indexerInteractiveSearch")}
                   </span>
                 </label>
-                <label className="flex items-center gap-2">
+                <label className="flex items-center gap-3">
                   <Checkbox
                     id="settings-indexer-enable-auto-search"
+                    size="large"
                     checked={indexerDraft.enableAutoSearch}
+                    disabled={mutatingIndexerId !== null}
                     onCheckedChange={(value) =>
                       setIndexerDraft((prev: IndexerDraft) => ({
                         ...prev,
@@ -1803,12 +1516,12 @@ export function SettingsIndexersSection({
                       }))
                     }
                   />
-                  <span className="text-sm">
+                  <span className="text-sm font-medium">
                     {t("settings.indexerAutoSearch")}
                   </span>
                 </label>
               </div>
-            )}
+            ) : null}
             <div className="flex gap-2">
               <Button id="settings-indexer-save" type="submit" disabled={mutatingIndexerId === "new"}>
                 {mutatingIndexerId === "new"

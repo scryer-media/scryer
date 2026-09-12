@@ -31,6 +31,10 @@ export type AcquisitionSettings = {
 };
 
 export type GeneralSettings = {
+  apiExplorerEnabled: boolean;
+  experimentalFeaturesEnabled: boolean;
+  personalizedDiscoveryEnabled: boolean;
+  srrdbFilenameRecoveryEnabled: boolean;
   keepHistoryForever: boolean;
   historyRetentionDays: number;
   imageCacheMaxSizeMb: number;
@@ -44,6 +48,10 @@ export type GeneralSettings = {
 export type GeneralSettingsUpdate = Partial<
   Pick<
     GeneralSettings,
+    | "apiExplorerEnabled"
+    | "experimentalFeaturesEnabled"
+    | "personalizedDiscoveryEnabled"
+    | "srrdbFilenameRecoveryEnabled"
     | "keepHistoryForever"
     | "historyRetentionDays"
     | "imageCacheMaxSizeMb"
@@ -51,7 +59,28 @@ export type GeneralSettingsUpdate = Partial<
   >
 >;
 
+/**
+ * Instance-wide feature switches, readable by any signed-in user.
+ *
+ * These come from the actor-only `instanceFeatures` query rather than
+ * `generalSettings`, which is limited to system-settings administrators.
+ */
+export type InstanceFeatures = {
+  apiExplorerEnabled: boolean;
+  experimentalFeaturesEnabled: boolean;
+  personalizedDiscoveryEnabled: boolean;
+};
+
 export type UiDateTimeFormat = "LOCALE" | "ISO24H";
+
+/**
+ * How thoroughly a copied file is proven before its source may be touched.
+ *
+ * The preference governs **download-client import copies only**. Library and
+ * root moves always verify in full, whatever this says, because they move the
+ * only copy of the content.
+ */
+export type VerificationDepth = "FULL" | "QUICK";
 
 export type UiTableColumnSetting = {
   facet: string;

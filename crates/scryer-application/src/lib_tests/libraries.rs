@@ -1925,7 +1925,7 @@ async fn library_settings_inherit_facet_quality_and_persona_when_library_scope_o
         .await;
 
     let (app, user) = bootstrap_with_settings_repo_and_profiles(
-        settings,
+        settings.clone(),
         quality_profiles,
         Arc::new(MockIndexerClient),
     );
@@ -1939,6 +1939,71 @@ async fn library_settings_inherit_facet_quality_and_persona_when_library_scope_o
     assert_eq!(library_settings.quality_profile_id, "wizard-series");
     assert_eq!(library_settings.scoring_persona_override, None);
     assert_eq!(library_settings.scoring_persona, ScoringPersona::Audiophile);
+
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let movie = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Global Persona Movie".into(),
+                facet: MediaFacet::Movie,
+                monitored: false,
+                ..Default::default()
+            },
+            movie_library_id,
+        )
+        .await
+        .expect("movie title should be created");
+    let series = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Facet Persona Series".into(),
+                facet: MediaFacet::Series,
+                monitored: false,
+                ..Default::default()
+            },
+            series_library_id.clone(),
+        )
+        .await
+        .expect("series title should be created");
+
+    assert_eq!(
+        app.resolve_canonical_scoring_context(&movie.title, &test_quality_profile("4k"))
+            .await
+            .profile()
+            .criteria
+            .scoring_persona,
+        ScoringPersona::Compatible,
+        "canonical Rego input keeps the resolved global persona"
+    );
+    assert_eq!(
+        app.resolve_canonical_scoring_context(&series.title, &test_quality_profile("4k"))
+            .await
+            .profile()
+            .criteria
+            .scoring_persona,
+        ScoringPersona::Audiophile,
+        "canonical Rego input keeps the resolved facet persona"
+    );
+
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            SCORING_PERSONA_KEY,
+            &series_library_id,
+            "\"Efficient\"",
+        )
+        .await;
+    assert_eq!(
+        app.resolve_canonical_scoring_context(&series.title, &test_quality_profile("4k"))
+            .await
+            .profile()
+            .criteria
+            .scoring_persona,
+        ScoringPersona::Efficient,
+        "canonical Rego input keeps the resolved library persona"
+    );
 }
 
 #[tokio::test]
@@ -2114,7 +2179,7 @@ async fn catalog_admin_can_open_titles_in_library_created_after_grant_seeding() 
     .await
     .expect("administrator should manage titles in an ungranted library");
     assert!(
-        app.has_granted_library_permission(
+        app.has_library_permission(
             &user,
             &library.id,
             scryer_domain::LibraryPermission::ManageTitles,
@@ -2160,4 +2225,176 @@ async fn catalog_admin_can_open_titles_in_library_created_after_grant_seeding() 
         Err(AppError::Unauthorized(_)) => {}
         other => panic!("expected unauthorized without a grant, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn library_access_surfaces_agree_for_catalog_settings_only_users() {
+    let (app, mut user) = bootstrap();
+
+    let library = app
+        .create_library(
+            &user,
+            MediaFacet::Movie,
+            "Kids".to_string(),
+            vec![LibraryRootDraft {
+                path: "/Volumes/Media/Kids".to_string(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("library should be created");
+    let created = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Kids Movie".into(),
+                facet: MediaFacet::Movie,
+                monitored: false,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                slug: Some("kids-movie".to_string()),
+                ..Default::default()
+            },
+            library.id.clone(),
+        )
+        .await
+        .expect("title should be created");
+
+    // Catalog settings only: no grant rows anywhere, not a permission admin.
+    app.services
+        .catalog
+        .libraries
+        .set_app_permission_mask_for_user(&user.id, AppPermissionMask::MANAGE_CATALOG_SETTINGS)
+        .await
+        .expect("app permission mask should be stored");
+    app.services
+        .catalog
+        .libraries
+        .set_grants_for_user(&user.id, Vec::new())
+        .await
+        .expect("library grants should be cleared");
+    user.authorization.loaded = false;
+
+    // Every surface reaches the same verdict for a readable permission ...
+    let view = scryer_domain::LibraryPermission::View;
+    let listed = app
+        .list_libraries_for_permission(&user, Some(MediaFacet::Movie), view)
+        .await
+        .expect("library listing should load");
+    assert!(listed.iter().any(|candidate| candidate.id == library.id));
+    let ids = app
+        .authorized_library_ids(&user, Some(MediaFacet::Movie), view)
+        .await
+        .expect("library ids should load");
+    assert!(ids.contains(&library.id));
+    assert!(
+        app.has_library_permission(&user, &library.id, view)
+            .await
+            .expect("permission check should load")
+    );
+    app.require_library_permission(&user, &library.id, view)
+        .await
+        .expect("catalog admin should read the ungranted library");
+    let by_id = app
+        .get_title(&user, &created.title.id)
+        .await
+        .expect("catalog admin should open a title in the ungranted library");
+    assert_eq!(by_id.map(|title| title.id), Some(created.title.id.clone()));
+
+    // ... and for a permission the app override never covers.
+    let manage = scryer_domain::LibraryPermission::ManageTitles;
+    let listed = app
+        .list_libraries_for_permission(&user, Some(MediaFacet::Movie), manage)
+        .await
+        .expect("library listing should load");
+    assert!(listed.iter().all(|candidate| candidate.id != library.id));
+    let ids = app
+        .authorized_library_ids(&user, Some(MediaFacet::Movie), manage)
+        .await
+        .expect("library ids should load");
+    assert!(!ids.contains(&library.id));
+    assert!(
+        !app.has_library_permission(&user, &library.id, manage)
+            .await
+            .expect("permission check should load")
+    );
+    assert!(matches!(
+        app.require_library_permission(&user, &library.id, manage)
+            .await,
+        Err(AppError::Unauthorized(_))
+    ));
+    assert!(
+        !app.has_any_library_permission(&user, manage)
+            .await
+            .expect("permission check should load")
+    );
+}
+
+#[tokio::test]
+async fn delete_preview_checks_the_title_folder_against_its_own_library_roots() {
+    let (app, user) = bootstrap();
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let library = app
+        .create_library(
+            &user,
+            MediaFacet::Anime,
+            "Anime Archive".to_string(),
+            vec![LibraryRootDraft {
+                path: tempdir.path().to_string_lossy().to_string(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("create a non-default anime library");
+    let title_dir = tempdir.path().join("Archived Serial");
+    std::fs::create_dir(&title_dir).expect("create title folder");
+    std::fs::write(
+        title_dir.join("Archived Serial - S01E01.mkv"),
+        vec![0_u8; 64],
+    )
+    .expect("write episode file");
+    let created = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Archived Serial".into(),
+                facet: MediaFacet::Anime,
+                monitored: false,
+                ..Default::default()
+            },
+            library.id.clone(),
+        )
+        .await
+        .expect("create title in the non-default library");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&created.title.id, title_dir.to_string_lossy().as_ref())
+        .await
+        .expect("set title folder");
+
+    // The folder sits under the title's own library root, not under the
+    // facet default library's root; the guard has to look at the former.
+    let preview = app
+        .preview_delete_title_files(&user, &created.title.id)
+        .await
+        .expect("preview a delete under the title's own library root");
+    assert_eq!(preview.media_count, 1);
+
+    let bulk = app
+        .preview_delete_titles_files(&user, std::slice::from_ref(&created.title.id))
+        .await
+        .expect("bulk preview");
+    assert_eq!(bulk.items.len(), 1);
+    assert_eq!(bulk.items[0].error, None);
+    assert_eq!(
+        bulk.items[0]
+            .preview
+            .as_ref()
+            .map(|preview| preview.media_count),
+        Some(1)
+    );
 }

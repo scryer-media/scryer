@@ -370,6 +370,21 @@ async fn record_file_import_ownership(
     tracked: &TrackedDownload,
     path: &Path,
 ) {
+    record_sized_file_import_ownership(app, tracked, path, None).await;
+}
+
+/// Like `record_file_import_ownership`, with the size the import recorded for
+/// the file (what a real import result carries as `file_size_bytes`).
+async fn record_sized_file_import_ownership(
+    app: &mut AppUseCase,
+    tracked: &TrackedDownload,
+    path: &Path,
+    file_size_bytes: Option<u64>,
+) {
+    let mut result = serde_json::json!({"decision": "imported", "source_path": path});
+    if let Some(size) = file_size_bytes {
+        result["file_size_bytes"] = serde_json::json!(size);
+    }
     let imports = Arc::new(TrackingImportRepo::default());
     let import_id = imports
         .queue_import_request(
@@ -387,7 +402,7 @@ async fn record_file_import_ownership(
         .update_import_status(
             &import_id,
             ImportStatus::Completed,
-            Some(serde_json::json!({"decision": "imported", "source_path": path}).to_string()),
+            Some(result.to_string()),
         )
         .await
         .unwrap();
@@ -1678,6 +1693,255 @@ async fn weaver_payload_refusal_is_remembered_across_cleanup_attempts() {
     let settled = serde_json::from_str::<serde_json::Value>(&settled).unwrap();
     assert_eq!(settled["client_refused_payload_deletion"], true);
     assert_eq!(settled["payload_removed"], true);
+}
+
+// SABnzbd's nzo_id is not a canonical token, and the job name it hands back
+// is a display name it may have rewritten (replace-spaces, replace-dots, a
+// sorter). The submission's release title still has to match the job by its
+// words, not byte for byte, or every renamed job would be "ambiguous" and
+// never cleaned up.
+#[tokio::test]
+async fn cleanup_identity_survives_a_client_rewritten_job_name() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "SABnzbd", "sabnzbd").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Renamed Job Movie").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "sabnzbd",
+        "SABnzbd_nzo_renamed",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = None;
+    tracked.client_item.title_name = "renamed_job_movie.nzb".into();
+    app.services
+        .workflow
+        .download_registry
+        .resolve_observation(&ObservedClientJob {
+            locator: ClientJobLocator::new(Some(&config.id), "sabnzbd", "SABnzbd_nzo_renamed"),
+            wire_token: Some(tracked.download_id.to_wire()),
+            observed_name: Some(title.name.clone()),
+            observed_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let record = cleanup_record_for(&tracked);
+
+    // A different release under the same locator is still refused.
+    client.history_items.lock().await[0].title_name = "Some.Other.Release.2026".into();
+    assert!(
+        crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+            .await
+            .is_none()
+    );
+    assert!(client.deleted_requests.lock().await.is_empty());
+
+    client.history_items.lock().await[0].title_name = "renamed_job_movie.nzb".into();
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let settled = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .expect("a rewritten display name must not make the job ambiguous");
+    assert_eq!(settled.2, TerminalDownloadCleanupOutcome::Removed);
+    assert!(!payload.exists());
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+#[test]
+fn cleanup_job_names_match_compares_word_runs() {
+    use crate::import::import::cleanup_job_names_match;
+    assert!(cleanup_job_names_match(
+        "Renamed Job Movie 2026 1080p",
+        "renamed_job_movie_2026_1080p.nzb"
+    ));
+    assert!(cleanup_job_names_match(
+        "Renamed.Job.Movie.2026.1080p-GRP",
+        "Renamed Job Movie 2026 1080p GRP"
+    ));
+    assert!(!cleanup_job_names_match(
+        "Renamed Job Movie 2026",
+        "Renamed Job Movie 2026 PROPER"
+    ));
+    assert!(!cleanup_job_names_match("", ""));
+    assert!(!cleanup_job_names_match("...", "..."));
+}
+
+// The import record names a path, not whatever occupies it now. A file that
+// was replaced under the same name while cleanup waited (a re-download, a
+// client-side repair) is not the file Scryer imported and stays put.
+#[tokio::test]
+async fn host_cleanup_retains_a_single_file_payload_whose_size_changed_since_import() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (mut app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "NZBGet", "nzbget").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Replaced File").await;
+    let tracked = tracked_for(
+        &config.id,
+        "nzbget",
+        "replaced-file-job",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    let (_root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    let file = payload.join("movie.mkv");
+    client.completed_downloads.lock().await[0].dest_dir = file.display().to_string();
+    // The import recorded the fixture's five-byte file; a larger one now sits
+    // at the same path.
+    std::fs::write(&file, b"re-downloaded replacement").unwrap();
+    record_sized_file_import_ownership(&mut app, &tracked, &file, Some(5)).await;
+
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        tracked.state,
+        None,
+    )
+    .await;
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::RetryableFailure);
+    assert_eq!(std::fs::read(&file).unwrap(), b"re-downloaded replacement");
+    assert!(client.deleted_requests.lock().await.is_empty());
+
+    // The recorded file is back in place: the same record settles normally.
+    std::fs::write(&file, b"media").unwrap();
+    let outcome = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        tracked.state,
+        None,
+    )
+    .await;
+    assert_eq!(outcome, TerminalDownloadCleanupOutcome::Removed);
+    assert!(!file.exists());
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+// Native deletion intent is checkpointed before the request goes out. Only a
+// request that actually reached the client (marker written after it answered)
+// lets a later entry absence count as a completed native deletion; a crash in
+// between leaves the row settling as payload-unverified instead.
+#[tokio::test]
+async fn native_removal_is_only_credited_after_the_request_was_sent() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Native attempt marker").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "weaver",
+        "native-attempt",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some(tracked.download_id.to_wire());
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let mut record = cleanup_record_for(&tracked);
+    client.set_delete_error(Some("response lost")).await;
+    let first = crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+        .await
+        .unwrap();
+    assert_eq!(first.2, TerminalDownloadCleanupOutcome::RetryableFailure);
+    let checkpoint = repository.cleanup_checkpoints.lock().await[&record.download_id].clone();
+    let checkpoint_json: serde_json::Value = serde_json::from_str(&checkpoint).unwrap();
+    assert_eq!(checkpoint_json["native_remove_requested"], true);
+    assert_eq!(checkpoint_json["native_remove_attempted"], true);
+    client.history_items.lock().await.clear();
+    client.set_delete_error(None).await;
+    let last_finish =
+        |finished: &[(scryer_domain::download_identity::DownloadId, String, bool)]| {
+            finished
+                .last()
+                .map(|(_, outcome, complete)| (outcome.clone(), *complete))
+        };
+
+    // Crash window: the intent was checkpointed but the request never left.
+    let mut intent_only = checkpoint_json.clone();
+    intent_only
+        .as_object_mut()
+        .unwrap()
+        .remove("native_remove_attempted");
+    let mut unsent = record.clone();
+    unsent.payload_checkpoint = Some(intent_only.to_string());
+    let unverified = crate::import::import::run_claimed_download_cleanup(&app, unsent, None)
+        .await
+        .unwrap();
+    assert_eq!(unverified.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    assert_eq!(
+        last_finish(&repository.finished_cleanup.lock().await),
+        Some(("entry_absent_payload_unverified".to_string(), true))
+    );
+
+    // The request was sent: absence now proves the native deletion completed.
+    record.payload_checkpoint = Some(checkpoint);
+    let recovered = crate::import::import::run_claimed_download_cleanup(&app, record, None)
+        .await
+        .unwrap();
+    assert_eq!(recovered.2, TerminalDownloadCleanupOutcome::AlreadyGone);
+    assert_eq!(
+        last_finish(&repository.finished_cleanup.lock().await),
+        Some(("native_removal_recovered".to_string(), true))
+    );
+}
+
+// A job the operator imported by hand that Scryer never submitted or observed
+// has no durable binding. The import was still verified, so the client entry
+// is cleaned up directly instead of being left behind with a warning.
+#[tokio::test]
+async fn verified_manual_import_without_a_binding_still_removes_the_client_job() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    repository
+        .durable_cleanup
+        .store(true, std::sync::atomic::Ordering::Relaxed);
+    let config = create_enabled_download_client_config(&app, &user, "Weaver", "weaver").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Foreign Manual Import").await;
+    let completed = scryer_domain::CompletedDownload {
+        client_type: "weaver".into(),
+        client_id: config.id.clone(),
+        download_client_item_id: "foreign-nzb".into(),
+        download_id: None,
+        name: title.name.clone(),
+        release_name: None,
+        dest_dir: "/downloads/complete/foreign".into(),
+        category: None,
+        size_bytes: None,
+        completed_at: None,
+        parameters: vec![],
+    };
+
+    crate::import::import::maybe_remove_completed_manual_import_download(
+        &app,
+        Some(&completed),
+        Some(&title.id),
+        true,
+    )
+    .await;
+
+    assert_eq!(
+        client.deleted_requests.lock().await.clone(),
+        vec![(
+            Some(config.id.clone()),
+            None,
+            "foreign-nzb".to_string(),
+            true,
+            true
+        )]
+    );
 }
 
 #[tokio::test]

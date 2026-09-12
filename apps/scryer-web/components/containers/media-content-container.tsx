@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import { MediaContentView } from "@/components/views/media-content-view";
 import {
   AddToCatalogDialog,
@@ -15,7 +16,7 @@ import {
   createLibraryMutation,
   deleteMediaFileMutation,
   deleteLibraryMutation,
-  queueBestReleaseMutation,
+  clearTitleReleaseBlocklistEntryMutation,
   queueExistingMutation,
   queueReplacementMutation,
   scanLibraryMutation,
@@ -24,6 +25,7 @@ import {
   setTitleMonitoredMutation,
   updateLibraryMutation,
   updateRuleSetMutation,
+  updateTitleTagsMutation,
 } from "@/lib/graphql/mutations";
 import {
   browsePathQuery,
@@ -91,6 +93,11 @@ import {
   type TitleCatalogAdvancedFilters,
 } from "@/lib/utils/title-catalog-query";
 import {
+  EMPTY_TITLE_TAGS_DELTA,
+  isEmptyTitleTagsDelta,
+} from "@/lib/utils/title-tags";
+import type { TitleTagsDelta } from "@/lib/types/title-tags";
+import {
   hasPrimaryMediaFile,
   releaseQueueScopeInput,
 } from "@/lib/utils/release-queue-scope";
@@ -144,6 +151,7 @@ import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { autoSearchOutcomeMessage } from "@/lib/utils/auto-search-outcome";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useSearchContext } from "@/lib/context/search-context";
 import {
@@ -159,6 +167,7 @@ import { titleMatchesOptionUpdates } from "@/lib/utils/title-edit-dialog";
 import { isTerminalJobRunStatus, normalizeJobRun } from "@/lib/utils/job-runs";
 import { toast } from "sonner";
 import { BulkTitleEditDialog } from "@/components/views/media-content/bulk-title-edit-dialog";
+import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import {
   readStoredContentViewMode,
   writeStoredContentViewMode,
@@ -191,6 +200,8 @@ const TITLE_DELETION_JOB_FALLBACK_DELAYS_MS = [
 const TITLE_CATALOG_PAGE_SIZE = 72;
 const TITLE_CATALOG_FILTER_DEBOUNCE_MS = 250;
 const LIBRARY_SCAN_TITLE_REFRESH_THROTTLE_MS = 5_000;
+// The title panel shows a recent-blocks window, not the whole blocklist.
+const SELECTED_OVERVIEW_BLOCKLIST_LIMIT = 6;
 const ALL_LIBRARIES_VALUE = "__all__";
 
 const EMPTY_TITLE_CATALOG_FILTER_OPTIONS: TitleCatalogFilterOptionsRecord = {
@@ -679,7 +690,11 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   } = searchState;
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
+  const { startAutomaticSearch } = useAutomaticSearch();
   const client = useClient();
+  // Library and root moves are still being finished, so the bulk dialog only
+  // becomes a move entry point when the instance has opted in.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const { registerInteractiveJobRun } = useJobRunToasts();
   const { confirmReplaceConflict, replaceConflictDialog } =
     useDownloadConflictConfirmation();
@@ -819,7 +834,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       if (
         updates.rootFolderIds !== undefined ||
         updates.genreTagKeys !== undefined ||
-        updates.themeTagKeys !== undefined
+        updates.themeTagKeys !== undefined ||
+        updates.userTagLabels !== undefined
       ) {
         markCatalogTiming("filter-intent");
         reloadCatalogForAdvancedFiltersRef.current?.(nextFilters);
@@ -1059,6 +1075,10 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     selectedOverviewBlocklistState.titleId === selectedOverviewTitleId
       ? selectedOverviewBlocklistState.entries
       : [];
+  const [
+    clearingSelectedOverviewBlocklistEntryId,
+    setClearingSelectedOverviewBlocklistEntryId,
+  ] = React.useState<string | null>(null);
   const [
     selectedOverviewExternalSubtitleState,
     setSelectedOverviewExternalSubtitleState,
@@ -1546,6 +1566,39 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         ?.roots ?? []
     );
   }, [editDialogTitleLibraryIds, libraries]);
+  // Bulk move workflow (FR-010–FR-011): picking a destination root in the bulk
+  // edit dialog opens the preview instead of staging a root rewrite.
+  const [bulkMoveRootId, setBulkMoveRootId] = React.useState<string | null>(null);
+  const editDialogLibraryName = React.useMemo(() => {
+    if (editDialogTitleLibraryIds.length !== 1) {
+      return null;
+    }
+    return (
+      libraries.find((library) => library.id === editDialogTitleLibraryIds[0])
+        ?.name ?? null
+    );
+  }, [editDialogTitleLibraryIds, libraries]);
+  const bulkMoveLibraries = React.useMemo(
+    () =>
+      libraries.map((library) => ({
+        id: library.id,
+        name: library.name,
+        roots: library.roots,
+      })),
+    [libraries],
+  );
+  const bulkMoveTitles = React.useMemo(
+    () =>
+      editDialogTitles.map((title) => ({
+        id: title.id,
+        name: title.name,
+        libraryId: title.libraryId,
+        libraryName: title.libraryName ?? null,
+        rootFolderId: title.rootFolderId ?? null,
+        rootFolderPath: title.rootFolderPath ?? null,
+      })),
+    [editDialogTitles],
+  );
 
   useOverviewWindowScrollRestoration({
     enabled: shouldLoadCatalogTitles && effectiveViewMode === "poster",
@@ -1951,10 +2004,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           .mutation(updateRuleSetMutation, {
             input: {
               id: ruleSetId,
-              name: rule.name,
-              description: rule.description,
-              regoSource: rule.regoSource,
-              priority: rule.priority,
               appliedFacets: nextFacets,
             },
           })
@@ -3252,6 +3301,63 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     ],
   );
 
+  const loadSelectedOverviewBlocklist = React.useCallback(
+    async (titleId: string) => {
+      const { data, error } = await client
+        .query<{ titleReleaseBlocklist?: TitleReleaseBlocklistEntry[] }>(
+          titleReleaseBlocklistQuery,
+          { titleId, limit: SELECTED_OVERVIEW_BLOCKLIST_LIMIT },
+          { requestPolicy: "network-only" },
+        )
+        .toPromise();
+      if (error) {
+        throw error;
+      }
+      return data?.titleReleaseBlocklist ?? [];
+    },
+    [client],
+  );
+  const clearSelectedOverviewBlocklistEntry = React.useCallback(
+    async (entryId: string) => {
+      // Key the refresh off the title the visible entries belong to, so a
+      // panel switch mid-flight cannot write another title's blocklist.
+      const titleId = selectedOverviewBlocklistState.titleId;
+      setClearingSelectedOverviewBlocklistEntryId(entryId);
+      try {
+        const { error } = await client
+          .mutation(clearTitleReleaseBlocklistEntryMutation, { id: entryId })
+          .toPromise();
+        if (error) {
+          throw error;
+        }
+        setGlobalStatus(t("status.blocklistEntryCleared"));
+        if (titleId) {
+          // Refetch instead of splicing: the panel shows a capped window, so
+          // clearing one entry can uncover an older blocked release.
+          const entries = await loadSelectedOverviewBlocklist(titleId);
+          setSelectedOverviewBlocklistState((current) =>
+            current.titleId === titleId ? { titleId, entries } : current,
+          );
+        }
+      } catch (error) {
+        setGlobalStatus(
+          error instanceof Error ? error.message : t("status.apiError"),
+        );
+      } finally {
+        setClearingSelectedOverviewBlocklistEntryId((current) =>
+          current === entryId ? null : current,
+        );
+      }
+    },
+    [
+      client,
+      loadSelectedOverviewBlocklist,
+      selectedOverviewBlocklistState.titleId,
+      setGlobalStatus,
+      t,
+    ],
+  );
+
   React.useEffect(() => {
     if (!shouldLoadCatalogTitles || !selectedPanelHydrationTitleId) {
       selectedPanelHydrationKeyRef.current = null;
@@ -3316,7 +3422,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       client
         .query<{ titleReleaseBlocklist?: TitleReleaseBlocklistEntry[] }>(
           titleReleaseBlocklistQuery,
-          { titleId, limit: 6 },
+          { titleId, limit: SELECTED_OVERVIEW_BLOCKLIST_LIMIT },
         )
         .toPromise(),
     ] as const).then(
@@ -3552,28 +3658,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const queueExisting = React.useCallback(
     async (title: TitleRecord) => {
       try {
-        const input = {
-          titleId: title.id,
-          scope: { title: true },
-        };
-        const payload = await retryWithReplaceOnConflict(
-          input,
-          async (nextInput) => {
-            const { data, error } = await client
-              .mutation(queueBestReleaseMutation, { input: nextInput })
-              .toPromise();
-            if (error) throw error;
-            return data?.queueBestRelease;
-          },
-          "A download is already in progress for this title.",
-          confirmReplaceConflict,
-        );
-        assertNoReplaceConflict(
-          payload,
-          "A download is already in progress for this title.",
-        );
-        const queuedMessage = t("status.queuedLatest", { name: title.name });
-        setGlobalStatus(queuedMessage);
+        await startAutomaticSearch(title.id);
       } catch (error) {
         setGlobalStatus(
           autoSearchOutcomeMessage(error, t, title.name) ??
@@ -3581,7 +3666,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         );
       }
     },
-    [client, confirmReplaceConflict, setGlobalStatus, t],
+    [startAutomaticSearch, setGlobalStatus, t],
   );
 
   const runInteractiveSearchForTitle = React.useCallback(
@@ -3950,14 +4035,56 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   );
 
   const applyBulkTitleOptions = React.useCallback(
-    async (changes: TitleOptionUpdates) => {
+    async (
+      changes: TitleOptionUpdates,
+      tagChanges: TitleTagsDelta = EMPTY_TITLE_TAGS_DELTA,
+    ) => {
       const targets = [...editDialogTitles];
       if (targets.length === 0 || bulkActionBusy) {
+        return;
+      }
+      const hasOptionChanges = Object.keys(changes).length > 0;
+      const hasTagChanges = !isEmptyTitleTagsDelta(tagChanges);
+      if (!hasOptionChanges && !hasTagChanges) {
         return;
       }
 
       setBulkActionBusy(true);
       try {
+        // Tags travel as one call for the whole selection: every title's
+        // library is authorized before the first write, so a set containing one
+        // title the caller cannot manage changes nothing at all.
+        if (hasTagChanges) {
+          const tagResult = await client
+            .mutation(updateTitleTagsMutation, {
+              input: {
+                titleIds: targets.map((title) => title.id),
+                add: tagChanges.add,
+                remove: tagChanges.remove,
+              },
+            })
+            .toPromise();
+          if (tagResult.error) {
+            setGlobalStatus(
+              withFailureDetail(
+                t("status.bulkTitleUpdateFailed"),
+                batchFailureDetail(tagResult.error),
+              ),
+            );
+            return;
+          }
+        }
+
+        if (!hasOptionChanges) {
+          await reloadTitles();
+          setSelectedTitleIds(new Set());
+          setBulkEditDialogOpen(false);
+          setGlobalStatus(
+            t("status.bulkTitleUpdateSuccess", { count: targets.length }),
+          );
+          return;
+        }
+
         const variables = Object.fromEntries(
           targets.map((title, index) => [
             `input${index}`,
@@ -4035,6 +4162,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       editDialogTitles,
       reloadTitles,
       setGlobalStatus,
+      setSelectedTitleIds,
       t,
     ],
   );
@@ -4550,7 +4678,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         if (library) {
           setSelectedLibraryIds([library.id]);
           setGlobalStatus(t("settings.libraryCreated"));
-          toast.success(t("settings.libraryCreated"));
         }
         return library;
       } catch (error) {
@@ -4602,7 +4729,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         await refreshRootValidationLibraries();
         if (library) {
           setGlobalStatus(t("settings.librarySaved"));
-          toast.success(t("settings.librarySaved"));
         }
         return library;
       } catch (error) {
@@ -5304,6 +5430,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           routeOverviewPending,
           routeOverviewEpisodeId,
           selectedOverviewBlocklistEntries,
+          clearingSelectedOverviewBlocklistEntryId,
+          clearSelectedOverviewBlocklistEntry,
           selectedOverviewExternalSubtitles,
           refreshSelectedOverviewExternalSubtitles,
           deleteSelectedOverviewMediaFile:
@@ -5388,6 +5516,26 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         rootFolders={editDialogRootFolders}
         busy={bulkActionBusy}
         onSubmit={applyBulkTitleOptions}
+        destinationLibraryName={editDialogLibraryName}
+        onRequestMove={
+          experimentalFeaturesEnabled
+            ? (rootFolderId) => {
+                setBulkEditDialogOpen(false);
+                setBulkMoveRootId(rootFolderId);
+              }
+            : undefined
+        }
+      />
+      <MoveTitlesDialog
+        open={bulkMoveRootId !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            setBulkMoveRootId(null);
+          }
+        }}
+        titles={bulkMoveTitles}
+        libraries={bulkMoveLibraries}
+        initialRootId={bulkMoveRootId}
       />
       <ConfirmDialog
         open={bulkDeleteDialogOpen}

@@ -10,6 +10,8 @@ import {
 import { IconButton } from "@/components/ui/icon-button";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { ExternalSubtitleSection } from "@/components/common/external-subtitle-section";
+import { DiscTitleButton } from "@/components/common/disc-title-dialog";
+import { hasDiscInventory } from "@/lib/utils/disc-review";
 import {
   MediaInfoBadges,
   SubtitleTracksPopover,
@@ -22,6 +24,7 @@ import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDate } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { audioFormatPills, hdrFormatPills } from "@/lib/utils/media-format-pills";
 import { cn } from "@/lib/utils";
 
 export type MediaFileOnDisk = MediaInfoFile & {
@@ -76,6 +79,7 @@ type MediaFilesOnDiskPanelProps<TFile extends MediaFileOnDisk> = {
   subtitleSearchIdPrefix?: string;
   deleteFileIdPrefix?: string;
   makePrimaryFileIdPrefix?: string;
+  discTitleIdPrefix?: string;
 };
 
 export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
@@ -99,6 +103,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
   subtitleSearchIdPrefix = "media-file-search-subtitles",
   deleteFileIdPrefix = "media-file-delete",
   makePrimaryFileIdPrefix = "media-file-make-primary",
+  discTitleIdPrefix = "media-file-disc-title",
 }: MediaFilesOnDiskPanelProps<TFile>) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
@@ -146,9 +151,15 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
             const isPrimaryFile = role === "primary";
             const isPromotingFile = primaryFileUpdatingId === file.id;
             const isDeletingFile = deletingFileIds?.has(file.id) ?? false;
+            const discAnalysis = file.analysis && hasDiscInventory(file.analysis.disc, file.analysisAttempt) ? file.analysis : null;
             const fileDate = formatMediaFileDate(file.createdAt, dateTimeFormat);
             const PathIcon = selectedTitlePresentation ? FileIcon : HardDrive;
             const unknownLabel = t("label.unknown");
+            const selectedTitleAudio = selectedTitleAudioLabel(file);
+            const formatPill = (label: string) => ({
+              className: "bg-[var(--scry-chip)] text-[var(--scry-muted2)]",
+              label,
+            });
             const selectedTitleBadges = [
               {
                 className:
@@ -160,11 +171,16 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                   "bg-[var(--scry-facet-movie-bg)] text-[var(--scry-facet-movie-text)]",
                 label: selectedTitleCodecLabel(file) ?? unknownLabel,
               },
+              ...hdrFormatPills(file).map(formatPill),
               {
                 className:
                   "bg-[var(--scry-facet-anime-bg)] text-[var(--scry-facet-anime-text)]",
-                label: selectedTitleAudioLabel(file) ?? unknownLabel,
+                label: selectedTitleAudio ?? unknownLabel,
               },
+              // The parsed release label can already say "TrueHD Atmos".
+              ...audioFormatPills(file)
+                .filter((pill) => !selectedTitleAudio?.toLowerCase().includes(pill.toLowerCase()))
+                .map(formatPill),
             ];
             const selectedTitleSubtitleStreams =
               file.subtitleStreams.length > 0
@@ -325,7 +341,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                         {formatMediaFileSize(file.sizeBytes)}
                       </div>
                     </div>
-                    {(canSearchSubtitles || onMakePrimaryFile || onDeleteFile) ? (
+                    {(canSearchSubtitles || onMakePrimaryFile || onDeleteFile || discAnalysis) ? (
                       <div className="flex items-start gap-2 lg:justify-end">
                         <div className="flex flex-wrap items-center gap-2">
                           {canSearchSubtitles ? (
@@ -381,6 +397,19 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             </TextActionButton>
                           ) : null}
                         </div>
+                        {discAnalysis ? (
+                          <DiscTitleButton
+                            id={selectorId(discTitleIdPrefix, file.id)}
+                            className={selectedTitlePresentation ? "h-8 w-8" : undefined}
+                            file={{
+                              id: file.id,
+                              filePath: file.filePath,
+                              analysis: discAnalysis,
+                              analysisAttempt: file.analysisAttempt,
+                              videoBitrateKbps: file.videoBitrateKbps,
+                            }}
+                          />
+                        ) : null}
                         {onDeleteFile ? (
                           <IconButton
                             label={t("mediaFile.delete")}

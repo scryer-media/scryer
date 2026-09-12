@@ -53,39 +53,6 @@ pub(crate) struct InvocationContext<'a> {
     pub(crate) stderr_tail: &'a str,
 }
 
-/// Interpret the result of `TypedFunc::call(_start)`.
-///
-/// Returns `Ok(())` for a clean return or `proc_exit(0)` (both are protocol
-/// success — the response is then read from stdout). Any other disposition is
-/// classified into a [`RunFailure`]. `memory_denied` reflects the store
-/// limiter: a denied growth is reported as a resource limit regardless of the
-/// symptomatic trap, because that is the actionable cause.
-pub(crate) fn interpret_start_result(
-    result: Result<(), wasmtime::Error>,
-    memory_denied: bool,
-) -> Result<(), RunFailure> {
-    match result {
-        // Clean dispositions (return or `proc_exit(0)`) are success ONLY if the
-        // limiter recorded no denial: a guest that survived a denied allocation
-        // and still exited clean cannot have completed correctly, so the denial
-        // is the actionable cause (mirrors `classify_error`'s precedence).
-        Ok(()) if !memory_denied => Ok(()),
-        Err(ref error)
-            if !memory_denied
-                && error
-                    .downcast_ref::<I32Exit>()
-                    .is_some_and(|exit| exit.0 == 0) =>
-        {
-            Ok(())
-        }
-        Ok(()) => Err(RunFailure::new(
-            FailureKind::ResourceLimit,
-            "guest exceeded its memory cap and could not complete",
-        )),
-        Err(error) => Err(classify_error(&error, memory_denied)),
-    }
-}
-
 /// Classify a wasmtime error raised during instantiation or the `_start` call.
 ///
 /// `memory_denied` is checked first: a limiter denial surfaces downstream as a
@@ -152,20 +119,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn clean_return_is_success() {
-        assert_eq!(interpret_start_result(Ok(()), false), Ok(()));
-    }
-
-    #[test]
-    fn proc_exit_zero_is_success() {
-        let err = wasmtime::Error::from(I32Exit(0));
-        assert_eq!(interpret_start_result(Err(err), false), Ok(()));
-    }
-
-    #[test]
     fn nonzero_exit_is_plugin_failure_with_code() {
         let err = wasmtime::Error::from(I32Exit(3));
-        let failure = interpret_start_result(Err(err), false).unwrap_err();
+        let failure = classify_error(&err, false);
         assert_eq!(failure.kind, FailureKind::PluginFailure);
         assert!(
             failure.detail.contains('3'),
@@ -177,7 +133,7 @@ mod tests {
     #[test]
     fn epoch_interrupt_is_timeout() {
         let err = wasmtime::Error::from(Trap::Interrupt);
-        let failure = interpret_start_result(Err(err), false).unwrap_err();
+        let failure = classify_error(&err, false);
         assert_eq!(failure.kind, FailureKind::Timeout);
     }
 
@@ -186,29 +142,22 @@ mod tests {
         // Even if the symptom is a generic trap, a limiter denial reports the
         // resource limit as the root cause.
         let err = wasmtime::Error::from(Trap::MemoryOutOfBounds);
-        let failure = interpret_start_result(Err(err), true).unwrap_err();
+        let failure = classify_error(&err, true);
         assert_eq!(failure.kind, FailureKind::ResourceLimit);
 
-        // ...and even a clean return or a zero exit is superseded by a recorded
-        // denial through the production path itself (not just `classify_error`).
+        // ...and a denial supersedes even a zero exit, which would otherwise
+        // read as an ordinary guest completion.
+        let clean_exit = wasmtime::Error::from(I32Exit(0));
         assert_eq!(
-            interpret_start_result(Ok(()), true).unwrap_err().kind,
+            classify_error(&clean_exit, true).kind,
             FailureKind::ResourceLimit
         );
-        assert_eq!(
-            interpret_start_result(Err(wasmtime::Error::from(I32Exit(0))), true)
-                .unwrap_err()
-                .kind,
-            FailureKind::ResourceLimit
-        );
-        // A clean disposition with no denial stays success.
-        assert!(interpret_start_result(Ok(()), false).is_ok());
     }
 
     #[test]
     fn other_trap_is_plugin_failure() {
         let err = wasmtime::Error::from(Trap::UnreachableCodeReached);
-        let failure = interpret_start_result(Err(err), false).unwrap_err();
+        let failure = classify_error(&err, false);
         assert_eq!(failure.kind, FailureKind::PluginFailure);
     }
 

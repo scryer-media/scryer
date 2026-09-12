@@ -37,6 +37,7 @@ import {
   Bell,
   BookOpen,
   Captions,
+  Code2,
   ChevronDown,
   Database,
   Download,
@@ -47,13 +48,16 @@ import {
   MessagesSquare,
   Monitor,
   Moon,
+  Network,
   Puzzle,
   Rss,
   Server,
   Settings2,
+  Wrench,
   ShieldCheck,
   SlidersHorizontal,
   Sun,
+  Tag,
   TextSearch,
   Timer,
   Recycle,
@@ -68,6 +72,7 @@ import type { PendingImportCounts } from "@/lib/types";
 import { pendingImportCountForView } from "@/lib/types";
 import { setMyUiSettingsMutation } from "@/lib/graphql/mutations";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useExperimentalFeaturesEnabled, useInstanceFeatures } from "@/lib/context/instance-features-context";
 import {
   useUiSettings,
   uiSettingsInputFromSettings,
@@ -82,6 +87,7 @@ import {
 } from "@/lib/utils/permissions";
 import type { AppPermission, LibraryPermission } from "@/lib/utils/permissions";
 import {
+  canAccessApiExplorer,
   canAccessDashboard,
   canAccessSystemSection,
 } from "@/lib/utils/routes";
@@ -108,6 +114,7 @@ type TopNavGroup = {
 
 type TopNavGroupItemDefinition =
   | { kind: "view"; id: ViewId }
+  | { kind: "apiExplorer"; icon: LucideIcon }
   | { kind: "requests"; icon: LucideIcon }
   | { kind: "logs"; id: LogsSection; labelKey: string; icon: LucideIcon }
   | { kind: "system"; id: SystemSection; labelKey: string; icon: LucideIcon }
@@ -118,8 +125,31 @@ type TopNavGroupItemDefinition =
       icon: LucideIcon;
     };
 
+/// Whether a sidebar settings entry owns the section currently open. Rules is
+/// one entry over two sections, so it stays lit while either kind of rule is
+/// open; every other entry is the section it names.
+function isSettingsNavEntryActive(
+  entryId: SettingsSection,
+  settingsSection: SettingsSection,
+): boolean {
+  if (entryId === "rules") {
+    return (
+      settingsSection === "rules" ||
+      settingsSection === "maintenanceRules" ||
+      settingsSection === "requestRules"
+    );
+  }
+  return entryId === settingsSection;
+}
+
 type TopNavGroupItem =
   | (NavItem & { kind: "view" })
+  | {
+      kind: "apiExplorer";
+      id: "api-explorer";
+      label: string;
+      icon: LucideIcon;
+    }
   | {
       kind: "requests";
       id: "requests";
@@ -181,7 +211,9 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "view", id: "calendar" },
       { kind: "view", id: "activity" },
       { kind: "settings", id: "subtitles", icon: Captions },
-      { kind: "settings", id: "rules", icon: SlidersHorizontal },
+      // Scoring, maintenance and request rules share this entry; the Rules
+      // page's own gutter picks the kind, so the sidebar names the subject once.
+      { kind: "settings", id: "rules", labelKey: "nav.rules", icon: SlidersHorizontal },
       { kind: "settings", id: "post-processing", icon: FolderCog },
     ],
   },
@@ -191,6 +223,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
     items: [
       { kind: "settings", id: "indexers", icon: Database },
       { kind: "settings", id: "downloadClients", icon: Download },
+      { kind: "settings", id: "proxies", icon: Network },
       { kind: "settings", id: "mediaServers", icon: Server },
       { kind: "settings", id: "notifications", icon: Bell },
     ],
@@ -207,6 +240,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       },
       { kind: "settings", id: "security", icon: ShieldCheck },
       { kind: "view", id: "system" },
+      { kind: "apiExplorer", icon: Code2 },
       { kind: "system", id: "jobs", labelKey: "system.jobsTitle", icon: Timer },
       {
         kind: "system",
@@ -233,11 +267,25 @@ const PROMOTED_SETTINGS_SHORTCUT_IDS = new Set<SettingsSection>(
     group.items.flatMap((item) => (item.kind === "settings" ? [item.id] : [])),
   ),
 );
+
+/// Whether a promoted shortcut already owns the open section, which is what
+/// keeps the Settings entry dark. Ownership runs through the same predicate the
+/// shortcuts light themselves with, so an entry standing in for more than one
+/// section covers all of them here too.
+function isPromotedSettingsSection(settingsSection: SettingsSection): boolean {
+  for (const entryId of PROMOTED_SETTINGS_SHORTCUT_IDS) {
+    if (isSettingsNavEntryActive(entryId, settingsSection)) {
+      return true;
+    }
+  }
+  return false;
+}
 const DEFAULT_SETTINGS_SECTION_ORDER: SettingsSection[] = [
   "general",
   "profile",
   "qualityProfiles",
   "delayProfiles",
+  "titleTags",
   "plugins",
 ];
 const MEDIA_NAV_VIEW_IDS: ViewId[] = ["movies", "series", "anime"];
@@ -261,6 +309,7 @@ type RootSidebarProps = {
   pendingMediaRequestCounts: PendingImportCounts | null;
   manualImportRequiredCount: number;
   pluginUpdateCount: number;
+  pluginBlockedCount: number;
   header?: React.ReactNode;
   children?: React.ReactNode;
   onNavigate: (
@@ -329,6 +378,12 @@ const settingsEntries: Array<{
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
+    id: "titleTags",
+    label: (t) => t("settings.titleTags"),
+    icon: Tag,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
+  },
+  {
     id: "downloadClients",
     label: (t) => t("settings.downloadClients"),
     requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
@@ -345,8 +400,26 @@ const settingsEntries: Array<{
     requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
   },
   {
+    id: "proxies",
+    label: (t) => t("settings.proxies"),
+    icon: Network,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
+  },
+  {
     id: "rules",
     label: (t) => t("settings.rules"),
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
+  },
+  {
+    id: "maintenanceRules",
+    label: (t) => t("settings.maintenanceRules"),
+    icon: Wrench,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
+  },
+  {
+    id: "requestRules",
+    label: (t) => t("settings.requestRules"),
+    icon: Inbox,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
@@ -386,6 +459,7 @@ const SETTINGS_NAV_GROUPS: Array<{
       "general",
       "qualityProfiles",
       "delayProfiles",
+      "titleTags",
       "plugins",
     ],
   },
@@ -567,12 +641,15 @@ function RootSidebarContent({
   pendingMediaRequestCounts,
   manualImportRequiredCount,
   pluginUpdateCount,
+  pluginBlockedCount,
   header,
   children,
   onNavigate,
 }: RootSidebarProps) {
   const client = useClient();
   const t = useTranslate();
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const { apiExplorerEnabled } = useInstanceFeatures();
   const setGlobalStatus = useGlobalStatus();
   const { isMobile, setOpenMobile } = useSidebar();
   const { theme, resolvedTheme, setTheme } = useTheme();
@@ -702,13 +779,18 @@ function RootSidebarContent({
     () =>
       settingsEntries.filter(
         (entry) =>
-          !entry.requiredAnyAppPermission ||
-          hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
-          entry.requiredAnyLibraryPermission?.some((permission) =>
-            hasAnyLibraryPermission(user, permission),
-          ),
+          // Maintenance and request rules are still being finished, so their
+          // shortcuts are offered only when the instance has opted in. The
+          // permission each already required still applies on top.
+          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules") ||
+            experimentalFeaturesEnabled) &&
+          (!entry.requiredAnyAppPermission ||
+            hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
+            entry.requiredAnyLibraryPermission?.some((permission) =>
+              hasAnyLibraryPermission(user, permission),
+            )),
       ),
-    [user],
+    [experimentalFeaturesEnabled, user],
   );
   const groupedSettingsEntries = React.useMemo(() => {
     const entriesById = new Map(
@@ -769,6 +851,19 @@ function RootSidebarContent({
               label: definition.labelKey
                 ? t(definition.labelKey)
                 : entry.label(t),
+              icon: definition.icon,
+            },
+          ];
+        }
+        if (definition.kind === "apiExplorer") {
+          if (!canAccessApiExplorer(canManageSystemSettings, apiExplorerEnabled)) {
+            return [];
+          }
+          return [
+            {
+              kind: "apiExplorer",
+              id: "api-explorer",
+              label: "API",
               icon: definition.icon,
             },
           ];
@@ -838,6 +933,7 @@ function RootSidebarContent({
         ]
       : groups;
   }, [
+    apiExplorerEnabled,
     canManageSystemSettings,
     canManageTitle,
     canRequestMedia,
@@ -1080,6 +1176,26 @@ function RootSidebarContent({
               <SidebarMenu id={groupContentId} className="space-y-0.5">
                 {group.items.map((item) => {
                   const Icon = item.icon;
+                  if (item.kind === "apiExplorer") {
+                    return (
+                      <React.Fragment key="api-explorer">
+                        <SidebarMenuItem>
+                          <SidebarMenuButton
+                            id="root-sidebar-api-explorer"
+                            tooltip="API"
+                            isActive={view === "api-explorer"}
+                            className={TOP_NAV_BUTTON_CLASS}
+                            onClick={(event) => {
+                              handleNavigate(event, "api-explorer");
+                            }}
+                          >
+                            <Icon className="h-4 w-4" />
+                            {item.label}
+                          </SidebarMenuButton>
+                        </SidebarMenuItem>
+                      </React.Fragment>
+                    );
+                  }
                   if (item.kind === "requests") {
                     return (
                       <React.Fragment key="requests">
@@ -1116,7 +1232,8 @@ function RootSidebarContent({
                               item.id,
                             )}
                             isActive={
-                              view === "settings" && settingsSection === item.id
+                              view === "settings" &&
+                              isSettingsNavEntryActive(item.id, settingsSection)
                             }
                             className={TOP_NAV_BUTTON_CLASS}
                             onClick={(event) => {
@@ -1200,13 +1317,10 @@ function RootSidebarContent({
                   const isActivityTop = item.id === "activity";
                   const isActiveMediaSection =
                     isMediaSection && view === item.id && !isRequestsSection;
-                  const isPromotedSettingsSection =
-                    view === "settings" &&
-                    PROMOTED_SETTINGS_SHORTCUT_IDS.has(settingsSection);
                   const isActiveSettingsSection =
                     isSettingsTop &&
                     view === "settings" &&
-                    !isPromotedSettingsSection;
+                    !isPromotedSettingsSection(settingsSection);
                   const isActiveSystemSection =
                     isSystemTop &&
                     view === "system" &&
@@ -1328,7 +1442,18 @@ function RootSidebarContent({
                             {activityImportBadgeCount}
                           </SidebarMenuBadge>
                         ) : null}
-                        {isSettingsTop && pluginUpdateCount > 0 ? (
+                        {isSettingsTop && pluginBlockedCount > 0 ? (
+                          // Only one badge fits the collapsed row; a plugin
+                          // that is not running outranks one with an update.
+                          <SidebarMenuBadge
+                            className={cn(
+                              "!top-1/2 -translate-y-1/2",
+                              navBadgeToneClass("danger"),
+                            )}
+                          >
+                            {pluginBlockedCount}
+                          </SidebarMenuBadge>
+                        ) : isSettingsTop && pluginUpdateCount > 0 ? (
                           <SidebarMenuBadge
                             className={cn(
                               "!top-1/2 -translate-y-1/2",
@@ -1381,6 +1506,13 @@ function RootSidebarContent({
                                         <span className="min-w-0 flex-1 truncate">
                                           {entry.label(t)}
                                         </span>
+                                        {entry.id === "plugins" &&
+                                        pluginBlockedCount > 0 ? (
+                                          <LeafNavBadge
+                                            count={pluginBlockedCount}
+                                            tone="danger"
+                                          />
+                                        ) : null}
                                         {entry.id === "plugins" &&
                                         pluginUpdateCount > 0 ? (
                                           <LeafNavBadge

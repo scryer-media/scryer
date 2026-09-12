@@ -1,6 +1,6 @@
 [package]
 name = "scryer-application"
-version = "0.19.16"
+version = "0.20.0"
 edition.workspace = true
 
 [features]
@@ -11,11 +11,7 @@ runtime = [
     "runtime-media-analysis",
     "runtime-plugin-trust",
 ]
-runtime-archives = [
-    "dep:lzma-rs",
-    "dep:par2-rs",
-    "dep:zstd",
-]
+runtime-archives = ["dep:zstd"]
 runtime-backups = ["dep:zstd"]
 runtime-media-analysis = [
     "dep:chardetng",
@@ -35,12 +31,14 @@ runtime-plugin-trust = [
 ]
 
 [dependencies]
+scryer-media-types = { path = "../scryer-media-types" }
 scryer-domain = { path = "../scryer-domain" }
 scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 scryer-release-parser = { path = "../scryer-release-parser" }
 scryer-rules = { path = "../scryer-rules" }
 scryer-mediainfo = { path = "../scryer-mediainfo", optional = true }
 scryer-outbound-http = { path = "../scryer-outbound-http" }
+scryer-tunnel = { workspace = true }
 scryer-logging = { path = "../scryer-logging" }
 scryer-runtime-info = { path = "../scryer-runtime-info" }
 jsonwebtoken = { workspace = true }
@@ -68,8 +66,6 @@ brotli = { version = "8", optional = true }
 tar = "0.4"
 flate2 = "1"
 zstd = { version = "0.13", default-features = false, optional = true }
-lzma-rs = { version = "0.3", optional = true }
-par2-rs = { version = "0.7.1", optional = true }
 tempfile = "3"
 chardetng = { version = "1", optional = true }
 encoding_rs = { version = "0.8", optional = true }
@@ -77,6 +73,7 @@ unicode-normalization = "0.1"
 whatlang = { version = "0.18.0", optional = true }
 regex = "1"
 blake3 = "1"
+crc-fast = { workspace = true }
 const-oid = { version = "0.10.2", features = ["db"] }
 serde_json_canonicalizer = { version = "0.3", optional = true }
 sigstore = { version = "0.14", default-features = false, features = ["sigstore-trust-root"], optional = true }
@@ -95,3 +92,16 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 wiremock = { workspace = true }
+# Thread-local recorder for asserting emitted metric names, labels and values
+# without installing a global recorder.
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
+# The in-process SSH server double, so the end-to-end tunnel chain is tested
+# against a real SSH peer rather than a mock of one.
+scryer-tunnel = { workspace = true, features = ["test-support"] }
+# Local HTTP/3 CONNECT fixture, using the same approved transport and crypto.
+bytes = "1"
+http = "1"
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
+h3 = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.1.0" }
+h3-quinn = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.1.0" }

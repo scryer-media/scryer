@@ -10,7 +10,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
-import { Badge } from "@/components/ui/badge";
+import { FacetSelect, FacetTags } from "@/components/common/facet-select";
+import { LOWERCASE_FACET_IDS } from "@/lib/facets/selection";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -60,31 +61,6 @@ type SettingsPostProcessingSectionProps = {
   scriptRuns: Record<string, PPScriptRun[]>;
   loadRunsForScript: (scriptId: string) => Promise<void> | void;
 };
-
-const FACET_OPTIONS = [
-  { value: "movie", label: "Movie" },
-  { value: "series", label: "Series" },
-  { value: "anime", label: "Anime" },
-];
-
-function FacetBadges({ facets }: { facets: string[] }) {
-  if (facets.length === 0) {
-    return (
-      <Badge tone="info" className="capitalize">
-        All
-      </Badge>
-    );
-  }
-  return (
-    <div className="flex gap-1">
-      {facets.map((f) => (
-        <Badge key={f} tone="neutral" className="capitalize">
-          {f}
-        </Badge>
-      ))}
-    </div>
-  );
-}
 
 function statusColor(status: string): string {
   switch (status) {
@@ -292,7 +268,10 @@ export const SettingsPostProcessingSection = React.memo(
                         {script.name}
                       </TableCell>
                       <TableCell>
-                        <FacetBadges facets={script.appliedFacets} />
+                        <FacetTags
+                          values={script.appliedFacets}
+                          emptyLabel="All"
+                        />
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {script.executionMode === "BLOCKING"
@@ -525,25 +504,14 @@ export const SettingsPostProcessingSection = React.memo(
               {/* Facets */}
               <div>
                 <Label className="mb-2 block">{t("settings.pp.facets")}</Label>
-                <div className="flex items-center gap-4">
-                  {FACET_OPTIONS.map((opt) => (
-                    <label key={opt.value} className="flex items-center gap-2">
-                      <Checkbox
-                        id={selectorId("settings-post-processing-facet", opt.value)}
-                        checked={scriptDraft.appliedFacets.includes(opt.value)}
-                        onCheckedChange={(checked) => {
-                          setScriptDraft((prev) => {
-                            const next = checked
-                              ? [...prev.appliedFacets, opt.value]
-                              : prev.appliedFacets.filter((f) => f !== opt.value);
-                            return { ...prev, appliedFacets: next };
-                          });
-                        }}
-                      />
-                      <span className="text-sm">{opt.label}</span>
-                    </label>
-                  ))}
-                </div>
+                <FacetSelect
+                  idPrefix="settings-post-processing-facet"
+                  values={LOWERCASE_FACET_IDS}
+                  selected={scriptDraft.appliedFacets}
+                  onChange={(next) => {
+                    setScriptDraft((prev) => ({ ...prev, appliedFacets: next }));
+                  }}
+                />
               </div>
 
               {/* Execution Mode */}

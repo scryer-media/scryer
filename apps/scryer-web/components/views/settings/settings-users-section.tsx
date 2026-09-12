@@ -230,9 +230,7 @@ export function SettingsUsersSection({
                       const canSetPassword =
                         user.accountKind !== "EXTERNAL_AUTO_PROVISIONED";
                       const permissionControlsDisabled =
-                        mutatingUserId === user.id ||
-                        isOwnUser ||
-                        !canManagePermissions;
+                        mutatingUserId === user.id || !canManagePermissions;
                       const appSelected =
                         userAppPermissionDrafts[user.id] ?? user.appPermissions;
                       const libraryDrafts =
@@ -277,12 +275,12 @@ export function SettingsUsersSection({
                           disabled={permissionControlsDisabled}
                           showSelectAll
                           onAppChange={(nextPermissions) => {
-                            if (isOwnUser || !canManagePermissions) return;
+                            if (!canManagePermissions) return;
                             updateUserAppPermissionDraft(user.id, nextPermissions);
                             void setUserAppPermissions(user.id, nextPermissions);
                           }}
                           onLibraryChange={(changes) => {
-                            if (isOwnUser || !canManagePermissions) return;
+                            if (!canManagePermissions) return;
                             updateUserLibraryPermissionDrafts(user.id, changes);
                             void setUserLibraryPermissions(user.id, changes);
                           }}
@@ -312,6 +310,7 @@ export function SettingsUsersSection({
                                 placeholder={t("form.newPasswordPlaceholder")}
                                 type="password"
                                 autoComplete="new-password"
+                                ignorePasswordManagers
                                 minLength={passwordMinLength ?? undefined}
                                 aria-label={t("settings.temporaryPassword")}
                                 aria-invalid={isPasswordTooShort(
@@ -489,6 +488,7 @@ export function SettingsUsersSection({
                     placeholder={t("form.passwordPlaceholder")}
                     type="password"
                     autoComplete="new-password"
+                    ignorePasswordManagers
                     required
                   />
                 </div>

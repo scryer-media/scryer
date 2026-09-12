@@ -299,10 +299,7 @@ impl AppUseCase {
             .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?
             || self
-                .has_any_granted_library_permission(
-                    actor,
-                    scryer_domain::LibraryPermission::ManageTitles,
-                )
+                .has_any_library_permission(actor, scryer_domain::LibraryPermission::ManageTitles)
                 .await?
         {
             return Ok(());
@@ -319,11 +316,7 @@ impl AppUseCase {
         library_ids: Option<Vec<String>>,
     ) -> AppResult<HashSet<String>> {
         let allowed = self
-            .granted_library_ids_for_permission(
-                actor,
-                None,
-                scryer_domain::LibraryPermission::ManageTitles,
-            )
+            .authorized_library_ids(actor, None, scryer_domain::LibraryPermission::ManageTitles)
             .await?
             .into_iter()
             .collect::<HashSet<_>>();
@@ -1430,7 +1423,7 @@ impl AppUseCase {
                     .ok_or_else(|| {
                         AppError::Unauthorized("You do not have access to this library".to_string())
                     })?;
-                self.require_granted_library_permission(
+                self.require_library_permission(
                     actor,
                     &library.id,
                     scryer_domain::LibraryPermission::ManageTitles,
@@ -1474,6 +1467,16 @@ impl AppUseCase {
         context: RestoreRecycledItemContext,
         conflict_policy: crate::RecycleRestoreConflictPolicy,
     ) -> AppResult<bool> {
+        // Restoring writes a file back into the title's folder, which an
+        // in-flight operation is copying out of (FR-084). Entries with no title
+        // (orphaned files) overlap nothing and pass through.
+        if let Some(title_id) = context.manifest.title_id.as_deref() {
+            self.ensure_location_ownership_allows_title(
+                &crate::location::ownership_guard::RECYCLE_RESTORE_ENTRY,
+                title_id,
+            )
+            .await?;
+        }
         let original_path = context.manifest.original_path_buf();
         let file_name = original_path
             .file_name()
@@ -2032,7 +2035,7 @@ impl AppUseCase {
                     .ok_or_else(|| {
                         AppError::Unauthorized("You do not have access to this library".to_string())
                     })?;
-                self.require_granted_library_permission(
+                self.require_library_permission(
                     actor,
                     &library.id,
                     scryer_domain::LibraryPermission::ManageTitles,

@@ -86,6 +86,23 @@ async fn set_media_path(ctx: &TestContext, key_name: &str, value: &str) {
         .expect("update default library root");
 }
 
+/// Root ids are allocated, never derived from a path (FR-078), so a fixture that
+/// wants a title attached to the configured root has to read the stored id.
+async fn default_library_root_id(ctx: &TestContext, facet: &MediaFacet) -> String {
+    let library_id = scryer_domain::default_library_id_for_facet(facet);
+    let library = LibraryRepository::get_by_id(&ctx.libraries, &library_id)
+        .await
+        .expect("default library should load")
+        .expect("default library should exist");
+    library
+        .roots
+        .iter()
+        .find(|root| root.is_default)
+        .or_else(|| library.roots.first())
+        .map(|root| root.id.clone())
+        .expect("default library should have a root")
+}
+
 #[tokio::test]
 async fn background_series_refresh_skips_non_relinked_titles_and_completes_job_run() {
     let ctx = TestContext::new().await;
@@ -97,6 +114,7 @@ async fn background_series_refresh_skips_non_relinked_titles_and_completes_job_r
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    let series_root_id = default_library_root_id(&ctx, &MediaFacet::Series).await;
 
     let title = TitleRepository::create(
         &ctx.titles,
@@ -112,9 +130,7 @@ async fn background_series_refresh_skips_non_relinked_titles_and_completes_job_r
                 source: "tvdb".to_string(),
                 value: "345679".to_string(),
             }],
-            root_folder_id: scryer_domain::root_folder_id_for_path(
-                media_root.path().to_string_lossy().as_ref(),
-            ),
+            root_folder_id: series_root_id,
             created_by: None,
             created_at: Utc::now(),
             year: Some(2024),
@@ -282,6 +298,79 @@ async fn scheduled_background_refresh_creates_one_job_run_per_library() {
             .filter(|run| run.job_key == JobKey::BackgroundLibraryRefreshMovies)
             .count(),
         2
+    );
+}
+
+#[tokio::test]
+async fn scheduled_library_scan_creates_one_job_run_per_library() {
+    let ctx = TestContext::new().await;
+    seed_media_path_settings(&ctx).await;
+
+    let default_root = tempfile::tempdir().expect("default movie root");
+    set_media_path(
+        &ctx,
+        "movies.path",
+        default_root.path().to_string_lossy().as_ref(),
+    )
+    .await;
+
+    let second_root = tempfile::tempdir().expect("second movie root");
+    let now = Utc::now();
+    LibraryRepository::create(
+        &ctx.libraries,
+        Library {
+            id: "movie_kids_library".to_string(),
+            facet: MediaFacet::Movie,
+            name: "Kids".to_string(),
+            slug: "kids".to_string(),
+            is_default: false,
+            roots: vec![],
+            created_at: now,
+            updated_at: now,
+        },
+        vec![LibraryRootDraft {
+            path: second_root.path().to_string_lossy().to_string(),
+            is_default: true,
+        }],
+    )
+    .await
+    .expect("create second movie library");
+
+    ctx.app
+        .run_scheduled_job_now(JobKey::LibraryScanMovies, JobTriggerSource::ScheduledDaily)
+        .await
+        .expect("scheduled scan should run each library job");
+
+    assert!(
+        ctx.app.active_library_scan_sessions().await.is_empty(),
+        "both library scan sessions should complete",
+    );
+
+    let workflow_store = WorkflowOperationStore::new(ctx.db.datastore());
+    let runs = <WorkflowOperationStore as JobRunRepository>::list_job_runs(
+        &workflow_store,
+        Some(JobKey::LibraryScanMovies),
+        5,
+    )
+    .await
+    .expect("list job runs");
+    let operation_types = runs
+        .iter()
+        .map(|run| run.operation_type.as_str())
+        .collect::<std::collections::HashSet<_>>();
+
+    assert!(operation_types.contains("library_scan_movies:movie_default_library"));
+    assert!(operation_types.contains("library_scan_movies:movie_kids_library"));
+    assert_eq!(
+        runs.iter()
+            .filter(|run| run.job_key == JobKey::LibraryScanMovies)
+            .count(),
+        2
+    );
+    assert!(
+        runs.iter().all(|run| run.status == JobRunStatus::Completed),
+        "{:?}",
+        runs.iter().map(|run| run.status).collect::<Vec<_>>()
     );
 }
 

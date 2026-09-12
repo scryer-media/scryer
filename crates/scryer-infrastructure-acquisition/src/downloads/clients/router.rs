@@ -4,6 +4,7 @@ use std::path::{Component, Path};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::native_download_client_http_client;
 use async_trait::async_trait;
 use futures_util::StreamExt;
 use scryer_application::{
@@ -11,14 +12,15 @@ use scryer_application::{
     DownloadClientCategorySnapshotStore, DownloadClientConfigRepository,
     DownloadClientFeedbackScope, DownloadClientListing, DownloadClientPluginProvider,
     DownloadClientRemotePathMapping, DownloadClientSnapshotOutcome, DownloadClientStatus,
-    DownloadGrabResult, DownloadSourceKind, IndexerConfigRepository, IndexerProxyConfigRepository,
-    PersistedSeedGoals, ResolvedDownloadArtifact, ResolvedSeedGoals, SeedGoalRequest,
+    DownloadGrabResult, DownloadSourceKind, IndexerArtifactResolutionRequest,
+    IndexerArtifactResolver, IndexerConfigRepository, PersistedSeedGoals, PreparedIndexerArtifact,
+    ProxyConfigRepository, ResolvedDownloadArtifact, ResolvedSeedGoals, SeedGoalRequest,
     SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore,
     accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
     apply_remote_path_mappings_to_status, extract_magnet_info_hash, is_valid_magnet_uri,
     normalize_torrent_info_hash, parse_download_client_remote_path_mappings,
 };
-use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet};
+use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet, ProxyConfig};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
 use tracing::{debug, info, warn};
@@ -45,6 +47,27 @@ pub fn download_client_feedback_timeout() -> Duration {
             scryer_outbound_http::DEFAULT_DOWNLOAD_CLIENT_FEEDBACK_TIMEOUT,
         )
     })
+}
+
+/// Read a staged NZB back out of its zstd frame, for handing to a browser.
+async fn read_staged_nzb_bytes(staged_nzb: &StagedNzbRef) -> AppResult<Vec<u8>> {
+    let input = tokio::fs::File::open(&staged_nzb.compressed_path)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!(
+                "failed to open staged nzb {}: {error}",
+                staged_nzb.compressed_path.display()
+            ))
+        })?;
+    let mut decoder =
+        async_compression::tokio::bufread::ZstdDecoder::new(tokio::io::BufReader::new(input));
+    let mut bytes = Vec::with_capacity(usize::try_from(staged_nzb.raw_size_bytes).unwrap_or(0));
+    tokio::io::AsyncReadExt::read_to_end(&mut decoder, &mut bytes)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("staged nzb decompression failed: {error}"))
+        })?;
+    Ok(bytes)
 }
 
 fn parse_download_client_feedback_timeout(raw: Option<&str>, default: Duration) -> Duration {
@@ -88,6 +111,95 @@ fn resolved_v1_info_hash(request: &DownloadClientAddRequest) -> Option<String> {
 
 const DOWNLOAD_CLIENT_FEEDBACK_BACKOFF_INITIAL_SECS: u64 = 15;
 const DOWNLOAD_CLIENT_FEEDBACK_BACKOFF_MAX_SECS: u64 = 120;
+
+const DOWNLOAD_CLIENT_REFRESH_TOTAL: &str = "scryer_download_client_refresh_total";
+const DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS: &str =
+    "scryer_download_client_refresh_duration_seconds";
+const DOWNLOAD_CLIENT_UP: &str = "scryer_download_client_up";
+
+/// Registers HELP/UNIT metadata for the per-download-client feedback families.
+///
+/// Public because the binary's metrics setup calls it once at startup, before
+/// the first poll, so a fleet with no configured clients still scrapes as a
+/// self-describing surface.
+pub fn describe_download_client_router_metrics() {
+    metrics::describe_counter!(
+        DOWNLOAD_CLIENT_REFRESH_TOTAL,
+        "Download-client feedback reads performed by the queue poller, by client, client type, \
+         read kind (`queue`, `recent_activity`) and result (`success`, `error`)."
+    );
+    metrics::describe_histogram!(
+        DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Wall time of one download-client feedback read, by client, client type and read kind."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_CLIENT_UP,
+        "1 when the client answered its queue read on the last poll cycle, 0 when it failed. \
+         Clients skipped by feedback backoff are not republished."
+    );
+}
+
+/// The bounded label pair every per-client family carries.
+///
+/// `client` is the operator-facing configured name (falling back to the type
+/// when a config was saved without one) and `client_type` is lowercased, so
+/// cardinality is the size of the configured fleet — never an item id, path or
+/// error string.
+fn download_client_metric_labels(config: &DownloadClientConfig) -> (String, String) {
+    let client_type = config.client_type.trim().to_ascii_lowercase();
+    let name = config.name.trim();
+    let client = if name.is_empty() {
+        client_type.clone()
+    } else {
+        name.to_string()
+    };
+    (client, client_type)
+}
+
+/// Emits the outcome and the duration of one download-client feedback read.
+///
+/// Called from both the success and the failure arm so the label set is built
+/// in exactly one place: a per-client read that fails still has a duration
+/// worth seeing (that is what a timeout looks like).
+fn record_client_read_metrics(
+    config: &DownloadClientConfig,
+    kind: DownloadFeedbackReadKind,
+    elapsed: Duration,
+    ok: bool,
+) {
+    let (client, client_type) = download_client_metric_labels(config);
+    let kind_label = PrioritizedDownloadClientRouter::feedback_read_kind_label(kind);
+    metrics::counter!(
+        DOWNLOAD_CLIENT_REFRESH_TOTAL,
+        "client" => client.clone(),
+        "client_type" => client_type.clone(),
+        "kind" => kind_label,
+        "result" => if ok { "success" } else { "error" },
+    )
+    .increment(1);
+    metrics::histogram!(
+        DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+        "client" => client,
+        "client_type" => client_type,
+        "kind" => kind_label,
+    )
+    .record(elapsed.as_secs_f64());
+}
+
+/// Publishes the per-client up/down gauge for one poll cycle.
+///
+/// Takes the already-built labels rather than the config so the queue loop can
+/// remember one small pair per client instead of cloning a whole config.
+fn record_client_up(labels: (String, String), up: bool) {
+    let (client, client_type) = labels;
+    metrics::gauge!(
+        DOWNLOAD_CLIENT_UP,
+        "client" => client,
+        "client_type" => client_type,
+    )
+    .set(if up { 1.0 } else { 0.0 });
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum DownloadFeedbackReadKind {
@@ -159,7 +271,11 @@ fn normalize_completed_download_import_dir(item: &mut scryer_domain::CompletedDo
 pub struct PrioritizedDownloadClientRouter {
     download_client_configs: Arc<dyn DownloadClientConfigRepository>,
     indexer_configs: Option<Arc<dyn IndexerConfigRepository>>,
-    indexer_proxy_configs: Option<Arc<dyn IndexerProxyConfigRepository>>,
+    proxy_configs: Option<Arc<dyn ProxyConfigRepository>>,
+    /// Resolves release artifacts at the indexer boundary for browser
+    /// downloads (D17). The submit path never fetches here: callers resolve
+    /// before routing and the router refuses unresolved URLs.
+    indexer_artifact_resolver: Option<Arc<dyn IndexerArtifactResolver>>,
     settings: Arc<dyn SettingsRepository>,
     staged_nzb_store: Arc<dyn StagedNzbStore>,
     staged_nzb_pipeline_limit: Arc<Semaphore>,
@@ -665,7 +781,8 @@ impl PrioritizedDownloadClientRouter {
         Self {
             download_client_configs,
             indexer_configs: None,
-            indexer_proxy_configs: None,
+            proxy_configs: None,
+            indexer_artifact_resolver: None,
             settings,
             staged_nzb_store,
             staged_nzb_pipeline_limit,
@@ -680,10 +797,21 @@ impl PrioritizedDownloadClientRouter {
     pub fn with_indexer_config_repositories(
         mut self,
         indexer_configs: Arc<dyn IndexerConfigRepository>,
-        indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
+        proxy_configs: Arc<dyn ProxyConfigRepository>,
     ) -> Self {
         self.indexer_configs = Some(indexer_configs);
-        self.indexer_proxy_configs = Some(indexer_proxy_configs);
+        self.proxy_configs = Some(proxy_configs);
+        self
+    }
+
+    /// Wire the indexer artifact resolver that backs browser downloads
+    /// (`fetch_release_artifact`). Without it the router cannot hand the
+    /// operator a file, because it never fetches artifacts itself.
+    pub fn with_indexer_artifact_resolver(
+        mut self,
+        indexer_artifact_resolver: Arc<dyn IndexerArtifactResolver>,
+    ) -> Self {
+        self.indexer_artifact_resolver = Some(indexer_artifact_resolver);
         self
     }
 
@@ -813,6 +941,17 @@ impl PrioritizedDownloadClientRouter {
         Fut: Future<Output = AppResult<T>> + Send,
     {
         let category_snapshot = self.category_snapshot_store.snapshot().await;
+        // Proxy assignments are resolved up front: the client build below runs
+        // inside a synchronous closure and cannot await, and an unresolvable
+        // assignment has to skip the client rather than read it unproxied.
+        let mut proxy_configs_by_client: HashMap<String, AppResult<Option<ProxyConfig>>> =
+            HashMap::new();
+        for config in &clients {
+            proxy_configs_by_client.insert(
+                config.id.clone(),
+                self.proxy_for_download_client(config).await,
+            );
+        }
         let mut skipped_client_ids = Vec::new();
         let reads = clients
             .into_iter()
@@ -830,12 +969,26 @@ impl PrioritizedDownloadClientRouter {
                     return None;
                 }
 
+                let proxy_config = match proxy_configs_by_client.get(&config.id) {
+                    Some(Ok(proxy_config)) => proxy_config.clone(),
+                    Some(Err(error)) => {
+                        tracing::warn!(
+                            client_id = %config.id,
+                            error = %error,
+                            operation,
+                            "skipping client for feedback read: assigned proxy is unusable"
+                        );
+                        return None;
+                    }
+                    None => None,
+                };
                 let client = match Self::client_from_config(
                     &config,
                     self.staged_nzb_store.clone(),
                     self.staged_nzb_pipeline_limit.clone(),
                     self.plugin_provider.as_ref(),
                     self.feedback_read_timeout,
+                    proxy_config.as_ref(),
                 ) {
                     Ok(client) => client,
                     Err(error) => {
@@ -1611,18 +1764,62 @@ impl PrioritizedDownloadClientRouter {
         }
     }
 
+    /// Load the proxy assigned to a download client.
+    ///
+    /// Fail-closed: an assignment that cannot be resolved (no repository, a
+    /// deleted proxy, a disabled proxy) is an error, never "carry on
+    /// unproxied". This mirrors how the indexer path resolves its own proxy in
+    /// `prepare_download_request`.
+    async fn proxy_for_download_client(
+        &self,
+        config: &DownloadClientConfig,
+    ) -> AppResult<Option<ProxyConfig>> {
+        let Some(proxy_config_id) = config.proxy_config_id.as_deref() else {
+            return Ok(None);
+        };
+        let Some(proxy_configs) = self.proxy_configs.as_ref() else {
+            return Err(AppError::Validation(format!(
+                "download client {} is assigned a proxy but the proxy repository is not wired",
+                config.id
+            )));
+        };
+        let proxy_config = proxy_configs
+            .get_by_id(proxy_config_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "download client {} references proxy configuration {proxy_config_id}, which was not found",
+                    config.id
+                ))
+            })?;
+        if !proxy_config.is_enabled {
+            return Err(AppError::Validation(format!(
+                "download client {} is assigned proxy {proxy_config_id}, which is disabled",
+                config.id
+            )));
+        }
+        Ok(Some(proxy_config))
+    }
+
     fn client_from_config(
         config: &DownloadClientConfig,
         staged_nzb_store: Arc<dyn StagedNzbStore>,
         staged_nzb_pipeline_limit: Arc<Semaphore>,
         plugin_provider: Option<&Arc<dyn DownloadClientPluginProvider>>,
         feedback_read_timeout: Duration,
+        proxy_config: Option<&ProxyConfig>,
     ) -> AppResult<Arc<dyn DownloadClient>> {
         if let Some(provider) = plugin_provider
-            && let Some(client) = provider.client_for_config(config)
+            && let Some(client) = provider.client_for_config_with_proxy(config, proxy_config)
         {
             return Ok(Self::wrap_feedback_client(client, feedback_read_timeout));
         }
+
+        // Native clients build their own reqwest client, so the proxy has to be
+        // attached here rather than in the plugin HTTP host. A tunnel fails to
+        // build, which stops the client being created at all rather than
+        // creating one that egresses directly.
+        let http_client = native_download_client_http_client(&config.name, proxy_config)?;
 
         let client = match config.client_type.as_str() {
             "nzbget" => {
@@ -1645,7 +1842,8 @@ impl PrioritizedDownloadClientRouter {
                     dupe_mode,
                     staged_nzb_store,
                     staged_nzb_pipeline_limit,
-                );
+                )
+                .with_http_client(http_client);
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             "sabnzbd" => {
@@ -1673,7 +1871,8 @@ impl PrioritizedDownloadClientRouter {
                     password,
                     staged_nzb_store,
                     staged_nzb_pipeline_limit,
-                );
+                )
+                .with_http_client(http_client);
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             "weaver" => {
@@ -1681,7 +1880,8 @@ impl PrioritizedDownloadClientRouter {
                     config,
                     staged_nzb_store,
                     staged_nzb_pipeline_limit,
-                )?;
+                )?
+                .with_http_client(http_client);
                 Self::wrap_feedback_client(Arc::new(client), feedback_read_timeout)
             }
             _ => {
@@ -1707,12 +1907,26 @@ impl PrioritizedDownloadClientRouter {
 
         let mut clients = Vec::new();
         for config in configs {
+            let proxy_config = match self.proxy_for_download_client(&config).await {
+                Ok(proxy_config) => proxy_config,
+                Err(error) => {
+                    warn!(
+                        routing_mode = "automatic",
+                        client_id = config.id.as_str(),
+                        client_name = config.name.as_str(),
+                        error = %error,
+                        "download client skipped while routing queue action: assigned proxy is unusable"
+                    );
+                    continue;
+                }
+            };
             match Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
                 self.staged_nzb_pipeline_limit.clone(),
                 self.plugin_provider.as_ref(),
                 self.feedback_read_timeout,
+                proxy_config.as_ref(),
             ) {
                 Ok(client) => clients.push((config, client)),
                 Err(error) => {
@@ -1784,12 +1998,14 @@ impl PrioritizedDownloadClientRouter {
                 continue;
             }
 
+            let proxy_config = self.proxy_for_download_client(&config).await?;
             return Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
                 self.staged_nzb_pipeline_limit.clone(),
                 self.plugin_provider.as_ref(),
                 self.feedback_read_timeout,
+                proxy_config.as_ref(),
             )
             .map(Some);
         }
@@ -1816,12 +2032,14 @@ impl PrioritizedDownloadClientRouter {
                 continue;
             }
 
+            let proxy_config = self.proxy_for_download_client(&config).await?;
             return Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
                 self.staged_nzb_pipeline_limit.clone(),
                 self.plugin_provider.as_ref(),
                 self.feedback_read_timeout,
+                proxy_config.as_ref(),
             )
             .map(Some);
         }
@@ -1832,6 +2050,60 @@ impl PrioritizedDownloadClientRouter {
 
 #[async_trait]
 impl DownloadClient for PrioritizedDownloadClientRouter {
+    /// Resolve the release's file without submitting it (D17).
+    ///
+    /// The indexer resolves the artifact exactly as the submit path resolves
+    /// it, so an assigned proxy or a private tracker's own grab flow still
+    /// owns the fetch. A staged NZB is read back and released, because a
+    /// browser download hands the operator bytes rather than a client a file.
+    /// A magnet comes back as-is; refusing it belongs to the caller, which
+    /// knows the release title to name in the message.
+    async fn fetch_release_artifact(
+        &self,
+        request: &DownloadClientAddRequest,
+    ) -> AppResult<ResolvedDownloadArtifact> {
+        let Some(resolver) = self.indexer_artifact_resolver.as_ref() else {
+            return Err(AppError::Validation(
+                "artifact download is not supported: no indexer artifact resolver is wired"
+                    .to_string(),
+            ));
+        };
+        let source_url = request
+            .source_hint
+            .as_deref()
+            .map(str::trim)
+            .filter(|source| !source.is_empty())
+            .ok_or_else(|| {
+                AppError::Validation("release has no download artifact to fetch".to_string())
+            })?;
+        let prepared = resolver
+            .resolve_artifact(&IndexerArtifactResolutionRequest {
+                indexer_id: request.indexer_id.clone(),
+                source_url: source_url.to_string(),
+                source_kind: request.source_kind,
+                info_hash_hint: request.info_hash_hint.clone(),
+                title_id: None,
+                search_facet: request.search_facet.clone(),
+                cancellation: tokio_util::sync::CancellationToken::new(),
+            })
+            .await?;
+        match prepared {
+            PreparedIndexerArtifact::Resolved(artifact) => Ok(artifact),
+            PreparedIndexerArtifact::StagedNzb(lease) => {
+                let staged_nzb = lease.staged_nzb().clone();
+                let bytes = read_staged_nzb_bytes(&staged_nzb).await;
+                drop(lease);
+                self.delete_staged_nzb(Some(&staged_nzb), "browser_download_served")
+                    .await;
+                Ok(ResolvedDownloadArtifact::Nzb {
+                    bytes: bytes?,
+                    file_name: None,
+                    content_type: None,
+                })
+            }
+        }
+    }
+
     async fn observe_download(
         &self,
         locator: &scryer_application::ClientJobLocator,
@@ -1876,12 +2148,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 });
             }
         }
+        let proxy_config = self.proxy_for_download_client(config).await?;
         let client = Self::client_from_config(
             config,
             self.staged_nzb_store.clone(),
             self.staged_nzb_pipeline_limit.clone(),
             self.plugin_provider.as_ref(),
             self.feedback_read_timeout,
+            proxy_config.as_ref(),
         )?;
         let started = Instant::now();
         let mut observation = match client.observe_download(locator, offset).await {
@@ -2001,7 +2275,37 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             }
         };
 
-        let mut clients = if let Some(mapped_client_id) = mapped_client_id {
+        let mut clients = if let Some(pinned_client_id) = request
+            .pinned_download_client_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            // An unlinked grab (D8) has no title to route by, so the operator
+            // named the client outright. That choice outranks the indexer
+            // mapping and the routing order; only the client's own routing
+            // entry still applies, for category and queue priority.
+            let Some(config) = selection
+                .all_clients
+                .iter()
+                .find(|config| config.id == pinned_client_id)
+            else {
+                self.delete_staged_nzb(request.staged_nzb.as_ref(), "pinned_client_missing")
+                    .await;
+                return Err(AppError::Validation(format!(
+                    "download client {pinned_client_id} does not exist"
+                )));
+            };
+            if !config.is_enabled {
+                self.delete_staged_nzb(request.staged_nzb.as_ref(), "pinned_client_disabled")
+                    .await;
+                return Err(AppError::Validation(format!(
+                    "download client {} is disabled",
+                    config.name
+                )));
+            }
+            vec![config.clone()]
+        } else if let Some(mapped_client_id) = mapped_client_id {
             let indexer = indexer_config
                 .as_ref()
                 .expect("mapped client requires indexer configuration");
@@ -2239,12 +2543,16 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 effective_scope = Self::routing_scope_label(selection.routing.as_ref()),
                 "selected download client route"
             );
+            // Fail-closed: a selected client whose proxy will not resolve is a
+            // routing failure, not a client to use unproxied.
+            let proxy_config = self.proxy_for_download_client(&config).await?;
             let client = match Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
                 self.staged_nzb_pipeline_limit.clone(),
                 self.plugin_provider.as_ref(),
                 self.feedback_read_timeout,
+                proxy_config.as_ref(),
             ) {
                 Ok(client) => client,
                 Err(error) => {
@@ -2631,7 +2939,11 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 |client, scope| async move { client.list_queue_with_feedback_scope(&scope).await },
             )
             .await;
+        let mut queue_read_outcomes = Vec::with_capacity(queue_reads.len());
         for (config, elapsed, result) in queue_reads {
+            let read_ok = result.is_ok();
+            record_client_read_metrics(&config, DownloadFeedbackReadKind::Queue, elapsed, read_ok);
+            queue_read_outcomes.push((download_client_metric_labels(&config), read_ok));
             match result {
                 Ok(mut items) => {
                     self.record_feedback_read_success(&config.id, DownloadFeedbackReadKind::Queue);
@@ -2653,6 +2965,11 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
             }
         }
+        // Republished for every polled client every cycle, so a client that
+        // stops answering shows as 0 rather than as a series that simply stops.
+        for (labels, read_ok) in queue_read_outcomes {
+            record_client_up(labels, read_ok);
+        }
 
         let mut activity_items = Vec::new();
         let mut activity_successes = HashSet::new();
@@ -2672,6 +2989,12 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 .await;
             for (config, elapsed, result) in activity_reads {
                 client_priorities.insert(config.id.clone(), config.client_priority);
+                record_client_read_metrics(
+                    &config,
+                    DownloadFeedbackReadKind::RecentActivity,
+                    elapsed,
+                    result.is_ok(),
+                );
                 match result {
                     Ok(mut items) => {
                         self.record_feedback_read_success(
@@ -3156,12 +3479,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             return Ok(None);
         };
 
+        let proxy_config = self.proxy_for_download_client(config).await?;
         let client = Self::client_from_config(
             config,
             self.staged_nzb_store.clone(),
             self.staged_nzb_pipeline_limit.clone(),
             self.plugin_provider.as_ref(),
             self.feedback_read_timeout,
+            proxy_config.as_ref(),
         )?;
         let started_at = Instant::now();
         match client
@@ -3314,12 +3639,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             .ok_or_else(|| {
                 AppError::Validation(format!("download client not found: {client_id}"))
             })?;
+        let proxy_config = self.proxy_for_download_client(&config).await?;
         let client = Self::client_from_config(
             &config,
             self.staged_nzb_store.clone(),
             self.staged_nzb_pipeline_limit.clone(),
             self.plugin_provider.as_ref(),
             self.feedback_read_timeout,
+            proxy_config.as_ref(),
         )?;
         let mut status = client.get_client_status().await?;
         let mappings = download_client_remote_path_mappings(&config);
@@ -3471,7 +3798,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -3517,6 +3844,7 @@ mod tests {
             season_pack_seed_time_minutes: None,
             is_recent: None,
             season_pack: None,
+            pinned_download_client_id: None,
         }
     }
 
@@ -3680,35 +4008,32 @@ mod tests {
         }
     }
 
-    struct EmptyIndexerProxyConfigRepository;
+    struct EmptyProxyConfigRepository;
 
     #[async_trait]
-    impl IndexerProxyConfigRepository for EmptyIndexerProxyConfigRepository {
+    impl ProxyConfigRepository for EmptyProxyConfigRepository {
         async fn list(
             &self,
-            _provider_type: Option<scryer_domain::IndexerProxyProviderType>,
-        ) -> AppResult<Vec<scryer_domain::IndexerProxyConfig>> {
+            _provider_type: Option<scryer_domain::ProxyProviderType>,
+        ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
             Ok(Vec::new())
         }
 
-        async fn get_by_id(
-            &self,
-            _id: &str,
-        ) -> AppResult<Option<scryer_domain::IndexerProxyConfig>> {
+        async fn get_by_id(&self, _id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
             Ok(None)
         }
 
         async fn create(
             &self,
-            config: scryer_domain::IndexerProxyConfig,
-        ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+            config: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
             Ok(config)
         }
 
         async fn update(
             &self,
-            config: scryer_domain::IndexerProxyConfig,
-        ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+            config: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
             Ok(config)
         }
 
@@ -3719,10 +4044,24 @@ mod tests {
         async fn record_health(
             &self,
             _id: &str,
-            _status: scryer_domain::IndexerProxyHealthStatus,
+            _status: scryer_domain::ProxyHealthStatus,
             _error_message: Option<String>,
             _error_at: Option<chrono::DateTime<chrono::Utc>>,
         ) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn pin_host_key(
+            &self,
+            _id: &str,
+            _fingerprint: &str,
+            _pinned_at: chrono::DateTime<chrono::Utc>,
+            _expected_updated_at: chrono::DateTime<chrono::Utc>,
+        ) -> AppResult<bool> {
+            Ok(true)
+        }
+
+        async fn clear_host_key(&self, _id: &str) -> AppResult<()> {
             Ok(())
         }
     }
@@ -4267,6 +4606,252 @@ mod tests {
             client_priority: priority,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            proxy_config_id: None,
+        }
+    }
+
+    mod client_read_metrics_tests {
+        use super::super::{
+            DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS, DOWNLOAD_CLIENT_REFRESH_TOTAL,
+            DOWNLOAD_CLIENT_UP, DownloadFeedbackReadKind, describe_download_client_router_metrics,
+            download_client_metric_labels, record_client_read_metrics, record_client_up,
+        };
+        use super::test_config;
+        use metrics::with_local_recorder;
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
+        use std::collections::BTreeMap;
+        use std::time::Duration;
+
+        type RecordedSeries = Vec<(String, BTreeMap<String, String>, DebugValue)>;
+
+        /// One reading per test: `Snapshotter::snapshot` drains the debugging
+        /// registry, so a second call reports every series as zero.
+        fn recorded(snapshotter: &Snapshotter) -> RecordedSeries {
+            snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .map(|(key, _unit, _description, value)| {
+                    let labels = key
+                        .key()
+                        .labels()
+                        .map(|label| (label.key().to_string(), label.value().to_string()))
+                        .collect::<BTreeMap<_, _>>();
+                    (key.key().name().to_string(), labels, value)
+                })
+                .collect()
+        }
+
+        fn find<'a>(
+            recorded: &'a RecordedSeries,
+            name: &str,
+            labels: &[(&str, &str)],
+        ) -> Option<&'a DebugValue> {
+            let expected = labels
+                .iter()
+                .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+                .collect::<BTreeMap<_, _>>();
+            recorded
+                .iter()
+                .find(|(series_name, series_labels, _)| {
+                    series_name == name && *series_labels == expected
+                })
+                .map(|(_, _, value)| value)
+        }
+
+        #[test]
+        fn per_client_reads_are_labelled_by_client_kind_and_result() {
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            // A mixed-case configured type proves the label is lowercased, and
+            // the two configs prove one slow client is separable from the fleet.
+            let healthy = test_config("client-1", "Attic SAB", "SABnzbd", 0);
+            let broken = test_config("client-2", "Basement NZBGet", "NzbGet", 1);
+            with_local_recorder(&recorder, || {
+                record_client_read_metrics(
+                    &healthy,
+                    DownloadFeedbackReadKind::Queue,
+                    Duration::from_millis(250),
+                    true,
+                );
+                record_client_read_metrics(
+                    &healthy,
+                    DownloadFeedbackReadKind::RecentActivity,
+                    Duration::from_millis(500),
+                    true,
+                );
+                record_client_read_metrics(
+                    &broken,
+                    DownloadFeedbackReadKind::Queue,
+                    Duration::from_secs(30),
+                    false,
+                );
+                record_client_up(download_client_metric_labels(&healthy), true);
+                record_client_up(download_client_metric_labels(&broken), false);
+            });
+
+            let recorded = recorded(&snapshotter);
+
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "Attic SAB"),
+                        ("client_type", "sabnzbd"),
+                        ("kind", "queue"),
+                        ("result", "success"),
+                    ],
+                ),
+                Some(DebugValue::Counter(1))
+            ));
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "Attic SAB"),
+                        ("client_type", "sabnzbd"),
+                        ("kind", "recent_activity"),
+                        ("result", "success"),
+                    ],
+                ),
+                Some(DebugValue::Counter(1))
+            ));
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "Basement NZBGet"),
+                        ("client_type", "nzbget"),
+                        ("kind", "queue"),
+                        ("result", "error"),
+                    ],
+                ),
+                Some(DebugValue::Counter(1))
+            ));
+            assert!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "Basement NZBGet"),
+                        ("client_type", "nzbget"),
+                        ("kind", "queue"),
+                        ("result", "success"),
+                    ],
+                )
+                .is_none(),
+                "a failed read must not also count as a success"
+            );
+
+            // A failed read is still timed: that is what a timeout looks like.
+            let slow = find(
+                &recorded,
+                DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+                &[
+                    ("client", "Basement NZBGet"),
+                    ("client_type", "nzbget"),
+                    ("kind", "queue"),
+                ],
+            );
+            assert!(
+                matches!(slow, Some(DebugValue::Histogram(samples)) if samples.len() == 1 && *samples[0] == 30.0),
+                "expected a 30s sample, got {slow:?}"
+            );
+            let quick = find(
+                &recorded,
+                DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+                &[
+                    ("client", "Attic SAB"),
+                    ("client_type", "sabnzbd"),
+                    ("kind", "queue"),
+                ],
+            );
+            assert!(
+                matches!(quick, Some(DebugValue::Histogram(samples)) if samples.len() == 1 && *samples[0] == 0.25),
+                "expected a 250ms sample, got {quick:?}"
+            );
+
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_UP,
+                    &[("client", "Attic SAB"), ("client_type", "sabnzbd")],
+                ),
+                Some(DebugValue::Gauge(value)) if **value == 1.0
+            ));
+            assert!(matches!(
+                find(
+                    &recorded,
+                    DOWNLOAD_CLIENT_UP,
+                    &[("client", "Basement NZBGet"), ("client_type", "nzbget")],
+                ),
+                Some(DebugValue::Gauge(value)) if **value == 0.0
+            ));
+        }
+
+        #[test]
+        fn a_nameless_client_falls_back_to_its_lowercased_type() {
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            let unnamed = test_config("client-3", "   ", "Weaver", 0);
+            with_local_recorder(&recorder, || {
+                record_client_read_metrics(
+                    &unnamed,
+                    DownloadFeedbackReadKind::Queue,
+                    Duration::from_millis(10),
+                    true,
+                );
+            });
+
+            assert!(matches!(
+                find(
+                    &recorded(&snapshotter),
+                    DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                    &[
+                        ("client", "weaver"),
+                        ("client_type", "weaver"),
+                        ("kind", "queue"),
+                        ("result", "success"),
+                    ],
+                ),
+                Some(DebugValue::Counter(1))
+            ));
+        }
+
+        #[test]
+        fn describe_download_client_router_metrics_registers_every_family() {
+            let recorder = DebuggingRecorder::new();
+            let snapshotter = recorder.snapshotter();
+            let config = test_config("client-1", "Attic SAB", "SABnzbd", 0);
+            with_local_recorder(&recorder, || {
+                describe_download_client_router_metrics();
+                // Descriptions alone are not "seen" metrics, so touch each family.
+                record_client_read_metrics(
+                    &config,
+                    DownloadFeedbackReadKind::Queue,
+                    Duration::from_millis(1),
+                    true,
+                );
+                record_client_up(download_client_metric_labels(&config), true);
+            });
+
+            let described = snapshotter
+                .snapshot()
+                .into_vec()
+                .into_iter()
+                .filter(|(_, _, description, _)| description.is_some())
+                .map(|(key, _, _, _)| key.key().name().to_string())
+                .collect::<std::collections::BTreeSet<_>>();
+            for family in [
+                DOWNLOAD_CLIENT_REFRESH_TOTAL,
+                DOWNLOAD_CLIENT_REFRESH_DURATION_SECONDS,
+                DOWNLOAD_CLIENT_UP,
+            ] {
+                assert!(described.contains(family), "missing HELP for {family}");
+            }
         }
     }
 
@@ -4377,7 +4962,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -4401,6 +4986,110 @@ mod tests {
         assert_eq!(submissions.len(), 1);
         assert_eq!(submissions[0].category.as_deref(), Some("Movies"));
         assert_eq!(submissions[0].queue_priority.as_deref(), Some("high"));
+    }
+
+    #[tokio::test]
+    async fn a_pinned_client_wins_over_routing_order_and_keeps_its_routing_category() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let secondary = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string(), "nzb_file".to_string()],
+                clients: vec![
+                    ("primary".to_string(), primary.clone()),
+                    ("secondary".to_string(), secondary.clone()),
+                ],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("primary", "Primary", "qbittorrent", 0),
+                    test_config("secondary", "Secondary", "qbittorrent", 10),
+                ],
+            }),
+            Arc::new(MockSettingsRepository {
+                routing_by_scope: HashMap::from([(
+                    "movie".to_string(),
+                    r#"{
+                        "primary": { "enabled": true },
+                        "secondary": { "enabled": true, "category": "Unlinked" }
+                    }"#
+                    .to_string(),
+                )]),
+            }),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        let mut request = DownloadClientAddRequest::from_legacy(
+            &test_title(),
+            Some("https://indexer.example/release.nzb".to_string()),
+            Some(DownloadSourceKind::NzbUrl),
+            Some("Pinned Release".to_string()),
+            None,
+            None,
+        );
+        request.resolved_download_artifact = Some(resolved_nzb_fixture());
+        request.pinned_download_client_id = Some("secondary".to_string());
+        router
+            .submit_download(&request)
+            .await
+            .expect("pinned client should accept the release");
+
+        assert!(
+            primary.submissions.lock().unwrap().is_empty(),
+            "the higher-priority client must not be routed to"
+        );
+        let submissions = secondary.submissions.lock().unwrap();
+        assert_eq!(submissions.len(), 1);
+        assert_eq!(submissions[0].category.as_deref(), Some("Unlinked"));
+    }
+
+    #[tokio::test]
+    async fn a_pinned_client_that_is_missing_or_disabled_is_refused() {
+        let primary = Arc::new(MockDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![("primary".to_string(), primary.clone())],
+            });
+        let mut retired = test_config("retired", "Retired", "qbittorrent", 5);
+        retired.is_enabled = false;
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![test_config("primary", "Primary", "qbittorrent", 0), retired],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        for pinned in ["retired", "does-not-exist"] {
+            let mut request = DownloadClientAddRequest::from_legacy(
+                &test_title(),
+                Some("https://indexer.example/release.nzb".to_string()),
+                Some(DownloadSourceKind::NzbUrl),
+                Some("Pinned Release".to_string()),
+                None,
+                None,
+            );
+            request.resolved_download_artifact = Some(resolved_nzb_fixture());
+            request.pinned_download_client_id = Some(pinned.to_string());
+            let error = router
+                .submit_download(&request)
+                .await
+                .expect_err("an unusable pinned client must not fall back");
+            assert!(
+                matches!(error, AppError::Validation(_)),
+                "{pinned}: {error:?}"
+            );
+        }
+        assert!(
+            primary.submissions.lock().unwrap().is_empty(),
+            "a refused pin must never fall back to another client"
+        );
     }
 
     #[tokio::test]
@@ -4434,7 +5123,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![test_indexer_config("https://indexer.example/api")],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
         let mut request = DownloadClientAddRequest::from_legacy(
             &test_title(),
@@ -4516,7 +5205,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: Vec::new(),
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
         let mut request = DownloadClientAddRequest::from_legacy(
             &test_title(),
@@ -4573,7 +5262,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -4635,7 +5324,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
         let mut request = DownloadClientAddRequest::from_legacy(
             &test_title(),
@@ -4682,7 +5371,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -4749,7 +5438,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -4815,7 +5504,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -4882,7 +5571,7 @@ mod tests {
             Arc::new(RoutingIndexerConfigRepository {
                 configs: vec![indexer],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         );
 
         let mut request = DownloadClientAddRequest::from_legacy(
@@ -4972,6 +5661,26 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn persisted_proxy_assignments_never_silently_fall_back_to_direct_traffic() {
+        let router = no_client_router();
+        let mut config = test_config("client", "Client", "sabnzbd", 0);
+        assert!(
+            router
+                .proxy_for_download_client(&config)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        for id in ["", " ", "missing-proxy"] {
+            config.proxy_config_id = Some(id.into());
+            assert!(
+                router.proxy_for_download_client(&config).await.is_err(),
+                "assignment {id:?} must block direct traffic"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn no_configured_clients_return_empty_feedback_reads() {
         let router = no_client_router();
 
@@ -5057,6 +5766,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("no configured clients should make submit unavailable");
@@ -5133,6 +5843,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("torrent request should route to torrent client");
@@ -5200,6 +5911,7 @@ mod tests {
             season_pack_seed_time_minutes: None,
             is_recent: None,
             season_pack: None,
+            pinned_download_client_id: None,
         }
     }
 
@@ -5311,6 +6023,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("ambiguous submit errors should stop router failover");
@@ -5378,6 +6091,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("rejected submit errors should stop router failover");
@@ -5447,6 +6161,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("exhausted failover clients should fail");
@@ -5516,6 +6231,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("magnet request should fail when only nzb clients are enabled");
@@ -5589,6 +6305,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("secondary client should be used when primary is disabled for facet");
@@ -5669,6 +6386,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("movie request should use secondary");
@@ -5700,6 +6418,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("anime request should use primary");
@@ -5765,6 +6484,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("secondary client should be used because primary is globally disabled");
@@ -5830,6 +6550,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: Some(true),
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("request should be routed");
@@ -5926,7 +6647,7 @@ mod tests {
                     ..test_indexer_config("https://indexer.invalid")
                 }],
             }),
-            Arc::new(EmptyIndexerProxyConfigRepository),
+            Arc::new(EmptyProxyConfigRepository),
         )
         .with_seed_goal_resolution(Arc::new(MockSeedingProfileRepository {
             profiles: vec![
@@ -5972,6 +6693,7 @@ mod tests {
             season_pack_seed_time_minutes: None,
             is_recent: None,
             season_pack: None,
+            pinned_download_client_id: None,
         }
     }
 
@@ -6172,6 +6894,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: Some(false),
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("request should be routed");
@@ -6232,6 +6955,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("facet-disabled clients should fail fast");
@@ -6317,6 +7041,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("library override should use the secondary client");
@@ -6396,6 +7121,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("omitted clients should be treated as disabled for this library");
@@ -6463,6 +7189,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: Some(true),
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect("library override should route the request");
@@ -6525,6 +7252,7 @@ mod tests {
                 season_pack_seed_time_minutes: None,
                 is_recent: None,
                 season_pack: None,
+                pinned_download_client_id: None,
             })
             .await
             .expect_err("library override should fail fast when every client is disabled");

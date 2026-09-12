@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use common::TestContext;
 use scryer_application::{
-    InsertMediaFileInput, LibraryRootDraft, LibraryScanUnmatchedItem,
+    InsertMediaFileInput, LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
     LibraryScanUnmatchedItemRepository, MediaFileRepository, MediaFileRole, PendingImportStatus,
     ShowRepository, TitleRepository,
 };
@@ -148,15 +148,33 @@ async fn set_default_library_root(ctx: &TestContext, facet: MediaFacet, root: &P
         .expect("update default library root");
 }
 
+/// Root ids are allocated, never derived from a path (FR-078), so a fixture that
+/// wants a title attached to the configured root has to read the stored id.
+async fn default_library_root_id(ctx: &TestContext, facet: &MediaFacet) -> String {
+    let library_id = scryer_domain::default_library_id_for_facet(facet);
+    let library = LibraryRepository::get_by_id(&ctx.libraries, &library_id)
+        .await
+        .expect("default library should load")
+        .expect("default library should exist");
+    library
+        .roots
+        .iter()
+        .find(|root| root.is_default)
+        .or_else(|| library.roots.first())
+        .map(|root| root.id.clone())
+        .expect("default library should have a root")
+}
+
 async fn seed_series_title(
     ctx: &TestContext,
     id: &str,
     name: &str,
     facet: MediaFacet,
-    media_root: &Path,
+    _media_root: &Path,
     folder_path: Option<&Path>,
     tvdb_id: Option<&str>,
 ) -> Title {
+    let root_folder_id = default_library_root_id(ctx, &facet).await;
     let title = Title {
         id: id.to_string(),
         name: name.to_string(),
@@ -173,9 +191,7 @@ async fn seed_series_title(
                 }]
             })
             .unwrap_or_default(),
-        root_folder_id: scryer_domain::root_folder_id_for_path(
-            media_root.to_string_lossy().as_ref(),
-        ),
+        root_folder_id,
         created_by: None,
         created_at: chrono::Utc::now(),
         year: Some(2024),
@@ -469,6 +485,7 @@ async fn loose_root_series_file_is_skipped_without_claiming_library_root() {
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
 
     let title = seed_series_title(
         &ctx,
@@ -487,7 +504,6 @@ async fn loose_root_series_file_is_skipped_without_claiming_library_root() {
     write_fake_media_file(&loose_file);
 
     let actor = admin();
-    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
     let summary = ctx
         .app
         .scan_library(&actor, MediaFacet::Series)
@@ -524,6 +540,7 @@ async fn full_rescan_preserves_existing_match_for_loose_series_file() {
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
 
     let title = seed_series_title(
         &ctx,
@@ -578,7 +595,6 @@ async fn full_rescan_preserves_existing_match_for_loose_series_file() {
         .expect("link file to episode");
 
     let actor = admin();
-    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
     let summary = ctx
         .app
         .scan_library(&actor, MediaFacet::Series)
@@ -623,6 +639,7 @@ async fn full_scan_uses_release_subfolder_when_series_file_name_is_obfuscated() 
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
 
     let title_dir = media_root.path().join("Harbor Pals");
     std::fs::create_dir_all(&title_dir).expect("create title directory");
@@ -645,7 +662,6 @@ async fn full_scan_uses_release_subfolder_when_series_file_name_is_obfuscated() 
     write_fake_media_file(&obfuscated_file);
 
     let actor = admin();
-    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
     ctx.app
         .scan_library(&actor, MediaFacet::Series)
         .await
@@ -690,6 +706,7 @@ async fn full_scan_does_not_infer_episode_from_parent_when_release_folder_has_mu
         media_root.path().to_string_lossy().as_ref(),
     )
     .await;
+    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
 
     let title_dir = media_root.path().join("Harbor Pals");
     std::fs::create_dir_all(&title_dir).expect("create title directory");
@@ -715,7 +732,6 @@ async fn full_scan_does_not_infer_episode_from_parent_when_release_folder_has_mu
     write_fake_media_file(&second_file);
 
     let actor = admin();
-    set_default_library_root(&ctx, MediaFacet::Series, media_root.path()).await;
     ctx.app
         .scan_library(&actor, MediaFacet::Series)
         .await

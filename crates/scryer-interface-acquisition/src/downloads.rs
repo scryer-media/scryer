@@ -290,6 +290,7 @@ impl DownloadMutations {
                         candidate_id: file.candidate_id.to_string(),
                         episode_id: file.episode_id.map(String::from),
                         series_movie_link_id: file.series_movie_link_id.map(String::from),
+                        disc_selection: file.disc_selection.map(Into::into),
                     })
                     .collect(),
             )
@@ -337,6 +338,8 @@ impl DownloadMutations {
                         video_width: facts.video_width,
                         video_height: facts.video_height,
                         duration_seconds: facts.duration_seconds,
+                        disc: facts.disc.map(Into::into),
+                        report: facts.report.into(),
                     }),
                     quality: file.quality,
                     parsed_season: file.parsed_season.map(|value| value as i32),

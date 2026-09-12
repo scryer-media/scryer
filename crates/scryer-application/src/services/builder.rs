@@ -141,6 +141,21 @@ impl AppServicesBuilder {
         integrations.indexer_errors,
         Arc<dyn IndexerErrorRepository>
     );
+    // Optional: an unconfigured location store answers "nothing is owned", so
+    // the ownership guard stays correct before the subsystem is wired up.
+    app_services_builder_setter!(
+        with_location_operation_repository,
+        library.location_operations,
+        Arc<dyn crate::ports::LocationOperationRepository>
+    );
+    // Optional in the same sense, but with the opposite default: an
+    // unconfigured merge store refuses every merge rather than answering with
+    // an empty snapshot the engine would happily plan against (US7, FR-066).
+    app_services_builder_setter!(
+        with_title_merge_repository,
+        library.title_merges,
+        Arc<dyn crate::location::merge::engine::TitleMergeRepository>
+    );
     app_services_builder_runtime_feature_setter!(
         with_plugin_http_trust_runtime,
         config.plugin_http_trust_runtime,
@@ -237,6 +252,57 @@ impl AppServicesBuilder {
         self
     }
 
+    /// Not a required service: maintenance rules ship dark, and an assembly
+    /// that never configures the store simply has no rules to read.
+    pub fn with_maintenance_rule_set_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: MaintenanceRuleSetRepository + Send + Sync + 'static,
+    {
+        self.services.customization.maintenance_rule_sets = store;
+        self
+    }
+
+    /// Not a required service either: without it the evaluator has nowhere to
+    /// record candidates, and the gate that would let it run is off anyway.
+    pub fn with_maintenance_evaluation_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::MaintenanceEvaluationRepository + Send + Sync + 'static,
+    {
+        self.services.customization.maintenance_evaluation = store;
+        self
+    }
+
+    /// Not a required service: request rules ship dark behind the experimental
+    /// gate, and an assembly that never configures the store simply has no
+    /// rules to read (spec 0003 FR-013).
+    pub fn with_request_rule_set_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::RequestRuleSetRepository + Send + Sync + 'static,
+    {
+        self.services.customization.request_rule_sets = store;
+        self
+    }
+
+    /// Not required either: without it there is nowhere to record a trace, and
+    /// the gate that would produce one is off anyway.
+    pub fn with_request_rule_decision_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::RequestRuleDecisionRepository + Send + Sync + 'static,
+    {
+        self.services.customization.request_rule_decisions = store;
+        self
+    }
+
+    /// Not required either: no claim store means no lease can be granted, which
+    /// is what an instance without request rules looks like.
+    pub fn with_lifecycle_claim_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::LifecycleClaimRepository + Send + Sync + 'static,
+    {
+        self.services.catalog.lifecycle_claims = store;
+        self
+    }
+
     pub fn with_post_processing_script_store<T>(mut self, store: Arc<T>) -> Self
     where
         T: PostProcessingScriptRepository + Send + Sync + 'static,
@@ -296,14 +362,19 @@ impl AppServicesBuilder {
     }
 
     app_services_builder_setter!(
+        with_download_client,
+        integrations.download_client,
+        Arc<dyn DownloadClient>
+    );
+    app_services_builder_setter!(
         with_builtin_download_client_connection_tester,
         integrations.builtin_download_client_connection_tester,
         Arc<dyn BuiltinDownloadClientConnectionTester>
     );
     app_services_builder_setter!(
-        with_indexer_proxy_config_store,
-        integrations.indexer_proxy_configs,
-        Arc<dyn IndexerProxyConfigRepository>
+        with_proxy_config_store,
+        integrations.proxy_configs,
+        Arc<dyn ProxyConfigRepository>
     );
     app_services_builder_setter!(
         with_scope_indexer_coverage_store,
@@ -580,6 +651,33 @@ impl AppServicesBuilder {
         integrations.archive_extractor_plugin_provider,
         Arc<dyn ArchiveExtractorPluginProvider>
     );
+    app_services_builder_runtime_feature_setter!(
+        with_srrdb_filename_lookup,
+        integrations.srrdb_filename_lookup,
+        Arc<dyn crate::ports::SrrdbFilenameLookup>
+    );
+    // ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────
+    app_services_builder_setter!(
+        with_media_server_playback_probe,
+        integrations.media_server_playback_probe,
+        Arc<dyn crate::ports::MediaServerPlaybackProbe>
+    );
+    // ── Media-server watch signals (RFC 137 §7.3, WP-M) ─────────────────────
+    app_services_builder_setter!(
+        with_media_server_signal_source,
+        integrations.media_server_signal_source,
+        Arc<dyn crate::ports::MediaServerSignalSource>
+    );
+    /// Not a required service: an assembly without a signal store collects no
+    /// watch signals, and the sync job records that as a per-connection error
+    /// rather than a sweep that found nothing.
+    pub fn with_media_server_signal_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::ports::MediaServerSignalRepository + Send + Sync + 'static,
+    {
+        self.services.integrations.media_server_signals = store;
+        self
+    }
     pub fn with_notification_provider(
         mut self,
         value: Arc<dyn NotificationPluginProvider>,

@@ -488,19 +488,36 @@ impl AppUseCase {
     /// Profile resolution is a four-level fallback (title tag, category
     /// override, global setting, built-in default) plus a name-equality retry;
     /// the two cutoff sweeps both need it and must not answer differently.
-    pub(crate) async fn monitored_titles_with_profiles(
+    pub(crate) async fn titles_with_profiles_for_search(
         &self,
         facet: Option<MediaFacet>,
         library_ids: &[String],
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
     ) -> AppResult<Vec<(scryer_domain::Title, QualityProfile)>> {
-        let titles = self
-            .services
-            .catalog
-            .titles
-            .list_for_libraries(facet, library_ids, None)
-            .await?;
-        let monitored: Vec<scryer_domain::Title> =
-            titles.into_iter().filter(|title| title.monitored).collect();
+        let titles = if let Some(title_id) = title_id {
+            self.services
+                .catalog
+                .titles
+                .get_by_id(title_id)
+                .await?
+                .filter(|title| {
+                    library_ids.contains(&title.library_id)
+                        && facet.as_ref().is_none_or(|facet| facet == &title.facet)
+                })
+                .into_iter()
+                .collect()
+        } else {
+            self.services
+                .catalog
+                .titles
+                .list_for_libraries(facet, library_ids, None)
+                .await?
+        };
+        let monitored: Vec<scryer_domain::Title> = titles
+            .into_iter()
+            .filter(|title| title.monitored || (!respect_title_monitoring && title_id.is_some()))
+            .collect();
         if monitored.is_empty() {
             return Ok(Vec::new());
         }
@@ -557,6 +574,27 @@ impl AppUseCase {
         facet: Option<MediaFacet>,
         library_filter: Option<Vec<String>>,
     ) -> AppResult<Vec<CutoffUnmetItem>> {
+        self.compute_cutoff_unmet_items_for_title(facet, library_filter, None)
+            .await
+    }
+
+    pub(crate) async fn compute_cutoff_unmet_items_for_title(
+        &self,
+        facet: Option<MediaFacet>,
+        library_filter: Option<Vec<String>>,
+        title_id: Option<&str>,
+    ) -> AppResult<Vec<CutoffUnmetItem>> {
+        self.compute_cutoff_unmet_items_for_search(facet, library_filter, title_id, true)
+            .await
+    }
+
+    pub(crate) async fn compute_cutoff_unmet_items_for_search(
+        &self,
+        facet: Option<MediaFacet>,
+        library_filter: Option<Vec<String>>,
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
+    ) -> AppResult<Vec<CutoffUnmetItem>> {
         let mut libraries = self.services.catalog.libraries.list(facet.clone()).await?;
         if let Some(filter) = library_filter {
             let allowed: HashSet<String> = filter.into_iter().collect();
@@ -575,7 +613,12 @@ impl AppUseCase {
             .map(|library| library.id.clone())
             .collect::<Vec<_>>();
         let monitored_titles = self
-            .monitored_titles_with_profiles(facet, &library_ids)
+            .titles_with_profiles_for_search(
+                facet,
+                &library_ids,
+                title_id,
+                respect_title_monitoring,
+            )
             .await?;
         if monitored_titles.is_empty() {
             return Ok(Vec::new());
@@ -853,6 +896,20 @@ impl AppUseCase {
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<AddTitleOutcome> {
+        // Creation is the third door into `titles.tags`, alongside the tag patch
+        // and the whole-bag `updateTitle(tags:)` write, and it is gated exactly
+        // like them: a title may not be born carrying a label the registry does
+        // not define. Reserved `scryer:` entries pass through — that is how the
+        // add flow stores per-title options.
+        //
+        // The gate sits here rather than at the shared `new_title_for_library`
+        // chokepoint on purpose. This is the operator-facing creation path
+        // (`addTitle` and `addTitleAndQueueDownload`); library scans, pending
+        // imports, and media-request approvals reach titles by other routes and
+        // only ever emit reserved entries, so gating them would add a registry
+        // read to every scan for no reachable case.
+        self.require_registered_title_tags(&crate::helpers::normalize_tags(&request.tags))
+            .await?;
         let created = self
             .create_title_without_hydration_with_options_patch_in_library(
                 actor,
@@ -1581,6 +1638,21 @@ impl AppUseCase {
             }
         }
 
+        self.purge_title_dependent_records(title_id, actor).await
+    }
+
+    /// The half of [`Self::purge_title_logical_dependents`] that needs nothing
+    /// but the title's id: the rows no foreign key reaches, and the downloads
+    /// that would otherwise keep running for a title that is gone.
+    ///
+    /// Split out so a merged source title — whose `titles` row the merge
+    /// transaction already removed, and whose files were repointed rather than
+    /// deleted — retires through exactly the same cleanup.
+    pub(crate) async fn purge_title_dependent_records(
+        &self,
+        title_id: &str,
+        actor: DomainEventActor,
+    ) -> AppResult<()> {
         let download_submissions = match self
             .services
             .workflow
@@ -1677,7 +1749,7 @@ impl AppUseCase {
         self.services
             .library
             .library_probe_signatures
-            .delete_probe_signatures_for_title_ids(std::slice::from_ref(&title.id))
+            .delete_probe_signatures_for_title_ids(&[title_id.to_string()])
             .await?;
 
         Ok(())

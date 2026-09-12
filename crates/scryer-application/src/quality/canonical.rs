@@ -9,12 +9,11 @@
 //!
 //! ```text
 //! release_score  = announced pass          → grab decisions (no file, and upgrades)
-//! total          = analyzed pass, vetoes excluded
+//! total          = analyzed pass, all numeric contributions
 //!                                          → the import score; PERSISTED; the upgrade bar
 //! ```
 //!
-//! With no analysis there is only one pass, and `total` is that pass with its
-//! vetoes excluded. `truth_variance` is the difference between the two passes,
+//! With no analysis there is only one pass, and `total` is its full numeric sum. `truth_variance` is the difference between the two passes,
 //! reported rather than folded in: it says *how far* the file drifted from its
 //! announcement, while `truth_verdict` says whether that drift was a lie. Because
 //! both passes go through one function with one term set, formula drift between
@@ -30,8 +29,8 @@
 //!   priority and pack-coverage preferences describe a *listing*, not a
 //!   release. They cannot be reconstructed from a media row, so admitting them
 //!   here would make a stored score unreproducible. They belong to search rank.
-//! - **Hard blocks as numbers.** A `BLOCK_SCORE` discovered by the analyzed pass
-//!   is a verdict, not a bounded numeric adjustment. See [`TruthVerdict`].
+//! - **Mandatory failures as numbers.** Explicit requirements carry zero-point
+//!   rejection entries. Numeric penalties remain recoverable. See [`TruthVerdict`].
 //!
 //! ## Where this sits in the loop
 //!
@@ -49,21 +48,13 @@
 //! display-only and cannot become the source of truth for later comparisons.
 
 use crate::quality_profile::{
-    BLOCK_SCORE, QualityProfileDecision, ScoringEntry, ScoringSource, apply_min_score_gate,
-    apply_size_scoring_for_category_with_remux_preference, evaluate_against_profile_for_category,
-    normalize_quality_tier,
+    QualityProfileDecision, ScoringEntry, ScoringSource, apply_min_score_gate,
+    evaluate_profile_requirements, normalize_quality_tier,
 };
-use crate::scoring_weights::ScoringWeights;
 use crate::{MediaFileAnalysis, ParsedReleaseMetadata, QualityProfile};
 
-/// Cap on how far analyzed evidence may move a score before the difference stops
-/// being a *variance* and becomes a *contradiction*.
-///
-/// One size-bucket step on the Balanced curve. A release that probes one bucket
-/// away from its announcement is the ordinary case — packaging overhead, a
-/// slightly short episode. A release that moves further than this was not the
-/// release it claimed to be, and that is a truth verdict for admission to act
-/// on, not a number to fold into the bar.
+/// Clamp on the informational difference between announced and analyzed scores.
+/// Customizable arithmetic cannot establish factual contradictions.
 pub(crate) const TRUTH_VARIANCE_BOUND: i32 = 700;
 
 /// The single `search_mode` value handed to score-bearing rules.
@@ -119,7 +110,6 @@ impl ReleaseEvidence {
 /// Note the absence of any incumbent field. That absence is the point.
 pub(crate) struct ScoringContext<'a> {
     pub profile: &'a QualityProfile,
-    pub weights: &'a ScoringWeights,
     pub required_audio_languages: &'a [String],
     pub category: &'a str,
     /// What size scoring compares the reported bytes against: the coverage's
@@ -136,11 +126,58 @@ pub(crate) struct ScoringContext<'a> {
     pub is_filler: bool,
 }
 
+impl<'a> ScoringContext<'a> {
+    /// Remove the rule-engine reference after an evaluator snapshot has been
+    /// created for a synchronous batch. This makes a batched score use exactly
+    /// one engine: the evaluator it was handed cannot be combined with another
+    /// context's engine by accident.
+    pub(crate) fn without_rules(mut self) -> Self {
+        self.rules = None;
+        self
+    }
+}
+
+/// Mutable rule runtime for one synchronous canonical-scoring batch.
+///
+/// The evaluator owns a clone of the resolved engine snapshot. It is not
+/// shared between tasks: Regorus mutates its input on every evaluation.
+pub(crate) struct RuleEvaluationBatch {
+    evaluator: Option<scryer_rules::UserRulesEvaluator>,
+    collect_diagnostics: bool,
+    pub(crate) errors: Vec<scryer_rules::RuleEvalError>,
+    pub(crate) engine_error: Option<String>,
+}
+
+impl RuleEvaluationBatch {
+    /// Capture the rule snapshot that is already present in this scoring
+    /// context. Empty contexts retain no evaluator and skip rule evaluation.
+    pub(crate) fn from_context(ctx: &ScoringContext<'_>) -> Self {
+        Self {
+            evaluator: ctx
+                .rules
+                .filter(|engine| !engine.is_empty())
+                .map(scryer_rules::UserRulesEngine::evaluator),
+            errors: Vec::new(),
+            engine_error: None,
+            collect_diagnostics: false,
+        }
+    }
+}
+
+pub(crate) struct ScoredReleasePreview {
+    pub scored: ScoredRelease,
+    pub rule_errors: Vec<scryer_rules::RuleEvalError>,
+    pub engine_error: Option<String>,
+}
+
 /// Whether the file backed up what the release claimed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TruthVerdict {
     /// No analysis yet, or the file matched its announcement within bounds.
     Consistent,
+    /// Playback facts cannot be assigned to the requested scope. Preserve the
+    /// source for review; this is not evidence against the release.
+    ReviewRequired { codes: Vec<String> },
     /// The file differs from its announcement by more than [`TRUTH_VARIANCE_BOUND`],
     /// or a scored fact changed materially. The release was mis-advertised.
     Contradicted { codes: Vec<String> },
@@ -189,9 +226,10 @@ impl TruthVerdict {
     pub(crate) fn codes(&self) -> &[String] {
         match self {
             Self::Consistent => &[],
-            Self::Contradicted { codes } | Self::Blocked { codes } | Self::Vetoed { codes } => {
-                codes
-            }
+            Self::Contradicted { codes }
+            | Self::Blocked { codes }
+            | Self::Vetoed { codes }
+            | Self::ReviewRequired { codes } => codes,
         }
     }
 }
@@ -231,7 +269,7 @@ pub(crate) struct ScoredRelease {
     /// same pipeline over the stored release name, so the number an incumbent
     /// gets is the number that release got when it was a candidate.
     pub revision: i32,
-    /// The analyzed pass's score with hard blocks excluded (the announced pass's
+    /// The analyzed pass's complete numeric score (the announced pass's
     /// when there was no analysis). This is the upgrade bar. It is written to
     /// `media_files.acquisition_score` for display and history, but a comparison
     /// always re-derives it rather than reading it back. A veto never appears
@@ -245,9 +283,210 @@ pub(crate) struct ScoredRelease {
 /// present — over those, and reports the difference as a bounded variance plus a
 /// verdict. Pure and synchronous by construction.
 pub(crate) fn score_release(evidence: &ReleaseEvidence, ctx: &ScoringContext<'_>) -> ScoredRelease {
-    let announced_decision =
-        run_term_pipeline(&evidence.parsed, evidence.announced_size_bytes, None, ctx);
+    let mut rules = RuleEvaluationBatch::from_context(ctx);
+    score_release_with_rules(evidence, ctx, &mut rules)
+}
+
+pub(crate) fn score_release_preview(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+) -> ScoredReleasePreview {
+    let mut rules = RuleEvaluationBatch::from_context(ctx);
+    rules.collect_diagnostics = true;
+    let scored = score_release_with_rules(evidence, ctx, &mut rules);
+    ScoredReleasePreview {
+        scored,
+        rule_errors: rules.errors,
+        engine_error: rules.engine_error,
+    }
+}
+
+/// Score a candidate in a batch that already owns the sole rule evaluator.
+///
+/// Callers must pass a context produced with [`ScoringContext::without_rules`]
+/// after constructing the batch. Keeping the context engine-free prevents a
+/// batch evaluator from ever being silently paired with a second snapshot.
+pub(crate) fn score_release_in_batch(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+) -> ScoredRelease {
+    assert!(
+        ctx.rules.is_none(),
+        "batched canonical scoring requires a context without a rules engine"
+    );
+    score_release_with_rules(evidence, ctx, rules)
+}
+
+fn score_release_with_rules(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+) -> ScoredRelease {
+    score_disc_scope_with_rules(evidence, ctx, rules, None)
+}
+
+fn score_disc_scope_with_rules(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+    episode_ids: Option<&[String]>,
+) -> ScoredRelease {
+    let _timer = crate::rules::metrics::StageTimer::new(
+        "scoring_release",
+        if rules.collect_diagnostics {
+            crate::rules::metrics::Purpose::Preview
+        } else {
+            crate::rules::metrics::Purpose::Live
+        },
+    );
+    let Some(analyzed) = &evidence.analyzed else {
+        return score_single_release_with_rules(evidence, ctx, rules);
+    };
+    let Some(disc) = &analyzed.analysis.details.disc else {
+        return score_single_release_with_rules(evidence, ctx, rules);
+    };
+    if disc.selection.title_id.as_ref().is_some_and(|id| {
+        !disc
+            .titles
+            .iter()
+            .any(|title| title.id == *id || title.aliases.contains(id))
+    }) {
+        return score_unresolved_disc(evidence, ctx, rules, "disc_title_override_invalid");
+    }
+    if episode_ids.is_some_and(|ids| {
+        ids.is_empty()
+            || ids.iter().any(|id| {
+                disc.selection
+                    .episode_mappings
+                    .iter()
+                    .filter(|mapping| mapping.episode_ids.contains(id))
+                    .count()
+                    != 1
+            })
+    }) {
+        return score_unresolved_disc(evidence, ctx, rules, "disc_episode_mapping_unresolved");
+    }
+    let mut scores = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for mapping in &disc.selection.episode_mappings {
+        if episode_ids.is_some_and(|ids| !mapping.episode_ids.iter().any(|id| ids.contains(id))) {
+            continue;
+        }
+        let Some(title) = disc.titles.iter().find(|title| {
+            title.id == mapping.disc_title_id || title.aliases.contains(&mapping.disc_title_id)
+        }) else {
+            return score_unresolved_disc(evidence, ctx, rules, "disc_episode_mapping_unresolved");
+        };
+        if mapping.episode_ids.len() != 1 || !seen.insert(&title.id) {
+            return score_unresolved_disc(evidence, ctx, rules, "disc_episode_mapping_ambiguous");
+        }
+        if title.report.status != scryer_media_types::ProbeStatus::Complete
+            || title
+                .duration_seconds
+                .is_none_or(|seconds| !seconds.is_finite() || seconds <= 0.0)
+        {
+            return score_unresolved_disc(evidence, ctx, rules, "disc_mapped_title_inconclusive");
+        }
+        let analysis = crate::media::disc_analysis::for_title(&analyzed.analysis, title);
+        let rule_file_doc = Some(crate::user_rule_input::file_doc_from_analysis(&analysis));
+        let scoped = ReleaseEvidence {
+            parsed: evidence.parsed.clone(),
+            announced_size_bytes: evidence.announced_size_bytes,
+            analyzed: Some(AnalyzedFacts {
+                analysis,
+                actual_size_bytes: analyzed.actual_size_bytes,
+                rule_file_doc,
+            }),
+        };
+        scores.push(score_single_release_with_rules(&scoped, ctx, rules));
+    }
+    if scores.is_empty() {
+        return score_single_release_with_rules(evidence, ctx, rules);
+    }
+    // Every mapped playback sequence must clear the gate. A superior soundtrack
+    // or cut elsewhere on the image cannot raise another episode's bar.
+    let severity = scores
+        .iter()
+        .map(|score| match score.truth_verdict {
+            TruthVerdict::ReviewRequired { .. } => 4,
+            TruthVerdict::Blocked { .. } => 3,
+            TruthVerdict::Vetoed { .. } => 2,
+            TruthVerdict::Contradicted { .. } => 1,
+            TruthVerdict::Consistent => 0,
+        })
+        .max()
+        .unwrap_or(0);
+    let mut codes = scores
+        .iter()
+        .flat_map(|score| score.truth_verdict.codes().iter().cloned())
+        .collect::<Vec<_>>();
+    codes.sort();
+    codes.dedup();
+    let mut weakest = scores
+        .into_iter()
+        .max_by_key(|score| {
+            (
+                crate::quality_profile::quality_tier_index(
+                    &ctx.profile.criteria,
+                    score.parsed_quality.as_deref(),
+                )
+                .unwrap_or(usize::MAX),
+                std::cmp::Reverse(score.total),
+            )
+        })
+        .expect("nonempty mapped titles");
+    weakest.truth_verdict = match severity {
+        4 => TruthVerdict::ReviewRequired { codes },
+        3 => TruthVerdict::Blocked { codes },
+        2 => TruthVerdict::Vetoed { codes },
+        1 => TruthVerdict::Contradicted { codes },
+        _ => TruthVerdict::Consistent,
+    };
+    weakest
+}
+
+fn score_unresolved_disc(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+    code: &str,
+) -> ScoredRelease {
+    // Retain the announcement, but never substitute another playback title's
+    // measurements for missing or invalid episode evidence.
+    let announced = ReleaseEvidence {
+        parsed: evidence.parsed.clone(),
+        announced_size_bytes: evidence.announced_size_bytes,
+        analyzed: None,
+    };
+    let mut score = score_single_release_with_rules(&announced, ctx, rules);
+    score.truth_verdict = TruthVerdict::ReviewRequired {
+        codes: vec![code.into()],
+    };
+    score
+}
+
+fn score_single_release_with_rules(
+    evidence: &ReleaseEvidence,
+    ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
+) -> ScoredRelease {
+    let is_disc = evidence
+        .analyzed
+        .as_ref()
+        .is_some_and(|facts| facts.analysis.details.disc.is_some());
+    let announced_decision = run_term_pipeline(
+        &evidence.parsed,
+        evidence.announced_size_bytes,
+        None,
+        ctx,
+        rules,
+    );
     let release_score = announced_decision.preference_score;
+    // Preserve the acquisition score while comparing only facts measurable for
+    // this playback title. Filesystem overhead and other cuts have no title size.
+    let comparable_announcement =
+        is_disc.then(|| run_term_pipeline(&evidence.parsed, None, None, ctx, rules));
 
     let mut analyzed_decision = None;
     let mut analyzed_quality = None;
@@ -263,12 +502,26 @@ pub(crate) fn score_release(evidence: &ReleaseEvidence, ctx: &ScoringContext<'_>
             .0;
             let analyzed_pass = run_term_pipeline(
                 &analyzed_parsed,
-                Some(analyzed.actual_size_bytes),
+                (!is_disc).then_some(analyzed.actual_size_bytes),
                 analyzed.rule_file_doc.clone(),
                 ctx,
+                rules,
             );
-            let mut classified =
-                classify_truth(&evidence.parsed, &announced_decision, &analyzed_pass);
+            let mut classified = classify_truth(
+                &evidence.parsed,
+                comparable_announcement
+                    .as_ref()
+                    .unwrap_or(&announced_decision),
+                &analyzed_pass,
+            );
+            if matches!(classified.1, TruthVerdict::Consistent)
+                && !ctx.size_basis.covers_multiple_members()
+                && size_claim_mismatch(evidence.announced_size_bytes, analyzed.actual_size_bytes)
+            {
+                classified.1 = TruthVerdict::Contradicted {
+                    codes: vec!["size_claim_mismatch".into()],
+                };
+            }
             analyzed_quality = analyzed_parsed.quality.clone();
 
             // A quality change is a contradiction on its own, whatever the
@@ -303,6 +556,9 @@ pub(crate) fn score_release(evidence: &ReleaseEvidence, ctx: &ScoringContext<'_>
                         codes.push(code);
                         TruthVerdict::Contradicted { codes }
                     }
+                    TruthVerdict::ReviewRequired { codes } => {
+                        TruthVerdict::ReviewRequired { codes }
+                    }
                     TruthVerdict::Consistent => TruthVerdict::Contradicted { codes: vec![code] },
                 };
             }
@@ -312,8 +568,8 @@ pub(crate) fn score_release(evidence: &ReleaseEvidence, ctx: &ScoringContext<'_>
     };
 
     // The bar is what the file *is*. Once the bytes have been measured, the
-    // analyzed pass is the honest number and `total` is exactly that — minus any
-    // veto (see [`preference_score_without_blocks`]).
+    // analyzed pass supplies every numeric contribution in `total`; explicit
+    // rejections contribute zero points (see [`numeric_score`]).
     //
     // It is deliberately not `release_score + truth_variance`: the variance is
     // clamped, so on a contradiction that sum drifts above the analyzed score —
@@ -322,8 +578,7 @@ pub(crate) fn score_release(evidence: &ReleaseEvidence, ctx: &ScoringContext<'_>
     // instead. The persisted bar would then be unreproducible, which is the
     // defect this whole change set exists to remove. `truth_variance` and
     // `truth_verdict` stay as the *report* of the contradiction.
-    let total =
-        preference_score_without_blocks(analyzed_decision.as_ref().unwrap_or(&announced_decision));
+    let total = numeric_score(analyzed_decision.as_ref().unwrap_or(&announced_decision));
     let parsed_quality = analyzed_quality.or_else(|| evidence.parsed.quality.clone());
 
     ScoredRelease {
@@ -338,27 +593,18 @@ pub(crate) fn score_release(evidence: &ReleaseEvidence, ctx: &ScoringContext<'_>
     }
 }
 
-/// The pass's score with every hard block taken back out.
-///
-/// `BLOCK_SCORE` is summed into `preference_score` like any other delta, so one
-/// veto drags a pass to roughly −10 000. Persisting that as the bar turns a
-/// verdict into a number, and the number then misbehaves in both directions: the
-/// vetoed file's re-derived bar sits so far below everything that every
-/// candidate reads as a large upgrade and is fetched, and when the block is
-/// structural (a minimum score no release for this title can reach, a language
-/// the files never carry) the *next* file scores −10 000 too, ties are admitted
-/// at import, and the scope churns on every RSS cycle.
-///
-/// So the veto travels as a veto: `allowed`, `block_codes` and
-/// [`TruthVerdict`] carry it, admission and the import gate act on it, and the
-/// number stays the honest sum of everything that was actually a preference.
-fn preference_score_without_blocks(decision: &QualityProfileDecision) -> i32 {
-    decision
-        .scoring_log
-        .iter()
-        .filter(|entry| entry.delta != BLOCK_SCORE)
-        .map(|entry| entry.delta)
-        .sum()
+/// Sum every numeric contribution, including strong penalties. Mandatory
+/// requirements and final score gates carry zero points.
+fn numeric_score(decision: &QualityProfileDecision) -> i32 {
+    crate::quality_profile::sum_score_deltas(
+        decision
+            .scoring_log
+            .iter()
+            .filter(|entry| {
+                entry.kind == crate::quality_profile::ScoringEntryKind::ScoreContribution
+            })
+            .map(|entry| entry.delta),
+    )
 }
 
 /// The one term sequence. Both evidence levels walk exactly this path; the only
@@ -368,28 +614,22 @@ fn run_term_pipeline(
     size_bytes: Option<i64>,
     file_doc: Option<scryer_rules::FileDoc>,
     ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
 ) -> QualityProfileDecision {
     let mut resolved_profile = ctx.profile.clone();
     resolved_profile.criteria.required_audio_languages = ctx.required_audio_languages.to_vec();
 
     // `has_existing_file` is hardcoded false: the profile's upgrade guard is an
     // admission concern and is applied there, against the real incumbent set.
-    let mut decision = evaluate_against_profile_for_category(
-        &resolved_profile,
-        parsed,
-        false,
-        ctx.weights,
-        Some(ctx.category),
-    );
-
-    apply_size_scoring_for_category_with_remux_preference(
+    let mut decision =
+        evaluate_profile_requirements(&resolved_profile, parsed, false, Some(ctx.category));
+    crate::quality_profile::apply_size_requirement(
         &mut decision,
+        &resolved_profile,
         parsed,
         size_bytes,
         Some(ctx.category),
         ctx.size_basis,
-        resolved_profile.criteria.prefer_remux,
-        ctx.weights,
     );
 
     // Deliberately absent: apply_age_scoring. Release age is listing metadata,
@@ -403,6 +643,7 @@ fn run_term_pipeline(
         file_doc,
         &mut decision,
         ctx,
+        rules,
     );
     apply_min_score_gate(&resolved_profile, &mut decision);
     decision
@@ -417,13 +658,19 @@ fn append_rule_scores(
     file_doc: Option<scryer_rules::FileDoc>,
     decision: &mut QualityProfileDecision,
     ctx: &ScoringContext<'_>,
+    rules: &mut RuleEvaluationBatch,
 ) {
-    let Some(engine) = ctx.rules else {
+    let Some(evaluator) = rules.evaluator.as_mut() else {
         return;
     };
-    if engine.is_empty() {
-        return;
-    }
+    let mut timer = crate::rules::metrics::StageTimer::new(
+        "rules_apply",
+        if rules.collect_diagnostics {
+            crate::rules::metrics::Purpose::Preview
+        } else {
+            crate::rules::metrics::Purpose::Live
+        },
+    );
 
     let input = crate::user_rule_input::build_rule_input(
         parsed,
@@ -454,14 +701,19 @@ fn append_rule_scores(
             // Rules see the scope's total runtime, which is what they always
             // saw; the member split is the size term's business alone.
             runtime_minutes: ctx.size_basis.total_runtime_minutes,
+            coverage_total_runtime_minutes: ctx.size_basis.total_runtime_minutes,
+            coverage_member_runtime_minutes: ctx.size_basis.member_runtime_minutes,
+            coverage_member_count: Some(ctx.size_basis.member_count),
             is_filler: ctx.is_filler,
         },
         file_doc,
     );
 
-    let mut evaluator = engine.evaluator();
     match evaluator.evaluate(&input, ctx.category) {
         Ok(result) => {
+            if !result.errors.is_empty() {
+                timer.outcome("error");
+            }
             for entry in result.entries {
                 let source = match entry.origin {
                     scryer_rules::PolicyOrigin::User => ScoringSource::UserRule {
@@ -476,6 +728,9 @@ fn append_rule_scores(
                 decision.log_with_source(&entry.code, entry.delta, source);
             }
             for err in result.errors {
+                if rules.collect_diagnostics {
+                    rules.errors.push(err.clone());
+                }
                 let (code, source) = match err.origin {
                     scryer_rules::PolicyOrigin::User => (
                         "user_rule_error",
@@ -496,6 +751,10 @@ fn append_rule_scores(
             }
         }
         Err(error) => {
+            timer.outcome("error");
+            if rules.collect_diagnostics {
+                rules.engine_error = Some(error.to_string());
+            }
             tracing::warn!(
                 error = %error,
                 title_id = ?ctx.title_id,
@@ -505,22 +764,10 @@ fn append_rule_scores(
     }
 }
 
-/// Block codes that describe the *announcement and the profile*, never the file.
-///
-/// They can only ever fire on both passes at once, so the set difference below
-/// would never surface them — except that the announced pass can be blocked by
-/// something else first, and `apply_min_score_gate` only fires when the pass is
-/// still `allowed`. Listing them explicitly keeps that ordering artefact from
-/// reading as evidence against the file.
-///
-/// - `score_below_minimum` is Sonarr's `MinFormatScore`, a **grab** floor. It is
-///   not an import specification there and must not become one here: a file that
-///   is on disk and correct cannot be improved by refusing it. A score-only
-///   contradiction is not a blocklist reason.
-/// - `upgrade_blocked_by_profile` is the profile's upgrade guard, which is an
-///   admission concern; canonical scoring hardcodes `has_existing_file = false`,
-///   so it should never appear at all — it is listed defensively.
-const POLICY_ONLY_BLOCK_CODES: &[&str] = &["score_below_minimum", "upgrade_blocked_by_profile"];
+/// The upgrade guard is an admission concern, never evidence against the file.
+/// Canonical scoring uses `has_existing_file = false`; exclude it defensively.
+/// Final score gates are classified separately by their explicit entry kind.
+const POLICY_ONLY_BLOCK_CODES: &[&str] = &["upgrade_blocked_by_profile"];
 
 /// Did the announcement *state* the fact this veto keys on?
 ///
@@ -550,44 +797,11 @@ fn veto_contradicts_an_assertion(code: &str, announced: &ParsedReleaseMetadata) 
     false
 }
 
-/// Turn the announced/analyzed difference into a bounded variance or a verdict.
-///
-/// A hard block is never flattened into a number — `allowed` is derived from
-/// explicit `BLOCK_SCORE` entries, and collapsing that into arithmetic would
-/// silently convert a veto into a survivable penalty. Both sides of the variance
-/// are therefore the passes' **non-block** sums, so no `BLOCK_SCORE` ever reaches
-/// the subtraction.
-///
-/// ## `Blocked` means the announcement *asserted* the field and the file
-/// contradicts it
-///
-/// The verdict answers "did this release lie", because that is the question the
-/// import gate acts on: `Blocked` costs the release a blocklist entry and
-/// reopens the search. Two filters stand between a `BLOCK_SCORE` entry and that
-/// answer, and both are load-bearing.
-///
-/// **First: only blocks the file evidence introduced.** Most `BLOCK_SCORE` terms
-/// are decided from the release *name* against the profile — a blocklisted
-/// source, a codec outside the allowlist, a missing required audio language — so
-/// they fire identically on both passes. Deciding from `!analyzed.allowed` alone
-/// (as this briefly did) burns the release, reopens the scope, grabs the next
-/// release, blocks it the same way and burns that one too: a loop that ends only
-/// when every release for the title is blocklisted, with a provably correct file
-/// on disk. If the announcement was already blocked, the release should never
-/// have been grabbed; that is a grab-side bug and destroying candidates does not
-/// fix it.
-///
-/// **Second: only fields the announcement actually stated.** "Introduced" alone
-/// reads *silence* as a lie, which is the same loop wearing a different hat. A
-/// release name that says nothing about codec, against a profile with a codec
-/// blocklist, produces `video_codec_in_profile_blocklist` on the analyzed pass
-/// only — and so does the next codec-silent release, and the one after that.
-/// The same goes for HDR and Dolby Vision (read out of `video_hdr_format`, which
-/// no name is obliged to carry) and for user/system file rules, which only see
-/// `input.file.*` on the analyzed pass by construction. None of those is the
-/// release misrepresenting itself; they are the profile refusing the file, which
-/// is [`TruthVerdict::Vetoed`] — a burn followed by another convergence search. See
-/// [`veto_contradicts_an_assertion`] for the per-code table.
+/// Distinguish newly discovered mandatory failures from numeric score changes.
+/// Only a requirement that contradicts an advertised field proves a lie;
+/// undisclosed requirements and an unrecovered final score are policy refusals.
+/// Rules and packs contribute numbers, never mandatory failures, even when
+/// their codes resemble built-in requirements.
 fn classify_truth(
     announced_parsed: &ParsedReleaseMetadata,
     announced: &QualityProfileDecision,
@@ -599,7 +813,7 @@ fn classify_truth(
     let introduced: Vec<&ScoringEntry> = analyzed
         .scoring_log
         .iter()
-        .filter(|entry| entry.delta == BLOCK_SCORE)
+        .filter(|entry| entry.kind == crate::quality_profile::ScoringEntryKind::MandatoryRejection)
         .filter(|entry| !announced.block_codes.contains(&entry.code))
         .filter(|entry| !POLICY_ONLY_BLOCK_CODES.contains(&entry.code.as_str()))
         .collect();
@@ -624,46 +838,40 @@ fn classify_truth(
         return (0, TruthVerdict::Vetoed { codes: undisclosed });
     }
 
-    // Both sides with their vetoes taken back out, so a block on either pass
-    // cannot masquerade as a −10 000 contradiction.
-    let raw = preference_score_without_blocks(analyzed)
-        .saturating_sub(preference_score_without_blocks(announced));
-
-    if raw.abs() > TRUTH_VARIANCE_BOUND {
+    // A finalized numeric refusal is policy, never proof of misrepresentation.
+    let score_rejections = analyzed
+        .scoring_log
+        .iter()
+        .filter(|entry| entry.kind == crate::quality_profile::ScoringEntryKind::FinalScoreRejection)
+        .map(|entry| entry.code.clone())
+        .collect::<Vec<_>>();
+    if !score_rejections.is_empty() && announced.allowed {
         return (
-            raw.clamp(-TRUTH_VARIANCE_BOUND, TRUTH_VARIANCE_BOUND),
-            TruthVerdict::Contradicted {
-                codes: contradiction_codes(announced, analyzed),
+            0,
+            TruthVerdict::Vetoed {
+                codes: score_rejections,
             },
         );
     }
 
-    (raw, TruthVerdict::Consistent)
+    // Rule/pack changes report variance but cannot on their own prove a lie.
+    let raw = numeric_score(analyzed).saturating_sub(numeric_score(announced));
+    (
+        raw.clamp(-TRUTH_VARIANCE_BOUND, TRUTH_VARIANCE_BOUND),
+        TruthVerdict::Consistent,
+    )
 }
 
-/// Name the terms that moved, so a contradiction says what was misadvertised
-/// rather than only that something was.
-fn contradiction_codes(
-    announced: &QualityProfileDecision,
-    analyzed: &QualityProfileDecision,
-) -> Vec<String> {
-    use std::collections::HashMap;
-
-    let announced_by_code: HashMap<&str, i32> = announced
-        .scoring_log
-        .iter()
-        .map(|entry| (entry.code.as_str(), entry.delta))
-        .collect();
-
-    let mut codes: Vec<String> = analyzed
-        .scoring_log
-        .iter()
-        .filter(|entry| announced_by_code.get(entry.code.as_str()) != Some(&entry.delta))
-        .map(|entry| entry.code.clone())
-        .collect();
-    codes.sort();
-    codes.dedup();
-    codes
+/// Compare only known positive byte counts. A fourfold discrepancy is well
+/// outside normal packaging overhead; score weights cannot affect this fact.
+/// The caller must establish that both byte counts cover the same single item.
+fn size_claim_mismatch(announced: Option<i64>, actual: i64) -> bool {
+    let Some(announced) = announced.filter(|bytes| *bytes > 0) else {
+        return false;
+    };
+    actual > 0
+        && (i128::from(actual) * 4 < i128::from(announced)
+            || i128::from(announced) * 4 < i128::from(actual))
 }
 
 /// Rebuild the analyzed half of a stored file's evidence.
@@ -673,6 +881,7 @@ fn contradiction_codes(
 /// its own file was written with, and every candidate would look like an upgrade.
 pub(crate) fn analyzed_facts_from_media_file(file: &crate::TitleMediaFile) -> AnalyzedFacts {
     let analysis = MediaFileAnalysis {
+        details: file.analysis_details.clone(),
         video_codec: file.video_codec,
         video_width: file.video_width,
         video_height: file.video_height,
@@ -855,4 +1064,18 @@ pub(crate) fn score_media_file(
     ctx: &ScoringContext<'_>,
 ) -> ScoredRelease {
     score_release(&evidence_from_media_file(file), ctx)
+}
+
+pub(crate) fn score_media_file_for_episodes(
+    file: &crate::TitleMediaFile,
+    episode_ids: &[String],
+    ctx: &ScoringContext<'_>,
+) -> ScoredRelease {
+    let mut rules = RuleEvaluationBatch::from_context(ctx);
+    score_disc_scope_with_rules(
+        &evidence_from_media_file(file),
+        ctx,
+        &mut rules,
+        Some(episode_ids),
+    )
 }

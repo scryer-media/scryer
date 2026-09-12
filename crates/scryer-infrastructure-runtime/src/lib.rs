@@ -14,6 +14,16 @@ pub(crate) mod external_identity {
     pub(crate) use scryer_infrastructure_identity::external_identity::*;
 }
 
+/// Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
+pub(crate) mod media_server_playback {
+    pub(crate) use scryer_infrastructure_identity::media_server_playback::*;
+}
+
+/// Provider adapters for media-server watch signals (RFC 137 §7.3, WP-M).
+pub(crate) mod media_server_signals {
+    pub(crate) use scryer_infrastructure_identity::media_server_signals::*;
+}
+
 #[cfg(test)]
 pub(crate) mod media_server_connection_store {
     pub(crate) use scryer_infrastructure_library::media::servers::*;
@@ -85,12 +95,15 @@ pub(crate) use scryer_infrastructure_acquisition::downloads::{
 };
 pub(crate) use scryer_infrastructure_acquisition::indexers::{
     config_store::IndexerConfigStore, error_store::IndexerErrorStore,
-    proxy_config_store::IndexerProxyConfigStore, search_learning::IndexerSearchLearningStore,
-    stats::InMemoryIndexerStatsTracker,
+    search_learning::IndexerSearchLearningStore, stats::InMemoryIndexerStatsTracker,
 };
+pub(crate) use scryer_infrastructure_acquisition::proxy_config_store::ProxyConfigStore;
 pub(crate) use scryer_infrastructure_configuration::customization::{
-    plugin_store::PluginStore, post_processing_script_store::PostProcessingScriptStore,
-    rule_set_store::RuleSetStore,
+    maintenance_evaluation_store::MaintenanceEvaluationStore,
+    maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
+    post_processing_script_store::PostProcessingScriptStore,
+    request_rule_decision_store::RequestRuleDecisionStore,
+    request_rule_set_store::RequestRuleSetStore, rule_set_store::RuleSetStore,
 };
 pub(crate) use scryer_infrastructure_configuration::settings::{
     quality_profile_store::QualityProfileStore, settings_store::SettingsStore,
@@ -110,17 +123,21 @@ pub(crate) use scryer_infrastructure_library::media::images::processor::HttpTitl
 pub(crate) use scryer_infrastructure_library::media::{
     images::title_image_store::TitleImageStore,
     libraries::{
+        location_operation_store::LocationOperationStore,
         scan_unmatched_store::LibraryScanUnmatchedStore,
         state_store::{
             BlocklistStore, HousekeepingStore, LibraryProbeStore, PendingReleaseStore,
             SubtitleDownloadStore, WantedStore,
         },
         store::LibraryStore,
+        title_merge_store::TitleMergeStore,
     },
+    lifecycle_claims::LifecycleClaimStore,
     requests::MediaRequestStore,
     search::media_file_store::MediaFileStore,
     servers::MediaServerConnectionStore,
     shows::store::ShowStore,
+    signals::MediaServerSignalStore,
     titles::store::TitleStore,
 };
 pub(crate) use scryer_infrastructure_metadata::metadata::gateway::client::{

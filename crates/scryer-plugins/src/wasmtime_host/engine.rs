@@ -250,8 +250,14 @@ fn initialize_wasm_runtime_for_tests() {
     if WASM_RUNTIME_CONFIG.get().is_some() {
         return;
     }
-    // Unit tests also run in independent test processes under Nextest.
-    let cache_dir = std::env::temp_dir().join("scryer-wasmtime-test-cache");
+    // Unit tests also run in independent test processes under Nextest. The
+    // shared cache lives under the build directory, not the system temp dir,
+    // which macOS clears on reboot; CI points the root at a restored cache.
+    let root = match std::env::var_os("SCRYER_WASMTIME_TEST_CACHE_ROOT") {
+        Some(root) if !root.is_empty() => PathBuf::from(root),
+        _ => PathBuf::from(env!("OUT_DIR")),
+    };
+    let cache_dir = root.join("scryer-wasmtime-test-cache");
     initialize_wasm_runtime_at(&cache_dir).expect("test Wasmtime cache must initialize");
 }
 

@@ -13,7 +13,7 @@ import { parseDecisionExplanation } from "@/lib/utils/release-decision-explanati
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import {
   Table,
   TableActionsCell,
@@ -446,6 +446,12 @@ export function WantedView({
   const activeWantedNavItem =
     wantedNav.find((item) => item.active) ?? wantedNav[0]!;
   const ActiveWantedIcon = activeWantedNavItem.icon;
+  const activeRefresh =
+    section === "cutoff"
+      ? null
+      : section === "pending"
+        ? { run: pendingState.refreshItems, busy: pendingState.loading }
+        : { run: wantedState.refreshItems, busy: wantedState.loading };
 
   return (
     <div className="md:flex md:h-full md:min-h-0 md:flex-row">
@@ -509,6 +515,18 @@ export function WantedView({
                 </h1>
               </div>
             </div>
+            {activeRefresh ? (
+              <Button
+                className="h-10 shrink-0 rounded-[10px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 text-[13px] text-[var(--scry-body)] shadow-none hover:bg-[var(--scry-hover)]"
+                size="sm"
+                variant="secondary"
+                onClick={() => void activeRefresh.run()}
+                disabled={activeRefresh.busy}
+              >
+                <RefreshCw className="mr-1 h-3 w-3" />
+                {activeRefresh.busy ? t("wanted.refreshing") : t("label.refresh")}
+              </Button>
+            ) : null}
           </div>
           <div className="min-h-0 flex-1">
             {section === "cutoff" ? (
@@ -552,7 +570,6 @@ function WantedItemsCard({
     offset,
     setOffset,
     limit,
-    refreshItems,
     expandedItemId,
     decisions,
     decisionsLoading,
@@ -608,25 +625,11 @@ function WantedItemsCard({
           : "overflow-hidden rounded-none border-0 bg-transparent shadow-none"
       }
     >
-      <CardHeader className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-surfD),transparent)] px-4 py-4 sm:px-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-          <Button
-            className="h-10 w-full rounded-[10px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 text-[13px] text-[var(--scry-body)] shadow-none hover:bg-[var(--scry-hover)] sm:w-auto"
-            size="sm"
-            variant="secondary"
-            onClick={() => void refreshItems()}
-            disabled={loading}
-          >
-            <RefreshCw className="mr-1 h-3 w-3" />
-            {loading ? t("wanted.refreshing") : t("label.refresh")}
-          </Button>
-        </div>
-      </CardHeader>
       <CardContent
         className={
           shouldScrollDesktopTable
-            ? "flex min-h-0 flex-1 flex-col space-y-3 bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5"
-            : "space-y-4 bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5"
+            ? "flex min-h-0 flex-1 flex-col space-y-3 p-4 sm:p-5"
+            : "space-y-4 p-4 sm:p-5"
         }
       >
         <div className="flex flex-col gap-3 rounded-[14px] border border-[var(--scry-border3)] bg-[var(--scry-surfC)] p-3 sm:flex-row sm:flex-wrap sm:items-center">
@@ -1023,7 +1026,7 @@ function WantedItemsCard({
                     </TableRow>
                     {expandedItemId === item.id && (
                       <TableRow>
-                        <TableCell colSpan={11} className="bg-muted/30 p-4">
+                        <TableCell colSpan={11} className="space-y-3 bg-muted/30 p-4">
                           <StandbyReleasesList items={standbyReleases} loading={standbyLoading} />
                           {decisionsLoading ? (
                             <p className="text-sm text-muted-foreground">
@@ -1038,6 +1041,7 @@ function WantedItemsCard({
                               overflow="clip"
                               layout="fixed"
                               density="dense"
+                              wrapperClassName="overflow-hidden rounded-[14px] border border-[var(--scry-border2)] bg-[var(--scry-surfC)]"
                             >
                               <TableHeader>
                                 <TableRow>
@@ -1237,7 +1241,6 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
     loading,
     hasMore,
     loadingMore,
-    refreshItems,
     loadMoreItems,
     forceGrab,
     dismiss,
@@ -1275,21 +1278,7 @@ function PendingReleasesCard({ state }: { state: PendingViewState }) {
 
   return (
     <Card className="overflow-hidden rounded-none border-0 bg-transparent shadow-none">
-      <CardHeader className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,var(--scry-surfD),transparent)] px-4 py-4 sm:px-5">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end">
-          <Button
-            className="h-10 w-full rounded-[10px] border-[var(--scry-border2)] bg-[var(--scry-inset)] px-3 text-[13px] text-[var(--scry-body)] shadow-none hover:bg-[var(--scry-hover)] sm:w-auto"
-            size="sm"
-            variant="secondary"
-            onClick={() => void refreshItems()}
-            disabled={loading}
-          >
-            <RefreshCw className="mr-1 h-3 w-3" />
-            {loading ? t("wanted.refreshing") : t("label.refresh")}
-          </Button>
-        </div>
-      </CardHeader>
-      <CardContent className="bg-[color-mix(in_srgb,var(--scry-bg)_52%,transparent)] p-4 sm:p-5">
+      <CardContent className="p-4 sm:p-5">
         {isMobile ? (
           items.length === 0 && !loading ? (
             <p className="text-center text-[var(--scry-muted3)]">{t("pending.noItems")}</p>

@@ -1,5 +1,5 @@
 import { ArrowDown, ArrowUp } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +34,7 @@ type SystemJobsViewState = {
   activeRuns: JobRun[];
   recentRuns: JobRun[];
   selectedJobKey: JobKey | null;
+  selectedJobRunId: string | null;
   selectedJobHistory: JobRun[];
   jobHistoryLoading: boolean;
   triggeringKeys: Partial<Record<JobKey, boolean>>;
@@ -335,6 +336,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     activeRuns,
     recentRuns,
     selectedJobKey,
+    selectedJobRunId,
     selectedJobHistory,
     jobHistoryLoading,
     triggeringKeys,
@@ -346,6 +348,17 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     () => jobs.find((job) => job.key === selectedJobKey) ?? null,
     [jobs, selectedJobKey],
   );
+
+  useEffect(() => {
+    if (!selectedJobRunId || jobHistoryLoading) {
+      return;
+    }
+    window.requestAnimationFrame(() => {
+      document
+        .getElementById(`job-run-${selectedJobRunId}`)
+        ?.scrollIntoView({ block: "nearest" });
+    });
+  }, [jobHistoryLoading, selectedJobHistory, selectedJobRunId]);
 
   const activeRunsByJob = useMemo(
     () => Object.fromEntries(activeRuns.map((run) => [run.jobKey, run])),
@@ -494,6 +507,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
           <div className="space-y-1">
             <p className="font-medium text-[var(--scry-ink2)]">{job.displayName}</p>
             <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{job.description}</p>
+            {job.key === "ARTWORK_ENCODING" && lastRun?.summaryText ? (
+              <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{lastRun.summaryText}</p>
+            ) : null}
           </div>
         </TableCell>
         <TableCell className={`w-[14rem] max-w-[14rem] ${JOBS_MUTED_TEXT_CLASS}`}>
@@ -512,7 +528,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         <TableCell className="w-[7.5rem] min-w-[7.5rem]">
           <span className={runStatusTone(status)}>{runStatusLabel(status, t)}</span>
         </TableCell>
-        <TableCell className="w-[6rem] min-w-[6rem] text-right">
+        <TableCell className="min-w-[6rem] text-right">
           {job.manualTriggerAllowed ? (
             <Button
               size="sm"
@@ -523,7 +539,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                 onTriggerJob(job.key);
               }}
             >
-              {t("jobs.action.run")}
+              {t(job.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.run")}
             </Button>
           ) : null}
         </TableCell>
@@ -556,6 +572,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               <p className={`text-xs leading-relaxed ${JOBS_MUTED_TEXT_CLASS}`}>
                 {job.description}
               </p>
+              {job.key === "ARTWORK_ENCODING" && lastRun?.summaryText ? (
+                <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{lastRun.summaryText}</p>
+              ) : null}
             </div>
             <span
               className={cn(
@@ -615,7 +634,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                 onTriggerJob(job.key);
               }}
             >
-              {t("jobs.action.run")}
+              {t(job.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.run")}
             </Button>
           ) : null}
         </div>
@@ -751,7 +770,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                         onClick={() => onTriggerJob(selectedJob.key)}
                         disabled={isDisabled}
                       >
-                        {t("jobs.action.runNow")}
+                        {t(selectedJob.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.runNow")}
                       </Button>
                     );
                   })()}
@@ -775,7 +794,16 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                         const healthCheckIssues = parseHealthCheckIssues(run);
 
                         return (
-                          <div key={run.id} className={`${JOBS_INSET_CLASS} p-3`}>
+                          <div
+                            key={run.id}
+                            id={`job-run-${run.id}`}
+                            className={cn(
+                              JOBS_INSET_CLASS,
+                              "p-3",
+                              run.id === selectedJobRunId &&
+                                "ring-1 ring-[var(--scry-accent)]",
+                            )}
+                          >
                             <div className="flex items-start justify-between gap-3">
                               <div className="space-y-1">
                                 <p className={runStatusTone(run.status)}>

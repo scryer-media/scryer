@@ -7,7 +7,8 @@ use tracing::{info, warn};
 
 use crate::acquisition::seed_goals::ReleaseSeedMinimums;
 use crate::acquisition::submission::{
-    CanonicalDownloadSubmissionIntent, CanonicalDownloadSubmissionOutcome,
+    CanonicalDownloadSubmissionIntent, CanonicalDownloadSubmissionOutcome, GrabTrigger,
+    record_grab_submission_outcome,
 };
 use crate::delay_profile::DelayProfile;
 use crate::types::{
@@ -797,6 +798,18 @@ impl AppUseCase {
         now: &chrono::DateTime<Utc>,
         trigger: PendingGrabTrigger,
     ) -> AppResult<PendingGrabOutcome> {
+        if let Some(denial) = self
+            .location_ownership_denial_for_title(
+                &crate::location::ownership_guard::TITLE_DOWNLOAD_ENTRY,
+                &pr.title_id,
+            )
+            .await?
+        {
+            if trigger == PendingGrabTrigger::Operator {
+                return Err(denial.into_app_error());
+            }
+            return Ok(PendingGrabOutcome::Deferred);
+        }
         // Load title
         let Some(title) = self.services.catalog.titles.get_by_id(&pr.title_id).await? else {
             return Ok(PendingGrabOutcome::Rejected);
@@ -1421,6 +1434,7 @@ impl AppUseCase {
                     season_pack_seed_time_minutes: pr.seed_minimums.season_pack_seed_time_minutes,
                     is_recent,
                     season_pack: is_season_pack.then_some(true),
+                    pinned_download_client_id: None,
                 },
                 scope: pending_scope.clone(),
                 conflict_policy: SubmissionConflictPolicy::Skip,
@@ -1429,6 +1443,16 @@ impl AppUseCase {
                 release_size_bytes: pr.release_size_bytes,
             })
             .await;
+
+        let grab_indexer = self
+            .grab_indexer_name(pr.indexer_id.as_deref(), pr.indexer_source.as_deref())
+            .await;
+        record_grab_submission_outcome(
+            GrabTrigger::Pending,
+            &title.facet,
+            grab_indexer.as_deref(),
+            &canonical_result,
+        );
 
         let canonical_submission = match canonical_result {
             Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
@@ -1440,20 +1464,11 @@ impl AppUseCase {
 
         match canonical_submission {
             Ok(canonical_submission) => {
+                let newly_submitted = canonical_submission.newly_submitted;
                 let grab = canonical_submission.grab;
-                {
-                    let facet_label = serde_json::to_string(&title.facet)
-                        .unwrap_or_else(|_| "\"other\"".to_string())
-                        .trim_matches('"')
-                        .to_string();
-                    let indexer_label = pr
-                        .indexer_source
-                        .as_deref()
-                        .unwrap_or("unknown")
-                        .to_string();
-                    metrics::counter!("scryer_grabs_total", "indexer" => indexer_label, "facet" => facet_label).increment(1);
+                if newly_submitted {
+                    self.record_indexer_grab(pr.indexer_id.as_deref(), grab_indexer.as_deref());
                 }
-                self.record_indexer_grab(pr.indexer_id.as_deref(), pr.indexer_source.as_deref());
 
                 let _ = self
                     .services

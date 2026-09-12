@@ -119,7 +119,8 @@ async fn graphql_anonymous_ui_settings_round_trip_is_shared() {
     assert_no_errors(&read);
 
     let settings = &read["data"]["myUiSettings"];
-    assert_eq!(settings["theme"], json!("PRIDE"));
+    // Retired theme inputs remain accepted and normalize to the supported dark theme.
+    assert_eq!(settings["theme"], json!("DARK"));
     assert_eq!(settings["dateTimeFormat"], json!("ISO24H"));
     assert_eq!(settings["highlightColor"], json!("#ff3366"));
     assert_eq!(settings["secondaryColor"], json!("#2277aa"));

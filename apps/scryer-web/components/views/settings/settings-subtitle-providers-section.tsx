@@ -352,6 +352,7 @@ function DynamicSubtitleConfigField({
         value={value}
         onChange={(event) => onChange(field.key, event.target.value)}
         type={isSecretField ? "password" : "text"}
+        ignorePasswordManagers={isSecretField}
         required={field.required && !hasStoredSecretValue}
         placeholder={
           isSecretField && hasStoredSecretValue

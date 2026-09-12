@@ -3,8 +3,11 @@ mod collections;
 mod config;
 mod interactive_search;
 mod library;
+mod location;
+mod maintenance_rules;
 mod notifications;
 mod recycle_bin;
+mod request_rules;
 mod rules;
 mod subtitle;
 mod titles;
@@ -31,9 +34,12 @@ pub struct MutationRoot(
     SettingsMutations,
     UserMutations,
     library::LibraryMutations,
+    location::LocationMutations,
     MediaRequestMutations,
     WantedMutations,
     rules::RulesMutations,
+    maintenance_rules::MaintenanceRuleMutations,
+    request_rules::RequestRuleMutations,
     PluginMutations,
     notifications::NotificationMutations,
     BackupMutations,

@@ -73,6 +73,7 @@ async fn execute_resolved_episode_import(
     origin: crate::import_decide::ImportOrigin,
     announced_size_bytes: Option<i64>,
     additional_import: bool,
+    disc_selection: Option<&scryer_media_types::DiscSelection>,
 ) -> AppResult<EpisodeImportOutcome> {
     let use_season_folders = app.resolve_use_season_folders(title).await?;
     let source_size = std::fs::metadata(source_video)
@@ -82,6 +83,19 @@ async fn execute_resolved_episode_import(
         .iter()
         .map(|episode| episode.id.clone())
         .collect::<Vec<_>>();
+    if let Some(selection) = disc_selection {
+        let mapped: std::collections::BTreeSet<_> = selection
+            .episode_mappings
+            .iter()
+            .flat_map(|mapping| mapping.episode_ids.iter())
+            .collect();
+        let targets: std::collections::BTreeSet<_> = target_episode_ids.iter().collect();
+        if mapped.is_empty() || mapped != targets {
+            return Err(AppError::Validation(
+                "disc import targets must exactly match its explicit episode mappings".into(),
+            ));
+        }
+    }
     let is_filler = target_episodes.iter().any(|episode| episode.is_filler);
     let existing_incumbents = app
         .services
@@ -137,7 +151,15 @@ async fn execute_resolved_episode_import(
             effective_quality_label.as_deref(),
         );
         let dest_path = additional_import_dest_path(&canonical_dest_path, &effective_parsed);
+        let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
+            app,
+            Some(&title.library_id),
+            &title.facet,
+            completed,
+        )
+        .await?;
         let check_ctx = crate::import_checks::ImportCheckContext {
+            import_mode,
             source_path: source_video,
             dest_path: &dest_path,
             source_size: source_size as u64,
@@ -157,13 +179,6 @@ async fn execute_resolved_episode_import(
             });
         }
 
-        let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
-            app,
-            Some(&title.library_id),
-            &title.facet,
-            completed,
-        )
-        .await?;
         persist_title_folder_path_if_missing(app, title, title_folder_path).await?;
         let destination_ownership = ImportDestinationOwnership::episodes(&target_episode_ids);
         let file_result = import_file_with_record_progress(
@@ -294,7 +309,15 @@ async fn execute_resolved_episode_import(
         precheck_quality_label.as_deref(),
     );
 
+    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
+        app,
+        Some(&title.library_id),
+        &title.facet,
+        completed,
+    )
+    .await?;
     let check_ctx = crate::import_checks::ImportCheckContext {
+        import_mode,
         source_path: source_video,
         dest_path: &precheck_dest_path,
         source_size: source_size as u64,
@@ -315,7 +338,7 @@ async fn execute_resolved_episode_import(
         });
     }
 
-    let prepared = match crate::post_download_gate::prepare_import_candidate(
+    let prepared = match crate::post_download_gate::prepare_import_candidate_with_disc_selection(
         app,
         title,
         parsed,
@@ -326,6 +349,7 @@ async fn execute_resolved_episode_import(
         existing_score,
         is_filler,
         runtime_sample_validation,
+        disc_selection,
     )
     .await
     {
@@ -334,7 +358,7 @@ async fn execute_resolved_episode_import(
             // A band miss is held for the operator (ImportBlocked), not
             // burned: expected runtimes are estimates and legitimate outliers
             // must stay grabbable after review.
-            if rejection.recycle_reason == crate::post_download_gate::RUNTIME_OUT_OF_BAND_CODE {
+            if rejection.requires_review() {
                 return Ok(EpisodeImportOutcome::Skipped {
                     message: rejection.message.clone(),
                     reason_code: Some(rejection.recycle_reason.to_string()),
@@ -358,12 +382,14 @@ async fn execute_resolved_episode_import(
         }
     };
 
-    if let Err(issue) = super::coverage_validation::validate_broad_episode_coverage(
-        title,
-        &prepared.parsed,
-        coverage_episodes,
-        prepared.accepted.as_ref(),
-    ) {
+    if disc_selection.is_none()
+        && let Err(issue) = super::coverage_validation::validate_broad_episode_coverage(
+            title,
+            &prepared.parsed,
+            coverage_episodes,
+            prepared.accepted.as_ref(),
+        )
+    {
         tracing::info!(
             code = issue.code,
             expected_runtime_minutes = issue.expected_runtime_minutes,
@@ -460,14 +486,6 @@ async fn execute_resolved_episode_import(
         rename_episode_title,
         effective_quality_label.as_deref(),
     );
-    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
-        app,
-        Some(&title.library_id),
-        &title.facet,
-        completed,
-    )
-    .await?;
-
     let manual_replacement = matches!(
         runtime_sample_mode,
         crate::post_download_gate::RuntimeSampleValidationMode::BypassRuntimeSampleCheck
@@ -697,7 +715,7 @@ async fn execute_resolved_episode_import(
         &media_file_id,
         prepared.accepted.as_ref(),
     )
-    .await;
+    .await?;
     if let Err(error) = crate::subtitles::reconcile_external_subtitles_for_media_file(
         app,
         &title.id,

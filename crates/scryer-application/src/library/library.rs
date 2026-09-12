@@ -85,10 +85,11 @@ pub(crate) use scan_title_files::{
 };
 use scan_title_files::{
     TitleScanLayoutSummary, classify_title_scan_layout, merge_title_scan_option_tags,
-    title_media_file_matches_snapshot,
+    title_media_file_matches_snapshot, title_media_file_quick_proof_changed,
 };
 use scan_title_finalize::finalize_movie_scan_file;
 pub(crate) use scan_title_finalize::finalize_title_scan_file;
+pub(crate) use scan_title_scan::{LibraryRootState, library_root_state};
 use scan_title_scan::{LibraryScanMediaAnalysisPolicy, LibraryScanMediaAnalysisPool};
 
 /// Destination for matched title work. Implemented by the media-analysis pool
@@ -644,6 +645,16 @@ impl AppUseCase {
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| existing.name.clone());
         let roots_were_provided = roots.is_some();
+        if roots_were_provided {
+            // Retiring or repointing a root under a running operation would move
+            // the ground out from under it; a name-only edit is harmless
+            // (FR-084).
+            self.ensure_location_ownership_allows_library_roots(
+                &crate::location::ownership_guard::LIBRARY_ROOTS_UPDATE_ENTRY,
+                &existing.id,
+            )
+            .await?;
+        }
         let roots = match roots {
             Some(roots) => normalize_library_root_drafts(roots)?,
             None => existing
@@ -726,6 +737,12 @@ impl AppUseCase {
                 "default libraries cannot be deleted".into(),
             ));
         }
+        // Deleting the library retires every root it configures (FR-084).
+        self.ensure_location_ownership_allows_library_roots(
+            &crate::location::ownership_guard::LIBRARY_DELETE_ENTRY,
+            &library.id,
+        )
+        .await?;
 
         for session in self
             .active_library_scan_sessions()
@@ -994,17 +1011,7 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
         self.require_library_management_permission(actor, &library.id)
             .await?;
-        let library_paths = library
-            .roots
-            .iter()
-            .map(|root| root.path.trim().to_string())
-            .filter(|path| !path.is_empty())
-            .collect::<Vec<_>>();
-        if library_paths.is_empty() {
-            return Err(AppError::Validation(
-                "library roots are not configured".into(),
-            ));
-        }
+        let library_paths = configured_library_scan_paths(&library)?;
 
         let (_coordinator, session) = LibraryScanCoordinator::start_for_library(
             self.clone(),
@@ -1068,6 +1075,56 @@ impl AppUseCase {
         self.require_library_management_permission(actor, &session_library_id)
             .await?;
         let library_paths = self.read_library_paths_for_scan_facet(&facet).await?;
+        self.scan_library_paths_with_tracking(
+            actor,
+            facet,
+            session_library_id,
+            library_paths,
+            session_id_override,
+            mode,
+        )
+        .await
+    }
+
+    /// Scan one concrete library end to end under a tracked session, the way
+    /// a scheduled per-library scan run does.
+    pub(crate) async fn scan_library_by_id_with_tracking(
+        &self,
+        actor: &User,
+        library_id: &str,
+        session_id_override: Option<String>,
+        mode: LibraryScanMode,
+    ) -> AppResult<LibraryScanSummary> {
+        let library = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(library_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
+        self.require_library_management_permission(actor, &library.id)
+            .await?;
+        let library_paths = configured_library_scan_paths(&library)?;
+        self.scan_library_paths_with_tracking(
+            actor,
+            library.facet,
+            library.id,
+            library_paths,
+            session_id_override,
+            mode,
+        )
+        .await
+    }
+
+    async fn scan_library_paths_with_tracking(
+        &self,
+        actor: &User,
+        facet: MediaFacet,
+        session_library_id: String,
+        library_paths: Vec<String>,
+        session_id_override: Option<String>,
+        mode: LibraryScanMode,
+    ) -> AppResult<LibraryScanSummary> {
         let (_coordinator, session) = LibraryScanCoordinator::start_for_library(
             self.clone(),
             facet.clone(),
@@ -1120,6 +1177,14 @@ impl AppUseCase {
         &self,
         request: &StartedLibraryScanRequest,
     ) -> AppResult<StartedLibraryScanOutcome> {
+        // Every scan trigger funnels here, so one check covers them all: a scan
+        // must not walk a root a location operation is moving files under
+        // (FR-084).
+        self.ensure_location_ownership_allows_library_roots(
+            &crate::location::ownership_guard::LIBRARY_SCAN_ENTRY,
+            &request.library_id,
+        )
+        .await?;
         let cancel_token = self
             .library_scan_cancellation_token(&request.session_id)
             .await;
@@ -1451,4 +1516,20 @@ impl AppUseCase {
             }
         }
     }
+}
+
+/// The trimmed, non-empty root paths a scan of `library` walks.
+fn configured_library_scan_paths(library: &scryer_domain::Library) -> AppResult<Vec<String>> {
+    let library_paths = library
+        .roots
+        .iter()
+        .map(|root| root.path.trim().to_string())
+        .filter(|path| !path.is_empty())
+        .collect::<Vec<_>>();
+    if library_paths.is_empty() {
+        return Err(AppError::Validation(
+            "library roots are not configured".into(),
+        ));
+    }
+    Ok(library_paths)
 }

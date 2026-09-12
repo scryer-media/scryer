@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useLocation } from "react-router";
+import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import {
   ArrowDown,
   ArrowUp,
@@ -38,9 +39,11 @@ import {
 } from "@/components/common/external-media-links";
 import { FixTitleMatchDialog } from "@/components/dialogs/fix-title-match-dialog";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useActiveDownloadTitleIds } from "@/lib/hooks/use-active-download-title-ids";
+import { useDownloadQueue } from "@/lib/hooks/use-download-queue";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -66,6 +69,7 @@ import {
   type MediaFileOnDisk,
 } from "@/components/common/media-files-on-disk-panel";
 import { TitleFilesOnDiskRail } from "@/components/common/title-files-on-disk-rail";
+import { MovieOverviewDownloadList } from "@/components/common/download-queue-overview";
 import {
   MediaRenamePlanPanel,
   type MediaRenamePlan,
@@ -188,6 +192,10 @@ import { handleFixTitleMatchComplete } from "@/lib/fix-title-match";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 
 type Facet = "MOVIE" | "SERIES" | "ANIME";
+
+// Queue activity is supplemental context for a title overview. A temporary
+// queue read failure must not interrupt the rest of the catalog page.
+const ignoreTitleOverviewQueueError = () => {};
 
 function titleTableColumnLabel(
   key: TitleTableColumnKey,
@@ -1025,6 +1033,8 @@ function TitleContextPanel({
   onClearAdvancedFilters,
   view,
   blocklistEntries,
+  clearingBlocklistEntryId,
+  onClearBlocklistEntry,
   externalSubtitles,
   isTogglingMonitored,
   isDeleting,
@@ -1082,6 +1092,8 @@ function TitleContextPanel({
   onClearAdvancedFilters: () => void;
   view: ViewId;
   blocklistEntries: TitleReleaseBlocklistEntry[];
+  clearingBlocklistEntryId: string | null;
+  onClearBlocklistEntry: (entryId: string) => Promise<void> | void;
   externalSubtitles: ExternalSubtitleRecord[];
   isTogglingMonitored: boolean;
   isDeleting: boolean;
@@ -1148,9 +1160,13 @@ function TitleContextPanel({
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const dateTimeFormat = useUiDateTimeFormat();
+  // Library and root moves are still being finished, so the panel's move entry
+  // point only exists when the instance has opted in.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const [autoQueueLoadingTitleId, setAutoQueueLoadingTitleId] = React.useState<
     string | null
   >(null);
+  const { isSearching } = useAutomaticSearch();
   const [releaseSearchRequestId, setReleaseSearchRequestId] = React.useState(0);
   const [releaseSearchLoading, setReleaseSearchLoading] = React.useState(false);
   const [releaseSearchTitleId, setReleaseSearchTitleId] = React.useState<
@@ -1168,6 +1184,16 @@ function TitleContextPanel({
   const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
   const releaseSearchOpen = title !== null && releaseSearchTitleId === title.id;
   const releaseSearchActionLoading = releaseSearchOpen && releaseSearchLoading;
+  const movieTitleId = title?.facet === "MOVIE" ? title.id : null;
+  const { queueItems: movieDownloadQueueItems } = useDownloadQueue({
+    enabled: movieTitleId !== null,
+    includeAllActivity: true,
+    includeHistoryOnly: false,
+    includeImportActivity: true,
+    titleId: movieTitleId,
+    activityFilter: "ALL",
+    onErrorStatus: ignoreTitleOverviewQueueError,
+  });
   // The action bar only carries mutations, so a viewer without manage rights
   // on this title's library gets no bar rather than a row of failing buttons.
   const canManageThisTitle =
@@ -1209,6 +1235,7 @@ function TitleContextPanel({
             videoWidth: file.videoWidth ?? null,
             videoHeight: file.videoHeight ?? null,
             videoBitrateKbps: file.videoBitrateKbps ?? null,
+            analysis: file.analysis,
             videoBitDepth: file.videoBitDepth ?? null,
             videoHdrFormat: file.videoHdrFormat ?? null,
             videoFrameRate: file.videoFrameRate ?? null,
@@ -1218,6 +1245,8 @@ function TitleContextPanel({
             audioBitrateKbps: file.audioBitrateKbps ?? null,
             audioLanguages: file.audioLanguages ?? [],
             audioStreams: (file.audioStreams ?? []).map((stream) => ({
+              profile: stream.profile ?? null,
+              name: stream.name ?? null,
               codec: stream.codec ?? null,
               channels: stream.channels ?? null,
               language: stream.language ?? null,
@@ -1381,7 +1410,7 @@ function TitleContextPanel({
     studioOrNetworkLabel,
   ].filter((value): value is string => Boolean(value));
   const heroGenreLabels = titleGenreLabels(title).slice(0, 4);
-  const autoQueueLoading = autoQueueLoadingTitleId === title.id;
+  const autoQueueLoading = autoQueueLoadingTitleId === title.id || isSearching(title.id);
   const releaseSearchPanelId = `title-context-release-search-${title.id}`;
   const handleAutoQueue = async () => {
     setAutoQueueLoadingTitleId(title.id);
@@ -1618,6 +1647,7 @@ function TitleContextPanel({
                 Promise.resolve(onTitleOptionsChanged(title))
               }
               onOpenFixMatch={() => setFixMatchOpen(true)}
+              experimentalFeaturesEnabled={experimentalFeaturesEnabled}
             />
           </div>
         ) : null}
@@ -1643,6 +1673,20 @@ function TitleContextPanel({
         ) : null}
 
         <div className="mt-3 space-y-3">
+          {movieDownloadQueueItems.length > 0 ? (
+            <Card>
+              <CardContent className="p-4">
+                <h2 className="text-base font-semibold text-card-foreground">
+                  {t("activity.activity")}
+                </h2>
+                <MovieOverviewDownloadList
+                  items={movieDownloadQueueItems}
+                  className="mt-3"
+                />
+              </CardContent>
+            </Card>
+          ) : null}
+
           <TitleFilesOnDiskRail
             action={
               <Button
@@ -1680,6 +1724,7 @@ function TitleContextPanel({
                   onApply={() => {
                     void handleApplyRename();
                   }}
+                  onCancel={() => setRenamePlan(null)}
                 />
               ) : null
             }
@@ -1787,6 +1832,29 @@ function TitleContextPanel({
                                 ) : null}
                               </div>
                             </div>
+                            {canManageTitle ? (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                aria-label={t("title.clearBlockedRelease", {
+                                  releaseName: releaseLabel,
+                                })}
+                                title={t("title.clearBlockedReleaseHint")}
+                                className="h-7 shrink-0 gap-1.5 px-2 text-[11px] font-semibold text-[var(--scry-muted)] hover:bg-[var(--scry-danger-bg)] hover:text-[var(--scry-danger-text)]"
+                                disabled={clearingBlocklistEntryId === entry.id}
+                                onClick={() => {
+                                  void onClearBlocklistEntry(entry.id);
+                                }}
+                              >
+                                {clearingBlocklistEntryId === entry.id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                )}
+                                <span>{t("label.remove")}</span>
+                              </Button>
+                            ) : null}
                           </div>
                           {entry.errorMessage ? (
                             <p className="mt-2 line-clamp-3 rounded-[8px] bg-[var(--scry-danger-bg)] px-2.5 py-1.5 text-[11px] leading-4 text-[var(--scry-danger-text)]">
@@ -2144,6 +2212,10 @@ export function MediaContentView({
     routeOverviewPending: boolean;
     routeOverviewEpisodeId: string | null;
     selectedOverviewBlocklistEntries: TitleReleaseBlocklistEntry[];
+    clearingSelectedOverviewBlocklistEntryId: string | null;
+    clearSelectedOverviewBlocklistEntry: (
+      entryId: string,
+    ) => Promise<void> | void;
     selectedOverviewExternalSubtitles: ExternalSubtitleRecord[];
     refreshSelectedOverviewExternalSubtitles: () => Promise<void> | void;
     deleteSelectedOverviewMediaFile: (
@@ -2366,6 +2438,8 @@ export function MediaContentView({
     routeOverviewPending,
     routeOverviewEpisodeId,
     selectedOverviewBlocklistEntries,
+    clearingSelectedOverviewBlocklistEntryId,
+    clearSelectedOverviewBlocklistEntry,
     selectedOverviewExternalSubtitles,
     refreshSelectedOverviewExternalSubtitles,
     deleteSelectedOverviewMediaFile,
@@ -3408,8 +3482,10 @@ export function MediaContentView({
                     <EyeOff className="h-4 w-4" />
                   </TitleTableActionButton>
                   <TitleTableActionButton
+                    id="title-overview-bulk-edit-inline"
                     tone="edit"
                     label={t("label.edit")}
+                    aria-label={t("title.bulkEditTitle")}
                     onClick={openBulkTitleEdit}
                     disabled={bulkActionBusy}
                     className="rounded-md"
@@ -4035,7 +4111,9 @@ export function MediaContentView({
                           {t("title.unmonitorAction")}
                         </Button>
                         <Button
+                          id="title-overview-bulk-edit"
                           variant="outline"
+                          aria-label={t("title.bulkEditTitle")}
                           onClick={openBulkTitleEdit}
                           disabled={bulkActionBusy}
                           className="justify-center gap-2"
@@ -4124,6 +4202,12 @@ export function MediaContentView({
                       onClearAdvancedFilters={clearAdvancedTitleFilters}
                       view={view}
                       blocklistEntries={selectedOverviewBlocklistEntries}
+                      clearingBlocklistEntryId={
+                        clearingSelectedOverviewBlocklistEntryId
+                      }
+                      onClearBlocklistEntry={
+                        clearSelectedOverviewBlocklistEntry
+                      }
                       externalSubtitles={selectedOverviewExternalSubtitles}
                       isTogglingMonitored={
                         activeOverviewTitle

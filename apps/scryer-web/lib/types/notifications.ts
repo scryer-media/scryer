@@ -11,6 +11,7 @@ export type NotificationChannel = {
   config: ProviderConfigValue[];
   storedSecretKeys: string[];
   isEnabled: boolean;
+  blockedReason?: string | null;
   createdAt: string;
   updatedAt: string;
 };

@@ -46,6 +46,22 @@ async fn persist_title_folder_ownership_conflict(
     Ok(item)
 }
 
+/// Heal a title whose recorded folder no longer exists by re-pointing it at
+/// the folder the scan found its files in. Returns `true` when the title now
+/// owns `scan_folder_path`; `false` leaves the ownership conflict to the
+/// caller. A title whose owned folder is still on disk, or whose owned root
+/// looks unmounted, is never touched.
+async fn reclaim_stale_title_folder_for_scan(
+    app: &AppUseCase,
+    title: &mut Title,
+    scan_folder_path: &Path,
+) -> AppResult<bool> {
+    if !crate::folder_ownership::title_folder_is_stale(title).await {
+        return Ok(false);
+    }
+    crate::folder_ownership::reclaim_stale_title_folder(app, title, scan_folder_path).await
+}
+
 async fn claim_series_candidate_folder(
     app: &AppUseCase,
     title: &mut Title,
@@ -63,7 +79,9 @@ async fn prepare_series_title_for_candidate(
     title: &mut Title,
     candidate: &PreparedSeriesLibraryScanCandidate,
 ) -> AppResult<Option<LibraryScanUnmatchedItem>> {
-    if crate::folder_ownership::title_owns_another_folder(title, &candidate.folder_path) {
+    if crate::folder_ownership::title_owns_another_folder(title, &candidate.folder_path)
+        && !reclaim_stale_title_folder_for_scan(app, title, &candidate.folder_path).await?
+    {
         crate::folder_ownership::unlink_title_media_in_folder(app, title, &candidate.folder_path)
             .await?;
         let item_path = candidate.item_path();
@@ -206,8 +224,22 @@ async fn sync_movie_title_folder_path_for_scan(
     );
     let current_folder_path = normalize_title_folder_path(title.folder_path.clone());
 
-    if current_folder_path.is_some() {
-        return Ok((current_folder_path, scan_folder_path));
+    if let Some(current_folder_path) = current_folder_path {
+        if let Some(folder_path) = scan_folder_path.as_deref()
+            && !crate::stored_paths::folder_paths_match(&current_folder_path, folder_path)
+            && reclaim_stale_title_folder_for_scan(
+                app,
+                title,
+                &stored_path_to_path_buf(folder_path),
+            )
+            .await?
+        {
+            return Ok((
+                normalize_title_folder_path(title.folder_path.clone()),
+                scan_folder_path,
+            ));
+        }
+        return Ok((Some(current_folder_path), scan_folder_path));
     }
 
     let Some(folder_path) = scan_folder_path.as_deref() else {

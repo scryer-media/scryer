@@ -140,6 +140,12 @@ impl AppUseCase {
         .await
     }
 
+    pub(crate) async fn artwork_cpu_performance(&self) -> (RuntimePerformanceClass, Option<u64>) {
+        tokio::task::spawn_blocking(probe_cpu_performance)
+            .await
+            .unwrap_or((RuntimePerformanceClass::Slow, None))
+    }
+
     pub fn warm_runtime_performance(&self) {
         let app = self.clone();
         tokio::spawn(async move {
@@ -180,6 +186,7 @@ impl AppUseCase {
     }
 
     pub async fn publish_stored_domain_event(&self, stored: &DomainEvent) {
+        crate::events::metrics::record_domain_event_metrics(stored);
         if should_invalidate_wanted_projection(&stored.payload) {
             self.runtime
                 .acquisition
@@ -207,6 +214,12 @@ impl AppUseCase {
         }
         self.maybe_accelerate_discovery_sync_for_scan_completion(stored)
             .await;
+        // A request lease's clock starts at the title's first import (spec 0003
+        // FR-041). Hooked to the event rather than to the five import paths
+        // that append it, so a new import path inherits the behaviour instead
+        // of silently leaving leases dormant.
+        self.maybe_activate_lifecycle_claims_for_import(stored)
+            .await;
     }
 
     pub async fn append_domain_events(
@@ -219,6 +232,9 @@ impl AppUseCase {
             .domain_events
             .append_many(events)
             .await?;
+        for event in &stored {
+            crate::events::metrics::record_domain_event_metrics(event);
+        }
         if stored
             .iter()
             .any(|event| should_invalidate_wanted_projection(&event.payload))
@@ -264,6 +280,7 @@ impl AppUseCase {
         for event in &stored {
             self.maybe_accelerate_discovery_sync_for_scan_completion(event)
                 .await;
+            self.maybe_activate_lifecycle_claims_for_import(event).await;
         }
         Ok(stored)
     }
@@ -475,6 +492,51 @@ impl AppUseCase {
             ));
         }
         Ok(self.services.integrations.indexer_stats.all_stats())
+    }
+
+    /// The name a grabbed release's indexer is counted under, for both
+    /// `scryer_grabs_total{indexer}` and the trailing-24h indexer stats.
+    ///
+    /// Search results carry `source`, a display string the plugin adapter
+    /// formats as `"<name> (<provider type>)"`, while queries are counted
+    /// under the configured indexer name. Counting grabs under the display
+    /// string split one indexer into two label values (and made the stats
+    /// row's name flip with whichever event came last), so the configured
+    /// name is resolved from the indexer id and `source` is only the fallback
+    /// for a release whose indexer is gone or was never recorded. A lookup
+    /// failure falls back the same way: a metric label must never fail a grab.
+    pub(crate) async fn grab_indexer_name(
+        &self,
+        indexer_id: Option<&str>,
+        source: Option<&str>,
+    ) -> Option<String> {
+        let fallback = || {
+            source
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string)
+        };
+        let Some(indexer_id) = indexer_id.map(str::trim).filter(|id| !id.is_empty()) else {
+            return fallback();
+        };
+        match self
+            .services
+            .integrations
+            .indexer_configs
+            .get_by_id(indexer_id)
+            .await
+        {
+            Ok(Some(config)) if !config.name.trim().is_empty() => Some(config.name),
+            Ok(_) => fallback(),
+            Err(error) => {
+                tracing::debug!(
+                    indexer_id,
+                    error = %error,
+                    "indexer config lookup failed while naming a grab; using the release source"
+                );
+                fallback()
+            }
+        }
     }
 
     /// Count one release grabbed through `indexer_id` toward that indexer's
@@ -753,25 +815,11 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::View,
         )
         .await?;
-        let gateway = &self.services.library.metadata_gateway;
-        let mut legacy = gateway.search_tvdb_multi(query, limit, language).await?;
-        match gateway
-            .search_titles(query, "movie", limit, language, None)
+        self.services
+            .library
+            .metadata_gateway
+            .search_titles_multi(query, limit, language)
             .await
-        {
-            Ok(movies) => legacy.movies = movies,
-            Err(error) if crate::catalog_workflow::movie_title_queries_not_supported(&error) => {}
-            // The legacy multi-search already succeeded for every facet. A
-            // failure of the added movie call must not throw away the series and
-            // anime results with it; keep the legacy movie bucket instead.
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "metadata gateway title search failed during multi-search; keeping the legacy movie results"
-                );
-            }
-        }
-        Ok(legacy)
     }
 
     pub async fn get_metadata_movie(
@@ -1186,6 +1234,45 @@ impl AppUseCase {
             .into_iter()
             .filter(|config| config.is_enabled)
             .min_by_key(|config| config.client_priority))
+    }
+
+    /// The proxy assigned to a download client, for background workers that
+    /// hold no actor.
+    ///
+    /// Fail-closed like the router's own resolution: an assignment that names
+    /// a missing or disabled proxy is an error, so the caller stops rather than
+    /// egressing directly.
+    pub async fn proxy_config_for_download_client(
+        &self,
+        config: &DownloadClientConfig,
+    ) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+        let Some(id) = config
+            .proxy_config_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        else {
+            return Ok(None);
+        };
+        let proxy = self
+            .services
+            .integrations
+            .proxy_configs
+            .get_by_id(id)
+            .await?
+            .ok_or_else(|| {
+                AppError::Validation(format!(
+                    "download client {} references proxy configuration {id}, which was not found",
+                    config.id
+                ))
+            })?;
+        if !proxy.is_enabled {
+            return Err(AppError::Validation(format!(
+                "download client {} is assigned proxy {id}, which is disabled",
+                config.id
+            )));
+        }
+        Ok(Some(proxy))
     }
 
     pub async fn active_library_scan_sessions(&self) -> Vec<LibraryScanSession> {

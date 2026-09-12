@@ -197,7 +197,7 @@ struct ImportRejectionContext<'a> {
 struct CompletedImportTarget {
     title: scryer_domain::Title,
     is_series: bool,
-    video_files: Vec<PathBuf>,
+    video_files: Vec<ImportVideoFile>,
     extracted_dir: Option<PathBuf>,
     series_movie_link_id: Option<String>,
 }
@@ -421,7 +421,15 @@ async fn try_match_titleless_archive_from_inner_video(
         .titles
         .list_for_matching(None, None)
         .await?;
-    for candidate in title_evidence_candidates_from_video_files(&video_files) {
+    // The titleless-archive probe predates filename recovery and is untouched
+    // by it: SAB and NZBGet unpack before Scryer sees the download, so the
+    // gated clients never reach this path.
+    let probe_files: Vec<ImportVideoFile> = video_files
+        .iter()
+        .cloned()
+        .map(ImportVideoFile::physical)
+        .collect();
+    for candidate in title_evidence_candidates_from_video_files(&probe_files) {
         if let Some(title) =
             resolve_title_from_release_candidate(&titles, &candidate, Some(facet.as_str()))
         {
@@ -494,6 +502,10 @@ async fn resolve_completed_import_target(
     let mut title = None;
     let dest_dir = Path::new(&completed.dest_dir);
     let mut extracted_dir: Option<PathBuf> = None;
+    // One srrdb session for this whole `run_import` call: the setting is read
+    // at most once, results are reused between the titleless probe below and
+    // the final file list, and one outage stops the rest of this import.
+    let mut srrdb = SrrdbFilenameRecovery::default();
     if let Some(manual_title_id) = manual_title_id.map(str::trim).filter(|id| !id.is_empty()) {
         if let Some(submission_title_id) = release_evidence.title_id()
             && submission_title_id != manual_title_id
@@ -560,6 +572,54 @@ async fn resolve_completed_import_target(
         if let Some(archive_match) = archive_match? {
             title = Some(archive_match.title);
             extracted_dir = Some(archive_match.extracted_dir);
+        }
+    }
+
+    // Whether the release name Scryer already holds for this download parses
+    // to a usable title. srrdb only ever helps a download whose own name says
+    // nothing: a usable name that matched no library title is an adopted
+    // download for something Scryer does not have, and the recovered scene
+    // name would carry the same title, so hashing it would buy nothing.
+    let release_evidence_title_unusable = release_evidence
+        .release_title(None)
+        .as_deref()
+        .and_then(parse_usable_release_title)
+        .is_none();
+
+    if title.is_none() && release_evidence_title_unusable {
+        // Last resort before giving up: neither the release name nor the
+        // download's own video files carry a title signal, so ask srrdb for
+        // their original names and try the ordinary release-candidate match
+        // again with those. The results are memoized and reused by the file
+        // list built further down.
+        let probe_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
+        let probe_files = find_video_files(probe_dir, true)
+            .ok()
+            .filter(|files| !files.is_empty())
+            .or_else(|| find_video_files(probe_dir, false).ok())
+            .unwrap_or_default();
+        if !probe_files.is_empty() {
+            // Nothing has identified the title, so every obfuscated-stem file
+            // has to speak for itself.
+            let enriched = srrdb.enrich(app, completed, probe_files, true).await;
+            if enriched.iter().any(|file| file.logical_name.is_some()) {
+                let titles = app
+                    .services
+                    .catalog
+                    .titles
+                    .list_for_matching(None, None)
+                    .await?;
+                for candidate in title_evidence_candidates_from_video_files(&enriched) {
+                    if let Some(matched) = resolve_title_from_release_candidate(
+                        &titles,
+                        &candidate,
+                        release_evidence.facet(),
+                    ) {
+                        title = Some(matched);
+                        break;
+                    }
+                }
+            }
         }
     }
 
@@ -691,6 +751,22 @@ async fn resolve_completed_import_target(
             return Err(error);
         }
     };
+    // Reuses anything the titleless probe already resolved; only files it never
+    // saw are hashed and looked up here.
+    //
+    // Whether a file needs a name of its own is a property of this download,
+    // not of its folder. A multi-file series pack always does: whatever named
+    // the release says which title and season, never which member is which
+    // episode, and `file_episode_identity_for_title` reads only the file stem.
+    // Otherwise it needs one only when the release name itself is unusable:
+    // with a single video file and a usable release name the release name
+    // already carries the episode or the year and the quality, planning
+    // proceeds on it today, and hashing plus a third-party request would buy
+    // nothing.
+    let needs_own_name = (is_series && video_files.len() > 1) || release_evidence_title_unusable;
+    let video_files = srrdb
+        .enrich(app, completed, video_files, needs_own_name)
+        .await;
 
     if video_files.is_empty() {
         if let Some(ref dir) = extracted_dir {
@@ -758,6 +834,15 @@ async fn dispatch_completed_import_target(
     started_at: chrono::DateTime<Utc>,
     target: &CompletedImportTarget,
 ) -> AppResult<ImportResult> {
+    // The target title is settled and nothing has been written yet: the last
+    // point an import can be refused cleanly while an operation owns the title
+    // (FR-084). The refusal reaches the operator as a failed import record.
+    let _location_guard = app
+        .acquire_location_title_mutation(
+            &crate::location::ownership_guard::COMPLETED_IMPORT_ENTRY,
+            &target.title.id,
+        )
+        .await?;
     // Branch on facet: movies import the single largest file, series import all episode files.
     //
     // The automatic lane's operator-intent signal is the submission purpose; the
@@ -988,7 +1073,15 @@ async fn import_additional_movie_download(
         .map(|episode_id| vec![episode_id.to_string()])
         .unwrap_or_default();
 
+    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
+        app,
+        Some(&title.library_id),
+        &title.facet,
+        Some(completed),
+    )
+    .await?;
     let check_ctx = crate::import_checks::ImportCheckContext {
+        import_mode,
         source_path: source_video,
         dest_path: &dest_path,
         source_size: source_size as u64,
@@ -1044,13 +1137,6 @@ async fn import_additional_movie_download(
         return Ok(result);
     }
 
-    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
-        app,
-        Some(&title.library_id),
-        &title.facet,
-        Some(completed),
-    )
-    .await?;
     persist_title_folder_path_if_missing(app, title, &full_folder_path).await?;
     let destination_ownership =
         series_movie_context
@@ -1199,12 +1285,16 @@ async fn import_movie_download(
     import_id: &str,
     completed: &CompletedDownload,
     release_evidence: &ReleaseEvidence,
-    video_files: &[PathBuf],
+    video_files: &[ImportVideoFile],
     started_at: chrono::DateTime<Utc>,
     runtime_sample_mode: crate::post_download_gate::RuntimeSampleValidationMode,
 ) -> AppResult<ImportResult> {
-    let source_video = pick_largest_file(video_files)?;
-    let source_title = release_evidence.release_title(Some(&source_video));
+    let largest = pick_largest_import_video_file(video_files)?;
+    // Only release parsing reads the recovered name; every path below is the
+    // physical file.
+    let parse_video = largest.parse_path().into_owned();
+    let source_video = largest.physical;
+    let source_title = release_evidence.release_title(Some(&parse_video));
     let source_size = std::fs::metadata(&source_video)
         .map(|m| m.len() as i64)
         .unwrap_or(0);
@@ -1218,7 +1308,7 @@ async fn import_movie_download(
     } = resolve_import_paths(app, title).await?;
 
     let parsed =
-        build_augmented_movie_import_metadata_for_title(&source_video, release_evidence, title);
+        build_augmented_movie_import_metadata_for_title(&parse_video, release_evidence, title);
     let existing_files = app
         .services
         .library
@@ -1270,7 +1360,7 @@ async fn import_movie_download(
             .map(|runtime_minutes| runtime_minutes.saturating_mul(60)),
         manual_replacement,
     );
-    let prepared = match crate::post_download_gate::prepare_import_candidate(
+    let prepared = match crate::post_download_gate::prepare_import_candidate_with_disc_selection(
         app,
         title,
         &parsed,
@@ -1281,6 +1371,7 @@ async fn import_movie_download(
         existing_score,
         false,
         runtime_sample_validation,
+        largest.disc_selection.as_ref(),
     )
     .await
     {
@@ -1289,7 +1380,7 @@ async fn import_movie_download(
             // A band miss is held for the operator, not burned: expected
             // runtimes are estimates and legitimate outliers (extended cuts,
             // double-length specials) must stay grabbable after review.
-            if rejection.recycle_reason == crate::post_download_gate::RUNTIME_OUT_OF_BAND_CODE {
+            if rejection.requires_review() {
                 return hold_replacement_for_manual_resolution(
                     app,
                     title,
@@ -1299,7 +1390,7 @@ async fn import_movie_download(
                     &source_video,
                     source_size,
                     parsed.quality.clone(),
-                    crate::post_download_gate::RUNTIME_OUT_OF_BAND_CODE,
+                    rejection.recycle_reason,
                     rejection.message.clone(),
                     started_at,
                 )
@@ -1390,7 +1481,15 @@ async fn import_movie_download(
     ensure_import_title_folder_available(app, title, &full_folder_path).await?;
 
     let dest_path = full_folder_path.join(&rendered_filename);
+    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
+        app,
+        Some(&title.library_id),
+        &title.facet,
+        Some(completed),
+    )
+    .await?;
     let check_ctx = crate::import_checks::ImportCheckContext {
+        import_mode,
         source_path: &source_video,
         dest_path: &dest_path,
         source_size: source_size as u64,
@@ -1474,14 +1573,6 @@ async fn import_movie_download(
         )
         .await;
     }
-
-    let import_mode = crate::seeding_gate::resolve_seeding_safe_import_mode(
-        app,
-        Some(&title.library_id),
-        &title.facet,
-        Some(completed),
-    )
-    .await?;
 
     // **The one import decision** (design §3): subject, landed score, truth
     // verdict and admission in one call, over the same incumbents and the same
@@ -1754,7 +1845,7 @@ async fn import_movie_download(
                 &file_id,
                 prepared.accepted.as_ref(),
             )
-            .await;
+            .await?;
             if let Err(error) = crate::subtitles::reconcile_external_subtitles_for_media_file(
                 app, &title.id, &file_id, None, &dest_path,
             )
@@ -1919,7 +2010,7 @@ async fn import_series_movie_download(
     import_id: &str,
     completed: &CompletedDownload,
     release_evidence: &ReleaseEvidence,
-    video_files: &[PathBuf],
+    video_files: &[ImportVideoFile],
     started_at: chrono::DateTime<Utc>,
     series_movie_link_id: &str,
     runtime_sample_mode: crate::post_download_gate::RuntimeSampleValidationMode,
@@ -1970,8 +2061,12 @@ async fn import_series_movie_download(
     };
     let movie = &link.movie;
 
-    let source_video = pick_largest_file(video_files)?;
-    let source_title = release_evidence.release_title(Some(&source_video));
+    let largest = pick_largest_import_video_file(video_files)?;
+    // Only release parsing reads the recovered name; every path below is the
+    // physical file.
+    let parse_video = largest.parse_path().into_owned();
+    let source_video = largest.physical;
+    let source_title = release_evidence.release_title(Some(&parse_video));
     let source_size = std::fs::metadata(&source_video)
         .map(|m| m.len() as i64)
         .unwrap_or(0);
@@ -1990,7 +2085,7 @@ async fn import_series_movie_download(
     // ids), so the import parse must use that same identity for parity.
     let search_title = crate::acquisition_release_search::series_movie_search_title(title, &link);
     let parsed = build_augmented_movie_import_metadata_for_title(
-        &source_video,
+        &parse_video,
         release_evidence,
         &search_title,
     );
@@ -2128,7 +2223,7 @@ async fn import_series_movie_download(
             // A band miss is held for the operator, not burned: expected
             // runtimes are estimates and legitimate outliers (extended cuts,
             // double-length specials) must stay grabbable after review.
-            if rejection.recycle_reason == crate::post_download_gate::RUNTIME_OUT_OF_BAND_CODE {
+            if rejection.requires_review() {
                 return hold_replacement_for_manual_resolution(
                     app,
                     title,
@@ -2138,7 +2233,7 @@ async fn import_series_movie_download(
                     &source_video,
                     source_size,
                     parsed.quality.clone(),
-                    crate::post_download_gate::RUNTIME_OUT_OF_BAND_CODE,
+                    rejection.recycle_reason,
                     rejection.message.clone(),
                     started_at,
                 )
@@ -2571,7 +2666,7 @@ async fn import_series_movie_download(
                 &file_id,
                 prepared.accepted.as_ref(),
             )
-            .await;
+            .await?;
             if let Err(error) = crate::subtitles::reconcile_external_subtitles_for_media_file(
                 app, &title.id, &file_id, None, &dest_path,
             )
@@ -2646,8 +2741,7 @@ async fn import_series_movie_download(
         .await?;
     if nfo_enabled {
         let nfo_path = dest_path.with_extension("nfo");
-        let nfo_content =
-        crate::nfo::render_series_movie_episode_nfo(
+        let nfo_content = crate::nfo::render_series_movie_episode_nfo(
             movie,
             season_episode.as_deref().unwrap_or_default(),
             link.after_season,
@@ -2822,9 +2916,16 @@ fn series_movie_episode_season(episode: &scryer_domain::Episode) -> Option<i32> 
 
 /// `S{season:02}E{episode:02}` for an episode whose season and episode numbers
 /// are both known.
-pub(crate) fn series_movie_season_episode_token(episode: &scryer_domain::Episode) -> Option<String> {
+pub(crate) fn series_movie_season_episode_token(
+    episode: &scryer_domain::Episode,
+) -> Option<String> {
     let season = series_movie_episode_season(episode)?;
-    let episode_number = episode.episode_number.as_deref()?.trim().parse::<i32>().ok()?;
+    let episode_number = episode
+        .episode_number
+        .as_deref()?
+        .trim()
+        .parse::<i32>()
+        .ok()?;
     Some(format!("S{season:02}E{episode_number:02}"))
 }
 

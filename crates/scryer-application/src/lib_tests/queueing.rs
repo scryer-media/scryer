@@ -1,6 +1,207 @@
 use super::*;
 
 #[tokio::test]
+async fn location_move_drains_an_already_admitted_download_submission() {
+    let client = Arc::new(StubDownloadClient::default());
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        client.clone(),
+        submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Draining Download".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let gate = Arc::new(tokio::sync::Notify::new());
+    *client.submit_gate.lock().await = Some(gate.clone());
+    let submit_app = app.clone();
+    let title_id = title.id.clone();
+    let submit = tokio::spawn(async move {
+        submit_app
+            .queue_existing_title_download(
+                &user,
+                &title_id,
+                QueuedReleaseSelection {
+                    source_hint: Some("https://example.invalid/draining.nzb".into()),
+                    source_kind: Some(DownloadSourceKind::NzbUrl),
+                    source_title: Some("Draining.Download.2026.1080p.WEB-DL".into()),
+                    ..Default::default()
+                },
+                SubmissionScope::Title,
+                SubmissionConflictPolicy::Abort,
+            )
+            .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        client.submit_started.notified(),
+    )
+    .await
+    .unwrap();
+    let entities = [crate::location::ownership_guard::OwnedEntity::Title(
+        title.id.clone(),
+    )];
+    let drain = app
+        .runtime
+        .library
+        .location_ownership
+        .drain_title_mutations(&entities);
+    tokio::pin!(drain);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(10), &mut drain)
+            .await
+            .is_err()
+    );
+    assert!(submissions.store.lock().await.is_empty());
+    gate.notify_one();
+    let exclusive = tokio::time::timeout(std::time::Duration::from_secs(5), drain)
+        .await
+        .unwrap();
+    assert_eq!(
+        submissions.store.lock().await.len(),
+        1,
+        "submission must be durable before the move can claim ownership"
+    );
+    app.runtime
+        .library
+        .location_ownership
+        .claim_all("move", &entities);
+    drop(exclusive);
+    submit.await.unwrap().unwrap();
+    assert!(
+        app.acquire_location_title_mutation(
+            &crate::location::ownership_guard::TITLE_DOWNLOAD_ENTRY,
+            &title.id
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn location_locked_title_cannot_download_or_upgrade_and_does_not_blocklist_release() {
+    let client = Arc::new(StubDownloadClient::default());
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        client.clone(),
+        submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Locked Download".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let collection = app
+        .create_collection(
+            &user,
+            title.id.clone(),
+            "season".into(),
+            "1".into(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    let episode = app
+        .create_episode(
+            &user,
+            title.id.clone(),
+            Some(collection.id.clone()),
+            "standard".into(),
+            Some("1".into()),
+            Some("1".into()),
+            None,
+            None,
+            None,
+            None,
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    let scope = SubmissionScope::Episode {
+        episode_id: episode.id,
+    };
+    let release = QueuedReleaseSelection {
+        source_hint: Some("https://example.invalid/locked.nzb".into()),
+        source_kind: Some(DownloadSourceKind::NzbUrl),
+        source_title: Some("Locked.Download.S01E01.1080p.WEB-DL".into()),
+        ..Default::default()
+    };
+    app.runtime.library.location_ownership.claim_all(
+        "move",
+        &[crate::location::ownership_guard::OwnedEntity::Title(
+            title.id.clone(),
+        )],
+    );
+    for purpose in [
+        DownloadSubmissionPurpose::Standard,
+        DownloadSubmissionPurpose::OperatorQueued,
+        DownloadSubmissionPurpose::ManualReplacement,
+        DownloadSubmissionPurpose::AdditionalFile,
+    ] {
+        let error = app
+            .queue_existing_title_download_with_purpose(
+                &user,
+                &title.id,
+                release.clone(),
+                scope.clone(),
+                SubmissionConflictPolicy::ReplaceEarly,
+                purpose,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, AppError::LocationOperationBusy(_)),
+            "{error}"
+        );
+    }
+    assert!(client.submitted_title_ids.lock().await.is_empty());
+    assert!(client.deleted_items.lock().await.is_empty());
+    assert!(submissions.store.lock().await.is_empty());
+    assert!(title_blocklist_entries(&app, &title.id).await.is_empty());
+    assert!(
+        app.derive_acquisition_targets_for_title(&Utc::now(), Some(&title.id))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    app.runtime
+        .library
+        .location_ownership
+        .release_operation("move");
+    app.queue_existing_title_download(
+        &user,
+        &title.id,
+        release,
+        scope,
+        SubmissionConflictPolicy::Abort,
+    )
+    .await
+    .unwrap();
+    assert_eq!(client.submitted_title_ids.lock().await.len(), 1);
+}
+
+#[tokio::test]
 async fn canonical_submission_holds_artifact_lease_until_client_accepts() {
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -3194,6 +3395,7 @@ async fn queue_replacement_release_from_candidate_token_marks_manual_replacement
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3306,6 +3508,7 @@ async fn queue_existing_title_download_additional_file_uses_signed_candidate_sco
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3508,6 +3711,7 @@ async fn queue_best_release_prefers_first_auto_eligible_candidate() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3600,6 +3804,7 @@ async fn queue_best_release_reports_auto_eligibility_reason_counts() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3738,6 +3943,7 @@ async fn queue_best_release_supports_series_movie_scope() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3908,6 +4114,11 @@ async fn series_movie_wanted_subject_uses_parent_owner_when_title_facet_is_missi
     ));
     let (app, user) = bootstrap_with_search_settings_and_indexer(settings, indexer_client);
 
+    // Creation is registry-gated now, so the vocabulary has to exist before a
+    // title can be born carrying it.
+    app.create_title_tag_definition(&user, "anime-hd", None)
+        .await
+        .expect("tag should be defined");
     let title = app
         .add_title(
             &user,
@@ -4047,6 +4258,7 @@ async fn search_indexers_for_series_movie_merges_categories_and_accepts_short_ti
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -4136,6 +4348,11 @@ async fn convergence_test_title_and_subject(
     Title,
     crate::acquisition_release_search::ResolvedReleaseSearchSubject,
 ) {
+    // Creation is registry-gated now, so the vocabulary has to exist before a
+    // title can be born carrying it.
+    app.create_title_tag_definition(user, "anime-hd", None)
+        .await
+        .expect("tag should be defined");
     let title = app
         .add_title(
             user,

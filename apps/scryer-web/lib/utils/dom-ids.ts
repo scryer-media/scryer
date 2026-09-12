@@ -59,6 +59,10 @@ export function wantedItemSearchNowId(wantedItemId: string): string {
   return selectorId("wanted-item-search-now", wantedItemId);
 }
 
+export function titleOverviewSelectId(titleId: string): string {
+  return selectorId("title-overview-select", titleId);
+}
+
 export function titleOverviewSearchButtonId(titleId: string): string {
   return selectorId("title-overview-search", titleId);
 }
@@ -257,6 +261,135 @@ export function mediaRequestMonitorOptionId(scope: string, monitorType: string):
   return selectorId(scope, "media-request-monitor-option", monitorType);
 }
 
+// ── Request rules, leases, decisions and claims ──────────────────────────
+//
+// One helper per interactive element the request-rules surfaces add, so the
+// e2e suite targets a name rather than a class or a position. Fixed ids that
+// carry no entity are constants; anything keyed by a rule, request, user,
+// template or claim is a function.
+
+export const REQUEST_MEDIA_LEASE_ID = "request-media-lease";
+export const REQUEST_MEDIA_LEASE_DAYS_ID = "request-media-lease-days";
+export const REQUEST_PREFLIGHT_BANNER_ID = "request-preflight-banner";
+
+export function requestMediaLeaseOptionId(value: string): string {
+  return selectorId("request-media-lease-option", value);
+}
+
+export function mediaRequestLeaseId(requestId: string): string {
+  return selectorId("media-request-lease", requestId);
+}
+
+export function mediaRequestDecisionId(requestId: string): string {
+  return selectorId("media-request-decision", requestId);
+}
+
+export function mediaRequestDecisionPopoverId(requestId: string): string {
+  return selectorId("media-request-decision-popover", requestId);
+}
+
+export function mediaRequestPolicyTagsId(requestId: string): string {
+  return selectorId("media-request-policy-tags", requestId);
+}
+
+export function mediaRequestDenyReasonId(requestId: string): string {
+  return selectorId("media-request-deny-reason", requestId);
+}
+
+export function mediaRequestClaimsToggleId(requestId: string): string {
+  return selectorId("media-request-claims-toggle", requestId);
+}
+
+export function mediaRequestClaimsPanelId(requestId: string): string {
+  return selectorId("media-request-claims-panel", requestId);
+}
+
+export const APPROVE_MEDIA_REQUEST_LEASE_ID = "approve-media-request-lease";
+export const APPROVE_MEDIA_REQUEST_LEASE_DAYS_ID =
+  "approve-media-request-lease-days";
+/// Prefix the approve dialog hands `TitleTagsPicker`, which derives its own
+/// ids from it: `<prefix>-tags` for the block, `<prefix>-tags-add` for the
+/// registry select, and `<prefix>-tag-remove-<label>` for each chip's remove
+/// button. The approver picks from the registry rather than typing, so the
+/// free-text field these ids used to name no longer exists.
+export const APPROVE_MEDIA_REQUEST_TAGS_PREFIX = "approve-media-request";
+export const APPROVE_MEDIA_REQUEST_TAGS_ID = "approve-media-request-tags";
+export const APPROVE_MEDIA_REQUEST_TAG_ADD_ID = "approve-media-request-tags-add";
+
+export function approveMediaRequestLeaseOptionId(value: string): string {
+  return selectorId("approve-media-request-lease-option", value);
+}
+
+/// Mirrors `TitleTagsPicker`'s own remove-button id exactly — the picker keeps
+/// the label's case and only collapses whitespace, so this cannot go through
+/// `selectorId`, which lowercases.
+export function approveMediaRequestTagRemoveId(tag: string): string {
+  return `${APPROVE_MEDIA_REQUEST_TAGS_PREFIX}-tag-remove-${tag.replace(/\s+/g, "-")}`;
+}
+
+export function titleClaimRowId(claimId: string): string {
+  return selectorId("title-claim-row", claimId);
+}
+
+export function titleClaimExtendId(claimId: string): string {
+  return selectorId("title-claim-extend", claimId);
+}
+
+export function titleClaimPermanentId(claimId: string): string {
+  return selectorId("title-claim-permanent", claimId);
+}
+
+export function titleClaimReleaseId(claimId: string): string {
+  return selectorId("title-claim-release", claimId);
+}
+
+export const TITLE_CLAIM_EXTEND_DATE_ID = "title-claim-extend-date";
+export const TITLE_CLAIM_RELEASE_REASON_ID = "title-claim-release-reason";
+
+export function settingsRequestRuleRowId(ruleSetId: string): string {
+  return selectorId("settings-request-rule-row", ruleSetId);
+}
+
+export function settingsRequestRuleNameId(name: string): string {
+  return selectorId("settings-request-rule-name", name);
+}
+
+export function settingsRequestRuleModeId(ruleSetId: string): string {
+  return selectorId("settings-request-rule-mode", ruleSetId);
+}
+
+export function settingsRequestRuleCopyId(ruleSetId: string): string {
+  return selectorId("settings-request-rule-copy", ruleSetId);
+}
+
+export function settingsRequestRuleEditId(ruleSetId: string): string {
+  return selectorId("settings-request-rule-edit", ruleSetId);
+}
+
+export function settingsRequestRuleDeleteId(ruleSetId: string): string {
+  return selectorId("settings-request-rule-delete", ruleSetId);
+}
+
+export function settingsRequestRuleLibraryId(libraryId: string): string {
+  return selectorId("settings-request-rule-library", libraryId);
+}
+
+export function settingsRequestTemplateId(templateId: string): string {
+  return selectorId("settings-request-template", templateId);
+}
+
+export function settingsRequestUserId(userId: string): string {
+  return selectorId("settings-request-user", userId);
+}
+
+export function settingsRequestPreviewTitleResultId(key: string): string {
+  return selectorId("settings-request-preview-title-result", key);
+}
+
+export function settingsRequestDecisionRowId(index: number): string {
+  return selectorId("settings-request-decision-row", index);
+}
+
 type ReleaseSearchSelectorInput = {
   source?: string | null;
   title?: string | null;
@@ -333,6 +466,57 @@ export function releaseSearchResultQueueAdditionalId(
   return selectorId(
     "release-search-result-queue-additional",
     variant,
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
+/**
+ * Rows of the Indexers › Search pane. The identity is the one the title-scoped
+ * release rows already use, so the same release keeps the same key wherever it
+ * is rendered — and a retry that returns it again merges onto its own row.
+ */
+export function indexerSearchResultRowId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-row",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
+export function indexerSearchResultSelectId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-select",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
+export function indexerSearchResultGrabId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-grab",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
+/** The row's "download to my browser" button (D17). */
+export function indexerSearchResultDownloadId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-download",
+    ...releaseSearchResultSelectorParts(release),
+  );
+}
+
+export function indexerSearchResultExpandId(
+  release: ReleaseSearchSelectorInput,
+): string {
+  return selectorId(
+    "indexer-search-expand",
     ...releaseSearchResultSelectorParts(release),
   );
 }

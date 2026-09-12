@@ -1903,6 +1903,7 @@ mod tests {
                 stream: scryer_domain::DomainEventStream::Global,
                 payload: DomainEventPayload::MediaRequestSubmitted(
                     MediaRequestSubmittedEventData {
+                        requested_lease_days: None,
                         request_id: "request-1".to_string(),
                         library_id: "library-series".to_string(),
                         facet: MediaFacet::Series,
@@ -1930,6 +1931,10 @@ mod tests {
                 schema_version: 1,
                 stream: scryer_domain::DomainEventStream::Global,
                 payload: DomainEventPayload::MediaRequestApproved(MediaRequestResolvedEventData {
+                    decided_by_rule_set_ids: Vec::new(),
+                    decision_reason_codes: Vec::new(),
+                    approved_lease_days: None,
+                    policy_tags: Vec::new(),
                     request_id: "request-1".to_string(),
                     library_id: "library-series".to_string(),
                     facet: MediaFacet::Series,
@@ -1957,6 +1962,10 @@ mod tests {
                 schema_version: 1,
                 stream: scryer_domain::DomainEventStream::Global,
                 payload: DomainEventPayload::MediaRequestRejected(MediaRequestResolvedEventData {
+                    decided_by_rule_set_ids: Vec::new(),
+                    decision_reason_codes: Vec::new(),
+                    approved_lease_days: None,
+                    policy_tags: Vec::new(),
                     request_id: "request-2".to_string(),
                     library_id: "library-movie".to_string(),
                     facet: MediaFacet::Movie,
@@ -1984,6 +1993,10 @@ mod tests {
                 schema_version: 1,
                 stream: scryer_domain::DomainEventStream::Global,
                 payload: DomainEventPayload::MediaRequestCanceled(MediaRequestResolvedEventData {
+                    decided_by_rule_set_ids: Vec::new(),
+                    decision_reason_codes: Vec::new(),
+                    approved_lease_days: None,
+                    policy_tags: Vec::new(),
                     request_id: "request-3".to_string(),
                     library_id: "library-anime".to_string(),
                     facet: MediaFacet::Anime,
@@ -2150,6 +2163,7 @@ mod tests {
         let cases = [
             (
                 DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
+                    requested_lease_days: None,
                     request_id: "request-submitted".to_string(),
                     library_id: "library-series".to_string(),
                     facet: MediaFacet::Series,
@@ -2167,6 +2181,10 @@ mod tests {
             ),
             (
                 DomainEventPayload::MediaRequestApproved(MediaRequestResolvedEventData {
+                    decided_by_rule_set_ids: Vec::new(),
+                    decision_reason_codes: Vec::new(),
+                    approved_lease_days: None,
+                    policy_tags: Vec::new(),
                     request_id: "request-approved".to_string(),
                     library_id: "library-movie".to_string(),
                     facet: MediaFacet::Movie,
@@ -2185,6 +2203,10 @@ mod tests {
             ),
             (
                 DomainEventPayload::MediaRequestRejected(MediaRequestResolvedEventData {
+                    decided_by_rule_set_ids: Vec::new(),
+                    decision_reason_codes: Vec::new(),
+                    approved_lease_days: None,
+                    policy_tags: Vec::new(),
                     request_id: "request-rejected".to_string(),
                     library_id: "library-movie".to_string(),
                     facet: MediaFacet::Movie,
@@ -2203,6 +2225,10 @@ mod tests {
             ),
             (
                 DomainEventPayload::MediaRequestCanceled(MediaRequestResolvedEventData {
+                    decided_by_rule_set_ids: Vec::new(),
+                    decision_reason_codes: Vec::new(),
+                    approved_lease_days: None,
+                    policy_tags: Vec::new(),
                     request_id: "request-canceled".to_string(),
                     library_id: "library-anime".to_string(),
                     facet: MediaFacet::Anime,

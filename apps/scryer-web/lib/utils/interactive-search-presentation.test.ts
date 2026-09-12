@@ -11,8 +11,10 @@ function indexer(
   return {
     indexerId: name.toLowerCase(),
     name,
+    priority: 0,
     status,
     resultCount: 0,
+    elapsedMs: null,
     failureReason: null,
   };
 }

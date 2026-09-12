@@ -20,6 +20,44 @@ pub struct PluginStore {
     datastore: StoreDatastore,
 }
 
+/// Owned copy of the seed values so the comparison below can run inside the
+/// transaction closure, which cannot borrow from the caller's frame.
+#[derive(Clone)]
+struct BuiltinSeedSnapshot {
+    name: String,
+    description: String,
+    version: String,
+    sdk_version: String,
+    sdk_constraint: String,
+    plugin_type: String,
+    provider_type: String,
+}
+
+/// True when the stored row already holds exactly what the seed UPDATE would
+/// write, so running it would change nothing but `updated_at`.
+///
+/// Seeding runs on every boot. Writing unconditionally made every built-in row
+/// report a fresh `updated_at` after each restart, so the column could not be
+/// used to tell a real metadata change from a restart.
+fn builtin_seed_row_is_current(existing: &PluginInstallation, seed: &BuiltinSeedSnapshot) -> bool {
+    if existing.plugin_type != seed.plugin_type || existing.provider_type != seed.provider_type {
+        return false;
+    }
+    if existing.source_kind == PluginSourceKind::Downloaded {
+        // The seed UPDATE preserves a downloaded build's own name, version,
+        // sdk and constraint columns; only the type pair, compared above, and
+        // `updated_at` would change.
+        return true;
+    }
+    existing.source_kind == PluginSourceKind::Bundled
+        && existing.name == seed.name
+        && existing.description == seed.description
+        && existing.version == seed.version
+        && existing.sdk_version == seed.sdk_version
+        && existing.sdk_constraint == seed.sdk_constraint
+        && existing.scryer_constraint.is_none()
+}
+
 #[derive(Clone, Copy)]
 struct BuiltinPluginSeed<'a> {
     plugin_id: &'a str,
@@ -154,6 +192,15 @@ impl PluginStore {
     async fn seed_builtin_plugin(&self, seed: BuiltinPluginSeed<'_>) -> AppResult<()> {
         let now = Utc::now();
         let plugin_id = seed.plugin_id.to_string();
+        let seed_snapshot = BuiltinSeedSnapshot {
+            name: seed.name.to_string(),
+            description: seed.description.to_string(),
+            version: seed.version.to_string(),
+            sdk_version: seed.sdk_version.to_string(),
+            sdk_constraint: seed.sdk_constraint.to_string(),
+            plugin_type: seed.plugin_type.to_string(),
+            provider_type: seed.provider_type.to_string(),
+        };
         let insert_args = vec![
             SqlArg::Text(Id::new().0),
             SqlArg::Text(plugin_id.clone()),
@@ -186,6 +233,7 @@ impl PluginStore {
             let plugin_id = plugin_id.clone();
             let insert_args = insert_args.clone();
             let update_args = update_args.clone();
+            let seed_snapshot = seed_snapshot.clone();
             Box::pin(async move {
                 let existing = read_plugin_installation_tx(tx, &plugin_id, false).await?;
                 match existing {
@@ -193,7 +241,10 @@ impl PluginStore {
                         SqlRuntime::execute(SqlExec::Tx(tx), PLUGIN_SEED_INSERT_SQL, &insert_args)
                             .await?;
                     }
-                    Some(existing) if existing.is_builtin => {
+                    Some(existing)
+                        if existing.is_builtin
+                            && !builtin_seed_row_is_current(&existing, &seed_snapshot) =>
+                    {
                         SqlRuntime::execute(SqlExec::Tx(tx), PLUGIN_SEED_UPDATE_SQL, &update_args)
                             .await?;
                     }
@@ -217,7 +268,6 @@ impl PluginInstallationRepository for PluginStore {
         SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &[])
             .await?
             .iter()
-            .filter(|row| !row_is_incompatible_external_installation(row, true))
             .map(row_to_plugin_installation)
             .collect()
     }
@@ -240,9 +290,9 @@ impl PluginInstallationRepository for PluginStore {
         let Some(row) = row else {
             return Ok(None);
         };
-        if row_is_incompatible_external_installation(&row, true) {
-            return Ok(None);
-        }
+        // Startup compatibility repair and the operator UI must see legacy
+        // rows, including incomplete payload metadata. Runtime loading applies
+        // compatibility checks separately; hiding rows prevents their repair.
         row_to_plugin_installation(&row).map(Some)
     }
 

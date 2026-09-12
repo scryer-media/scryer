@@ -565,6 +565,7 @@ impl NotificationPluginProvider for TestNotificationPluginProvider {
             host_binding: None,
             options: Vec::new(),
             help_text: None,
+            ..Default::default()
         }]
     }
 

@@ -1,4 +1,6 @@
+use super::maintenance_evaluation::MaintenanceActionJobReceipts;
 use super::*;
+use std::sync::atomic::AtomicBool;
 
 pub(super) type DeleteOperationLog = Arc<Mutex<Vec<String>>>;
 pub(super) type OptionalDeleteOperationLog = Arc<Mutex<Option<DeleteOperationLog>>>;
@@ -19,8 +21,16 @@ pub(super) type PausedDownloadRequests = Arc<Mutex<Vec<PausedDownloadRequest>>>;
 #[derive(Default)]
 pub(super) struct MockTitleRepo {
     pub(super) store: Arc<Mutex<Vec<Title>>>,
+    /// The title tag registry, in definition order. Mirrors the store's
+    /// behaviour rather than its SQL: unique labels, a rename that rewrites
+    /// every bag carrying the old label, and a delete that strips it.
+    pub(super) title_tag_definitions: Arc<Mutex<Vec<scryer_domain::TitleTagDefinition>>>,
+    pub(super) fail_tag_reads: AtomicBool,
     pub(super) smg_identity_backfill_attempts: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) create_or_get_existing_error: Arc<Mutex<Option<String>>>,
+    /// `(title_id, message)`: fail folder-ownership writes for one title, so a
+    /// compensating transaction can be exercised at the exact commit that fails.
+    pub(super) folder_path_write_error: Arc<Mutex<Option<(String, String)>>>,
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
     pub(super) pending_import_items: Option<Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>>,
     pub(super) external_id_batch_lookup_calls: AtomicUsize,
@@ -29,12 +39,22 @@ pub(super) struct MockTitleRepo {
 #[derive(Default)]
 pub(crate) struct RecordingJobRunRepo {
     pub(super) runs: Arc<Mutex<Vec<JobRunRecord>>>,
+    maintenance_action_job_receipts: Option<MaintenanceActionJobReceipts>,
     pub(super) list_job_runs_calls: AtomicUsize,
     pub(super) list_job_runs_for_actor_calls: AtomicUsize,
     pub(super) list_active_job_runs_calls: AtomicUsize,
 }
 
 impl RecordingJobRunRepo {
+    pub(super) fn with_maintenance_action_job_receipts(
+        maintenance_action_job_receipts: MaintenanceActionJobReceipts,
+    ) -> Self {
+        Self {
+            maintenance_action_job_receipts: Some(maintenance_action_job_receipts),
+            ..Self::default()
+        }
+    }
+
     pub(crate) async fn seed(&self, run: JobRunRecord) {
         self.runs.lock().await.push(run);
     }
@@ -46,6 +66,63 @@ impl JobRunRepository for RecordingJobRunRepo {
         let mut runs = self.runs.lock().await;
         runs.push(run.clone());
         Ok(run.clone())
+    }
+
+    async fn create_maintenance_search_job_run(
+        &self,
+        run: &JobRunRecord,
+        receipt: &scryer_domain::MaintenanceActionJobReceipt,
+    ) -> AppResult<MaintenanceSearchJobRunCreation> {
+        receipt
+            .validate_schema()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        if receipt.state != scryer_domain::MaintenanceActionJobReceiptState::Accepted
+            || receipt.job_run_id.as_deref() != Some(run.id.as_str())
+            || run.job_key != JobKey::AcquisitionSearch
+        {
+            return Err(AppError::Validation(
+                "maintenance Search requires an accepted receipt for its acquisition job run"
+                    .to_string(),
+            ));
+        }
+        let Some(stored_receipts) = &self.maintenance_action_job_receipts else {
+            return Err(AppError::Repository(
+                "maintenance Search dispatch is not configured".to_string(),
+            ));
+        };
+
+        // Keep this receipt store shared with the evaluator. Holding its lock
+        // through the job insertion gives the test adapter the same no-duplicate
+        // acceptance boundary that the workflow store provides in SQL.
+        let mut receipts = stored_receipts.lock().await;
+        if let Some(existing) = receipts.iter().find(|existing| {
+            existing.key == receipt.key
+                && existing.request_hash == receipt.request_hash
+                && matches!(
+                    existing.state,
+                    scryer_domain::MaintenanceActionJobReceiptState::Accepted
+                        | scryer_domain::MaintenanceActionJobReceiptState::Completed
+                )
+        }) {
+            return Ok(MaintenanceSearchJobRunCreation::Existing {
+                receipt: existing.clone(),
+            });
+        }
+        if let Some(existing) = receipts.iter().find(|existing| {
+            existing.key == receipt.key && existing.dispatch_attempt == receipt.dispatch_attempt
+        }) {
+            return Ok(MaintenanceSearchJobRunCreation::Existing {
+                receipt: existing.clone(),
+            });
+        }
+
+        let mut runs = self.runs.lock().await;
+        receipts.push(receipt.clone());
+        runs.push(run.clone());
+        Ok(MaintenanceSearchJobRunCreation::Created {
+            run: Box::new(run.clone()),
+            receipt: receipt.clone(),
+        })
     }
 
     async fn update_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord> {
@@ -159,6 +236,21 @@ impl MockTitleRepo {
         *self.create_or_get_existing_error.lock().await = Some(message.to_string());
     }
 
+    /// Make every `set_folder_path`/`clear_folder_path` for `title_id` fail.
+    pub(super) async fn fail_folder_path_writes_for(&self, title_id: &str, message: &str) {
+        *self.folder_path_write_error.lock().await =
+            Some((title_id.to_string(), message.to_string()));
+    }
+
+    async fn folder_path_write_failure(&self, id: &str) -> Option<AppError> {
+        self.folder_path_write_error
+            .lock()
+            .await
+            .as_ref()
+            .filter(|(failing_id, _)| failing_id == id)
+            .map(|(_, message)| AppError::Repository(message.clone()))
+    }
+
     pub(super) async fn set_delete_operation_log(&self, operation_log: Arc<Mutex<Vec<String>>>) {
         *self.delete_operation_log.lock().await = Some(operation_log);
     }
@@ -251,26 +343,222 @@ impl TitleRepository for MockTitleRepo {
             .collect())
     }
 
+    async fn list_title_tag_definitions(&self) -> AppResult<Vec<TitleTagDefinitionSummary>> {
+        if self.fail_tag_reads.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic tag registry read failure".into(),
+            ));
+        }
+        let definitions = self.title_tag_definitions.lock().await.clone();
+        let titles = self.store.lock().await.clone();
+        let mut summaries = definitions
+            .into_iter()
+            .map(|definition| {
+                let title_count = titles
+                    .iter()
+                    .filter(|title| title.tags.iter().any(|tag| tag == &definition.label))
+                    .count() as u64;
+                TitleTagDefinitionSummary {
+                    definition,
+                    title_count,
+                    // The mock owns titles only; series-movie membership lives
+                    // on the show repository, so the count it can honestly give
+                    // for links is zero.
+                    series_movie_count: 0,
+                }
+            })
+            .collect::<Vec<_>>();
+        summaries.sort_by(|left, right| left.definition.label.cmp(&right.definition.label));
+        Ok(summaries)
+    }
+
+    async fn get_title_tag_definition(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_domain::TitleTagDefinition>> {
+        Ok(self
+            .title_tag_definitions
+            .lock()
+            .await
+            .iter()
+            .find(|definition| definition.id == id)
+            .cloned())
+    }
+
+    async fn create_title_tag_definition(
+        &self,
+        definition: &scryer_domain::TitleTagDefinition,
+    ) -> AppResult<scryer_domain::TitleTagDefinition> {
+        let mut definitions = self.title_tag_definitions.lock().await;
+        if definitions
+            .iter()
+            .any(|existing| existing.label == definition.label)
+        {
+            return Err(AppError::Validation(format!(
+                "a tag named '{}' already exists",
+                definition.label
+            )));
+        }
+        definitions.push(definition.clone());
+        Ok(definition.clone())
+    }
+
+    async fn update_title_tag_definition(
+        &self,
+        id: &str,
+        label: Option<String>,
+        description: Option<Option<String>>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<(
+        scryer_domain::TitleTagDefinition,
+        crate::TitleTagMembershipCounts,
+    )> {
+        let mut definitions = self.title_tag_definitions.lock().await;
+        let existing = definitions
+            .iter()
+            .find(|definition| definition.id == id)
+            .cloned()
+            .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))?;
+        let next_label = label.unwrap_or_else(|| existing.label.clone());
+        if next_label != existing.label
+            && definitions
+                .iter()
+                .any(|definition| definition.id != id && definition.label == next_label)
+        {
+            return Err(AppError::Validation(format!(
+                "a tag named '{next_label}' already exists"
+            )));
+        }
+
+        let updated = scryer_domain::TitleTagDefinition {
+            label: next_label.clone(),
+            description: description.unwrap_or_else(|| existing.description.clone()),
+            updated_at,
+            ..existing.clone()
+        };
+        if let Some(slot) = definitions
+            .iter_mut()
+            .find(|definition| definition.id == id)
+        {
+            *slot = updated.clone();
+        }
+        drop(definitions);
+
+        let mut titles = self.store.lock().await;
+        let mut rewritten = 0_u64;
+        if next_label != existing.label {
+            for title in titles.iter_mut() {
+                if !title.tags.iter().any(|tag| tag == &existing.label) {
+                    continue;
+                }
+                title.tags.retain(|tag| tag != &existing.label);
+                if !title.tags.iter().any(|tag| tag == &next_label) {
+                    title.tags.push(next_label.clone());
+                }
+                rewritten += 1;
+            }
+        }
+        Ok((
+            updated,
+            crate::TitleTagMembershipCounts {
+                titles: rewritten,
+                series_movies: 0,
+            },
+        ))
+    }
+
+    async fn delete_title_tag_definition(
+        &self,
+        id: &str,
+    ) -> AppResult<(
+        scryer_domain::TitleTagDefinition,
+        crate::TitleTagMembershipCounts,
+    )> {
+        let mut definitions = self.title_tag_definitions.lock().await;
+        let index = definitions
+            .iter()
+            .position(|definition| definition.id == id)
+            .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))?;
+        let removed = definitions.remove(index);
+        drop(definitions);
+
+        let mut titles = self.store.lock().await;
+        let mut stripped = 0_u64;
+        for title in titles.iter_mut() {
+            if !title.tags.iter().any(|tag| tag == &removed.label) {
+                continue;
+            }
+            title.tags.retain(|tag| tag != &removed.label);
+            stripped += 1;
+        }
+        Ok((
+            removed,
+            crate::TitleTagMembershipCounts {
+                titles: stripped,
+                series_movies: 0,
+            },
+        ))
+    }
+
+    async fn update_user_tags(
+        &self,
+        title_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<Title> {
+        let mut titles = self.store.lock().await;
+        let title = titles
+            .iter_mut()
+            .find(|entry| entry.id == title_id)
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+        // Removals first, so a label in both lists survives; reserved entries
+        // are never removed and never counted against the ceiling. The bag is
+        // assembled and validated before it is assigned, because the mock has
+        // no transaction to roll back a refused write.
+        let mut next_tags = title
+            .tags
+            .iter()
+            .filter(|tag| {
+                crate::is_reserved_title_tag(tag) || !remove.iter().any(|removed| removed == *tag)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for label in add {
+            if !next_tags.iter().any(|tag| tag == label) {
+                next_tags.push(label.clone());
+            }
+        }
+        let user_tag_count = next_tags
+            .iter()
+            .filter(|tag| !crate::is_reserved_title_tag(tag))
+            .count();
+        if user_tag_count > crate::MAX_USER_TAGS_PER_TITLE {
+            return Err(AppError::Validation(format!(
+                "a title can carry at most {} tags; this change would leave it with {user_tag_count}",
+                crate::MAX_USER_TAGS_PER_TITLE
+            )));
+        }
+        title.tags = next_tags;
+        Ok(title.clone())
+    }
+
     async fn list_by_external_ids(&self, source: &str, values: &[String]) -> AppResult<Vec<Title>> {
-        let requested: Vec<&str> = values
+        let requested: HashSet<&str> = values
             .iter()
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
             .collect();
         let list = self.store.lock().await;
-        let mut matches = Vec::new();
-        let mut seen = HashSet::new();
-        for value in requested {
-            if let Some(title) = list.iter().find(|title| {
+        Ok(list
+            .iter()
+            .filter(|title| {
                 title.external_ids.iter().any(|external_id| {
-                    external_id.source.eq_ignore_ascii_case(source) && external_id.value == value
+                    external_id.source.eq_ignore_ascii_case(source)
+                        && requested.contains(external_id.value.trim())
                 })
-            }) && seen.insert(title.id.clone())
-            {
-                matches.push(title.clone());
-            }
-        }
-        Ok(matches)
+            })
+            .cloned()
+            .collect())
     }
 
     async fn list_existing_external_ids_in_library_and_facet(
@@ -746,6 +1034,38 @@ impl TitleRepository for MockTitleRepo {
         Ok(title.clone())
     }
 
+    /// FR-056: the transfer repoints the existing row, so everything keyed on
+    /// the title id stays exactly where it is. The mock mirrors the store's
+    /// behaviour rather than the store's SQL: the row's library and root change,
+    /// and nothing else about the title does.
+    async fn transfer_to_library(
+        &self,
+        id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+        facet: Option<MediaFacet>,
+        drop_tag_prefixes: &[String],
+    ) -> AppResult<()> {
+        let mut list = self.store.lock().await;
+        let title = list
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .ok_or_else(|| AppError::NotFound(format!("title {id}")))?;
+        title.library_id = library_id.to_string();
+        title.root_folder_id = root_folder_id.to_string();
+        // FR-057: the facet converts in the same write, and the values derived
+        // under the old facet go with it.
+        if let Some(facet) = facet {
+            title.facet = facet;
+            title.tags.retain(|tag| {
+                !drop_tag_prefixes
+                    .iter()
+                    .any(|prefix| tag.starts_with(prefix))
+            });
+        }
+        Ok(())
+    }
+
     async fn update_monitored(&self, id: &str, monitored: bool) -> AppResult<Title> {
         let mut list = self.store.lock().await;
         let title = list
@@ -831,6 +1151,9 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
+        if let Some(error) = self.folder_path_write_failure(id).await {
+            return Err(error);
+        }
         let mut list = self.store.lock().await;
         let title = list
             .iter_mut()
@@ -841,6 +1164,9 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn clear_folder_path(&self, id: &str) -> AppResult<()> {
+        if let Some(error) = self.folder_path_write_failure(id).await {
+            return Err(error);
+        }
         let mut list = self.store.lock().await;
         let title = list
             .iter_mut()

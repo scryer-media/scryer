@@ -41,6 +41,8 @@ mod import;
 mod indexer_category;
 mod indexer_errors;
 mod indexer_requests;
+pub mod transport_proxy;
+pub mod tunnel_proxy;
 pub use indexer_category::{
     CATEGORY_MISMATCH_CODE, IndexerCategoryFamily, NZB_HEAD_PROBE_BYTES, enforce_nzb_category_gate,
     indexer_category_contradicts_facet, indexer_category_family, nzb_head_category,
@@ -62,9 +64,14 @@ mod library_scan_progress;
 mod library_scan_titles;
 #[path = "library/scan/unmatched.rs"]
 mod library_scan_unmatched;
+pub mod lifecycle_claims;
+pub mod location;
+pub mod maintenance_rules;
 mod media;
 mod media_requests;
+pub mod media_server_signals;
 mod media_servers;
+mod metrics_support;
 mod notifications;
 mod null_repositories;
 mod oauth;
@@ -80,7 +87,14 @@ pub use ports::{
 pub use ports::{DownloadCleanupClaim, DownloadCleanupRecord, DownloadClientObservation};
 mod quality;
 mod rate_limit_signal;
+pub mod request_rules;
 mod rules;
+pub use rules::preview::{
+    RuleSetTestContext, RuleSetTestDraft, RuleSetTestDraftContribution, RuleSetTestEntry,
+    RuleSetTestError, RuleSetTestParsed, RuleSetTestRequest, RuleSetTestResult,
+    RuleSetTestRuleSetResult,
+};
+pub use rules::tracked_packs::{RulePackPreviewChange, TrackedRulePackPreview};
 mod scheduler;
 mod security;
 mod services;
@@ -129,7 +143,6 @@ pub(crate) use quality::profile as quality_profile;
 pub(crate) use quality::release_group_db;
 pub(crate) use quality::release_parser;
 pub(crate) use quality::scoring_weights;
-pub(crate) use quality::trash_scores;
 pub(crate) use rules::user_rule_input;
 
 pub use download_client_config::resolve_download_client_base_url_from_config_json;
@@ -155,17 +168,21 @@ pub use ports::{
     UserUiSettingsRepository,
 };
 pub(crate) mod normalize;
+pub use acquisition::submission::describe_acquisition_metrics;
 pub use api_keys::{
     API_KEY_PREFIX, ApiKeyAuthentication, ApiKeyExpiryPreset, ApiKeySummary, CreateApiKey,
     CreatedApiKey, DevelopmentApiKeySeed, parse_api_key,
 };
+pub use events::metrics::describe_domain_event_metrics;
 pub use events::retention::user_facing_domain_event_types;
 pub use import::failed_download as failed_download_handler;
 pub use import::post_processing as app_usecase_post_processing;
+pub use import::srrdb::{SRRDB_API_BASE_URL, SrrdbHttpFilenameLookup};
 pub use import::upgrade;
 pub use integration::tracked_downloads;
 pub use library::filesystem_walk;
 pub use library::recycle_bin;
+pub use metrics_support::describe_freshness_and_health_metrics;
 pub use notifications::runtime::{
     NotificationSubscriptionTargetCreate, NotificationSubscriptionTargetUpdate,
 };
@@ -183,12 +200,13 @@ pub use plugins::plugins::RUNTIME_PLUGIN_LOAD_CONCURRENCY;
 pub use plugins::plugins::decode_persisted_plugin_wasm_payload;
 pub use plugins::plugins::load_runtime_plugin_from_persisted_installation_payload;
 pub use quality::release_dedup;
+pub use rules::metrics::describe_rule_metrics;
 pub use services::{
     ActiveImportStream, ActiveImportStreamHandle, ActiveImportStreamPhase, ActiveImportStreamSync,
     DownloadClientCategoryAdmissionSnapshot, DownloadClientCategorySnapshotStore,
     DownloadQueueSync, ImportCancellation, PluginInstallInProgressError,
     PluginInstallOperationKind, PluginInstallProgressSnapshot, PluginInstallState, RuntimeFeature,
-    RuntimePerformanceClass, RuntimePerformanceSnapshot,
+    RuntimePerformanceClass, RuntimePerformanceSnapshot, describe_download_queue_metrics,
 };
 pub use types::canonicalize_jellyfin_user_id;
 pub use upstream_scheduler::{
@@ -213,8 +231,8 @@ use scryer_domain::{
     MediaFacet, MediaRequest, MediaServerConnection, MediaServerDefaultLibraryGrant,
     MediaServerPathMapping, MediaServerProvider, NewDomainEvent, NewDownloadClientConfig,
     NewIndexerConfig, NewTitle, PluginCatalogSource, PluginCatalogStatusRecord, PluginInstallation,
-    PolicyInput, PolicyOutput, RuleSet, SubtitleProviderConfig, TaggedAlias, Title,
-    TitleHistoryEventType, TitleHistoryRecord, User,
+    PolicyInput, PolicyOutput, RulePackInstallation, RuleSet, SubtitleProviderConfig, TaggedAlias,
+    Title, TitleHistoryEventType, TitleHistoryRecord, User,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -244,6 +262,7 @@ pub use app_usecase_integration::derive_download_queue_display_state;
 pub use app_usecase_integration::enrich_download_queue_items_from_submissions;
 pub use app_usecase_integration::matches_download_activity_filter;
 pub use app_usecase_integration::matches_download_queue_filter;
+pub use app_usecase_integration::validate_persisted_proxy_config;
 pub use app_usecase_integration::{
     DownloadQueuePollerOptions, start_download_queue_poller,
     start_download_queue_poller_with_options,
@@ -269,7 +288,8 @@ pub use catalog::facets::series::SeriesFacetHandler;
 pub use catalog::interactive_release_search::{
     InteractiveReleaseSearchIndexerStatus, InteractiveReleaseSearchIndexerView,
     InteractiveReleaseSearchRequest, InteractiveReleaseSearchSnapshot,
-    InteractiveReleaseSearchState,
+    InteractiveReleaseSearchState, InteractiveSearchArtifactBundle,
+    InteractiveSearchArtifactTarget, InteractiveSearchKind, QueueUnlinkedReleaseOutcome,
 };
 pub use catalog::release_search::release_candidate_fingerprint;
 pub use catalog::title_hydration::start_background_title_hydration_loop;
@@ -288,17 +308,16 @@ pub use contracts::{
     EpisodeUpdate, ImportArtifact, IndexerArtifactLease, IndexerArtifactResolutionRequest,
     IndexerConfigSyncResult, IndexerConfigUpdate, IndexerDownloadClientMappingCatalog,
     IndexerDownloadClientMappingClient, IndexerDownloadClientMappingIndexer,
-    IndexerDownloadClientProviderCompatibility, IndexerProxyConfigUpdate, IndexerProxyTestResult,
-    IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility, IndexerSyncPlan,
-    IndexerValidationResult, InsertMediaFileInput, ManagedIndexerChildPlan,
-    ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
-    MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewIndexerProxyConfig,
+    IndexerDownloadClientProviderCompatibility, IndexerRoutingEntry, IndexerRoutingPlan,
+    IndexerSearchEligibility, IndexerSyncPlan, IndexerValidationResult, InsertMediaFileInput,
+    ManagedIndexerChildPlan, ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
+    MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewProxyConfig,
     NewSeedingProfile, NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob,
     PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
-    PreparedIndexerArtifact, QueueDownloadOutcome, QueuedDownloadResult, QueuedManualImport,
-    QueuedReleaseSelection, ReleaseDecisionsQuery, ResolvedDownloadArtifact, SearchMode,
-    SeedingProfileUpdate, StagedNzbRef, StorageRootUsage, SubmissionConflictPolicy,
-    SubmissionScope, SubmissionScopeConflict, SubtitleGenerationInput,
+    PreparedIndexerArtifact, ProxyConfigUpdate, ProxyTestResult, QueueDownloadOutcome,
+    QueuedDownloadResult, QueuedManualImport, QueuedReleaseSelection, ReleaseDecisionsQuery,
+    ResolvedDownloadArtifact, SearchMode, SeedingProfileUpdate, StagedNzbRef, StorageRootUsage,
+    SubmissionConflictPolicy, SubmissionScope, SubmissionScopeConflict, SubtitleGenerationInput,
     SubtitleProviderConfigUpdate, SubtitleProviderValidationResult, SubtitleStreamDetail,
     SuccessfulGrabCommit, TerminalDownloadHistoryRow, TitleHistoryFilter, TitleHistoryPage,
     WantedSearchOutcome, indexer_search_eligibility,
@@ -342,12 +361,18 @@ pub(crate) use library::rename::{
     validate_season_folder_template, validate_specials_folder_template,
     validate_title_folder_template,
 };
+pub use location::backfill::start_full_hash_backfill_worker;
 pub use media::language::{
     normalize_detected_audio_language_code, normalize_detected_audio_languages,
     normalize_detected_subtitle_language_code, normalize_detected_subtitle_languages,
     normalize_known_audio_language_code, normalize_metadata_language_code,
 };
+pub use media_requests::snapshot::{
+    MEDIA_REQUEST_SNAPSHOT_SCHEMA_VERSION, MediaRequestMetadataSnapshot,
+    MediaRequestMetadataSnapshotExt,
+};
 pub use media_requests::{
+    ApproveMediaRequestOutcome, CLAIM_RELEASE_REQUEST_CANCELED, CLAIM_RELEASE_REQUEST_REJECTED,
     ListMediaRequestsInput, SubmitMediaRequestInput, SubmitMediaRequestOutcome,
     UpdateMediaRequestInput,
 };
@@ -358,24 +383,35 @@ pub use media_servers::{
 };
 pub use plugins::plugins::{
     ManualPluginPreview, PluginCatalogStatus, RegistryPlugin, RulePackRegistryEntry,
-    RulePackTemplate,
+    RulePackTemplate, VerifiedRulePack,
 };
-pub use ports::{MediaServerCatalogItem, MediaServerCatalogItemKind};
+pub use ports::{MediaServerCatalogItem, MediaServerCatalogItemKind, RuleSetHistoryChange};
+pub use request_rules::{
+    Arbitration, ArbitrationReason, FALLBACK_ERROR, FALLBACK_HELD, FALLBACK_NO_RULE_MATCHED,
+    FALLBACK_RULE_MANUAL, LIBRARY_PERMISSION_DECIDER, PREFLIGHT_REQUEST_ID_PREFIX,
+    REQUEST_MAX_LEASE_DAYS, RecordedVote, RequestDecisionReason, RequestDraft, RequestEvaluation,
+    RequestEvaluationPurpose, RequestPreflight, RequestRuleDraft, RequestRuleGates,
+    RequestRuleGatesUpdate, RequestRulePreviewMatcher, RequestRulePreviewRequest,
+    RequestRulePreviewResult, RequestRuleSample, RequestRuleScope, RequestRuleSetDetail,
+    RequestRulesEngineCache, RequestRulesEngineHandle, ScopedError, ScopedVote, arbitrate,
+    validate_lease_days, validate_tag_list,
+};
 pub use security::backup::{AutoBackupRunOutcome, start_background_auto_backup_scheduler};
 pub use security::backup_bundle::{
     BACKUP_TABLE_CATALOG, BLOB_MARKER_BASE64, BLOB_MARKER_TYPE, BackupBundleExportRequest,
     BackupBundleInspectSummary, BackupBundleRestorePayload, BackupBundleStaging,
     BackupExportOutcome, BackupExportSecrets, BackupInstanceSecrets, BackupRestorePreparedBundle,
     BackupTableCatalogEntry, BackupTableClassification, EXPORT_BATCH_SIZE,
-    PreparedBackupBundleDirectory, backup_table_part_filename, inspect_backup_bundle,
-    prepare_backup_restore_payload,
+    PreparedBackupBundleDirectory, RESTORE_VERSION_CONTRACT_HINT, backup_export_table_names,
+    backup_table_part_filename, inspect_backup_bundle, prepare_backup_restore_payload,
+    validate_inspected_bundle_is_restorable, validate_restore_manifest_table_set,
 };
 pub use security::external_accounts::{ExternalAuthRuntimeConnection, ExternalAuthRuntimeSettings};
 pub use settings::settings::{
     AcquisitionSettings, AutoBackupSettings, BackupSettings, DownloadClientRoutingSettingsEntry,
     ExternalImportLibraryPathsSelection, ExternalImportLibrarySettingsAutoApplyDraft,
     ExternalImportLibrarySettingsAutoApplyResult, ExternalImportSettingsAutoApplySkip,
-    FacetScoringPersonaSelection, GeneralSettings, IndexerRoutingSettingsEntry,
+    FacetScoringPersonaSelection, GeneralSettings, IndexerRoutingSettingsEntry, InstanceFeatures,
     LibraryPathsSettings, LibrarySettings, LibrarySettingsOverrideDraft, MediaSettings,
     PluginAutoUpdateSettings, QualityProfileSelection, QualityProfileSettings,
     RequestQualityProfileSettings, SaveQualityProfileSettings, SecuritySettings, ServiceSettings,
@@ -397,8 +433,10 @@ pub(crate) const LIBRARY_SCAN_EPISODIC_FILE_ANALYSIS_CONCURRENCY_PER_WALK: usize
 pub(crate) const GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY: usize = 24;
 pub use acquisition::release_search::release_strategy_kind_for_label;
 pub use helpers::{
-    HashDomain, accepted_inputs_for_client, blake3_identity_hex, nice_thread,
-    normalize_release_name, normalize_release_password,
+    HashDomain, MAX_USER_TAGS_PER_TITLE, MAX_USER_TITLE_TAG_LEN, RESERVED_TITLE_TAG_PREFIX,
+    accepted_inputs_for_client, background_worker_priority, blake3_identity_hex,
+    is_reserved_title_tag, nice_thread, normalize_release_name, normalize_release_password,
+    normalize_user_title_tag, normalize_user_title_tags,
 };
 pub(crate) use helpers::{
     INHERIT_QUALITY_PROFILE_VALUE, NATIVE_DOWNLOAD_CLIENT_TYPES, await_cancellable,
@@ -422,32 +460,35 @@ pub use indexer_requests::{
 pub use jobs::definitions::{
     JobCategory, JobDefinition, JobKey, JobRun, JobRunRecord, JobRunStatus, JobRunTracker,
     JobScheduleInfo, JobScheduleKind, JobSection, JobTriggerSource, LibraryProbeSignature,
+    MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS,
 };
 pub use library::user_delete::{
     DeleteEpisodeFilePreviewResult, DeleteEpisodeFilesPreview, DeletePreview, DeleteTitlesPreview,
+    PolicyDeleteAuthorization,
 };
 pub use library_scan::{
     AnimeEpisodeMapping, AnimeMapping, AnimeMovie, BulkArtworkUrlResult, BulkMetadataResult,
     DiscoveryCollectionCompletionInput, DiscoveryCollectionCompletionResult,
     DiscoveryContentCertification, DiscoveryContentRating, DiscoveryContextChangeType,
     DiscoveryContextChangedSubjectInput, DiscoveryContextChangesInput,
-    DiscoveryContextChangesResult, DiscoveryContextSnapshotAckResult,
-    DiscoveryContextSnapshotPageResult, DiscoveryContextSnapshotStatusResult,
-    DiscoveryContextSnapshotSubmitInput, DiscoveryContextSnapshotSubmitResult,
-    DiscoveryDashboardResult, DiscoveryDashboardSection, DiscoveryExternalIdInput, DiscoveryFacet,
-    DiscoveryPublicFeedInput, DiscoveryRatingProvenance, DiscoveryRelatedResult,
-    DiscoverySnapshotFacetGroup, DiscoverySnapshotFacetValue, DiscoverySubjectInput,
-    DiscoveryTitle, EpisodeArtworkUrls, EpisodeMetadata, LibraryDirectoryScanResult, LibraryFile,
-    LibraryFileBatch, LibraryFileBatchReceiver, LibraryScanSummary, LibraryScanner,
-    MetadataGateway, MetadataSearchItem, MetadataSearchQuery, MovieMetadata, MovieTitleBulkResult,
-    MovieTitleRef, MultiMetadataSearchResult, RichMetadataSearchItem, SeasonMetadata,
-    SeriesArtworkUrls, SeriesMetadata, TitleArtworkUrls, TitleRecommendationsInput,
-    TitleResolution,
+    DiscoveryContextChangesResult, DiscoveryContextMediumMixInput,
+    DiscoveryContextSnapshotAckResult, DiscoveryContextSnapshotPageResult,
+    DiscoveryContextSnapshotStatusResult, DiscoveryContextSnapshotSubmitInput,
+    DiscoveryContextSnapshotSubmitResult, DiscoveryDashboardResult, DiscoveryDashboardSection,
+    DiscoveryExternalIdInput, DiscoveryFacet, DiscoveryPublicFeedInput, DiscoveryRatingProvenance,
+    DiscoveryRelatedResult, DiscoverySnapshotFacetGroup, DiscoverySnapshotFacetValue,
+    DiscoverySubjectInput, DiscoveryTitle, EpisodeArtworkUrls, EpisodeMetadata,
+    LibraryDirectoryScanResult, LibraryFile, LibraryFileBatch, LibraryFileBatchReceiver,
+    LibraryScanSummary, LibraryScanner, MetadataGateway, MetadataSearchItem, MetadataSearchQuery,
+    MovieMetadata, MovieTitleBulkResult, MovieTitleRef, MultiMetadataSearchResult,
+    RichMetadataSearchItem, SeasonMetadata, SeriesArtworkUrls, SeriesMetadata, TitleArtworkUrls,
+    TitleRecommendationsInput, TitleResolution,
 };
 pub use library_scan_progress::{
     LibraryScanMode, LibraryScanPhaseProgress, LibraryScanSession, LibraryScanStatus,
     LibraryScanTracker,
 };
+pub use location::model::VerificationDepth;
 pub use media::analyzer::NativeMediaAnalyzer;
 pub use notifications::dispatcher::start_notification_dispatcher;
 pub use null_repositories::NullIndexerErrorRepository;
@@ -456,18 +497,25 @@ pub use null_repositories::{
     NullDomainEventRepository, NullDownloadQueueCommandRepository, NullDownloadRegistryRepository,
     NullDownloadSubmissionRepository, NullExternalImportMonitorSnapshotRepository,
     NullExternalImportSetupSecretDraftRepository, NullFileImporter, NullHousekeepingRepository,
-    NullImportArtifactRepository, NullImportRepository, NullIndexerProxyConfigRepository,
-    NullIndexerSearchLearningRepository, NullIndexerStatsTracker, NullJobRunRepository,
-    NullLibraryProbeRepository, NullLibraryRepository, NullLibraryScanUnmatchedItemRepository,
-    NullLogicalBackupExporter, NullMediaFileRepository, NullMediaRequestRepository,
-    NullMediaServerConnectionRepository, NullNotificationChannelRepository,
-    NullNotificationSubscriptionRepository, NullOAuthRepository, NullPendingReleaseRepository,
-    NullPluginDescriptorLoader, NullPluginHttpTrustConfigRuntime, NullPluginInstallationRepository,
-    NullPostProcessingScriptRepository, NullRuleSetRepository, NullScopeIndexerCoverageRepository,
-    NullSettingsRepository, NullStagedNzbStore, NullSubtitleDownloadRepository,
-    NullSystemInfoProvider, NullTitleImageProcessor, NullTitleImageRepository,
-    NullUpstreamScheduler, NullWorkflowOperationRepository,
+    NullImportArtifactRepository, NullImportRepository, NullIndexerSearchLearningRepository,
+    NullIndexerStatsTracker, NullJobRunRepository, NullLibraryProbeRepository,
+    NullLibraryRepository, NullLibraryScanUnmatchedItemRepository, NullLifecycleClaimRepository,
+    NullLocationOperationRepository, NullLogicalBackupExporter,
+    NullMaintenanceEvaluationRepository, NullMaintenanceRuleSetRepository, NullMediaFileRepository,
+    NullMediaRequestRepository, NullMediaServerConnectionRepository,
+    NullNotificationChannelRepository, NullNotificationSubscriptionRepository, NullOAuthRepository,
+    NullPendingReleaseRepository, NullPluginDescriptorLoader, NullPluginHttpTrustConfigRuntime,
+    NullPluginInstallationRepository, NullPostProcessingScriptRepository,
+    NullProxyConfigRepository, NullRequestRuleDecisionRepository, NullRequestRuleSetRepository,
+    NullRuleSetRepository, NullScopeIndexerCoverageRepository, NullSettingsRepository,
+    NullStagedNzbStore, NullSubtitleDownloadRepository, NullSystemInfoProvider,
+    NullTitleImageProcessor, NullTitleImageRepository, NullUpstreamScheduler,
+    NullWorkflowOperationRepository,
 };
+// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+pub use null_repositories::NullMediaServerPlaybackProbe;
+// ── Media-server watch signals (RFC 137 §7.3, WP-M) ─────────────────────────
+pub use null_repositories::{NullMediaServerSignalRepository, NullMediaServerSignalSource};
 pub use ports::{
     AcquisitionScopeStateRepository, AcquisitionStateRepository, ArchiveExtractorClient,
     ArchiveExtractorPluginProvider, BlocklistRepository, BuiltinDownloadClientConnectionTester,
@@ -489,32 +537,46 @@ pub use ports::{
     ImportFileTransferProgressSender, ImportRepository, IndexerAccountingContext,
     IndexerArtifactResolver, IndexerCapsSnapshotRefresher, IndexerClient, IndexerConfigRepository,
     IndexerDispatchGate, IndexerManagementClient, IndexerPluginProvider,
-    IndexerProxyConfigRepository, IndexerSearchCandidateWrite, IndexerSearchLearningContext,
-    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
-    IndexerSearchRunWrite, IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser,
-    JobRunRepository, LibraryProbeRepository, LibraryRepository,
-    LibraryScanUnmatchedItemRepository, LogicalBackupExporter, MediaAnalyzer, MediaFileRepository,
-    MediaRequestQuery, MediaRequestRepository, MediaServerConnectionRepository, MediaServerUser,
-    MediaServerUserGroup, MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION,
-    NewMediaRequest, NormalizedIndexerSearchCandidate, NotificationActorPayload,
-    NotificationAppPayload, NotificationApplicationUpdatePayload, NotificationChannelRepository,
-    NotificationClient, NotificationDownloadPayload, NotificationEpisodePayload,
-    NotificationExternalIdsPayload, NotificationFilePayload, NotificationHealthPayload,
-    NotificationImportPayload, NotificationManualInteractionPayload, NotificationMediaFilePayload,
+    IndexerSearchCandidateWrite, IndexerSearchLearningContext, IndexerSearchLearningKey,
+    IndexerSearchLearningRecord, IndexerSearchLearningRepository, IndexerSearchRunWrite,
+    IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser, JobRunRepository,
+    LibraryProbeRepository, LibraryRepository, LibraryScanUnmatchedItemRepository,
+    LifecycleActionRunRepository, LifecycleClaimRepository, LocationOperationProgress,
+    LocationOperationRepository, LocationOwnershipClaim, LocationOwnershipOutcome,
+    LogicalBackupExporter, MaintenanceActionJobReceiptClaim, MaintenanceActionJobReceiptTransition,
+    MaintenanceActionStepCandidateKey, MaintenanceActionStepClaim, MaintenanceActionStepRepository,
+    MaintenanceCandidateQuery, MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
+    MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
+    MaintenanceRuleSetRepository, MaintenanceSearchJobRunCreation,
+    MaintenanceSequenceCompletionRepository, MediaAnalyzer, MediaFileHashCandidate,
+    MediaFileRepository, MediaRequestQuery, MediaRequestRepository,
+    MediaServerConnectionRepository, MediaServerUser, MediaServerUserGroup,
+    MediaServerUserGroupStatus, NOTIFICATION_REQUEST_SCHEMA_VERSION, NewMediaRequest,
+    NormalizedIndexerSearchCandidate, NotificationActorPayload, NotificationAppPayload,
+    NotificationApplicationUpdatePayload, NotificationChannelRepository, NotificationClient,
+    NotificationDownloadPayload, NotificationEpisodePayload, NotificationExternalIdsPayload,
+    NotificationFilePayload, NotificationHealthPayload, NotificationImportPayload,
+    NotificationManualInteractionPayload, NotificationMediaFilePayload,
     NotificationMediaUpdatePayload, NotificationMediaUpdateTypePayload, NotificationPayload,
     NotificationPluginProvider, NotificationReleasePayload, NotificationSeverityPayload,
     NotificationSubscriptionRepository, NotificationTitlePayload, OAuthRepository,
     PendingReleaseRepository, PlexServerDiscovery, PlexServerUser, PluginDescriptorLoader,
     PluginHttpTrustConfigRuntime, PluginInstallationRepository, PostProcessingScriptRepository,
-    QualityProfileRepository, ReleaseAttemptRepository, ReusableIndexerSearchCandidate,
+    ProxyConfigRepository, QualityProfileRepository, ReleaseAttemptRepository,
+    RequestRuleDecisionRepository, RequestRuleSetRepository, ReusableIndexerSearchCandidate,
     ReusableIndexerSearchStrategy, RuleSetRepository, RuntimePluginLoad, ScopeCoverageRow,
     ScopeIndexerCoverageRepository, SeedingProfileRepository, SettingsRepository, ShowRepository,
-    StagedNzbStore, SubtitleDownloadRepository, SubtitlePluginProvider, SubtitleProviderClient,
-    SubtitleProviderConfigRepository, SystemInfoProvider, TitleImageProcessor,
-    TitleImageRepository, TitleRepository, TotpRepository, UserExternalAccountRepository,
-    UserRepository, VerifiedExternalIdentity, WebauthnRepository, WorkflowOperationInfo,
-    WorkflowOperationRepository,
+    SrrdbFilenameLookup, SrrdbOutage, StagedNzbStore, SubtitleDownloadRepository,
+    SubtitlePluginProvider, SubtitleProviderClient, SubtitleProviderConfigRepository,
+    SystemInfoProvider, TitleImageProcessor, TitleImageRepository, TitleRepository, TotpRepository,
+    UserExternalAccountRepository, UserRepository, VerifiedExternalIdentity, WebauthnRepository,
+    WorkflowOperationInfo, WorkflowOperationRepository,
 };
+pub use ports::{
+    ConnectionPlaybackActivity, MediaServerPlaybackProbe, PlaybackActivitySnapshot,
+    PlaybackProbeStatus,
+};
+pub use ports::{MediaServerSignalRepository, MediaServerSignalSource, ProviderPlayedItem};
 pub use quality::release_parser::{
     AudioCodec, ExternalIdSource, ParsedEpisodeMetadata, ParsedEpisodeReleaseType,
     ParsedReleaseMetadata, ParsedSpecialKind, ReleaseParseAnalysis, ReleaseParseContext,
@@ -524,16 +586,13 @@ pub use quality::release_parser::{
     build_release_parse_context_for_title, parse_release_metadata,
     parse_release_metadata_for_target,
 };
-pub use quality::scoring_weights::{
-    ScoringOverrides, ScoringPersona, ScoringWeights, build_weights, build_weights_for_category,
-};
+pub use quality::scoring_weights::{ScoringOverrides, ScoringPersona};
 pub use quality_profile::{
     BLOCK_SCORE, BUILTIN_DEFAULT_QUALITY_PROFILE_ID, QUALITY_PROFILE_CATALOG_KEY,
     QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE, QualityProfile, QualityProfileCriteria,
     QualityProfileDecision, REQUEST_QUALITY_PROFILE_IDS_KEY, ScoringConfig, ScoringEntry,
-    ScoringSource, apply_age_scoring, apply_size_scoring_for_category, builtin_4k_profile,
-    builtin_8k_profile, builtin_1080p_profile, builtin_anime_profile,
-    builtin_default_quality_profile, evaluate_against_profile, parse_profile_catalog_from_json,
+    ScoringEntryKind, ScoringSource, builtin_4k_profile, builtin_8k_profile, builtin_1080p_profile,
+    builtin_anime_profile, builtin_default_quality_profile, parse_profile_catalog_from_json,
 };
 pub use rate_limit_signal::{RateLimitSignal, RateLimitSignalSource};
 pub use services::{
@@ -546,22 +605,26 @@ pub use services::{
 pub use settings::keys::{
     ANIME_FILLER_POLICY_KEY, ANIME_INTER_SEASON_MOVIES_KEY, ANIME_MONITOR_FILLER_MOVIES_KEY,
     ANIME_MONITOR_SPECIALS_KEY, ANIME_PATH_KEY, ANIME_RECAP_POLICY_KEY, ANIME_ROOT_FOLDERS_KEY,
-    API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY, AUDIO_PERSONA_MIGRATION_SENTINEL_KEY,
-    AUTO_BACKUP_DAILY_TIME_LOCAL_KEY, AUTO_BACKUP_DISABLED_MISSING_KEY_NOTICE_KEY,
-    AUTO_BACKUP_ENABLED_KEY, AUTO_BACKUP_KEY_KEY, AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY,
-    BACKUP_PATH_KEY, CHOWN_GROUP_KEY, DEFAULT_ANIME_LIBRARY_PATH,
-    DEFAULT_AUTO_BACKUP_DAILY_TIME_LOCAL, DEFAULT_FILLER_POLICY, DEFAULT_FOLDER_TEMPLATE_ANIME,
-    DEFAULT_FOLDER_TEMPLATE_MOVIE, DEFAULT_FOLDER_TEMPLATE_SERIES, DEFAULT_IMAGE_CACHE_MAX_SIZE_MB,
-    DEFAULT_MOVIE_LIBRARY_PATH, DEFAULT_RECAP_POLICY, DEFAULT_RENAME_COLLISION_POLICY,
-    DEFAULT_RENAME_MISSING_METADATA_POLICY, DEFAULT_RENAME_TEMPLATE_ANIME,
-    DEFAULT_RENAME_TEMPLATE_MOVIE, DEFAULT_RENAME_TEMPLATE_SERIES, DEFAULT_SEASON_FOLDER_TEMPLATE,
-    DEFAULT_SEEDING_PROFILE_SETTING_KEY, DEFAULT_SERIES_LIBRARY_PATH,
-    DEFAULT_SPECIALS_FOLDER_TEMPLATE, DISCOVERY_REGION_KEY,
+    API_EXPLORER_ENABLED_KEY, API_KEYS_RESTRICT_TO_SYSTEM_SETTINGS_USERS_KEY,
+    AUDIO_PERSONA_MIGRATION_SENTINEL_KEY, AUTO_BACKUP_DAILY_TIME_LOCAL_KEY,
+    AUTO_BACKUP_DISABLED_MISSING_KEY_NOTICE_KEY, AUTO_BACKUP_ENABLED_KEY, AUTO_BACKUP_KEY_KEY,
+    AUTO_BACKUP_POST_UPGRADE_PENDING_VERSION_KEY, BACKUP_PATH_KEY, CHOWN_GROUP_KEY,
+    DEFAULT_ANIME_LIBRARY_PATH, DEFAULT_AUTO_BACKUP_DAILY_TIME_LOCAL, DEFAULT_FILLER_POLICY,
+    DEFAULT_FOLDER_TEMPLATE_ANIME, DEFAULT_FOLDER_TEMPLATE_MOVIE, DEFAULT_FOLDER_TEMPLATE_SERIES,
+    DEFAULT_IMAGE_CACHE_MAX_SIZE_MB, DEFAULT_MOVIE_LIBRARY_PATH, DEFAULT_RECAP_POLICY,
+    DEFAULT_RENAME_COLLISION_POLICY, DEFAULT_RENAME_MISSING_METADATA_POLICY,
+    DEFAULT_RENAME_TEMPLATE_ANIME, DEFAULT_RENAME_TEMPLATE_MOVIE, DEFAULT_RENAME_TEMPLATE_SERIES,
+    DEFAULT_SEASON_FOLDER_TEMPLATE, DEFAULT_SEEDING_PROFILE_SETTING_KEY,
+    DEFAULT_SERIES_LIBRARY_PATH, DEFAULT_SPECIALS_FOLDER_TEMPLATE,
+    DISCOVERY_PERSONALIZED_ENABLED_KEY, DISCOVERY_REGION_KEY,
     DOWNLOAD_CLIENT_DEFAULT_CATEGORY_SETTING_KEY, DOWNLOAD_CLIENT_ROUTING_SETTINGS_KEY,
-    FILE_CHMOD_KEY, FOLDER_CHMOD_KEY, FOLDER_TEMPLATE_KEY, FORM_LOGIN_ENABLED_KEY,
-    HISTORY_KEEP_FOREVER_KEY, HISTORY_RETENTION_DAYS_KEY, IMAGE_CACHE_MAX_BYTES_ENV,
-    IMAGE_CACHE_MAX_SIZE_MB_KEY, IMPORT_MODE_KEY, INDEXER_ROUTING_SETTINGS_KEY,
-    LEGACY_NZBGET_CATEGORY_SETTING_KEY, LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY,
+    EXPERIMENTAL_FEATURES_ENABLED_KEY, FILE_CHMOD_KEY, FOLDER_CHMOD_KEY, FOLDER_TEMPLATE_KEY,
+    FORM_LOGIN_ENABLED_KEY, FULL_HASH_BACKFILL_CURSOR_KEY, HISTORY_KEEP_FOREVER_KEY,
+    HISTORY_RETENTION_DAYS_KEY, IMAGE_CACHE_MAX_BYTES_ENV, IMAGE_CACHE_MAX_SIZE_MB_KEY,
+    IMPORT_MODE_KEY, INDEXER_ROUTING_SETTINGS_KEY, LEGACY_NZBGET_CATEGORY_SETTING_KEY,
+    LEGACY_NZBGET_CLIENT_ROUTING_SETTINGS_KEY, MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY,
+    MAINTENANCE_GATE_EVALUATION_KEY, MAINTENANCE_GATE_PRESENTATION_EFFECTS_KEY,
+    MAINTENANCE_GATE_RESULT_DISPLAY_KEY, MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY,
     METADATA_LANGUAGE_KEY, MFA_REQUIRE_CONFIG_STEP_UP_KEY, MFA_REQUIRE_PASSWORD_LOGIN_KEY,
     MINIMUM_SEEDERS_FLOOR_DEFAULT, MINIMUM_SEEDERS_FLOOR_DEFAULT_JSON,
     MINIMUM_SEEDERS_FLOOR_SETTING_KEY, MOVIES_PATH_KEY, MOVIES_ROOT_FOLDERS_KEY,
@@ -580,13 +643,14 @@ pub use settings::keys::{
     RENAME_MISSING_METADATA_POLICY_MOVIE_GLOBAL_KEY,
     RENAME_MISSING_METADATA_POLICY_SERIES_GLOBAL_KEY, RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
     RENAME_TEMPLATE_KEY, RENAME_TEMPLATE_MOVIE_GLOBAL_KEY, RENAME_TEMPLATE_SERIES_GLOBAL_KEY,
-    REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY, SEASON_FOLDER_TEMPLATE_KEY, SERIES_PATH_KEY,
-    SERIES_ROOT_FOLDERS_KEY, SET_PERMISSIONS_LINUX_KEY, SETTINGS_SCOPE_MEDIA,
-    SETTINGS_SCOPE_SYSTEM, SETTINGS_SOURCE_TYPED_GRAPHQL, SETUP_COMPLETE_KEY,
-    SKIP_LOGIN_FOR_LOCAL_IPS_KEY, SPECIALS_FOLDER_TEMPLATE_KEY,
+    REQUEST_RULE_GATE_EVALUATION_KEY, REQUIRED_AUDIO_LANGUAGES_KEY, SCORING_PERSONA_KEY,
+    SEASON_FOLDER_TEMPLATE_KEY, SERIES_PATH_KEY, SERIES_ROOT_FOLDERS_KEY,
+    SET_PERMISSIONS_LINUX_KEY, SETTINGS_SCOPE_MEDIA, SETTINGS_SCOPE_SYSTEM,
+    SETTINGS_SOURCE_TYPED_GRAPHQL, SETUP_COMPLETE_KEY, SKIP_LOGIN_FOR_LOCAL_IPS_KEY,
+    SPECIALS_FOLDER_TEMPLATE_KEY, SRRDB_FILENAME_RECOVERY_ENABLED_KEY,
     TITLE_METADATA_LANGUAGE_OVERRIDE_KEY, TITLE_REQUIRED_AUDIO_OVERRIDE_KEY, TLS_CERT_PATH_KEY,
     TLS_KEY_PATH_KEY, TOTP_REQUIRE_EMBY_LOGIN_KEY, TOTP_REQUIRE_JELLYFIN_LOGIN_KEY,
-    USE_SEASON_FOLDERS_KEY,
+    USE_SEASON_FOLDERS_KEY, VERIFICATION_DEPTH_KEY,
 };
 pub use settings::runtime::is_bootstrap_default_library_root_set;
 pub(crate) use types::JwtClaims;
@@ -599,44 +663,47 @@ pub use types::{
     AddTitleAndQueueDownloadOutcome, AddTitleHydrationState, AddTitleOutcome,
     ApiKeyProvisioningSource, ApiKeyRecord, AuthenticatedTokenClaims, BackupDownloadTicket,
     BackupInfo, BackupStatus, BackupTrigger, CancelLibraryScanResult,
-    CollectionEpisodeProgressSummary, CreateTitleOutcome, CutoffUnmetItem, CutoffUnmetPage,
-    CutoffUnmetQualitySummary, DecisionCodeCount, DiskSpaceInfo, DownloadActivityFilter,
-    DownloadDisplayState, DownloadGrabResult, DownloadHistoryFilter, DownloadHistoryPage,
-    DownloadHistorySort, DownloadHistorySortKey, DownloadImportFilter, DownloadImportPage,
-    DownloadQueueCommandRecord, DownloadQueuePage, DownloadSourceKind, EpisodeMediaAvailability,
-    EpisodeMediaAvailabilityState, EpisodeScopedMediaFile, FixTitleMatchResult, HealthCheckResult,
-    HealthCheckStatus, HousekeepingReport, IgnorePendingImportResult, IndexerQueryStats,
-    JwtAuthConfig, JwtSessionScope, LibraryRootDraft, LibraryScanUnmatchedItem,
-    LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass, LoginVerificationChallengeRecord,
-    LoginVerificationMethod, LoginVerificationRequirement, LoginVerificationSatisfied,
-    ManualImportSelection, ManualImportSelectionCandidate, MediaFileAssociations,
-    MediaRequestCounts, MissingEpisodeCandidate, MissingScopeCandidates,
-    MissingSeriesMovieLinkCandidate, MissingTitleCandidate, OAuthAuthorizationCodeRecord,
-    OAuthAuthorizationSource, OAuthClientRegistrationRecord, OAuthConnectedAppRecord,
-    OAuthRefreshGrantRecord, OAuthRefreshRotation, OAuthRefreshRotationOutcome,
-    OAuthRefreshTokenRecord, PasskeySummary, PendingImportBindingFilePreview,
-    PendingImportBindingPreview, PendingImportConnection, PendingImportCounts, PendingImportItem,
-    PendingImportReasonClass, PendingImportSearchAttempt, PendingImportStatus,
-    PendingImportTitleSearchItem, PendingRelease, PendingReleaseObservation, PendingReleaseRole,
-    PendingReleaseStatus, PendingReleaseStatusCount, PendingTitleHydration,
+    CollectionEpisodeProgressSummary, ContentCertification, ContentRating, CreateTitleOutcome,
+    CutoffUnmetItem, CutoffUnmetPage, CutoffUnmetQualitySummary, DecisionCodeCount, DiskSpaceInfo,
+    DownloadActivityFilter, DownloadDisplayState, DownloadGrabResult, DownloadHistoryFilter,
+    DownloadHistoryPage, DownloadHistorySort, DownloadHistorySortKey, DownloadImportFilter,
+    DownloadImportPage, DownloadQueueCommandRecord, DownloadQueuePage, DownloadSourceKind,
+    EpisodeMediaAvailability, EpisodeMediaAvailabilityState, EpisodeScopedMediaFile,
+    FixTitleMatchResult, HealthCheckResult, HealthCheckStatus, HousekeepingReport,
+    IgnorePendingImportResult, IndexerQueryStats, JwtAuthConfig, JwtSessionScope, LibraryRootDraft,
+    LibraryScanUnmatchedItem, LibraryScanUnmatchedSearchAttempt, LoginFailureTimingClass,
+    LoginVerificationChallengeRecord, LoginVerificationMethod, LoginVerificationRequirement,
+    LoginVerificationSatisfied, ManualImportSelection, ManualImportSelectionCandidate,
+    MdblistSummary, MediaFileAssociations, MediaRequestCounts, MissingEpisodeCandidate,
+    MissingScopeCandidates, MissingSeriesMovieLinkCandidate, MissingTitleCandidate,
+    OAuthAuthorizationCodeRecord, OAuthAuthorizationSource, OAuthClientRegistrationRecord,
+    OAuthConnectedAppRecord, OAuthRefreshGrantRecord, OAuthRefreshRotation,
+    OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, PasskeySummary,
+    PendingImportBindingFilePreview, PendingImportBindingPreview, PendingImportConnection,
+    PendingImportCounts, PendingImportItem, PendingImportReasonClass, PendingImportSearchAttempt,
+    PendingImportStatus, PendingImportTitleSearchItem, PendingRelease, PendingReleaseObservation,
+    PendingReleaseRole, PendingReleaseStatus, PendingReleaseStatusCount, PendingTitleHydration,
     PrimaryCollectionSummary, RecycleBinBatchJobAccepted, RecycleBinSettings,
     RecycleRestoreConflictPolicy, RecycleRestorePreview, RecycleRestorePreviewItem, RecycledItem,
     ReleaseDecision, ReleaseDownloadAttemptOutcome, ReleaseDownloadFailureRecord,
     ReleaseDownloadFailureSignature, ResolvePendingImportResult, RuntimePathStyle,
-    ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics,
+    ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics, TitleAward,
     TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogFilterCounts,
     TitleCatalogFilterOptions, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
     TitleCatalogTagFilterOption, TitleCredit, TitleEpisodeProgressSummary, TitleExternalRating,
     TitleImageBlob, TitleImageKind, TitleImageSourceResult, TitleImageSyncTask,
     TitleImageVariantRecord, TitleImageVariantSpec, TitleMediaFile, TitleMediaSizeSummary,
     TitleMetadataUpdate, TitleMovieMediaSummary, TitleQualitySummary, TitleRatingSummary,
-    TitleReleaseBlocklistEntry, TotpCredentialRecord, TotpEnrollmentChallengeRecord,
-    TotpEnrollmentComplete, TotpEnrollmentStart, TotpFailedAttemptRecord, TotpRecoveryCodeRecord,
-    TotpStatus, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet,
-    UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
-    UpdateRecycleBinSettings, UserAuthFactorStatus, UserLoginSnapshot, VerifiedLocalCredentials,
-    WantedKind, WantedStatusCount, WebauthnChallengePurpose, WebauthnChallengeRecord,
-    WebauthnChallengeStart, WebauthnChallengeType, WebauthnCredentialRecord,
+    TitleReleaseBlocklistEntry, TitleTagDefinitionSummary, TitleTagDefinitionUpdate,
+    TitleTagMembershipCounts, TitleTagRewriteCounts, TotpCredentialRecord,
+    TotpEnrollmentChallengeRecord, TotpEnrollmentComplete, TotpEnrollmentStart,
+    TotpFailedAttemptRecord, TotpRecoveryCodeRecord, TotpStatus, UiDateTimeFormat,
+    UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode,
+    UiTableColumnSetting, UiTableViewMode, UiTheme, UpdateRecycleBinSettings,
+    UpdateVerificationSettings, UserAuthFactorStatus, UserLoginSnapshot, VerificationSettings,
+    VerifiedLocalCredentials, WantedKind, WantedStatusCount, WebauthnChallengePurpose,
+    WebauthnChallengeRecord, WebauthnChallengeStart, WebauthnChallengeType,
+    WebauthnCredentialRecord,
 };
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,
@@ -681,6 +748,41 @@ pub enum AppError {
 
     #[error("validation: {0}")]
     Validation(String),
+
+    /// A title mutation is deferred until its location operation releases ownership.
+    #[error("{0}")]
+    LocationOperationBusy(String),
+
+    /// A previewed location plan was refused at confirmation time. A validation
+    /// error in every other respect, but the refusal carries the reason as a
+    /// code so the client can re-preview or unblock without reading prose
+    /// (FR-016, FR-081).
+    #[error("validation: {message}")]
+    LocationPlanRefused {
+        message: String,
+        code: crate::location::preview::PlanConfirmationError,
+    },
+
+    /// A root-scoped workflow (US4 change root, US5 consolidate root) refused
+    /// its request before any plan was built: the destination is not admissible,
+    /// the source root cannot be read, the two paths overlap, or the request
+    /// belongs to the *other* half of FR-020's one control.
+    ///
+    /// The code is application vocabulary (`root_change::refusal_codes`,
+    /// `consolidation::refusal_codes`) and travels typed rather than as a
+    /// bracketed suffix on a sentence, so the API promotes it to
+    /// `extensions.refusalCode` without parsing prose and the web client can
+    /// cross-route FR-020's two halves on it.
+    #[error("validation: {message}")]
+    LocationRootRefused { message: String, code: &'static str },
+
+    /// A direct `rootFolderId` write on a title that already has tracked files.
+    /// Retired by FR-077: relocating a title with content on disk is the move
+    /// workflow's job, so the refusal carries its own code and the title it
+    /// refused for, and a client routes to the preview without parsing prose
+    /// (FR-077, SC-009).
+    #[error("validation: {message}")]
+    DirectRootWriteRetired { message: String, title_id: String },
 
     #[error("no auto-eligible release found")]
     NoAutoEligibleRelease {
@@ -799,6 +901,20 @@ impl AppError {
         Self::Canceled(message.into())
     }
 
+    /// The FR-077 refusal, worded once so every path that retires a direct root
+    /// write says the same thing: the options update path and the reused-title
+    /// branch of the creation path (SC-009).
+    pub fn direct_root_write_retired(title_name: &str, title_id: &str) -> Self {
+        Self::DirectRootWriteRetired {
+            message: format!(
+                "changing rootFolderId directly is retired for titles with tracked files: \
+                 '{title_name}' already has files on disk, so preview the change with \
+                 locationOperationPreview and run it with startLocationOperation"
+            ),
+            title_id: title_id.to_string(),
+        }
+    }
+
     pub fn download_submit_unavailable(message: impl Into<String>) -> Self {
         Self::DownloadSubmitUnavailable(message.into())
     }
@@ -913,4 +1029,4 @@ impl AppError {
 }
 
 #[cfg(test)]
-mod lib_tests;
+pub(crate) mod lib_tests;

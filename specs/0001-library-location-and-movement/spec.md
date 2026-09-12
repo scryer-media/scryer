@@ -2,7 +2,14 @@
 
 **Feature Branch**: `feature/library-location-spec`
 **Created**: 2026-08-30
-**Status**: Draft
+**Status**: Implemented (2026-09-01) — all nine user stories built on
+`feature/library-location-movement`. US3 (adoption), US4 (change root) and US5
+(consolidate root) landed `cf9f92bcd`..`b51f30973`; the relocation-prototype
+gate on US4 dissolved and the phase was built fresh against this spec. Final
+acceptance (tasks.md T096) and the operator-run e2e gate (T095) are still
+pending; known deltas are recorded in
+[checklists/requirements.md](./checklists/requirements.md) and the tasks-file
+phase notes.
 **Input**: Operator product plan (2026-08-30) + plan review amendments + operator decisions recorded in the Clarifications section below.
 
 ## Summary
@@ -202,8 +209,8 @@ sidecars; verify each classification and outcome.
 1. **Given** consolidation, **When** previewed, **Then** the preview identifies:
    titles moving into unused destination folders; titles merging with an existing
    destination title; folder-name collisions between unrelated titles; media
-   collisions; identical files eligible for dedup; sidecar collisions requiring
-   rename; untracked content blocking retirement.
+   collisions; files the quick check finds may be identical (merge candidates);
+   sidecar collisions requiring rename; untracked content blocking retirement.
 2. **Given** two unrelated titles calculating the same destination folder, **When**
    previewed, **Then** the incoming folder receives a unique previewed destination
    name or the operation stays blocked — unrelated titles never merge over a name.
@@ -261,19 +268,20 @@ via the preview and the post-merge catalog.
    the job starts.
 2. **Given** a merge, **Then** the destination title id, metadata identity,
    monitoring, explicit settings, quality configuration, naming behavior, and
-   library inheritance win; additive data (tags, history, requests, import records,
-   acquisition history, compatible title-linked records) is unioned; the preview
-   summarizes which settings win, what carries forward, what is unioned, and what is
-   dropped or converted.
+   library inheritance win; the merging title's media file records and its history
+   carry across; everything else recorded against it retires with it; the preview
+   states what carries across, which roles change, and how much retires.
 3. **Given** both titles have a primary file for the same logical slot, **Then** the
    destination primary remains primary and the incoming primary becomes additional;
    an incoming primary fills a slot with no destination primary; the preview shows
    every role change.
-4. **Given** episode or special identities that cannot be mapped unambiguously,
-   **Then** the operation blocks rather than attaching files or episode-scoped
-   records to guessed identities (FR-066).
-5. **Given** the merge completes, **Then** the source title is removed only when
-   every required relationship has been transferred or intentionally resolved.
+4. **Given** an episode, collection, or series-movie slot that carries a source
+   media file or a history row and cannot be mapped unambiguously, **Then** the
+   operation blocks rather than attaching a record to a guessed identity (FR-066);
+   a source slot carrying nothing the merge moves does not block.
+5. **Given** the merge completes, **Then** the merging title's catalog row is gone,
+   removed in the same transaction that repointed its files and its history, and
+   its remaining rows retired through the ordinary title-delete path.
 
 ### User Story 8 — Monitor, cancel, and resume operations (Priority: P3)
 
@@ -303,23 +311,27 @@ stops at the next safe title checkpoint with completed titles consistent.
    deduplicated assets separately from media files, and states the verification
    depth applied.
 
-### User Story 9 — Operator controls verification depth; catalog hashes converge (Priority: P3)
+### User Story 9 — Operator controls import verification depth; catalog hashes converge (Priority: P3)
 
-An operator chooses between full verification (default) and quick check, and a
-background job slowly backfills full-file hashes across the catalog.
+An operator chooses between full verification (default) and quick check for
+download-client import copies, and a background job slowly backfills full-file
+hashes across the catalog. Location operations are not governed by the
+preference: a move over existing library content always verifies full (FR-042).
 
-**Independent test**: Flip the preference and verify move operations honor it and
-stamp the applied depth; run the backfill job against a catalog with unhashed files
-and verify convergence, throttling, and skip rules.
+**Independent test**: Flip the preference and verify import copies honor it while
+location operations ignore it and always verify full, stamping the applied depth
+either way; run the backfill job against a catalog with unhashed files and verify
+convergence, throttling, and skip rules.
 
 **Acceptance scenarios**:
 
-1. **Given** the default preference, **When** a cross-filesystem copy completes,
-   **Then** the destination is fully read back and compared against the streaming
-   CRC before the source is touched.
-2. **Given** the quick-check preference, **When** a copy completes, **Then**
-   verification uses the sampled head+tail proof plus size, and the operation
-   records "verified (quick)".
+1. **Given** any preference, **When** a location operation's cross-filesystem
+   copy completes, **Then** the destination is fully read back and compared
+   against the streaming CRC before the source is touched — the quick-check
+   preference does not apply to moves.
+2. **Given** the quick-check preference, **When** a download-client import copy
+   completes, **Then** verification uses the sampled head+tail proof plus size,
+   and the result records "verified (quick)".
 3. **Given** full verification cannot run for a file, **Then** verification falls
    back to the quick check (never below it) and the fallback is recorded.
 4. **Given** the backfill job runs, **Then** it hashes only files missing a persisted
@@ -340,7 +352,9 @@ and verify convergence, throttling, and skip rules.
 - Multi-episode file spanning covered and uncovered episode slots → primary for
   uncovered slots, additional for covered ones (FR-069).
 - Recycle bin disabled, unavailable, or rejecting a file → preserve + collision
-  rename + visible warning; never permanent deletion (FR-073).
+  rename + visible warning; never permanent deletion. The one exception is a
+  source the transfer proved byte-identical to the destination's copy: it is
+  dropped outright, bin or no bin (FR-073, C4).
 - Crash mid-copy → partial destination state is expected and resumable; not stale.
 - Stale source mount during adoption → proceed when the destination is provable from
   stored catalog data; otherwise a clear unresolved state (US3.3).
@@ -417,7 +431,7 @@ and verify convergence, throttling, and skip rules.
   is retired.
 - **FR-024**: The consolidation preview MUST classify: titles moving into unused
   destination folders; titles merging with existing destination titles; folder-name
-  collisions between unrelated titles; media collisions; dedup-eligible identical
+  collisions between unrelated titles; media collisions; quick-checked may-merge
   files; sidecar/non-media collisions requiring rename; and untracked/unsupported
   content that prevents safe source-root retirement.
 - **FR-025**: Unrelated titles MUST never merge because they calculate the same
@@ -461,11 +475,15 @@ and verify convergence, throttling, and skip rules.
 - **FR-041**: The same streaming pass MUST also compute the full-file BLAKE3; both
   values are persisted with the media file, separately from the sampled head+tail
   proof.
-- **FR-042**: Verification depth is a user preference: **full** (default) reads the
-  destination back in full (cache-bypassed where the platform allows) and compares
-  against the streaming CRC; **quick check** uses the sampled head+tail proof plus
-  size. The quick check is the universal floor: full mode falls back to it when a
-  full read-back cannot run, and verification never drops below it.
+- **FR-042**: Two verification depths exist: **full** reads the destination back
+  in full (cache-bypassed where the platform allows) and compares against the
+  streaming CRC; **quick check** uses the sampled head+tail proof plus size. The
+  depth is a user preference **for download-client import copies only** (full by
+  default). **Location operations always verify full**: existing library content
+  is never put at a user-selectable level of risk by a move (operator decision,
+  2026-09-01). The quick check remains the universal floor in both contexts: full
+  verification falls back to it when a full read-back cannot run, and
+  verification never drops below it.
 - **FR-043**: The applied depth MUST be stamped on the operation: the preview states
   the depth that will apply; Activity and per-file results record
   "verified (full)" or "verified (quick)" (including fallback cases).
@@ -527,19 +545,30 @@ and verify convergence, throttling, and skip rules.
 - **FR-063**: On merge, the destination wins: title id, metadata identity,
   monitoring, explicit settings, quality configuration, naming behavior, and
   destination-library inheritance are kept.
-- **FR-064**: Additive data is unioned: tags, history, requests, import records,
-  acquisition history, and other compatible title-linked records. Source-only
-  compatible records are retained when they can be mapped safely.
+- **FR-064**: Exactly two things carry across: the merging title's **media file
+  records** and its **history**. Media files are repointed onto the destination
+  title, episode, or series-movie slot, and the rows that belong to a file travel
+  with it. History means `history_events` and `domain_events`, unioned onto the
+  destination with episode ids remapped. Every other row recorded against the
+  merging title (tags, requests, acquisition state, blocklist entries, discovery
+  provenance, external ids, images, credits) retires with it and is not carried.
 - **FR-065**: Source media MUST be mapped onto destination movie, episode, or
   series-movie identities. Destination episode and collection metadata wins for
   duplicate records.
-- **FR-066**: Episode-identity mapping applies to **every episode-scoped record
-  being unioned** (media files, history rows, import records, and any other record
-  referencing source episode ids), not only media. Ambiguous episode or special
-  identities block the operation rather than attaching records to guessed
-  identities.
-- **FR-067**: The source title is removed only when every required relationship has
-  been transferred or intentionally resolved.
+- **FR-066**: Episode, collection, and series-movie-link identity mapping applies
+  to the slots the merge is actually carrying something onto: a slot named by a
+  source media file record or by a history row. An unmapped or ambiguous slot of
+  that kind blocks the operation rather than attaching a record to a guessed
+  identity. A source slot carrying nothing the merge moves is simply not mapped;
+  it retires with the title. A merge is also refused while the merging title has
+  active acquisition work (a queued or in-flight download, an unconsumed
+  manual-import selection) or while another resumable location operation holds
+  it.
+- **FR-067**: The merging title's catalog row is removed in the same transaction
+  that repoints its media files and its history, and only after both — so no
+  cascade can take a row the merge has already moved. Its remaining rows are then
+  retired through the ordinary title-delete path; the merge performs no
+  filesystem deletion, because the files were repointed rather than removed.
 - **FR-068**: Media roles resolve per logical slot (movie title / linked series
   movie / mapped episode), not per filename: destination primary stays primary;
   incoming primary becomes additional where a destination primary exists, and stays
@@ -550,20 +579,29 @@ and verify convergence, throttling, and skip rules.
 - **FR-070**: No destination primary is ever silently demoted by a library move;
   role changes appear in the preview; users may re-promote later via existing
   media-file controls.
-- **FR-071**: The merge preview summarizes which destination settings win, which
-  source values carry forward, which data is unioned, and which values are dropped
-  or converted.
+- **FR-071**: The merge preview states the surviving title, how many media file
+  records and history rows carry across, every media-file role change (with the
+  demotion count), how many records retire with the merging title as one figure,
+  and any record that blocks the merge with its reason.
 
 ### Filesystem collision and deduplication rules
 
 - **FR-072**: Destination content always wins the pathname; incoming content is
   deduplicated or renamed, never overwritten.
-- **FR-073**: Identical files (proven by matching **full-file BLAKE3** — never the
-  sampled proof): keep the destination copy; recycle the redundant source copy;
-  retain or merge catalog associations onto the survivor; record the dedup in the
-  operation summary. If the recycle bin is disabled, unavailable, or rejects the
-  file: preserve the incoming copy, rename it per FR-074, complete with a visible
-  warning, and never fall back to permanent deletion.
+- **FR-073**: Identity is decided at transfer time, never by the preview. The
+  preview quick-checks a name collision (size, then the sampled head+tail proof)
+  and lists a pair it cannot tell apart as *may merge*; a pair the quick check
+  proves different is a rename (FR-074) with no further read, and a pair it could
+  not sample is still *may merge* with a visible warning. During the transfer the
+  same quick check runs first: a pair that differs by size or sample copies
+  immediately, with the CRC and full BLAKE3 computed during the copy; a pair the
+  quick check cannot tell apart is compared by matching **full-file BLAKE3 on
+  both sides — never the sampled proof alone** — while both copies exist.
+  Proven identical: keep the destination copy; drop the redundant source copy
+  outright — not recycled, because the surviving copy was proven byte-identical
+  first (C4) and the library already holds those bytes; retain or merge catalog
+  associations onto the survivor; record the dedup in the operation summary and
+  name the file in the asset listing. Proven different: rename per FR-074.
 - **FR-074**: Non-identical media collisions: keep the destination filename; rename
   the incoming file with a readable source-library suffix plus numeric
   disambiguation if needed; preserve both media records; apply role rules
@@ -573,9 +611,9 @@ and verify convergence, throttling, and skip rules.
   with the same suffix scheme; related asset groups move together; companion names
   follow a renamed media file to preserve the relationship; renamed canonical items
   (`movie.nfo`, `tvshow.nfo`) are preserved incoming artifacts while the
-  destination's canonical file stays authoritative; BLAKE3-identical assets
-  deduplicate via the recycle rule. The final summary lists renamed and deduplicated
-  assets separately from media files.
+  destination's canonical file stays authoritative; assets the transfer proves
+  BLAKE3-identical merge per FR-073. The final summary lists renamed and
+  deduplicated assets separately from media files.
 
 ### API and compatibility
 
@@ -678,10 +716,13 @@ and verify convergence, throttling, and skip rules.
   file verified at the configured depth, survives a process restart mid-copy, and
   repeats no verified work on resume.
 - **SC-003**: No location operation ever overwrites destination content or
-  permanently deletes a collision or duplicate, in any acceptance scenario,
-  including recycle-unavailable paths.
+  permanently deletes a collision, in any acceptance scenario, including
+  recycle-unavailable paths. The one permanent removal is FR-073's: a source copy
+  dropped only after the transfer proved the surviving destination copy
+  byte-identical by full BLAKE3 while both copies existed.
 - **SC-004**: Every acceptance scenario's preview matches the executed outcome
-  exactly (no unpreviewed rename, merge, dedup, or role change) or the operation
+  exactly (no unpreviewed rename, merge, dedup, or role change; a *may merge*
+  item resolves to the merge or the rename the preview named) or the operation
   stops with a stale-plan error.
 - **SC-005**: A bulk move spanning three source libraries classifies 100% of
   selected titles into exactly one class, with zero silent omissions.
@@ -699,6 +740,45 @@ and verify convergence, throttling, and skip rules.
   actionable error.
 
 ## Clarifications
+
+### Session 2026-09-11 (operator decisions)
+
+- Q: When a merge finds a same-named file at the destination, when is identity
+  decided, and what happens to a proven-identical source → A: **At transfer
+  time, and the source is dropped outright.** The preview only quick-checks
+  (size, then the sampled head+tail proof) and says the file *may* be identical
+  and merged; long reads never happen to render a screen. During the transfer
+  the quick check runs first: bytes that differ copy immediately, with the CRC
+  and full BLAKE3 computed during the copy; a pair the quick check cannot tell
+  apart is full-hashed on both sides, and a proven-identical source is dropped —
+  no recycle bin, no extra copy — because the destination already holds the
+  byte-identical file. Supersedes FR-073's recycle-or-preserve wording; SC-003
+  now carries this one proven exception, and C3's "never permanent deletion"
+  reads with C4's proof as the gate.
+
+### Session 2026-09-01 (operator decisions)
+
+- Q: Should the verification-depth preference govern location operations as well
+  as import copies → A: **No — moves are forced full.** The preference stays
+  user-facing for download-client import copies; library/root moves and every
+  other location operation always verify full. Rationale: losing banked library
+  data on a move is far more damaging than losing a fresh import the user never
+  had. Supersedes the 2026-08-30 depth-preference answer for the location-move
+  scope; the quick floor and recorded fallback are unchanged.
+- Q: What happens to a recycle bin that lives inside a root whose path is being
+  replaced → A: **The bin's contents move with the operation** (always the
+  intended design): after recycling completes and before the configuration
+  flips, the in-root bin relocates to the destination path, and restores of
+  entries recycled before the flip re-anchor onto the new root path.
+- Q: Does US5 consolidation offer both execution modes (CHK003 found the spec
+  silent) → A: **Move with Scryer only**, implementation-decided and accepted:
+  a consolidation's destination is a configured root whose content already
+  belongs to other titles, so "files are already there" has no coherent
+  meaning there and is refused by name
+  (`root_consolidation_mode_not_supported`). A root change refuses it too —
+  its destination must be empty or absent, so files can never already be
+  there. Adoption of externally-moved content remains the title-scoped US3
+  workflow.
 
 ### Session 2026-08-30 (operator decisions)
 

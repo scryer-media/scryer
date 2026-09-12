@@ -10,6 +10,7 @@ pub(crate) fn config_field_to_domain(field: &ConfigFieldDef) -> scryer_domain::C
             ConfigFieldType::Multiline => scryer_domain::ConfigFieldType::Multiline,
             ConfigFieldType::Bool => scryer_domain::ConfigFieldType::Bool,
             ConfigFieldType::Select => scryer_domain::ConfigFieldType::Select,
+            ConfigFieldType::FilteredSelect => scryer_domain::ConfigFieldType::FilteredSelect,
             ConfigFieldType::Number => scryer_domain::ConfigFieldType::Number,
             ConfigFieldType::Path => scryer_domain::ConfigFieldType::Path,
             ConfigFieldType::Tag => scryer_domain::ConfigFieldType::Tag,
@@ -36,6 +37,25 @@ pub(crate) fn config_field_to_domain(field: &ConfigFieldDef) -> scryer_domain::C
             })
             .collect(),
         help_text: field.help_text.clone(),
+        visible_when: field.visible_when.as_ref().map(field_condition_to_domain),
+        required_when: field.required_when.as_ref().map(field_condition_to_domain),
+        advanced: field.advanced,
+    }
+}
+
+pub(crate) fn field_condition_to_domain(
+    condition: &FieldCondition,
+) -> scryer_domain::FieldCondition {
+    scryer_domain::FieldCondition {
+        key: condition.key.clone(),
+        op: match condition.op {
+            ConditionOp::Eq => scryer_domain::ConditionOp::Eq,
+            ConditionOp::Ne => scryer_domain::ConditionOp::Ne,
+            ConditionOp::In => scryer_domain::ConditionOp::In,
+            ConditionOp::NotIn => scryer_domain::ConditionOp::NotIn,
+            ConditionOp::NonEmpty => scryer_domain::ConditionOp::NonEmpty,
+        },
+        values: condition.values.clone(),
     }
 }
 
@@ -246,27 +266,5 @@ pub(crate) fn tagged_alias_to_sdk(alias: scryer_domain::TaggedAlias) -> TaggedAl
     TaggedAlias {
         name: alias.name,
         language: alias.language,
-    }
-}
-
-pub(crate) fn decode_plugin_result<T>(
-    output: &str,
-    context: &str,
-) -> scryer_application::AppResult<T>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let envelope: PluginResult<T> = serde_json::from_str(output).map_err(|error| {
-        scryer_application::AppError::Repository(format!(
-            "{context}: plugin returned invalid result envelope: {error}"
-        ))
-    })?;
-
-    match envelope {
-        PluginResult::Ok(value) => Ok(value),
-        PluginResult::Err(error) => Err(scryer_application::AppError::Repository(format!(
-            "{context}: plugin error {:?}: {}",
-            error.code, error.public_message
-        ))),
     }
 }

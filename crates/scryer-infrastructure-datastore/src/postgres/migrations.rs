@@ -527,6 +527,13 @@ async fn run_postgres_rust_hook(
         "compact_event_storage" => {
             crate::migrations::event_storage::compact_event_storage_postgres(tx).await
         }
+        "migrate_synthetic_root_ids" => {
+            crate::migrations::synthetic_root_ids::migrate_synthetic_root_ids_postgres(tx).await
+        }
+        "adopt_existing_title_tag_definitions" => {
+            crate::migrations::title_tag_definitions::adopt_existing_title_tag_definitions_postgres(tx)
+                .await
+        }
         "compress_post_processing_output" => {
             crate::migrations::post_processing_output::compress_post_processing_output_postgres(tx)
                 .await

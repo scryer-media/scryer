@@ -427,6 +427,7 @@ async fn reconcile_terminal_download_cleanup(
             && (client_type.trim() != "weaver" || native_payload_refused)
             && !plugin_has_native_data_removal(app, client_id).await;
         let record = refused_record.as_ref().or(record);
+        let mut intent_record: Option<crate::DownloadCleanupRecord> = None;
         let mut payload_disposition = None;
         let payload_cleanup_checkpoint = if host_managed_payload {
             match remove_host_payload_before_entry_cleanup(
@@ -552,7 +553,12 @@ async fn reconcile_terminal_download_cleanup(
                     "failed to checkpoint native removal intent");
                 return TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure);
             }
+            intent_record = Some(crate::DownloadCleanupRecord {
+                payload_checkpoint: Some(checkpoint),
+                ..record.clone()
+            });
         }
+        let record = intent_record.as_ref().or(record);
         let delete_result = if client_id.is_empty() {
             app.services
                 .integrations
@@ -630,6 +636,32 @@ async fn reconcile_terminal_download_cleanup(
                 continue;
             }
             Err(error) => {
+                // The request reached the client (or at least left this
+                // process): a later authoritative absence may credit it as a
+                // completed native deletion. A crash before this point leaves
+                // no marker, and absence then settles as payload-unverified.
+                if client_remove_data
+                    && !host_managed_payload
+                    && let Some(record) = record
+                {
+                    let mut checkpoint = record
+                        .payload_checkpoint
+                        .as_deref()
+                        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+                        .filter(serde_json::Value::is_object)
+                        .unwrap_or_else(|| serde_json::json!({}));
+                    checkpoint[NATIVE_REMOVE_ATTEMPTED_KEY] = serde_json::json!(true);
+                    if let Err(error) = app
+                        .services
+                        .workflow
+                        .download_submissions
+                        .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint.to_string())
+                        .await
+                    {
+                        tracing::warn!(client_id, download_client_item_id, error = %error,
+                            "failed to checkpoint the native removal attempt");
+                    }
+                }
                 if !remove_data
                     && !terminal_download_item_is_still_visible(
                         app,
@@ -1158,6 +1190,13 @@ fn remove_inventoried_payload_blocking(
 /// client only removes the entry, on every later attempt of the same row.
 const CLIENT_REFUSED_PAYLOAD_DELETION_KEY: &str = "client_refused_payload_deletion";
 
+/// Checkpoint flag set once a native data-deletion request has actually been
+/// sent (the client answered, even with an error). Written *after* the
+/// request, unlike `native_remove_requested`, so a crash between the intent
+/// checkpoint and the request cannot pass off entry absence as a completed
+/// payload deletion.
+pub(crate) const NATIVE_REMOVE_ATTEMPTED_KEY: &str = "native_remove_attempted";
+
 fn client_refused_payload_deletion(checkpoint: Option<&serde_json::Value>) -> bool {
     checkpoint.is_some_and(|checkpoint| {
         checkpoint
@@ -1476,6 +1515,27 @@ async fn remove_host_payload_before_entry_cleanup(
                 return Err(AppError::Validation(
                     "file payload ownership is unverified; retaining source and client entry"
                         .into(),
+                ));
+            }
+            // The import record names the path, not whatever occupies it now.
+            // A file replaced since the import (a re-download into the same
+            // name while cleanup waited on seeding or a retry) is not the one
+            // Scryer imported: its recorded size must still match.
+            let current_size = if metadata.file_type().is_symlink() {
+                tokio::fs::metadata(&target).await.ok().map(|resolved| resolved.len())
+            } else {
+                Some(metadata.len())
+            };
+            let size_matches = imported_sources.iter().any(|(source, size)| {
+                source.as_path() == target
+                    && match (*size, current_size) {
+                        (Some(recorded), Some(current)) => recorded == current,
+                        _ => true,
+                    }
+            });
+            if !size_matches {
+                return Err(AppError::Validation(
+                    "file payload changed since import; retaining source and client entry".into(),
                 ));
             }
             persist_plan(serde_json::json!({
@@ -1865,12 +1925,39 @@ async fn finalize_import_source_cleanup(
         return Ok(file_result.strategy);
     }
 
+    // FR-044, at the application-level gate as well as inside the copy. The
+    // importer already refuses to build a cleanup guard for a copy it could not
+    // prove, so this is belt-and-braces — but source removal is irreversible,
+    // and a guard that arrives next to a non-passing verification is a bug this
+    // must not act on.
+    if let Some(verification) = file_result.verification.as_ref()
+        && !verification.permits_source_removal()
+    {
+        return Err(AppError::Repository(format!(
+            "move import source cleanup blocked because the destination copy was not verified: {} ({})",
+            file_result.dest_path.display(),
+            verification.stamp(),
+        )));
+    }
+
     let guard = file_result.source_cleanup.clone().ok_or_else(|| {
         AppError::Repository(format!(
             "move import did not return a source cleanup guard for {}",
             file_result.source_path.display()
         ))
     })?;
+
+    if let Some(verification) = file_result.verification.as_ref() {
+        // FR-043: the applied depth is recorded wherever the import surface can
+        // carry it today. Activity stamping is a later package; the fact is
+        // already persisted on the media file (migration 0205).
+        tracing::info!(
+            dest_path = %file_result.dest_path.display(),
+            verification = %verification.stamp(),
+            bytes = verification.hashes.size_bytes,
+            "verified import copy before removing the source"
+        );
+    }
 
     let execution_context = crate::ImportFileExecutionContext::new(
         completed.map_or("", |item| item.client_id.as_str()),

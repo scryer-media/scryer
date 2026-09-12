@@ -1,8 +1,9 @@
 use super::{
-    DomainEventTypeValue, ExternalIdInput, MediaFacetValue, MediaRequestStatusValue,
-    MonitorTypeValue, WantedSearchPayload,
+    DomainEventTypeValue, ExternalIdInput, MediaFacetValue, MediaRequestLease,
+    MediaRequestMetadataPayload, MediaRequestStatusValue, MonitorTypeValue, RequestRuleDecision,
+    WantedSearchPayload,
 };
-use async_graphql::{Enum, ID, InputObject, SimpleObject};
+use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 
 /// External identifier from a provider.
@@ -165,6 +166,24 @@ pub struct MediaRequestPayload {
     pub created_at: DateTime<Utc>,
     /// UTC time when the request was last changed.
     pub updated_at: DateTime<Utc>,
+    /// Days the requester asked the media to be kept for; null means forever.
+    pub requested_lease_days: Option<i32>,
+    /// Days the approver granted; null means forever, and it stays null until
+    /// the request is approved.
+    pub approved_lease_days: Option<i32>,
+    /// The lease actually holding the created title, or null until an approval
+    /// creates the claim.
+    pub lease: Option<MediaRequestLease>,
+    /// The decision request rules recorded for this request, or null when it
+    /// was never evaluated. A requester reading their own request gets it with
+    /// `votes` emptied.
+    pub decision: Option<RequestRuleDecision>,
+    /// Tags the policy emitted for this request. Stamped on the title only when
+    /// the request is approved.
+    pub policy_tags: Vec<String>,
+    /// The metadata the request was decided against, as captured at submit
+    /// time.
+    pub metadata: MediaRequestMetadataPayload,
 }
 
 /// Event payload identifying a changed media request.
@@ -240,6 +259,9 @@ pub struct SubmitMediaRequestInput {
     pub requested_monitor_type: Option<MonitorTypeValue>,
     /// Seasons and series movies to monitor; required with `ADVANCED`.
     pub requested_monitor_selection: Option<MonitorSelectionInput>,
+    /// How long the requester wants the media kept, in days. Omitted means
+    /// forever, which is what Scryer granted before leases existed.
+    pub requested_lease_days: Option<i32>,
 }
 
 #[derive(InputObject, Clone)]
@@ -254,6 +276,16 @@ pub struct ApproveMediaRequestInput {
     /// Optional approver override for the requested advanced selection; when
     /// omitted the request's stored selection is applied.
     pub monitor_selection: Option<MonitorSelectionInput>,
+    /// Approver override for the lease, in days. Omitting both this and
+    /// `leaseForever` grants exactly what the requester asked for.
+    pub lease_days: Option<i32>,
+    /// Set to true to grant the title forever regardless of what was asked.
+    /// Rejected together with `leaseDays`.
+    pub lease_forever: Option<bool>,
+    /// Approver override for the policy tags stamped on the created title. A
+    /// supplied list **replaces** the policy's tags outright; omitting it keeps
+    /// them.
+    pub tags: Option<Vec<String>>,
 }
 
 #[derive(InputObject, Clone)]
@@ -267,6 +299,8 @@ pub struct UpdateMediaRequestInput {
     pub requested_monitor_type: Option<MonitorTypeValue>,
     /// Seasons and series movies to monitor; required with `ADVANCED`.
     pub requested_monitor_selection: Option<MonitorSelectionInput>,
+    /// Replacement lease in days. Omission preserves the current lease; null requests forever.
+    pub requested_lease_days: MaybeUndefined<i32>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -285,4 +319,39 @@ pub struct ApproveMediaRequestPayload {
     pub wanted_search: Option<WantedSearchPayload>,
     /// Non-fatal search error when approval succeeded but search could not be queued.
     pub search_error: Option<String>,
+    /// Non-fatal claim error when the title was created and the request
+    /// resolved, but the retention claim could not be written. The approval is
+    /// deliberately **not** rolled back: the requester has their title, and an
+    /// operator can re-pin it by hand.
+    pub claim_error: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_graphql::{InputType, value};
+
+    #[test]
+    fn request_edits_distinguish_omitted_null_and_finite_leases() {
+        let omitted = UpdateMediaRequestInput::parse(Some(value!({
+            "requestId": "request", "requestedQualityProfileId": "profile"
+        })))
+        .unwrap_or_else(|_| panic!("omitted lease should parse"));
+        assert!(matches!(
+            omitted.requested_lease_days,
+            MaybeUndefined::Undefined
+        ));
+        let forever = UpdateMediaRequestInput::parse(Some(value!({
+            "requestId": "request", "requestedQualityProfileId": "profile", "requestedLeaseDays": null
+        }))).unwrap_or_else(|_| panic!("null lease should parse"));
+        assert!(matches!(forever.requested_lease_days, MaybeUndefined::Null));
+        let finite = UpdateMediaRequestInput::parse(Some(value!({
+            "requestId": "request", "requestedQualityProfileId": "profile", "requestedLeaseDays": 30
+        })))
+        .unwrap_or_else(|_| panic!("finite lease should parse"));
+        assert!(matches!(
+            finite.requested_lease_days,
+            MaybeUndefined::Value(30)
+        ));
+    }
 }

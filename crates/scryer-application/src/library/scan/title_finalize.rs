@@ -9,6 +9,9 @@ struct ExistingScannedMediaFile<'a> {
     file_id: &'a str,
     should_skip_analysis: bool,
     should_refresh_source_signature: bool,
+    /// FR-046: the sampled quick proof changed, so the persisted full hashes
+    /// describe bytes that no longer exist.
+    should_invalidate_full_hashes: bool,
 }
 
 struct PersistedScannedMediaFile {
@@ -44,6 +47,36 @@ async fn persist_or_reuse_scanned_media_file(
 
     if let Some(existing) = existing {
         let mut db_elapsed = Duration::default();
+
+        // FR-046: a changed quick proof throws away the persisted full hashes
+        // before anything else, so a crash between here and the signature
+        // refresh leaves the file queued for backfill rather than carrying a
+        // hash of content it no longer holds. The scan itself never computes a
+        // full hash; it only ever clears one.
+        if existing.should_invalidate_full_hashes {
+            let db_started = Instant::now();
+            let invalidated = app
+                .services
+                .library
+                .media_files
+                .clear_media_file_content_hashes(existing.file_id)
+                .await;
+            db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
+            match invalidated {
+                Ok(true) => tracing::info!(
+                    title_id = %title.id,
+                    file_id = %existing.file_id,
+                    "sampled content proof changed; cleared persisted full hashes and re-queued the file for backfill"
+                ),
+                Ok(false) => {}
+                Err(error) => warn!(
+                    error = %error,
+                    title_id = %title.id,
+                    file_id = %existing.file_id,
+                    "failed to invalidate persisted full hashes after a changed content proof"
+                ),
+            }
+        }
 
         if existing.should_refresh_source_signature {
             let db_started = Instant::now();
@@ -131,20 +164,73 @@ async fn persist_scanned_media_analysis_outcome(
     app: &AppUseCase,
     title: &Title,
     file_id: &str,
-    outcome: MediaAnalysisOutcome,
+    inspected: crate::media::discs::CataloguedMediaAnalysis,
 ) -> (Duration, bool) {
     let db_started = Instant::now();
+    let files = &app.services.library.media_files;
+    let Ok(Some(current)) = files.get_media_file_by_id(file_id).await else {
+        return (db_started.elapsed(), false);
+    };
+    let same_catalogue =
+        inspected
+            .expected
+            .as_ref()
+            .map_or(current.analysis_details.revision == 0, |expected| {
+                expected.file_path == current.file_path
+                    && expected.analysis_details == current.analysis_details
+            });
+    let same_source =
+        crate::media::discs::MediaSourceVersion::read(&stored_path_to_path_buf(&current.file_path))
+            .await
+            .is_ok_and(|source| source == inspected.source);
+    if !same_catalogue || !same_source {
+        warn!(
+            file_id,
+            "discarded media analysis after source or saved metadata changed"
+        );
+        return (db_started.elapsed(), false);
+    }
 
-    let persisted = match outcome {
-        MediaAnalysisOutcome::Valid(analysis) => {
+    let persisted = match inspected.outcome {
+        MediaAnalysisOutcome::Valid(mut analysis) => {
+            if let Some(disc) = &mut analysis.details.disc {
+                let mapping_result = app.validate_disc_episode_mappings(title, disc).await;
+                // Mapping validation awaits catalogue reads; the image may have
+                // been replaced while those reads were in flight.
+                if !crate::media::discs::MediaSourceVersion::read(&stored_path_to_path_buf(
+                    &current.file_path,
+                ))
+                .await
+                .is_ok_and(|source| source == inspected.source)
+                {
+                    return (db_started.elapsed(), false);
+                }
+                if let Err(error) = mapping_result {
+                    analysis.details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+                    analysis
+                        .details
+                        .report
+                        .warnings
+                        .push(scryer_media_types::ProbeWarning {
+                            code: "disc_episode_mapping_review".into(),
+                            message: error.to_string(),
+                            ..Default::default()
+                        });
+                    let recorded = files
+                        .record_media_analysis_attempt(&current, &analysis)
+                        .await
+                        .unwrap_or(false);
+                    return (db_started.elapsed(), recorded);
+                }
+            }
             let update_result = app
                 .services
                 .library
                 .media_files
-                .update_media_file_analysis(file_id, *analysis)
+                .update_media_file_analysis_if_unchanged(&current, *analysis)
                 .await;
             match update_result {
-                Ok(()) => true,
+                Ok(updated) => updated,
                 Err(error) => {
                     warn!(
                         error = %error,
@@ -156,6 +242,10 @@ async fn persist_scanned_media_analysis_outcome(
                 }
             }
         }
+        MediaAnalysisOutcome::Inconclusive(analysis) => files
+            .record_media_analysis_attempt(&current, &analysis)
+            .await
+            .unwrap_or(false),
         MediaAnalysisOutcome::Invalid(error_message) => {
             let mark_result = app
                 .services
@@ -185,6 +275,7 @@ fn scanned_media_analysis_status(outcome: &MediaAnalysisOutcome) -> &'static str
     match outcome {
         MediaAnalysisOutcome::Valid(_) => "scanned",
         MediaAnalysisOutcome::Invalid(_) => "failed",
+        MediaAnalysisOutcome::Inconclusive(_) => "incomplete",
     }
 }
 
@@ -286,7 +377,7 @@ pub(crate) async fn finalize_title_scan_file(
     app: &AppUseCase,
     title: &Title,
     plan: PlannedTitleScanFile,
-    analysis_outcome: Option<MediaAnalysisOutcome>,
+    analysis_outcome: Option<crate::media::discs::CataloguedMediaAnalysis>,
     _scan_mode: LibraryScanMode,
     episode_links: &mut HashSet<(String, String)>,
     summary: &mut LibraryScanSummary,
@@ -307,10 +398,12 @@ pub(crate) async fn finalize_title_scan_file(
             file_id,
             should_skip_analysis,
             should_refresh_source_signature,
+            should_invalidate_full_hashes,
         } => Some(ExistingScannedMediaFile {
             file_id,
             should_skip_analysis: *should_skip_analysis,
             should_refresh_source_signature: *should_refresh_source_signature,
+            should_invalidate_full_hashes: *should_invalidate_full_hashes,
         }),
         PlannedTitleScanRecord::New => None,
     };
@@ -344,6 +437,18 @@ pub(crate) async fn finalize_title_scan_file(
     *db_elapsed = db_elapsed.saturating_add(persisted_file.db_elapsed);
 
     let mut title_updated = persisted_file.title_updated;
+    // Disc availability is published atomically from saved playback mappings, never a filename.
+    let is_disc_image = scryer_domain::is_disc_image(&destination_path);
+    let target_episodes = if is_disc_image {
+        Vec::new()
+    } else {
+        target_episodes
+    };
+    let series_movie_link_id = if is_disc_image {
+        None
+    } else {
+        series_movie_link_id
+    };
     let external_subtitle_episode_id = match target_episodes.as_slice() {
         [episode] => Some(episode.id.as_str()),
         _ => None,
@@ -424,7 +529,7 @@ pub(crate) async fn finalize_title_scan_file(
     }
 
     if let Some(outcome) = analysis_outcome {
-        let analysis_status = scanned_media_analysis_status(&outcome);
+        let analysis_status = scanned_media_analysis_status(&outcome.outcome);
         let (analysis_db_elapsed, analysis_persisted) =
             persist_scanned_media_analysis_outcome(app, title, &persisted_file.file_id, outcome)
                 .await;
@@ -590,6 +695,9 @@ pub(super) async fn finalize_movie_scan_file(
                 || existing.source_signature_scheme != desired_source_signature_scheme.clone()
                 || existing.source_signature_value != desired_source_signature_value.clone()
                 || existing.scan_status != "scanned",
+            should_invalidate_full_hashes: title_media_file_quick_proof_changed(
+                existing, &snapshot,
+            ),
         });
 
     let destination_permit = app
@@ -646,10 +754,7 @@ pub(super) async fn finalize_movie_scan_file(
 
     if persisted_file.should_analyze {
         let analysis_outcome = match app
-            .services
-            .library
-            .media_analyzer
-            .analyze_file(file_path.clone())
+            .analyze_catalogued_media_file(Some(&persisted_file.file_id), file_path.clone())
             .await
         {
             Ok(outcome) => outcome,
@@ -660,13 +765,13 @@ pub(super) async fn finalize_movie_scan_file(
                     file_path = %file.path,
                     "movie media analysis task failed during library scan"
                 );
-                MediaAnalysisOutcome::Invalid(error.to_string())
+                return;
             }
         };
         if library_scan_cancel_requested(cancel_token) {
             return;
         }
-        let analysis_status = scanned_media_analysis_status(&analysis_outcome);
+        let analysis_status = scanned_media_analysis_status(&analysis_outcome.outcome);
         let (_, analysis_persisted) = persist_scanned_media_analysis_outcome(
             app,
             title,

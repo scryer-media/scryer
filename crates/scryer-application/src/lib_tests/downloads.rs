@@ -445,6 +445,121 @@ async fn authoritative_absence_follows_the_history_cursor_past_the_first_page() 
     assert!(!registry.ended.lock().await.contains(&second_download_id));
 }
 
+// History deeper than one pass's scan budget is walked to its end across
+// passes: the cursor where the budget ran out is where the next pass resumes,
+// instead of re-reading the same first pages forever and never proving absence.
+#[tokio::test]
+async fn authoritative_absence_resumes_its_history_scan_on_the_next_pass() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let registry = Arc::new(RecordingDownloadRegistry::default());
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let config =
+        create_enabled_download_client_config(&app, &user, "Primary NZBGet", "nzbget").await;
+    download_client
+        .set_snapshot_authoritative_client_ids([config.id.clone()])
+        .await;
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source_identity =
+        ClientJobLocator::new(Some(config.id.as_str()), "nzbget", "deep-history-1");
+    registry.bind(source_identity.clone(), download_id).await;
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: "title-deep-history".to_string(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some(config.id.clone()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "deep-history-1".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Deep.History.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+        })
+        .await
+        .expect("seed download submission");
+    let mut item = queue_history_fixture_item("deep-history-1", DownloadQueueState::Downloading, 1);
+    item.client_id = config.id.clone();
+    item.client_name = config.name.clone();
+    item.client_type = "nzbget".to_string();
+    item.download_id = Some(download_id.to_wire());
+    item.is_scryer_origin = true;
+    let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+    tracker.track(&app, item).await;
+
+    // Nine pages before the end of history: one more than a pass may read.
+    download_client
+        .observation_script
+        .lock()
+        .await
+        .extend(
+            (1..=9).map(|page| crate::DownloadClientObservation::Unknown {
+                reason: format!("page {page} scanned"),
+                next_history_offset: page * 100,
+            }),
+        );
+    download_client
+        .observation_script
+        .lock()
+        .await
+        .push_back(crate::DownloadClientObservation::Absent);
+
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &source_identity,
+    )
+    .await;
+    assert_eq!(
+        download_client
+            .observed_history_offsets
+            .lock()
+            .await
+            .clone(),
+        (0..8).map(|page| page * 100).collect::<Vec<_>>(),
+        "the first pass reads its full budget from the start of history"
+    );
+    assert!(
+        !registry.ended.lock().await.contains(&download_id),
+        "an unfinished scan keeps the binding"
+    );
+
+    download_client
+        .observed_history_offsets
+        .lock()
+        .await
+        .clear();
+    crate::app_usecase_integration::reconcile_authoritatively_absent_source(
+        &app,
+        &mut tracker,
+        &source_identity,
+    )
+    .await;
+    assert_eq!(
+        download_client
+            .observed_history_offsets
+            .lock()
+            .await
+            .clone(),
+        vec![800, 900],
+        "the next pass resumes where the budget ran out"
+    );
+    assert!(registry.ended.lock().await.contains(&download_id));
+}
+
 #[tokio::test]
 async fn authoritative_absence_fails_and_ends_an_incomplete_binding_before_reobservation() {
     let download_client = Arc::new(StubDownloadClient::default());
@@ -1361,6 +1476,7 @@ async fn list_download_queue_reads_cached_observed_items_without_client_calls() 
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -1468,6 +1584,7 @@ async fn list_download_queue_uses_live_queue_only_for_all_activity() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -1548,6 +1665,7 @@ async fn list_download_queue_for_title_filters_the_shared_cache() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -1814,6 +1932,7 @@ async fn list_download_import_page_returns_only_import_rows_for_selected_filter(
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -1903,6 +2022,7 @@ async fn count_download_import_items_matches_selected_filter() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -2185,6 +2305,7 @@ async fn find_download_queue_scope_ignores_stale_submission_titles() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -2668,12 +2789,14 @@ async fn queued_manual_import_rejects_observed_targets_before_consuming_or_queue
         crate::ManualImportCandidateMapping {
             candidate_id: "candidate-1".to_string(),
             episode_id: Some(observed_episode.id),
+            disc_selection: None,
             series_movie_link_id: None,
         },
         crate::ManualImportCandidateMapping {
             candidate_id: "candidate-1".to_string(),
             episode_id: None,
             series_movie_link_id: Some(observed_series_movie.id),
+            disc_selection: None,
         },
     ] {
         let error = app
@@ -3186,6 +3309,7 @@ async fn list_download_import_page_returns_promptly_when_tracked_snapshot_handle
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3233,6 +3357,7 @@ async fn list_download_import_page_uses_runtime_tracked_snapshot_cache() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3317,6 +3442,7 @@ async fn list_download_import_page_degrades_promptly_for_limit_one_count_reads_w
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -3371,6 +3497,7 @@ async fn download_import_page_renders_importing_state_from_runtime_snapshot() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -6469,6 +6596,566 @@ async fn automatic_import_rejects_download_whose_only_file_matches_no_episode() 
     assert_eq!(statuses, vec![ImportStatus::Failed]);
 }
 
+#[cfg(feature = "runtime-media-analysis")]
+#[path = "../../../scryer-mediainfo/tests/support/disc_image.rs"]
+mod authored_disc_image;
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn unknown_program_video_codec_is_held_for_review_across_production_paths() {
+    let fixture = fail_closed_pack_fixture().await;
+    let source_dir = tempfile::tempdir().unwrap();
+    let source = source_dir.path().join("Fail.Closed.Pack.S01E01.mpg");
+    let bytes = [
+        0, 0, 1, 0xba, 0x44, 0, 4, 0, 4, 1, 0, 0, 3, 0xf8, 0, 0, 1, 0xe0, 0, 3, 0x80, 0, 0,
+    ];
+    std::fs::write(&source, bytes).unwrap();
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    let crate::MediaAnalysisOutcome::Inconclusive(analysis) =
+        analyzer.analyze_file(source.clone()).await.unwrap()
+    else {
+        panic!("detected video without codec headers must remain inconclusive");
+    };
+    assert!(analysis.video_codec.is_none());
+    assert!(analysis.details.selected_video_id.is_some());
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let parsed = crate::release_parser::parse_release_metadata("Fail.Closed.Pack.S01E01.mpg");
+    let decision = crate::post_download_gate::probe_and_validate_with_disc_selection(
+        &fixture.app,
+        &fixture.title,
+        &parsed,
+        &profile,
+        &source,
+        bytes.len() as i64,
+        false,
+        None,
+        false,
+        crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+        None,
+    )
+    .await;
+    let crate::post_download_gate::ImportedFileGateDecision::Rejected(rejection) = decision else {
+        panic!("inconclusive video must require review before import");
+    };
+    assert!(rejection.requires_review());
+    assert_eq!(
+        rejection.recycle_reason,
+        crate::post_download_gate::MEDIA_ANALYSIS_REVIEW_REQUIRED_CODE
+    );
+    for origin in [
+        crate::import::decide::ImportOrigin::Automatic,
+        crate::import::decide::ImportOrigin::OperatorQueued,
+    ] {
+        assert_eq!(
+            crate::import::decide::prepare_rejection_disposition_for_origin(&rejection, origin),
+            crate::import::decide::RejectionDisposition::Hold,
+        );
+    }
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn catalog_scan_and_final_import_join_the_same_native_probe() {
+    let fixture = fail_closed_pack_fixture().await;
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv");
+    let size = std::fs::metadata(&path).unwrap().len() as i64;
+    let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
+    let (release, references) =
+        crate::media::analyzer::hold_native_probe_for_test(path.clone()).await;
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    let (catalog, imported, ()) = tokio::join!(
+        analyzer.analyze_file(path.clone()),
+        crate::post_download_gate::probe_and_validate_with_disc_selection(
+            &fixture.app,
+            &fixture.title,
+            &parsed,
+            &profile,
+            &path,
+            size,
+            false,
+            None,
+            false,
+            crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+            None,
+        ),
+        async {
+            // One held handle, one worker, and both production waiters.
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while references() < 4 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("both production paths must join the held native probe");
+            release.send(()).unwrap();
+        },
+    );
+    let crate::MediaAnalysisOutcome::Valid(catalog) = catalog.unwrap() else {
+        panic!("catalog fixture must be valid");
+    };
+    let crate::post_download_gate::ImportedFileGateDecision::Accepted(imported) = imported else {
+        panic!("import fixture must be accepted");
+    };
+    assert_eq!(
+        serde_json::to_value(catalog).unwrap(),
+        serde_json::to_value(imported.analysis.unwrap()).unwrap()
+    );
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn shared_native_probe_rejects_source_changes_in_both_production_paths() {
+    let fixture = fail_closed_pack_fixture().await;
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("changing.mkv");
+    let original = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../scryer-mediainfo/tests/media/h264_aac.mkv"),
+    )
+    .unwrap();
+    std::fs::write(&path, &original).unwrap();
+    let parsed = crate::release_parser::parse_release_metadata("Example.S01E01.mkv");
+    let (release, references) =
+        crate::media::analyzer::hold_native_probe_for_test(path.clone()).await;
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    let (catalog, imported, ()) = tokio::join!(
+        analyzer.analyze_file(path.clone()),
+        crate::post_download_gate::probe_and_validate_with_disc_selection(
+            &fixture.app,
+            &fixture.title,
+            &parsed,
+            &profile,
+            &path,
+            original.len() as i64,
+            false,
+            None,
+            false,
+            crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+            None,
+        ),
+        async {
+            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+                while references() < 4 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("both production paths must join before changing the source");
+            let mut replacement = original.clone();
+            replacement.extend_from_slice(&[0; 16]);
+            std::fs::write(&path, replacement).unwrap();
+            release.send(()).unwrap();
+        },
+    );
+    assert!(
+        matches!(catalog, Err(AppError::Validation(message)) if message.contains("source changed"))
+    );
+    let crate::post_download_gate::ImportedFileGateDecision::Rejected(rejection) = imported else {
+        panic!("a changed source must not become an accepted metadata failure");
+    };
+    assert!(rejection.requires_review());
+    for origin in [
+        crate::import::decide::ImportOrigin::Automatic,
+        crate::import::decide::ImportOrigin::OperatorQueued,
+    ] {
+        assert_eq!(
+            crate::import::decide::prepare_rejection_disposition_for_origin(&rejection, origin),
+            crate::import::decide::RejectionDisposition::Hold,
+        );
+    }
+    assert!(
+        rejection
+            .blocking_rule_codes
+            .iter()
+            .any(|code| code == "source_changed_after_probe")
+    );
+    assert_eq!(
+        std::fs::metadata(&path).unwrap().len(),
+        original.len() as u64 + 16
+    );
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract() {
+    let fixture = fail_closed_pack_fixture().await;
+    let profile = fixture
+        .app
+        .resolve_quality_profile_for_title(&fixture.title)
+        .await
+        .unwrap();
+    let analyzer = crate::media::analyzer::NativeMediaAnalyzer;
+    for name in [
+        "h264_aac.mkv",
+        "matrix_ts_002.m2ts",
+        "av1_sequence_pq.mp4",
+        "av1_sequence_pq.mkv",
+        "hevc_sequence_pq.mp4",
+        "hevc_hdr10plus.mp4",
+        "dv_profile5.mkv",
+        "dv_profile7.mkv",
+        "dv_profile8.mkv",
+        "hevc_hdr10plus.mkv",
+        "hevc_sequence_pq.mkv",
+        "chapters_nero.mp4",
+        "chapters_quicktime.mp4",
+        "matrix_mkv_004.mkv",
+        "matrix_mkv_005.mkv",
+        "matrix_mp4_002.m4v",
+        "matrix_mp4_011.m4v",
+        "matrix_ts_003.ts",
+        "matrix_ts_004.m2ts",
+        "matrix_mkv_003.mkv",
+        "matrix_mkv_007.mkv",
+        "matrix_mkv_020.mkv",
+        "matrix_mp4_008.m4v",
+        "ogv_theora_opus_surround.ogv",
+        "ogv_theora_vorbis.ogv",
+        "matrix_avi_001.avi",
+        "matrix_avi_009.avi",
+        "matrix_avi_013.avi",
+        "matrix_avi_005.avi",
+        "matrix_mkv_015.mkv",
+        "matrix_ts_016.m2ts",
+        "matrix_ts_005.ts",
+        "wmv_wmv1_aac_surround.wmv",
+        "wmv_wmv1_wmav1.wmv",
+        "wmv_wmv1_mp3_mono.wmv",
+        "wmv_wmv2_video_only.wmv",
+        "flv_flv1_pcm_s16le.flv",
+        "flv_flv1_pcm_u8.flv",
+        "flv_flv1_speex.flv",
+        "flv_h264_mp3.flv",
+        "ps_mpeg1_mp2.mpg",
+        "ps_mpeg2_mp2.vob",
+    ] {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../scryer-mediainfo/tests/media")
+            .join(name);
+        let crate::MediaAnalysisOutcome::Valid(catalog) =
+            analyzer.analyze_file(path.clone()).await.unwrap()
+        else {
+            panic!("mandatory valid fixture: {name}");
+        };
+        let parsed = crate::release_parser::parse_release_metadata(name);
+        let decision = crate::post_download_gate::probe_and_validate_with_disc_selection(
+            &fixture.app,
+            &fixture.title,
+            &parsed,
+            &profile,
+            &path,
+            std::fs::metadata(&path).unwrap().len() as i64,
+            false,
+            None,
+            false,
+            crate::post_download_gate::RuntimeSampleValidation::manual_override(None),
+            None,
+        )
+        .await;
+        let crate::post_download_gate::ImportedFileGateDecision::Accepted(imported) = decision
+        else {
+            panic!("native import fixture was rejected: {name}");
+        };
+        let mut catalog = serde_json::to_value(catalog).unwrap();
+        let mut rule_file = serde_json::to_value(
+            imported
+                .rule_file_doc
+                .expect("canonical facts must reach import rules"),
+        )
+        .unwrap();
+        let mut imported = serde_json::to_value(imported.analysis.unwrap()).unwrap();
+        // Runtime instrumentation may vary between probes; metadata may not.
+        catalog["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
+        imported["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
+        rule_file["details"]["report"]["elapsed_ms"] = serde_json::json!(0);
+        assert_eq!(
+            catalog, imported,
+            "canonical production paths diverged for {name}"
+        );
+        assert_eq!(
+            catalog["details"], rule_file["details"],
+            "rule projection lost structured facts for {name}"
+        );
+        assert_eq!(
+            catalog["details"]["revision"],
+            scryer_media_types::ANALYSIS_REVISION
+        );
+        assert!(!catalog["details"]["streams"].as_array().unwrap().is_empty());
+    }
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn automatic_disc_import_holds_unmapped_encrypted_and_unknown_images() {
+    for kind in ["unmapped", "encrypted", "unknown", "missing-clpi"] {
+        let fixture = fail_closed_pack_fixture().await;
+        let source_dir = tempfile::tempdir().unwrap();
+        let mut clip = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+        )
+        .unwrap();
+        if kind == "encrypted" {
+            for packet in clip.chunks_exact_mut(192) {
+                if packet[4] == 0x47 {
+                    packet[7] |= 0x80;
+                }
+            }
+        }
+        let mut image_files = vec![(
+            "BDMV/PLAYLIST/00001.MPLS",
+            authored_disc_image::mpls(&[("00001", 0, 135_000)]),
+        )];
+        if kind != "missing-clpi" {
+            image_files.push((
+                "BDMV/CLIPINF/00001.CLPI",
+                authored_disc_image::clpi((clip.len() / 192) as u32, 135_000, &[(0, 0)]),
+            ));
+        }
+        image_files.push(("BDMV/STREAM/00001.M2TS", clip));
+        let bytes = if kind == "unknown" {
+            vec![0; 4096]
+        } else {
+            authored_disc_image::iso(&image_files)
+        };
+        let source = source_dir.path().join("Fail.Closed.Pack.S01E01.iso");
+        std::fs::write(&source, &bytes).unwrap();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(&source)
+            .unwrap()
+            .set_len(PACK_VIDEO_SIZE_BYTES)
+            .unwrap();
+        let completed = series_pack_completed_download(
+            &format!("disc-{kind}"),
+            &fixture.title.id,
+            "Fail.Closed.Pack.S01E01",
+            source_dir.path(),
+        );
+        let result = crate::import::import::import_completed_download(
+            &fixture.app,
+            &fixture.user,
+            &completed,
+        )
+        .await
+        .unwrap();
+        assert!(
+            result
+                .error_message
+                .as_deref()
+                .is_some_and(|message| message.contains("disc")),
+            "{kind}: {result:?}"
+        );
+        assert!(source.exists(), "{kind}: source must survive review hold");
+        assert!(
+            library_video_file_names(fixture.library_dir.path()).is_empty(),
+            "{kind}: no import before review"
+        );
+        assert!(
+            fixture
+                .app
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(&fixture.title.id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn manual_disc_import_keeps_one_image_and_explicit_episode_mappings() {
+    manual_disc_import_for_filesystem(None).await;
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+#[tokio::test]
+async fn manual_udf_disc_import_keeps_one_image_and_explicit_episode_mappings() {
+    for metadata_partition in [false, true] {
+        manual_disc_import_for_filesystem(Some(metadata_partition)).await;
+    }
+}
+
+#[cfg(feature = "runtime-media-analysis")]
+async fn manual_disc_import_for_filesystem(udf_metadata_partition: Option<bool>) {
+    let fixture = fail_closed_pack_fixture().await;
+    let (app, user, title) = (&fixture.app, &fixture.user, &fixture.title);
+    let mut mapped = Vec::new();
+    for (number, duration) in [(2, 2), (3, 1)] {
+        mapped.push(
+            app.create_episode(
+                user,
+                title.id.clone(),
+                fixture.episode.collection_id.clone(),
+                "standard".into(),
+                Some(number.to_string()),
+                Some("1".into()),
+                None,
+                Some(format!("Disc episode {number}")),
+                None,
+                Some(duration),
+                false,
+                false,
+            )
+            .await
+            .unwrap(),
+        );
+    }
+    let clip = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../scryer-mediainfo/tests/media/matrix_ts_002.m2ts"),
+    )
+    .unwrap();
+    let image_files = [
+        (
+            "BDMV/PLAYLIST/00001.MPLS",
+            authored_disc_image::mpls(&[("00001", 0, 90_000)]),
+        ),
+        (
+            "BDMV/PLAYLIST/00002.MPLS",
+            authored_disc_image::mpls(&[("00001", 90_000, 135_000)]),
+        ),
+        (
+            "BDMV/CLIPINF/00001.CLPI",
+            authored_disc_image::clpi((clip.len() / 192) as u32, 135_000, &[(0, 0)]),
+        ),
+        ("BDMV/STREAM/00001.M2TS", clip),
+    ];
+    let bytes = if let Some(metadata) = udf_metadata_partition {
+        authored_disc_image::udf_image::udf(&image_files, metadata)
+    } else {
+        authored_disc_image::iso(&image_files)
+    };
+    let source_dir = tempfile::tempdir().unwrap();
+    // A deliberately misleading filename must not add the unmapped first episode.
+    let source = source_dir.path().join("Fail.Closed.Pack.S01E01.iso");
+    std::fs::write(&source, &bytes).unwrap();
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&source)
+        .unwrap()
+        .set_len(PACK_VIDEO_SIZE_BYTES)
+        .unwrap();
+    let unmapped = crate::import_workflow::execute_manual_import(
+        app,
+        user,
+        "manual-disc-unmapped",
+        &title.id,
+        None,
+        vec![ManualImportFileMapping {
+            file_path: source.to_string_lossy().into_owned(),
+            episode_id: Some(fixture.episode.id.clone()),
+            series_movie_link_id: None,
+            disc_selection: None,
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert!(
+        !unmapped[0].success,
+        "filename episode matching must not bypass disc mapping"
+    );
+    assert!(
+        unmapped[0]
+            .error_message
+            .as_ref()
+            .unwrap()
+            .contains("explicit disc-title-to-episode"),
+        "{unmapped:?}"
+    );
+    assert!(source.exists());
+    assert!(
+        app.services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let selection = scryer_media_types::DiscSelection {
+        title_id: None,
+        episode_mappings: mapped
+            .iter()
+            .enumerate()
+            .map(|(index, episode)| scryer_media_types::DiscEpisodeMapping {
+                disc_title_id: format!("{:05}", index + 1),
+                episode_ids: vec![episode.id.clone()],
+            })
+            .collect(),
+    };
+    let results = crate::import_workflow::execute_manual_import(
+        app,
+        user,
+        "manual-disc-explicit",
+        &title.id,
+        None,
+        vec![ManualImportFileMapping {
+            file_path: source.to_string_lossy().into_owned(),
+            episode_id: None,
+            series_movie_link_id: None,
+            disc_selection: Some(selection.clone()),
+        }],
+        Some(std::fs::canonicalize(source_dir.path()).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].success, "{results:?}");
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        files.len(),
+        1,
+        "one physical image must serve every mapped episode"
+    );
+    assert_eq!(files[0].size_bytes, PACK_VIDEO_SIZE_BYTES as i64);
+    assert_eq!(
+        files[0].analysis_details.disc.as_ref().unwrap().selection,
+        selection
+    );
+    assert_ne!(
+        files[0].episode_id.as_deref(),
+        Some(fixture.episode.id.as_str())
+    );
+    let destination = crate::stored_paths::stored_path_to_path_buf(&files[0].file_path);
+    assert_eq!(destination.extension().unwrap(), "iso");
+    assert_eq!(
+        std::fs::metadata(&destination).unwrap().len(),
+        PACK_VIDEO_SIZE_BYTES
+    );
+    let mut prefix = vec![0; bytes.len()];
+    std::io::Read::read_exact(&mut std::fs::File::open(destination).unwrap(), &mut prefix).unwrap();
+    assert_eq!(
+        prefix, bytes,
+        "import must retain the authored image intact"
+    );
+}
+
 #[tokio::test]
 async fn manual_import_still_accepts_file_whose_name_matches_no_episode() {
     // Manual imports resolve the target from the operator's mapping, not from
@@ -6494,6 +7181,7 @@ async fn manual_import_still_accepts_file_whose_name_matches_no_episode() {
         &title.id,
         None,
         vec![ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: Some(episode.id.clone()),
             series_movie_link_id: None,
@@ -6550,6 +7238,7 @@ async fn manual_import_of_a_file_already_in_place_is_satisfied_not_failed() {
         source_dir.path(),
     );
     let mappings = vec![ManualImportFileMapping {
+        disc_selection: None,
         file_path: source_file.to_string_lossy().into_owned(),
         episode_id: Some(episode.id.clone()),
         series_movie_link_id: None,
@@ -6653,6 +7342,7 @@ async fn manual_import_upgrade_reports_transfer_progress_on_its_record() {
         (
             completed,
             vec![ManualImportFileMapping {
+                disc_selection: None,
                 file_path: source_file.to_string_lossy().into_owned(),
                 episode_id: Some(episode.id.clone()),
                 series_movie_link_id: None,
@@ -6811,6 +7501,7 @@ async fn scryer_manual_import_defaults_to_grabbed_scope_but_accepts_same_title_o
         vec![ManualImportFileMapping {
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: Some(selected_episode.id.clone()),
+            disc_selection: None,
             series_movie_link_id: None,
         }],
         Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
@@ -9275,6 +9966,7 @@ async fn path_manual_import_can_target_series_movie_link() {
         &title.id,
         None,
         vec![ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: None,
             series_movie_link_id: Some(link.id.clone()),
@@ -9380,6 +10072,7 @@ async fn path_manual_import_rejects_another_title_folder_before_source_mutation(
         &candidate.id,
         None,
         vec![ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: None,
             series_movie_link_id: None,
@@ -9523,6 +10216,7 @@ async fn list_download_history_page_filters_terminal_rows_and_clamps_page_size_t
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -9635,6 +10329,7 @@ async fn list_download_history_page_includes_tracked_terminal_rows_when_client_h
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -9751,6 +10446,7 @@ async fn list_download_history_page_sorts_before_paginating() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -9829,6 +10525,7 @@ async fn list_download_history_page_can_limit_to_scryer_submitted_rows() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -9949,6 +10646,7 @@ async fn download_queue_subscription_bootstraps_from_runtime_cache_without_clien
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -10003,6 +10701,7 @@ async fn download_queue_subscription_bootstraps_from_runtime_cache_without_clien
 
     let mut receiver = app
         .subscribe_download_queue(&user)
+        .await
         .expect("queue subscription should start");
     let snapshot = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -10031,6 +10730,7 @@ async fn download_queue_subscription_sends_empty_bootstrap_snapshot() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -10038,6 +10738,7 @@ async fn download_queue_subscription_sends_empty_bootstrap_snapshot() {
 
     let mut receiver = app
         .subscribe_download_queue(&user)
+        .await
         .expect("queue subscription should start");
     let snapshot = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
         .await
@@ -11922,6 +12623,7 @@ async fn a_manual_series_movie_link_import_never_reaches_the_verdict_gate() {
         &title.id,
         None,
         vec![ManualImportFileMapping {
+            disc_selection: None,
             file_path: source_file.to_string_lossy().into_owned(),
             episode_id: None,
             series_movie_link_id: Some(link.id.clone()),
@@ -13350,5 +14052,402 @@ async fn alternate_numbered_verified_pack_member_reconciles_from_fused_label() {
             .iter()
             .any(|file_name| file_name.contains("S02E01")),
         "catalog numbering must drive the destination"
+    );
+}
+
+#[derive(Default)]
+struct RetainedProxyRepo {
+    entries: Arc<Mutex<Vec<scryer_domain::ProxyConfig>>>,
+    lookup_observed: Option<Arc<Notify>>,
+    delete_gate: Option<Arc<ProxyDeleteGate>>,
+}
+
+struct ProxyDeleteGate {
+    delete_started: Notify,
+    release_delete: Notify,
+}
+
+impl RetainedProxyRepo {
+    fn with_entry(entry: scryer_domain::ProxyConfig) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(vec![entry])),
+            lookup_observed: None,
+            delete_gate: None,
+        }
+    }
+
+    fn with_lookup_observer(
+        entry: scryer_domain::ProxyConfig,
+        lookup_observed: Arc<Notify>,
+    ) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(vec![entry])),
+            lookup_observed: Some(lookup_observed),
+            delete_gate: None,
+        }
+    }
+
+    fn with_delete_gate(
+        entry: scryer_domain::ProxyConfig,
+        delete_gate: Arc<ProxyDeleteGate>,
+    ) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(vec![entry])),
+            lookup_observed: None,
+            delete_gate: Some(delete_gate),
+        }
+    }
+
+    async fn set_enabled(&self, id: &str, is_enabled: bool) {
+        let mut entries = self.entries.lock().await;
+        entries
+            .iter_mut()
+            .find(|entry| entry.id == id)
+            .expect("test proxy should exist")
+            .is_enabled = is_enabled;
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::ProxyConfigRepository for RetainedProxyRepo {
+    async fn list(
+        &self,
+        _provider_type: Option<scryer_domain::ProxyProviderType>,
+    ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
+        Ok(self.entries.lock().await.clone())
+    }
+
+    async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+        let config = self
+            .entries
+            .lock()
+            .await
+            .iter()
+            .find(|entry| entry.id == id)
+            .cloned();
+        if let Some(lookup_observed) = &self.lookup_observed {
+            lookup_observed.notify_one();
+        }
+        Ok(config)
+    }
+
+    async fn create(
+        &self,
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
+        self.entries.lock().await.push(config.clone());
+        Ok(config)
+    }
+
+    async fn update(
+        &self,
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
+        let mut entries = self.entries.lock().await;
+        let entry = entries
+            .iter_mut()
+            .find(|entry| entry.id == config.id)
+            .ok_or_else(|| AppError::NotFound(format!("proxy config '{}'", config.id)))?;
+        *entry = config.clone();
+        Ok(config)
+    }
+
+    async fn delete(&self, id: &str) -> AppResult<()> {
+        if let Some(delete_gate) = &self.delete_gate {
+            delete_gate.delete_started.notify_one();
+            delete_gate.release_delete.notified().await;
+        }
+        let mut entries = self.entries.lock().await;
+        let before = entries.len();
+        entries.retain(|entry| entry.id != id);
+        if entries.len() == before {
+            return Err(AppError::NotFound(format!("proxy config '{id}'")));
+        }
+        Ok(())
+    }
+
+    async fn record_health(
+        &self,
+        _id: &str,
+        _status: scryer_domain::ProxyHealthStatus,
+        _error_message: Option<String>,
+        _error_at: Option<chrono::DateTime<Utc>>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn pin_host_key(
+        &self,
+        _id: &str,
+        _fingerprint: &str,
+        _pinned_at: chrono::DateTime<Utc>,
+        _expected_updated_at: chrono::DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Ok(true)
+    }
+
+    async fn clear_host_key(&self, _id: &str) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+fn retained_proxy_fixture(is_enabled: bool) -> scryer_domain::ProxyConfig {
+    let now = Utc::now();
+    scryer_domain::ProxyConfig {
+        id: "retained-proxy".to_string(),
+        name: "Retained proxy".to_string(),
+        provider_type: scryer_domain::ProxyProviderType::Http,
+        protocol: None,
+        base_url: "http://proxy.example.test".to_string(),
+        request_timeout_seconds: 60,
+        is_enabled,
+        username_encrypted: None,
+        password_encrypted: None,
+        remote_dns: false,
+        private_key_encrypted: None,
+        private_key_passphrase_encrypted: None,
+        peer_public_key: None,
+        preshared_key_encrypted: None,
+        tunnel_public_key: None,
+        tunnel_addresses: Vec::new(),
+        tunnel_dns_servers: Vec::new(),
+        tunnel_mtu: None,
+        tunnel_keepalive_seconds: None,
+        host_key_fingerprint: None,
+        host_key_pinned_at: None,
+        last_health_status: None,
+        last_error_message: None,
+        last_error_at: None,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+#[tokio::test]
+async fn enabling_a_disabled_client_revalidates_its_retained_proxy_assignment() {
+    let proxy_configs = Arc::new(RetainedProxyRepo::with_entry(retained_proxy_fixture(true)));
+    let (base_app, user) = bootstrap();
+    let app = base_app
+        .with_test_overrides(|services| services.with_proxy_config_store(proxy_configs.clone()));
+    let now = Utc::now();
+    app.services
+        .integrations
+        .download_client_configs
+        .create(scryer_domain::DownloadClientConfig {
+            id: "disabled-client".to_string(),
+            name: "Disabled client".to_string(),
+            client_type: "nzbget".to_string(),
+            config_json: "{}".to_string(),
+            client_priority: 1,
+            is_enabled: false,
+            status: scryer_domain::DownloadClientStatus::Healthy,
+            last_error: None,
+            last_seen_at: None,
+            proxy_config_id: Some("retained-proxy".to_string()),
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("seed disabled download client");
+    proxy_configs.set_enabled("retained-proxy", false).await;
+
+    let error = app
+        .update_download_client_config(
+            &user,
+            crate::DownloadClientConfigUpdate {
+                id: "disabled-client".to_string(),
+                is_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a retained disabled proxy must block re-enabling its client");
+    assert!(error.to_string().contains("Proxy is disabled"));
+    assert!(
+        !app.services
+            .integrations
+            .download_client_configs
+            .get_by_id("disabled-client")
+            .await
+            .expect("read seeded client")
+            .expect("seeded client remains")
+            .is_enabled
+    );
+
+    let cleared = app
+        .update_download_client_config(
+            &user,
+            crate::DownloadClientConfigUpdate {
+                id: "disabled-client".to_string(),
+                is_enabled: Some(true),
+                proxy_config_id: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("explicitly clearing the proxy must allow re-enabling the client");
+    assert!(cleared.is_enabled);
+    assert_eq!(cleared.proxy_config_id, None);
+}
+
+#[tokio::test]
+async fn enabling_a_disabled_indexer_revalidates_its_retained_proxy_after_connection_probe() {
+    let lookup_observed = Arc::new(Notify::new());
+    let proxy_configs = Arc::new(RetainedProxyRepo::with_lookup_observer(
+        retained_proxy_fixture(true),
+        lookup_observed.clone(),
+    ));
+    let mut indexer = synthetic_direct_nab_indexer_config("disabled-indexer", "nzbgeek");
+    indexer.is_enabled = false;
+    indexer.proxy_config_id = Some("retained-proxy".to_string());
+    indexer.config_json = Some(
+        serde_json::json!({
+            "base_url": "https://api.nzbgeek.info",
+            "api_key": "secret"
+        })
+        .to_string(),
+    );
+    let (base_app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockIndexerClient),
+        vec![indexer],
+    );
+    let app = base_app
+        .with_test_overrides(|services| services.with_proxy_config_store(proxy_configs.clone()));
+
+    let proxy_assignment = app.services.integrations.proxy_assignment_lock.lock().await;
+    let lookup = lookup_observed.notified();
+    let update_app = app.clone();
+    let update_user = user.clone();
+    let update = tokio::spawn(async move {
+        update_app
+            .update_indexer_config(
+                &update_user,
+                IndexerConfigUpdate {
+                    id: "disabled-indexer".to_string(),
+                    is_enabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+    });
+    timeout(Duration::from_secs(5), lookup)
+        .await
+        .expect("indexer probe should read the retained proxy before locking");
+    proxy_configs.set_enabled("retained-proxy", false).await;
+    drop(proxy_assignment);
+
+    let error = update
+        .await
+        .expect("indexer update task should not panic")
+        .expect_err("the retained proxy must be revalidated after the connection probe");
+    assert!(error.to_string().contains("Proxy is disabled"));
+    assert!(
+        !app.services
+            .integrations
+            .indexer_configs
+            .get_by_id("disabled-indexer")
+            .await
+            .expect("read seeded indexer")
+            .expect("seeded indexer remains")
+            .is_enabled
+    );
+}
+
+#[tokio::test]
+async fn proxy_deletion_serializes_against_download_client_proxy_assignment() {
+    let delete_gate = Arc::new(ProxyDeleteGate {
+        delete_started: Notify::new(),
+        release_delete: Notify::new(),
+    });
+    let proxy_configs = Arc::new(RetainedProxyRepo::with_delete_gate(
+        retained_proxy_fixture(true),
+        delete_gate.clone(),
+    ));
+    let (base_app, user) = bootstrap();
+    let app =
+        base_app.with_test_overrides(|services| services.with_proxy_config_store(proxy_configs));
+    let now = Utc::now();
+    app.services
+        .integrations
+        .download_client_configs
+        .create(scryer_domain::DownloadClientConfig {
+            id: "unassigned-client".to_string(),
+            name: "Unassigned client".to_string(),
+            client_type: "nzbget".to_string(),
+            config_json: "{}".to_string(),
+            client_priority: 1,
+            is_enabled: false,
+            status: scryer_domain::DownloadClientStatus::Healthy,
+            last_error: None,
+            last_seen_at: None,
+            proxy_config_id: None,
+            created_at: now,
+            updated_at: now,
+        })
+        .await
+        .expect("seed unassigned download client");
+
+    let delete_started = delete_gate.delete_started.notified();
+    let delete_app = app.clone();
+    let delete_user = user.clone();
+    let delete = tokio::spawn(async move {
+        delete_app
+            .delete_proxy_config(&delete_user, "retained-proxy")
+            .await
+    });
+    timeout(Duration::from_secs(5), delete_started)
+        .await
+        .expect("proxy deletion should reach its gated repository operation");
+
+    let mut assignment = Box::pin(app.update_download_client_config(
+        &user,
+        crate::DownloadClientConfigUpdate {
+            id: "unassigned-client".to_string(),
+            proxy_config_id: Some(Some("retained-proxy".to_string())),
+            ..Default::default()
+        },
+    ));
+    let assignment_waiting =
+        std::future::poll_fn(|context| match assignment.as_mut().poll(context) {
+            std::task::Poll::Pending => std::task::Poll::Ready(true),
+            std::task::Poll::Ready(_) => std::task::Poll::Ready(false),
+        })
+        .await;
+    assert!(
+        assignment_waiting,
+        "client assignment must wait while proxy deletion owns the assignment lock"
+    );
+    assert_eq!(
+        app.services
+            .integrations
+            .download_client_configs
+            .get_by_id("unassigned-client")
+            .await
+            .expect("read seeded client")
+            .expect("seeded client remains")
+            .proxy_config_id,
+        None
+    );
+
+    delete_gate.release_delete.notify_one();
+    delete
+        .await
+        .expect("proxy delete task should not panic")
+        .expect("unassigned proxy should delete");
+    let error = assignment
+        .await
+        .expect_err("assignment must observe the completed deletion");
+    assert!(error.to_string().contains("not found"));
+    assert_eq!(
+        app.services
+            .integrations
+            .download_client_configs
+            .get_by_id("unassigned-client")
+            .await
+            .expect("read seeded client")
+            .expect("seeded client remains")
+            .proxy_config_id,
+        None
     );
 }

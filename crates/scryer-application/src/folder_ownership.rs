@@ -2,7 +2,8 @@ use std::path::Path;
 
 use scryer_domain::Title;
 
-use crate::stored_paths::{folder_paths_match, path_to_stored_string};
+use crate::library::workflow::{LibraryRootState, library_root_state};
+use crate::stored_paths::{folder_paths_match, path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult, AppUseCase};
 
 fn non_empty_folder_path(path: Option<&str>) -> Option<&str> {
@@ -21,7 +22,83 @@ pub(crate) fn title_owns_another_folder(title: &Title, folder_path: &Path) -> bo
         && !title_owns_folder(title, folder_path)
 }
 
-async fn find_other_folder_owner(
+pub(crate) fn title_folder_path(title: &Title) -> Option<&str> {
+    non_empty_folder_path(title.folder_path.as_deref())
+}
+
+/// Whether the folder a title records as its own is still on disk.
+///
+/// `None` means the answer is unknown (an unreachable mount, a permission
+/// problem). Callers treat that as "not proven" and take no action on it.
+async fn owned_folder_present(owned_path: &str) -> Option<bool> {
+    match tokio::fs::metadata(stored_path_to_path_buf(owned_path)).await {
+        Ok(_) => Some(true),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Some(false),
+        Err(_) => None,
+    }
+}
+
+/// A title's recorded folder is stale when it no longer exists while the
+/// directory that held it still has entries.
+///
+/// `folder_path` is written once when a title first claims a folder and is
+/// never re-validated, so files relocated outside Scryer (a root split, a
+/// drive migration, another tool's root-folder move) leave every affected
+/// title pointing at a folder that is gone. The parent-directory check mirrors
+/// the mount guard in [`library_root_state`]: a missing or empty parent is the
+/// signature of a vanished mount, and nothing under it can be called gone.
+pub(crate) async fn title_folder_is_stale(title: &Title) -> bool {
+    let Some(owned_path) = non_empty_folder_path(title.folder_path.as_deref()) else {
+        return false;
+    };
+    if owned_folder_present(owned_path).await != Some(false) {
+        return false;
+    }
+    let owned_path = stored_path_to_path_buf(owned_path);
+    let Some(parent) = owned_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    else {
+        return false;
+    };
+    matches!(
+        library_root_state(parent).await,
+        Ok(LibraryRootState::Populated)
+    )
+}
+
+/// Move a title's stale folder ownership to the folder a scan found its
+/// files in. Returns `false`, changing nothing, when another title already
+/// owns that folder — that is a real conflict, not a heal.
+pub(crate) async fn reclaim_stale_title_folder(
+    app: &AppUseCase,
+    title: &mut Title,
+    folder_path: &Path,
+) -> AppResult<bool> {
+    let previous_folder_path = title.folder_path.clone().unwrap_or_default();
+    let folder_path = path_to_stored_string(folder_path);
+    if find_other_folder_owner(app, title, &folder_path)
+        .await?
+        .is_some()
+    {
+        return Ok(false);
+    }
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&title.id, &folder_path)
+        .await?;
+    title.folder_path = Some(folder_path.clone());
+    tracing::info!(
+        title_id = %title.id,
+        previous_folder_path = %previous_folder_path,
+        folder_path = %folder_path,
+        "re-pointed stale title folder ownership to the scanned folder"
+    );
+    Ok(true)
+}
+
+pub(crate) async fn find_other_folder_owner(
     app: &AppUseCase,
     title: &Title,
     folder_path: &str,
@@ -122,13 +199,37 @@ pub(crate) async fn unlink_title_media_in_folder(
     if !title_owns_another_folder(title, folder_path) {
         return Ok(0);
     }
+    // Only a title whose owned folder is confirmed on disk holds a real
+    // second copy. An absent or unreachable owned folder is stale ownership
+    // or an unmounted root; unlinking there turns a monitored title fileless
+    // and exposes it to automatic re-download.
+    let owned_path = title.folder_path.as_deref().unwrap_or_default();
+    if owned_folder_present(owned_path).await != Some(true) {
+        return Ok(0);
+    }
 
+    detach_title_media_in_folder(app, &title.id, folder_path).await
+}
+
+/// Drop every catalog media row of `title_id` that lives inside `folder_path`,
+/// without asking whether the title still owns some other folder.
+///
+/// [`unlink_title_media_in_folder`] guards on ownership because a scan only ever
+/// detaches rows from a folder the title lost to someone else. Folder-match
+/// correction detaches from a folder the title is *giving up* — including the
+/// takeover case where the displaced title is left owning nothing at all — so it
+/// needs the unguarded form (FR-003, FR-007).
+pub(crate) async fn detach_title_media_in_folder(
+    app: &AppUseCase,
+    title_id: &str,
+    folder_path: &Path,
+) -> AppResult<u32> {
     let folder_path = path_to_stored_string(folder_path);
     let media_file_ids = app
         .services
         .library
         .media_files
-        .list_media_files_for_title(&title.id)
+        .list_media_files_for_title(title_id)
         .await?
         .into_iter()
         .filter(|media_file| {
@@ -145,7 +246,7 @@ pub(crate) async fn unlink_title_media_in_folder(
     }
     let deleted = media_file_ids.len() as u32;
     tracing::info!(
-        title_id = %title.id,
+        title_id = %title_id,
         folder_path = %folder_path,
         unlinked_media_files = deleted,
         "unlinked catalog media outside the title-owned folder"

@@ -5,6 +5,10 @@ use chrono::{DateTime, Utc};
 /// Audio stream metadata for a media file.
 #[derive(SimpleObject, Clone)]
 pub struct AudioStreamDetailPayload {
+    /// Codec profile, or null when unavailable.
+    pub profile: Option<String>,
+    /// Original container track name, or null when absent.
+    pub name: Option<String>,
     /// Codec name, or null when unavailable.
     pub codec: Option<String>,
     /// Number of audio channels, or null when unavailable.
@@ -292,6 +296,17 @@ pub struct CompleteSetupPayload {
 pub struct ClearTitleImageCachePayload {
     /// When the cache-clear request was accepted.
     pub requested_at: DateTime<Utc>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Instance-wide feature switches readable by any signed-in user.
+pub struct InstanceFeaturesPayload {
+    /// Whether the API explorer is enabled and the current user may access it.
+    pub api_explorer_enabled: bool,
+    /// Whether surfaces that are still being finished are shown on this instance.
+    pub experimental_features_enabled: bool,
+    /// Whether this instance sends its library context to the metadata gateway for personalized discovery.
+    pub personalized_discovery_enabled: bool,
 }
 
 #[derive(SimpleObject, Clone)]

@@ -14,6 +14,90 @@ const DELETE_TYPED_CONFIRMATION_VALUE: &str = "DELETE";
 const DELETE_TYPED_CONFIRMATION_PROMPT: &str = "Type DELETE to confirm this large delete.";
 const BULK_DELETE_PREVIEW_CONCURRENCY: usize = 4;
 
+/// What authorized a file deletion past the large-delete guard (RFC 137 §9.6).
+///
+/// A human confirms a large delete by typing the confirmation value; a
+/// maintenance policy instead presents a typed authorization naming the arming
+/// record. Neither path may weaken the fingerprint check, which both share.
+pub(crate) enum DeleteConfirmationAuthority<'a> {
+    Human { typed_confirmation: Option<&'a str> },
+    Policy(&'a PolicyDeleteAuthorization),
+}
+
+/// Provenance of a maintenance-policy deletion: the rule, candidate, and
+/// matcher revision whose arming authorized it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PolicyDeleteAuthorization {
+    pub rule_set_id: String,
+    pub candidate_id: String,
+    pub revision_number: i64,
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PolicyMediaFileDeletePlan {
+    pub fingerprint: String,
+    paths: Vec<PolicyDeletePathProof>,
+}
+
+impl PolicyMediaFileDeletePlan {
+    /// The policy executor owns these paths. Storage-pressure callers use this
+    /// narrow view to prove that every owned sidecar remains on their selected
+    /// root before authorizing the shared delete path.
+    pub(crate) fn path_strings(&self) -> Option<Vec<String>> {
+        self.paths
+            .iter()
+            .map(|entry| entry.path.to_str().map(str::to_string))
+            .collect()
+    }
+
+    /// A crash can occur after the shared policy deleter unlinks every path
+    /// and before the media-file catalog cleanup or checkpoint write. This is
+    /// only used to finish that exact journal entry; any unreadable path stays
+    /// unknown rather than being mistaken for a completed deletion.
+    pub(crate) async fn paths_are_all_absent(&self) -> AppResult<Option<bool>> {
+        if self.paths.is_empty() {
+            return Ok(None);
+        }
+        for entry in &self.paths {
+            match tokio::fs::symlink_metadata(&entry.path).await {
+                Err(error) if error.kind() == ErrorKind::NotFound => {}
+                Ok(_) => return Ok(Some(false)),
+                Err(_) => return Ok(None),
+            }
+        }
+        Ok(Some(true))
+    }
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+struct PolicyDeletePathProof {
+    path: PathBuf,
+    proof: String,
+}
+
+async fn policy_path_proof(path: &Path) -> AppResult<String> {
+    let metadata = tokio::fs::symlink_metadata(path).await.map_err(|error| {
+        AppError::Repository(format!(
+            "cannot inspect deletion target {}: {error}",
+            path.display()
+        ))
+    })?;
+    #[cfg(unix)]
+    let identity = {
+        use std::os::unix::fs::MetadataExt;
+        format!("{}:{}", metadata.dev(), metadata.ino())
+    };
+    #[cfg(not(unix))]
+    let identity = format!("{:?}", metadata.created());
+    Ok(format!(
+        "{}:{:?}:{}:{}",
+        metadata.len(),
+        metadata.modified(),
+        metadata.file_type().is_symlink(),
+        identity
+    ))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeletePreview {
     pub fingerprint: String,
@@ -228,17 +312,24 @@ impl AppUseCase {
             .into_iter()
             .map(|title| (title.title_id.clone(), title))
             .collect::<HashMap<_, _>>();
-        let requested_facets = title_ids
+        // Roots are resolved per library, not per facet: a title in a
+        // non-default library lives under that library's roots, and checking
+        // it against the facet default's roots refuses every such delete.
+        let requested_libraries = title_ids
             .iter()
-            .filter_map(|title_id| titles_by_id.get(title_id).map(|title| title.facet.clone()))
+            .filter_map(|title_id| {
+                titles_by_id
+                    .get(title_id)
+                    .map(|title| (title.library_id.clone(), title.facet.clone()))
+            })
             .collect::<HashSet<_>>();
-        let mut root_folders_by_facet = HashMap::new();
-        for facet in requested_facets {
+        let mut root_folders_by_library = HashMap::new();
+        for (library_id, facet) in requested_libraries {
             let root_folders = self
-                .root_folders_for_facet(&facet)
+                .root_folders_for_library(&library_id, &facet)
                 .await
                 .map_err(|error| error.to_string());
-            root_folders_by_facet.insert(facet, root_folders);
+            root_folders_by_library.insert(library_id, root_folders);
         }
         let tracked_title_folders = titles_by_id
             .values()
@@ -247,7 +338,7 @@ impl AppUseCase {
             .collect::<Vec<_>>();
 
         let titles_by_id = Arc::new(titles_by_id);
-        let root_folders_by_facet = Arc::new(root_folders_by_facet);
+        let root_folders_by_library = Arc::new(root_folders_by_library);
         let tracked_title_folders = Arc::new(tracked_title_folders);
 
         for chunk in title_ids.chunks(BULK_DELETE_PREVIEW_CONCURRENCY) {
@@ -257,7 +348,7 @@ impl AppUseCase {
                 let actor = actor.clone();
                 let title_id = title_id.clone();
                 let titles_by_id = Arc::clone(&titles_by_id);
-                let root_folders_by_facet = Arc::clone(&root_folders_by_facet);
+                let root_folders_by_library = Arc::clone(&root_folders_by_library);
                 let tracked_title_folders = Arc::clone(&tracked_title_folders);
                 tasks.push(tokio::spawn(async move {
                     let result = app
@@ -265,7 +356,7 @@ impl AppUseCase {
                             &actor,
                             &title_id,
                             &titles_by_id,
-                            &root_folders_by_facet,
+                            &root_folders_by_library,
                             &tracked_title_folders,
                         )
                         .await;
@@ -294,7 +385,7 @@ impl AppUseCase {
         actor: &User,
         title_id: &str,
         titles_by_id: &HashMap<String, TitleDeletePreviewInfo>,
-        root_folders_by_facet: &HashMap<MediaFacet, Result<Vec<RootFolderEntry>, String>>,
+        root_folders_by_library: &HashMap<String, Result<Vec<RootFolderEntry>, String>>,
         tracked_title_folders: &[TrackedTitleFolder],
     ) -> AppResult<DeletePreview> {
         let title = titles_by_id
@@ -307,18 +398,18 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
-        let root_folders = match root_folders_by_facet.get(&title.facet) {
+        let root_folders = match root_folders_by_library.get(&title.library_id) {
             Some(Ok(root_folders)) => root_folders.clone(),
             Some(Err(error)) => {
                 return Err(AppError::Repository(format!(
-                    "failed to load {} root folders for delete preview: {error}",
-                    title.facet.as_str()
+                    "failed to load library {} root folders for delete preview: {error}",
+                    title.library_id
                 )));
             }
             None => {
                 return Err(AppError::Repository(format!(
-                    "missing {} root folders for delete preview",
-                    title.facet.as_str()
+                    "missing library {} root folders for delete preview",
+                    title.library_id
                 )));
             }
         };
@@ -508,8 +599,102 @@ impl AppUseCase {
         typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
         let context = self.resolve_title_delete_context(title_id).await?;
-        self.execute_delete_context(context, preview_fingerprint, typed_confirmation)
-            .await
+        self.execute_delete_context(
+            context,
+            preview_fingerprint,
+            DeleteConfirmationAuthority::Human { typed_confirmation },
+        )
+        .await
+    }
+
+    /// Maintenance-policy variant of [`Self::execute_delete_title_files`]
+    /// (RFC 137 section 9.6): the deletion carries a typed authorization naming
+    /// the rule, candidate, and revision that authorized it, in place of the
+    /// typed confirmation a human would give. Everything else — the fresh
+    /// manifest, the fingerprint check, root availability — is identical.
+    pub(crate) async fn execute_delete_title_files_by_policy(
+        &self,
+        title_id: &str,
+        preview_fingerprint: &str,
+        authorization: &PolicyDeleteAuthorization,
+    ) -> AppResult<()> {
+        let context = self.resolve_title_delete_context(title_id).await?;
+        self.execute_delete_context(
+            context,
+            preview_fingerprint,
+            DeleteConfirmationAuthority::Policy(authorization),
+        )
+        .await
+    }
+
+    /// Capture the existing per-file ownership manifest and replacement proofs
+    /// before the policy changes monitoring. Persist this plan before acting.
+    pub(crate) async fn prepare_policy_media_file_delete(
+        &self,
+        file_id: &str,
+    ) -> AppResult<PolicyMediaFileDeletePlan> {
+        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let manifest = self.build_delete_manifest(context.clone()).await?;
+        ensure_delete_context_roots_available(&context)?;
+        let mut paths = Vec::new();
+        for entry in &manifest.entries {
+            if entry.delete_kind == DeletePathKind::Directory {
+                return Err(AppError::Validation(
+                    "scoped policy deletion cannot remove directories".into(),
+                ));
+            }
+            paths.push(PolicyDeletePathProof {
+                path: entry.path.clone(),
+                proof: policy_path_proof(&entry.path).await?,
+            });
+        }
+        Ok(PolicyMediaFileDeletePlan {
+            fingerprint: manifest.fingerprint,
+            paths,
+        })
+    }
+
+    pub(crate) async fn execute_delete_media_file_by_policy(
+        &self,
+        file_id: &str,
+        plan: &PolicyMediaFileDeletePlan,
+        authorization: &PolicyDeleteAuthorization,
+    ) -> AppResult<()> {
+        let context = self.resolve_media_file_delete_context(file_id).await?;
+        let manifest = self.build_delete_manifest(context.clone()).await?;
+        // A resumed attempt may have removed part of its manifest. Only a
+        // strict subset of the persisted ownership manifest is still authorized;
+        // newly discovered paths and replacement files require re-evaluation.
+        for entry in &manifest.entries {
+            let Some(expected) = plan
+                .paths
+                .iter()
+                .find(|expected| expected.path == entry.path)
+            else {
+                return Err(AppError::Validation(
+                    "maintenance deletion targets changed; re-evaluation required".into(),
+                ));
+            };
+            if entry.delete_kind == DeletePathKind::Directory
+                || policy_path_proof(&entry.path).await? != expected.proof
+            {
+                return Err(AppError::Validation(
+                    "maintenance deletion file changed; re-evaluation required".into(),
+                ));
+            }
+        }
+        if manifest.entries.len() == plan.paths.len() && manifest.fingerprint != plan.fingerprint {
+            return Err(AppError::Validation(
+                "maintenance deletion fingerprint changed".into(),
+            ));
+        }
+        // Rebuild and validate again through the shared confirmation owner.
+        self.execute_delete_context(
+            context,
+            &manifest.fingerprint,
+            DeleteConfirmationAuthority::Policy(authorization),
+        )
+        .await
     }
 
     pub(crate) async fn execute_delete_media_file(
@@ -519,8 +704,12 @@ impl AppUseCase {
         typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
         let context = self.resolve_media_file_delete_context(file_id).await?;
-        self.execute_delete_context(context, preview_fingerprint, typed_confirmation)
-            .await
+        self.execute_delete_context(
+            context,
+            preview_fingerprint,
+            DeleteConfirmationAuthority::Human { typed_confirmation },
+        )
+        .await
     }
 
     pub(crate) async fn validate_delete_media_file(
@@ -530,9 +719,13 @@ impl AppUseCase {
         typed_confirmation: Option<&str>,
     ) -> AppResult<()> {
         let context = self.resolve_media_file_delete_context(file_id).await?;
-        self.validate_delete_context(context, preview_fingerprint, typed_confirmation)
-            .await
-            .map(|_| ())
+        self.validate_delete_context(
+            context,
+            preview_fingerprint,
+            DeleteConfirmationAuthority::Human { typed_confirmation },
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn delete_external_subtitle(
@@ -627,7 +820,7 @@ impl AppUseCase {
                 facet: title.facet,
             }),
             preview_fingerprint,
-            typed_confirmation,
+            DeleteConfirmationAuthority::Human { typed_confirmation },
         )
         .await?;
 
@@ -679,10 +872,10 @@ impl AppUseCase {
         &self,
         context: UserDeleteContext,
         preview_fingerprint: &str,
-        typed_confirmation: Option<&str>,
+        authority: DeleteConfirmationAuthority<'_>,
     ) -> AppResult<()> {
         let manifest = self
-            .validate_delete_context(context, preview_fingerprint, typed_confirmation)
+            .validate_delete_context(context, preview_fingerprint, authority)
             .await?;
         apply_delete_manifest(&manifest).await
     }
@@ -705,7 +898,7 @@ impl AppUseCase {
         &self,
         context: UserDeleteContext,
         preview_fingerprint: &str,
-        typed_confirmation: Option<&str>,
+        authority: DeleteConfirmationAuthority<'_>,
     ) -> AppResult<UserDeleteManifest> {
         let manifest = self.build_delete_manifest(context.clone()).await?;
         if manifest.fingerprint != preview_fingerprint {
@@ -714,12 +907,31 @@ impl AppUseCase {
             ));
         }
 
-        if manifest.media_count > LARGE_DELETE_MEDIA_THRESHOLD
-            && typed_confirmation.unwrap_or_default().trim() != DELETE_TYPED_CONFIRMATION_VALUE
-        {
-            return Err(AppError::Validation(format!(
-                "typed confirmation is required; enter {DELETE_TYPED_CONFIRMATION_VALUE}"
-            )));
+        if manifest.media_count > LARGE_DELETE_MEDIA_THRESHOLD {
+            match authority {
+                DeleteConfirmationAuthority::Human { typed_confirmation } => {
+                    if typed_confirmation.unwrap_or_default().trim()
+                        != DELETE_TYPED_CONFIRMATION_VALUE
+                    {
+                        return Err(AppError::Validation(format!(
+                            "typed confirmation is required; enter {DELETE_TYPED_CONFIRMATION_VALUE}"
+                        )));
+                    }
+                }
+                // RFC 137 §9.6: a policy deletion never synthesizes the human
+                // confirmation; the typed authorization it carries — arming
+                // record, candidate, revision — stands in for it, and is logged
+                // so the audit trail names what authorized a large delete.
+                DeleteConfirmationAuthority::Policy(authorization) => {
+                    tracing::info!(
+                        rule_set_id = authorization.rule_set_id.as_str(),
+                        candidate_id = authorization.candidate_id.as_str(),
+                        revision_number = authorization.revision_number,
+                        media_count = manifest.media_count,
+                        "maintenance policy authorized a large deletion"
+                    );
+                }
+            }
         }
 
         ensure_delete_context_roots_available(&context)?;
@@ -760,7 +972,9 @@ impl AppUseCase {
             .get_by_id(title_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
-        let root_folders = self.root_folders_for_facet(&title.facet).await?;
+        let root_folders = self
+            .root_folders_for_library(&title.library_id, &title.facet)
+            .await?;
         let other_titles = self
             .services
             .catalog

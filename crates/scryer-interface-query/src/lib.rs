@@ -10,15 +10,17 @@ use scryer_application::{
     ExternalImportSetupSecretDraft as AppExternalImportSetupSecretDraft,
     ExternalImportSetupSecretDraftStatus, ExternalImportSetupSecretInstanceKind,
     ExternalImportSetupSecretOverrideDraft, ImageProxyKind, JwtSessionScope, MediaRequestCounts,
-    OAuthAuthorizationSource, PendingImportCounts, RenamePlan, RenameWriteAction, RuntimePathStyle,
-    SCRYER_VERSION, SortDirection, TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogSort,
-    TitleCatalogSortKey, TitleHistoryFilter, is_supported_title_history_event_type,
-    supported_title_history_event_types,
+    OAuthAuthorizationSource, PendingImportCounts, RenamePlan, RenameWriteAction,
+    RulePackRegistryEntry, RuntimePathStyle, SCRYER_VERSION, SortDirection,
+    TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogSort, TitleCatalogSortKey,
+    TitleHistoryFilter, is_supported_title_history_event_type, supported_title_history_event_types,
 };
-use scryer_domain::{AppPermission, LibraryPermission, TitleHistoryEventType};
+use scryer_domain::{
+    AppPermission, LibraryPermission, RulePackInstallation, RuleSet, TitleHistoryEventType,
+};
 use scryer_interface_metadata::MetadataQueries;
 use scryer_interface_settings::SettingsQueries;
-use std::{fs, io, path::Path};
+use std::{collections::HashMap, fs, io, path::Path};
 
 use scryer_interface_core as context;
 use scryer_interface_core::{
@@ -31,19 +33,22 @@ use scryer_interface_media::mappers::{
     catalog_discovery_query_from_input, discovery_home_filter_options_query_from_input,
     discovery_home_query_from_input, discovery_item_detail_query_from_input,
     discovery_items_query_from_input, from_active_import_stream, from_activity_event,
-    from_application_upgrade_status, from_backup_info, from_catalog_discovery, from_collection,
-    from_dashboard_activity_stats, from_delete_episode_files_preview, from_delete_preview,
-    from_delete_titles_preview, from_discovery_home, from_discovery_home_cards,
-    from_discovery_home_filter_options, from_discovery_item, from_discovery_items_result,
-    from_domain_event, from_download_queue_item, from_episode,
-    from_external_import_monitor_warmup_progress, from_job_definition, from_job_run, from_library,
-    from_library_scan_session, from_library_settings, from_linked_account, from_media_rename_plan,
-    from_media_request, from_media_request_counts, from_pending_import_connection,
-    from_pending_import_counts, from_pending_release, from_provider_type, from_runtime_path_style,
+    from_application_upgrade_status, from_backup_info, from_catalog_discovery,
+    from_change_title_folder_preview, from_collection, from_dashboard_activity_stats,
+    from_delete_episode_files_preview, from_delete_preview, from_delete_titles_preview,
+    from_discovery_home, from_discovery_home_cards, from_discovery_home_filter_options,
+    from_discovery_item, from_discovery_items_result, from_domain_event, from_download_queue_item,
+    from_episode, from_external_import_monitor_warmup_progress, from_job_definition, from_job_run,
+    from_library, from_library_scan_session, from_library_settings, from_linked_account,
+    from_location_operation, from_location_operation_asset_listing, from_location_retry_selection,
+    from_media_rename_plan, from_media_request, from_media_request_counts,
+    from_pending_import_connection, from_pending_import_counts, from_pending_release,
+    from_provider_type, from_root_move_preview, from_root_scope_preview, from_runtime_path_style,
     from_smg_scryer_update_notice, from_smg_version_compatibility_notice, from_storage_root_usage,
     from_system_health, from_title, from_title_acquisition_diagnostics, from_title_history_page,
     from_title_release_blocklist_entry, from_user_with_auth_factor_status, from_wanted_item,
-    from_wanted_scope_view,
+    from_wanted_scope_view, location_destination_into_application,
+    location_execution_mode_into_application, root_scope_destination,
 };
 use scryer_interface_media::types::*;
 
@@ -142,6 +147,52 @@ fn parse_required_datetime(value: &str, field: &str) -> Result<DateTime<Utc>, Ap
         .map_err(|error| AppError::Validation(format!("invalid {field} timestamp: {error}")))
 }
 
+fn from_tracked_rule_pack(
+    installation: RulePackInstallation,
+    available: Option<RulePackRegistryEntry>,
+    auto_update_available: bool,
+    rule_sets: &HashMap<String, RuleSet>,
+) -> TrackedRulePackPayload {
+    TrackedRulePackPayload {
+        pack_id: installation.pack_id,
+        name: installation.name,
+        version: installation.version,
+        digest: installation.digest,
+        customizable: installation.customizable,
+        revision: installation.revision.into(),
+        auto_update: installation.auto_update,
+        available_version: available.map(|candidate| candidate.version),
+        auto_update_available,
+        last_error: installation.last_error,
+        last_updated: installation.last_updated,
+        members: installation
+            .members
+            .into_iter()
+            .map(|member| {
+                let rule_set = rule_sets.get(&member.rule_set_id);
+                TrackedRulePackMemberPayload {
+                    template_id: member.template_id,
+                    rule_set_id: ID::from(member.rule_set_id),
+                    removed: member.removed,
+                    enabled: rule_set.map(|rule_set| rule_set.enabled),
+                    priority: rule_set.map(|rule_set| rule_set.priority),
+                    name: rule_set.map(|rule_set| rule_set.name.clone()),
+                    description: rule_set.map(|rule_set| rule_set.description.clone()),
+                    applied_facets: rule_set
+                        .map(|rule_set| {
+                            rule_set
+                                .applied_facets
+                                .iter()
+                                .map(|facet| facet.as_str().to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default(),
+                }
+            })
+            .collect(),
+    }
+}
+
 fn parse_supported_title_history_event_types(
     event_types: Option<Vec<TitleHistoryEventTypeValue>>,
 ) -> GqlResult<Option<Vec<TitleHistoryEventType>>> {
@@ -232,6 +283,21 @@ fn title_catalog_tag_filter_keys(
     Ok(keys)
 }
 
+/// Normalize the requested user-tag labels the way the registry stores them,
+/// so a filter typed as `Needs  Review` finds the titles carrying
+/// `needs review`. Anything the registry could never hold — a blank label, the
+/// reserved namespace, an over-long label — is refused by name rather than
+/// silently matching nothing.
+fn title_catalog_user_tags(tags: Option<Vec<String>>) -> Result<Vec<String>, AppError> {
+    let tags = tags.unwrap_or_default();
+    if tags.is_empty() {
+        return Ok(Vec::new());
+    }
+    scryer_application::normalize_user_title_tags(&tags).map_err(|error| {
+        AppError::Validation(format!("title catalog tags entries are invalid: {error}"))
+    })
+}
+
 fn title_catalog_filter_from_input(
     filter: Option<TitleCatalogFilterInput>,
 ) -> Result<TitleCatalogFilter, AppError> {
@@ -272,6 +338,7 @@ fn title_catalog_filter_from_input(
         ),
         genre_tag_keys: title_catalog_tag_filter_keys("genreTagKeys", filter.genre_tag_keys)?,
         theme_tag_keys: title_catalog_tag_filter_keys("themeTagKeys", filter.theme_tag_keys)?,
+        user_tags: title_catalog_user_tags(filter.tags)?,
         minimum_year: filter.minimum_year,
         maximum_year: filter.maximum_year,
         minimum_rating,
@@ -295,6 +362,32 @@ fn usize_to_i32_saturating(value: usize) -> i32 {
 
 fn optional_ids_to_strings(ids: Option<Vec<ID>>) -> Option<Vec<String>> {
     ids.map(|ids| ids.into_iter().map(String::from).collect())
+}
+
+/// Project a page of media requests together with the policy detail that lives
+/// in other tables — the decision trace and the lifecycle claim holding the
+/// title.
+///
+/// The facts are loaded for the whole page in one call rather than per row, and
+/// a failure to load them degrades to requests without policy detail: a request
+/// list that errors because a trace row could not be read is strictly worse than
+/// one that shows the requests.
+async fn media_requests_with_policy(
+    app: &scryer_application::AppUseCase,
+    actor: &scryer_domain::User,
+    requests: Vec<scryer_domain::MediaRequest>,
+) -> Vec<MediaRequestPayload> {
+    let facts = app
+        .media_request_policy_facts(actor, &requests)
+        .await
+        .unwrap_or_default();
+    requests
+        .into_iter()
+        .map(|request| {
+            let policy = facts.get(&request.id).cloned().unwrap_or_default();
+            from_media_request(app, request, Some(&policy))
+        })
+        .collect()
 }
 
 fn from_download_history_page(
@@ -390,6 +483,7 @@ fn from_acquisition_search_job_view(
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
     Ok(AcquisitionSearchJobPayload {
+        job_run: None,
         id: view.id.into(),
         state,
         total: view.total,
@@ -440,6 +534,10 @@ pub fn from_interactive_release_search_snapshot(
                 }
             },
             result_count: indexer.result_count as i32,
+            priority: indexer.priority as i32,
+            elapsed_ms: indexer
+                .elapsed_ms
+                .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
         })
         .collect();
@@ -1255,10 +1353,7 @@ impl CatalogQueries {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(requests
-            .into_iter()
-            .map(|request| from_media_request(&app, request))
-            .collect())
+        Ok(media_requests_with_policy(&app, &actor, requests).await)
     }
 
     /// List only the caller's media requests, optionally filtered by facet, libraries, and status.
@@ -1287,10 +1382,7 @@ impl CatalogQueries {
             )
             .await
             .map_err(to_gql_error)?;
-        Ok(requests
-            .into_iter()
-            .map(|request| from_media_request(&app, request))
-            .collect())
+        Ok(media_requests_with_policy(&app, &actor, requests).await)
     }
 
     /// Read settings for a library by ID, subject to the caller's library-settings permission.
@@ -1509,6 +1601,282 @@ impl CatalogQueries {
             .collect())
     }
 
+    /// Preview correcting which existing folder a title owns; no files are moved.
+    async fn change_title_folder_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Title and candidate folder whose ownership change is described; nothing is changed."
+        )]
+        input: ChangeTitleFolderPreviewInput,
+    ) -> GqlResult<ChangeTitleFolderPreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let preview = app
+            .change_title_folder_preview(&actor, input.title_id.as_str(), &input.folder_path)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_change_title_folder_preview(preview))
+    }
+
+    /// Preview moving selected titles to another library or root; nothing is moved.
+    ///
+    /// The returned fingerprint is what `startLocationOperation` confirms. A
+    /// changed filesystem, catalog, selection, destination, or mode produces a
+    /// different fingerprint and voids the confirmation.
+    ///
+    /// The mode picks which preview runs: the managed move plans the copy, and
+    /// `FILES_ALREADY_THERE` instead accounts for what is already at the
+    /// destination (FR-050 to FR-053). The reported mode can still come back as
+    /// `CATALOG_ONLY` when the selection has no files on disk (FR-076).
+    async fn location_operation_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Titles to move, the destination library or root they would move to, and how the files get there."
+        )]
+        input: LocationOperationPreviewInput,
+    ) -> GqlResult<LocationOperationPreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let mode = location_execution_mode_into_application(input.mode);
+        let request = scryer_application::location::operations::RootMovePreviewRequest {
+            title_ids: input
+                .title_ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
+            destination: location_destination_into_application(input.destination),
+        };
+        let preview = match mode {
+            scryer_application::location::model::LocationExecutionMode::UserMovedFiles => {
+                app.preview_manual_move(&actor, request).await
+            }
+            scryer_application::location::model::LocationExecutionMode::FilesAlreadyThere => {
+                app.preview_adoption(&actor, request).await
+            }
+            _ => app.preview_root_move(&actor, request).await,
+        }
+        .map_err(to_gql_error)?;
+        Ok(from_root_move_preview(&preview))
+    }
+
+    /// Preview a **Change root** (US4 + US5): moving one root's content to a
+    /// new path, or folding it into another root of the same library.
+    ///
+    /// FR-020 is one settings action with two destinations, so it is one query
+    /// with two destinations. Name `destinationPath` for a new location, or
+    /// `destinationRootId` for a root that already exists; a `destinationPath`
+    /// that resolves to a configured root of this library is the same request
+    /// as naming that root, and is planned as a fold either way. Naming both,
+    /// or neither, is refused.
+    ///
+    /// Root scoped, so there is no selection: every title assigned to the root
+    /// goes, and the ledger says so rather than offering a way to exclude one
+    /// (FR-023). The returned fingerprint is what `startLocationOperation`
+    /// confirms with its `rootScope` target.
+    async fn location_root_scope_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "The root being moved, the destination it moves to, and how the files get there."
+        )]
+        input: LocationRootScopePreviewInput,
+    ) -> GqlResult<LocationRootScopePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let call = scryer_application::location::root_scope_execution::RootScopeCall {
+            library_id: input.library_id.to_string(),
+            root_id: input.root_id.to_string(),
+            destination: root_scope_destination(input.destination_path, input.destination_root_id)
+                .map_err(to_gql_error)?,
+            // The planner refuses an unsupported mode itself, by name
+            // (`root_change_mode_not_supported`), so the request travels
+            // through the shared mapper and the refusal is a routable code
+            // rather than an interface sentence the client cannot translate.
+            mode: location_execution_mode_into_application(input.mode),
+        };
+        let preview = app
+            .preview_root_scope(&actor, &call)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_root_scope_preview(&preview))
+    }
+
+    /// Aggregate progress of one transfer with no title rows; poll this for
+    /// the operation header.
+    async fn location_transfer_summary(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+    ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferSnapshotPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        Ok(app
+            .location_transfer_snapshot(&actor, id.as_str(), None, 50)
+            .await
+            .map_err(to_gql_error)?
+            .map(scryer_interface_media::mappers::from_location_transfer))
+    }
+
+    /// One page of up to 50 title rows of a transfer, exceptions first.
+    async fn location_transfer_page(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+        #[graphql(
+            default = 0,
+            desc = "Zero-based index of the first title row to return."
+        )]
+        offset: i32,
+    ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferSnapshotPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        Ok(app
+            .location_transfer_snapshot(&actor, id.as_str(), Some(i64::from(offset.max(0))), 50)
+            .await
+            .map_err(to_gql_error)?
+            .map(scryer_interface_media::mappers::from_location_transfer))
+    }
+
+    /// One page of up to 50 file rows for one title of a transfer.
+    async fn location_transfer_files(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+        #[graphql(desc = "Identity of the title whose files to page.")] title_id: ID,
+        #[graphql(
+            default = 0,
+            desc = "Zero-based index of the first file row to return."
+        )]
+        offset: i32,
+    ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferSnapshotPayload>> {
+        app_from_ctx(ctx)?
+            .location_transfer_files_snapshot(
+                &actor_from_ctx(ctx)?,
+                id.as_str(),
+                title_id.as_str(),
+                i64::from(offset.max(0)),
+            )
+            .await
+            .map_err(to_gql_error)
+            .map(|snapshot| snapshot.map(scryer_interface_media::mappers::from_location_transfer))
+    }
+
+    /// The operator-facing detail behind a title's exception, or null when it
+    /// has none.
+    async fn location_transfer_title_detail(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+        #[graphql(desc = "Identity of the title whose detail to read.")] title_id: ID,
+    ) -> GqlResult<Option<String>> {
+        app_from_ctx(ctx)?
+            .location_transfer_title_detail(&actor_from_ctx(ctx)?, id.as_str(), title_id.as_str())
+            .await
+            .map_err(to_gql_error)
+            .map(|detail| {
+                detail
+                    .as_deref()
+                    .map(scryer_interface_media::mappers::transfer_message)
+            })
+    }
+
+    /// Read one location operation with its per-title checkpoints.
+    async fn location_operation(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+    ) -> GqlResult<Option<LocationOperationPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let Some(operation) = app
+            .location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        // The same source-and-destination gate the operation was started under
+        // (FR-083); reading an operation is reading both libraries' state.
+        app.require_location_operation_permission(&actor, &operation)
+            .await
+            .map_err(to_gql_error)?;
+        let checkpoints = app
+            .location_operation_checkpoints(&operation_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(Some(from_location_operation(&operation, &checkpoints)))
+    }
+
+    /// What planning a location operation's unfinished work again would
+    /// select: the same destination and mode, and the titles it did not finish.
+    ///
+    /// Read on demand for a stopped operation, since it joins the stored plan
+    /// with the checkpoints. Null for an unknown operation, one stored without
+    /// a readable plan, and for the root-scoped operation types, which are
+    /// planned again from the root rather than from titles.
+    async fn location_operation_retry_selection(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+    ) -> GqlResult<Option<LocationRetrySelectionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let Some(operation) = app
+            .location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        app.require_location_operation_permission(&actor, &operation)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(app
+            .location_operation_retry_selection(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+            .as_ref()
+            .map(from_location_retry_selection))
+    }
+
+    /// Which files one location operation renames and deduplicates, per title.
+    ///
+    /// Activity's counters say how many; this says which ones, and whether each
+    /// has happened yet or is still only what the confirmed plan intends
+    /// (FR-091). It is a separate read from `locationOperation` because the
+    /// per-file identities live in the operation's stored plan, which a
+    /// progress poll has no reason to load.
+    async fn location_operation_assets(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+    ) -> GqlResult<Option<LocationOperationAssetListingPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let operation_id = id.to_string();
+        let Some(operation) = app
+            .location_operation(&operation_id)
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        // The same source-and-destination gate reading the operation itself
+        // applies (FR-083); this reads the same two libraries' paths.
+        app.require_location_operation_permission(&actor, &operation)
+            .await
+            .map_err(to_gql_error)?;
+        let listing = app
+            .location_operation_asset_listing(&operation_id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(Some(from_location_operation_asset_listing(&listing)))
+    }
+
     /// Preview deleting all media files for one title without changing files.
     async fn delete_title_preview(
         &self,
@@ -1641,7 +2009,16 @@ impl CatalogQueries {
             season,
             episode,
             limit,
+            ..
         } = input;
+
+        // One-shot search is title-anchored only; a query subject is a job
+        // (`startInteractiveReleaseSearch`), never a blocking resolver.
+        let Some(title_id) = title_id else {
+            return Err(to_gql_error(AppError::Validation(
+                "searchReleases requires a title id".to_string(),
+            )));
+        };
 
         let safe_limit = limit.unwrap_or(50).clamp(1, 200) as usize;
         let title_id = title_id.to_string();
@@ -2054,17 +2431,26 @@ impl ActivityQueries {
                 Ok(0)
             }
         };
+        let plugin_blocked_count = async {
+            if can_manage_system_settings {
+                app.plugin_blocked_count(&actor).await
+            } else {
+                Ok(0)
+            }
+        };
 
         let (
             pending_import_counts,
             pending_media_request_counts,
             activity_import_count,
             plugin_update_count,
+            plugin_blocked_count,
         ) = tokio::try_join!(
             pending_import_counts,
             pending_media_request_counts,
             activity_import_count,
             plugin_update_count,
+            plugin_blocked_count,
         )
         .map_err(to_gql_error)?;
 
@@ -2073,6 +2459,7 @@ impl ActivityQueries {
             pending_media_request_counts: from_media_request_counts(pending_media_request_counts),
             activity_import_count: activity_import_count as i32,
             plugin_update_count: plugin_update_count as i32,
+            plugin_blocked_count: plugin_blocked_count as i32,
         })
     }
 
@@ -2601,6 +2988,18 @@ impl SystemQueries {
         Ok(SCRYER_VERSION.to_string())
     }
 
+    /// Instance-wide feature switches readable by any signed-in user.
+    async fn instance_features(&self, ctx: &Context<'_>) -> GqlResult<InstanceFeaturesPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let features = app.instance_features(&actor).await.map_err(to_gql_error)?;
+        Ok(InstanceFeaturesPayload {
+            api_explorer_enabled: features.api_explorer_enabled,
+            experimental_features_enabled: features.experimental_features_enabled,
+            personalized_discovery_enabled: features.personalized_discovery_enabled,
+        })
+    }
+
     /// Return an SMG compatibility notice when the connected SMG version requires attention.
     async fn smg_version_compatibility_notice(
         &self,
@@ -3008,6 +3407,437 @@ impl AcquisitionQueries {
             .collect())
     }
 
+    /// Return one rule set, including its source, when it is visible to the caller.
+    async fn rule_set(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Rule-set identity to load.")] id: ID,
+    ) -> GqlResult<Option<RuleSetPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let rule_set = app
+            .get_rule_set(&actor, id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(rule_set.map(crate::mappers::from_rule_set))
+    }
+
+    // ── Maintenance Rule Sets ────────────────────────────────────────────
+
+    /// List maintenance rule sets; requires catalog-settings management permission.
+    async fn maintenance_rule_sets(&self, ctx: &Context<'_>) -> GqlResult<Vec<MaintenanceRuleSet>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        // Details, not bare rows: the payload carries the action and grace
+        // period of the revision in force so a list view never has to fetch
+        // each rule set again to render them.
+        let details = app
+            .list_maintenance_rule_set_details(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(details
+            .iter()
+            .map(crate::mappers::from_maintenance_rule_set)
+            .collect())
+    }
+
+    /// Return one maintenance rule set with the revision currently in force, or null when no such rule set exists.
+    async fn maintenance_rule_set(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Maintenance rule-set ID to load.")] id: ID,
+    ) -> GqlResult<Option<MaintenanceRuleSetDetail>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let detail = app
+            .get_maintenance_rule_set(&actor, id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(detail.map(crate::mappers::from_maintenance_rule_set_detail))
+    }
+
+    /// List every stored revision of one maintenance rule set, newest first.
+    async fn maintenance_rule_revisions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Maintenance rule-set ID whose revisions are returned.")] rule_set_id: ID,
+    ) -> GqlResult<Vec<MaintenanceRuleRevision>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let revisions = app
+            .list_maintenance_rule_revisions(&actor, rule_set_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(revisions
+            .into_iter()
+            .map(crate::mappers::from_maintenance_rule_revision)
+            .collect())
+    }
+
+    /// List the static maintenance action catalog the rule builder chooses from.
+    async fn maintenance_action_descriptors(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<MaintenanceActionDescriptor>> {
+        // The catalog is static, so no service call enforces the permission the
+        // rest of this surface requires; the gate has to happen here.
+        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        Ok(crate::mappers::maintenance_action_descriptors())
+    }
+
+    /// List the backend-owned schema-2 action-sequence catalog. Authoring
+    /// clients use its parameter and dependency descriptors directly rather
+    /// than maintaining a parallel effect matrix.
+    async fn maintenance_action_step_descriptors(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<MaintenanceActionStepDescriptor>> {
+        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        Ok(crate::mappers::maintenance_action_step_descriptors())
+    }
+
+    /// List lifecycle candidates the maintenance evaluator has recorded; requires catalog-settings management permission.
+    ///
+    /// Two independent things hide rows, and they are not the same thing. A
+    /// rule in shadow mode is dark by definition, so its candidates are
+    /// returned only when `includeShadow` is true. Separately, the instance
+    /// result-display gate hides everything while it is off.
+    ///
+    /// `includeShadow` overrides the gate as well as the mode filter, on
+    /// purpose: an operator deciding whether to arm result display has to be
+    /// able to see what shadow evaluation actually found first, and reaching
+    /// this query already requires catalog-settings management.
+    async fn maintenance_candidates(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return candidates of this rule set only.")] rule_set_id: Option<ID>,
+        #[graphql(desc = "Return candidates in these lifecycle states only.")] states: Option<
+            Vec<MaintenanceCandidateState>,
+        >,
+        #[graphql(desc = "Return candidates whose subject belongs to this library only.")]
+        library_id: Option<ID>,
+        #[graphql(desc = "Include candidates produced by rules running in shadow mode.")]
+        include_shadow: Option<bool>,
+        #[graphql(desc = "Maximum number of candidates to return.")] limit: Option<i32>,
+    ) -> GqlResult<Vec<MaintenanceCandidate>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let candidates = app
+            .list_maintenance_candidates(
+                &actor,
+                scryer_application::maintenance_rules::MaintenanceCandidateFilter {
+                    rule_set_id: rule_set_id.map(String::from),
+                    states: states
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(crate::mappers::maintenance_candidate_state_into_application)
+                        .collect(),
+                    library_id: library_id.map(String::from),
+                    include_shadow: include_shadow.unwrap_or(false),
+                    limit: limit.filter(|limit| *limit > 0).map(|limit| limit as usize),
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(candidates
+            .into_iter()
+            .map(crate::mappers::from_maintenance_candidate)
+            .collect())
+    }
+
+    /// List recorded maintenance evaluation runs, newest first.
+    ///
+    /// Runs carry counts and timing rather than subjects, so the result-display
+    /// gate does not hide them: they are how an operator sees that dark
+    /// evaluation is working at all.
+    async fn maintenance_evaluation_runs(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return runs of this rule set only.")] rule_set_id: Option<ID>,
+        #[graphql(desc = "Maximum number of runs to return.")] limit: Option<i32>,
+    ) -> GqlResult<Vec<MaintenanceEvaluationRun>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let runs = app
+            .list_maintenance_evaluation_runs(
+                &actor,
+                rule_set_id.as_ref().map(|id| id.as_str()),
+                limit.filter(|limit| *limit > 0).map(|limit| limit as usize),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(runs
+            .into_iter()
+            .map(crate::mappers::from_maintenance_evaluation_run)
+            .collect())
+    }
+
+    /// Read the five instance-wide maintenance gates; requires system-settings management permission.
+    async fn maintenance_instance_gates(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<MaintenanceInstanceGates> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let gates = app
+            .maintenance_instance_gates(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_maintenance_instance_gates(gates))
+    }
+
+    /// List maintenance exclusions, newest first.
+    ///
+    /// Narrowing by rule returns that rule's own exclusions together with every
+    /// global one, because both are what actually stop it acting.
+    async fn maintenance_exclusions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return the exclusions that apply to this rule set.")] rule_set_id: Option<
+            ID,
+        >,
+    ) -> GqlResult<Vec<MaintenanceExclusion>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let exclusions = app
+            .list_maintenance_exclusions(&actor, rule_set_id.as_ref().map(|id| id.as_str()))
+            .await
+            .map_err(to_gql_error)?;
+        Ok(exclusions
+            .into_iter()
+            .map(crate::mappers::from_maintenance_exclusion)
+            .collect())
+    }
+
+    /// List recorded maintenance action-handler attempts, newest first.
+    async fn maintenance_action_runs(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Return only attempts for this rule set.")] rule_set_id: Option<ID>,
+        #[graphql(desc = "Return only attempts for this candidate.")] candidate_id: Option<ID>,
+        #[graphql(desc = "Maximum rows to return; defaults to fifty.")] limit: Option<i32>,
+    ) -> GqlResult<Vec<MaintenanceActionRun>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let runs = app
+            .list_maintenance_action_runs(
+                &actor,
+                rule_set_id.as_ref().map(|id| id.as_str()),
+                candidate_id.as_ref().map(|id| id.as_str()),
+                limit.and_then(|limit| usize::try_from(limit).ok()),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(runs
+            .into_iter()
+            .filter_map(crate::mappers::from_maintenance_action_run)
+            .collect())
+    }
+
+    // ── Request Rule Sets ────────────────────────────────────────────────
+
+    /// List request rule sets; requires catalog-settings management permission.
+    async fn request_rule_sets(&self, ctx: &Context<'_>) -> GqlResult<Vec<RequestRuleSet>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let details = app
+            .list_request_rule_set_details(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        let ids: Vec<String> = details
+            .iter()
+            .map(|detail| detail.rule_set.id.clone())
+            .collect();
+        let counts = app
+            .request_rule_decision_counts(&actor, &ids)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(details
+            .iter()
+            .map(|detail| {
+                crate::mappers::from_request_rule_set(
+                    &detail.rule_set,
+                    counts.get(&detail.rule_set.id).copied().unwrap_or_default(),
+                )
+            })
+            .collect())
+    }
+
+    /// Return one request rule set with the revision currently in force, or null when no such rule set exists.
+    async fn request_rule_set(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Request rule-set ID to load.")] id: ID,
+    ) -> GqlResult<Option<RequestRuleSetDetail>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let Some(detail) = app
+            .get_request_rule_set(&actor, id.as_ref())
+            .await
+            .map_err(to_gql_error)?
+        else {
+            return Ok(None);
+        };
+        let counts = app
+            .request_rule_decision_counts(&actor, std::slice::from_ref(&detail.rule_set.id))
+            .await
+            .map_err(to_gql_error)?;
+        let count = counts.get(&detail.rule_set.id).copied().unwrap_or_default();
+        Ok(Some(crate::mappers::from_request_rule_set_detail(
+            detail, count,
+        )))
+    }
+
+    /// List every stored revision of one request rule set, newest first.
+    async fn request_rule_revisions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Request rule-set ID whose revisions are returned.")] rule_set_id: ID,
+    ) -> GqlResult<Vec<RequestRuleRevision>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let revisions = app
+            .list_request_rule_revisions(&actor, rule_set_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(revisions
+            .into_iter()
+            .map(crate::mappers::from_request_rule_revision)
+            .collect())
+    }
+
+    /// Read the instance-wide request-rule gate; requires system-settings management permission.
+    async fn request_rule_instance_gates(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<RequestRuleInstanceGates> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let gates = app
+            .request_rule_instance_gates(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_request_rule_instance_gates(gates))
+    }
+
+    /// Read the decision recorded for one media request, or null when it was never evaluated.
+    ///
+    /// Two audiences reach this. A manager of the request's library sees the
+    /// whole trace. The **requester** sees the outcome, the fallback reason, the
+    /// reasons, and the tags, with `votes` emptied, which is the same redaction
+    /// the pre-flight enforces by construction.
+    async fn request_rule_decision(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Media request whose decision is returned.")] request_id: ID,
+    ) -> GqlResult<Option<RequestRuleDecision>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let view = app
+            .request_rule_decision_for_request(&actor, request_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(view.map(crate::mappers::from_request_rule_decision_view))
+    }
+
+    /// List recorded request decisions, newest first; requires catalog-settings management permission.
+    async fn request_rule_decisions(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Maximum decisions to return; defaults to 50 and is clamped to 1 through 500."
+        )]
+        limit: Option<i32>,
+        #[graphql(desc = "Return only decisions whose effective outcome was this.")]
+        outcome: Option<RequestDecisionOutcomeValue>,
+    ) -> GqlResult<Vec<RequestRuleDecision>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let decisions = app
+            .list_request_rule_decisions(
+                &actor,
+                limit.and_then(|limit| usize::try_from(limit).ok()),
+                outcome.map(crate::mappers::request_decision_outcome_into_application),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(decisions
+            .into_iter()
+            // The catalog administrator who reaches this query is the audience
+            // the vote table exists for.
+            .map(|record| crate::mappers::from_request_rule_decision(record, false))
+            .collect())
+    }
+
+    /// The request family's Rules Context Reference: every fact a request matcher may read.
+    async fn request_rule_input_reference(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<crate::mappers::RequestRuleInputReference> {
+        // The contract is a static document, so no service call enforces the
+        // permission the rest of this surface requires; the gate happens here.
+        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        Ok(crate::mappers::request_rule_input_reference())
+    }
+
+    /// Evaluate a draft request without submitting it; requires request permission on the target library.
+    ///
+    /// Takes the submit mutation's own input type, deliberately: the pre-flight
+    /// and the submit share one input, one metadata read, and one evaluation
+    /// function, which is what makes "identical drafts yield identical
+    /// decisions" a property of the code rather than a promise.
+    async fn preview_my_request_decision(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "The draft request to evaluate, exactly as it would be submitted.")]
+        input: SubmitMediaRequestInput,
+    ) -> GqlResult<RequestPreflightPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let preflight = app
+            .preview_my_request_decision(
+                &actor,
+                crate::mappers::submit_media_request_input_into_application(input),
+            )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_request_preflight(preflight))
+    }
+
+    /// List every lifecycle claim on one title, live and historical; requires title management on the title's library.
+    async fn title_claims(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Title whose claims are returned.")] title_id: ID,
+    ) -> GqlResult<Vec<TitleClaim>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let claims = app
+            .list_title_claims(&actor, title_id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(claims
+            .into_iter()
+            .map(crate::mappers::from_title_claim)
+            .collect())
+    }
+
     // ── Post-Processing Scripts ──────────────────────────────────────────
 
     /// List post-processing scripts visible to the caller.
@@ -3102,6 +3932,7 @@ impl AcquisitionQueries {
                 description: p.description,
                 author: p.author,
                 version: p.version,
+                customizable: p.customizable,
             })
             .collect())
     }
@@ -3129,6 +3960,57 @@ impl AcquisitionQueries {
                 applied_facets: t.applied_facets,
             })
             .collect())
+    }
+
+    /// List tracked community rule packs and their local rule bindings.
+    async fn tracked_rule_packs(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<TrackedRulePackPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let installations = app
+            .list_tracked_rule_packs(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        let rule_sets = app.list_rule_sets(&actor).await.map_err(to_gql_error)?;
+        let rule_sets = rule_sets
+            .into_iter()
+            .map(|rule_set| (rule_set.id.clone(), rule_set))
+            .collect::<HashMap<_, _>>();
+
+        let mut payloads = Vec::with_capacity(installations.len());
+        for installation in installations {
+            let available = app
+                .rule_pack_update_candidate(
+                    &actor,
+                    &installation.pack_id,
+                    &installation.version,
+                    false,
+                )
+                .await
+                .unwrap_or(None);
+            let auto_update_available = if installation.auto_update {
+                app.rule_pack_update_candidate(
+                    &actor,
+                    &installation.pack_id,
+                    &installation.version,
+                    true,
+                )
+                .await
+                .unwrap_or(None)
+                .is_some()
+            } else {
+                false
+            };
+            payloads.push(from_tracked_rule_pack(
+                installation,
+                available,
+                auto_update_available,
+                &rule_sets,
+            ));
+        }
+        Ok(payloads)
     }
 
     /// Return available indexer provider types and their configuration fields; requires system-settings permission.
@@ -3235,13 +4117,19 @@ impl UtilityQueries {
             .list_notification_channels(&actor)
             .await
             .map_err(to_gql_error)?;
-        Ok(channels
-            .into_iter()
-            .map(|channel| {
-                let fields = app.notification_provider_config_fields(channel.channel_type.as_str());
-                crate::mappers::from_notification_channel_with_fields(channel, &fields)
-            })
-            .collect())
+        let mut payloads = Vec::with_capacity(channels.len());
+        for channel in channels {
+            let fields = app.notification_provider_config_fields(channel.channel_type.as_str());
+            let mut payload =
+                crate::mappers::from_notification_channel_with_fields(channel, &fields);
+            // A blocked plugin leaves the stored row enabled and healthy-looking;
+            // the row is where the operator looks first, so say it there.
+            payload.blocked_reason = app
+                .plugin_component_blocker_for_provider(&payload.channel_type)
+                .await;
+            payloads.push(payload);
+        }
+        Ok(payloads)
     }
 
     /// List notification targets visible to the caller.

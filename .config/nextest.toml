@@ -11,7 +11,16 @@ setup = "build-test-plugin-fixture"
 [test-groups.wasm-integration]
 max-threads = 2
 
+[test-groups.wasm-component-compile]
+max-threads = 1
+
 [[profile.default.overrides]]
 filter = '(package(scryer-plugins) & binary(wasm_integration)) | (package(scryer) & (binary(integration_interactive_release_search) | binary(integration_multi_indexer_urls)))'
 test-group = 'wasm-integration'
 retries = 1
+
+# Each of these compiles the Newznab component from a cold Wasmtime cache; run
+# concurrently, every one misses the cache and compiles it again.
+[[profile.default.overrides]]
+filter = 'package(scryer-plugins) & kind(lib) & test(/^newznab_profiles::/)'
+test-group = 'wasm-component-compile'

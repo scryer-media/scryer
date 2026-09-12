@@ -2,9 +2,7 @@ use crate::MediaInfoError;
 use crate::types::{RawContainer, RawTrack, TrackKind};
 use isolang::Language;
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::io::SeekFrom;
 
 pub(crate) const ASF_HEADER_GUID: [u8; 16] = [
     0x30, 0x26, 0xb2, 0x75, 0x8e, 0x66, 0xcf, 0x11, 0xa6, 0xd9, 0x00, 0xaa, 0x00, 0x62, 0xce, 0x6c,
@@ -28,6 +26,12 @@ const EXTENDED_STREAM_PROPERTIES_GUID: [u8; 16] = [
 const STREAM_BITRATE_PROPERTIES_GUID: [u8; 16] = [
     0xce, 0x75, 0xf8, 0x7b, 0x8d, 0x46, 0xd1, 0x11, 0x8d, 0x82, 0x00, 0x60, 0x97, 0xc9, 0xa2, 0xb2,
 ];
+const METADATA_GUID: [u8; 16] = [
+    0xea, 0xcb, 0xf8, 0xc5, 0xaf, 0x5b, 0x77, 0x48, 0x84, 0x67, 0xaa, 0x8c, 0x44, 0xfa, 0x4c, 0xca,
+];
+const METADATA_LIBRARY_GUID: [u8; 16] = [
+    0x94, 0x1c, 0x23, 0x44, 0x98, 0x94, 0xd1, 0x49, 0xa1, 0x41, 0x1d, 0x13, 0x4e, 0x45, 0x70, 0x54,
+];
 const LANGUAGE_LIST_GUID: [u8; 16] = [
     0xa9, 0x46, 0x43, 0x7c, 0xe0, 0xef, 0xfc, 0x4b, 0xb2, 0x29, 0x39, 0x3e, 0xde, 0x41, 0x5c, 0x85,
 ];
@@ -43,6 +47,7 @@ const VIDEO_MEDIA_GUID: [u8; 16] = [
 
 const MAX_HEADER_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_OBJECTS: usize = 4_096;
+const MAX_HEADER_EXTENSION_DEPTH: usize = 8;
 const MAX_LANGUAGES: usize = 65_536;
 const MAX_FRAME_RATE_SCAN_BYTES: u64 = 1024 * 1024;
 const MAX_FRAME_RATE_SCAN_PACKETS: usize = 256;
@@ -51,9 +56,16 @@ const MAX_FRAME_RATE_SCAN_PACKETS: usize = 256;
 struct AsfState {
     duration_seconds: Option<f64>,
     chapters: Option<i32>,
+    markers: Vec<(u64, Option<String>)>,
+    marker_inventory_incomplete: bool,
+    preroll_ms: Option<u64>,
     streams: BTreeMap<u16, StreamState>,
+    stream_order: Vec<u16>,
     languages: Vec<String>,
+    original_languages: Vec<String>,
     object_count: usize,
+    header_extension_depth: usize,
+    header_nesting_exhausted: bool,
     max_packet_size: Option<u32>,
 }
 
@@ -62,12 +74,24 @@ struct StreamState {
     track: Option<RawTrack>,
     bit_rate_bps: Option<i64>,
     frame_rate_fps: Option<f64>,
+    declared_frame_rate: Option<scryer_media_types::Rational>,
     language_index: Option<usize>,
+    aspect_x: Option<u32>,
+    aspect_y: Option<u32>,
+    aspect_conflict: bool,
 }
 
-pub(crate) fn parse_asf(path: &Path) -> Result<RawContainer, MediaInfoError> {
-    let mut file = File::open(path)?;
-    let file_len = file.metadata()?.len();
+#[derive(Debug, Clone, Copy)]
+struct AsfFrameTiming {
+    summary_fps: f64,
+    observed_rate: scryer_media_types::Rational,
+    variable: bool,
+}
+
+pub(crate) fn parse_asf_source(
+    mut file: &mut dyn crate::source::MediaSource,
+) -> Result<RawContainer, MediaInfoError> {
+    let file_len = file.len();
     let mut prefix = [0_u8; 24];
     file.read_exact(&mut prefix)
         .map_err(|_| parse_error("truncated ASF header"))?;
@@ -122,18 +146,89 @@ pub(crate) fn parse_asf(path: &Path) -> Result<RawContainer, MediaInfoError> {
         .unwrap_or_default();
 
     let languages = state.languages;
+    let original_languages = state.original_languages;
+    let mut details = scryer_media_types::AnalysisDetails::default();
+    if state.header_nesting_exhausted {
+        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.budget_exhausted = true;
+        details.report.warnings.push(scryer_media_types::ProbeWarning {
+            code: "asf_header_nesting_limit".into(),
+            message: "Header extension nesting exceeded the inspection limit; nested metadata was not inspected".into(),
+            ..Default::default()
+        });
+    }
     let mut tracks = Vec::new();
-    for (stream_number, stream) in state.streams {
+    for stream_number in state.stream_order {
+        let Some(stream) = state.streams.remove(&stream_number) else {
+            continue;
+        };
         if let Some(mut track) = stream.track {
+            track.metadata.id = Some(stream_number.to_string());
             track.bit_rate_bps = stream.bit_rate_bps.or(track.bit_rate_bps);
-            track.frame_rate_fps = stream
-                .frame_rate_fps
-                .or(track.frame_rate_fps)
-                .or_else(|| probed_frame_rates.get(&stream_number).copied());
+            if stream.bit_rate_bps.is_some() {
+                track.metadata.bitrate_provenance = scryer_media_types::Provenance::Container;
+            }
+            track.frame_rate_fps = stream.frame_rate_fps.or(track.frame_rate_fps).or_else(|| {
+                probed_frame_rates
+                    .get(&stream_number)
+                    .map(|timing| timing.summary_fps)
+            });
+            if track.kind == TrackKind::Video {
+                track.metadata.declared_frame_rate = stream.declared_frame_rate;
+                let aspect = stream
+                    .aspect_x
+                    .zip(stream.aspect_y)
+                    .filter(|(x, y)| !stream.aspect_conflict && *x > 0 && *y > 0)
+                    .and_then(|(x, y)| {
+                        scryer_media_types::Rational::new(i64::from(x), u64::from(y))
+                    });
+                if let Some(aspect) = aspect {
+                    track.metadata.sample_aspect_ratio = Some(aspect);
+                    track.metadata.display_aspect_ratio = track
+                        .width
+                        .zip(track.height)
+                        .filter(|(width, height)| *width > 0 && *height > 0)
+                        .and_then(|(width, height)| {
+                            scryer_media_types::Rational::new(
+                                aspect.numerator * i64::from(width),
+                                aspect.denominator * height as u64,
+                            )
+                        });
+                } else if stream.aspect_conflict
+                    || stream.aspect_x.is_some()
+                    || stream.aspect_y.is_some()
+                {
+                    details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+                    details
+                        .report
+                        .warnings
+                        .push(scryer_media_types::ProbeWarning {
+                        code: "asf_aspect_incomplete".into(),
+                        message:
+                            "Stream pixel aspect attributes are incomplete, invalid, or conflicting"
+                                .into(),
+                        stream_id: track.metadata.id.clone(),
+                        ..Default::default()
+                    });
+                }
+                if let Some(timing) = probed_frame_rates.get(&stream_number) {
+                    track.metadata.observed_frame_rate = Some(timing.observed_rate);
+                    track.metadata.variable_frame_rate = Some(timing.variable);
+                }
+            }
             track.language = stream
                 .language_index
                 .and_then(|index| languages.get(index))
+                .filter(|language| !language.is_empty() && language.as_str() != "und")
                 .cloned();
+            track.metadata.original_language = stream
+                .language_index
+                .and_then(|index| original_languages.get(index))
+                .filter(|language| !language.is_empty())
+                .cloned();
+            if track.metadata.original_language.is_some() {
+                track.metadata.language_provenance = scryer_media_types::Provenance::Container;
+            }
             tracks.push(track);
         }
     }
@@ -142,7 +237,33 @@ pub(crate) fn parse_asf(path: &Path) -> Result<RawContainer, MediaInfoError> {
         return Err(parse_error("ASF header contains no supported streams"));
     }
 
+    if let Some(preroll_ms) = state.preroll_ms {
+        details.chapters = state
+            .markers
+            .iter()
+            .enumerate()
+            .map(|(index, (time, title))| scryer_media_types::Chapter {
+                id: index.to_string(),
+                title: title.clone(),
+                start_seconds: *time as f64 / 10_000_000.0 - preroll_ms as f64 / 1000.0,
+                end_seconds: None,
+            })
+            .collect();
+    }
+    if state.marker_inventory_incomplete
+        || (!state.markers.is_empty() && state.preroll_ms.is_none())
+    {
+        details.report.status = scryer_media_types::ProbeStatus::Incomplete;
+        details.report.budget_exhausted |=
+            state.chapters.unwrap_or_default() as usize > state.markers.len();
+        details.report.warnings.push(scryer_media_types::ProbeWarning {
+            code: "asf_chapters_incomplete".into(),
+            message: "Marker inventory reached its limit, contains undecodable text, or lacks presentation timing metadata".into(),
+            ..Default::default()
+        });
+    }
     Ok(RawContainer {
+        details,
         format_name: "asf".into(),
         duration_seconds: state.duration_seconds,
         num_chapters: state.chapters,
@@ -192,6 +313,7 @@ fn parse_object(
         EXTENDED_STREAM_PROPERTIES_GUID => parse_extended_stream_properties(payload, state),
         STREAM_BITRATE_PROPERTIES_GUID => parse_stream_bitrates(payload, state),
         LANGUAGE_LIST_GUID => parse_languages(payload, state),
+        METADATA_GUID | METADATA_LIBRARY_GUID => parse_stream_metadata(payload, state),
         MARKER_GUID => parse_markers(payload, state),
         _ => Ok(()),
     }
@@ -203,6 +325,7 @@ fn parse_file_properties(data: &[u8], state: &mut AsfState) -> Result<(), MediaI
     let play_time = r.u64_le()?;
     r.skip(8)?;
     let preroll_ms = r.u64_le()?;
+    state.preroll_ms = Some(preroll_ms);
     let flags = r.u32_le()?;
     r.skip(4)?;
     let max_packet_size = r.u32_le()?;
@@ -211,8 +334,8 @@ fn parse_file_properties(data: &[u8], state: &mut AsfState) -> Result<(), MediaI
         state.max_packet_size = Some(max_packet_size);
     }
     if flags & 1 == 0 {
-        let play_ms = play_time / 10_000;
-        state.duration_seconds = Some(play_ms.saturating_sub(preroll_ms) as f64 / 1_000.0);
+        state.duration_seconds =
+            Some((play_time as f64 / 10_000_000.0 - preroll_ms as f64 / 1_000.0).max(0.0));
     }
     Ok(())
 }
@@ -235,7 +358,11 @@ fn parse_stream_properties(data: &[u8], state: &mut AsfState) -> Result<(), Medi
     } else {
         return Ok(());
     };
-    state.streams.entry(stream_number).or_default().track = Some(track);
+    let stream = state.streams.entry(stream_number).or_default();
+    if stream.track.is_none() {
+        state.stream_order.push(stream_number);
+    }
+    stream.track = Some(track);
     Ok(())
 }
 
@@ -257,9 +384,24 @@ fn parse_audio_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
         .and_then(|(tag, bits)| map_audio_format_tag(tag, bits))
         .map(str::to_owned);
     let mut track = raw_track(TrackKind::Audio, format!("0x{format_tag:04x}"), codec_name);
-    track.codec_private = codec_private;
-    track.channels = Some(i32::from(channels));
-    track.bit_rate_bps = i64::from(avg_bytes_per_second).checked_mul(8);
+    track.metadata = crate::audio_metadata::wave_format(data);
+    track.codec_private = if format_tag == 0xfffe && track.codec_name.is_some() {
+        // WAVEFORMATEXTENSIBLE's valid-bits, mask, and GUID precede the codec
+        // configuration. They must not be interpreted as an AAC ASC.
+        codec_private
+            .and_then(|extra| Some(extra.get(22..)?.to_vec()).filter(|bytes| !bytes.is_empty()))
+    } else {
+        codec_private
+    };
+    track.audio_profile = crate::codec::detect_header_audio_profile(
+        &track.codec_id,
+        track.codec_name.as_deref(),
+        track.codec_private.as_deref(),
+    );
+    track.channels = (channels > 0).then_some(i32::from(channels));
+    track.bit_rate_bps = i64::from(avg_bytes_per_second)
+        .checked_mul(8)
+        .filter(|value| *value > 0);
     Ok(track)
 }
 
@@ -300,7 +442,53 @@ fn parse_video_type_data(data: &[u8]) -> Result<RawTrack, MediaInfoError> {
     track.codec_private = codec_private;
     track.width = Some(width);
     track.height = Some(height);
+    if matches!(track.codec_name.as_deref(), Some("wmv1" | "wmv2")) {
+        track.metadata.bit_depth = Some(8);
+        track.metadata.pixel_format = Some("yuv420p".into());
+    }
     Ok(track)
+}
+
+fn parse_stream_metadata(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
+    let mut reader = SliceReader::new(data);
+    let count = reader.u16_le()?;
+    for _ in 0..count {
+        reader.skip(2)?; // Reserved in Metadata; language index in Metadata Library.
+        let stream_number = reader.u16_le()?;
+        let name_length = usize::from(reader.u16_le()?);
+        let value_type = reader.u16_le()?;
+        let value_length = reader.u32_le()? as usize;
+        let name = reader.take(name_length)?;
+        let value = reader.take(value_length)?;
+        if name_length % 2 != 0 {
+            return Err(parse_error("invalid ASF metadata name length"));
+        }
+        let named = |expected: &str| {
+            name.chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .eq(expected.encode_utf16())
+        };
+        let x_axis = named("AspectRatioX\0");
+        if !(1..=127).contains(&stream_number) || (!x_axis && !named("AspectRatioY\0")) {
+            continue;
+        }
+        let stream = state.streams.entry(stream_number).or_default();
+        // These stream attributes are DWORDs. An unsupported representation
+        // cannot establish a ratio, and must not supersede another valid value.
+        if value_type != 3 || value.len() != 4 {
+            stream.aspect_conflict = true;
+            continue;
+        }
+        let value = u32::from_le_bytes(value.try_into().unwrap());
+        let axis = if x_axis {
+            &mut stream.aspect_x
+        } else {
+            &mut stream.aspect_y
+        };
+        stream.aspect_conflict |= value == 0 || axis.is_some_and(|previous| previous != value);
+        *axis = Some(value);
+    }
+    Ok(())
 }
 
 fn parse_header_extension(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError> {
@@ -308,7 +496,14 @@ fn parse_header_extension(data: &[u8], state: &mut AsfState) -> Result<(), Media
     r.skip(16 + 2)?;
     let extension_size = r.u32_le()? as usize;
     let extension = r.take(extension_size)?;
-    parse_objects(&mut SliceReader::new(extension), None, state)
+    if state.header_extension_depth >= MAX_HEADER_EXTENSION_DEPTH {
+        state.header_nesting_exhausted = true;
+        return Ok(());
+    }
+    state.header_extension_depth += 1;
+    let result = parse_objects(&mut SliceReader::new(extension), None, state);
+    state.header_extension_depth -= 1;
+    result
 }
 
 fn parse_extended_stream_properties(
@@ -331,6 +526,8 @@ fn parse_extended_stream_properties(
     }
     if average_frame_time != 0 {
         stream.frame_rate_fps = Some(10_000_000.0 / average_frame_time as f64);
+        stream.declared_frame_rate =
+            scryer_media_types::Rational::new(10_000_000, average_frame_time);
     }
     stream.language_index = Some(language_index);
 
@@ -371,6 +568,7 @@ fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoErr
         return Err(parse_error("too many ASF language records"));
     }
     let mut languages = Vec::with_capacity(count);
+    let mut original_languages = Vec::with_capacity(count);
     for _ in 0..count {
         let byte_len = r.u8()? as usize;
         if !byte_len.is_multiple_of(2) {
@@ -381,8 +579,10 @@ fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoErr
             .chunks_exact(2)
             .map(|bytes| u16::from_le_bytes([bytes[0], bytes[1]]))
             .collect::<Vec<_>>();
-        let language = String::from_utf16_lossy(&utf16)
+        let original_language = String::from_utf16_lossy(&utf16)
             .trim_matches('\0')
+            .to_owned();
+        let language = original_language
             .split(['-', '_'])
             .next()
             .unwrap_or_default()
@@ -392,8 +592,10 @@ fn parse_languages(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoErr
             .map(|language| language.to_639_3().to_owned())
             .unwrap_or(language);
         languages.push(language);
+        original_languages.push(original_language);
     }
     state.languages = languages;
+    state.original_languages = original_languages;
     Ok(())
 }
 
@@ -404,28 +606,53 @@ fn parse_markers(data: &[u8], state: &mut AsfState) -> Result<(), MediaInfoError
     r.skip(2)?;
     let name_len = r.u16_le()? as usize;
     r.skip(name_len)?;
+    if count > r.remaining() / 30 {
+        return Err(parse_error("ASF marker count exceeds object boundary"));
+    }
     let mut valid = 0_i32;
     for _ in 0..count.min(i32::MAX as usize) {
-        r.skip(8 + 8)?;
+        r.skip(8)?;
+        let presentation_time = r.u64_le()?;
         let entry_len = r.u16_le()? as usize;
         let entry = r.take(entry_len)?;
         let mut marker = SliceReader::new(entry);
         marker.skip(4 + 4)?;
         let description_len = marker.u32_le()? as usize;
-        marker.skip(description_len)?;
+        let description_bytes = description_len
+            .checked_mul(2)
+            .ok_or_else(|| parse_error("ASF marker description length overflow"))?;
+        let description = marker.take(description_bytes)?;
+        if state.markers.len() < 4096 {
+            let units = description
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect::<Vec<_>>();
+            let title = match String::from_utf16(&units) {
+                Ok(title) => {
+                    Some(title.trim_end_matches('\0').to_owned()).filter(|title| !title.is_empty())
+                }
+                Err(_) => {
+                    state.marker_inventory_incomplete = true;
+                    None
+                }
+            };
+            state.markers.push((presentation_time, title));
+        } else {
+            state.marker_inventory_incomplete = true;
+        }
         valid += 1;
     }
-    state.chapters = Some(valid);
+    state.chapters = Some(state.chapters.unwrap_or_default().saturating_add(valid));
     Ok(())
 }
 
 fn probe_asf_frame_rates(
-    file: &mut File,
+    file: &mut dyn crate::source::MediaSource,
     file_len: u64,
     data_offset: u64,
     packet_size: u32,
     video_streams: &BTreeSet<u16>,
-) -> Option<BTreeMap<u16, f64>> {
+) -> Option<BTreeMap<u16, AsfFrameTiming>> {
     if video_streams.is_empty() || packet_size == 0 {
         return None;
     }
@@ -586,7 +813,7 @@ fn read_asf_packet_value(
     }
 }
 
-fn derive_frame_rate(timestamps: &[u32]) -> Option<f64> {
+fn derive_frame_rate(timestamps: &[u32]) -> Option<AsfFrameTiming> {
     if timestamps.len() < 3 {
         return None;
     }
@@ -599,9 +826,8 @@ fn derive_frame_rate(timestamps: &[u32]) -> Option<f64> {
         return None;
     }
     deltas.sort_unstable();
-    if deltas.last()?.saturating_sub(*deltas.first()?) > 1 {
-        return None;
-    }
+    // Millisecond timestamps alternate by one tick even for a fixed cadence.
+    let variable = deltas.last()?.saturating_sub(*deltas.first()?) > 1;
     let span = timestamps.last()?.checked_sub(*timestamps.first()?)?;
     if span == 0 {
         return None;
@@ -614,7 +840,16 @@ fn derive_frame_rate(timestamps: &[u32]) -> Option<f64> {
     if (frame_rate - rounded).abs() <= rounded * 0.01 {
         frame_rate = rounded;
     }
-    Some(frame_rate)
+    Some(AsfFrameTiming {
+        summary_fps: frame_rate,
+        observed_rate: scryer_media_types::Rational::new(
+            i64::try_from(timestamps.len() - 1)
+                .ok()?
+                .checked_mul(1_000)?,
+            u64::from(span),
+        )?,
+        variable,
+    })
 }
 
 fn map_video_fourcc(fourcc: [u8; 4]) -> Option<&'static str> {
@@ -649,14 +884,10 @@ fn resolve_audio_format(
     let subformat = u32::from_le_bytes(extra[6..10].try_into().unwrap());
     let subformat = u16::try_from(subformat).ok()?;
     let valid_bits = u16::from_le_bytes(extra[0..2].try_into().unwrap());
-    Some((
-        subformat,
-        if valid_bits == 0 {
-            bits_per_sample
-        } else {
-            valid_bits
-        },
-    ))
+    if matches!(subformat, 1 | 3) && valid_bits > bits_per_sample {
+        return None;
+    }
+    Some((subformat, bits_per_sample))
 }
 
 fn map_audio_format_tag(tag: u16, bits_per_sample: u16) -> Option<&'static str> {
@@ -689,6 +920,7 @@ fn map_audio_format_tag(tag: u16, bits_per_sample: u16) -> Option<&'static str> 
 
 fn raw_track(kind: TrackKind, codec_id: String, codec_name: Option<String>) -> RawTrack {
     RawTrack {
+        metadata: Default::default(),
         kind,
         codec_id,
         codec_name,
@@ -778,6 +1010,369 @@ mod tests {
     use super::*;
 
     #[test]
+    fn stream_inventory_preserves_container_order_and_missing_language() {
+        let mut objects = Vec::new();
+        for id in [7_u16, 3] {
+            let mut properties = vec![0; 54 + 16];
+            properties[..16].copy_from_slice(&AUDIO_MEDIA_GUID);
+            properties[40..44].copy_from_slice(&16_u32.to_le_bytes());
+            properties[48..50].copy_from_slice(&id.to_le_bytes());
+            properties[54..56].copy_from_slice(&1_u16.to_le_bytes());
+            properties[56..58].copy_from_slice(&1_u16.to_le_bytes());
+            properties[58..62].copy_from_slice(&48_000_u32.to_le_bytes());
+            properties[62..66].copy_from_slice(&96_000_u32.to_le_bytes());
+            properties[66..68].copy_from_slice(&2_u16.to_le_bytes());
+            properties[68..70].copy_from_slice(&16_u16.to_le_bytes());
+            objects.extend(STREAM_PROPERTIES_GUID);
+            objects.extend((24 + properties.len() as u64).to_le_bytes());
+            objects.extend(properties);
+        }
+        let mut image = Vec::from(ASF_HEADER_GUID);
+        image.extend((30 + objects.len() as u64).to_le_bytes());
+        image.extend(2_u32.to_le_bytes());
+        image.extend([1, 2]);
+        image.extend(objects);
+        let container = parse_asf_source(&mut std::io::Cursor::new(image)).unwrap();
+        assert_eq!(
+            container
+                .tracks
+                .iter()
+                .map(|track| track.metadata.id.as_deref())
+                .collect::<Vec<_>>(),
+            [Some("7"), Some("3")]
+        );
+        assert!(container.tracks.iter().all(|track| track.language.is_none() && track.metadata.original_language.is_none()));
+    }
+
+    #[test]
+    fn wave_mp3_mono_layout_reaches_the_catalog_contract() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/media/wmv_wmv1_mp3_mono.wmv");
+        let analysis = crate::analyze_catalog_file(&path).unwrap();
+        let audio = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .unwrap();
+        assert_eq!(audio.codec.as_deref(), Some("mp3"));
+        assert_eq!(audio.channels, Some(1));
+        assert_eq!(audio.metadata.channel_layout.as_deref(), Some("mono"));
+        assert_eq!(audio.metadata.original_language.as_deref(), Some("en"));
+        assert_eq!(audio.language.as_deref(), Some("eng"));
+        assert!(audio.metadata.sample_format.is_none());
+    }
+
+    #[test]
+    fn extensible_aac_uses_the_codec_configuration_after_the_wave_header() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/media/wmv_wmv1_aac_surround.wmv");
+        let analysis = crate::analyze_catalog_file(&path).unwrap();
+        let audio = analysis
+            .details
+            .streams
+            .iter()
+            .find(|stream| stream.kind == scryer_media_types::StreamKind::Audio)
+            .unwrap();
+        assert_eq!(audio.codec.as_deref(), Some("aac"));
+        assert_eq!(audio.channels, Some(6));
+        assert_eq!(audio.metadata.channel_layout.as_deref(), Some("5.1"));
+        assert_eq!(audio.metadata.sample_rate, Some(48_000));
+        assert_eq!(audio.metadata.profile.as_deref(), Some("LC"));
+    }
+
+    #[test]
+    fn legacy_windows_media_video_properties_reach_the_catalog_contract() {
+        for fixture in ["wmv_wmv1_wmav1.wmv", "wmv_wmv2_video_only.wmv"] {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/media")
+                .join(fixture);
+            let analysis = crate::analyze_catalog_file(&path).unwrap();
+            let video = analysis
+                .details
+                .streams
+                .iter()
+                .find(|stream| stream.kind == scryer_media_types::StreamKind::Video)
+                .unwrap();
+            assert_eq!(video.metadata.bit_depth, Some(8), "{fixture}");
+            assert_eq!(
+                video.metadata.sample_aspect_ratio,
+                scryer_media_types::Rational::new(1, 1),
+                "{fixture}"
+            );
+            assert_eq!(
+                video.metadata.display_aspect_ratio,
+                scryer_media_types::Rational::new(20, 11),
+                "{fixture}"
+            );
+            assert_eq!(
+                video.metadata.pixel_format.as_deref(),
+                Some("yuv420p"),
+                "{fixture}"
+            );
+        }
+    }
+
+    fn marker_payload(entries: &[(u64, &str)]) -> Vec<u8> {
+        let mut payload = vec![0; 16];
+        payload.extend((entries.len() as u32).to_le_bytes());
+        payload.extend([0; 4]);
+        for (time, title) in entries {
+            let units = title.encode_utf16().chain([0]).collect::<Vec<_>>();
+            payload.extend(50_u64.to_le_bytes());
+            payload.extend(time.to_le_bytes());
+            payload.extend((12 + units.len() as u16 * 2).to_le_bytes());
+            payload.extend([0; 8]);
+            payload.extend((units.len() as u32).to_le_bytes());
+            payload.extend(units.into_iter().flat_map(u16::to_le_bytes));
+        }
+        payload
+    }
+
+    fn asf_chapter_fixture(markers_first: bool) -> Vec<u8> {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/media/wmv_wmv1_wmav1.wmv");
+        let original = std::fs::read(path).unwrap();
+        let header_size = u64::from_le_bytes(original[16..24].try_into().unwrap());
+        let count = u32::from_le_bytes(original[24..28].try_into().unwrap());
+        let markers = marker_payload(&[(31_000_000, "Début 🎬"), (32_250_000, "第二章")]);
+        let object_size = 24 + markers.len() as u64;
+        let insert_at = if markers_first {
+            30
+        } else {
+            header_size as usize
+        };
+        let mut bytes = original[..insert_at].to_vec();
+        bytes[16..24].copy_from_slice(&(header_size + object_size).to_le_bytes());
+        bytes[24..28].copy_from_slice(&(count + 1).to_le_bytes());
+        // Native expectations also cover markers preceding the preroll declaration.
+        bytes.extend(MARKER_GUID);
+        bytes.extend(object_size.to_le_bytes());
+        bytes.extend(markers);
+        bytes.extend(&original[insert_at..]);
+        let file_size = bytes.len() as u64;
+        let size_at = 70
+            + if markers_first {
+                object_size as usize
+            } else {
+                0
+            };
+        bytes[size_at..size_at + 8].copy_from_slice(&file_size.to_le_bytes());
+        bytes
+    }
+
+    #[test]
+    fn markers_preserve_unicode_titles_and_precise_preroll_adjusted_times() {
+        let analysis = crate::analyze_source(
+            &mut std::io::Cursor::new(asf_chapter_fixture(true)),
+            "wmv",
+            crate::AnalyzeOptions {
+                profile: crate::AnalysisProfile::DefaultRich,
+            },
+        )
+        .unwrap();
+        assert_eq!(analysis.num_chapters, Some(2));
+        assert_eq!(analysis.details.chapters.len(), 2);
+        assert_eq!(
+            analysis.details.chapters[0].title.as_deref(),
+            Some("Début 🎬")
+        );
+        assert_eq!(analysis.details.chapters[0].start_seconds, 0.0);
+        assert_eq!(
+            analysis.details.chapters[1].title.as_deref(),
+            Some("第二章")
+        );
+        assert!((analysis.details.chapters[1].start_seconds - 0.125).abs() < 1e-9);
+        assert!(
+            analysis
+                .details
+                .chapters
+                .iter()
+                .all(|chapter| chapter.end_seconds.is_none())
+        );
+    }
+
+    #[test]
+    fn marker_inventory_rejects_truncated_descriptions_and_bounds_retained_records() {
+        let payload = marker_payload(&[(31_000_000, "Unicode 🎬")]);
+        for end in 0..payload.len() {
+            assert!(parse_markers(&payload[..end], &mut AsfState::default()).is_err());
+        }
+        let entries = vec![(31_000_000, ""); 4097];
+        let mut state = AsfState::default();
+        parse_markers(&marker_payload(&entries), &mut state).unwrap();
+        assert_eq!(state.chapters, Some(4097));
+        assert_eq!(state.markers.len(), 4096);
+        assert!(state.marker_inventory_incomplete);
+        let mut invalid_text = payload.clone();
+        let length = invalid_text.len();
+        invalid_text[length - 2..].copy_from_slice(&0xd800_u16.to_le_bytes());
+        let mut state = AsfState::default();
+        parse_markers(&invalid_text, &mut state).unwrap();
+        assert!(state.marker_inventory_incomplete);
+        assert!(state.markers[0].1.is_none());
+    }
+
+    #[test]
+    #[ignore = "development reference requires FFprobe"]
+    fn asf_marker_chapter_reference_matches_ffprobe() {
+        let version = std::process::Command::new("ffprobe")
+            .arg("-version")
+            .output()
+            .unwrap();
+        assert!(version.status.success());
+        eprintln!("{}", String::from_utf8_lossy(&version.stdout));
+        // FFprobe 8.1.1 applies preroll while reading each marker; it does not
+        // revisit markers appearing before File Properties. Compare its usual
+        // object ordering, while the mandatory native test covers the reverse.
+        let bytes = asf_chapter_fixture(false);
+        let mut child = std::process::Command::new("ffprobe")
+            .args([
+                "-v",
+                "error",
+                "-show_chapters",
+                "-of",
+                "json",
+                "-i",
+                "pipe:0",
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(&mut child.stdin.take().unwrap(), &bytes).unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let reference: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+        let native = crate::analyze_source(
+            &mut std::io::Cursor::new(bytes),
+            "wmv",
+            crate::AnalyzeOptions {
+                profile: crate::AnalysisProfile::DefaultRich,
+            },
+        )
+        .unwrap();
+        let chapters = reference["chapters"].as_array().unwrap();
+        assert_eq!(chapters.len(), native.details.chapters.len());
+        for (reference, native) in chapters.iter().zip(&native.details.chapters) {
+            assert_eq!(reference["tags"]["title"].as_str(), native.title.as_deref());
+            let start = reference["start_time"]
+                .as_str()
+                .unwrap()
+                .parse::<f64>()
+                .unwrap();
+            assert!(
+                (native.start_seconds - start).abs() < 1e-6,
+                "native={} reference={start}",
+                native.start_seconds
+            );
+        }
+    }
+
+    #[test]
+    fn pixel_aspect_attributes_are_stream_specific_and_conflict_aware() {
+        fn record(stream: u16, name: &str, value: u32) -> Vec<u8> {
+            let name = name
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>();
+            let mut bytes = 1_u16.to_le_bytes().to_vec();
+            bytes.extend(0_u16.to_le_bytes());
+            bytes.extend(stream.to_le_bytes());
+            bytes.extend((name.len() as u16).to_le_bytes());
+            bytes.extend(3_u16.to_le_bytes());
+            bytes.extend(4_u32.to_le_bytes());
+            bytes.extend(name);
+            bytes.extend(value.to_le_bytes());
+            bytes
+        }
+        let mut state = AsfState::default();
+        let x = record(7, "AspectRatioX", 12);
+        for end in 0..x.len() {
+            assert!(parse_stream_metadata(&x[..end], &mut AsfState::default()).is_err());
+        }
+        parse_object(METADATA_GUID, &x, &mut state).unwrap();
+        parse_object(
+            METADATA_LIBRARY_GUID,
+            &record(7, "AspectRatioY", 11),
+            &mut state,
+        )
+        .unwrap();
+        parse_stream_metadata(&record(3, "AspectRatioX", 1), &mut state).unwrap();
+        assert_eq!(state.streams[&7].aspect_x, Some(12));
+        assert_eq!(state.streams[&7].aspect_y, Some(11));
+        assert!(state.streams[&3].aspect_y.is_none());
+        assert!(!state.streams[&7].aspect_conflict);
+        parse_stream_metadata(&x, &mut state).unwrap();
+        assert!(!state.streams[&7].aspect_conflict);
+        parse_stream_metadata(&record(7, "AspectRatioX", 16), &mut state).unwrap();
+        assert!(state.streams[&7].aspect_conflict);
+    }
+
+    #[test]
+    fn invalid_or_missing_pixel_aspect_does_not_become_square_pixels() {
+        let path =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/media/wmv_wmv1_wmav1.wmv");
+        let original = std::fs::read(path).unwrap();
+        let positions = ["AspectRatioX", "AspectRatioY"].map(|name| {
+            let name = name
+                .encode_utf16()
+                .chain([0])
+                .flat_map(u16::to_le_bytes)
+                .collect::<Vec<_>>();
+            let start = original
+                .windows(name.len())
+                .position(|bytes| bytes == name)
+                .unwrap();
+            (start, start + name.len())
+        });
+        for (x, y, incomplete) in [
+            (Some(4_u32), Some(3_u32), false),
+            (Some(0), Some(1), true),
+            (None, Some(1), true),
+            (None, None, false),
+        ] {
+            let mut bytes = original.clone();
+            for ((name_at, value_at), value) in positions.into_iter().zip([x, y]) {
+                if let Some(value) = value {
+                    bytes[value_at..value_at + 4].copy_from_slice(&value.to_le_bytes());
+                } else {
+                    bytes[name_at] = b'Z';
+                }
+            }
+            let parsed = parse_asf_source(&mut std::io::Cursor::new(bytes)).unwrap();
+            let video = parsed
+                .tracks
+                .iter()
+                .find(|track| track.kind == TrackKind::Video)
+                .unwrap();
+            if x == Some(4) {
+                assert_eq!(
+                    video.metadata.sample_aspect_ratio,
+                    scryer_media_types::Rational::new(4, 3)
+                );
+                assert_eq!(
+                    video.metadata.display_aspect_ratio,
+                    scryer_media_types::Rational::new(80, 33)
+                );
+            } else {
+                assert!(video.metadata.sample_aspect_ratio.is_none());
+                assert!(video.metadata.display_aspect_ratio.is_none());
+            }
+            assert_eq!(
+                parsed.details.report.status == scryer_media_types::ProbeStatus::Incomplete,
+                incomplete
+            );
+        }
+    }
+
+    #[test]
     fn maps_windows_media_codecs() {
         assert_eq!(map_video_fourcc(*b"WMV3"), Some("wmv3"));
         assert_eq!(map_video_fourcc(*b"WVC1"), Some("vc1"));
@@ -806,6 +1401,23 @@ mod tests {
                 .and_then(|(tag, bits)| map_audio_format_tag(tag, bits)),
             Some("pcm_f32le")
         );
+        extra[0..2].copy_from_slice(&20_u16.to_le_bytes());
+        extra[6..10].copy_from_slice(&1_u32.to_le_bytes());
+        assert_eq!(
+            resolve_audio_format(0xfffe, 24, Some(&extra)),
+            Some((1, 24))
+        );
+        let mut wave = vec![0_u8; 18];
+        wave[0..2].copy_from_slice(&0xfffe_u16.to_le_bytes());
+        wave[2..4].copy_from_slice(&2_u16.to_le_bytes());
+        wave[4..8].copy_from_slice(&48_000_u32.to_le_bytes());
+        wave[14..16].copy_from_slice(&24_u16.to_le_bytes());
+        wave[16..18].copy_from_slice(&22_u16.to_le_bytes());
+        wave.extend(extra);
+        let track = parse_audio_type_data(&wave).unwrap();
+        assert_eq!(track.codec_name.as_deref(), Some("pcm_s24le"));
+        assert_eq!(track.metadata.sample_bit_depth, Some(20));
+        assert_eq!(track.metadata.sample_rate, Some(48_000));
     }
 
     #[test]
@@ -831,7 +1443,17 @@ mod tests {
                 Some(24)
             );
         }
-        assert_eq!(derive_frame_rate(&timestamps[&1]), Some(25.0));
+        let timing = derive_frame_rate(&timestamps[&1]).unwrap();
+        assert_eq!(timing.summary_fps, 25.0);
+        assert_eq!(
+            timing.observed_rate,
+            scryer_media_types::Rational::new(25, 1).unwrap()
+        );
+        assert!(!timing.variable);
+        assert!(derive_frame_rate(&[0, 40, 100]).unwrap().variable);
+        assert!(!derive_frame_rate(&[0, 33, 67, 100]).unwrap().variable);
+        assert!(derive_frame_rate(&[0, 40, 20]).is_none());
+        assert!(derive_frame_rate(&[0, 40]).is_none());
 
         let truncated = packet(4, 120);
         assert!(
@@ -843,6 +1465,83 @@ mod tests {
             )
             .is_none()
         );
+    }
+
+    #[test]
+    fn header_extension_budget_preserves_siblings_and_reports_incomplete_metadata() {
+        fn object(guid: [u8; 16], payload: &[u8]) -> Vec<u8> {
+            let mut bytes = Vec::from(guid);
+            bytes.extend((24 + payload.len() as u64).to_le_bytes());
+            bytes.extend(payload);
+            bytes
+        }
+        let mut properties = vec![0; 80];
+        properties[40..48].copy_from_slice(&20_000_000_u64.to_le_bytes());
+        for depth in [
+            1,
+            MAX_HEADER_EXTENSION_DEPTH,
+            MAX_HEADER_EXTENSION_DEPTH + 1,
+        ] {
+            let mut nested = object(FILE_PROPERTIES_GUID, &properties);
+            for _ in 0..depth {
+                let mut extension = vec![0; 18];
+                extension.extend((nested.len() as u32).to_le_bytes());
+                extension.extend(nested);
+                nested = object(HEADER_EXTENSION_GUID, &extension);
+            }
+            let exhausted = depth > MAX_HEADER_EXTENSION_DEPTH;
+            let mut state = AsfState::default();
+            parse_objects(&mut SliceReader::new(&nested), Some(1), &mut state).unwrap();
+            assert_eq!(state.duration_seconds, (!exhausted).then_some(2.0));
+            assert_eq!(state.header_extension_depth, 0);
+            assert_eq!(state.header_nesting_exhausted, exhausted);
+            assert!(state.object_count <= MAX_HEADER_EXTENSION_DEPTH + 1);
+
+            let mut sibling = properties.clone();
+            sibling[40..48].copy_from_slice(&30_000_000_u64.to_le_bytes());
+            nested.extend(object(FILE_PROPERTIES_GUID, &sibling));
+            let mut audio = vec![0; 70];
+            audio[..16].copy_from_slice(&AUDIO_MEDIA_GUID);
+            audio[40..44].copy_from_slice(&16_u32.to_le_bytes());
+            audio[48..50].copy_from_slice(&1_u16.to_le_bytes());
+            audio[54..56].copy_from_slice(&1_u16.to_le_bytes());
+            audio[56..58].copy_from_slice(&1_u16.to_le_bytes());
+            audio[58..62].copy_from_slice(&48_000_u32.to_le_bytes());
+            audio[62..66].copy_from_slice(&96_000_u32.to_le_bytes());
+            audio[66..68].copy_from_slice(&2_u16.to_le_bytes());
+            audio[68..70].copy_from_slice(&16_u16.to_le_bytes());
+            nested.extend(object(STREAM_PROPERTIES_GUID, &audio));
+            let mut image = Vec::from(ASF_HEADER_GUID);
+            image.extend((30 + nested.len() as u64).to_le_bytes());
+            image.extend(3_u32.to_le_bytes());
+            image.extend([1, 2]);
+            image.extend(nested);
+            let result = parse_asf_source(&mut std::io::Cursor::new(image)).unwrap();
+            assert_eq!(result.tracks.len(), 1);
+            assert_eq!(result.duration_seconds, Some(3.0));
+            assert_eq!(result.details.report.budget_exhausted, exhausted);
+            assert_eq!(
+                result
+                    .details
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|warning| { warning.code == "asf_header_nesting_limit" }),
+                exhausted
+            );
+            if exhausted {
+                assert_eq!(
+                    result.details.report.status,
+                    scryer_media_types::ProbeStatus::Incomplete
+                );
+            }
+        }
+        let mut state = AsfState::default();
+        let mut malformed = vec![0; 18];
+        malformed.extend(24_u32.to_le_bytes());
+        malformed.extend(object(FILE_PROPERTIES_GUID, &[]));
+        assert!(parse_header_extension(&malformed, &mut state).is_err());
+        assert_eq!(state.header_extension_depth, 0);
     }
 
     #[test]
@@ -866,6 +1565,9 @@ mod tests {
         let mut state = AsfState::default();
         parse_file_properties(&properties, &mut state).unwrap();
         assert_eq!(state.duration_seconds, Some(2.5));
+        properties[40..48].copy_from_slice(&30_001_234_u64.to_le_bytes());
+        parse_file_properties(&properties, &mut state).unwrap();
+        assert!((state.duration_seconds.unwrap() - 2.5001234).abs() < 1e-9);
     }
 
     #[test]
@@ -887,6 +1589,10 @@ mod tests {
         let stream = state.streams.get(&7).unwrap();
         assert_eq!(stream.bit_rate_bps, Some(128_000));
         assert_eq!(stream.frame_rate_fps, Some(25.0));
+        assert_eq!(
+            stream.declared_frame_rate,
+            scryer_media_types::Rational::new(25, 1)
+        );
         assert_eq!(stream.language_index, Some(1));
     }
 
@@ -894,12 +1600,13 @@ mod tests {
     fn normalizes_rfc1766_languages_to_iso_639_3() {
         let mut languages = Vec::new();
         languages.extend_from_slice(&1_u16.to_le_bytes());
-        languages.push(6);
-        for value in ['j' as u16, 'a' as u16, 0] {
+        languages.push(12);
+        for value in "ja-JP\0".encode_utf16() {
             languages.extend_from_slice(&value.to_le_bytes());
         }
         let mut state = AsfState::default();
         parse_languages(&languages, &mut state).unwrap();
         assert_eq!(state.languages, ["jpn"]);
+        assert_eq!(state.original_languages, ["ja-JP"]);
     }
 }

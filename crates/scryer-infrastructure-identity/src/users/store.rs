@@ -553,6 +553,37 @@ impl UserExternalAccountRepository for UserStore {
         row.as_ref().map(row_to_external_account).transpose()
     }
 
+    async fn list_verified_by_connection(
+        &self,
+        provider: ExternalAccountProvider,
+        connection_id: &str,
+    ) -> AppResult<Vec<UserExternalAccount>> {
+        // The three conditions are the participant test, stated in SQL so a
+        // caller cannot forget one: active, actually verified, and carrying a
+        // provider user id we can address the provider's API with. The
+        // emptiness check is written as a trimmed comparison because a link
+        // repaired by hand can hold a blank string rather than NULL.
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, user_id, provider, connection_id, external_user_id, username,
+                    display_name, avatar_url, status, verified_at, last_login_at, created_at, updated_at
+               FROM user_external_accounts
+              WHERE provider = {}
+                AND connection_id = {}
+                AND status = 'active'
+                AND verified_at IS NOT NULL
+                AND external_user_id IS NOT NULL
+                AND TRIM(external_user_id) <> ''
+              ORDER BY username, id",
+            &[
+                SqlArg::Text(provider.as_str().to_string()),
+                SqlArg::Text(connection_id.to_string()),
+            ],
+        )
+        .await?;
+        rows.iter().map(row_to_external_account).collect()
+    }
+
     async fn update(&self, account: UserExternalAccount) -> AppResult<UserExternalAccount> {
         SqlRuntime::run_in_transaction(&self.datastore, "update_user_external_account", move |tx| {
             let account = account.clone();
@@ -1400,7 +1431,7 @@ mod tests {
             &store,
             &user.id,
             UiSettingsUpdate {
-                theme: UiTheme::Pride,
+                theme: UiTheme::Dark,
                 date_time_format: UiDateTimeFormat::Iso24h,
                 highlight_color: Some("#ff3366".to_string()),
                 secondary_color: Some("#2277aa".to_string()),
@@ -1431,12 +1462,30 @@ mod tests {
         .await
         .expect("upsert UI settings");
         assert_eq!(stored.user_id, user.id);
-        assert_eq!(stored.theme, UiTheme::Pride);
+        assert_eq!(stored.theme, UiTheme::Dark);
         assert_eq!(stored.date_time_format, UiDateTimeFormat::Iso24h);
         assert!(stored.hide_sponsor_button);
         assert_eq!(stored.table_columns.len(), 2);
         assert_eq!(stored.table_columns[0].column_id, "name");
         assert_eq!(stored.table_columns[1].column_id, "episodes");
+
+        // Existing databases can retain the retired value until the next save.
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            panic!("expected SQLite test store");
+        };
+        sqlx::query("UPDATE user_ui_settings SET theme = 'pride' WHERE user_id = ?")
+            .bind(&user.id)
+            .execute(pool)
+            .await
+            .expect("seed legacy theme");
+        let legacy = UserUiSettingsRepository::get_by_user_id(&store, &user.id)
+            .await
+            .expect("load legacy UI settings")
+            .expect("UI settings exist");
+        assert_eq!(legacy.theme, UiTheme::Dark);
+        assert_eq!(legacy.theme.as_str(), "dark");
+        assert_eq!(legacy.table_columns, stored.table_columns);
+        assert_eq!(legacy.highlight_color, stored.highlight_color);
 
         let replaced = UserUiSettingsRepository::upsert(
             &store,

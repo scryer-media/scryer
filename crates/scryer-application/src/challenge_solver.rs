@@ -13,8 +13,8 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 
-use crate::IndexerProxyConfigRepository;
-use scryer_domain::IndexerProxyHealthStatus;
+use crate::ProxyConfigRepository;
+use scryer_domain::ProxyHealthStatus;
 
 /// Path of the FlareSolverr-compatible solve endpoint under the proxy base URL.
 pub const SOLVER_SOLVE_PATH: &str = "/v1";
@@ -55,20 +55,37 @@ pub enum SolverErrorKind {
     MissingSolution,
 }
 
-pub fn solver_provider_name(provider: scryer_domain::IndexerProxyProviderType) -> &'static str {
+/// Reported when a proxy that only carries bytes (plain HTTP, SOCKS, or a
+/// tunnel) reaches a challenge-solver code path. Those proxies solve nothing,
+/// so this message names a routing bug rather than a service fault.
+pub const TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE: &str =
+    "transport proxies do not solve browser challenges";
+
+pub fn solver_provider_name(provider: scryer_domain::ProxyProviderType) -> &'static str {
     match provider {
-        scryer_domain::IndexerProxyProviderType::Byparr => "Byparr",
-        scryer_domain::IndexerProxyProviderType::Trawl => "Trawl",
+        scryer_domain::ProxyProviderType::Byparr => "Byparr",
+        scryer_domain::ProxyProviderType::Trawl => "Trawl",
+        scryer_domain::ProxyProviderType::Http => "HTTP proxy",
+        scryer_domain::ProxyProviderType::Http3 => "HTTP/3 CONNECT proxy",
+        scryer_domain::ProxyProviderType::Socks4 => "SOCKS4 proxy",
+        scryer_domain::ProxyProviderType::Socks5 => "SOCKS5 proxy",
+        scryer_domain::ProxyProviderType::SshTunnel => "SSH tunnel",
+        scryer_domain::ProxyProviderType::WireGuard => "WireGuard tunnel",
     }
 }
 
 pub fn solver_error_message(
-    provider: scryer_domain::IndexerProxyProviderType,
+    provider: scryer_domain::ProxyProviderType,
     kind: SolverErrorKind,
 ) -> &'static str {
-    use scryer_domain::IndexerProxyProviderType::{Byparr, Trawl};
+    use scryer_domain::ProxyProviderType::{
+        Byparr, Http, Http3, Socks4, Socks5, SshTunnel, Trawl, WireGuard,
+    };
 
     match (provider, kind) {
+        (Http | Http3 | Socks4 | Socks5 | SshTunnel | WireGuard, _) => {
+            TRANSPORT_PROXY_NOT_A_SOLVER_MESSAGE
+        }
         (Byparr, SolverErrorKind::Unreachable) => BYPARR_UNREACHABLE_MESSAGE,
         (Byparr, SolverErrorKind::Timeout) => BYPARR_TIMEOUT_MESSAGE,
         (Byparr, SolverErrorKind::Unavailable) => BYPARR_UNAVAILABLE_MESSAGE,
@@ -121,15 +138,21 @@ pub struct ChallengeSolverRequest<'a> {
 }
 
 pub fn solver_solve_request(
-    provider: scryer_domain::IndexerProxyProviderType,
+    provider: scryer_domain::ProxyProviderType,
     url: &str,
     request_timeout_seconds: u32,
 ) -> ChallengeSolverRequest<'_> {
     let max_timeout = match provider {
-        scryer_domain::IndexerProxyProviderType::Byparr => request_timeout_seconds,
-        scryer_domain::IndexerProxyProviderType::Trawl => {
-            request_timeout_seconds.saturating_mul(1_000)
-        }
+        // Transport proxies never reach a solve endpoint; seconds is the
+        // harmless reading if a caller ever gets here by mistake.
+        scryer_domain::ProxyProviderType::Byparr
+        | scryer_domain::ProxyProviderType::Http
+        | scryer_domain::ProxyProviderType::Http3
+        | scryer_domain::ProxyProviderType::Socks4
+        | scryer_domain::ProxyProviderType::Socks5
+        | scryer_domain::ProxyProviderType::SshTunnel
+        | scryer_domain::ProxyProviderType::WireGuard => request_timeout_seconds,
+        scryer_domain::ProxyProviderType::Trawl => request_timeout_seconds.saturating_mul(1_000),
     };
     ChallengeSolverRequest {
         cmd: "request.get",
@@ -163,7 +186,7 @@ pub enum ChallengeSolverParseError {
 }
 
 impl ChallengeSolverParseError {
-    pub fn message(self, provider: scryer_domain::IndexerProxyProviderType) -> &'static str {
+    pub fn message(self, provider: scryer_domain::ProxyProviderType) -> &'static str {
         match self {
             Self::Malformed => solver_error_message(provider, SolverErrorKind::Malformed),
             Self::ServiceError => solver_error_message(provider, SolverErrorKind::Unavailable),
@@ -414,7 +437,7 @@ pub fn sanitized_url_for_log(raw: &str) -> String {
 
 /// Redact credential-bearing query values from solver error text before it is
 /// logged or persisted as proxy health detail.
-pub fn sanitize_indexer_proxy_error(message: &str) -> String {
+pub fn sanitize_proxy_error(message: &str) -> String {
     let mut sanitized = message.to_string();
     for marker in [
         "apikey=", "api_key=", "token=", "passkey=", "auth=", "rsskey=", "jwt=",
@@ -576,7 +599,7 @@ impl SolverHealthLedger {
         self.record(SolverHealthEvent {
             proxy_config_id: proxy_config_id.to_string(),
             healthy: false,
-            message: Some(sanitize_indexer_proxy_error(message)),
+            message: Some(sanitize_proxy_error(message)),
             observed_at: Utc::now(),
         });
     }
@@ -598,15 +621,21 @@ impl SolverHealthLedger {
     }
 }
 
-/// Persist any pending solver-health observations. Health writes go through
-/// the dedicated repository method so they never bump `updated_at`, which
-/// doubles as the plugin client cache revision.
-pub async fn flush_solver_health(repo: &dyn IndexerProxyConfigRepository) {
+/// Persist any pending proxy observations. Health writes go through the
+/// dedicated repository method so they never bump `updated_at`, which doubles
+/// as the plugin client cache revision.
+///
+/// Two ledgers drain here, for the same reason and at the same two call sites:
+/// solver/transport health, and host keys the tunnel engine learned on first
+/// use. Neither the blocking plugin host nor the tunnel engine can reach a
+/// repository from where they observe these things.
+pub async fn flush_solver_health(repo: &dyn ProxyConfigRepository) {
+    flush_tunnel_host_key_pins(repo).await;
     for event in SolverHealthLedger::shared().drain() {
         let status = if event.healthy {
-            IndexerProxyHealthStatus::Healthy
+            ProxyHealthStatus::Healthy
         } else {
-            IndexerProxyHealthStatus::Unhealthy
+            ProxyHealthStatus::Unhealthy
         };
         let existing = match repo.get_by_id(&event.proxy_config_id).await {
             Ok(Some(existing)) => existing,
@@ -615,7 +644,7 @@ pub async fn flush_solver_health(repo: &dyn IndexerProxyConfigRepository) {
                 tracing::warn!(
                     proxy_config_id = event.proxy_config_id.as_str(),
                     error = %error,
-                    "failed to load indexer proxy config for health update"
+                    "failed to load proxy config for health update"
                 );
                 continue;
             }
@@ -638,8 +667,51 @@ pub async fn flush_solver_health(repo: &dyn IndexerProxyConfigRepository) {
             tracing::warn!(
                 proxy_config_id = event.proxy_config_id.as_str(),
                 error = %error,
-                "failed to record indexer proxy runtime health"
+                "failed to record proxy runtime health"
             );
+        }
+    }
+}
+
+/// Persist host keys the tunnel engine learned on first use.
+///
+/// `pin_host_key` deliberately does not bump `updated_at`: pinning happens
+/// immediately after the connect that just succeeded, and bumping the revision
+/// there would evict the very session that did the pinning on every first
+/// connect. A trust-on-first-use pin is not an operator edit.
+async fn flush_tunnel_host_key_pins(repo: &dyn ProxyConfigRepository) {
+    flush_tunnel_host_key_ledger(repo, crate::tunnel_proxy::TunnelHostKeyLedger::shared()).await;
+}
+
+async fn flush_tunnel_host_key_ledger(
+    repo: &dyn ProxyConfigRepository,
+    ledger: &crate::tunnel_proxy::TunnelHostKeyLedger,
+) {
+    for pin in ledger.pending() {
+        match repo
+            .pin_host_key(
+                &pin.proxy_config_id,
+                &pin.fingerprint,
+                pin.pinned_at,
+                pin.updated_at,
+            )
+            .await
+        {
+            Ok(true) => ledger.acknowledge(&pin),
+            Ok(false) => {
+                ledger.reject(&pin);
+                tracing::warn!(
+                    proxy_config_id = pin.proxy_config_id.as_str(),
+                    "rejected a stale or conflicting tunnel host key pin"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    proxy_config_id = pin.proxy_config_id.as_str(),
+                    error = %error,
+                    "failed to persist a tunnel host key pin"
+                );
+            }
         }
     }
 }
@@ -647,6 +719,132 @@ pub async fn flush_solver_health(repo: &dyn IndexerProxyConfigRepository) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{AppError, AppResult};
+    use chrono::DateTime;
+
+    struct FailingPinRepository {
+        row: std::sync::Mutex<scryer_domain::ProxyConfig>,
+        ledger: std::sync::Arc<crate::tunnel_proxy::TunnelHostKeyLedger>,
+        fail_write: std::sync::atomic::AtomicBool,
+        cancel_write: bool,
+    }
+
+    #[async_trait::async_trait]
+    impl ProxyConfigRepository for FailingPinRepository {
+        async fn get_by_id(&self, _: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+            Ok(Some(self.row.lock().unwrap().clone()))
+        }
+        async fn pin_host_key(
+            &self,
+            _: &str,
+            fingerprint: &str,
+            pinned_at: DateTime<Utc>,
+            updated_at: DateTime<Utc>,
+        ) -> AppResult<bool> {
+            assert!(
+                self.ledger
+                    .record("proxy-tunnel", updated_at, "SHA256:later")
+                    .is_err()
+            );
+            if self
+                .fail_write
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(AppError::Repository("injected write failure".into()));
+            }
+            if self.cancel_write {
+                std::future::pending::<()>().await;
+            }
+            let mut row = self.row.lock().unwrap();
+            row.host_key_fingerprint = Some(fingerprint.into());
+            row.host_key_pinned_at = Some(pinned_at);
+            Ok(true)
+        }
+        async fn list(
+            &self,
+            _: Option<scryer_domain::ProxyProviderType>,
+        ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
+            unreachable!()
+        }
+        async fn create(
+            &self,
+            _: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
+            unreachable!()
+        }
+        async fn update(
+            &self,
+            _: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
+            unreachable!()
+        }
+        async fn delete(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn record_health(
+            &self,
+            _: &str,
+            _: scryer_domain::ProxyHealthStatus,
+            _: Option<String>,
+            _: Option<DateTime<Utc>>,
+        ) -> AppResult<()> {
+            unreachable!()
+        }
+        async fn clear_host_key(&self, _: &str) -> AppResult<()> {
+            unreachable!()
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_host_key_flush_retries_the_original_observation_and_timestamp() {
+        let ledger = std::sync::Arc::new(crate::tunnel_proxy::TunnelHostKeyLedger::default());
+        let config = crate::tunnel_proxy::tests::tunnel_config();
+        ledger.register(&config).unwrap();
+        ledger
+            .record(&config.id, config.updated_at, "SHA256:first")
+            .unwrap();
+        let first = ledger.pending().pop().unwrap();
+        let repo = FailingPinRepository {
+            row: std::sync::Mutex::new(config),
+            ledger: ledger.clone(),
+            fail_write: true.into(),
+            cancel_write: false,
+        };
+        flush_tunnel_host_key_ledger(&repo, &ledger).await;
+        assert_eq!(ledger.pending(), vec![first.clone()]);
+        assert!(repo.row.lock().unwrap().host_key_fingerprint.is_none());
+        flush_tunnel_host_key_ledger(&repo, &ledger).await;
+        assert!(ledger.pending().is_empty());
+        let row = repo.row.lock().unwrap();
+        assert_eq!(row.host_key_fingerprint.as_deref(), Some("SHA256:first"));
+        assert_eq!(row.host_key_pinned_at, Some(first.pinned_at));
+    }
+
+    #[tokio::test]
+    async fn cancelled_host_key_flush_preserves_the_original_pending_pin() {
+        let ledger = std::sync::Arc::new(crate::tunnel_proxy::TunnelHostKeyLedger::default());
+        let config = crate::tunnel_proxy::tests::tunnel_config();
+        ledger.register(&config).unwrap();
+        ledger
+            .record(&config.id, config.updated_at, "SHA256:first")
+            .unwrap();
+        let first = ledger.pending();
+        let repo = FailingPinRepository {
+            row: std::sync::Mutex::new(config),
+            ledger: ledger.clone(),
+            fail_write: false.into(),
+            cancel_write: true,
+        };
+        assert!(
+            tokio::time::timeout(
+                std::time::Duration::from_millis(10),
+                flush_tunnel_host_key_ledger(&repo, &ledger)
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(ledger.pending(), first);
+    }
 
     fn solution_from_json(value: serde_json::Value) -> ChallengeSolverSolution {
         serde_json::from_value(value).expect("solution should deserialize")
@@ -655,13 +853,13 @@ mod tests {
     #[test]
     fn solve_requests_serialize_provider_timeout_units() {
         let byparr = serde_json::to_value(solver_solve_request(
-            scryer_domain::IndexerProxyProviderType::Byparr,
+            scryer_domain::ProxyProviderType::Byparr,
             "https://example.com/",
             60,
         ))
         .expect("Byparr payload should serialize");
         let trawl = serde_json::to_value(solver_solve_request(
-            scryer_domain::IndexerProxyProviderType::Trawl,
+            scryer_domain::ProxyProviderType::Trawl,
             "https://example.com/",
             60,
         ))
@@ -978,11 +1176,11 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_indexer_proxy_error_redacts_sensitive_query_values_once() {
+    fn sanitize_proxy_error_redacts_sensitive_query_values_once() {
         let message =
             "Byparr failed for https://example.invalid/api?t=search&apikey=abc123&token=def456";
 
-        let sanitized = sanitize_indexer_proxy_error(message);
+        let sanitized = sanitize_proxy_error(message);
 
         assert_eq!(
             sanitized,
@@ -991,10 +1189,10 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_indexer_proxy_error_handles_all_sensitive_markers() {
+    fn sanitize_proxy_error_handles_all_sensitive_markers() {
         let message = "api_key=a passkey=b auth=c rsskey=d jwt=e apikey=f";
 
-        let sanitized = sanitize_indexer_proxy_error(message);
+        let sanitized = sanitize_proxy_error(message);
 
         assert_eq!(
             sanitized,
@@ -1003,10 +1201,10 @@ mod tests {
     }
 
     #[test]
-    fn sanitize_indexer_proxy_error_does_not_loop_on_already_redacted_value() {
+    fn sanitize_proxy_error_does_not_loop_on_already_redacted_value() {
         let message = "request failed: apikey=REDACTED&token=still-secret";
 
-        let sanitized = sanitize_indexer_proxy_error(message);
+        let sanitized = sanitize_proxy_error(message);
 
         assert_eq!(sanitized, "request failed: apikey=REDACTED&token=REDACTED");
     }

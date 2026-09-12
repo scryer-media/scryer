@@ -12,6 +12,10 @@ struct EpisodeDeleteFixture {
 }
 
 async fn seed_episode_delete_fixture() -> EpisodeDeleteFixture {
+    seed_episode_delete_fixture_for(MediaFacet::Series).await
+}
+
+async fn seed_episode_delete_fixture_for(facet: MediaFacet) -> EpisodeDeleteFixture {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let root = tempdir.path().join("series");
     std::fs::create_dir_all(root.join("Emberfall/Season 01")).expect("create season folder");
@@ -29,7 +33,7 @@ async fn seed_episode_delete_fixture() -> EpisodeDeleteFixture {
 
     app.update_media_settings(
         &admin,
-        MediaFacet::Series,
+        facet.clone(),
         empty_update_media_settings_with_roots(vec![build_root_folder_entry(&root, true)]),
     )
     .await
@@ -40,7 +44,7 @@ async fn seed_episode_delete_fixture() -> EpisodeDeleteFixture {
             &admin,
             NewTitle {
                 name: "Emberfall".into(),
-                facet: MediaFacet::Series,
+                facet,
                 monitored: true,
                 tags: vec![],
                 external_ids: vec![],
@@ -528,6 +532,163 @@ async fn delete_episode_files_removes_selected_files_from_disk_and_catalog() {
     );
 }
 
+async fn episode_is_monitored(app: &AppUseCase, episode_id: &str) -> bool {
+    app.services
+        .catalog
+        .shows
+        .get_episode_by_id(episode_id)
+        .await
+        .expect("read episode")
+        .expect("episode row")
+        .monitored
+}
+
+async fn collection_is_monitored(app: &AppUseCase, collection_id: &str) -> bool {
+    app.services
+        .catalog
+        .shows
+        .get_collection_by_id(collection_id)
+        .await
+        .expect("read collection")
+        .expect("collection row")
+        .monitored
+}
+
+fn summary_ids(summary: &serde_json::Value, key: &str) -> Vec<String> {
+    let mut ids = summary[key]
+        .as_array()
+        .unwrap_or_else(|| panic!("{key} should be an array: {summary:?}"))
+        .iter()
+        .map(|value| value.as_str().expect("id").to_string())
+        .collect::<Vec<_>>();
+    ids.sort();
+    ids
+}
+
+/// Checking a whole season and deleting its files leaves nothing under that
+/// season monitored, so the season stops being monitored with its episodes.
+#[tokio::test]
+async fn delete_episode_files_unmonitors_deleted_episodes_and_their_drained_season() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    // Seasons 0..=2, two episodes each. Season 1 owns episodes 2 and 3.
+    let season = &setup.seasons[1];
+    let episode_ids = vec![setup.episodes[2].id.clone(), setup.episodes[3].id.clone()];
+
+    let preview = f
+        .app
+        .preview_delete_episode_files(&f.admin, &f.title_id, &episode_ids)
+        .await
+        .expect("preview");
+    let accepted = f
+        .app
+        .start_delete_episode_files_job(
+            &f.admin,
+            &f.title_id,
+            &episode_ids,
+            true,
+            Some(DeleteExecutionConfirmation {
+                preview_fingerprint: preview.preview.fingerprint.clone(),
+                typed_confirmation: None,
+            }),
+        )
+        .await
+        .expect("start episode file deletion job");
+    let run = f.wait_for_run(&accepted.job_run.id).await;
+    assert_eq!(run.status, JobRunStatus::Completed, "run: {run:?}");
+
+    for episode_id in &episode_ids {
+        assert!(
+            !episode_is_monitored(&f.app, episode_id).await,
+            "deleted episode {episode_id} should be unmonitored"
+        );
+    }
+    assert!(
+        !collection_is_monitored(&f.app, &season.id).await,
+        "a season with no monitored episodes left should be unmonitored"
+    );
+
+    // Untouched seasons and their episodes keep monitoring.
+    for index in [0usize, 1, 4, 5] {
+        assert!(
+            episode_is_monitored(&f.app, &setup.episodes[index].id).await,
+            "episode {index} was not deleted and must stay monitored"
+        );
+    }
+    for index in [0usize, 2] {
+        assert!(
+            collection_is_monitored(&f.app, &setup.seasons[index].id).await,
+            "season {index} was not deleted and must stay monitored"
+        );
+    }
+
+    let summary = f.run_summary(&run);
+    let mut expected_episodes = episode_ids.clone();
+    expected_episodes.sort();
+    assert_eq!(
+        summary_ids(&summary, "unmonitoredEpisodeIds"),
+        expected_episodes
+    );
+    assert_eq!(
+        summary_ids(&summary, "unmonitoredCollectionIds"),
+        vec![season.id.clone()]
+    );
+}
+
+/// A season that still has an episode with a file stays monitored: only the
+/// episodes whose files actually went away are unmonitored.
+#[tokio::test]
+async fn delete_episode_files_keeps_a_partly_deleted_season_monitored() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    let season = &setup.seasons[2];
+    let deleted = setup.episodes[4].id.clone();
+    let kept = setup.episodes[5].id.clone();
+    let episode_ids = vec![deleted.clone()];
+
+    let preview = f
+        .app
+        .preview_delete_episode_files(&f.admin, &f.title_id, &episode_ids)
+        .await
+        .expect("preview");
+    let accepted = f
+        .app
+        .start_delete_episode_files_job(
+            &f.admin,
+            &f.title_id,
+            &episode_ids,
+            true,
+            Some(DeleteExecutionConfirmation {
+                preview_fingerprint: preview.preview.fingerprint.clone(),
+                typed_confirmation: None,
+            }),
+        )
+        .await
+        .expect("start episode file deletion job");
+    let run = f.wait_for_run(&accepted.job_run.id).await;
+    assert_eq!(run.status, JobRunStatus::Completed, "run: {run:?}");
+
+    assert!(!episode_is_monitored(&f.app, &deleted).await);
+    assert!(
+        episode_is_monitored(&f.app, &kept).await,
+        "the sibling episode still has its file and must stay monitored"
+    );
+    assert!(
+        collection_is_monitored(&f.app, &season.id).await,
+        "a season with a monitored episode left must stay monitored"
+    );
+
+    let summary = f.run_summary(&run);
+    assert_eq!(
+        summary_ids(&summary, "unmonitoredEpisodeIds"),
+        vec![deleted]
+    );
+    assert!(
+        summary_ids(&summary, "unmonitoredCollectionIds").is_empty(),
+        "no season should be unmonitored: {summary:?}"
+    );
+}
+
 #[tokio::test]
 async fn delete_episode_files_records_per_file_failures_and_keeps_going() {
     let fixture = seed_episode_delete_fixture().await;
@@ -603,4 +764,826 @@ async fn delete_episode_files_records_per_file_failures_and_keeps_going() {
     assert_eq!(failed[0]["fileId"].as_str(), Some(outside_root.as_str()));
 
     assert_eq!(fixture.remaining_file_ids().await, vec![outside_root]);
+}
+
+// Maintainerr af02e66c: explicit scope, fresh reads, confirmed unmonitoring,
+// independent files, and partial failure evidence.
+struct ScopedMaintenanceFixture {
+    fixture: EpisodeDeleteFixture,
+    evaluation: Arc<crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo>,
+    shows: Arc<MockShowRepo>,
+    seasons: Vec<Collection>,
+    episodes: Vec<Episode>,
+}
+
+async fn scoped_maintenance_fixture() -> ScopedMaintenanceFixture {
+    scoped_maintenance_fixture_for(MediaFacet::Series).await
+}
+
+async fn scoped_maintenance_fixture_for(facet: MediaFacet) -> ScopedMaintenanceFixture {
+    use crate::lib_tests::maintenance_evaluation::InMemoryMaintenanceEvaluationRepo;
+    use crate::lib_tests::maintenance_rules::InMemoryMaintenanceRuleRepo;
+    let mut fixture = seed_episode_delete_fixture_for(facet).await;
+    let evaluation = Arc::new(InMemoryMaintenanceEvaluationRepo::default());
+    let shows = Arc::new(MockShowRepo::default());
+    fixture.app = fixture.app.with_test_overrides(|services| {
+        services
+            .with_shows(shows.clone())
+            .with_maintenance_rule_set_store(Arc::new(InMemoryMaintenanceRuleRepo::default()))
+            .with_maintenance_evaluation_store(evaluation.clone())
+    });
+    let mut seasons = Vec::new();
+    let mut episodes = Vec::new();
+    for season in 0..=2 {
+        let collection = fixture
+            .app
+            .create_collection(
+                &fixture.admin,
+                fixture.title_id.clone(),
+                if season == 0 { "specials" } else { "season" }.into(),
+                season.to_string(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .expect("season");
+        for number in 1..=2 {
+            let episode = fixture
+                .app
+                .create_episode(
+                    &fixture.admin,
+                    fixture.title_id.clone(),
+                    Some(collection.id.clone()),
+                    "standard".into(),
+                    Some(number.to_string()),
+                    Some(season.to_string()),
+                    None,
+                    Some(format!("Episode {number}")),
+                    Some("2020-01-01".into()),
+                    None,
+                    false,
+                    false,
+                )
+                .await
+                .expect("episode");
+            fixture
+                .add_episode_file(
+                    &format!(
+                        "Emberfall/Season {season:02}/Emberfall - S{season:02}E{number:02}.mkv"
+                    ),
+                    &episode.id,
+                )
+                .await;
+            episodes.push(episode);
+        }
+        seasons.push(collection);
+    }
+    ScopedMaintenanceFixture {
+        fixture,
+        evaluation,
+        shows,
+        seasons,
+        episodes,
+    }
+}
+
+impl ScopedMaintenanceFixture {
+    async fn rule(
+        &self,
+        scope: scryer_domain::MaintenanceRuleSubjectKind,
+        matcher: String,
+        grace: i64,
+    ) -> String {
+        use crate::maintenance_rules::*;
+        let app = &self.fixture.app;
+        let actor = &self.fixture.admin;
+        let rule = app
+            .create_maintenance_rule_set(
+                actor,
+                MaintenanceRuleDraft {
+                    subject_kind: scope,
+                    name: "Scoped deletion".into(),
+                    description: String::new(),
+                    rego_source: matcher,
+                    action_definition:
+                        crate::maintenance_rules::MaintenanceActionDefinition::Legacy(
+                            MaintenanceActionSpec::new(
+                                MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+                            ),
+                        ),
+                    grace_days: grace,
+                    storage_root_id: None,
+                    library_ids: vec![],
+                    evaluation_mode: None,
+                },
+            )
+            .await
+            .expect("create scoped rule");
+        assert!(!rule.rule_set.enabled);
+        assert_eq!(
+            rule.rule_set.effect_arming,
+            scryer_domain::MaintenanceEffectArming::None
+        );
+        app.set_maintenance_rule_evaluation_mode(
+            actor,
+            &rule.rule_set.id,
+            scryer_domain::MaintenanceEvaluationMode::Observe,
+        )
+        .await
+        .expect("observe");
+        app.set_maintenance_instance_gates(
+            actor,
+            MaintenanceGatesUpdate {
+                evaluation_enabled: Some(true),
+                destructive_effects_enabled: Some(true),
+                result_display_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("gates");
+        app.run_maintenance_rule_evaluation_job()
+            .await
+            .expect("evaluate");
+        let count = self
+            .evaluation
+            .all_candidates()
+            .await
+            .iter()
+            .filter(|candidate| {
+                candidate.rule_set_id == rule.rule_set.id && !candidate.state.is_terminal()
+            })
+            .count();
+        app.set_maintenance_rule_arming(
+            actor,
+            &rule.rule_set.id,
+            scryer_domain::MaintenanceEffectArming::Destructive,
+            Some(count as i64),
+        )
+        .await
+        .expect("arm");
+        rule.rule_set.id
+    }
+}
+
+#[tokio::test]
+async fn maintenance_scope_episode_deletion_preserves_siblings_and_records() {
+    use crate::maintenance_rules::{
+        MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewSelection,
+    };
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    let target = &setup.episodes[3]; // S01E02, never S02E02.
+    let extra = f
+        .add_episode_file("Emberfall/Season 01/Emberfall - S01E02.v2.mkv", &target.id)
+        .await;
+    let rule = setup.rule(scryer_domain::MaintenanceRuleSubjectKind::Episode,
+        format!("match if {{ input.subject.episode_id == {:?}; input.facts.monitored; input.facts.has_file }}", target.id), 0).await;
+    let preview = f
+        .app
+        .preview_maintenance_rule(
+            &f.admin,
+            MaintenancePreviewRequest {
+                matcher: MaintenancePreviewMatcher::Stored { rule_set_id: rule },
+                selection: MaintenancePreviewSelection::Titles(vec![f.title_id.clone()]),
+            },
+        )
+        .await
+        .expect("preview");
+    let matched = preview
+        .titles
+        .iter()
+        .find(|row| row.subject_id == target.id)
+        .expect("target preview");
+    assert_eq!(matched.file_count, 2);
+    assert_eq!(matched.title_id, f.title_id);
+    let report = f
+        .app
+        .run_lifecycle_action_handling_job()
+        .await
+        .expect("execute");
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert!(!f.remaining_file_ids().await.contains(&extra));
+    assert_eq!(f.remaining_file_ids().await.len(), 5);
+    assert!(
+        f.root
+            .join("Emberfall/Season 02/Emberfall - S02E02.mkv")
+            .exists()
+    );
+    assert!(
+        f.root
+            .join("Emberfall/Season 01/Emberfall - S01E01.mkv")
+            .exists()
+    );
+    assert!(
+        f.app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&f.title_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .monitored
+    );
+    assert_eq!(setup.shows.episodes.lock().await.len(), 6);
+    assert_eq!(setup.shows.collections.lock().await.len(), 3);
+    assert!(
+        !f.app
+            .services
+            .catalog
+            .shows
+            .get_episode_by_id(&target.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .monitored
+    );
+    let runs = setup.evaluation.all_action_runs().await;
+    assert_eq!(runs.len(), 1);
+    let detail: serde_json::Value = serde_json::from_str(&runs[0].detail).unwrap();
+    assert_eq!(detail["files"].as_array().unwrap().len(), 2);
+    assert!(
+        detail["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|file| file["completed"] == true)
+    );
+}
+
+#[tokio::test]
+async fn maintenance_scope_season_deletion_preserves_other_seasons_and_unmonitors_future() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup.shows.episodes.lock().await[3].air_date = Some("2099-01-01".into());
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            "match if { input.subject.season_number == 1; input.facts.monitored }".into(),
+            0,
+        )
+        .await;
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(f.remaining_file_ids().await.len(), 4);
+    let episodes = setup.shows.episodes.lock().await;
+    assert!(
+        episodes
+            .iter()
+            .filter(|episode| episode.season_number.as_deref() != Some("1"))
+            .all(|episode| episode.monitored)
+    );
+    assert!(
+        episodes
+            .iter()
+            .filter(|episode| episode.season_number.as_deref() == Some("1"))
+            .all(|episode| !episode.monitored)
+    );
+    assert!(
+        f.root
+            .join("Emberfall/Season 02/Emberfall - S02E02.mkv")
+            .exists()
+    );
+    assert!(f.root.join("Emberfall/Season 01").is_dir());
+    assert_eq!(setup.shows.collections.lock().await.len(), 3);
+}
+
+#[tokio::test]
+async fn maintenance_scope_specials_zero_and_inherited_exclusions() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    let rule = setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            "match := true".into(),
+            0,
+        )
+        .await;
+    f.app
+        .exclude_maintenance_scoped_subject(
+            &f.admin,
+            &f.title_id,
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            &setup.seasons[0].id,
+            Some(rule),
+            None,
+        )
+        .await
+        .unwrap();
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 4, "{report:?}");
+    assert_eq!(f.remaining_file_ids().await.len(), 2);
+    assert!(
+        setup.shows.episodes.lock().await[..2]
+            .iter()
+            .all(|episode| episode.monitored)
+    );
+}
+
+#[tokio::test]
+async fn maintenance_scope_shared_episode_file_is_held_before_unmonitoring() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    let mut shared = f.media_files.store.lock().await[2].clone();
+    shared.episode_id = Some(setup.episodes[4].id.clone());
+    f.media_files.store.lock().await.push(shared);
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            format!(
+                "match if {{ input.subject.episode_id == {:?} }}",
+                setup.episodes[2].id
+            ),
+            0,
+        )
+        .await;
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 0);
+    assert_eq!(report.held, 1, "{report:?}");
+    assert!(setup.shows.episodes.lock().await[2].monitored);
+    assert!(
+        f.root
+            .join("Emberfall/Season 01/Emberfall - S01E01.mkv")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn maintenance_scope_missing_episode_never_falls_back_to_show() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            format!(
+                "match if {{ input.subject.episode_id == {:?} }}",
+                setup.episodes[3].id
+            ),
+            0,
+        )
+        .await;
+    setup
+        .shows
+        .episodes
+        .lock()
+        .await
+        .retain(|episode| episode.id != setup.episodes[3].id);
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 0);
+    assert_eq!(f.remaining_file_ids().await.len(), 6);
+    assert!(
+        f.app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&f.title_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn maintenance_scope_failed_unmonitor_preserves_files_and_retry_rechecks_them() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            format!(
+                "match if {{ input.subject.episode_id == {:?}; input.facts.monitored }}",
+                setup.episodes[3].id
+            ),
+            0,
+        )
+        .await;
+    *setup.shows.fail_monitoring.lock().await = true;
+    let first = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(first.executed, 0);
+    assert_eq!(f.remaining_file_ids().await.len(), 6);
+    assert!(setup.shows.episodes.lock().await[3].monitored);
+    let runs = setup.evaluation.all_action_runs().await;
+    assert!(
+        runs[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("monitoring failure")
+    );
+    *setup.shows.fail_monitoring.lock().await = false;
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(f.remaining_file_ids().await.len(), 5);
+}
+
+#[tokio::test]
+async fn maintenance_scope_changed_file_is_preserved_on_retry() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            format!(
+                "match if {{ input.subject.episode_id == {:?} }}",
+                setup.episodes[3].id
+            ),
+            0,
+        )
+        .await;
+    *setup.shows.fail_monitoring.lock().await = true;
+    f.app.run_lifecycle_action_handling_job().await.unwrap();
+    *setup.shows.fail_monitoring.lock().await = false;
+    append_maintenance_safety_holds(&setup).await;
+    let path = f.root.join("Emberfall/Season 01/Emberfall - S01E02.mkv");
+    std::fs::write(&path, b"new replacement version").unwrap();
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 0);
+    assert_eq!(std::fs::read(path).unwrap(), b"new replacement version");
+    let runs = setup.evaluation.all_action_runs().await;
+    assert!(runs.iter().any(|run| run.detail.contains("file changed")));
+}
+
+async fn append_maintenance_safety_holds(setup: &ScopedMaintenanceFixture) {
+    use crate::LifecycleActionRunRepository;
+    let checkpoint_run = setup.evaluation.all_action_runs().await.remove(0);
+    for index in 0..101 {
+        let mut held = checkpoint_run.clone();
+        held.id = format!("later-hold-{index}");
+        held.idempotency_key = format!("hold:{}", held.id);
+        held.status = scryer_domain::LifecycleActionRunStatus::Held;
+        held.hold_reason = Some("active_playback".into());
+        held.error = None;
+        held.detail = "{}".into();
+        held.started_at = checkpoint_run.started_at + chrono::Duration::microseconds(index + 1);
+        held.finished_at = Some(held.started_at);
+        setup.evaluation.start_action_run(&held).await.unwrap();
+    }
+    assert_eq!(
+        setup.evaluation.all_candidates().await[0].action_attempts,
+        1,
+        "safety holds do not spend mutation attempts"
+    );
+}
+
+#[tokio::test]
+async fn maintenance_scope_partial_preview_failure_records_each_file_and_preserves_shared_sidecars()
+{
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    let outside = tempfile::tempdir().unwrap();
+    let outside_path = outside.path().join("outside.mkv");
+    std::fs::write(&outside_path, b"outside").unwrap();
+    let rejected = f
+        .insert_media_file_row(&outside_path.to_string_lossy(), Some(&setup.episodes[3].id))
+        .await;
+    let sidecar = f.root.join("Emberfall/Season 01/season.nfo");
+    std::fs::write(&sidecar, b"shared season metadata").unwrap();
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            format!(
+                "match if {{ input.subject.episode_id == {:?} }}",
+                setup.episodes[3].id
+            ),
+            0,
+        )
+        .await;
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 0);
+    assert!(outside_path.exists());
+    assert!(sidecar.exists());
+    assert!(
+        !f.root
+            .join("Emberfall/Season 01/Emberfall - S01E02.mkv")
+            .exists()
+    );
+    assert!(f.remaining_file_ids().await.contains(&rejected));
+    let runs = setup.evaluation.all_action_runs().await;
+    let detail: serde_json::Value = serde_json::from_str(&runs[0].detail).unwrap();
+    let outcomes = detail["files"].as_array().unwrap();
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|file| file["completed"] == true)
+            .count(),
+        1
+    );
+    assert_eq!(
+        outcomes
+            .iter()
+            .filter(|file| file["error"].is_string())
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn maintenance_scope_crash_after_unmonitor_and_disk_removal_resumes_catalog_cleanup() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup.rule(scryer_domain::MaintenanceRuleSubjectKind::Episode,
+        format!("match if {{ input.subject.episode_id == {:?}; input.facts.monitored; input.facts.has_file }}", setup.episodes[3].id), 0).await;
+    *setup.shows.fail_monitoring.lock().await = true;
+    f.app.run_lifecycle_action_handling_job().await.unwrap();
+    *setup.shows.fail_monitoring.lock().await = false;
+    f.app
+        .set_episode_monitored(&f.admin, &setup.episodes[3].id, false)
+        .await
+        .unwrap();
+    // Crash window: the approved video was removed, but its catalog row and
+    // completion flag were not persisted. The next lease uses the saved plan.
+    std::fs::remove_file(f.root.join("Emberfall/Season 01/Emberfall - S01E02.mkv")).unwrap();
+    let candidate = setup.evaluation.all_candidates().await.remove(0);
+    append_maintenance_safety_holds(&setup).await;
+    setup
+        .evaluation
+        .strand_as_executing(&candidate.id, Utc::now() - chrono::Duration::hours(2))
+        .await;
+    f.app.run_maintenance_rule_evaluation_job().await.unwrap();
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(f.remaining_file_ids().await.len(), 5);
+    assert_eq!(setup.evaluation.all_candidates().await.len(), 1);
+}
+
+#[tokio::test]
+async fn maintenance_scope_preview_targets_are_exact_and_sibling_grace_is_independent() {
+    use crate::maintenance_rules::{
+        MaintenancePreviewMatcher, MaintenancePreviewRequest, MaintenancePreviewSelection,
+    };
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup.shows.episodes.lock().await[3].monitored = false;
+    let rule = setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            "match if { input.subject.season_number == 1; input.facts.monitored }".into(),
+            7,
+        )
+        .await;
+    let first = setup.evaluation.all_candidates().await.remove(0);
+    setup.shows.episodes.lock().await[3].monitored = true;
+    f.app.run_maintenance_rule_evaluation_job().await.unwrap();
+    let rows = setup.evaluation.all_candidates().await;
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        rows.iter()
+            .find(|row| row.id == first.id)
+            .unwrap()
+            .first_matched_at,
+        first.first_matched_at
+    );
+    assert_eq!(
+        rows.iter().find(|row| row.id == first.id).unwrap().due_at,
+        first.due_at
+    );
+    let sibling = rows.iter().find(|row| row.id != first.id).unwrap();
+    assert_eq!(sibling.match_generation, 1);
+    assert!(sibling.first_matched_at > first.first_matched_at);
+    let preview = f
+        .app
+        .preview_maintenance_rule(
+            &f.admin,
+            MaintenancePreviewRequest {
+                matcher: MaintenancePreviewMatcher::Stored {
+                    rule_set_id: rule.clone(),
+                },
+                selection: MaintenancePreviewSelection::Subjects {
+                    title_ids: vec![f.title_id.clone()],
+                    subject_ids: vec![setup.episodes[3].id.clone()],
+                },
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(preview.titles.len(), 1);
+    assert_eq!(preview.titles[0].subject_id, setup.episodes[3].id);
+    assert_eq!(preview.titles[0].due_at, Some(sibling.due_at));
+    assert!(!preview.titles[0].due_at_is_estimate);
+    f.app
+        .exclude_maintenance_scoped_subject(
+            &f.admin,
+            &f.title_id,
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            &setup.seasons[1].id,
+            Some(rule.clone()),
+            None,
+        )
+        .await
+        .unwrap();
+    let excluded = f
+        .app
+        .preview_maintenance_rule(
+            &f.admin,
+            MaintenancePreviewRequest {
+                matcher: MaintenancePreviewMatcher::Stored {
+                    rule_set_id: rule.clone(),
+                },
+                selection: MaintenancePreviewSelection::Subjects {
+                    title_ids: vec![f.title_id.clone()],
+                    subject_ids: vec![setup.episodes[3].id.clone()],
+                },
+            },
+        )
+        .await
+        .unwrap();
+    assert!(excluded.titles[0].excluded);
+    assert!(excluded.titles[0].due_at.is_none());
+    let missing = f
+        .app
+        .preview_maintenance_rule(
+            &f.admin,
+            MaintenancePreviewRequest {
+                matcher: MaintenancePreviewMatcher::Stored { rule_set_id: rule },
+                selection: MaintenancePreviewSelection::Subjects {
+                    title_ids: vec![f.title_id.clone()],
+                    subject_ids: vec!["missing".into()],
+                },
+            },
+        )
+        .await;
+    assert!(missing.is_err());
+}
+
+#[tokio::test]
+async fn maintenance_scope_anime_specials_and_missing_files_keep_parent_records() {
+    let setup = scoped_maintenance_fixture_for(MediaFacet::Anime).await;
+    let f = &setup.fixture;
+    setup.shows.episodes.lock().await[0].absolute_number = Some("100".into());
+    std::fs::remove_file(f.root.join("Emberfall/Season 00/Emberfall - S00E01.mkv")).unwrap();
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            "match if { input.subject.season_number == 0 }".into(),
+            0,
+        )
+        .await;
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 1, "{report:?}");
+    assert_eq!(f.remaining_file_ids().await.len(), 4);
+    assert_eq!(setup.shows.episodes.lock().await.len(), 6);
+    assert_eq!(setup.shows.collections.lock().await.len(), 3);
+    assert!(
+        f.app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&f.title_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        f.root
+            .join("Emberfall/Season 01/Emberfall - S01E02.mkv")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn maintenance_scope_season_failed_propagation_preserves_every_file() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            "match if { input.subject.season_number == 1 }".into(),
+            0,
+        )
+        .await;
+    *setup.shows.fail_monitoring.lock().await = true;
+    let report = f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(report.executed, 0);
+    assert_eq!(f.remaining_file_ids().await.len(), 6);
+    assert!(
+        setup.shows.episodes.lock().await[2..4]
+            .iter()
+            .all(|episode| episode.monitored)
+    );
+    assert!(
+        f.root
+            .join("Emberfall/Season 01/Emberfall - S01E02.mkv")
+            .exists()
+    );
+}
+
+#[tokio::test]
+async fn maintenance_scope_overlapping_episode_and_season_rules_preserve_other_seasons() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Episode,
+            format!(
+                "match if {{ input.subject.episode_id == {:?}; input.facts.monitored }}",
+                setup.episodes[3].id
+            ),
+            0,
+        )
+        .await;
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            "match if { input.subject.season_number == 1; input.facts.monitored }".into(),
+            0,
+        )
+        .await;
+    f.app.run_lifecycle_action_handling_job().await.unwrap();
+    assert_eq!(f.remaining_file_ids().await.len(), 4);
+    assert!(
+        f.root
+            .join("Emberfall/Season 02/Emberfall - S02E02.mkv")
+            .exists()
+    );
+    assert!(
+        f.app
+            .services
+            .catalog
+            .titles
+            .get_by_id(&f.title_id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let completed: Vec<String> = setup
+        .evaluation
+        .all_action_runs()
+        .await
+        .into_iter()
+        .flat_map(|run| {
+            let detail: serde_json::Value = serde_json::from_str(&run.detail).unwrap();
+            detail["files"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|file| file["completed"] == true)
+                .map(|file| file["file_id"].as_str().unwrap().to_owned())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert_eq!(completed.len(), 2);
+    assert_eq!(completed.iter().collect::<HashSet<_>>().len(), 2);
+}
+
+#[tokio::test]
+async fn maintenance_scope_newly_discovered_future_episodes_inherit_unmonitored_season() {
+    let setup = scoped_maintenance_fixture().await;
+    let f = &setup.fixture;
+    setup
+        .rule(
+            scryer_domain::MaintenanceRuleSubjectKind::Season,
+            "match if { input.subject.season_number == 1 }".into(),
+            0,
+        )
+        .await;
+    assert_eq!(
+        f.app
+            .run_lifecycle_action_handling_job()
+            .await
+            .unwrap()
+            .executed,
+        1
+    );
+    let title = f
+        .app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&f.title_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let seasons = vec![SeasonMetadata {
+        tvdb_id: 101,
+        number: 1,
+        label: "Season 1".into(),
+        episode_type: "official".into(),
+    }];
+    let episodes = vec![EpisodeMetadata {
+        tvdb_id: 10103,
+        episode_number: 3,
+        name: "Future episode".into(),
+        aired: "2099-01-01".into(),
+        runtime_minutes: 24,
+        is_filler: false,
+        is_recap: false,
+        overview: String::new(),
+        absolute_number: "3".into(),
+        season_number: 1,
+        image_url: String::new(),
+    }];
+    f.app
+        .create_series_seasons_and_episodes(&title, &seasons, &episodes, &[], &[])
+        .await;
+    let episodes = setup.shows.episodes.lock().await;
+    let future = episodes
+        .iter()
+        .find(|episode| episode.tvdb_id.as_deref() == Some("10103"))
+        .expect("new episode");
+    assert!(!future.monitored);
+    assert_eq!(future.collection_id.as_ref(), Some(&setup.seasons[1].id));
+    assert!(title.monitored);
 }

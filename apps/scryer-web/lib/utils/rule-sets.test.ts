@@ -50,12 +50,21 @@ test("create input round-trips enabled and omits managed metadata", () => {
   assert.equal(Object.hasOwn(input, "managedKey"), false);
 });
 
+test("community copies format only the draft and preserve source until explicitly saved", () => {
+  const record = { ...managedRule, regoSource: 'score_entry["bonus"] := 200 if { input.release.is_remux; true }' };
+  const original = structuredClone(record);
+  const draft = copyRuleSetDraft(record);
+  assert.equal(draft.regoSource, 'score_entry["bonus"] := 200 if {\n  input.release.is_remux\n  true\n}');
+  assert.deepEqual(record, original);
+  assert.equal(createRuleSetInput(draft).regoSource, draft.regoSource);
+});
+
 test("managed rules remain guarded from user-owned edit and delete actions", () => {
   assert.equal(isUserOwnedRuleSet(managedRule), false);
   assert.equal(isUserOwnedRuleSet({ ...managedRule, isManaged: false }), true);
 });
 
-test("rule input reference renders release guide facts as a string array", () => {
+test("rule input reference exposes parser tokens and retires guide facts", () => {
   const releaseSection = ruleInputContract.sections.find(
     (section) => section.path === "input.release",
   );
@@ -63,9 +72,10 @@ test("rule input reference renders release guide facts as a string array", () =>
     (field) => field.field === "guide_facts",
   );
 
-  assert.deepEqual(guideFacts, {
-    field: "guide_facts",
+  assert.equal(guideFacts, undefined);
+  assert.deepEqual(releaseSection?.fields.find((field) => field.field === "normalized_tokens"), {
+    field: "normalized_tokens",
     type: "string[]",
-    descKey: "settings.refReleaseGuideFacts",
+    descKey: "settings.refReleaseNormalizedTokens",
   });
 });

@@ -14,6 +14,34 @@ query GetSeries($id: String!, $includeEpisodes: Boolean!, $language: String!) {
       poster_url
       original_language
       country
+      genres
+      content_ratings {
+        country
+        certifications {
+          value
+          source
+          release_type
+        }
+        age_rating
+        age_rating_source
+      }
+      mdblist {
+        mdblist_id
+        trakt_id
+        score
+        score_average
+        age_rating
+        certification
+        commonsense
+      }
+      awards {
+        award_qid
+        award_label
+        year
+        recipient_qid
+        recipient_label
+        claim_side
+      }
       canonical_tags {
         key
         category

@@ -1,14 +1,24 @@
 import {
   BACKUP_INFO_FIELDS,
   JOB_RUN_FIELDS,
+  LOCATION_OPERATION_FIELDS,
+  MAINTENANCE_EXCLUSION_FIELDS,
+  MAINTENANCE_RULE_SET_DETAIL_FIELDS,
+  MAINTENANCE_RULE_SET_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
   RELEASE_SEARCH_RESULT_FIELDS,
+  REQUEST_RULE_DECISION_FIELDS,
+  REQUEST_RULE_SET_DETAIL_FIELDS,
+  REQUEST_RULE_SET_FIELDS,
   SEEDING_PROFILE_FIELDS,
   SUBTITLE_PROVIDER_CONFIG_FIELDS,
   SUBTITLE_SETTINGS_FIELDS,
+  TITLE_CLAIM_FIELDS,
   TITLE_MUTATION_RESULT_FIELDS,
+  TITLE_TAG_DEFINITION_FIELDS,
 } from "./queries.ts";
+import { MEDIA_DISC_FIELDS } from "../types/media-analysis.ts";
 
 const AUTH_USER_FIELDS = `
       id
@@ -384,7 +394,7 @@ export const createIndexerMutation = `mutation CreateIndexer($input: CreateIndex
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     hasApiKey
     storedSecretKeys
@@ -413,7 +423,7 @@ export const updateIndexerMutation = `mutation UpdateIndexer($input: UpdateIndex
     name
     providerType
     baseUrl
-    indexerProxyConfigId
+    proxyConfigId
     downloadClientId
     hasApiKey
     storedSecretKeys
@@ -436,13 +446,25 @@ export const updateIndexerMutation = `mutation UpdateIndexer($input: UpdateIndex
   }
 }`;
 
-const INDEXER_PROXY_CONFIG_FIELDS = `
+const PROXY_CONFIG_FIELDS = `
     id
     name
     providerType
     protocol
     baseUrl
     requestTimeoutSeconds
+    hasCredentials
+    remoteDns
+    hasPrivateKey
+    peerPublicKey
+    hasPresharedKey
+    tunnelPublicKey
+    tunnelAddresses
+    tunnelDnsServers
+    tunnelMtu
+    tunnelKeepaliveSeconds
+    hostKeyFingerprint
+    hostKeyPinnedAt
     isEnabled
     lastHealthStatus
     lastErrorMessage
@@ -450,28 +472,39 @@ const INDEXER_PROXY_CONFIG_FIELDS = `
     createdAt
     updatedAt`;
 
-export const createIndexerProxyConfigMutation = `mutation CreateIndexerProxyConfig($input: CreateIndexerProxyConfigInput!) {
-  createIndexerProxyConfig(input: $input) {${INDEXER_PROXY_CONFIG_FIELDS}
+export const createProxyConfigMutation = `mutation CreateProxyConfig($input: CreateProxyConfigInput!) {
+  createProxyConfig(input: $input) {${PROXY_CONFIG_FIELDS}
   }
 }`;
 
-export const updateIndexerProxyConfigMutation = `mutation UpdateIndexerProxyConfig($input: UpdateIndexerProxyConfigInput!) {
-  updateIndexerProxyConfig(input: $input) {${INDEXER_PROXY_CONFIG_FIELDS}
+export const updateProxyConfigMutation = `mutation UpdateProxyConfig($input: UpdateProxyConfigInput!) {
+  updateProxyConfig(input: $input) {${PROXY_CONFIG_FIELDS}
   }
 }`;
 
-export const deleteIndexerProxyConfigMutation = `mutation DeleteIndexerProxyConfig($id: ID!) {
-  deleteIndexerProxyConfig(id: $id) {
+export const deleteProxyConfigMutation = `mutation DeleteProxyConfig($id: ID!) {
+  deleteProxyConfig(id: $id) {
       id
 }
 }`;
 
-export const testIndexerProxyConfigMutation = `mutation TestIndexerProxyConfig($id: ID!) {
-  testIndexerProxyConfig(id: $id) {
+export const testProxyConfigMutation = `mutation TestProxyConfig($id: ID!, $url: String) {
+  testProxyConfig(id: $id, url: $url) {
     ok
     status
     message
     durationMs
+    observedIp
+    httpStatus
+  }
+}`;
+
+/**
+ * Trust-on-first-use reset: forgetting the pinned host key makes the next
+ * connection pin whatever the server offers.
+ */
+export const resetProxyHostKeyMutation = `mutation ResetProxyHostKey($id: ID!) {
+  resetProxyHostKey(id: $id) {${PROXY_CONFIG_FIELDS}
   }
 }`;
 
@@ -507,6 +540,7 @@ export const createDownloadClientMutation = `mutation CreateDownloadClient($inpu
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
     storedSecretKeys
+    proxyConfigId
     isEnabled
     status
     lastError
@@ -525,6 +559,7 @@ export const updateDownloadClientMutation = `mutation UpdateDownloadClient($inpu
     config {${PROVIDER_CONFIG_VALUE_FIELDS}
     }
     storedSecretKeys
+    proxyConfigId
     isEnabled
     status
     lastError
@@ -605,6 +640,7 @@ export const approveMediaRequestMutation = `mutation ApproveMediaRequest($input:
       skippedInProgressCount
     }
     searchError
+    claimError
   }
 }`;
 
@@ -825,6 +861,10 @@ export const updateAcquisitionSettingsMutation = `mutation UpdateAcquisitionSett
 
 export const updateGeneralSettingsMutation = `mutation UpdateGeneralSettings($input: UpdateGeneralSettingsInput!) {
   updateGeneralSettings(input: $input) {
+    apiExplorerEnabled
+    experimentalFeaturesEnabled
+    personalizedDiscoveryEnabled
+    srrdbFilenameRecoveryEnabled
     keepHistoryForever
     historyRetentionDays
     imageCacheMaxSizeMb
@@ -1089,6 +1129,62 @@ export const upsertDelayProfileMutation = `mutation UpsertDelayProfile($input: D
 export const deleteDelayProfileMutation = `mutation DeleteDelayProfile($id: ID!) {
   deleteDelayProfile(id: $id) {
     id
+  }
+}`;
+
+/// A rename rewrites titles and delay profiles but never a rule source, so
+/// every registry write returns the counts the settings section warns with.
+const TITLE_TAG_REWRITE_COUNT_FIELDS = `
+      titles
+      seriesMovies
+      delayProfiles
+      maintenanceRuleSets
+      releaseRuleSets
+      managedTagFilters
+      requestRuleSets`;
+
+export const createTitleTagDefinitionMutation = `mutation CreateTitleTagDefinition($input: CreateTitleTagDefinitionInput!) {
+  createTitleTagDefinition(input: $input) {
+    definition {${TITLE_TAG_DEFINITION_FIELDS}
+    }
+    counts {${TITLE_TAG_REWRITE_COUNT_FIELDS}
+    }
+  }
+}`;
+
+export const updateTitleTagDefinitionMutation = `mutation UpdateTitleTagDefinition($input: UpdateTitleTagDefinitionInput!) {
+  updateTitleTagDefinition(input: $input) {
+    definition {${TITLE_TAG_DEFINITION_FIELDS}
+    }
+    counts {${TITLE_TAG_REWRITE_COUNT_FIELDS}
+    }
+  }
+}`;
+
+export const deleteTitleTagDefinitionMutation = `mutation DeleteTitleTagDefinition($id: ID!) {
+  deleteTitleTagDefinition(id: $id) {
+    id
+    label
+    counts {${TITLE_TAG_REWRITE_COUNT_FIELDS}
+    }
+  }
+}`;
+
+/// A patch, not a replacement: reserved `scryer:` entries survive untouched,
+/// and one denied library leaves the whole set unchanged.
+export const updateTitleTagsMutation = `mutation UpdateTitleTags($input: UpdateTitleTagsInput!) {
+  updateTitleTags(input: $input) {
+    id
+    tags
+  }
+}`;
+
+/// The series-movie twin of `updateTitleTags`. A series movie is a link row,
+/// not a title, so its tags are patched by link id and read back off the link.
+export const updateSeriesMovieTagsMutation = `mutation UpdateSeriesMovieTags($input: UpdateSeriesMovieTagsInput!) {
+  updateSeriesMovieTags(input: $input) {
+    id
+    tags
   }
 }`;
 
@@ -1391,6 +1487,8 @@ export const beginManualImportSelectionMutation = `mutation BeginManualImportSel
         videoWidth
         videoHeight
         durationSeconds
+        report { status warnings { code message } }
+        disc { ${MEDIA_DISC_FIELDS} }
       }
       quality
       parsedSeason
@@ -1636,6 +1734,46 @@ export const fixTitleMatchMutation = `mutation FixTitleMatch($input: FixTitleMat
   }
 }`;
 
+// Folder-match correction. Ownership of a folder another title holds is never
+// taken silently: the caller must send SWAP or TAKE_OVER for that case.
+export const applyTitleFolderChangeMutation = `mutation ApplyTitleFolderChange($input: ApplyTitleFolderChangeInput!) {
+  applyTitleFolderChange(input: $input) {
+    outcome
+    title {
+      id
+      name
+      folderPath
+    }
+    previousFolderPath
+    detachedMediaFileCount
+    scan {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+    swappedTitle {
+      id
+      name
+      folderPath
+    }
+    swappedTitleScan {
+      scanned
+      matched
+      imported
+      skipped
+      unmatched
+    }
+    displacedTitle {
+      id
+      name
+      previousFolderPath
+      repairReasonCode
+    }
+  }
+}`;
+
 export const setPrimaryMovieFileMutation = `mutation SetPrimaryMovieFile($input: SetPrimaryMovieFileInput!) {
   setPrimaryMovieFile(input: $input) {
     id
@@ -1646,6 +1784,10 @@ export const setPrimaryMovieFileMutation = `mutation SetPrimaryMovieFile($input:
 // per-item trigger mutations; progress is polled via acquisitionSearchJobQuery.
 export const triggerAcquisitionSearchMutation = `mutation TriggerAcquisitionSearch($input: TriggerAcquisitionSearchInput!) {
   triggerAcquisitionSearch(input: $input) {
+    jobRun {
+      id jobKey displayName category section status triggerSource
+      startedAt completedAt summaryJson summaryText errorText progressJson
+    }
     id
     state
     total
@@ -1676,8 +1818,10 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
     indexers {
       indexerId
       name
+      priority
       status
       resultCount
+      elapsedMs
       failureReason
     }
     startedAt
@@ -1689,6 +1833,25 @@ export const cancelInteractiveReleaseSearchMutation = `mutation CancelInteractiv
   cancelInteractiveReleaseSearch(id: $id) {
     id
     accepted
+  }
+}`;
+
+// Spec 0002 D4: a title-less search row carries no candidate token, so the grab
+// dialog mints one against the title the operator picked and then queues it
+// with the existing queue mutations. The payload is the same release row, now
+// carrying `candidateToken` and the server-resolved `queueScope` (D11).
+export const issueInteractiveReleaseCandidateTokenMutation = `mutation IssueInteractiveReleaseCandidateToken($input: IssueInteractiveReleaseCandidateTokenInput!) {
+  issueInteractiveReleaseCandidateToken(input: $input) {${RELEASE_SEARCH_RESULT_FIELDS}
+  }
+}`;
+
+// Spec 0002 D8: grabs a search row with no catalog title behind it. The client's
+// own routing category applies, so there is no category input here.
+export const queueUnlinkedReleaseMutation = `mutation QueueUnlinkedRelease($input: QueueUnlinkedReleaseInput!) {
+  queueUnlinkedRelease(input: $input) {
+    downloadId
+    clientName
+    sourceTitle
   }
 }`;
 
@@ -1992,6 +2155,12 @@ export const updateRecycleBinSettingsMutation = `mutation UpdateRecycleBinSettin
   }
 }`;
 
+export const updateVerificationSettingsMutation = `mutation UpdateVerificationSettings($input: UpdateVerificationSettingsInput!) {
+  updateVerificationSettings(input: $input) {
+    depth
+  }
+}`;
+
 export const updatePluginAutoUpdateSettingsMutation = `mutation UpdatePluginAutoUpdateSettings($input: UpdatePluginAutoUpdateSettingsInput!) {
   updatePluginAutoUpdateSettings(input: $input) {
     enabled
@@ -2091,6 +2260,9 @@ export const createRuleSetMutation = `mutation CreateRuleSet($input: CreateRuleS
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
@@ -2108,6 +2280,9 @@ export const updateRuleSetMutation = `mutation UpdateRuleSet($input: UpdateRuleS
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
@@ -2131,6 +2306,9 @@ export const toggleRuleSetMutation = `mutation ToggleRuleSet($input: ToggleRuleS
     regoSource
     enabled
     priority
+    evaluationPhase
+    disabledReason
+    exclusiveGroup
     appliedFacets
     isManaged
     managedKey
@@ -2144,6 +2322,306 @@ export const validateRuleSetMutation = `mutation ValidateRuleSet($input: Validat
   validateRuleSet(input: $input) {
     valid
     errors
+  }
+}`;
+
+export const testRuleSetMutation = `mutation TestRuleSet($input: TestRuleSetInput!) {
+  testRuleSet(input: $input) {
+    score
+    allowed
+    blocked
+    minimumScoreMet
+    profileName
+    context {
+      titleName
+      libraryName
+      facet
+      language
+      tags
+      episodeLabel
+    }
+    parsed {
+      releaseGroup
+      quality
+      source
+      season
+      episode
+      edition
+      videoCodec
+      audio
+      year
+      audioLanguages
+      sizeBytes
+    }
+    ruleSets {
+      ruleSetId
+      ruleSetName
+      origin
+      score
+      matched
+      blocked
+      isDraft
+      entries {
+        code
+        delta
+        blocked
+        kind
+      }
+      messages
+    }
+    draftContribution {
+      score
+      matched
+      blocked
+      applies
+      enabled
+      message
+    }
+    errors {
+      code
+      message
+      ruleSetId
+    }
+  }
+}`;
+
+export const installTrackedRulePackMutation = `mutation InstallTrackedRulePack($packId: String!, $templateIds: [String!]!) {
+  installTrackedRulePack(packId: $packId, templateIds: $templateIds) {
+    packId
+    revision
+  }
+}`;
+
+export const previewTrackedRulePackUpdateMutation = `mutation PreviewTrackedRulePackUpdate($packId: String!) {
+  previewTrackedRulePackUpdate(packId: $packId) {
+    version
+    digest
+    revision
+    addedTemplateIds
+    changedTemplateIds
+    removedTemplateIds
+  }
+}`;
+
+export const updateTrackedRulePackMutation = `mutation UpdateTrackedRulePack($packId: String!, $version: String!, $digest: String!, $revision: Long!) {
+  updateTrackedRulePack(packId: $packId, version: $version, digest: $digest, revision: $revision) {
+    packId
+    revision
+  }
+}`;
+
+export const setTrackedRulePackSettingsMutation = `mutation SetTrackedRulePackSettings($packId: String!, $enabledTemplateIds: [String!]!, $priorities: [TrackedRulePackPriorityInput!]!, $autoUpdate: Boolean!, $expectedRevision: Long!) {
+  setTrackedRulePackSettings(packId: $packId, enabledTemplateIds: $enabledTemplateIds, priorities: $priorities, autoUpdate: $autoUpdate, expectedRevision: $expectedRevision) {
+    packId
+    revision
+  }
+}`;
+
+export const copyTrackedRulePackRuleMutation = `mutation CopyTrackedRulePackRule($ruleSetId: ID!, $name: String!, $description: String!, $regoSource: String!, $appliedFacets: [String!]!, $priority: Int!) {
+  copyTrackedRulePackRule(ruleSetId: $ruleSetId, name: $name, description: $description, regoSource: $regoSource, appliedFacets: $appliedFacets, priority: $priority) {
+    id
+  }
+}`;
+
+export const uninstallTrackedRulePackMutation = `mutation UninstallTrackedRulePack($packId: String!, $revision: Long!) {
+  uninstallTrackedRulePack(packId: $packId, revision: $revision) {
+    packId
+  }
+}`;
+
+// ── Maintenance Rules ─────────────────────────────────────────────────
+//
+// Maintenance rule sets are saved disabled and nothing evaluates or executes
+// them yet. Preview is the only mutation here that runs a matcher, and it is
+// read-only: it reports what a rule would select, and changes nothing.
+
+export const createMaintenanceRuleSetMutation = `mutation CreateMaintenanceRuleSet($input: CreateMaintenanceRuleSetInput!) {
+  createMaintenanceRuleSet(input: $input) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const updateMaintenanceRuleMatcherMutation = `mutation UpdateMaintenanceRuleMatcher($input: UpdateMaintenanceRuleMatcherInput!) {
+  updateMaintenanceRuleMatcher(input: $input) {${MAINTENANCE_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const updateMaintenanceRuleMetadataMutation = `mutation UpdateMaintenanceRuleMetadata($input: UpdateMaintenanceRuleMetadataInput!) {
+  updateMaintenanceRuleMetadata(input: $input) {${MAINTENANCE_RULE_SET_FIELDS}
+  }
+}`;
+
+export const deleteMaintenanceRuleSetMutation = `mutation DeleteMaintenanceRuleSet($id: ID!) {
+  deleteMaintenanceRuleSet(id: $id) {
+    id
+  }
+}`;
+
+export const validateMaintenanceRuleMutation = `mutation ValidateMaintenanceRule($input: ValidateMaintenanceRuleInput!) {
+  validateMaintenanceRule(input: $input) {
+    valid
+    errors
+  }
+}`;
+
+export const previewMaintenanceRuleMutation = `mutation PreviewMaintenanceRule($input: PreviewMaintenanceRuleInput!) {
+  previewMaintenanceRule(input: $input) {
+    ruleSetId
+    matcherContentHash
+    evaluatedAt
+    titles {
+      excluded
+      dueAt
+      dueAtIsEstimate
+      subjectKind
+      subjectId
+      subjectLabel
+      fileCount
+      totalSizeBytes
+      titleId
+      titleName
+      facet
+      libraryId
+      outcome
+      reasonCodes
+      error
+    }
+  }
+}`;
+
+/// Mode and arming both return the whole rule set, but the caller refetches the
+/// list afterwards rather than patching state from the payload, so these
+/// selections stay at the identity the caller needs to correlate the response.
+export const setMaintenanceRuleModeMutation = `mutation SetMaintenanceRuleMode($input: SetMaintenanceRuleModeInput!) {
+  setMaintenanceRuleMode(input: $input) {
+    id
+    evaluationMode
+    enabled
+  }
+}`;
+
+/// Arming to `DESTRUCTIVE` must acknowledge the rule's current non-terminal
+/// candidate count. When it no longer matches, the server rejects the call with
+/// the real count in the message and the dialog re-asks against that number.
+export const setMaintenanceRuleArmingMutation = `mutation SetMaintenanceRuleArming($input: SetMaintenanceRuleArmingInput!) {
+  setMaintenanceRuleArming(input: $input) {
+    id
+    effectArming
+  }
+}`;
+
+export const setMaintenanceInstanceGatesMutation = `mutation SetMaintenanceInstanceGates($input: SetMaintenanceInstanceGatesInput!) {
+  setMaintenanceInstanceGates(input: $input) {
+    evaluationEnabled
+    resultDisplayEnabled
+    presentationEffectsEnabled
+    reversibleEffectsEnabled
+    destructiveEffectsEnabled
+  }
+}`;
+
+export const excludeMaintenanceSubjectMutation = `mutation ExcludeMaintenanceSubject($input: ExcludeMaintenanceSubjectInput!) {
+  excludeMaintenanceSubject(input: $input) {${MAINTENANCE_EXCLUSION_FIELDS}
+  }
+}`;
+
+export const removeMaintenanceExclusionMutation = `mutation RemoveMaintenanceExclusion($id: ID!) {
+  removeMaintenanceExclusion(id: $id) {
+    id
+  }
+}`;
+
+export const runMaintenanceEvaluationNowMutation = `mutation RunMaintenanceEvaluationNow($ruleSetId: ID) {
+  runMaintenanceEvaluationNow(ruleSetId: $ruleSetId) {
+    started
+    message
+  }
+}`;
+
+export const runMaintenanceActionHandlerNowMutation = `mutation RunMaintenanceActionHandlerNow {
+  runMaintenanceActionHandlerNow {
+    started
+    message
+  }
+}`;
+
+// ── Request Rules ─────────────────────────────────────────────────────
+//
+// A rule is created DISABLED; `setRequestRuleMode` arms it, and the instance
+// gate is a third switch under a different permission entirely.
+
+export const createRequestRuleSetMutation = `mutation CreateRequestRuleSet($input: CreateRequestRuleSetInput!) {
+  createRequestRuleSet(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const updateRequestRuleMatcherMutation = `mutation UpdateRequestRuleMatcher($input: UpdateRequestRuleMatcherInput!) {
+  updateRequestRuleMatcher(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const updateRequestRuleMetadataMutation = `mutation UpdateRequestRuleMetadata($input: UpdateRequestRuleMetadataInput!) {
+  updateRequestRuleMetadata(input: $input) {${REQUEST_RULE_SET_FIELDS}
+  }
+}`;
+
+export const setRequestRuleModeMutation = `mutation SetRequestRuleMode($input: SetRequestRuleModeInput!) {
+  setRequestRuleMode(input: $input) {${REQUEST_RULE_SET_DETAIL_FIELDS}
+  }
+}`;
+
+export const deleteRequestRuleSetMutation = `mutation DeleteRequestRuleSet($id: ID!) {
+  deleteRequestRuleSet(id: $id) {
+    id
+  }
+}`;
+
+export const validateRequestRuleMutation = `mutation ValidateRequestRule($input: ValidateRequestRuleInput!) {
+  validateRequestRule(input: $input) {
+    valid
+    errors
+  }
+}`;
+
+/// The author's preview. Unlike the requester's pre-flight it returns the input
+/// document the matcher actually saw, which is the "why did this not match"
+/// affordance, and a synthesised single-rule decision whose vote is the rule's
+/// own — `revisionNumber` on it is 0 and must not be rendered as a revision.
+export const previewRequestRuleMutation = `mutation PreviewRequestRule($input: PreviewRequestRuleInput!) {
+  previewRequestRule(input: $input) {
+    ruleSetId
+    matcherContentHash
+    metadataPartial
+    undefinedTags
+    inputDocument
+    decision {${REQUEST_RULE_DECISION_FIELDS}
+    }
+  }
+}`;
+
+export const setRequestRuleInstanceGatesMutation = `mutation SetRequestRuleInstanceGates($input: SetRequestRuleInstanceGatesInput!) {
+  setRequestRuleInstanceGates(input: $input) {
+    evaluationEnabled
+  }
+}`;
+
+// ── Title retention claims ────────────────────────────────────────────
+//
+// Converting a lease to a permanent hold leaves the original CONVERTED as
+// history and writes a fresh OPERATOR_KEEP beside it, so the three mutations
+// each return the claim the operator should now be looking at.
+
+export const extendTitleClaimMutation = `mutation ExtendTitleClaim($input: ExtendTitleClaimInput!) {
+  extendTitleClaim(input: $input) {${TITLE_CLAIM_FIELDS}
+  }
+}`;
+
+export const convertTitleClaimToPermanentMutation = `mutation ConvertTitleClaimToPermanent($input: ConvertTitleClaimToPermanentInput!) {
+  convertTitleClaimToPermanent(input: $input) {${TITLE_CLAIM_FIELDS}
+  }
+}`;
+
+export const releaseTitleClaimMutation = `mutation ReleaseTitleClaim($input: ReleaseTitleClaimInput!) {
+  releaseTitleClaim(input: $input) {${TITLE_CLAIM_FIELDS}
   }
 }`;
 
@@ -2595,5 +3073,36 @@ export const setMinimumSeedersFloorMutation = `mutation SetMinimumSeedersFloor($
   setMinimumSeedersFloor(input: $input) {
     seedingProfileId
     minimumSeedersFloor
+  }
+}`;
+
+export const startLocationOperationMutation = `mutation StartLocationOperation($input: StartLocationOperationInput!) {
+  startLocationOperation(input: $input) {
+    planFingerprint
+    operation {${LOCATION_OPERATION_FIELDS}
+    }
+  }
+}`;
+
+export const cancelLocationOperationMutation = `mutation CancelLocationOperation($id: ID!) {
+  cancelLocationOperation(id: $id) {
+    id
+    cancelRequested
+  }
+}`;
+
+export const abandonLocationOperationMutation = `mutation AbandonLocationOperation($id: ID!) {
+  abandonLocationOperation(id: $id) {
+    id
+    abandoned
+    detail
+  }
+}`;
+
+export const resumeLocationOperationMutation = `mutation ResumeLocationOperation($id: ID!) {
+  resumeLocationOperation(id: $id) {
+    id
+    resumed
+    detail
   }
 }`;

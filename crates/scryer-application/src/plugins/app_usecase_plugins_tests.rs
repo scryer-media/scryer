@@ -119,7 +119,7 @@ impl MockPluginInstallationRepo {
                         "version": release.version.clone(),
                         "sdk_constraint": release.sdk_constraint.clone(),
                         "artifacts": [{
-                            "runtime": "wasm32-wasip1",
+                            "runtime": "wasm32-wasip2",
                             "required_features": [],
                             "url": artifact_url,
                             "mirror_urls": [],
@@ -625,6 +625,7 @@ impl MockPluginProvider {
                 host_binding: None,
                 options: Vec::new(),
                 help_text: None,
+                ..Default::default()
             });
         self
     }
@@ -698,6 +699,7 @@ impl IndexerPluginProvider for MockPluginProvider {
                 host_binding: None,
                 options: Vec::new(),
                 help_text: None,
+                ..Default::default()
             });
         }
 
@@ -991,6 +993,7 @@ fn make_runtime_plugin_load(
             host_binding: None,
             options: vec![],
             help_text: None,
+            ..Default::default()
         }]
     }
 
@@ -1187,7 +1190,7 @@ fn catalog_v3_artifact(
     wasm_digest: &str,
 ) -> serde_json::Value {
     serde_json::json!({
-        "runtime": "wasm32-wasip1",
+        "runtime": "wasm32-wasip2",
         "required_features": required_features,
         "url": url,
         "mirror_urls": [],
@@ -1220,10 +1223,7 @@ fn catalog_v3_release(
     release
 }
 
-fn catalog_entry_with_releases(
-    id: &str,
-    releases: Vec<serde_json::Value>,
-) -> serde_json::Value {
+fn catalog_entry_with_releases(id: &str, releases: Vec<serde_json::Value>) -> serde_json::Value {
     serde_json::json!({
         "id": id,
         "name": format!("{id} Plugin"),
@@ -1414,7 +1414,7 @@ fn make_indexer_config(provider_type: &str) -> IndexerConfig {
         rate_limit_seconds: None,
         rate_limit_burst: None,
         disabled_until: None,
-        indexer_proxy_config_id: None,
+        proxy_config_id: None,
         download_client_id: None,
         seeding_profile_id: None,
         managed_parent_config_id: None,
@@ -1479,7 +1479,19 @@ fn bootstrap_plugins_inner(
     )
     .with_plugin_installations(plugin_repo.clone())
     .with_plugin_descriptor_loader(plugin_descriptor_loader.clone())
-    .with_supported_plugin_required_features(supported_features.iter().copied());
+    // The runtime environment carries one capability-token set: the WASI
+    // targets this host can instantiate plus the wasm features it detected.
+    // Production assembles it via `scryer_plugins::detect_plugin_runtime_capabilities`;
+    // tests name the feature half and inherit the same target the fleet builds for.
+    .with_supported_plugin_required_features(
+        supported_features
+            .iter()
+            .copied()
+            .map(str::to_string)
+            .chain(std::iter::once(
+                crate::plugins::catalog::CATALOG_V3_RUNTIME_WASIP2.to_string(),
+            )),
+    );
     let plugin_provider = provider.map(Arc::new);
     if let Some(provider) = &plugin_provider {
         services = services.with_plugin_provider(provider.clone());
@@ -2400,6 +2412,43 @@ async fn list_rule_pack_registry_reads_cached_central_catalog() {
     assert_eq!(packs[0].id, "anime-defaults");
 }
 
+#[tokio::test]
+async fn rule_pack_updates_accept_v_prefixed_installed_and_catalog_versions() {
+    for candidate in ["0.1.1", "v0.1.1"] {
+        let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+        let catalog = serde_json::json!({
+            "plugins": [],
+            "rule_packs": [{
+                "id": "anime-defaults", "name": "Anime Defaults",
+                "description": "Test", "author": "scryer",
+                "version": candidate,
+                "url": "https://example.test/anime.json"
+            }]
+        })
+        .to_string();
+        h.plugin_repo
+            .store_catalog_fixture_json(&catalog)
+            .await
+            .unwrap();
+        for installed in ["0.1.0", "v0.1.0"] {
+            let update = h
+                .app
+                .rule_pack_update_candidate(&admin(), "anime-defaults", installed, true)
+                .await
+                .unwrap()
+                .expect("new patch");
+            assert_eq!(update.version, candidate);
+        }
+        assert!(
+            h.app
+                .rule_pack_update_candidate(&admin(), "anime-defaults", "v0.1.1", true)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
 // ── list_available_plugins ───────────────────────────────────────────────────
 
 #[tokio::test]
@@ -2456,7 +2505,7 @@ async fn list_available_plugins_includes_cached_verified_community_source() {
                 "version": "1.0.0",
                 "sdk_constraint": scryer_plugin_sdk::current_sdk_constraint(),
                 "artifacts": [{
-                    "runtime": "wasm32-wasip1",
+                    "runtime": "wasm32-wasip2",
                     "required_features": [],
                     "url": artifact_url,
                     "mirror_urls": [],
@@ -2515,7 +2564,7 @@ async fn list_available_plugins_ignores_cached_community_source_with_unapproved_
                 "version": "1.0.0",
                 "sdk_constraint": scryer_plugin_sdk::current_sdk_constraint(),
                 "artifacts": [{
-                    "runtime": "wasm32-wasip1",
+                    "runtime": "wasm32-wasip2",
                     "required_features": [],
                     "url": artifact_url,
                     "mirror_urls": [],
@@ -2879,7 +2928,8 @@ async fn list_installed_at_latest() {
 
 #[tokio::test]
 async fn list_installed_same_version_portable_updates_to_simd_artifact_on_simd_host() {
-    let h = bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
+    let h =
+        bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
     h.plugin_repo
         .store_raw_catalog_source(
             CENTRAL_CATALOG_SOURCE_KEY,
@@ -2925,13 +2975,17 @@ async fn list_installed_same_version_portable_does_not_update_without_simd_suppo
     h.plugin_repo.installations.lock().await.push(installation);
 
     let result = h.app.list_available_plugins(&admin()).await.unwrap();
-    assert_eq!(result[0].wasm_url.as_deref(), Some(ALPHA_BASELINE_ARTIFACT_URL));
+    assert_eq!(
+        result[0].wasm_url.as_deref(),
+        Some(ALPHA_BASELINE_ARTIFACT_URL)
+    );
     assert!(!result[0].update_available);
 }
 
 #[tokio::test]
 async fn list_builtin_same_version_counts_as_portable_for_simd_artifact_update() {
-    let h = bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
+    let h =
+        bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
     h.plugin_repo
         .store_raw_catalog_source(
             CENTRAL_CATALOG_SOURCE_KEY,
@@ -3093,6 +3147,45 @@ async fn plugin_update_count_matches_available_plugins() {
     let count = h.app.plugin_update_count(&admin()).await.unwrap();
 
     assert_eq!(count, 1);
+}
+
+#[tokio::test]
+async fn plugin_blocked_count_is_kept_apart_from_the_update_count() {
+    let h = bootstrap_plugins(Some(MockPluginProvider::new()));
+    let json = make_catalog_fixture_json(&[
+        catalog_entry(
+            "alpha",
+            "0.2.0",
+            false,
+            Some("https://example.com/alpha.wasm.zst"),
+        ),
+        catalog_entry(
+            "beta",
+            "1.0.0",
+            false,
+            Some("https://example.com/beta.wasm.zst"),
+        ),
+    ]);
+    h.plugin_repo
+        .store_catalog_fixture_json(&json)
+        .await
+        .unwrap();
+    let beta = make_installation("beta", "1.0.0", false, true);
+    h.plugin_repo
+        .installations
+        .lock()
+        .await
+        .push(make_installation("alpha", "0.1.0", false, true));
+    h.plugin_repo.installations.lock().await.push(beta.clone());
+    h.app
+        .set_plugin_component_blocker(&beta, Some("incompatible contract".into()))
+        .await
+        .unwrap();
+
+    // Beta is blocked but current; alpha has an update but runs. Neither badge
+    // may count the other's plugin, or the operator cannot tell which is which.
+    assert_eq!(h.app.plugin_update_count(&admin()).await.unwrap(), 1);
+    assert_eq!(h.app.plugin_blocked_count(&admin()).await.unwrap(), 1);
 }
 
 #[tokio::test]
@@ -3636,8 +3729,12 @@ async fn nzbgeek_catalog_migration_converts_legacy_builtin_to_downloaded_install
     let runtime_wasm_bytes = runtime_plugin.wasm_bytes.clone();
     h.plugin_descriptor_loader
         .register(&runtime_wasm_bytes, runtime_plugin.descriptor);
-    let mut prepared =
-        prepared_catalog_plugin_install_fixture("nzbgeek", "indexer", "nzbgeek", runtime_wasm_bytes);
+    let mut prepared = prepared_catalog_plugin_install_fixture(
+        "nzbgeek",
+        "indexer",
+        "nzbgeek",
+        runtime_wasm_bytes,
+    );
     prepared.release.version = "0.3.0".to_string();
     let persisted_wasm_bytes = prepared.persisted_wasm_bytes.clone();
     let validated = h
@@ -3659,7 +3756,10 @@ async fn nzbgeek_catalog_migration_converts_legacy_builtin_to_downloaded_install
     assert_eq!(updated.source_kind, PluginSourceKind::Downloaded);
     assert_eq!(updated.support_tier, PluginSupportTier::Official);
     assert_eq!(updated.sdk_version, scryer_plugin_sdk::SDK_VERSION);
-    assert_eq!(updated.sdk_constraint, scryer_plugin_sdk::current_sdk_constraint());
+    assert_eq!(
+        updated.sdk_constraint,
+        scryer_plugin_sdk::current_sdk_constraint()
+    );
     assert_eq!(runtime_plugin.wasm_bytes, vec![1, 2, 3, 4]);
     assert!(updated.descriptor_json.is_some());
 
@@ -3848,6 +3948,7 @@ fn validate_downloaded_plugin_descriptor_rejects_invalid_allowed_hosts() {
                     host_binding: None,
                     options: vec![],
                     help_text: None,
+                    ..Default::default()
                 }],
                 allowed_hosts: vec!["https://example.com".to_string()],
                 rate_limit_seconds: None,
@@ -4262,13 +4363,17 @@ async fn install_uploaded_plugin_requires_risk_acknowledgement() {
 
 #[tokio::test]
 async fn install_uploaded_plugin_rejects_host_process_capability() {
-    let provider =
-        MockPluginProvider::new().with_provider("host-proc", "Host Proc", Some("https://example.com"));
+    let provider = MockPluginProvider::new().with_provider(
+        "host-proc",
+        "Host Proc",
+        Some("https://example.com"),
+    );
     let h = bootstrap_plugins(Some(provider));
     let wasm_bytes = vec![0x00, 0x61, 0x73, 0x6d];
     let mut descriptor =
         make_runtime_plugin_load("host-proc-plugin", "notification", "host-proc").descriptor;
-    if let scryer_plugin_sdk::ProviderDescriptor::Notification(provider) = &mut descriptor.provider {
+    if let scryer_plugin_sdk::ProviderDescriptor::Notification(provider) = &mut descriptor.provider
+    {
         provider.capabilities.requires_host_process = true;
     }
     h.plugin_descriptor_loader
@@ -4543,8 +4648,31 @@ async fn recover_restored_plugins_skips_local_uploads_and_persists_warning() {
     assert_eq!(
         payload["restoreWarnings"],
         serde_json::json!([
-            "Skipped restoring plugin 'Local Upload' because it was uploaded locally and cannot be re-downloaded from a remote catalog source."
+            "Skipped restoring plugin 'Local Upload' because it was uploaded locally and cannot be re-downloaded from a remote catalog source. Its installation has been removed, but its saved configuration remains and is still enabled, so it will not work until you upload the plugin again."
         ])
+    );
+    // The skip has three consequences and the operator needs all three: the
+    // row is gone, the configuration is not, and it is still switched on.
+    let warning = payload["restoreWarnings"][0].as_str().unwrap();
+    assert!(warning.contains("installation has been removed"), "{warning}");
+    assert!(warning.contains("configuration remains"), "{warning}");
+    assert!(warning.contains("still enabled"), "{warning}");
+}
+
+#[test]
+fn a_restored_plugin_whose_version_moved_is_reported_once() {
+    let mut installation = make_installation("alpha", "0.3.0", false, true);
+    installation.name = "Alpha".to_string();
+
+    let warning = restore_version_change_warning(&installation, "0.1.0")
+        .expect("a version change must be reported");
+    assert!(warning.contains("'Alpha'"), "{warning}");
+    assert!(warning.contains("version 0.3.0"), "{warning}");
+    assert!(warning.contains("version 0.1.0"), "{warning}");
+
+    assert!(
+        restore_version_change_warning(&installation, "0.3.0").is_none(),
+        "a plugin restored at the backup's own version is not a change"
     );
 }
 
@@ -4662,6 +4790,8 @@ fn bootstrap_plugins_with_settings(
 
 const AUTO_UPDATE_WASM_BYTES: &[u8] = b"persisted plugin artifact";
 
+mod component_upgrade_tests;
+
 fn official_catalog_installation(plugin_id: &str, version: &str) -> PluginInstallation {
     let mut installation = make_installation(plugin_id, version, false, true);
     installation.wasm_encoding = PluginWasmEncoding::Identity;
@@ -4774,7 +4904,8 @@ async fn auto_update_selects_builtins_but_skips_manual_and_unparseable_installat
 
 #[tokio::test]
 async fn auto_update_selects_same_version_optimized_artifact() {
-    let h = bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
+    let h =
+        bootstrap_plugins_with_supported_features(Some(MockPluginProvider::new()), &["simd128"]);
     h.plugin_repo
         .store_raw_catalog_source(
             CENTRAL_CATALOG_SOURCE_KEY,

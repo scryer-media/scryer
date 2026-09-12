@@ -72,13 +72,17 @@ export function canAccessSettingsSection(
     case "mediaServers":
     case "indexers":
     case "downloadClients":
+    case "proxies":
     case "acquisition":
     case "plugins":
     case "notifications":
       return canManageSystemSettings;
     case "qualityProfiles":
     case "delayProfiles":
+    case "titleTags":
     case "rules":
+    case "maintenanceRules":
+    case "requestRules":
     case "post-processing":
     case "subtitles":
       return canManageCatalogSettings;
@@ -114,6 +118,13 @@ export function canAccessSystemSection(
  */
 export function canAccessDashboard(canManageSystemSettings: boolean): boolean {
   return canManageSystemSettings;
+}
+
+export function canAccessApiExplorer(
+  canManageSystemSettings: boolean,
+  enabled: boolean | undefined,
+): boolean {
+  return canManageSystemSettings && enabled === true;
 }
 
 export function defaultSettingsSection(

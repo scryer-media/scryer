@@ -2,7 +2,7 @@
 //!
 //! [`crate::canonical_scoring::score_release`] is pure and synchronous so its
 //! invariants can be property-tested. Everything it needs that lives in the
-//! database — the quality profile, the resolved persona and weights, the
+//! database — the quality profile,
 //! required-language set, the library name, the active rule engine — is
 //! gathered here once and then handed to it by reference.
 //!
@@ -12,7 +12,6 @@
 
 use crate::canonical_scoring::ScoringContext;
 use crate::quality_profile::CoverageSizeBasis;
-use crate::scoring_weights::{ScoringPersona, ScoringWeights};
 use crate::{AppUseCase, QualityProfile};
 use scryer_domain::Title;
 
@@ -20,7 +19,6 @@ use scryer_domain::Title;
 /// [`ResolvedScoringContext::view`].
 pub(crate) struct ResolvedScoringContext {
     profile: QualityProfile,
-    weights: ScoringWeights,
     required_audio_languages: Vec<String>,
     category: String,
     title_id: String,
@@ -48,7 +46,6 @@ impl ResolvedScoringContext {
     ) -> ScoringContext<'_> {
         ScoringContext {
             profile: &self.profile,
-            weights: &self.weights,
             required_audio_languages: &self.required_audio_languages,
             category: &self.category,
             size_basis: size_basis.or_runtime(self.default_runtime_minutes),
@@ -124,12 +121,9 @@ pub(crate) struct ParkedReleaseFacts {
     /// The D4 runtime basis for what the release covers: total runtime, one
     /// member's, and how many members.
     pub size_basis: CoverageSizeBasis,
-    /// The release's **block-free** score ([`crate::canonical_scoring::ScoredRelease::total`]):
-    /// the number an incumbent's bar is built from, so a queued release the
-    /// profile now vetoes still compares on honest terms instead of carrying
-    /// `BLOCK_SCORE` into the ladder (I5). Whether the profile allows it at all
-    /// is `allowed`, and the lanes that must refuse a vetoed release read that
-    /// first.
+    /// The complete numeric score ([`crate::canonical_scoring::ScoredRelease::total`]),
+    /// including penalties. Mandatory requirements contribute zero points.
+    /// Lanes that require eligibility read `allowed` before comparing scores.
     pub score: i32,
     pub tier_index: Option<usize>,
     pub revision: i32,
@@ -187,9 +181,8 @@ pub(crate) fn score_parked_release_title(
 
     ParkedReleaseFacts {
         size_basis,
-        // Block-free, like an incumbent's bar: a queued release the profile
-        // now vetoes must not carry −10 000 into `queued_rejection`, where it
-        // would lose to every candidate and quietly switch the queue gate off.
+        // Like the incumbent bar, retain every numeric contribution and carry
+        // eligibility separately from the score.
         score: scored.total,
         tier_index,
         revision: scored.revision,
@@ -286,23 +279,40 @@ impl AppUseCase {
         title: &Title,
         profile: &QualityProfile,
     ) -> ResolvedScoringContext {
+        self.resolve_canonical_scoring_context_impl(title, profile, true)
+            .await
+    }
+
+    /// Preview compilation supplies its own temporary engine, so it does not
+    /// need to clone the active engine only to replace it before evaluation.
+    pub(crate) async fn resolve_canonical_scoring_context_without_rules(
+        &self,
+        title: &Title,
+        profile: &QualityProfile,
+    ) -> ResolvedScoringContext {
+        self.resolve_canonical_scoring_context_impl(title, profile, false)
+            .await
+    }
+
+    async fn resolve_canonical_scoring_context_impl(
+        &self,
+        title: &Title,
+        profile: &QualityProfile,
+        include_rules: bool,
+    ) -> ResolvedScoringContext {
         let category = crate::post_download_gate::facet_to_category_hint(&title.facet).to_string();
 
         let required_audio_languages = self
             .resolve_required_audio_languages_for_title(title)
             .await
             .unwrap_or_default();
-
-        let persona: ScoringPersona = self
+        let persona = self
             .resolve_scoring_persona(Some(title.library_id.as_str()), Some(category.as_str()))
             .await
             .unwrap_or_default();
-
-        let weights = crate::scoring_weights::build_weights_for_category(
-            &persona,
-            &profile.criteria.scoring_overrides,
-            Some(category.as_str()),
-        );
+        let mut profile = profile.clone();
+        profile.criteria.scoring_persona = persona;
+        profile.criteria.facet_persona_overrides.clear();
 
         let library_name = match self
             .services
@@ -323,17 +333,24 @@ impl AppUseCase {
             }
         };
 
-        let rules = self
-            .services
-            .customization
-            .user_rules
-            .read()
-            .map(|guard| guard.clone())
-            .unwrap_or_else(|_| scryer_rules::UserRulesEngine::empty());
+        let rules = if include_rules {
+            use crate::rules::metrics::{Purpose, StageTimer};
+            let mut wait = StageTimer::new("snapshot_wait", Purpose::Live);
+            let guard = self.services.customization.user_rules.read();
+            if guard.is_err() {
+                wait.outcome("error");
+            }
+            drop(wait);
+            let _clone = StageTimer::new("snapshot_clone", Purpose::Live);
+            guard
+                .map(|guard| guard.clone())
+                .unwrap_or_else(|_| scryer_rules::UserRulesEngine::empty())
+        } else {
+            scryer_rules::UserRulesEngine::empty()
+        };
 
         ResolvedScoringContext {
-            profile: profile.clone(),
-            weights,
+            profile,
             required_audio_languages,
             category,
             title_id: title.id.clone(),
@@ -400,7 +417,17 @@ impl AppUseCase {
                 context.default_runtime_minutes(),
             )
             .or_runtime(runtime_minutes);
-            let bar = self.incumbent_bar(file, context, incumbent_basis);
+            let scoring_episodes = covers
+                .iter()
+                .filter(|id| match scope {
+                    SubmissionScope::Episode { episode_id } => *id == episode_id,
+                    SubmissionScope::EpisodeSet { episode_ids } => episode_ids.contains(id),
+                    _ => true,
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            let bar =
+                self.incumbent_bar_for_episodes(file, context, incumbent_basis, &scoring_episodes);
             (
                 Incumbent {
                     tier_index: bar.tier_index,
@@ -448,9 +475,12 @@ impl AppUseCase {
 
                 let subject = AdmissionSubject::new(
                     AdmissionScope::Episodes(episode_ids),
-                    incumbents.iter().map(|incumbent| {
-                        to_incumbent(&incumbent.media_file, primary_span(incumbent))
-                    }),
+                    incumbents
+                        .iter()
+                        .filter(|incumbent| incumbent.media_file.scan_status != "review_required")
+                        .map(|incumbent| {
+                            to_incumbent(&incumbent.media_file, primary_span(incumbent))
+                        }),
                 );
                 if is_pack_grab {
                     subject.per_member().with_unaired_members(unaired_members)
@@ -477,6 +507,7 @@ impl AppUseCase {
                                 .iter()
                                 .any(|link_id| link_id == series_movie_link_id)
                         })
+                        .filter(|file| file.scan_status != "review_required")
                         .map(|file| to_incumbent(file, Vec::new())),
                 )
             }
@@ -497,6 +528,7 @@ impl AppUseCase {
                         .filter(|file| {
                             file.episode_id.is_none() && file.series_movie_link_ids.is_empty()
                         })
+                        .filter(|file| file.scan_status != "review_required")
                         .map(|file| to_incumbent(file, Vec::new())),
                 )
             }
@@ -545,9 +577,12 @@ impl AppUseCase {
 
                 AdmissionSubject::new(
                     AdmissionScope::Episodes(episode_ids),
-                    incumbents.iter().map(|incumbent| {
-                        to_incumbent(&incumbent.media_file, primary_span(incumbent))
-                    }),
+                    incumbents
+                        .iter()
+                        .filter(|incumbent| incumbent.media_file.scan_status != "review_required")
+                        .map(|incumbent| {
+                            to_incumbent(&incumbent.media_file, primary_span(incumbent))
+                        }),
                 )
                 .per_member()
                 .with_unaired_members(unaired_members)
@@ -866,8 +901,22 @@ impl AppUseCase {
         context: &ResolvedScoringContext,
         size_basis: CoverageSizeBasis,
     ) -> IncumbentFacts {
+        self.incumbent_bar_for_episodes(file, context, size_basis, &[])
+    }
+
+    pub(crate) fn incumbent_bar_for_episodes(
+        &self,
+        file: &crate::TitleMediaFile,
+        context: &ResolvedScoringContext,
+        size_basis: CoverageSizeBasis,
+        episode_ids: &[String],
+    ) -> IncumbentFacts {
         let view = context.view(size_basis, false);
-        let scored = crate::canonical_scoring::score_media_file(file, &view);
+        let scored = if episode_ids.is_empty() {
+            crate::canonical_scoring::score_media_file(file, &view)
+        } else {
+            crate::canonical_scoring::score_media_file_for_episodes(file, episode_ids, &view)
+        };
         let tier_index = crate::quality_profile::quality_tier_index(
             &context.profile().criteria,
             scored

@@ -401,6 +401,43 @@ impl SettingsRepository for SettingsStore {
         Ok(())
     }
 
+    async fn upsert_global_settings_json(
+        &self,
+        scope: &str,
+        values: &[(String, String)],
+        source: &str,
+        updated_by_user_id: Option<String>,
+    ) -> AppResult<()> {
+        let scope = scope.to_string();
+        let values = values.to_vec();
+        let source = source.to_string();
+        let encryption_key = self.encryption_key()?;
+        SqlRuntime::run_in_transaction(&self.datastore, "upsert_global_settings_json", move |tx| {
+            let scope = scope.clone();
+            let values = values.clone();
+            let source = source.clone();
+            let actor = updated_by_user_id.clone();
+            let encryption_key = encryption_key.clone();
+            Box::pin(async move {
+                for (key, value) in values {
+                    upsert_setting_value_tx(
+                        tx,
+                        &scope,
+                        &key,
+                        None,
+                        &value,
+                        &source,
+                        actor.clone(),
+                        encryption_key.as_ref(),
+                    )
+                    .await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn delete_setting_value(
         &self,
         scope: &str,

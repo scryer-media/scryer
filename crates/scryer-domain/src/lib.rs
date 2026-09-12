@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 pub mod download_identity;
 mod title_sort;
+pub mod title_spelling;
 pub use title_sort::{
     title_catalog_name_tie_key, title_catalog_sort_input, title_catalog_sort_key,
     title_catalog_sort_key_for_title,
@@ -155,10 +156,37 @@ pub fn normalize_library_root_path(path: &str) -> String {
     }
 }
 
+/// Prefix marking a library root id as synthetic — allocated, never derived.
+pub const SYNTHETIC_ROOT_ID_PREFIX: &str = "root_";
+
+/// Allocate a fresh identity for a newly configured library root.
+///
+/// A root's id is opaque and permanent: it is minted once, when the root is
+/// first configured, and is never recomputed. That is what lets a root's path be
+/// a mutable attribute — changing where a root points does not change which root
+/// it is, so titles keep valid references across path changes and consolidations
+/// (FR-078). Resolving an *existing* root always means reading its stored id, not
+/// recomputing one from its path.
+pub fn allocate_root_folder_id() -> String {
+    format!(
+        "{SYNTHETIC_ROOT_ID_PREFIX}{}",
+        uuid::Uuid::new_v4().simple()
+    )
+}
+
+/// The pre-0204 path-derived root id.
+///
+/// **Legacy.** Root identity was a pure function of the platform-normalized path
+/// until migration 0204 re-keyed roots onto synthetic ids. This survives for the
+/// migration hooks that have to reproduce the old scheme to recognize and remap
+/// it, and for resolving a legacy id a caller may still be holding through
+/// `library_root_id_remaps`. New code allocates with [`allocate_root_folder_id`]
+/// and resolves existing roots by reading `library_roots.id`.
 pub fn root_folder_id_for_path(path: &str) -> String {
     root_folder_id_for_normalized_path(&normalize_library_root_path(path))
 }
 
+/// See [`root_folder_id_for_path`] — legacy, migration and lookup use only.
 pub fn root_folder_id_for_normalized_path(normalized_path: &str) -> String {
     blake3::hash(normalized_path.as_bytes())
         .to_hex()
@@ -348,6 +376,24 @@ pub struct MediaRequest {
     pub created_title_id: Option<String>,
     pub approved_quality_profile_id: Option<String>,
     pub approved_quality_profile_name: Option<String>,
+    /// Lease the requester asked for, in days. `None` means forever, which is
+    /// the dialog default (plan 0003 A2).
+    pub requested_lease_days: Option<i64>,
+    /// Lease the approver granted. `None` on a pending request, and on an
+    /// approved one it means the approver granted forever.
+    pub approved_lease_days: Option<i64>,
+    /// The [`RequestRuleDecisionRecord`] that decided this request, when rules
+    /// were evaluated at all.
+    pub decision_id: Option<String>,
+    /// Rule sets that voted for the effective outcome.
+    pub decided_by_rule_set_ids: Vec<String>,
+    /// Tags the rules emitted, merged onto the created title at approval
+    /// (spec 0003 FR-050).
+    pub policy_tags: Vec<String>,
+    /// Versioned metadata snapshot captured at submit (spec 0003 FR-030).
+    /// A raw JSON string here: the typed snapshot lives in the application
+    /// layer, so the domain carries the bytes and nothing interprets them.
+    pub metadata_snapshot_json: String,
     pub external_ids: Vec<ExternalId>,
     pub requesters: Vec<MediaRequestRequester>,
     pub created_by_user_id: String,
@@ -813,6 +859,25 @@ pub struct TaggedAlias {
     pub language: String,
 }
 
+/// One admin-defined user tag.
+///
+/// Membership still lives as a label inside `Title::tags`; this registry is the
+/// gate that says which unprefixed labels may be written there at all. The
+/// `scryer:` namespace inside `Title::tags` is reserved for structured settings
+/// and is never represented here.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleTagDefinition {
+    pub id: String,
+    /// Normalized label: trimmed, lowercased, internal whitespace collapsed.
+    /// Unique across the registry, and the exact string stored in `Title::tags`.
+    pub label: String,
+    pub description: Option<String>,
+    /// `None` for labels the 0220 migration adopted from existing title bags.
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
 /// How the community (AniDB/AniList/MAL, and therefore release groups) numbers
 /// an anime series, expressed against the TVDB official order the catalog uses.
 ///
@@ -1043,6 +1108,15 @@ pub struct SeriesMovieLink {
     pub metadata_active: bool,
     pub monitored: bool,
     pub legacy_collection_id: Option<String>,
+    /// User tags applied to this series movie, by label.
+    ///
+    /// A series movie is a link, not a title, so it carries its own bag rather
+    /// than borrowing the series title's: the same `movie_entities` row can be
+    /// linked from several series, and each placement is tagged on its own.
+    /// Same registry gate, same normalization, and the same reserved `scryer:`
+    /// namespace rule as `Title::tags`.
+    #[serde(default)]
+    pub tags: Vec<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -1196,7 +1270,7 @@ pub struct IndexerConfig {
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
     pub enable_auto_search: bool,
-    pub indexer_proxy_config_id: Option<String>,
+    pub proxy_config_id: Option<String>,
     pub download_client_id: Option<String>,
     pub seeding_profile_id: Option<String>,
     pub managed_parent_config_id: Option<String>,
@@ -1211,18 +1285,56 @@ pub struct IndexerConfig {
     pub updated_at: DateTime<Utc>,
 }
 
+/// What a proxy actually does to a request.
+///
+/// Derived from the provider type rather than stored: a provider belongs to
+/// exactly one family, so a second persisted column would only be a way for
+/// the two to disagree.
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum IndexerProxyProviderType {
-    Byparr,
-    Trawl,
+pub enum ProxyKind {
+    /// The proxy fetches the page itself and hands back a solved response
+    /// (Byparr, Trawl). Requires a `ChallengeSolverProtocol`.
+    ChallengeSolver,
+    /// The proxy only carries bytes: an HTTP CONNECT or SOCKS5 hop that
+    /// Scryer's own HTTP client dials through. Carries no solver protocol.
+    Transport,
+    /// Scryer brings the hop up itself — an SSH session or a userspace
+    /// WireGuard device — and then dials through it. Like a transport it only
+    /// carries bytes, but it owns credentials and a lifecycle that a plain
+    /// transport hop does not have.
+    Tunnel,
 }
 
-impl IndexerProxyProviderType {
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ProxyProviderType {
+    Byparr,
+    Trawl,
+    Http,
+    Socks4,
+    Socks5,
+    SshTunnel,
+    /// Multiplexed HTTP/3 CONNECT over an authenticated QUIC connection.
+    Http3,
+    /// A userspace WireGuard tunnel Scryer brings up itself. Same family as
+    /// [`Self::SshTunnel`] — it owns credentials and a lifecycle — but it
+    /// authenticates with keys alone and has no trust-on-first-use step, so it
+    /// never pins a host key.
+    WireGuard,
+}
+
+impl ProxyProviderType {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Byparr => "byparr",
             Self::Trawl => "trawl",
+            Self::Http => "http",
+            Self::Http3 => "http3",
+            Self::Socks4 => "socks4",
+            Self::Socks5 => "socks5",
+            Self::SshTunnel => "ssh_tunnel",
+            Self::WireGuard => "wireguard",
         }
     }
 
@@ -1230,8 +1342,37 @@ impl IndexerProxyProviderType {
         match value.trim().to_ascii_lowercase().replace('-', "_").as_str() {
             "byparr" => Some(Self::Byparr),
             "trawl" => Some(Self::Trawl),
+            "http" => Some(Self::Http),
+            "http3" => Some(Self::Http3),
+            "socks4" => Some(Self::Socks4),
+            "socks5" => Some(Self::Socks5),
+            "ssh_tunnel" => Some(Self::SshTunnel),
+            // `wire-guard` reaches this arm as `wire_guard` through the same
+            // hyphen rule every other provider gets, so both spellings of the
+            // product's own name are accepted.
+            "wireguard" | "wire_guard" => Some(Self::WireGuard),
             _ => None,
         }
+    }
+
+    pub fn kind(self) -> ProxyKind {
+        match self {
+            Self::Byparr | Self::Trawl => ProxyKind::ChallengeSolver,
+            Self::Http | Self::Socks4 | Self::Socks5 => ProxyKind::Transport,
+            Self::SshTunnel | Self::WireGuard | Self::Http3 => ProxyKind::Tunnel,
+        }
+    }
+
+    pub fn is_challenge_solver(self) -> bool {
+        matches!(self.kind(), ProxyKind::ChallengeSolver)
+    }
+
+    pub fn is_transport(self) -> bool {
+        matches!(self.kind(), ProxyKind::Transport)
+    }
+
+    pub fn is_tunnel(self) -> bool {
+        matches!(self.kind(), ProxyKind::Tunnel)
     }
 }
 
@@ -1258,13 +1399,13 @@ impl ChallengeSolverProtocol {
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum IndexerProxyHealthStatus {
+pub enum ProxyHealthStatus {
     Unknown,
     Healthy,
     Unhealthy,
 }
 
-impl IndexerProxyHealthStatus {
+impl ProxyHealthStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Unknown => "unknown",
@@ -1284,19 +1425,87 @@ impl IndexerProxyHealthStatus {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub struct IndexerProxyConfig {
+pub struct ProxyConfig {
     pub id: String,
     pub name: String,
-    pub provider_type: IndexerProxyProviderType,
-    pub protocol: ChallengeSolverProtocol,
+    pub provider_type: ProxyProviderType,
+    /// Solve protocol spoken by challenge-solver providers. `None` for
+    /// transport providers, which speak no application protocol of their own.
+    pub protocol: Option<ChallengeSolverProtocol>,
     pub base_url: String,
     pub request_timeout_seconds: u32,
     pub is_enabled: bool,
-    pub last_health_status: Option<IndexerProxyHealthStatus>,
+    /// Proxy credentials. Named `*_encrypted` for the at-rest column they map
+    /// to; in memory these hold plaintext, exactly like
+    /// `IndexerConfig::api_key_encrypted`. The store encrypts on write and
+    /// decrypts on read.
+    pub username_encrypted: Option<String>,
+    pub password_encrypted: Option<String>,
+    /// SOCKS5 `socks5h` semantics: resolve the destination hostname at the
+    /// proxy rather than locally. Meaningless for the other providers.
+    pub remote_dns: bool,
+    /// Tunnel private key, in PEM form. Same `*_encrypted` convention as the
+    /// credentials above: the column is encrypted, this field is plaintext.
+    pub private_key_encrypted: Option<String>,
+    /// Passphrase protecting `private_key_encrypted`, when the key has one.
+    pub private_key_passphrase_encrypted: Option<String>,
+    /// WireGuard only: the peer's base64 `PublicKey`, from the `[Peer]`
+    /// section. It is the whole of the peer's identity and it is public, so it
+    /// is stored and shown in the clear — unlike everything else on this
+    /// tunnel.
+    pub peer_public_key: Option<String>,
+    /// WireGuard only: the optional symmetric `PresharedKey`. Same
+    /// `*_encrypted` convention as the credentials — the column is ciphertext,
+    /// this field is plaintext base64.
+    pub preshared_key_encrypted: Option<String>,
+    /// WireGuard only: *our* base64 public key, derived from
+    /// `private_key_encrypted` and re-derived whenever it changes. Stored
+    /// rather than computed on read so nothing above the workflow needs the
+    /// tunnel crate to show the operator the line they must paste into the
+    /// server's `[Peer]` section.
+    pub tunnel_public_key: Option<String>,
+    /// WireGuard only: the interface's own addresses inside the tunnel, from
+    /// the `[Interface] Address` line. At least one is required.
+    pub tunnel_addresses: Vec<String>,
+    /// WireGuard only: resolvers to use *through* the tunnel, from the
+    /// `[Interface] DNS` line. May be empty, in which case names cannot be
+    /// resolved through this tunnel at all.
+    pub tunnel_dns_servers: Vec<String>,
+    /// WireGuard only: tunnel MTU. `None` means the engine's default.
+    pub tunnel_mtu: Option<u16>,
+    /// WireGuard only: `PersistentKeepalive`, in seconds. `None` means the
+    /// engine's default; `Some(0)` switches keepalive off.
+    pub tunnel_keepalive_seconds: Option<u16>,
+    /// Host key pinned on the first successful tunnel connect, formatted the
+    /// way OpenSSH prints it (`SHA256:<base64>`). A host key is public, so this
+    /// is stored and exposed in the clear; the tunnel engine hard-fails when a
+    /// server presents a different one.
+    pub host_key_fingerprint: Option<String>,
+    /// When the pin above was taken.
+    pub host_key_pinned_at: Option<DateTime<Utc>>,
+    pub last_health_status: Option<ProxyHealthStatus>,
     pub last_error_message: Option<String>,
     pub last_error_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+impl ProxyConfig {
+    pub fn kind(&self) -> ProxyKind {
+        self.provider_type.kind()
+    }
+
+    pub fn is_challenge_solver(&self) -> bool {
+        self.provider_type.is_challenge_solver()
+    }
+
+    pub fn is_transport(&self) -> bool {
+        self.provider_type.is_transport()
+    }
+
+    pub fn is_tunnel(&self) -> bool {
+        self.provider_type.is_tunnel()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1369,7 +1578,7 @@ pub struct NewIndexerConfig {
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
     pub enable_auto_search: bool,
-    pub indexer_proxy_config_id: Option<String>,
+    pub proxy_config_id: Option<String>,
     pub download_client_id: Option<String>,
     pub config_json: Option<String>,
 }
@@ -1413,6 +1622,10 @@ pub struct DownloadClientConfig {
     pub status: DownloadClientStatus,
     pub last_error: Option<String>,
     pub last_seen_at: Option<DateTime<Utc>>,
+    /// Proxy this client's traffic egresses through, when the operator
+    /// assigned one. Same column name and meaning as
+    /// `IndexerConfig::proxy_config_id`.
+    pub proxy_config_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -1424,6 +1637,7 @@ pub struct NewDownloadClientConfig {
     pub config_json: String,
     pub client_priority: i64,
     pub is_enabled: bool,
+    pub proxy_config_id: Option<String>,
 }
 
 /// How a seeding profile treats season packs relative to its own goals.
@@ -1999,7 +2213,8 @@ impl DownloadQueueDeleteStatus {
 }
 
 pub const VIDEO_EXTENSIONS: &[&str] = &[
-    "mkv", "mp4", "avi", "wmv", "mov", "m4v", "ts", "m2ts", "webm", "flv", "ogv", "strm",
+    "mkv", "mp4", "avi", "wmv", "mov", "m4v", "ts", "m2ts", "webm", "flv", "ogv", "strm", "mpg",
+    "mpeg", "vob", "iso",
 ];
 
 pub const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "ass", "ssa", "sub", "vtt", "idx"];
@@ -2027,6 +2242,10 @@ pub fn canonical_video_extension(path: &std::path::Path) -> Option<&'static str>
 
 pub fn is_video_file(path: &std::path::Path) -> bool {
     canonical_video_extension(path).is_some()
+}
+
+pub fn is_disc_image(path: &std::path::Path) -> bool {
+    canonical_video_extension(path) == Some("iso")
 }
 
 pub fn is_subtitle_file(path: &std::path::Path) -> bool {
@@ -2145,7 +2364,9 @@ impl ImportStatus {
 #[serde(rename_all = "snake_case")]
 pub enum ImportTransferPhase {
     Extracting,
+    Waiting,
     Copying,
+    Verifying,
     Finalizing,
 }
 
@@ -2153,7 +2374,9 @@ impl ImportTransferPhase {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Extracting => "extracting",
+            Self::Waiting => "waiting",
             Self::Copying => "copying",
+            Self::Verifying => "verifying",
             Self::Finalizing => "finalizing",
         }
     }
@@ -2441,6 +2664,207 @@ pub struct ImportFileResult {
     #[serde(default)]
     pub destination_disposition: ImportDestinationDisposition,
     pub source_cleanup: Option<ImportSourceCleanupGuard>,
+    /// What proving the destination concluded, for the placements that copied
+    /// bytes (FR-045). `None` for a rename, hardlink, or symlink placement:
+    /// nothing was copied, so there is nothing to verify and no hash to
+    /// persist.
+    #[serde(default)]
+    pub verification: Option<ImportVerification>,
+}
+
+// ── Content verification value types (FR-040–047) ───────────────────────────
+//
+// These live in the domain rather than beside the copy machinery because three
+// layers need to name the same values: the application resolves the depth
+// preference and persists the hashes, the workflow importer performs the copy —
+// in a separate worker process, so the values must serialize — and the location
+// operation runner records them per file. Behavior stays where it belongs; only
+// the vocabulary is shared.
+
+/// How thoroughly a copied file is proven before its source may be touched.
+///
+/// FR-042: **full** (default) reads the destination back and compares it against
+/// the CRC streamed during the copy; **quick** uses the sampled head+tail proof
+/// plus size and is the universal floor — full falls back to it, and verification
+/// never drops below it.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VerificationDepth {
+    /// Full destination read-back compared against the streamed CRC.
+    #[default]
+    Full,
+    /// Sampled head+tail content proof plus size.
+    Quick,
+}
+
+impl VerificationDepth {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Full => "full",
+            Self::Quick => "quick",
+        }
+    }
+
+    /// Parse a persisted setting value. Unknown values are an error rather than a
+    /// silent downgrade so a corrupt setting cannot quietly weaken verification.
+    pub fn from_setting(value: &str) -> Result<Self, String> {
+        match value.trim() {
+            "full" => Ok(Self::Full),
+            "quick" => Ok(Self::Quick),
+            other => Err(format!("unsupported verification depth: {other}")),
+        }
+    }
+}
+
+/// The depth actually applied to one file, including the fallback case.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub struct AppliedVerificationDepth {
+    /// The depth the operation was configured to apply.
+    pub requested: VerificationDepth,
+    /// The depth actually achieved for this file.
+    pub applied: VerificationDepth,
+    /// True when `requested` was `Full` but only the quick floor could run
+    /// (FR-042 fallback); recorded so the reduced guarantee is auditable.
+    pub fell_back: bool,
+}
+
+impl AppliedVerificationDepth {
+    /// The depth was applied exactly as requested.
+    pub fn exact(depth: VerificationDepth) -> Self {
+        Self {
+            requested: depth,
+            applied: depth,
+            fell_back: false,
+        }
+    }
+
+    /// Full verification was requested but only the quick floor could run.
+    pub fn quick_fallback() -> Self {
+        Self {
+            requested: VerificationDepth::Full,
+            applied: VerificationDepth::Quick,
+            fell_back: true,
+        }
+    }
+
+    /// The FR-043 stamp: "verified (full)" / "verified (quick, fallback)".
+    pub fn label(&self) -> String {
+        if self.fell_back {
+            format!("{} (fallback)", self.applied.as_str())
+        } else {
+            self.applied.as_str().to_string()
+        }
+    }
+}
+
+/// Outcome of verifying one destination file.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum FileVerificationOutcome {
+    /// Destination content matched at the applied depth; source removal is
+    /// unblocked for this file (FR-044).
+    Verified,
+    /// Destination content did not match; the source is never touched.
+    Mismatch,
+    /// Verification could not run at all (unreadable destination, vanished
+    /// mount); treated as a failure, never as a pass.
+    Unavailable,
+}
+
+impl FileVerificationOutcome {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Verified => "verified",
+            Self::Mismatch => "mismatch",
+            Self::Unavailable => "unavailable",
+        }
+    }
+
+    /// Parse a persisted value. An unreadable outcome is never treated as a
+    /// pass (FR-044).
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "verified" => Some(Self::Verified),
+            "mismatch" => Some(Self::Mismatch),
+            "unavailable" => Some(Self::Unavailable),
+            _ => None,
+        }
+    }
+
+    /// Only a verified file may have its source recycled or removed (FR-044).
+    pub fn permits_source_removal(&self) -> bool {
+        matches!(self, Self::Verified)
+    }
+}
+
+/// CRC algorithm identifier persisted alongside a stored CRC so a future default
+/// change cannot be mistaken for a corruption (FR-041 "algorithm-tagged").
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MoveCrcAlgorithm {
+    /// CRC-64/NVME — the default; see `scryer_application::location::verify`.
+    #[default]
+    Crc64Nvme,
+}
+
+impl MoveCrcAlgorithm {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Crc64Nvme => "crc64_nvme",
+        }
+    }
+
+    pub fn from_setting(value: &str) -> Result<Self, String> {
+        match value.trim() {
+            "crc64_nvme" => Ok(Self::Crc64Nvme),
+            other => Err(format!("unsupported move CRC algorithm: {other}")),
+        }
+    }
+}
+
+/// Hashes produced by one streaming copy pass (D2): read once at the source,
+/// both values persisted with the destination media file.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StreamedContentHashes {
+    /// Bytes streamed through the hashers.
+    pub size_bytes: u64,
+    /// Algorithm tag for `move_crc`.
+    pub crc_algorithm: MoveCrcAlgorithm,
+    /// Streaming CRC over the copied bytes; the move-corruption check.
+    pub move_crc: u64,
+    /// Full-file BLAKE3 (hex); the dedup identity (D4, FR-073).
+    pub full_blake3: String,
+}
+
+/// What an import's copy proved about its destination (FR-045).
+///
+/// The import equivalent of a location operation's per-file verification
+/// record, minus the operation identifiers an import does not have. It crosses
+/// the import worker's process boundary, so everything in it serializes.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ImportVerification {
+    /// Hashes streamed while the bytes were copied.
+    pub hashes: StreamedContentHashes,
+    /// Requested vs applied depth, and whether the quick floor was a fallback.
+    pub depth: AppliedVerificationDepth,
+    pub outcome: FileVerificationOutcome,
+    /// Why the outcome is not a plain pass, or why the depth fell back.
+    pub detail: Option<String>,
+}
+
+impl ImportVerification {
+    /// The FR-044 gate. An import that copied bytes it could not prove must not
+    /// reach source cleanup.
+    pub fn permits_source_removal(&self) -> bool {
+        self.outcome.permits_source_removal()
+    }
+
+    /// The FR-043 stamp: `verified (full)`, `verified (quick)`, or
+    /// `verified (quick (fallback))`.
+    pub fn stamp(&self) -> String {
+        format!("{} ({})", self.outcome.as_str(), self.depth.label())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -2509,6 +2933,7 @@ pub enum TitleHistoryEventType {
     FileRecycled,
     FileDeleted,
     FileRenamed,
+    TitleMoved,
     DownloadIgnored,
     Rematched,
     /// A torrent was imported and its client entry is being retained while it
@@ -2535,6 +2960,7 @@ impl TitleHistoryEventType {
             Self::FileRecycled => "file_recycled",
             Self::FileDeleted => "file_deleted",
             Self::FileRenamed => "file_renamed",
+            Self::TitleMoved => "title_moved",
             Self::DownloadIgnored => "download_ignored",
             Self::Rematched => "rematched",
             Self::SeedingStarted => "seeding_started",
@@ -2557,6 +2983,7 @@ impl TitleHistoryEventType {
             "file_recycled" => Some(Self::FileRecycled),
             "file_deleted" => Some(Self::FileDeleted),
             "file_renamed" => Some(Self::FileRenamed),
+            "title_moved" => Some(Self::TitleMoved),
             "download_ignored" => Some(Self::DownloadIgnored),
             "rematched" => Some(Self::Rematched),
             "seeding_started" => Some(Self::SeedingStarted),
@@ -2579,6 +3006,7 @@ impl TitleHistoryEventType {
         Self::FileRecycled,
         Self::FileDeleted,
         Self::FileRenamed,
+        Self::TitleMoved,
         Self::DownloadIgnored,
         Self::Rematched,
         Self::SeedingStarted,
@@ -2795,6 +3223,7 @@ pub enum DomainEventType {
     TitleAdded,
     TitleUpdated,
     TitleRematched,
+    TitleMoved,
     TitleDeleted,
     ConfigurationChanged,
     DiscoverySearchCompleted,
@@ -2846,6 +3275,7 @@ impl DomainEventType {
             Self::TitleAdded => "title_added",
             Self::TitleUpdated => "title_updated",
             Self::TitleRematched => "title_rematched",
+            Self::TitleMoved => "title_moved",
             Self::TitleDeleted => "title_deleted",
             Self::ConfigurationChanged => "configuration_changed",
             Self::DiscoverySearchCompleted => "discovery_search_completed",
@@ -2897,6 +3327,7 @@ impl DomainEventType {
             "title_added" => Some(Self::TitleAdded),
             "title_updated" => Some(Self::TitleUpdated),
             "title_rematched" => Some(Self::TitleRematched),
+            "title_moved" => Some(Self::TitleMoved),
             "title_deleted" => Some(Self::TitleDeleted),
             "configuration_changed" => Some(Self::ConfigurationChanged),
             "discovery_search_completed" => Some(Self::DiscoverySearchCompleted),
@@ -2998,6 +3429,10 @@ pub struct MediaRequestSubmittedEventData {
     pub requested_quality_profile_id: Option<String>,
     pub requested_quality_profile_name: Option<String>,
     pub requested_monitor_type: Option<String>,
+    /// `None` means forever. Defaulted on read: events written before request
+    /// leases existed carry no lease at all, which is exactly "forever".
+    #[serde(default)]
+    pub requested_lease_days: Option<i64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -3013,6 +3448,16 @@ pub struct MediaRequestResolvedEventData {
     pub requested_monitor_type: Option<String>,
     pub approved_quality_profile_id: Option<String>,
     pub approved_quality_profile_name: Option<String>,
+    /// Policy provenance, all defaulted on read so events written before
+    /// request rules existed decode unchanged (constitution C6).
+    #[serde(default)]
+    pub decided_by_rule_set_ids: Vec<String>,
+    #[serde(default)]
+    pub decision_reason_codes: Vec<String>,
+    #[serde(default)]
+    pub approved_lease_days: Option<i64>,
+    #[serde(default)]
+    pub policy_tags: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -3023,6 +3468,26 @@ pub struct TitleAddedEventData {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TitleUpdatedEventData {
     pub title: TitleContextSnapshot,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TitleMovedEventData {
+    pub title: TitleContextSnapshot,
+    pub operation_id: String,
+    pub operation_type: String,
+    pub mode: String,
+    pub source_title_id: String,
+    pub source_title_name: String,
+    pub source_library_id: String,
+    pub source_library_name: String,
+    pub destination_library_id: String,
+    pub destination_library_name: String,
+    pub source_root_id: String,
+    pub destination_root_id: String,
+    pub source_path: Option<String>,
+    pub destination_path: Option<String>,
+    pub completed_with_warnings: bool,
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -3590,6 +4055,7 @@ pub enum DomainEventPayload {
     TitleAdded(TitleAddedEventData),
     TitleUpdated(TitleUpdatedEventData),
     TitleRematched(TitleRematchedEventData),
+    TitleMoved(TitleMovedEventData),
     TitleDeleted(TitleDeletedEventData),
     ConfigurationChanged(ConfigurationChangedEventData),
     DiscoverySearchCompleted(DiscoverySearchCompletedEventData),
@@ -3643,6 +4109,7 @@ impl DomainEventPayload {
             Self::TitleAdded(_) => DomainEventType::TitleAdded,
             Self::TitleUpdated(_) => DomainEventType::TitleUpdated,
             Self::TitleRematched(_) => DomainEventType::TitleRematched,
+            Self::TitleMoved(_) => DomainEventType::TitleMoved,
             Self::TitleDeleted(_) => DomainEventType::TitleDeleted,
             Self::ConfigurationChanged(_) => DomainEventType::ConfigurationChanged,
             Self::DiscoverySearchCompleted(_) => DomainEventType::DiscoverySearchCompleted,
@@ -3935,6 +4402,31 @@ pub struct PluginCatalogStatusRecord {
 }
 
 /// A user-authored rule set definition.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleEvaluationPhase {
+    Baseline,
+    #[default]
+    Additional,
+}
+
+impl RuleEvaluationPhase {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Additional => "additional",
+            Self::Baseline => "baseline",
+        }
+    }
+
+    pub fn from_storage_str(value: &str) -> Option<Self> {
+        match value {
+            "additional" => Some(Self::Additional),
+            "baseline" => Some(Self::Baseline),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RuleSet {
     pub id: String,
@@ -3943,6 +4435,12 @@ pub struct RuleSet {
     pub rego_source: String,
     pub enabled: bool,
     pub priority: i32,
+    #[serde(default)]
+    pub evaluation_phase: RuleEvaluationPhase,
+    #[serde(default)]
+    pub exclusive_group: Option<String>,
+    #[serde(default)]
+    pub disabled_reason: Option<String>,
     /// Facets this rule applies to. Empty = all facets.
     pub applied_facets: Vec<MediaFacet>,
     pub created_at: DateTime<Utc>,
@@ -3953,6 +4451,1065 @@ pub struct RuleSet {
     /// applies wherever its facts match; tags restrict it to titles carrying
     /// one of them. Only meaningful for managed rows.
     pub managed_tag_filter: Option<Vec<String>>,
+}
+
+/// A rule pack installed from a tracked source.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RulePackInstallation {
+    pub pack_id: String,
+    pub name: String,
+    pub version: String,
+    pub digest: String,
+    /// Whether rules from this installed signed pack may be copied into user-authored rules.
+    #[serde(default = "default_rule_pack_customizable")]
+    pub customizable: bool,
+    pub auto_update: bool,
+    /// Monotonically increasing optimistic-concurrency token.
+    pub revision: i64,
+    pub last_updated: DateTime<Utc>,
+    pub last_error: Option<String>,
+    pub members: Vec<RulePackMember>,
+}
+
+const fn default_rule_pack_customizable() -> bool {
+    true
+}
+
+/// The stable source-template to local-rule-set mapping for one installed pack.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RulePackMember {
+    pub template_id: String,
+    pub rule_set_id: String,
+    /// A source template removed upstream. Retained so reappearance preserves
+    /// the local identity.
+    pub removed: bool,
+}
+
+/// How far a maintenance rule set is allowed to act (RFC 137 section 7).
+///
+/// Only [`Self::Disabled`] is reachable in the foundation wave: nothing
+/// evaluates stored maintenance rules yet, so a rule that claimed to be running
+/// in shadow or observe mode would be advertising a capability that does not
+/// exist. The other two variants are declared here because the storage column
+/// is written now and must not need a migration when the evaluator lands.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceEvaluationMode {
+    #[default]
+    Disabled,
+    /// Evaluate and record candidates; never act.
+    Shadow,
+    /// Evaluate, record, and surface candidates for manual approval.
+    Observe,
+}
+
+impl MaintenanceEvaluationMode {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Shadow => "shadow",
+            Self::Observe => "observe",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "disabled" => Some(Self::Disabled),
+            "shadow" => Some(Self::Shadow),
+            "observe" => Some(Self::Observe),
+            _ => None,
+        }
+    }
+}
+
+/// Granularity a maintenance rule set is scoped to.
+///
+/// Scope is immutable after creation. Omitted scope retains title behavior.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceRuleSubjectKind {
+    #[default]
+    Title,
+    Season,
+    Episode,
+}
+
+impl MaintenanceRuleSubjectKind {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Title => "title",
+            Self::Season => "season",
+            Self::Episode => "episode",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "title" => Some(Self::Title),
+            "season" => Some(Self::Season),
+            "episode" => Some(Self::Episode),
+            _ => None,
+        }
+    }
+}
+
+/// A user-authored maintenance rule set: identity, scope, and evaluation state.
+///
+/// The matcher and the action it authorizes live on
+/// [`MaintenanceRuleRevision`], never here, so changing what a rule *does*
+/// always produces a new revision.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleSet {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub enabled: bool,
+    pub evaluation_mode: MaintenanceEvaluationMode,
+    /// How far this rule's effects are armed, independent of its mode. The
+    /// action handler requires both this and the instance effect gates.
+    pub effect_arming: MaintenanceEffectArming,
+    /// Set only by the one-time compatibility migration when newly available
+    /// show facts could widen an already destructively armed title rule.
+    /// Operators must review and arm the rule again before it can execute.
+    #[serde(default)]
+    pub destructive_rearm_required: bool,
+    /// Libraries this rule is confined to. Empty means every library.
+    pub library_ids: Vec<String>,
+    pub subject_kind: MaintenanceRuleSubjectKind,
+    /// Revision number of the matcher currently in force.
+    pub current_revision_number: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One immutable revision of a maintenance rule set's matcher and action
+/// (RFC 137 section 7.1).
+///
+/// Revisions are append-only: editing the matcher writes revision N+1 and
+/// repoints the rule set, so a candidate can always be attributed to the exact
+/// source and action that produced it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleRevision {
+    pub id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    /// Rego source with the package declaration already rewritten to the
+    /// system-assigned rule ID.
+    pub rego_source: String,
+    /// Serialized `MaintenanceActionSpec`. Stored as JSON because the closed
+    /// action catalog lives in the application layer; callers deserialize it at
+    /// that boundary rather than passing the raw text around.
+    pub action_spec_json: String,
+    pub grace_days: i64,
+    /// Configured library root whose capacity and owned files this revision
+    /// may read. `None` preserves the legacy root-agnostic behavior.
+    #[serde(default)]
+    pub storage_root_id: Option<String>,
+    pub matcher_content_hash: String,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Lifecycle state of one maintenance candidate (RFC 137 section 8).
+///
+/// The whole enum is pinned here, storage strings included, even though the
+/// dark evaluator only ever writes [`Self::Observing`], [`Self::Canceled`], and
+/// [`Self::Excluded`]. The executor wave writes the rest; declaring them now is
+/// what keeps that wave from needing a migration to widen a column it already
+/// shipped.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceCandidateState {
+    /// Matching, grace clock running. The only state a first match creates.
+    #[default]
+    Observing,
+    /// Grace elapsed and effect arming permits action; awaiting the handler.
+    PendingAction,
+    /// Eligible to execute now.
+    Due,
+    /// An action lease is held for this candidate.
+    Executing,
+    /// The action completed.
+    Succeeded,
+    /// The action failed terminally.
+    Failed,
+    /// The subject stopped matching, or its revision was superseded.
+    Canceled,
+    /// An exclusion covers the subject.
+    Excluded,
+    /// A safety precondition refused the action.
+    Blocked,
+}
+
+impl MaintenanceCandidateState {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Observing => "observing",
+            Self::PendingAction => "pending_action",
+            Self::Due => "due",
+            Self::Executing => "executing",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Canceled => "canceled",
+            Self::Excluded => "excluded",
+            Self::Blocked => "blocked",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "observing" => Some(Self::Observing),
+            "pending_action" => Some(Self::PendingAction),
+            "due" => Some(Self::Due),
+            "executing" => Some(Self::Executing),
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
+            "canceled" => Some(Self::Canceled),
+            "excluded" => Some(Self::Excluded),
+            "blocked" => Some(Self::Blocked),
+            _ => None,
+        }
+    }
+
+    /// A terminal candidate is finished: nothing re-opens it, and a later match
+    /// starts a new candidate with the next match generation instead. The set
+    /// is duplicated as a literal list in the `lifecycle_candidates` partial
+    /// unique index, which is what enforces one active candidate per
+    /// (rule, title); [`MAINTENANCE_TERMINAL_CANDIDATE_STATES`] is the storage
+    /// form of the same set.
+    pub const fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Canceled | Self::Excluded
+        )
+    }
+}
+
+/// Storage strings of every terminal candidate state, in the order the
+/// migration's partial unique index lists them.
+pub const MAINTENANCE_TERMINAL_CANDIDATE_STATES: [&str; 4] =
+    ["succeeded", "failed", "canceled", "excluded"];
+
+/// Durable membership of one subject in one maintenance rule set
+/// (RFC 137 section 8).
+///
+/// `first_matched_at` is the grace clock's origin and is never rewritten while
+/// the candidate is active: a repeat match advances `last_matched_at` only.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleCandidate {
+    pub id: String,
+    pub rule_set_id: String,
+    /// Revision in force when the candidate was created. A candidate whose
+    /// revision no longer matches the rule set's current revision is superseded.
+    pub revision_number: i64,
+    pub matcher_content_hash: String,
+    pub title_id: String,
+    pub library_id: String,
+    pub facet: String,
+    pub subject_kind: String,
+    /// Title, collection, or episode ID, according to `subject_kind`.
+    pub subject_id: String,
+    /// Increments per (rule, subject kind, subject ID) for each fresh candidate, so
+    /// a cancel-then-rematch is distinguishable from a continuing membership.
+    pub match_generation: i64,
+    pub state: MaintenanceCandidateState,
+    pub state_reason: String,
+    pub reason_codes: Vec<String>,
+    /// Action the revision authorizes, as its stored catalog wire name. The
+    /// closed action enum lives in the application layer, so the domain row
+    /// carries the string the revision's spec serialized to.
+    pub action_kind: String,
+    pub grace_days: i64,
+    pub first_matched_at: DateTime<Utc>,
+    pub last_matched_at: DateTime<Utc>,
+    /// `first_matched_at + grace_days`, materialized so due selection is a
+    /// column comparison rather than arithmetic over two columns.
+    pub due_at: DateTime<Utc>,
+    pub last_evaluated_at: DateTime<Utc>,
+    /// Set while the latest evaluation could not decide (unknown fact or a
+    /// per-title evaluation error), cleared by the next confirmed match.
+    pub held_since: Option<DateTime<Utc>>,
+    /// Failed execution attempts for the current match generation. Bounded by
+    /// the action handler; reset implicitly because a new match starts a new
+    /// candidate row.
+    pub action_attempts: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A subject a maintenance rule must never act on (RFC 137 section 11).
+///
+/// `rule_set_id` is `None` for a global exclusion, which covers the subject for
+/// every rule. Exclusions are honored from the first shadow evaluation.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceRuleExclusion {
+    pub id: String,
+    /// `None` means the exclusion is global.
+    pub rule_set_id: Option<String>,
+    pub title_id: String,
+    pub subject_kind: MaintenanceRuleSubjectKind,
+    pub subject_id: String,
+    pub reason: String,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// Status of one recorded evaluation run.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceEvaluationRunStatus {
+    /// Started and not yet finished. A row left in this state is the trace of
+    /// a run that was interrupted.
+    #[default]
+    Running,
+    Succeeded,
+    Failed,
+}
+
+impl MaintenanceEvaluationRunStatus {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// One rule set's pass through one evaluation job run (RFC 137 section 11).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceEvaluationRun {
+    pub id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    pub matcher_content_hash: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub status: MaintenanceEvaluationRunStatus,
+    pub evaluated_count: i64,
+    pub matched_count: i64,
+    pub no_match_count: i64,
+    pub unknown_count: i64,
+    pub error_count: i64,
+    pub canceled_candidates: i64,
+    pub superseded_candidates: i64,
+    pub duration_ms: Option<i64>,
+    pub error: Option<String>,
+}
+
+/// How far a maintenance rule set's effects are armed (RFC 137 sections 8 and
+/// 17 D2/D3). Arming is per rule and independent of the instance-wide effect
+/// gates: an action executes only when both permit it.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceEffectArming {
+    /// Evaluate and track candidates; never act.
+    #[default]
+    None,
+    /// Low- and medium-risk actions may execute.
+    Reversible,
+    /// High-risk actions may additionally execute.
+    Destructive,
+}
+
+impl MaintenanceEffectArming {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Reversible => "reversible",
+            Self::Destructive => "destructive",
+        }
+    }
+
+    /// An unknown stored value must read back as [`Self::None`], never as a
+    /// higher level: a build that cannot interpret an arming level must not act
+    /// on it.
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "none" => Some(Self::None),
+            "reversible" => Some(Self::Reversible),
+            "destructive" => Some(Self::Destructive),
+            _ => None,
+        }
+    }
+}
+
+/// Outcome of one action-handler attempt on one candidate.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleActionRunStatus {
+    /// Started and not yet finished; a row left here traces an interruption.
+    #[default]
+    Running,
+    Succeeded,
+    /// The postcondition already held, so no mutation was performed.
+    AlreadySatisfied,
+    Failed,
+    /// A safety precondition refused the attempt; `hold_reason` says which.
+    Held,
+}
+
+impl LifecycleActionRunStatus {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::AlreadySatisfied => "already_satisfied",
+            Self::Failed => "failed",
+            Self::Held => "held",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "already_satisfied" => Some(Self::AlreadySatisfied),
+            "failed" => Some(Self::Failed),
+            "held" => Some(Self::Held),
+            _ => None,
+        }
+    }
+}
+
+/// One recorded action-handler attempt, holds included, so the executed (or
+/// refused) history of a candidate is append-only evidence (RFC 137 section 8).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleActionRun {
+    pub id: String,
+    pub candidate_id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    pub title_id: String,
+    pub subject_kind: String,
+    pub subject_id: String,
+    /// Catalog wire name of the action, as stored on the candidate.
+    pub action_kind: String,
+    pub match_generation: i64,
+    /// Stable across retries of the same candidate generation and action;
+    /// `attempt` distinguishes retries.
+    pub idempotency_key: String,
+    pub attempt: i64,
+    pub status: LifecycleActionRunStatus,
+    pub hold_reason: Option<String>,
+    pub error: Option<String>,
+    /// Versioned JSON evidence (preview fingerprints, profile ids, …).
+    pub detail: String,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// One stable step coordinate inside a versioned maintenance action sequence.
+///
+/// A candidate generation and revision identify the rule decision; `step_id`
+/// identifies one user-authored operation within that immutable decision. The
+/// key intentionally does not contain an attempt number: retries update the
+/// same durable intent and increment its attempt counter rather than creating
+/// another logical request.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub struct MaintenanceActionStepKey {
+    pub candidate_id: String,
+    pub match_generation: i64,
+    pub revision_number: i64,
+    pub step_id: String,
+}
+
+impl MaintenanceActionStepKey {
+    /// Stable logical identity shared by a step and any durable job receipt it
+    /// creates. It is deliberately human-inspectable while the content hash
+    /// remains a separate revision-bound verification value.
+    pub fn logical_request_key(&self) -> String {
+        format!(
+            "maintenance-sequence:{}:{}:{}:{}",
+            self.candidate_id, self.match_generation, self.revision_number, self.step_id
+        )
+    }
+}
+
+/// State of the durable intent for one maintenance sequence step.
+///
+/// `Held` is not a failed attempt and must never consume retry budget. A
+/// `Skipped` step has reached its policy-defined no-op postcondition, such as a
+/// conditional search after an unchanged quality profile.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceActionStepState {
+    #[default]
+    Pending,
+    Running,
+    Succeeded,
+    AlreadySatisfied,
+    Skipped,
+    Held,
+    Failed,
+}
+
+impl MaintenanceActionStepState {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::AlreadySatisfied => "already_satisfied",
+            Self::Skipped => "skipped",
+            Self::Held => "held",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "running" => Some(Self::Running),
+            "succeeded" => Some(Self::Succeeded),
+            "already_satisfied" => Some(Self::AlreadySatisfied),
+            "skipped" => Some(Self::Skipped),
+            "held" => Some(Self::Held),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+
+    pub const fn is_success_class(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::AlreadySatisfied | Self::Skipped
+        )
+    }
+
+    /// A completed sequence may advance past only these states. Holds and
+    /// failures remain resumable at the step level until executor policy
+    /// reaches a terminal candidate outcome.
+    pub const fn is_completion_success(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::AlreadySatisfied | Self::Skipped
+        )
+    }
+
+    /// The current attempt has returned a result. This differs from sequence
+    /// completion: a held or failed attempt may be retried with a new attempt
+    /// record under the same stable step key.
+    pub const fn is_attempt_finished(self) -> bool {
+        self.is_completion_success() || matches!(self, Self::Held | Self::Failed)
+    }
+}
+
+/// Persisted, mutation-safe evidence for one sequence step.
+///
+/// The JSON fields are versioned evidence, never configuration parameters:
+/// configuration is the closed typed sequence stored on the revision. Writing
+/// this evidence before a mutation lets recovery reason about the exact target,
+/// observed before-state, and provenance without reconstructing either from a
+/// later catalog read.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceActionStepRun {
+    pub key: MaintenanceActionStepKey,
+    pub rule_set_id: String,
+    pub title_id: String,
+    pub subject_kind: String,
+    pub subject_id: String,
+    pub sequence_content_hash: String,
+    pub step_kind: String,
+    pub intent_json: String,
+    pub before_state_json: String,
+    pub target_identity_json: String,
+    pub provenance_json: String,
+    pub state: MaintenanceActionStepState,
+    /// Reservation count for mutations. Holds do not advance it.
+    pub attempt: i64,
+    pub lease_id: Option<String>,
+    pub lease_expires_at: Option<DateTime<Utc>>,
+    pub hold_reason: Option<String>,
+    pub error: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+/// Immutable evidence for one attempt beneath a stable sequence step.
+///
+/// The mutable [`MaintenanceActionStepRun`] is the coordinator's current
+/// checkpoint. This row preserves failed and reconciled job attempts so a
+/// later retry cannot overwrite the evidence that led to it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceActionStepAttempt {
+    pub id: String,
+    pub key: MaintenanceActionStepKey,
+    pub attempt: i64,
+    pub state: MaintenanceActionStepState,
+    pub intent_json: String,
+    pub before_state_json: String,
+    pub target_identity_json: String,
+    pub provenance_json: String,
+    pub hold_reason: Option<String>,
+    pub error: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A versioned receipt for an operation that outlives the action worker.
+///
+/// `Accepted` means a real durable job was created for `job_run_id`; it is not
+/// a speculative dispatch intent. The receipt intentionally has no foreign key
+/// to job history because action evidence must survive ordinary job pruning.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceActionJobReceiptState {
+    #[default]
+    Dispatching,
+    Accepted,
+    Completed,
+    Failed,
+    /// Reconciliation cannot prove whether an external job completed. Workers
+    /// hold here and never submit another request blindly.
+    Unknown,
+}
+
+impl MaintenanceActionJobReceiptState {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Dispatching => "dispatching",
+            Self::Accepted => "accepted",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "dispatching" => Some(Self::Dispatching),
+            "accepted" => Some(Self::Accepted),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "unknown" => Some(Self::Unknown),
+            _ => None,
+        }
+    }
+}
+
+pub const MAINTENANCE_ACTION_JOB_RECEIPT_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceActionJobReceipt {
+    pub schema_version: u32,
+    pub key: MaintenanceActionStepKey,
+    /// Retryable completed-job policies use a new dispatch attempt while
+    /// retaining this step key as their logical identity.
+    pub dispatch_attempt: i64,
+    pub logical_request_key: String,
+    pub request_hash: String,
+    pub job_run_id: Option<String>,
+    pub state: MaintenanceActionJobReceiptState,
+    pub reconciliation_evidence_json: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl MaintenanceActionJobReceipt {
+    pub fn validate_schema(&self) -> Result<(), MaintenanceActionJobReceiptError> {
+        if self.schema_version != MAINTENANCE_ACTION_JOB_RECEIPT_SCHEMA_VERSION {
+            return Err(MaintenanceActionJobReceiptError::UnsupportedSchemaVersion {
+                found: self.schema_version,
+                expected: MAINTENANCE_ACTION_JOB_RECEIPT_SCHEMA_VERSION,
+            });
+        }
+        if self.dispatch_attempt <= 0 {
+            return Err(MaintenanceActionJobReceiptError::InvalidDispatchAttempt);
+        }
+        if self.logical_request_key != self.key.logical_request_key() {
+            return Err(MaintenanceActionJobReceiptError::LogicalRequestKeyMismatch);
+        }
+        if self.request_hash.trim().is_empty() {
+            return Err(MaintenanceActionJobReceiptError::MissingRequestHash);
+        }
+        if matches!(
+            self.state,
+            MaintenanceActionJobReceiptState::Accepted
+                | MaintenanceActionJobReceiptState::Completed
+        ) && self
+            .job_run_id
+            .as_deref()
+            .is_none_or(|job_run_id| job_run_id.trim().is_empty())
+        {
+            return Err(MaintenanceActionJobReceiptError::AcceptedWithoutJobRun);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum MaintenanceActionJobReceiptError {
+    #[error(
+        "maintenance action job receipt schema version {found} is unsupported; expected {expected}"
+    )]
+    UnsupportedSchemaVersion { found: u32, expected: u32 },
+    #[error("maintenance action job receipt dispatch attempt must be positive")]
+    InvalidDispatchAttempt,
+    #[error("maintenance action job receipt logical request key does not match its step key")]
+    LogicalRequestKeyMismatch,
+    #[error("maintenance action job receipt request hash is missing")]
+    MissingRequestHash,
+    #[error("an accepted maintenance action job receipt must name a real job run")]
+    AcceptedWithoutJobRun,
+}
+
+/// The terminal outcome that latches a continuous sequence membership.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MaintenanceSequenceTerminalOutcome {
+    Succeeded,
+    Failed,
+}
+
+impl MaintenanceSequenceTerminalOutcome {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "succeeded" => Some(Self::Succeeded),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+/// Durable terminal-membership evidence for a v2 action sequence.
+///
+/// A candidate can become terminal while its rule still matches. This marker
+/// keeps that continuous membership from being admitted again until a raw,
+/// confirmed no-match releases it. Failed markers are intentional: otherwise a
+/// permanently failing sequence would reset its retry budget by creating a new
+/// generation on every evaluator pass.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MaintenanceSequenceTerminalMembership {
+    pub id: String,
+    pub candidate_id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    pub matcher_content_hash: String,
+    pub title_id: String,
+    pub subject_kind: String,
+    pub subject_id: String,
+    pub match_generation: i64,
+    pub sequence_content_hash: String,
+    pub outcome: MaintenanceSequenceTerminalOutcome,
+    /// The complete ordered step-id list of the immutable sequence.
+    pub expected_step_ids: Vec<String>,
+    /// Completed step ids up to the terminal outcome, including a failed final
+    /// step when `outcome` is `Failed`.
+    pub completed_step_ids: Vec<String>,
+    pub terminal_step_id: Option<String>,
+    pub created_at: DateTime<Utc>,
+    /// `None` means the same continuous membership remains latched.
+    pub released_at: Option<DateTime<Utc>>,
+}
+
+/// How far a request rule set is allowed to act (spec 0003 FR-013).
+///
+/// The whole enum is pinned here, storage strings included, even though the
+/// persistence wave only ever writes [`Self::Disabled`]: the column ships now
+/// and must not need a migration when the evaluator lands.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestRuleEvaluationMode {
+    #[default]
+    Disabled,
+    /// Evaluate and record the trace; the effective decision stays whatever
+    /// today's permission check would have produced.
+    Shadow,
+    /// Evaluate, record, and act on the decision.
+    Enforce,
+}
+
+impl RequestRuleEvaluationMode {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Shadow => "shadow",
+            Self::Enforce => "enforce",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "disabled" => Some(Self::Disabled),
+            "shadow" => Some(Self::Shadow),
+            "enforce" => Some(Self::Enforce),
+            _ => None,
+        }
+    }
+}
+
+/// A user-authored request rule set: identity, scope, and evaluation state.
+///
+/// The matcher lives on [`RequestRuleRevision`], never here, so changing what a
+/// rule decides always produces a new revision.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestRuleSet {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub enabled: bool,
+    pub evaluation_mode: RequestRuleEvaluationMode,
+    /// Libraries this rule is confined to. Empty means every library.
+    pub library_ids: Vec<String>,
+    /// Revision number of the matcher currently in force.
+    pub current_revision_number: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// One immutable revision of a request rule set's matcher.
+///
+/// Revisions are append-only, exactly as maintenance revisions are: editing the
+/// matcher writes revision N+1 and repoints the rule set, so a decision can
+/// always be attributed to the exact source that produced it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestRuleRevision {
+    pub id: String,
+    pub rule_set_id: String,
+    pub revision_number: i64,
+    /// Rego source with the package declaration already rewritten to the
+    /// system-assigned rule ID.
+    pub rego_source: String,
+    pub matcher_content_hash: String,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// What a request evaluation concluded (spec 0003 FR-010, FR-011).
+///
+/// [`Self::ManualReview`] is the default because every failure path — engine
+/// error, timeout, unknown fact, no matching rule — lands there: a decision this
+/// build cannot interpret must never read back as an approval or a denial.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RequestDecisionOutcome {
+    AutoApprove,
+    #[default]
+    ManualReview,
+    Deny,
+}
+
+impl RequestDecisionOutcome {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::AutoApprove => "auto_approve",
+            Self::ManualReview => "manual_review",
+            Self::Deny => "deny",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "auto_approve" => Some(Self::AutoApprove),
+            "manual_review" => Some(Self::ManualReview),
+            "deny" => Some(Self::Deny),
+            _ => None,
+        }
+    }
+}
+
+/// The durable trace of one request evaluation (spec 0003 FR-016).
+///
+/// Written for every evaluation, shadow and enforce alike, which is why
+/// `policy_outcome` (what the rules said) and `effective_outcome` (what the
+/// instance acted on) are separate columns: in shadow they disagree on purpose.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestRuleDecisionRecord {
+    pub id: String,
+    /// The media request this decision belongs to. Not a foreign key: a
+    /// pre-flight decision is recorded before any request row exists.
+    pub request_id: String,
+    pub evaluated_at: DateTime<Utc>,
+    pub mode: RequestRuleEvaluationMode,
+    pub effective_outcome: RequestDecisionOutcome,
+    pub policy_outcome: RequestDecisionOutcome,
+    /// Why the decision fell back rather than following a rule vote
+    /// (`no_rule_matched`, `held`, `error`, …). `None` when a rule decided.
+    pub fallback_reason: Option<String>,
+    /// Serialized per-rule votes, reasons, and rule ids. JSON because the vote
+    /// shape belongs to the application layer.
+    pub votes_json: String,
+    /// Tags the rules emitted, in the order the arbitration produced them.
+    pub tags: Vec<String>,
+    /// Hash of the bounded input document, so a decision can be compared
+    /// against the data it was made on.
+    pub input_hash: String,
+    pub input_schema_version: i64,
+    pub created_at: DateTime<Utc>,
+}
+
+/// What produced a lifecycle claim (plan 0003 §5).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleClaimProducer {
+    /// A finite lease approved on a media request.
+    #[default]
+    RequestLease,
+    /// A "forever" request: a permanent keep.
+    RequestPermanent,
+    /// An administrator pinned the title by hand.
+    OperatorKeep,
+}
+
+impl LifecycleClaimProducer {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::RequestLease => "request_lease",
+            Self::RequestPermanent => "request_permanent",
+            Self::OperatorKeep => "operator_keep",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "request_lease" => Some(Self::RequestLease),
+            "request_permanent" => Some(Self::RequestPermanent),
+            "operator_keep" => Some(Self::OperatorKeep),
+            _ => None,
+        }
+    }
+}
+
+/// What a lifecycle claim holds (plan 0003 §5).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleClaimKind {
+    /// Holds until `expires_at`, which starts running at first import.
+    #[default]
+    RetainUntil,
+    /// Holds indefinitely.
+    Keep,
+}
+
+impl LifecycleClaimKind {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::RetainUntil => "retain_until",
+            Self::Keep => "keep",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "retain_until" => Some(Self::RetainUntil),
+            "keep" => Some(Self::Keep),
+            _ => None,
+        }
+    }
+}
+
+/// Lifecycle state of one claim (plan 0003 §5).
+///
+/// Claims are released, never deleted (constitution C3): the terminal states are
+/// history, and only [`Self::Dormant`] and [`Self::Active`] hold anything.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum LifecycleClaimState {
+    /// Created but not yet started: the title has never imported.
+    #[default]
+    Dormant,
+    /// Running; `expires_at` is set for a retention claim.
+    Active,
+    /// The retention window elapsed.
+    Expired,
+    /// Withdrawn before it ran out (request canceled, title deleted, admin).
+    Released,
+    /// Superseded by a permanent keep.
+    Converted,
+}
+
+impl LifecycleClaimState {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Dormant => "dormant",
+            Self::Active => "active",
+            Self::Expired => "expired",
+            Self::Released => "released",
+            Self::Converted => "converted",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "dormant" => Some(Self::Dormant),
+            "active" => Some(Self::Active),
+            "expired" => Some(Self::Expired),
+            "released" => Some(Self::Released),
+            "converted" => Some(Self::Converted),
+            _ => None,
+        }
+    }
+
+    /// A live claim holds every destructive maintenance action on its title
+    /// (spec 0003 FR-042). A dormant claim counts: the title simply has not
+    /// imported yet, and deleting it would destroy the very thing the claim was
+    /// created to protect.
+    pub const fn is_live(self) -> bool {
+        matches!(self, Self::Dormant | Self::Active)
+    }
+}
+
+/// Storage form of the live claim states. Duplicated as a literal list in the
+/// `lifecycle_claims` partial unique index, which is what enforces one live
+/// claim per (producer, producer_ref).
+pub const LIFECYCLE_CLAIM_LIVE_STATES: [&str; 2] = [
+    LifecycleClaimState::Dormant.as_storage_str(),
+    LifecycleClaimState::Active.as_storage_str(),
+];
+
+/// A hold on a title's lifecycle: a request lease, a permanent keep, or an
+/// operator pin (plan 0003 §5, spec 0003 FR-041…FR-044).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LifecycleClaim {
+    pub id: String,
+    pub title_id: String,
+    pub library_id: String,
+    pub producer: LifecycleClaimProducer,
+    /// The producing media request's id, for a request-produced claim. `None`
+    /// for an operator pin, which has nothing upstream to release against.
+    pub producer_ref: Option<String>,
+    pub kind: LifecycleClaimKind,
+    pub state: LifecycleClaimState,
+    /// Requested window for a retention claim; `None` for a keep.
+    pub duration_days: Option<i64>,
+    /// When the claim started running — the title's first import.
+    pub starts_at: Option<DateTime<Utc>>,
+    /// `starts_at + duration_days` once activated; `None` while dormant and for
+    /// keeps.
+    pub expires_at: Option<DateTime<Utc>>,
+    pub created_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    /// Why the claim was released or converted. Kept as history, never cleared.
+    pub released_reason: Option<String>,
+}
+
+impl LifecycleClaim {
+    /// See [`LifecycleClaimState::is_live`].
+    pub const fn is_live(&self) -> bool {
+        self.state.is_live()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Default)]
@@ -4168,6 +5725,108 @@ pub struct MediaServerPlaybackItem {
     pub entity_id: String,
     pub provider_item_id: String,
     pub last_seen_at: DateTime<Utc>,
+}
+
+// ── Media-server watch signals (RFC 137 section 7.3) ────────────────────────
+
+/// What a watch signal is about.
+///
+/// Deliberately only the two granularities the RFC records observations at.
+/// There is no `Show` variant: a series-level "watched" is an aggregate over
+/// its episodes, and storing it would create a second answer that the next
+/// sweep could contradict.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaServerSignalKind {
+    #[default]
+    Movie,
+    Episode,
+}
+
+impl MediaServerSignalKind {
+    pub const fn as_storage_str(self) -> &'static str {
+        match self {
+            Self::Movie => "movie",
+            Self::Episode => "episode",
+        }
+    }
+
+    pub fn parse_storage(value: &str) -> Option<Self> {
+        match value {
+            "movie" => Some(Self::Movie),
+            "episode" => Some(Self::Episode),
+            _ => None,
+        }
+    }
+}
+
+/// One normalized per-user, per-subject observation, as the sync job is about
+/// to write it (RFC 137 "Normalized observation model").
+///
+/// The identity fields the row is keyed by — `connection_id` and
+/// `external_user_id` — are not here: they are the arguments of the write, so a
+/// batch cannot accidentally mix two participants into one replace.
+///
+/// `scryer_title_id` and `scryer_episode_id` are `None` for an observation that
+/// mapping could not attribute to Scryer media. That row is still written:
+/// identity-mapping rule 4 retains unmatched observations rather than guessing
+/// a subject for them.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NewUserMediaSignal {
+    pub provider: MediaServerProvider,
+    /// Denormalized from the linked account at sync time. `None` when the
+    /// provider identity is not linked to a Scryer user.
+    pub scryer_user_id: Option<String>,
+    pub provider_item_id: String,
+    pub kind: MediaServerSignalKind,
+    pub scryer_title_id: Option<String>,
+    pub scryer_episode_id: Option<String>,
+    pub played: bool,
+    pub play_count: i64,
+    pub last_played_at: Option<DateTime<Utc>>,
+    pub observed_at: DateTime<Utc>,
+}
+
+/// A stored watch signal, as read back.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct UserMediaSignal {
+    pub id: String,
+    pub connection_id: String,
+    pub provider: MediaServerProvider,
+    pub external_user_id: String,
+    pub scryer_user_id: Option<String>,
+    pub provider_item_id: String,
+    pub kind: MediaServerSignalKind,
+    pub scryer_title_id: Option<String>,
+    pub scryer_episode_id: Option<String>,
+    pub played: bool,
+    pub play_count: i64,
+    pub last_played_at: Option<DateTime<Utc>>,
+    pub observed_at: DateTime<Utc>,
+    /// Sweep that wrote this row. Rows from older generations for the same
+    /// participant are deleted by the next successful sweep, which is how an
+    /// item leaving the provider's played set stops being reported as played.
+    pub sync_generation: i64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Per-connection signal-sync health.
+///
+/// `last_error` is the operator-facing reason the newest sweep failed; it is
+/// cleared on the next success. `enabled` is the connection's state as of that
+/// sweep, so "no signals" can be told apart from "connection turned off".
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MediaServerSignalSyncState {
+    pub connection_id: String,
+    pub provider: MediaServerProvider,
+    pub enabled: bool,
+    pub last_started_at: Option<DateTime<Utc>>,
+    pub last_success_at: Option<DateTime<Utc>>,
+    pub last_error: Option<String>,
+    pub participant_count: i64,
+    pub signal_count: i64,
+    pub updated_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -4654,6 +6313,8 @@ pub enum ConfigFieldType {
     Multiline,
     Bool,
     Select,
+    /// Enumerated selection rendered with a filter box.
+    FilteredSelect,
     Number,
     Path,
     Tag,
@@ -4667,6 +6328,7 @@ impl ConfigFieldType {
             Self::Multiline => "multiline",
             Self::Bool => "bool",
             Self::Select => "select",
+            Self::FilteredSelect => "filtered_select",
             Self::Number => "number",
             Self::Path => "path",
             Self::Tag => "tag",
@@ -4680,6 +6342,7 @@ impl ConfigFieldType {
             "multiline" => Some(Self::Multiline),
             "bool" => Some(Self::Bool),
             "select" => Some(Self::Select),
+            "filtered_select" => Some(Self::FilteredSelect),
             "number" => Some(Self::Number),
             "path" => Some(Self::Path),
             "tag" => Some(Self::Tag),
@@ -4741,7 +6404,59 @@ impl PluginHostBindingId {
 /// Describes a single configuration field a plugin expects.
 /// Used by the plugin system to advertise what config keys are needed,
 /// and by the frontend to render dynamic form fields.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+/// How a [`FieldCondition`] compares another field's value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionOp {
+    #[default]
+    Eq,
+    Ne,
+    In,
+    NotIn,
+    /// Holds when the referenced field has a non-blank value. Ignores `values`.
+    NonEmpty,
+}
+
+impl ConditionOp {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Eq => "eq",
+            Self::Ne => "ne",
+            Self::In => "in",
+            Self::NotIn => "not_in",
+            Self::NonEmpty => "non_empty",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "eq" => Some(Self::Eq),
+            "ne" => Some(Self::Ne),
+            "in" => Some(Self::In),
+            "not_in" => Some(Self::NotIn),
+            "non_empty" => Some(Self::NonEmpty),
+            _ => None,
+        }
+    }
+}
+
+/// A predicate over another configuration field's current value.
+///
+/// The host evaluates these, so the operator set is closed rather than an
+/// expression language: a plugin declares what it depends on, it does not run
+/// logic in the form.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FieldCondition {
+    /// Key of the field whose value is tested.
+    pub key: String,
+    pub op: ConditionOp,
+    /// Values compared against. `eq`/`ne` use the first, `in`/`not_in` the
+    /// whole set, and `non_empty` ignores it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ConfigFieldDef {
     /// Config key name (e.g. "custom_endpoint"). Used as the JSON key in
     /// `config_json` and the Extism config key.
@@ -4765,6 +6480,65 @@ pub struct ConfigFieldDef {
     pub options: Vec<ConfigFieldOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_text: Option<String>,
+    /// Shown only while this holds. `None` means always shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<FieldCondition>,
+    /// Required while this holds, in addition to `required`. A field hidden by
+    /// `visible_when` is never required, whatever this says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_when: Option<FieldCondition>,
+    /// Placed behind the form's advanced disclosure rather than shown up front.
+    #[serde(default)]
+    pub advanced: bool,
+}
+
+impl FieldCondition {
+    /// Whether this holds, given the current value of the field it references.
+    ///
+    /// Values are trimmed and an absent value is treated as empty, so a field
+    /// that was never filled in reads the same as one cleared by hand.
+    pub fn holds(&self, referenced_value: Option<&str>) -> bool {
+        let value = referenced_value.map(str::trim).unwrap_or("");
+        match self.op {
+            ConditionOp::Eq => self.values.first().is_some_and(|first| first == value),
+            ConditionOp::Ne => !self.values.first().is_some_and(|first| first == value),
+            ConditionOp::In => self.values.iter().any(|candidate| candidate == value),
+            ConditionOp::NotIn => !self.values.iter().any(|candidate| candidate == value),
+            ConditionOp::NonEmpty => !value.is_empty(),
+        }
+    }
+}
+
+/// Whether a field should be shown, given a way to read the other fields.
+///
+/// This and [`config_field_is_required`] are the only place these conditions
+/// are interpreted on the host. The web client mirrors them exactly; a form
+/// that hid a field while the host still demanded it would be unfixable from
+/// the UI.
+pub fn config_field_is_visible<'a>(
+    field: &ConfigFieldDef,
+    value_of: impl Fn(&str) -> Option<&'a str>,
+) -> bool {
+    field
+        .visible_when
+        .as_ref()
+        .is_none_or(|condition| condition.holds(value_of(&condition.key)))
+}
+
+/// Whether a field must carry a value. A field the form is not showing never
+/// does, whatever it declared.
+pub fn config_field_is_required<'a>(
+    field: &ConfigFieldDef,
+    value_of: impl Fn(&str) -> Option<&'a str> + Copy,
+) -> bool {
+    if !config_field_is_visible(field, value_of) {
+        return false;
+    }
+    field.required
+        || field
+            .required_when
+            .as_ref()
+            .is_some_and(|condition| condition.holds(value_of(&condition.key)))
 }
 
 /// A single option for "select"-type config fields.

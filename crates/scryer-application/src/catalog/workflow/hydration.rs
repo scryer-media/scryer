@@ -189,6 +189,44 @@ impl AppUseCase {
 }
 
 #[cfg(test)]
+mod location_lock_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn location_locked_hydration_propagates_deferral_without_marking_metadata_complete() {
+        let (app, user) = crate::lib_tests::bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Locked Hydration".into(),
+                    facet: MediaFacet::Series,
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let before = title.metadata_fetched_at;
+        app.runtime.library.location_ownership.claim_all(
+            "move",
+            &[crate::location::ownership_guard::OwnedEntity::Title(
+                title.id.clone(),
+            )],
+        );
+        let result = app
+            .apply_hydration_result(
+                title.clone(),
+                super::super::HydrationResult::default(),
+                HydrationSource::BackgroundDue,
+            )
+            .await;
+        assert!(matches!(result, Err(AppError::LocationOperationBusy(_))));
+        let current = app.get_title(&user, &title.id).await.unwrap().unwrap();
+        assert_eq!(current.metadata_fetched_at, before);
+    }
+}
+
+#[cfg(test)]
 mod title_id_capability_tests {
     use super::*;
 
@@ -622,6 +660,12 @@ impl AppUseCase {
         language: &str,
         redirects: &[(i64, i64)],
     ) -> AppResult<Title> {
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_HYDRATION_ENTRY,
+                &target.title.id,
+            )
+            .await?;
         let movie_smg_id = movie.smg_id;
         let redirected_from = extract_smg_id(&target.title).filter(|stored_smg_id| {
             movie_smg_id.is_some_and(|movie_smg_id| movie_smg_id != *stored_smg_id)
@@ -632,7 +676,7 @@ impl AppUseCase {
         let result = super::movie_to_hydration_result(movie, language);
         let hydrated = self
             .apply_hydration_result(target.title.clone(), result, target.source)
-            .await;
+            .await?;
 
         if let (Some(movie_smg_id), Some(redirected_from)) = (movie_smg_id, redirected_from)
             && let Err(error) = self
@@ -940,9 +984,18 @@ impl AppUseCase {
                                     let mut result =
                                         super::series_to_hydration_result(series.clone(), &language);
                                     result.movie_metadata = movie_metadata.clone();
-                                    let hydrated = self
+                                    let hydrated = match self
                                         .apply_hydration_result(target.title, result, title_source)
-                                        .await;
+                                        .await
+                                    {
+                                        Ok(hydrated) => hydrated,
+                                        Err(error) => {
+                                            outcome
+                                                .failed_titles
+                                                .insert(title_id, error.to_string());
+                                            continue;
+                                        }
+                                    };
                                     self.complete_title_hydration(
                                         &hydrated,
                                         HydrationCompletionOptions {
@@ -1093,7 +1146,7 @@ impl AppUseCase {
                 let result = super::series_to_hydration_result(series, language);
                 let hydrated = self
                     .apply_hydration_result(target.title, result, target.source)
-                    .await;
+                    .await?;
                 self.complete_title_hydration(
                     &hydrated,
                     HydrationCompletionOptions {
@@ -1175,7 +1228,13 @@ impl AppUseCase {
         title: Title,
         result: super::HydrationResult,
         source: HydrationSource,
-    ) -> Title {
+    ) -> AppResult<Title> {
+        let _location_guard = self
+            .acquire_location_title_mutation(
+                &crate::location::ownership_guard::TITLE_HYDRATION_ENTRY,
+                &title.id,
+            )
+            .await?;
         let has_episodes = self
             .facet_registry
             .get(&title.facet)
@@ -1293,7 +1352,7 @@ impl AppUseCase {
             self.runtime.catalog.fanart_wake.notify_one();
         }
 
-        title
+        Ok(title)
     }
 
     async fn refresh_or_queue_title_more_like_this_after_hydration(

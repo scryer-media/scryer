@@ -147,6 +147,7 @@ impl FileImporter for CopyingFileImporter {
             size_bytes,
             destination_disposition: scryer_domain::ImportDestinationDisposition::Created,
             source_cleanup: None,
+            verification: None,
         })
     }
 
@@ -225,11 +226,16 @@ impl FileImporter for ProgressReportingFileImporter {
 #[derive(Default, Clone)]
 pub(super) struct MockMediaFileRepo {
     pub(super) store: Arc<Mutex<Vec<TitleMediaFile>>>,
+    pub(super) pending_analysis_ids: Arc<Mutex<Vec<String>>>,
+    pub(super) analysis_attempts: Arc<Mutex<Vec<(String, MediaFileAnalysis)>>>,
+    pub(super) delete_media_file_error: Arc<Mutex<Option<String>>>,
     /// Optional bridge for the background acquisition cursor: when set, the
     /// derived missing-target sweep reads the seeded acquisition-state rows so a
     /// mock-backed store still yields targets for `run_background_acquisition_cycle_once`.
     /// Left `None` for stores that manage their own media files directly.
     pub(super) missing_scope_source: Option<Arc<super::TrackingAcquisitionScopeStateRepo>>,
+    /// Catalog candidates independent of workflow status, as returned by SQL.
+    pub(super) missing_scope_candidates_override: Option<MissingScopeCandidates>,
     /// The catalog the seeded scopes belong to — used to resolve each scope's
     /// real facet (movie/series/anime) for the derived target, since the thinned
     /// state row does not carry it.
@@ -237,6 +243,10 @@ pub(super) struct MockMediaFileRepo {
 }
 
 impl MockMediaFileRepo {
+    pub(super) async fn fail_delete_media_file(&self, message: &str) {
+        *self.delete_media_file_error.lock().await = Some(message.to_string());
+    }
+
     /// Wire the seeded wanted-state store (and its catalog) as the missing-target
     /// source so the convergence cursor sees each monitored, fileless scope as a
     /// target with its correct facet.
@@ -248,12 +258,15 @@ impl MockMediaFileRepo {
             store: Arc::new(Mutex::new(Vec::new())),
             missing_scope_source: Some(source),
             missing_scope_titles: Some(titles),
+            ..Default::default()
         }
     }
 }
 
 fn mock_media_file(id: String, input: &InsertMediaFileInput) -> TitleMediaFile {
     TitleMediaFile {
+        analysis_details: Default::default(),
+        analysis_attempt: None,
         id,
         title_id: input.title_id.clone(),
         episode_id: None,
@@ -264,6 +277,7 @@ fn mock_media_file(id: String, input: &InsertMediaFileInput) -> TitleMediaFile {
         announced_size_bytes: input.announced_size_bytes,
         source_signature_scheme: input.source_signature_scheme.clone(),
         source_signature_value: input.source_signature_value.clone(),
+        content_hashes: None,
         quality_label: input.quality_label.clone(),
         scan_status: "pending".to_string(),
         created_at: Utc::now().to_rfc3339(),
@@ -409,6 +423,9 @@ impl MediaFileRepository for MockMediaFileRepo {
     }
 
     async fn list_missing_scope_candidates(&self) -> AppResult<MissingScopeCandidates> {
+        if let Some(candidates) = &self.missing_scope_candidates_override {
+            return Ok(candidates.clone());
+        }
         // Without a real library store, derive the missing-scope
         // sweep from the seeded acquisition-state rows so the convergence cursor
         // sees each monitored, fileless `wanted` scope as a target. Synthetic
@@ -689,6 +706,95 @@ impl MediaFileRepository for MockMediaFileRepo {
         Ok(Vec::new())
     }
 
+    async fn list_media_files_needing_analysis(
+        &self,
+        _library_id: &str,
+        revision: u32,
+        _retry_before: chrono::DateTime<chrono::Utc>,
+        _limit: usize,
+    ) -> AppResult<Vec<TitleMediaFile>> {
+        let ids = self.pending_analysis_ids.lock().await.clone();
+        let rows = self.store.lock().await;
+        // Deliberately return duplicate and oversized batches so worker bounds
+        // are tested independently from datastore query limits.
+        Ok(ids
+            .iter()
+            .filter_map(|id| {
+                rows.iter()
+                    .find(|row| row.id == *id && row.analysis_details.revision < revision)
+                    .cloned()
+            })
+            .collect())
+    }
+
+    async fn record_media_analysis_attempt(
+        &self,
+        expected: &TitleMediaFile,
+        analysis: &MediaFileAnalysis,
+    ) -> AppResult<bool> {
+        let rows = self.store.lock().await;
+        let Some(entry) = rows.iter().find(|row| row.id == expected.id) else {
+            return Ok(false);
+        };
+        if entry.title_id != expected.title_id
+            || entry.file_path != expected.file_path
+            || entry.size_bytes != expected.size_bytes
+            || entry.source_signature_scheme != expected.source_signature_scheme
+            || entry.source_signature_value != expected.source_signature_value
+            || entry.analysis_details != expected.analysis_details
+        {
+            return Ok(false);
+        }
+        self.analysis_attempts
+            .lock()
+            .await
+            .push((expected.id.clone(), analysis.clone()));
+        Ok(true)
+    }
+
+    async fn update_media_file_analysis_if_unchanged(
+        &self,
+        expected: &TitleMediaFile,
+        analysis: MediaFileAnalysis,
+    ) -> AppResult<bool> {
+        let mut list = self.store.lock().await;
+        let Some(entry) = list.iter_mut().find(|entry| entry.id == expected.id) else {
+            return Ok(false);
+        };
+        if entry.file_path != expected.file_path
+            || entry.size_bytes != expected.size_bytes
+            || entry.source_signature_scheme != expected.source_signature_scheme
+            || entry.source_signature_value != expected.source_signature_value
+            || entry.analysis_details != expected.analysis_details
+        {
+            return Ok(false);
+        }
+        entry.scan_status = "scanned".to_string();
+        entry.analysis_details = analysis.details;
+        entry.audio_profile = analysis.audio_profile;
+        entry.video_codec = analysis.video_codec;
+        entry.video_width = analysis.video_width;
+        entry.video_height = analysis.video_height;
+        entry.video_bitrate_kbps = analysis.video_bitrate_kbps;
+        entry.video_bit_depth = analysis.video_bit_depth;
+        entry.video_hdr_format = analysis.video_hdr_format;
+        entry.video_frame_rate = analysis.video_frame_rate;
+        entry.video_profile = analysis.video_profile;
+        entry.audio_codec = analysis.audio_codec;
+        entry.audio_channels = analysis.audio_channels;
+        entry.audio_bitrate_kbps = analysis.audio_bitrate_kbps;
+        entry.audio_languages = analysis.audio_languages;
+        entry.audio_streams = analysis.audio_streams;
+        entry.subtitle_languages = analysis.subtitle_languages;
+        entry.subtitle_codecs = analysis.subtitle_codecs;
+        entry.subtitle_streams = analysis.subtitle_streams;
+        entry.has_multiaudio = analysis.has_multiaudio;
+        entry.duration_seconds = analysis.duration_seconds;
+        entry.num_chapters = analysis.num_chapters;
+        entry.container_format = analysis.container_format;
+        Ok(true)
+    }
+
     async fn update_media_file_analysis(
         &self,
         file_id: &str,
@@ -700,6 +806,8 @@ impl MediaFileRepository for MockMediaFileRepo {
             .find(|entry| entry.id == file_id)
             .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
         entry.scan_status = "scanned".to_string();
+        entry.analysis_details = analysis.details;
+        entry.audio_profile = analysis.audio_profile;
         entry.video_codec = analysis.video_codec;
         entry.video_width = analysis.video_width;
         entry.video_height = analysis.video_height;
@@ -842,6 +950,9 @@ impl MediaFileRepository for MockMediaFileRepo {
             .cloned())
     }
     async fn delete_media_file(&self, file_id: &str) -> AppResult<()> {
+        if let Some(error) = self.delete_media_file_error.lock().await.clone() {
+            return Err(AppError::Repository(error));
+        }
         let mut list = self.store.lock().await;
         let position = list
             .iter()
@@ -849,6 +960,74 @@ impl MediaFileRepository for MockMediaFileRepo {
             .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
         list.remove(position);
         Ok(())
+    }
+
+    /// Mirrors the SQL queue: rows with no full hash, in id order, after the
+    /// cursor. The ordering is what makes the backfill job's cursor mean
+    /// anything, so the double has to honour it.
+    async fn list_media_files_missing_full_hash(
+        &self,
+        after_id: Option<&str>,
+        limit: u32,
+    ) -> AppResult<Vec<crate::MediaFileHashCandidate>> {
+        let list = self.store.lock().await;
+        let mut candidates: Vec<_> = list
+            .iter()
+            .filter(|entry| entry.content_hashes.is_none())
+            .filter(|entry| after_id.is_none_or(|cursor| entry.id.as_str() > cursor))
+            .map(|entry| crate::MediaFileHashCandidate {
+                id: entry.id.clone(),
+                title_id: entry.title_id.clone(),
+                file_path: entry.file_path.clone(),
+                size_bytes: entry.size_bytes,
+            })
+            .collect();
+        candidates.sort_by(|left, right| left.id.cmp(&right.id));
+        candidates.truncate(limit as usize);
+        Ok(candidates)
+    }
+
+    async fn update_media_file_content_hashes(
+        &self,
+        file_id: &str,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<()> {
+        let mut list = self.store.lock().await;
+        let entry = list
+            .iter_mut()
+            .find(|entry| entry.id == file_id)
+            .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))?;
+        entry.content_hashes = Some(hashes.clone());
+        Ok(())
+    }
+
+    async fn update_media_file_content_hashes_if_unchanged(
+        &self,
+        expected: &TitleMediaFile,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let mut list = self.store.lock().await;
+        let Some(entry) = list.iter_mut().find(|entry| {
+            entry.id == expected.id
+                && entry.title_id == expected.title_id
+                && entry.file_path == expected.file_path
+                && entry.size_bytes == expected.size_bytes
+                && entry.source_signature_scheme == expected.source_signature_scheme
+                && entry.source_signature_value == expected.source_signature_value
+                && entry.content_hashes.is_none()
+        }) else {
+            return Ok(false);
+        };
+        entry.content_hashes = Some(hashes.clone());
+        Ok(true)
+    }
+
+    async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {
+        let mut list = self.store.lock().await;
+        let Some(entry) = list.iter_mut().find(|entry| entry.id == file_id) else {
+            return Ok(false);
+        };
+        Ok(entry.content_hashes.take().is_some())
     }
 }
 

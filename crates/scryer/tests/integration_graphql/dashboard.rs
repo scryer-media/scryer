@@ -699,7 +699,7 @@ async fn graphql_pending_imports_expose_created_at_size_and_reason_class() {
     .await;
 
     // A row recorded before the size column existed, whose file is still on
-    // disk: the read path stats it.
+    // disk: listing still returns only scanner-recorded metadata.
     let fallback_dir = tempfile::tempdir().expect("fallback pending import tempdir");
     let fallback_file = fallback_dir.path().join("Fallback.Size.2026.mkv");
     let fallback_contents = vec![0_u8; 4_096];
@@ -756,10 +756,9 @@ async fn graphql_pending_imports_expose_created_at_size_and_reason_class() {
     );
 
     let fallback = pending_import_row(&body, "pending-fallback-size");
-    assert_eq!(
-        fallback["sizeBytes"],
-        fallback_contents.len() as i64,
-        "a row with no stored size falls back to a filesystem stat: {body}"
+    assert!(
+        fallback["sizeBytes"].is_null(),
+        "a row with no stored size stays unknown even when the file exists: {body}"
     );
     assert_eq!(fallback["reasonClass"], "AMBIGUOUS");
 
@@ -774,7 +773,7 @@ async fn graphql_pending_imports_expose_created_at_size_and_reason_class() {
     assert_eq!(other["reasonClass"], "OTHER");
     assert_eq!(other["reason"], "title_already_owns_another_folder");
 
-    // The read-path stat must not be written back to the store.
+    // Listing must leave the scanner's stored metadata unchanged.
     let stored =
         scryer_application::LibraryScanUnmatchedItemRepository::get_library_scan_unmatched_item(
             &ctx.library_scan_unmatched,
@@ -785,7 +784,7 @@ async fn graphql_pending_imports_expose_created_at_size_and_reason_class() {
         .expect("seeded pending import should exist");
     assert!(
         stored.size_bytes.is_none(),
-        "the stat fallback must not backfill the stored row"
+        "listing must not backfill the stored row"
     );
 }
 

@@ -441,7 +441,12 @@ fn staging_path_for(dest: &Path) -> PathBuf {
 ///
 /// The destination was never claimed, so this is the moment another writer
 /// could have taken it; the exclusive rename is tried first for that reason.
-async fn promote_staged_file(
+///
+/// Public because the verified copier stages its own partial the same way: it
+/// writes to a sibling name and promotes it here, so a crash mid-copy can never
+/// leave a half-written file under the destination's real name
+/// ([`crate::location::verify`]).
+pub async fn promote_staged_file(
     staged: &Path,
     dest: &Path,
     options: MoveOptions,

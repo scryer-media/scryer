@@ -1,20 +1,17 @@
 //! Archive extraction for the import pipeline.
 //!
 //! Detects RAR, 7z, and zip archives in download directories. Extraction is
-//! delegated to the optional archive extraction plugin after native PAR2
-//! placement/repair handling.
+//! delegated to the optional archive extraction plugin, which also owns PAR2
+//! verification, placement and repair: the plugin scans the read-only source
+//! directory it is given for `.par2` sets and repairs internally, emitting the
+//! result into its writable output directory. The host neither orchestrates
+//! nor observes that step.
 
-use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use crate::{AppError, AppResult, ArchiveExtractorPluginProvider};
-use par2_rs::{
-    DiskFileAccess, Par2FileSet, RepairOptions, Repairability, disk::PlacementFileAccess,
-    execute_repair_with_options, placement::PlacementPlan, plan_repair, scan_placement,
-    verify::verify_all,
-};
 use scryer_plugin_sdk::{
     ArchivePluginFormat, ArchivePluginOperation, ArchivePluginProcessRequest,
     ArchivePluginProcessResponse, ArchivePluginStatus,
@@ -26,15 +23,12 @@ const ARCHIVE_STAGING_PREFIX: &str = ".scryer-ax-";
 const ARCHIVE_WRITE_PROBE_PREFIX: &str = ".scryer-write-probe-";
 const LEGACY_ARCHIVE_STAGING_PREFIX: &str = ".scryer-archive-extract-";
 const ARCHIVE_STAGING_OUTPUT_DIR: &str = "out";
-const ARCHIVE_NORMALIZED_INPUT_DIR: &str = "normalized";
-const ARCHIVE_REPAIR_INPUT_DIR: &str = "repair";
 const ARCHIVE_STAGING_CREATE_ATTEMPTS: usize = 16;
 const STALE_ARCHIVE_STAGING_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_PLUGIN_OUTPUT_FILES: usize = 20_000;
 const MAX_PLUGIN_OUTPUT_DIRECTORIES: usize = 20_000;
 const MAX_PLUGIN_OUTPUT_ENTRIES: usize = MAX_PLUGIN_OUTPUT_FILES + MAX_PLUGIN_OUTPUT_DIRECTORIES;
 const MAX_PLUGIN_OUTPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
-const MAX_REPAIR_COPY_FALLBACK_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct ArchiveExtractionDestination {
@@ -68,13 +62,6 @@ struct ArchiveExtractionWorkspace {
     output_dir: PathBuf,
 }
 
-#[derive(Debug, Clone)]
-struct ArchiveInputSet {
-    source_dir: PathBuf,
-    archive_path: PathBuf,
-    cleanup_dirs: Vec<PathBuf>,
-}
-
 struct ArchivePluginExtraction {
     source_dir: PathBuf,
     archive_path: PathBuf,
@@ -83,21 +70,6 @@ struct ArchivePluginExtraction {
     password: Option<String>,
     provider: Arc<dyn ArchiveExtractorPluginProvider>,
     output_dir: PathBuf,
-}
-
-#[derive(Debug, Clone)]
-struct Par2PlacementVerification {
-    actual_by_canonical: HashMap<String, PathBuf>,
-    state: NativePar2State,
-    placement_move_count: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum NativePar2State {
-    Verified,
-    Repairable,
-    InsufficientRecoveryData,
-    ResourceLimited,
 }
 
 /// Archive type detected in a download directory.
@@ -155,63 +127,31 @@ pub async fn extract_archives_if_needed(
     );
 
     let workspace_root = workspace.root.clone();
-    let input_set = match archive_type {
-        ArchiveType::Rar | ArchiveType::Zip | ArchiveType::SevenZip
-            if archive_provider.is_none() =>
-        {
-            cleanup_extracted_dir(&workspace_root).await;
-            return Err(AppError::archive_extraction_plugin_required(Some(
-                dir.to_string_lossy().into_owned(),
-            )));
-        }
-        _ => {
-            let source_dir = archive_path
-                .parent()
-                .filter(|parent| !parent.as_os_str().is_empty())
-                .unwrap_or_else(|| Path::new("."))
-                .to_path_buf();
-            let archive_path = archive_path.clone();
-            let workspace = workspace.clone();
-            tokio::task::spawn_blocking(move || {
-                prepare_archive_input_set(&source_dir, &archive_path, archive_type, &workspace)
-            })
-            .await
-            .map_err(|e| AppError::Repository(format!("archive PAR2 task failed: {e}")))
-            .and_then(|result| result)
-        }
-    };
-    let input_set = match input_set {
-        Ok(input_set) => input_set,
-        Err(error) => {
-            cleanup_extracted_dir(&workspace_root).await;
-            return Err(error);
-        }
+    let Some(provider) = archive_provider else {
+        cleanup_extracted_dir(&workspace_root).await;
+        return Err(AppError::archive_extraction_plugin_required(Some(
+            dir.to_string_lossy().into_owned(),
+        )));
     };
 
-    let input_cleanup_dirs = input_set.cleanup_dirs.clone();
-    let extraction = {
-        let format = archive_plugin_format_for_type(archive_type);
-        if let Some(provider) = archive_provider {
-            extract_with_archive_plugin(ArchivePluginExtraction {
-                source_dir: input_set.source_dir,
-                archive_path: input_set.archive_path,
-                archive_type,
-                format,
-                password,
-                provider,
-                output_dir: workspace.output_dir.clone(),
-            })
-            .await
-        } else {
-            Err(AppError::archive_extraction_plugin_required(Some(
-                dir.to_string_lossy().into_owned(),
-            )))
-        }
-    };
-
-    for cleanup_dir in input_cleanup_dirs {
-        cleanup_extracted_dir(&cleanup_dir).await;
-    }
+    // The plugin owns PAR2: it is handed the archive's own directory as a
+    // read-only source preopen, finds any `.par2` set there itself, and repairs
+    // into its writable output directory before (or instead of) extracting.
+    let source_dir = archive_path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
+    let extraction = extract_with_archive_plugin(ArchivePluginExtraction {
+        source_dir,
+        archive_path,
+        archive_type,
+        format: archive_plugin_format_for_type(archive_type),
+        password,
+        provider,
+        output_dir: workspace.output_dir.clone(),
+    })
+    .await;
 
     match extraction {
         Ok(Some(_)) => Ok(Some(workspace_root)),
@@ -390,522 +330,9 @@ async fn cleanup_archive_artifacts_older_than(parent: &Path, min_age: Duration) 
     }
 }
 
-fn cleanup_archive_artifacts_older_than_sync(parent: &Path, min_age: Duration) {
-    let entries = match std::fs::read_dir(parent) {
-        Ok(entries) => entries,
-        Err(_) => return,
-    };
-    let now = SystemTime::now();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !is_archive_staging_dir(&path) && !is_archive_write_probe_file(&path) {
-            continue;
-        }
-        let Ok(metadata) = entry.metadata() else {
-            continue;
-        };
-        if is_archive_staging_dir(&path) && !metadata.is_dir() {
-            continue;
-        }
-        if is_archive_write_probe_file(&path) && !metadata.is_file() {
-            continue;
-        }
-        let Ok(modified) = metadata.modified() else {
-            continue;
-        };
-        if now.duration_since(modified).is_ok_and(|age| age >= min_age) {
-            if metadata.is_dir() {
-                let _ = std::fs::remove_dir_all(path);
-            } else {
-                let _ = std::fs::remove_file(path);
-            }
-        }
-    }
-}
-
-fn cleanup_archive_staging_dirs_sync(dirs: &[PathBuf]) {
-    for dir in dirs {
-        if is_archive_staging_dir(dir) {
-            let _ = std::fs::remove_dir_all(dir);
-        }
-    }
-}
-
-fn prepare_archive_input_set(
-    source_dir: &Path,
-    archive_path: &Path,
-    archive_type: ArchiveType,
-    workspace: &ArchiveExtractionWorkspace,
-) -> AppResult<ArchiveInputSet> {
-    let par2_paths = find_par2_paths(source_dir);
-    if par2_paths.is_empty() {
-        return Ok(ArchiveInputSet {
-            source_dir: source_dir.to_path_buf(),
-            archive_path: archive_path.to_path_buf(),
-            cleanup_dirs: Vec::new(),
-        });
-    }
-
-    let verification = verify_par2_with_placement(source_dir, &par2_paths)?;
-    match verification.state {
-        NativePar2State::Verified if verification.placement_move_count == 0 => {
-            let archive_path = verification.archive_path_for(archive_type, archive_path)?;
-            Ok(ArchiveInputSet {
-                source_dir: source_dir.to_path_buf(),
-                archive_path,
-                cleanup_dirs: Vec::new(),
-            })
-        }
-        NativePar2State::Verified => {
-            let archive_hint = verification.canonical_hint_for_actual_path(archive_path);
-            let (normalized_dir, cleanup_dirs) =
-                create_par2_staging_dir(source_dir, workspace, ARCHIVE_NORMALIZED_INPUT_DIR)?;
-            let result = (|| {
-                stage_par2_input_set(
-                    source_dir,
-                    &par2_paths,
-                    &verification,
-                    &normalized_dir,
-                    StageMode::CleanNormalize,
-                )?;
-                let staged_par2_paths = remap_par2_paths(&par2_paths, &normalized_dir)?;
-                let staged_verification =
-                    verify_par2_with_placement(&normalized_dir, &staged_par2_paths)?;
-                if !matches!(staged_verification.state, NativePar2State::Verified) {
-                    return Err(AppError::Repository(
-                        "PAR2 normalized archive staging did not verify cleanly".to_string(),
-                    ));
-                }
-                let archive_path =
-                    staged_verification.archive_path_for(archive_type, &archive_hint)?;
-                Ok(ArchiveInputSet {
-                    source_dir: normalized_dir,
-                    archive_path,
-                    cleanup_dirs: cleanup_dirs.clone(),
-                })
-            })();
-            if result.is_err() {
-                cleanup_archive_staging_dirs_sync(&cleanup_dirs);
-            }
-            result
-        }
-        NativePar2State::Repairable => {
-            let archive_hint = verification.canonical_hint_for_actual_path(archive_path);
-            let (repair_dir, cleanup_dirs) =
-                create_par2_staging_dir(source_dir, workspace, ARCHIVE_REPAIR_INPUT_DIR)?;
-            let result = (|| {
-                stage_par2_input_set(
-                    source_dir,
-                    &par2_paths,
-                    &verification,
-                    &repair_dir,
-                    StageMode::Repair,
-                )?;
-                let staged_par2_paths = remap_par2_paths(&par2_paths, &repair_dir)?;
-                repair_par2_in_place(&repair_dir, &staged_par2_paths)?;
-                let repaired = verify_par2_with_placement(&repair_dir, &staged_par2_paths)?;
-                if !matches!(repaired.state, NativePar2State::Verified) {
-                    return Err(AppError::Repository(
-                        "PAR2 repair completed but verification still requires repair".to_string(),
-                    ));
-                }
-                let archive_path = repaired.archive_path_for(archive_type, &archive_hint)?;
-                Ok(ArchiveInputSet {
-                    source_dir: repair_dir,
-                    archive_path,
-                    cleanup_dirs: cleanup_dirs.clone(),
-                })
-            })();
-            if result.is_err() {
-                cleanup_archive_staging_dirs_sync(&cleanup_dirs);
-            }
-            result
-        }
-        NativePar2State::InsufficientRecoveryData => Err(AppError::Validation(
-            "PAR2 set does not have enough recovery data to repair the archive".to_string(),
-        )),
-        NativePar2State::ResourceLimited => {
-            tracing::warn!(
-                source_dir = %source_dir.display(),
-                archive = %archive_path.display(),
-                "PAR2 verification exceeded resource limits; attempting archive extraction without PAR2 repair"
-            );
-            Ok(ArchiveInputSet {
-                source_dir: source_dir.to_path_buf(),
-                archive_path: archive_path.to_path_buf(),
-                cleanup_dirs: Vec::new(),
-            })
-        }
-    }
-}
-
-fn verify_par2_with_placement(
-    source_dir: &Path,
-    par2_paths: &[PathBuf],
-) -> AppResult<Par2PlacementVerification> {
-    let set = Par2FileSet::from_paths(par2_paths)
-        .map_err(|error| AppError::Repository(format!("failed to load PAR2 set: {error}")))?;
-    validate_par2_file_names(&set)?;
-    let plan = scan_placement(source_dir, &set).map_err(|error| {
-        AppError::Repository(format!("failed to scan PAR2 file placement: {error}"))
-    })?;
-    if !plan.conflicts.is_empty() {
-        return Err(AppError::Validation(format!(
-            "PAR2 placement is ambiguous for {} file(s); refusing to guess archive order",
-            plan.conflicts.len()
-        )));
-    }
-
-    let access = PlacementFileAccess::from_plan(source_dir.to_path_buf(), &set, &plan);
-    let verification = verify_all(&set, &access);
-    let state = match verification.repairable {
-        Repairability::NotNeeded => NativePar2State::Verified,
-        Repairability::Repairable { .. } => NativePar2State::Repairable,
-        Repairability::Insufficient { .. } => NativePar2State::InsufficientRecoveryData,
-        Repairability::ResourceLimited { .. } => NativePar2State::ResourceLimited,
-    };
-
-    Ok(Par2PlacementVerification {
-        actual_by_canonical: par2_actual_paths_by_canonical(source_dir, &set, &plan),
-        state,
-        placement_move_count: plan.renames.len() + plan.swaps.len().saturating_mul(2),
-    })
-}
-
-fn validate_par2_file_names(set: &Par2FileSet) -> AppResult<()> {
-    let mut seen = std::collections::HashSet::new();
-    for description in set.files.values() {
-        let relative = safe_par2_relative_path(&description.filename)?;
-        if !seen.insert(relative) {
-            return Err(AppError::Validation(format!(
-                "PAR2 metadata contains duplicate file path '{}'",
-                description.filename
-            )));
-        }
-    }
-    Ok(())
-}
-
-fn par2_actual_paths_by_canonical(
-    source_dir: &Path,
-    set: &Par2FileSet,
-    plan: &PlacementPlan,
-) -> HashMap<String, PathBuf> {
-    let mut actual = HashMap::new();
-    for description in set.files.values() {
-        actual.insert(
-            description.filename.clone(),
-            source_dir.join(safe_par2_relative_path_lossy(&description.filename)),
-        );
-    }
-    for (left, right) in &plan.swaps {
-        actual.insert(
-            left.correct_name.clone(),
-            source_dir.join(safe_par2_relative_path_lossy(&left.current_name)),
-        );
-        actual.insert(
-            right.correct_name.clone(),
-            source_dir.join(safe_par2_relative_path_lossy(&right.current_name)),
-        );
-    }
-    for entry in &plan.renames {
-        actual.insert(
-            entry.correct_name.clone(),
-            source_dir.join(safe_par2_relative_path_lossy(&entry.current_name)),
-        );
-    }
-    actual
-}
-
-fn safe_par2_relative_path_lossy(path: &str) -> PathBuf {
-    safe_par2_relative_path(path).unwrap_or_else(|_| PathBuf::from(path.replace(['/', '\\'], "_")))
-}
-
-fn safe_par2_relative_path(path: &str) -> AppResult<PathBuf> {
-    let path = Path::new(path);
-    if path.is_absolute() {
-        return Err(AppError::Validation(format!(
-            "PAR2 filename '{}' is absolute",
-            path.display()
-        )));
-    }
-    let mut relative = PathBuf::new();
-    for component in path.components() {
-        match component {
-            Component::Normal(part) => relative.push(part),
-            Component::CurDir => {}
-            Component::ParentDir | Component::RootDir | Component::Prefix(_) => {
-                return Err(AppError::Validation(format!(
-                    "PAR2 filename '{}' is unsafe",
-                    path.display()
-                )));
-            }
-        }
-    }
-    if relative.as_os_str().is_empty() {
-        return Err(AppError::Validation("PAR2 filename is empty".to_string()));
-    }
-    Ok(relative)
-}
-
-#[derive(Debug, Clone, Copy)]
-enum StageMode {
-    CleanNormalize,
-    Repair,
-}
-
-fn create_par2_staging_dir(
-    source_dir: &Path,
-    workspace: &ArchiveExtractionWorkspace,
-    purpose: &str,
-) -> AppResult<(PathBuf, Vec<PathBuf>)> {
-    cleanup_archive_artifacts_older_than_sync(source_dir, STALE_ARCHIVE_STAGING_AFTER);
-    for _ in 0..ARCHIVE_STAGING_CREATE_ATTEMPTS {
-        let source_staging_dir = source_dir.join(format!(
-            "{ARCHIVE_STAGING_PREFIX}{}-{purpose}",
-            short_staging_suffix()
-        ));
-        match std::fs::create_dir(&source_staging_dir) {
-            Ok(()) => return Ok((source_staging_dir.clone(), vec![source_staging_dir])),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => {
-                tracing::warn!(
-                    source_dir = %source_dir.display(),
-                    staging_dir = %source_staging_dir.display(),
-                    %error,
-                    "could not create source-side PAR2 staging directory; falling back to destination workspace"
-                );
-                break;
-            }
-        }
-    }
-
-    Ok((workspace.root.join(purpose), Vec::new()))
-}
-
-fn stage_par2_input_set(
-    source_dir: &Path,
-    par2_paths: &[PathBuf],
-    verification: &Par2PlacementVerification,
-    staging_dir: &Path,
-    mode: StageMode,
-) -> AppResult<()> {
-    std::fs::create_dir_all(staging_dir).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to create PAR2 staging directory {}: {error}",
-            staging_dir.display()
-        ))
-    })?;
-
-    for (canonical, actual_path) in &verification.actual_by_canonical {
-        let relative = safe_par2_relative_path(canonical)?;
-        if !actual_path.exists() {
-            continue;
-        }
-        stage_par2_file(actual_path, &staging_dir.join(relative), mode)?;
-    }
-
-    for par2_path in par2_paths {
-        let file_name = par2_path.file_name().ok_or_else(|| {
-            AppError::Validation(format!(
-                "PAR2 path '{}' has no file name",
-                par2_path.display()
-            ))
-        })?;
-        stage_par2_file(
-            par2_path,
-            &staging_dir.join(file_name),
-            StageMode::CleanNormalize,
-        )?;
-    }
-
-    tracing::info!(
-        source_dir = %source_dir.display(),
-        staging_dir = %staging_dir.display(),
-        mode = ?mode,
-        "staged PAR2 archive inputs"
-    );
-    Ok(())
-}
-
-fn stage_par2_file(source: &Path, destination: &Path, mode: StageMode) -> AppResult<()> {
-    let metadata = std::fs::symlink_metadata(source).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to inspect PAR2 input {}: {error}",
-            source.display()
-        ))
-    })?;
-    if metadata.file_type().is_symlink() {
-        return Err(AppError::Validation(format!(
-            "PAR2 staging refuses symbolic link '{}'",
-            source.display()
-        )));
-    }
-    if !metadata.is_file() {
-        return Ok(());
-    }
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create PAR2 staging parent {}: {error}",
-                parent.display()
-            ))
-        })?;
-    }
-
-    let result = match mode {
-        StageMode::CleanNormalize => stage_clean_file(source, destination, metadata.len()),
-        StageMode::Repair => stage_repair_file(source, destination, metadata.len(), true),
-    };
-    result.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to stage PAR2 input '{}' to '{}': {error}",
-            source.display(),
-            destination.display()
-        ))
-    })
-}
-
-fn remap_par2_paths(par2_paths: &[PathBuf], staging_dir: &Path) -> AppResult<Vec<PathBuf>> {
-    par2_paths
-        .iter()
-        .map(|path| {
-            let file_name = path.file_name().ok_or_else(|| {
-                AppError::Validation(format!("PAR2 path '{}' has no file name", path.display()))
-            })?;
-            Ok(staging_dir.join(file_name))
-        })
-        .collect()
-}
-
-fn repair_par2_in_place(source_dir: &Path, par2_paths: &[PathBuf]) -> AppResult<()> {
-    let set = Par2FileSet::from_paths(par2_paths).map_err(|error| {
-        AppError::Repository(format!("failed to load staged PAR2 set: {error}"))
-    })?;
-    validate_par2_file_names(&set)?;
-    let mut access = DiskFileAccess::new(source_dir.to_path_buf(), &set);
-    let verification = verify_all(&set, &access);
-    match &verification.repairable {
-        Repairability::NotNeeded => return Ok(()),
-        Repairability::Insufficient { .. } => {
-            return Err(AppError::Validation(
-                "PAR2 set does not have enough recovery data".to_string(),
-            ));
-        }
-        Repairability::ResourceLimited { .. } => {
-            return Err(AppError::Repository(
-                "PAR2 repair exceeded resource limits".to_string(),
-            ));
-        }
-        Repairability::Repairable { .. } => {}
-    }
-
-    let plan = plan_repair(&set, &verification)
-        .map_err(|error| AppError::Repository(format!("failed to plan PAR2 repair: {error}")))?;
-    execute_repair_with_options(&plan, &set, &mut access, &RepairOptions::default())
-        .map_err(|error| AppError::Repository(format!("PAR2 repair failed: {error}")))?;
-
-    let post = verify_all(&set, &access);
-    if post.needs_repair() {
-        return Err(AppError::Repository(
-            "PAR2 repair did not verify cleanly after reconstruction".to_string(),
-        ));
-    }
-    Ok(())
-}
-
 fn is_old_rar_volume_extension(ext: &str) -> bool {
     let mut chars = ext.chars();
     matches!(chars.next(), Some('r'..='z')) && ext.len() >= 3 && chars.all(|ch| ch.is_ascii_digit())
-}
-
-fn stage_clean_file(source: &Path, destination: &Path, len: u64) -> std::io::Result<()> {
-    // Clean normalization is read-only and the plugin receives source preopens as
-    // read-only, so hardlinks are safe here. If that sandbox contract changes,
-    // this path must switch to COW/copy staging before extraction.
-    match std::fs::hard_link(source, destination) {
-        Ok(()) => Ok(()),
-        Err(_) => stage_repair_file(source, destination, len, false),
-    }
-}
-
-fn stage_repair_file(
-    source: &Path,
-    destination: &Path,
-    len: u64,
-    allow_large_copy: bool,
-) -> std::io::Result<()> {
-    match clone_file_cow(source, destination) {
-        Ok(()) => Ok(()),
-        Err(error) if !allow_large_copy && len > MAX_REPAIR_COPY_FALLBACK_BYTES => {
-            Err(std::io::Error::new(
-                error.kind(),
-                format!(
-                    "copy-on-write staging is unavailable and file is larger than {} bytes",
-                    MAX_REPAIR_COPY_FALLBACK_BYTES
-                ),
-            ))
-        }
-        Err(_) => std::fs::copy(source, destination).map(|_| ()),
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn clone_file_cow(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::fs::OpenOptions;
-    use std::os::fd::AsRawFd;
-
-    const FICLONE: libc::Ioctl = 0x4004_9409;
-
-    let source_file = std::fs::File::open(source)?;
-    let destination_file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(destination)?;
-    let result = unsafe {
-        libc::ioctl(
-            destination_file.as_raw_fd(),
-            FICLONE,
-            source_file.as_raw_fd(),
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        let error = std::io::Error::last_os_error();
-        let _ = std::fs::remove_file(destination);
-        Err(error)
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn clone_file_cow(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::ffi::CString;
-    use std::os::unix::ffi::OsStrExt;
-
-    let source = CString::new(source.as_os_str().as_bytes()).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidInput, "source path contains NUL")
-    })?;
-    let destination = CString::new(destination.as_os_str().as_bytes()).map_err(|_| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "destination path contains NUL",
-        )
-    })?;
-    let result = unsafe { libc::clonefile(source.as_ptr(), destination.as_ptr(), 0) };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "macos")))]
-fn clone_file_cow(_source: &Path, _destination: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "copy-on-write file cloning is not implemented for this platform",
-    ))
 }
 
 fn handle_archive_plugin_response(
@@ -935,12 +362,37 @@ fn handle_archive_plugin_response(
         ))),
         ArchivePluginStatus::Failed => {
             let _ = std::fs::remove_dir_all(&output_dir);
-            let message = response
-                .message
-                .or(response.error_code)
-                .unwrap_or_else(|| "archive plugin extraction failed".to_string());
-            Err(AppError::Repository(message))
+            Err(archive_plugin_failure_error(
+                response.error_code.as_deref(),
+                response.message.as_deref(),
+            ))
         }
+    }
+}
+
+/// Maps a `Failed` archive plugin response onto an `AppError`.
+///
+/// PAR2 verification and repair now run inside the plugin, so what used to be a
+/// native validation error arrives as `Failed` plus a machine-readable
+/// `error_code`. Both halves are surfaced (`error_code` used to be dropped
+/// whenever a human message was also present), and the one code that maps onto
+/// a pre-existing native classification keeps it: a recovery set that cannot
+/// reconstruct the payload is a permanent condition in the downloaded data, not
+/// a transient host fault.
+fn archive_plugin_failure_error(error_code: Option<&str>, message: Option<&str>) -> AppError {
+    const PAR2_INSUFFICIENT_RECOVERY: &str = "par2_insufficient_recovery";
+
+    let text = match (error_code, message) {
+        (Some(code), Some(message)) => format!("{code}: {message}"),
+        (Some(code), None) => code.to_string(),
+        (None, Some(message)) => message.to_string(),
+        (None, None) => "archive plugin extraction failed".to_string(),
+    };
+
+    if error_code == Some(PAR2_INSUFFICIENT_RECOVERY) {
+        AppError::Validation(text)
+    } else {
+        AppError::Repository(text)
     }
 }
 
@@ -1226,205 +678,6 @@ fn rar_volume_info_from_name(file_name: &str) -> Option<(String, usize)> {
     Some((group.to_string(), family_offset * 100 + number + 1))
 }
 
-impl Par2PlacementVerification {
-    fn canonical_hint_for_actual_path(&self, hint: &Path) -> PathBuf {
-        let hint_name = hint.file_name().and_then(|name| name.to_str());
-        for (canonical, actual_path) in &self.actual_by_canonical {
-            let actual_matches = actual_path == hint
-                || hint_name.is_some_and(|hint_name| {
-                    actual_path
-                        .file_name()
-                        .and_then(|name| name.to_str())
-                        .is_some_and(|actual_name| actual_name.eq_ignore_ascii_case(hint_name))
-                });
-            if actual_matches {
-                return PathBuf::from(canonical);
-            }
-        }
-        hint.to_path_buf()
-    }
-
-    fn archive_path_for(&self, archive_type: ArchiveType, hint: &Path) -> AppResult<PathBuf> {
-        match archive_type {
-            ArchiveType::Rar => self.rar_first_volume_path(hint),
-            ArchiveType::SevenZip => self.single_archive_path(hint, "7z"),
-            ArchiveType::Zip => self.single_archive_path(hint, "zip"),
-        }
-    }
-
-    fn rar_first_volume_path(&self, hint: &Path) -> AppResult<PathBuf> {
-        let mut candidates = Vec::new();
-        for (canonical, actual_path) in &self.actual_by_canonical {
-            let Some(canonical_name) = canonical_file_name(canonical) else {
-                continue;
-            };
-            let Some((group, index)) =
-                rar_volume_info_from_name(&canonical_name.to_ascii_lowercase())
-            else {
-                continue;
-            };
-            candidates.push(RarVolumeCandidate {
-                group,
-                index,
-                canonical_name,
-                actual_path: actual_path.clone(),
-            });
-        }
-        if candidates.is_empty() {
-            return Err(AppError::Validation(
-                "PAR2 metadata does not describe a RAR archive".to_string(),
-            ));
-        }
-
-        let group = archive_hint_group(hint, &candidates)
-            .or_else(|| single_rar_group(&candidates))
-            .ok_or_else(|| {
-                AppError::Validation(
-                    "PAR2 metadata describes multiple RAR archive sets and the requested archive did not identify one"
-                        .to_string(),
-                )
-            })?;
-        let mut selected = candidates
-            .into_iter()
-            .filter(|candidate| candidate.group == group)
-            .collect::<Vec<_>>();
-        selected.sort_by(|left, right| {
-            left.index
-                .cmp(&right.index)
-                .then_with(|| left.canonical_name.cmp(&right.canonical_name))
-        });
-        let Some(first) = selected.first() else {
-            return Err(AppError::Validation(
-                "PAR2 metadata did not identify a RAR archive set".to_string(),
-            ));
-        };
-        if first.index != 0 {
-            return Err(AppError::Validation(
-                "PAR2 metadata did not identify the first RAR volume".to_string(),
-            ));
-        }
-        let mut previous = None;
-        for candidate in &selected {
-            if previous == Some(candidate.index) {
-                return Err(AppError::Validation(
-                    "PAR2 metadata maps multiple files to the same RAR volume index".to_string(),
-                ));
-            }
-            previous = Some(candidate.index);
-        }
-        Ok(first.actual_path.clone())
-    }
-
-    fn single_archive_path(&self, hint: &Path, extension: &str) -> AppResult<PathBuf> {
-        let hint_name = hint
-            .file_name()
-            .and_then(|name| name.to_str())
-            .map(|name| name.to_ascii_lowercase());
-        let mut candidates = self
-            .actual_by_canonical
-            .iter()
-            .filter_map(|(canonical, actual_path)| {
-                let canonical_name = canonical_file_name(canonical)?;
-                canonical_name
-                    .to_ascii_lowercase()
-                    .ends_with(&format!(".{extension}"))
-                    .then_some((canonical_name, actual_path.clone()))
-            })
-            .collect::<Vec<_>>();
-
-        if let Some(hint_name) = hint_name
-            && let Some((_, actual_path)) =
-                candidates.iter().find(|(canonical_name, actual_path)| {
-                    canonical_name.eq_ignore_ascii_case(&hint_name)
-                        || actual_path
-                            .file_name()
-                            .and_then(|name| name.to_str())
-                            .is_some_and(|name| name.eq_ignore_ascii_case(&hint_name))
-                })
-        {
-            return Ok(actual_path.clone());
-        }
-
-        candidates.sort_by(|left, right| left.0.cmp(&right.0));
-        match candidates.as_slice() {
-            [(_, path)] => Ok(path.clone()),
-            [] => Err(AppError::Validation(format!(
-                "PAR2 metadata does not describe a {extension} archive"
-            ))),
-            _ => Err(AppError::Validation(format!(
-                "PAR2 metadata describes multiple {extension} archives and the requested path did not identify one"
-            ))),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct RarVolumeCandidate {
-    group: String,
-    index: usize,
-    canonical_name: String,
-    actual_path: PathBuf,
-}
-
-fn archive_hint_group(hint: &Path, candidates: &[RarVolumeCandidate]) -> Option<String> {
-    let hint_name = hint.file_name().and_then(|name| name.to_str())?;
-    candidates
-        .iter()
-        .find(|candidate| {
-            candidate.canonical_name.eq_ignore_ascii_case(hint_name)
-                || candidate
-                    .actual_path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .is_some_and(|name| name.eq_ignore_ascii_case(hint_name))
-        })
-        .map(|candidate| candidate.group.clone())
-}
-
-fn single_rar_group(candidates: &[RarVolumeCandidate]) -> Option<String> {
-    let mut groups = candidates
-        .iter()
-        .map(|candidate| candidate.group.clone())
-        .collect::<Vec<_>>();
-    groups.sort();
-    groups.dedup();
-    match groups.as_slice() {
-        [group] => Some(group.clone()),
-        _ => None,
-    }
-}
-
-fn canonical_file_name(path: &str) -> Option<String> {
-    Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(ToOwned::to_owned)
-}
-
-fn find_par2_paths(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return Vec::new();
-    };
-
-    let mut par2 = Vec::new();
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let ext = path
-            .extension()
-            .and_then(|e| e.to_str())
-            .unwrap_or("")
-            .to_ascii_lowercase();
-        if ext == "par2" {
-            par2.push(path);
-        }
-    }
-    par2.sort();
-    par2
-}
-
 /// Clean up the extraction directory after import completes.
 pub async fn cleanup_extracted_dir(dir: &Path) {
     if is_archive_staging_dir(dir) {
@@ -1453,7 +706,6 @@ mod tests {
     use super::*;
     use crate::{ArchiveExtractorClient, ArchiveExtractorPluginProvider};
     use scryer_plugin_sdk::ArchivePluginExtractedFile;
-    use std::collections::HashMap;
     use std::fs;
     use std::sync::{Arc, Mutex};
 
@@ -1529,6 +781,70 @@ mod tests {
         }
     }
 
+    /// Stands in for the plugin's internal PAR2 pass: writes a caller-supplied
+    /// set of plain files into the plugin's writable output directory and
+    /// answers with a caller-supplied status, so the host-side consumption of
+    /// `files` can be exercised without the native pipeline that used to sit in
+    /// front of it.
+    struct ScriptedArchiveClient {
+        emitted: Vec<(&'static str, &'static [u8])>,
+        status: ArchivePluginStatus,
+        error_code: Option<&'static str>,
+        message: Option<&'static str>,
+        copied_bytes: Option<u64>,
+    }
+
+    #[async_trait::async_trait]
+    impl ArchiveExtractorClient for ScriptedArchiveClient {
+        async fn process(
+            &self,
+            request: ArchivePluginProcessRequest,
+        ) -> AppResult<ArchivePluginProcessResponse> {
+            let ArchivePluginOperation::ExtractArchive { output_dir, .. } = &request.operation
+            else {
+                panic!("expected an extract operation");
+            };
+            let output_dir = PathBuf::from(output_dir);
+            fs::create_dir_all(&output_dir).unwrap();
+
+            let mut files = Vec::new();
+            for (relative_path, bytes) in &self.emitted {
+                let path = output_dir.join(relative_path);
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).unwrap();
+                }
+                fs::write(&path, bytes).unwrap();
+                files.push(ArchivePluginExtractedFile {
+                    relative_path: (*relative_path).to_string(),
+                    size: Some(bytes.len() as u64),
+                    checksum: None,
+                });
+            }
+
+            Ok(ArchivePluginProcessResponse {
+                status: self.status,
+                files,
+                expanded_bytes: None,
+                copied_bytes: self.copied_bytes,
+                staged_bytes: None,
+                error_code: self.error_code.map(ToOwned::to_owned),
+                message: self.message.map(ToOwned::to_owned),
+            })
+        }
+    }
+
+    fn scripted_provider(client: ScriptedArchiveClient) -> Arc<dyn ArchiveExtractorPluginProvider> {
+        let client: Arc<dyn ArchiveExtractorClient> = Arc::new(client);
+        Arc::new(RecordingArchiveProvider {
+            client,
+            formats: vec![
+                ArchivePluginFormat::Rar,
+                ArchivePluginFormat::SevenZip,
+                ArchivePluginFormat::Zip,
+            ],
+        })
+    }
+
     #[test]
     fn has_video_files_detects_mkv() {
         let dir = tempfile::tempdir().unwrap();
@@ -1600,97 +916,6 @@ mod tests {
     }
 
     #[test]
-    fn par2_rar_resolution_uses_first_volume_even_when_hint_is_later_volume() {
-        let dir = tempfile::tempdir().unwrap();
-        let part1 = dir.path().join("obfuscated-a.bin");
-        let part5 = dir.path().join("obfuscated-e.bin");
-        let verification = Par2PlacementVerification {
-            actual_by_canonical: HashMap::from([
-                ("show.part1.rar".to_string(), part1.clone()),
-                ("show.part5.rar".to_string(), part5.clone()),
-            ]),
-            state: NativePar2State::Verified,
-            placement_move_count: 2,
-        };
-
-        let resolved = verification
-            .archive_path_for(ArchiveType::Rar, &part5)
-            .unwrap();
-
-        assert_eq!(resolved, part1);
-    }
-
-    #[test]
-    fn par2_canonical_hint_maps_obfuscated_actual_name() {
-        let dir = tempfile::tempdir().unwrap();
-        let actual = dir.path().join("obfuscated-e.bin");
-        let verification = Par2PlacementVerification {
-            actual_by_canonical: HashMap::from([("show.part5.rar".to_string(), actual.clone())]),
-            state: NativePar2State::Verified,
-            placement_move_count: 1,
-        };
-
-        assert_eq!(
-            verification.canonical_hint_for_actual_path(&actual),
-            PathBuf::from("show.part5.rar")
-        );
-    }
-
-    #[test]
-    fn par2_resolution_does_not_fallback_to_hint_when_metadata_has_no_matching_archive() {
-        let dir = tempfile::tempdir().unwrap();
-        let hint = dir.path().join("release.zip");
-        let verification = Par2PlacementVerification {
-            actual_by_canonical: HashMap::from([(
-                "release.nfo".to_string(),
-                dir.path().join("release.nfo"),
-            )]),
-            state: NativePar2State::Verified,
-            placement_move_count: 0,
-        };
-
-        let error = verification
-            .archive_path_for(ArchiveType::Zip, &hint)
-            .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("does not describe a zip archive"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn par2_rar_resolution_rejects_multiple_sets_without_identifying_hint() {
-        let dir = tempfile::tempdir().unwrap();
-        let verification = Par2PlacementVerification {
-            actual_by_canonical: HashMap::from([
-                ("show-a.part1.rar".to_string(), dir.path().join("a1.bin")),
-                ("show-b.part1.rar".to_string(), dir.path().join("b1.bin")),
-            ]),
-            state: NativePar2State::Verified,
-            placement_move_count: 2,
-        };
-
-        let error = verification
-            .archive_path_for(ArchiveType::Rar, &dir.path().join("unknown.part5.rar"))
-            .unwrap_err();
-
-        assert!(
-            error.to_string().contains("multiple RAR archive sets"),
-            "{error}"
-        );
-    }
-
-    #[test]
-    fn par2_relative_path_rejects_escape_before_filesystem_access() {
-        assert!(safe_par2_relative_path("../escape.rar").is_err());
-        assert!(safe_par2_relative_path("/tmp/escape.rar").is_err());
-        assert!(safe_par2_relative_path("nested/volume.rar").is_ok());
-    }
-
-    #[test]
     fn find_primary_archive_none_for_video_only() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("movie.mkv"), b"video").unwrap();
@@ -1710,68 +935,6 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = safe_archive_output_path(dir.path(), "Season 1/movie.mkv").unwrap();
         assert_eq!(path, dir.path().join("Season 1").join("movie.mkv"));
-    }
-
-    #[test]
-    fn clean_staging_refuses_large_copy_when_clone_is_unavailable() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source.bin");
-        let destination = dir.path().join("destination.bin");
-        fs::write(&source, b"source").unwrap();
-        fs::write(&destination, b"existing").unwrap();
-
-        let error = stage_repair_file(
-            &source,
-            &destination,
-            MAX_REPAIR_COPY_FALLBACK_BYTES + 1,
-            false,
-        )
-        .unwrap_err();
-
-        assert!(
-            error
-                .to_string()
-                .contains("copy-on-write staging is unavailable"),
-            "{error}"
-        );
-        assert_eq!(fs::read(&destination).unwrap(), b"existing");
-    }
-
-    #[test]
-    fn repair_staging_allows_large_copy_when_clone_is_unavailable() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("source.bin");
-        let destination = dir.path().join("destination.bin");
-        fs::write(&source, b"source").unwrap();
-        fs::write(&destination, b"existing").unwrap();
-
-        stage_repair_file(
-            &source,
-            &destination,
-            MAX_REPAIR_COPY_FALLBACK_BYTES + 1,
-            true,
-        )
-        .unwrap();
-
-        assert_eq!(fs::read(&destination).unwrap(), b"source");
-    }
-
-    #[test]
-    fn par2_staging_prefers_source_filesystem() {
-        let source = tempfile::tempdir().unwrap();
-        let destination = tempfile::tempdir().unwrap();
-        let workspace = ArchiveExtractionWorkspace {
-            root: destination.path().join("workspace"),
-            output_dir: destination.path().join("workspace").join("out"),
-        };
-
-        let (staging_dir, cleanup_dirs) =
-            create_par2_staging_dir(source.path(), &workspace, ARCHIVE_REPAIR_INPUT_DIR).unwrap();
-
-        assert!(staging_dir.starts_with(source.path()));
-        assert_eq!(cleanup_dirs, vec![staging_dir.clone()]);
-        assert!(is_archive_staging_dir(&staging_dir));
-        std::fs::remove_dir_all(staging_dir).unwrap();
     }
 
     #[tokio::test]
@@ -2037,7 +1200,6 @@ mod tests {
                 .join("movie.mkv")
                 .exists()
         );
-        assert!(!extracted.join(ARCHIVE_REPAIR_INPUT_DIR).exists());
 
         let recorded = operation.lock().unwrap().clone().unwrap();
         match recorded {
@@ -2126,5 +1288,109 @@ mod tests {
         cleanup_extracted_dir(&other).await;
         // Should NOT be deleted: name matches neither legacy nor staging dirs.
         assert!(other.exists());
+    }
+
+    /// PAR2 repair moved inside the plugin. When the recovery set protects plain
+    /// media files rather than an archive, the plugin repairs them into its
+    /// output directory and reports them in `files` with `copied_bytes` set
+    /// instead of `expanded_bytes`. The host must accept those exactly like
+    /// extracted archive members.
+    #[tokio::test]
+    async fn plugin_emitted_plain_files_are_the_deliverable() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("release.rar"), b"rar").unwrap();
+        fs::write(source.path().join("release.par2"), b"par2").unwrap();
+
+        let provider = scripted_provider(ScriptedArchiveClient {
+            emitted: vec![
+                ("Season 1/episode.mkv", b"repaired video"),
+                ("release.nfo", b"nfo"),
+            ],
+            status: ArchivePluginStatus::Ok,
+            error_code: None,
+            message: None,
+            copied_bytes: Some(17),
+        });
+
+        let extracted = extract_archives_if_needed(
+            source.path(),
+            Some(ArchiveExtractionDestination::new(
+                destination.path(),
+                "par2-plain-files",
+            )),
+            None,
+            Some(provider),
+        )
+        .await
+        .unwrap()
+        .expect("plugin-emitted plain files should be accepted as extraction output");
+
+        assert!(extracted.starts_with(destination.path()));
+        assert!(
+            extracted
+                .join(ARCHIVE_STAGING_OUTPUT_DIR)
+                .join("Season 1")
+                .join("episode.mkv")
+                .exists()
+        );
+        // The read-only source is untouched by the host.
+        assert!(source.path().join("release.rar").exists());
+        assert!(source.path().join("release.par2").exists());
+    }
+
+    /// `par2_insufficient_recovery` used to be a native validation error. It now
+    /// arrives as a plugin `Failed` status and must keep both its code and its
+    /// permanent (validation) classification.
+    #[tokio::test]
+    async fn insufficient_par2_recovery_surfaces_as_validation_error() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("release.rar"), b"rar").unwrap();
+
+        let provider = scripted_provider(ScriptedArchiveClient {
+            emitted: Vec::new(),
+            status: ArchivePluginStatus::Failed,
+            error_code: Some("par2_insufficient_recovery"),
+            message: Some("recovery set cannot reconstruct 3 damaged blocks"),
+            copied_bytes: None,
+        });
+
+        let error = extract_archives_if_needed(
+            source.path(),
+            Some(ArchiveExtractionDestination::new(
+                destination.path(),
+                "par2-insufficient",
+            )),
+            None,
+            Some(provider),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        let text = error.to_string();
+        assert!(text.contains("par2_insufficient_recovery"), "{text}");
+        assert!(text.contains("3 damaged blocks"), "{text}");
+    }
+
+    #[test]
+    fn archive_plugin_failure_keeps_the_error_code_alongside_the_message() {
+        let error = archive_plugin_failure_error(Some("par2_scan_failed"), Some("bad header"));
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+        let text = error.to_string();
+        assert!(text.contains("par2_scan_failed"), "{text}");
+        assert!(text.contains("bad header"), "{text}");
+
+        assert!(
+            archive_plugin_failure_error(None, None)
+                .to_string()
+                .contains("archive plugin extraction failed")
+        );
+        assert!(
+            archive_plugin_failure_error(Some("only_code"), None)
+                .to_string()
+                .contains("only_code")
+        );
     }
 }

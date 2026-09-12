@@ -94,6 +94,7 @@ mod jellyfin;
 mod playback;
 mod plex;
 mod policy;
+mod refresh;
 mod scanner;
 mod users;
 

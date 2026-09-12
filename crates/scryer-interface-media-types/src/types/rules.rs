@@ -1,4 +1,4 @@
-use super::MediaFacetValue;
+use super::{Long, MediaFacetValue};
 use async_graphql::{ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
 
@@ -19,6 +19,12 @@ pub struct RuleSetPayload {
     pub enabled: bool,
     /// Evaluation priority.
     pub priority: i32,
+    /// Baseline rules establish the subtotal read by additional rules.
+    pub evaluation_phase: String,
+    /// Why a retained rule was disabled during a context migration.
+    pub disabled_reason: Option<String>,
+    /// Other rules with this group cannot be enabled simultaneously.
+    pub exclusive_group: Option<String>,
     /// Media facets to which the rule set applies.
     pub applied_facets: Vec<String>,
     /// Whether the rule set is managed by a trusted pack.
@@ -48,6 +54,205 @@ pub struct RuleValidationResultPayload {
     pub valid: bool,
     /// Validation errors; empty when valid.
     pub errors: Vec<String>,
+}
+
+#[derive(InputObject)]
+/// Unsaved rule-set fields evaluated by a scoring preview.
+pub struct RuleSetTestDraftInput {
+    /// Rule name used in the preview output.
+    pub name: String,
+    /// Rule description retained for the editor draft.
+    pub description: String,
+    /// Complete Rego source for the unsaved draft.
+    pub rego_source: String,
+    /// Whether the draft participates in the preview policy set.
+    pub enabled: bool,
+    /// Evaluation priority for the draft.
+    pub priority: i32,
+    /// Media facets to which the draft applies.
+    pub applied_facets: Vec<String>,
+}
+
+#[derive(InputObject)]
+/// Input for an explicit, read-only title-aware rule-set scoring preview.
+pub struct TestRuleSetInput {
+    /// Current unsaved editor draft. Omit when testing a saved rule set.
+    pub draft: Option<RuleSetTestDraftInput>,
+    /// Saved rule-set identity to test without supplying a draft.
+    pub test_rule_set_id: Option<ID>,
+    /// Existing rule-set identity being edited, or null when creating a rule.
+    pub edit_rule_set_id: Option<ID>,
+    /// Source identity when the editor was opened by copying a rule, or null.
+    pub copy_source_rule_set_id: Option<ID>,
+    /// Whether copying disables the source rule in the preview policy set.
+    #[graphql(default = false)]
+    pub copy_disables_source: bool,
+    /// Library title used to construct title-aware scoring facts.
+    pub title_id: ID,
+    /// Episode belonging to the selected title, or null for a whole-title preview.
+    pub episode_id: Option<ID>,
+    /// Release name to parse and score.
+    pub release_name: String,
+    /// Release size in bytes, or null when unknown.
+    pub size_bytes: Option<Long>,
+}
+
+#[cfg(test)]
+mod saved_rule_preview_input_tests {
+    use super::TestRuleSetInput;
+    use async_graphql::{InputType, value};
+
+    #[test]
+    fn saved_rule_preview_input_needs_no_draft_or_copy_flag() {
+        let input = TestRuleSetInput::parse(Some(value!({
+            "testRuleSetId": "installed-rule",
+            "titleId": "library-title",
+            "releaseName": "A.Release.1080p"
+        })))
+        .unwrap_or_else(|_| panic!("minimal saved-rule request must parse"));
+        assert_eq!(
+            input.test_rule_set_id.as_ref().map(|id| id.as_str()),
+            Some("installed-rule")
+        );
+        assert!(input.draft.is_none());
+        assert!(input.edit_rule_set_id.is_none());
+        assert!(input.copy_source_rule_set_id.is_none());
+        assert!(!input.copy_disables_source);
+        assert!(input.size_bytes.is_none());
+    }
+}
+
+#[derive(SimpleObject, Clone)]
+/// Title and library facts resolved for a rule-set scoring preview.
+pub struct RuleSetTestContextPayload {
+    /// Resolved title name.
+    pub title_name: String,
+    /// Resolved library name, or null when unavailable.
+    pub library_name: Option<String>,
+    /// Resolved media facet.
+    pub facet: String,
+    /// Resolved original language, or null when unavailable.
+    pub language: Option<String>,
+    /// Resolved title tags.
+    pub tags: Vec<String>,
+    /// Resolved episode label, or null for whole-title previews.
+    pub episode_label: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Release facts parsed for a rule-set scoring preview.
+pub struct RuleSetTestParsedPayload {
+    /// Parsed release group, or null when unknown.
+    pub release_group: Option<String>,
+    /// Parsed quality, or null when unknown.
+    pub quality: Option<String>,
+    /// Parsed release source, or null when unknown.
+    pub source: Option<String>,
+    /// Season parsed from the release name, or null when absent.
+    pub season: Option<String>,
+    /// Episode parsed from the release name, or null when absent.
+    pub episode: Option<String>,
+    /// Parsed edition, or null when unknown.
+    pub edition: Option<String>,
+    /// Parsed video codec, or null when unknown.
+    pub video_codec: Option<String>,
+    /// Parsed audio codec, or null when unknown.
+    pub audio: Option<String>,
+    /// Parsed release year, or null when unknown.
+    pub year: Option<i32>,
+    /// Parsed audio-language codes.
+    pub audio_languages: Vec<String>,
+    /// Release size in bytes, or null when the caller omitted it.
+    pub size_bytes: Option<Long>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One rule-set's contribution to a title-aware scoring preview.
+pub struct RuleSetTestRuleSetPayload {
+    /// Stable rule-set identity.
+    pub rule_set_id: Option<String>,
+    /// Rule-set display name.
+    pub rule_set_name: String,
+    /// Existing policy origin.
+    pub origin: String,
+    /// Signed score contribution.
+    pub score: i32,
+    /// Whether this rule set matched the candidate facts.
+    pub matched: bool,
+    /// Whether this group contains an explicit rejection. Numeric penalties are recoverable.
+    pub blocked: bool,
+    /// Whether this entry represents the current editor draft.
+    pub is_draft: bool,
+    /// Individual numeric contributions and explicit rejection reasons.
+    pub entries: Vec<RuleSetTestEntryPayload>,
+    /// Evaluation messages and diagnostics for this rule set.
+    pub messages: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One numeric contribution or explicit rejection in a scoring preview.
+pub struct RuleSetTestEntryPayload {
+    /// Stable explanation code; the code does not determine rejection type.
+    pub code: String,
+    /// Signed score delta associated with the entry.
+    pub delta: i32,
+    /// Whether this is an explicit rejection, as identified by kind.
+    pub blocked: bool,
+    /// score_contribution, mandatory_rejection, or final_score_rejection.
+    pub kind: String,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Current editor draft's contribution to a scoring preview.
+pub struct RuleSetTestDraftContributionPayload {
+    /// Signed score contribution from the draft.
+    pub score: i32,
+    /// Whether the draft matched the candidate facts.
+    pub matched: bool,
+    /// Compatibility field, always false: drafts emit recoverable numeric contributions.
+    pub blocked: bool,
+    /// Whether the draft applies to the selected title facet.
+    pub applies: bool,
+    /// Whether the draft is enabled.
+    pub enabled: bool,
+    /// Explanation for a disabled or non-applicable draft, or null when none.
+    pub message: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A validation or evaluation error retained by a scoring preview.
+pub struct RuleSetTestErrorPayload {
+    /// Stable error classification.
+    pub code: String,
+    /// Human-readable error detail.
+    pub message: String,
+    /// Rule-set identity associated with the error, or null when global.
+    pub rule_set_id: Option<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Explicit, read-only scoring preview for the current rule-editor draft.
+pub struct TestRuleSetPayload {
+    /// Aggregate score after normal policy aggregation.
+    pub score: i32,
+    /// Whether mandatory requirements and both final score gates pass.
+    pub allowed: bool,
+    /// Whether the completed decision is rejected by a requirement or score gate.
+    pub blocked: bool,
+    /// Whether the configured minimum-score gate passed.
+    pub minimum_score_met: bool,
+    /// Resolved quality-profile name.
+    pub profile_name: String,
+    /// Resolved title, library, and episode context.
+    pub context: RuleSetTestContextPayload,
+    /// Parsed release facts preserved from the supplied release name.
+    pub parsed: RuleSetTestParsedPayload,
+    /// Contributions grouped by policy rule set.
+    pub rule_sets: Vec<RuleSetTestRuleSetPayload>,
+    /// Dedicated explanation of the current draft's contribution.
+    pub draft_contribution: RuleSetTestDraftContributionPayload,
+    /// Validation and evaluation errors retained by the preview.
+    pub errors: Vec<RuleSetTestErrorPayload>,
 }
 
 #[derive(InputObject)]

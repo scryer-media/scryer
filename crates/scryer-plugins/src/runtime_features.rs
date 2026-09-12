@@ -3,9 +3,51 @@ use std::collections::HashSet;
 pub const PLUGIN_REQUIRED_FEATURE_SIMD128: &str = "simd128";
 pub const PLUGIN_REQUIRED_FEATURE_RELAXED_SIMD: &str = "relaxed-simd";
 
+/// WASI targets, spelled exactly as the catalog spells an artifact's `runtime`.
+pub const PLUGIN_RUNTIME_TARGET_WASIP1: &str = "wasm32-wasip1";
+pub const PLUGIN_RUNTIME_TARGET_WASIP2: &str = "wasm32-wasip2";
+
+/// The WASI targets this host can actually instantiate.
+///
+/// This is a declaration, not a probe: unlike a wasm feature — which either
+/// compiles on this CPU or does not — a WASI target is a property of the
+/// loader that is linked into this binary. The components-only runtime loads
+/// `wasm32-wasip2` components and nothing else; the Preview 1 command and
+/// Extism runtimes were deleted with the component migration, so
+/// `wasm32-wasip1` is deliberately absent.
+///
+/// Adding Preview 3 later is a one-line change here plus the wasmtime bump —
+/// the catalog wire format, the renderer, and the selection code stay as they
+/// are, because both halves of an artifact's requirement (`runtime` and
+/// `required_features`) are matched as opaque capability tokens against the
+/// set this module returns.
+const SUPPORTED_PLUGIN_RUNTIME_TARGETS: &[&str] = &[PLUGIN_RUNTIME_TARGET_WASIP2];
+
 const SIMD128_PROBE_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/simd128_probe.wasm"));
 const RELAXED_SIMD_PROBE_WASM: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/relaxed_simd_probe.wasm"));
+
+/// Every capability token this host satisfies: WASI targets and wasm features
+/// in one namespace.
+///
+/// A catalog artifact is runnable here when its `runtime` token is in this set
+/// and its `required_features` are a subset of it. Target names
+/// (`wasm32-wasip*`) and feature names (`simd128`, `relaxed-simd`) cannot
+/// collide, so one set expresses both axes and a new axis — a future target, a
+/// future wasm feature — needs no new plumbing.
+pub fn detect_plugin_runtime_capabilities() -> HashSet<String> {
+    let mut capabilities = detect_supported_plugin_required_features();
+    capabilities.extend(supported_plugin_runtime_targets());
+    capabilities
+}
+
+/// The WASI target tokens this host declares support for.
+pub fn supported_plugin_runtime_targets() -> HashSet<String> {
+    SUPPORTED_PLUGIN_RUNTIME_TARGETS
+        .iter()
+        .map(|target| (*target).to_string())
+        .collect()
+}
 
 pub fn detect_supported_plugin_required_features() -> HashSet<String> {
     detect_supported_plugin_required_features_with(supports_plugin_module)
@@ -99,6 +141,37 @@ mod tests {
         }
         if features.contains(PLUGIN_REQUIRED_FEATURE_RELAXED_SIMD) {
             assert!(features.contains(PLUGIN_REQUIRED_FEATURE_SIMD128));
+        }
+    }
+
+    #[test]
+    fn declared_targets_are_the_components_only_runtime() {
+        let targets = supported_plugin_runtime_targets();
+        assert!(targets.contains(PLUGIN_RUNTIME_TARGET_WASIP2));
+        assert!(
+            !targets.contains(PLUGIN_RUNTIME_TARGET_WASIP1),
+            "the Preview 1 command runtime was deleted; declaring it would make the client \
+             download wasip1 artifacts it cannot instantiate"
+        );
+    }
+
+    #[test]
+    fn capabilities_carry_targets_and_features_in_one_namespace() {
+        let capabilities = detect_plugin_runtime_capabilities();
+        assert!(capabilities.contains(PLUGIN_RUNTIME_TARGET_WASIP2));
+        for feature in detect_supported_plugin_required_features() {
+            assert!(capabilities.contains(&feature));
+        }
+        for capability in &capabilities {
+            assert!(
+                matches!(
+                    capability.as_str(),
+                    PLUGIN_RUNTIME_TARGET_WASIP2
+                        | PLUGIN_REQUIRED_FEATURE_SIMD128
+                        | PLUGIN_REQUIRED_FEATURE_RELAXED_SIMD
+                ),
+                "unexpected capability token {capability}"
+            );
         }
     }
 }

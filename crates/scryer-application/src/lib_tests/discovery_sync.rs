@@ -10,7 +10,10 @@ use crate::ports::{
     DiscoveryItemLibraryProvenanceRecord, DiscoveryItemsPageRecord, DiscoveryItemsStorageQuery,
     DiscoverySourceTagRecord,
 };
-use crate::settings::keys::{DISCOVERY_REGION_KEY, METADATA_LANGUAGE_KEY, SETTINGS_SCOPE_SYSTEM};
+use crate::settings::keys::{
+    DISCOVERY_PERSONALIZED_ENABLED_KEY, DISCOVERY_REGION_KEY, METADATA_LANGUAGE_KEY,
+    SETTINGS_SCOPE_SYSTEM,
+};
 use crate::{
     AppError, AppResult, BulkMetadataResult, CatalogDiscoveryGroupKind, CatalogDiscoveryQuery,
     CatalogDiscoverySurface, DiscoveryContextChangeType, DiscoveryContextChangesInput,
@@ -43,12 +46,114 @@ use tokio::sync::{Mutex, Notify};
 fn canonical_genre_tags(labels: &[&str]) -> Vec<CanonicalMediaTag> {
     labels
         .iter()
+        .map(|label| {
+            let slug = label.to_ascii_lowercase().replace(' ', "-");
+            CanonicalMediaTag {
+                key: format!("canonical:genre:{slug}"),
+                category: "genre".to_string(),
+                name: (*label).to_string(),
+                // The shape SMG produces from a provider's own genre list, which
+                // is what the genre corroboration gate requires: a lone
+                // community tag key would (correctly) earn no rail.
+                confidence: Some(1.0),
+                sources: vec!["genre".to_string()],
+                source_tag_keys: vec![format!("genre:{slug}")],
+                is_adult: false,
+                is_spoiler: false,
+            }
+        })
+        .collect()
+}
+
+/// Rail-quality floors mean a three-title library earns no reason rails at all,
+/// and a two-item rail is dropped rather than padded out of the evidence-less
+/// tail. These fixtures are about RBAC and group ordering rather than about the
+/// floors, so they top the library up past the full-ladder tier and give each
+/// label enough pool items to clear the minimum rail size.
+fn rail_floor_padding_titles(library_id: &str, count: usize) -> Vec<Title> {
+    (0..count)
+        .map(|index| {
+            let mut title = test_title(
+                &format!("pad-title-{index}"),
+                &format!("Pad Title {index}"),
+                MediaFacet::Movie,
+                Vec::new(),
+            );
+            title.library_id = library_id.to_string();
+            title.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+            title
+                .canonical_tags
+                .extend(canonical_theme_tags(&["Isekai"]));
+            title
+        })
+        .collect()
+}
+
+fn rail_floor_padding_subjects(
+    run_id: &str,
+    library_id: &str,
+    count: usize,
+) -> Vec<DiscoverySubmittedSubjectRecord> {
+    (0..count)
+        .map(|index| DiscoverySubmittedSubjectRecord {
+            run_id: run_id.to_string(),
+            subject_key: format!("tmdb:movie:7{index:04}"),
+            title_id: Some(format!("pad-title-{index}")),
+            library_id: Some(library_id.to_string()),
+            library_facet: Some("movie".to_string()),
+            title_kind: Some("movie".to_string()),
+            display_title: Some(format!("Pad Title {index}")),
+            external_ids_json: serde_json::json!([{"source": "tmdb", "value": format!("7{index:04}")}])
+                .to_string(),
+            raw_subject_json: serde_json::json!({"tmdbId": format!("7{index:04}")}).to_string(),
+        })
+        .collect()
+}
+
+fn rail_floor_padding_items(
+    run_id: &str,
+    prefix: &str,
+    genres: &[&str],
+    themes: &[&str],
+    count: usize,
+) -> Vec<DiscoveryItemRecord> {
+    (0..count)
+        .map(|index| {
+            let mut item = discovery_item_record(
+                run_id,
+                run_id,
+                None,
+                &format!("tmdb:movie:8{prefix}{index}"),
+                &format!("Pad {prefix} {index}"),
+                "movie",
+                // Above the evidence-less band so the padding is admitted on
+                // edge evidence, which is what a real rail item has.
+                20.0,
+                genres,
+                &[],
+                false,
+                true,
+            );
+            item.facet_terms.extend(
+                themes
+                    .iter()
+                    .map(|theme| format!("canonical:theme:{}", theme.to_ascii_lowercase())),
+            );
+            item.matched_subject_keys = vec!["tmdb:movie:603".to_string()];
+            item
+        })
+        .collect()
+}
+
+fn canonical_theme_tags(labels: &[&str]) -> Vec<CanonicalMediaTag> {
+    labels
+        .iter()
         .map(|label| CanonicalMediaTag {
             key: format!(
-                "canonical:genre:{}",
+                "canonical:theme:{}",
                 label.to_ascii_lowercase().replace(' ', "-")
             ),
-            category: "genre".to_string(),
+            category: "theme".to_string(),
             name: (*label).to_string(),
             confidence: Some(1.0),
             sources: Vec::new(),
@@ -75,6 +180,12 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
     owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Horror", "Isekai"]));
+    // The user-tag bag is deliberately populated and deliberately ignored:
+    // affinity is sourced from canonical tags only, and nothing tag-related
+    // leaves the instance.
     owned_drama_sci_fi.tags = vec!["horror".to_string(), "isekai".to_string()];
     let mut owned_drama = test_title(
         "owned-2",
@@ -84,6 +195,9 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
     );
     owned_drama.library_id = visible_movie_library_id.clone();
     owned_drama.canonical_tags = canonical_genre_tags(&["Drama"]);
+    owned_drama
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Horror"]));
     owned_drama.tags = vec!["horror".to_string()];
     let mut owned_sci_fi = test_title(
         "owned-3",
@@ -93,6 +207,9 @@ async fn discovery_sync_status_returns_state_recent_runs_and_pending_count() {
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
     owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Isekai"]));
     owned_sci_fi.tags = vec!["isekai".to_string()];
     titles
         .store
@@ -211,6 +328,12 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     );
     owned_drama_sci_fi.library_id = visible_movie_library_id.clone();
     owned_drama_sci_fi.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+    owned_drama_sci_fi
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Horror", "Isekai"]));
+    // The user-tag bag is deliberately populated and deliberately ignored:
+    // affinity is sourced from canonical tags only, and nothing tag-related
+    // leaves the instance.
     owned_drama_sci_fi.tags = vec!["horror".to_string(), "isekai".to_string()];
     let mut owned_drama = test_title(
         "owned-2",
@@ -220,6 +343,9 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     );
     owned_drama.library_id = visible_movie_library_id.clone();
     owned_drama.canonical_tags = canonical_genre_tags(&["Drama"]);
+    owned_drama
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Horror"]));
     owned_drama.tags = vec!["horror".to_string()];
     let mut owned_sci_fi = test_title(
         "owned-3",
@@ -229,12 +355,20 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
     );
     owned_sci_fi.library_id = visible_movie_library_id.clone();
     owned_sci_fi.canonical_tags = canonical_genre_tags(&["Sci-Fi"]);
+    owned_sci_fi
+        .canonical_tags
+        .extend(canonical_theme_tags(&["Isekai"]));
     owned_sci_fi.tags = vec!["isekai".to_string()];
     titles
         .store
         .lock()
         .await
         .extend([owned_drama_sci_fi, owned_drama, owned_sci_fi]);
+    titles
+        .store
+        .lock()
+        .await
+        .extend(rail_floor_padding_titles(&visible_movie_library_id, 60));
 
     *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
         last_success_generation_id: Some("context-run".to_string()),
@@ -298,6 +432,15 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
             raw_subject_json: serde_json::json!({"tmdbId": 999}).to_string(),
         },
     ]);
+    discovery
+        .submitted_subjects
+        .lock()
+        .await
+        .extend(rail_floor_padding_subjects(
+            "context-run",
+            &visible_movie_library_id,
+            60,
+        ));
     let mut private_recommendation = discovery_item_record(
         "context-run",
         "context-run",
@@ -600,6 +743,22 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
             true,
         ),
     ]);
+    let mut rail_padding = rail_floor_padding_items("context-run", "isekai", &[], &["Isekai"], 10);
+    rail_padding.extend(rail_floor_padding_items(
+        "context-run",
+        "drama",
+        &["Drama"],
+        &[],
+        10,
+    ));
+    rail_padding.extend(rail_floor_padding_items(
+        "context-run",
+        "scifi",
+        &["Sci-Fi"],
+        &[],
+        10,
+    ));
+    discovery.items.lock().await.extend(rail_padding);
     discovery.facets.lock().await.push(DiscoveryFacetRecord {
         run_id: "context-run".to_string(),
         facet_name: "genre".to_string(),
@@ -674,7 +833,9 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         .iter()
         .find(|facet| facet.facet_name == "genre" && facet.facet_value == "Drama")
         .expect("canonical drama facet should be present");
-    assert_eq!(drama_facet.local_count, Some(3));
+    // Three original Drama items plus the ten that pad the Drama rail past the
+    // minimum rail size.
+    assert_eq!(drama_facet.local_count, Some(13));
     assert_eq!(drama_facet.smg_count, None);
     assert!(
         viewer_home
@@ -4006,6 +4167,104 @@ async fn discovery_sync_daily_snapshot_takes_precedence_and_clears_pending_chang
 }
 
 #[tokio::test]
+async fn discovery_sync_library_growth_resnapshots_ahead_of_the_daily_cadence() {
+    // A fresh install imports for hours after its first snapshot. Waiting for
+    // the daily gate means a day of rails built for a library that no longer
+    // exists.
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let now = Utc.timestamp_opt(10_000, 0).unwrap();
+    app.runtime.environment.set_fixed_now_for_tests(Some(now));
+
+    let mut run = discovery_run_record("generation-1", now, "complete");
+    run.subject_count = 1;
+    discovery
+        .upsert_discovery_sync_run(&run)
+        .await
+        .expect("previous snapshot run should seed");
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-1".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-1".to_string()),
+        last_context_snapshot_completed_at: Some(now - chrono::Duration::hours(1)),
+        next_context_snapshot_eligible_at: Some(now + chrono::Duration::days(1)),
+        next_incremental_reload_eligible_at: Some(now + chrono::Duration::hours(4)),
+        updated_at: now,
+        ..DiscoverySyncStateRecord::default()
+    });
+
+    {
+        let mut store = titles.store.lock().await;
+        for index in 0..6 {
+            store.push(test_title(
+                &format!("title-{index}"),
+                &format!("The Example Movie {index}"),
+                MediaFacet::Movie,
+                vec![("tmdb_movie", &format!("60{index}"))],
+            ));
+        }
+    }
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should run");
+
+    assert_eq!(
+        gateway.submitted_inputs.lock().await.len(),
+        1,
+        "a library that grew from one subject to six must re-snapshot"
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_minor_library_growth_waits_for_the_daily_cadence() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let now = Utc.timestamp_opt(10_000, 0).unwrap();
+    app.runtime.environment.set_fixed_now_for_tests(Some(now));
+
+    let mut run = discovery_run_record("generation-1", now, "complete");
+    run.subject_count = 10;
+    discovery
+        .upsert_discovery_sync_run(&run)
+        .await
+        .expect("previous snapshot run should seed");
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-1".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-1".to_string()),
+        last_context_snapshot_completed_at: Some(now - chrono::Duration::hours(1)),
+        next_context_snapshot_eligible_at: Some(now + chrono::Duration::days(1)),
+        next_incremental_reload_eligible_at: Some(now + chrono::Duration::hours(4)),
+        updated_at: now,
+        ..DiscoverySyncStateRecord::default()
+    });
+
+    {
+        let mut store = titles.store.lock().await;
+        for index in 0..11 {
+            store.push(test_title(
+                &format!("title-{index}"),
+                &format!("The Example Movie {index}"),
+                MediaFacet::Movie,
+                vec![("tmdb_movie", &format!("6{index:02}"))],
+            ));
+        }
+    }
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should run");
+
+    assert!(
+        gateway.submitted_inputs.lock().await.is_empty(),
+        "one new title out of ten is not a different library"
+    );
+}
+
+#[tokio::test]
 async fn discovery_sync_public_feed_runs_while_scan_and_context_backoff_are_active_and_filters_collection_section()
  {
     let gateway = Arc::new(SnapshotMetadataGateway::default());
@@ -5071,6 +5330,10 @@ struct RecordingDiscoveryRepository {
     // reads these columns from discovery_titles.
     home_hero_presentation: Mutex<HomeHeroPresentation>,
     personalized_facet_calls: Mutex<usize>,
+    // Filter options return the same shape whichever generation they read, so
+    // the personalized generation the caller asked for is the only observable
+    // that proves the visibility gate was applied.
+    filter_option_context_run_ids: Mutex<Vec<Option<String>>>,
 }
 
 #[async_trait]
@@ -5675,11 +5938,15 @@ impl DiscoveryRepository for RecordingDiscoveryRepository {
     async fn list_discovery_home_filter_options(
         &self,
         _public_run_id: Option<&str>,
-        _context_run_id: Option<&str>,
+        context_run_id: Option<&str>,
         _readable_library_ids: &[String],
         _allowed_media_kinds: &[String],
         _include_unresolved: bool,
     ) -> AppResult<DiscoveryHomeFilterOptions> {
+        self.filter_option_context_run_ids
+            .lock()
+            .await
+            .push(context_run_id.map(str::to_string));
         Ok(DiscoveryHomeFilterOptions::default())
     }
 
@@ -6582,6 +6849,8 @@ fn discovery_item_record(
         relation_count: Some(relation_subtypes.len() as i32),
         source_subject_count: Some(1),
         rank_score: Some(rank_score),
+        recommendation_score: Some(rank_score),
+        base_rank: Some(0.0),
         matched_subject_keys: Vec::new(),
         matched_subject_titles: Vec::new(),
         matched_subject_count: 0,
@@ -6788,6 +7057,8 @@ fn test_discovery_title() -> DiscoveryTitle {
         relation_count: 0,
         source_subject_count: 1,
         rank_score: 0.8,
+        recommendation_score: Some(0.8),
+        base_rank: Some(0.0),
         best_source: "popular".to_string(),
         matched_subject_keys: vec!["tmdb:movie:603".to_string()],
         matched_subject_titles: vec!["The Example Movie".to_string()],
@@ -6802,4 +7073,397 @@ fn test_discovery_title() -> DiscoveryTitle {
         change_subject_keys: Vec::new(),
         removed_subject_keys: Vec::new(),
     }
+}
+
+// ── Instance-wide personalized discovery switch ────────────────────────────
+//
+// With `discovery.personalized_enabled` false, nothing derived from the local
+// library leaves the instance: no context snapshot submit, no incremental
+// change submit, and no scheduling bookkeeping for either. The public feed
+// (region and language only) keeps refreshing, and every read path serves
+// public rows.
+
+/// Build a settings repository with personalized discovery turned off.
+async fn settings_with_personalized_discovery(enabled: bool) -> Arc<StoredSettingsRepo> {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            if enabled { "true" } else { "false" },
+        )
+        .await;
+    settings
+}
+
+/// A populated library whose fingerprint has never been submitted, with the
+/// bootstrap quiet window already elapsed. With the switch on this state
+/// submits a first context snapshot on the very next run.
+fn snapshot_ready_discovery_state(due_at: DateTime<Utc>) -> DiscoverySyncStateRecord {
+    DiscoverySyncStateRecord {
+        bootstrap_started_at: Some(due_at),
+        bootstrap_quiet_until: Some(due_at),
+        updated_at: due_at,
+        ..DiscoverySyncStateRecord::default()
+    }
+}
+
+async fn assert_no_personalized_send_up(
+    gateway: &SnapshotMetadataGateway,
+    discovery: &RecordingDiscoveryRepository,
+) {
+    assert!(
+        gateway.submitted_inputs.lock().await.is_empty(),
+        "no context snapshot may be submitted while personalized discovery is off"
+    );
+    assert!(
+        gateway.change_inputs.lock().await.is_empty(),
+        "no incremental change submit may happen while personalized discovery is off"
+    );
+    assert!(
+        discovery.commits.lock().await.is_empty(),
+        "no personalized generation may be committed while the switch is off"
+    );
+    assert!(
+        discovery.incremental_commits.lock().await.is_empty(),
+        "no incremental generation may be committed while the switch is off"
+    );
+    let state = discovery
+        .state
+        .lock()
+        .await
+        .clone()
+        .expect("state should be written");
+    assert!(
+        state.last_success_generation_id.is_none(),
+        "no personalized generation should exist"
+    );
+    assert!(
+        state.next_context_snapshot_eligible_at.is_none(),
+        "the disabled run must not schedule a context snapshot gate"
+    );
+    assert!(
+        state.next_incremental_reload_eligible_at.is_none(),
+        "the disabled run must not schedule an incremental reload gate"
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_scheduled_run_with_personalized_disabled_refreshes_public_feed_only() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(false).await;
+    let (app, _admin, titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway.clone(), settings);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "The Quiet Orchard",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should run");
+
+    assert_no_personalized_send_up(&gateway, &discovery).await;
+    assert_eq!(
+        gateway.public_feed_inputs.lock().await.len(),
+        1,
+        "the public feed must still refresh"
+    );
+    let runs = discovery.runs.lock().await;
+    assert!(
+        runs.iter().any(|run| run.kind == "public_feed"),
+        "a public feed run should be recorded"
+    );
+    assert!(
+        !runs.iter().any(|run| run.kind == "context_snapshot"),
+        "no context snapshot run should be recorded"
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_manual_run_with_personalized_disabled_refreshes_public_feed_only() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(false).await;
+    let (app, _admin, titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway.clone(), settings);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "The Quiet Orchard",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+
+    // A manual "Run now" normally skips the bootstrap settle window and submits
+    // immediately, so it is the strongest check that the switch wins.
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::Manual)
+        .await
+        .expect("manual discovery sync should run");
+
+    assert_no_personalized_send_up(&gateway, &discovery).await;
+    assert_eq!(
+        gateway.public_feed_inputs.lock().await.len(),
+        1,
+        "the public feed must still refresh on a manual run"
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_reenabling_personalized_submits_on_the_next_run() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(false).await;
+    let (app, _admin, titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway.clone(), settings.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let due_at = Utc.timestamp_opt(0, 0).unwrap();
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+
+    titles.store.lock().await.push(test_title(
+        "title-1",
+        "The Quiet Orchard",
+        MediaFacet::Movie,
+        vec![("tmdb_movie", "603")],
+    ));
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("disabled discovery sync should run");
+    assert!(gateway.submitted_inputs.lock().await.is_empty());
+
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            DISCOVERY_PERSONALIZED_ENABLED_KEY,
+            "true",
+        )
+        .await;
+    // The disabled run left the bootstrap quiet window alone, so the very next
+    // run picks the snapshot up where it left off.
+    *discovery.state.lock().await = Some(snapshot_ready_discovery_state(due_at));
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("re-enabled discovery sync should run");
+
+    let submitted_inputs = gateway.submitted_inputs.lock().await;
+    assert_eq!(
+        submitted_inputs.len(),
+        1,
+        "re-enabling the switch lets the next run submit"
+    );
+    assert_eq!(submitted_inputs[0].subjects.len(), 1);
+    assert_eq!(submitted_inputs[0].subjects[0].tmdb_id, Some(603));
+    drop(submitted_inputs);
+    assert_eq!(discovery.commits.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn discovery_reads_with_personalized_disabled_serve_public_rows_only() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let settings = settings_with_personalized_discovery(false).await;
+    let (app, _admin, _titles) =
+        bootstrap_with_metadata_gateway_settings_and_titles(gateway, settings);
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let observed_at = Utc.timestamp_opt(3_200, 0).unwrap();
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let viewer = library_permission_user(
+        "orchard-library-viewer",
+        &movie_library_id,
+        &[
+            scryer_domain::LibraryPermission::View,
+            scryer_domain::LibraryPermission::Request,
+        ],
+    );
+
+    // A personalized generation exists and is intact; the switch alone must
+    // keep it out of every read.
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("context-run".to_string()),
+        last_public_feed_generation_id: Some("public-run".to_string()),
+        updated_at: observed_at,
+        ..DiscoverySyncStateRecord::default()
+    });
+    discovery
+        .sections
+        .lock()
+        .await
+        .push(discovery_section_record(
+            "public-run",
+            "trending_now",
+            "TRENDING_NOW",
+            "public",
+        ));
+    discovery.items.lock().await.extend([
+        discovery_item_record(
+            "public-run",
+            "public-run",
+            Some("trending_now"),
+            "tmdb:movie:910001",
+            "Lantern Season",
+            "movie",
+            10.0,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        ),
+        discovery_item_record(
+            "context-run",
+            "context-run",
+            None,
+            "tmdb:movie:910002",
+            "Personalized Pick",
+            "movie",
+            99.0,
+            &["Drama"],
+            &[],
+            false,
+            true,
+        ),
+    ]);
+
+    let home = app
+        .discovery_home(
+            &viewer,
+            DiscoveryHomeQuery {
+                include_public: true,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 10,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("discovery home should load");
+    assert!(!home.can_view_personalized);
+    assert!(home.personalized_sections.is_empty());
+    assert!(
+        home.status.state.last_success_generation_id.is_none(),
+        "the returned status must not carry a personalized generation"
+    );
+    let home_titles = home
+        .public_sections
+        .iter()
+        .flat_map(|section| section.items.iter().map(|item| item.display_title.as_str()))
+        .collect::<HashSet<_>>();
+    assert_eq!(home_titles, HashSet::from(["Lantern Season"]));
+
+    let cards = app
+        .discovery_home_cards(
+            &viewer,
+            DiscoveryHomeQuery {
+                include_public: true,
+                include_personalized: true,
+                include_unresolved: true,
+                limit_per_section: 10,
+                filters: DiscoveryHomeFilters::default(),
+            },
+        )
+        .await
+        .expect("discovery home cards should load");
+    assert!(!cards.can_view_personalized);
+    assert!(cards.personalized_sections.is_empty());
+
+    app.discovery_home_filter_options(
+        &viewer,
+        DiscoveryHomeQuery {
+            include_public: true,
+            include_personalized: true,
+            include_unresolved: true,
+            limit_per_section: 10,
+            filters: DiscoveryHomeFilters::default(),
+        },
+    )
+    .await
+    .expect("discovery home filter options should load");
+    assert!(
+        discovery
+            .filter_option_context_run_ids
+            .lock()
+            .await
+            .iter()
+            .all(Option::is_none),
+        "filter options must never read the personalized generation while the switch is off"
+    );
+
+    let items = app
+        .discovery_items(
+            &viewer,
+            DiscoveryItemsQuery {
+                include_public: true,
+                include_unresolved: true,
+                limit: 10,
+                offset: 0,
+                ..DiscoveryItemsQuery::default()
+            },
+        )
+        .await
+        .expect("discovery items should load");
+    let item_titles = items
+        .items
+        .iter()
+        .map(|item| item.display_title.as_str())
+        .collect::<HashSet<_>>();
+    assert_eq!(item_titles, HashSet::from(["Lantern Season"]));
+
+    let personalized_detail = app
+        .discovery_item_detail(
+            &viewer,
+            DiscoveryItemDetailQuery {
+                target_key: "tmdb:movie:910002".to_string(),
+                include_unresolved: true,
+            },
+        )
+        .await
+        .expect("detail query should succeed");
+    assert!(
+        personalized_detail.is_none(),
+        "a personalized row must not be reachable by detail lookup"
+    );
+    let public_detail = app
+        .discovery_item_detail(
+            &viewer,
+            DiscoveryItemDetailQuery {
+                target_key: "tmdb:movie:910001".to_string(),
+                include_unresolved: true,
+            },
+        )
+        .await
+        .expect("public detail query should succeed");
+    assert!(public_detail.is_some());
+
+    let catalog = app
+        .catalog_discovery(
+            &viewer,
+            CatalogDiscoveryQuery {
+                facet: MediaFacet::Movie,
+                library_ids: Vec::new(),
+                include_unresolved: true,
+                limit_per_group: 10,
+                max_groups: 6,
+            },
+        )
+        .await
+        .expect("catalog discovery should load");
+    assert!(!catalog.can_view_personalized);
+    assert!(
+        catalog
+            .groups
+            .iter()
+            .all(|group| group.surface == CatalogDiscoverySurface::Public),
+        "catalog discovery must return public groups only"
+    );
 }

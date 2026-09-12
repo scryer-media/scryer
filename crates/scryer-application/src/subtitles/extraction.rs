@@ -1,6 +1,6 @@
 use std::cmp::Reverse;
 use std::fs::{self, File};
-use std::io::{self, Cursor, Read, Write};
+use std::io::{Cursor, Read};
 use std::path::{Component, Path};
 use std::sync::Arc;
 
@@ -132,6 +132,7 @@ fn plugin_subtitle_archive_format(
             Some((ArtifactKind::SevenZip, ArchivePluginFormat::SevenZip))
         }
         Some(ArtifactKind::Rar) => Some((ArtifactKind::Rar, ArchivePluginFormat::Rar)),
+        Some(ArtifactKind::Xz) => Some((ArtifactKind::Xz, ArchivePluginFormat::Xz)),
         _ => None,
     }
 }
@@ -141,6 +142,7 @@ fn safe_archive_filename(file: &SubtitleFile, archive_type: ArtifactKind) -> Str
         ArtifactKind::Zip => "zip",
         ArtifactKind::SevenZip => "7z",
         ArtifactKind::Rar => "rar",
+        ArtifactKind::Xz => "xz",
         _ => "archive",
     };
     let filename = file
@@ -225,20 +227,7 @@ fn normalize_sync(
                 depth + 1,
             )
         }
-        Some(ArtifactKind::Xz) => {
-            let filename = file.filename;
-            let format = file.format;
-            let mut writer = LimitedWriter::new(MAX_EXPANDED_BYTES);
-            lzma_rs::xz_decompress(&mut Cursor::new(file.content), &mut writer).map_err(
-                |error| AppError::Repository(format!("failed to decompress XZ subtitle: {error}")),
-            )?;
-            let content = writer.into_inner();
-            normalize_sync(
-                inner_file_from_parts(filename, format, content, ".xz"),
-                context,
-                depth + 1,
-            )
-        }
+        Some(ArtifactKind::Xz) => Err(AppError::archive_extraction_plugin_required(None)),
         Some(ArtifactKind::Zip) => Err(AppError::archive_extraction_plugin_required(None)),
         Some(ArtifactKind::Tar) => {
             select_archive_candidate(extract_tar_candidates(file.content)?, context, depth)
@@ -700,41 +689,6 @@ fn read_limited<R: Read>(reader: R) -> AppResult<Vec<u8>> {
     Ok(out)
 }
 
-struct LimitedWriter {
-    content: Vec<u8>,
-    limit: usize,
-}
-
-impl LimitedWriter {
-    fn new(limit: usize) -> Self {
-        Self {
-            content: Vec::new(),
-            limit,
-        }
-    }
-
-    fn into_inner(self) -> Vec<u8> {
-        self.content
-    }
-}
-
-impl Write for LimitedWriter {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        if self.content.len().saturating_add(buf.len()) > self.limit {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "subtitle artifact expands beyond the configured byte limit",
-            ));
-        }
-        self.content.extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 fn ensure_expanded_size(size: usize) -> AppResult<()> {
     if size > MAX_EXPANDED_BYTES {
         return Err(AppError::Validation(format!(
@@ -891,16 +845,50 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn xz_subtitle_decompresses() {
-        let mut xz = Vec::new();
-        lzma_rs::xz_compress(&mut Cursor::new(ASS_CONTENT), &mut xz).unwrap();
-        let normalized =
-            normalize_downloaded_subtitle(subtitle_file("release.ass.xz", xz), context())
-                .await
-                .unwrap();
+    async fn xz_subtitle_requires_archive_plugin() {
+        let err = normalize_downloaded_subtitle(
+            subtitle_file("release.ass.xz", b"xz".to_vec()),
+            context(),
+        )
+        .await
+        .unwrap_err();
 
-        assert_eq!(normalized.format, "ass");
-        assert_eq!(normalized.content, ASS_CONTENT);
+        assert!(matches!(
+            err,
+            AppError::ArchiveExtractionPluginRequired { .. }
+        ));
+    }
+
+    #[tokio::test]
+    async fn xz_subtitle_uses_archive_plugin_when_supported() {
+        let operation = Arc::new(Mutex::new(None));
+        let client: Arc<dyn ArchiveExtractorClient> = Arc::new(RecordingArchiveClient {
+            operation: Arc::clone(&operation),
+        });
+        let provider: Arc<dyn ArchiveExtractorPluginProvider> =
+            Arc::new(RecordingArchiveProvider {
+                client,
+                formats: vec![ArchivePluginFormat::Xz],
+            });
+
+        let normalized = normalize_downloaded_subtitle_with_archive_provider(
+            subtitle_file("release.ass.xz", b"xz".to_vec()),
+            context(),
+            Some(provider),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(normalized.format, "srt");
+        assert_eq!(normalized.content, SRT_CONTENT);
+        let recorded = operation.lock().unwrap().clone().unwrap();
+        assert!(matches!(
+            recorded,
+            ArchivePluginOperation::ExtractArchive {
+                format: ArchivePluginFormat::Xz,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

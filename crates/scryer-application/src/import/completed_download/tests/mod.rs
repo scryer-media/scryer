@@ -9,6 +9,7 @@ mod path_state;
 mod result_state;
 mod route_gate;
 mod snapshot_resolution;
+mod srrdb_recovery;
 mod verification;
 
 use crate::null_repositories::test_nulls::{

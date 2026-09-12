@@ -1,6 +1,6 @@
 [package]
 name = "scryer"
-version = "0.19.16"
+version = "0.20.0"
 edition.workspace = true
 
 [features]
@@ -24,6 +24,7 @@ scryer-infrastructure-workflow = { path = "../scryer-infrastructure-workflow" }
 scryer-logging = { path = "../scryer-logging" }
 scryer-outbound-http = { path = "../scryer-outbound-http" }
 scryer-plugins = { path = "../scryer-plugins" }
+scryer-rules = { path = "../scryer-rules" }
 scryer-runtime-info = { path = "../scryer-runtime-info" }
 async-graphql = { workspace = true }
 async-graphql-axum = { version = "7.2" }
@@ -49,7 +50,9 @@ brotli = "8"
 flate2 = "1"
 percent-encoding = "2"
 toml = { workspace = true }
+metrics = { workspace = true }
 metrics-exporter-prometheus = { version = "0.18", default-features = false }
+metrics-util = { version = "0.20", default-features = false }
 directories = "6"
 open = "5"
 governor = { workspace = true }
@@ -57,9 +60,9 @@ webauthn-rs = { workspace = true }
 url = "2"
 
 [dev-dependencies]
-scryer-rules = { path = "../scryer-rules" }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 wiremock = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "http2", "gzip", "brotli", "deflate"] }
 tempfile = "3"

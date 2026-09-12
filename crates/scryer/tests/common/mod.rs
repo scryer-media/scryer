@@ -33,14 +33,17 @@ use scryer_infrastructure_acquisition::{
     },
     indexers::{
         artifact_resolver::AcquisitionIndexerArtifactResolver, config_store::IndexerConfigStore,
-        proxy_config_store::IndexerProxyConfigStore, search_client::MultiIndexerSearchClient,
-        stats::InMemoryIndexerStatsTracker,
+        search_client::MultiIndexerSearchClient, stats::InMemoryIndexerStatsTracker,
     },
+    proxy_config_store::ProxyConfigStore,
 };
 use scryer_infrastructure_configuration::{
     customization::{
-        plugin_store::PluginStore, post_processing_script_store::PostProcessingScriptStore,
-        rule_set_store::RuleSetStore,
+        maintenance_evaluation_store::MaintenanceEvaluationStore,
+        maintenance_rule_set_store::MaintenanceRuleSetStore, plugin_store::PluginStore,
+        post_processing_script_store::PostProcessingScriptStore,
+        request_rule_decision_store::RequestRuleDecisionStore,
+        request_rule_set_store::RequestRuleSetStore, rule_set_store::RuleSetStore,
     },
     settings::{quality_profile_store::QualityProfileStore, settings_store::SettingsStore},
 };
@@ -54,6 +57,7 @@ use scryer_infrastructure_identity::{
 use scryer_infrastructure_library::media::{
     images::{image_proxy_store::ImageProxyStore, title_image_store::TitleImageStore},
     libraries::{
+        location_operation_store::LocationOperationStore,
         scan_unmatched_store::LibraryScanUnmatchedStore,
         scanner::FileSystemLibraryScanner,
         state_store::{
@@ -61,10 +65,14 @@ use scryer_infrastructure_library::media::{
             SubtitleDownloadStore, WantedStore,
         },
         store::LibraryStore,
+        title_merge_store::TitleMergeStore,
     },
+    lifecycle_claims::LifecycleClaimStore,
+    requests::MediaRequestStore,
     search::media_file_store::MediaFileStore,
     servers::MediaServerConnectionStore,
     shows::store::ShowStore,
+    signals::MediaServerSignalStore,
     titles::store::TitleStore,
 };
 use scryer_infrastructure_metadata::metadata::gateway::client::{
@@ -93,7 +101,16 @@ pub fn initialize_wasm_runtime_for_tests() {
     TEST_WASMTIME_RUNTIME.call_once(|| {
         // Nextest gives each test a process, so this test-only cache is shared
         // across the suite instead of recompiling the same modules per test.
-        let cache_dir = std::env::temp_dir().join("scryer-wasmtime-integration-cache");
+        // It lives under the build directory, not the system temp dir, which
+        // macOS clears on reboot; CI points the root at a restored cache.
+        let root = match std::env::var_os("SCRYER_WASMTIME_TEST_CACHE_ROOT") {
+            Some(root) if !root.is_empty() => std::path::PathBuf::from(root),
+            // The scryer binary's own unit tests include this module too, and
+            // only integration tests are built with CARGO_TARGET_TMPDIR.
+            _ => option_env!("CARGO_TARGET_TMPDIR")
+                .map_or_else(std::env::temp_dir, std::path::PathBuf::from),
+        };
+        let cache_dir = root.join("scryer-wasmtime-integration-cache");
         scryer_plugins::initialize_wasm_runtime_at(cache_dir)
             .expect("test Wasmtime cache must initialize");
     });
@@ -813,7 +830,10 @@ impl TestContext {
             datastore.clone(),
             db.encryption_key_state(),
         ));
-        let indexer_proxy_config_store = Arc::new(IndexerProxyConfigStore::new(datastore.clone()));
+        let proxy_config_store = Arc::new(ProxyConfigStore::new(
+            datastore.clone(),
+            db.encryption_key_state(),
+        ));
         let download_client_config_store = Arc::new(DownloadClientConfigStore::new(
             datastore.clone(),
             db.encryption_key_state(),
@@ -835,7 +855,7 @@ impl TestContext {
         let indexer_artifact_resolver: Arc<dyn IndexerArtifactResolver> = Arc::new(
             AcquisitionIndexerArtifactResolver::new(
                 indexer_config_store.clone(),
-                indexer_proxy_config_store,
+                proxy_config_store,
                 staged_nzb_store.clone(),
                 staged_nzb_pipeline_limit.clone(),
             )
@@ -889,6 +909,13 @@ impl TestContext {
         let title_image_store = TitleImageStore::new(datastore.clone());
         let image_proxy_store = ImageProxyStore::new(datastore.clone());
         let rule_set_store = RuleSetStore::new(datastore.clone());
+        let maintenance_rule_set_store = MaintenanceRuleSetStore::new(datastore.clone());
+        let maintenance_evaluation_store = MaintenanceEvaluationStore::new(datastore.clone());
+        let request_rule_set_store = RequestRuleSetStore::new(datastore.clone());
+        let request_rule_decision_store = RequestRuleDecisionStore::new(datastore.clone());
+        let lifecycle_claim_store = LifecycleClaimStore::new(datastore.clone());
+        let media_request_store = MediaRequestStore::new(datastore.clone());
+        let media_server_signal_store = MediaServerSignalStore::new(datastore.clone());
         let post_processing_script_store = PostProcessingScriptStore::new(datastore.clone());
         let plugin_store = PluginStore::new(datastore.clone());
         let oauth_store = OAuthStore::new(datastore.clone());
@@ -924,6 +951,16 @@ impl TestContext {
         .with_blocklist_repo(Arc::new(blocklist_store))
         .with_library_probe_signatures(Arc::new(library_probe_store.clone()))
         .with_library_scan_unmatched_items(Arc::new(library_scan_unmatched_store.clone()))
+        // Location operations persist through the same store production wires,
+        // so a test exercising a move sees real rows rather than the
+        // "nothing is configured" null repository.
+        .with_location_operation_repository(Arc::new(LocationOperationStore::new(
+            datastore.clone(),
+        )))
+        // The merge engine's Group 0 read and Groups 1–5 transaction, over the
+        // same real schema, so a US7 preview sees the destination title the
+        // test seeded rather than the null repository's refusal.
+        .with_title_merge_repository(Arc::new(TitleMergeStore::new(datastore.clone())))
         .with_title_images(Arc::new(title_image_store))
         .with_image_proxy(Arc::new(image_proxy_store))
         .with_housekeeping(Arc::new(housekeeping_store))
@@ -940,6 +977,13 @@ impl TestContext {
         .with_totp_store(Arc::new(totp_store))
         .with_oauth_store(Arc::new(oauth_store))
         .with_rule_set_store(Arc::new(rule_set_store))
+        .with_maintenance_rule_set_store(Arc::new(maintenance_rule_set_store))
+        .with_maintenance_evaluation_store(Arc::new(maintenance_evaluation_store))
+        .with_request_rule_set_store(Arc::new(request_rule_set_store))
+        .with_request_rule_decision_store(Arc::new(request_rule_decision_store))
+        .with_lifecycle_claim_store(Arc::new(lifecycle_claim_store))
+        .with_media_requests(Arc::new(media_request_store))
+        .with_media_server_signal_store(Arc::new(media_server_signal_store))
         .with_post_processing_script_store(Arc::new(post_processing_script_store))
         .with_plugin_installation_store(Arc::new(plugin_store.clone()))
         .with_acquisition_state(acquisition_store)
@@ -961,6 +1005,14 @@ impl TestContext {
         .with_staged_nzb_store(staged_nzb_store.clone())
         .with_staged_nzb_pipeline_limit(staged_nzb_pipeline_limit)
         .with_workflow_operations(workflow_operation_store)
+        // The plugin catalog client picks artifacts by matching their declared
+        // requirements against this capability-token set — WASI targets and
+        // wasm features in one namespace. Left empty, no catalog artifact is
+        // runnable and every downloadable plugin disappears from the listing,
+        // so the test host declares what the real one does.
+        .with_supported_plugin_required_features(
+            scryer_plugins::detect_plugin_runtime_capabilities(),
+        )
         .build();
 
         // Facet registry with all built-in facets

@@ -8,8 +8,11 @@ mod base_path;
 #[cfg(any(debug_assertions, test))]
 mod dev_api_keys;
 mod http_error;
+mod http_metrics;
+mod indexer_search_routes;
 mod init;
 mod log_buffer;
+mod metrics_setup;
 mod middleware;
 mod oauth_routes;
 mod rate_limit;
@@ -104,6 +107,7 @@ use backup_routes::{
     BackupRouteState, download_backup_handler, finalize_pending_restore_if_present,
 };
 use base_path::BasePath;
+use indexer_search_routes::download_indexer_search_artifacts_handler;
 use middleware::{
     AuthState, AuthlessAccessAllowlist, AuthlessAccessGuardState, AuthlessAccessPolicy,
     AuthlessWebClientProofRouteState, AuthlessWebClientProofState, CorsConfig,
@@ -128,7 +132,6 @@ use ui_assets::{UiAssetMode, ui_asset_mode, ui_fallback};
 include!(concat!(env!("OUT_DIR"), "/smg_build_assets.rs"));
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const LEGACY_NZBGEEK_PLUGIN_ID: &str = "nzbgeek";
 const RECOVERY_ADMIN_PASSWORD_ENV: &str = "SCRYER_RECOVERY_ADMIN_PASSWORD";
 const DEVELOPMENT_MODE_ENV: &str = "SCRYER_DEVELOPMENT_MODE";
 const ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS_ENV: &str = "SCRYER_ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS";
@@ -742,18 +745,7 @@ async fn run_application() {
     // Install Prometheus metrics recorder when enabled.
     // The `metrics` crate uses a global facade — once installed, `metrics::counter!()`
     // calls from any crate resolve to this recorder. When not installed, they are no-ops.
-    let metrics_handle = if std::env::var("SCRYER_METRICS")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-    {
-        let handle = metrics_exporter_prometheus::PrometheusBuilder::new()
-            .install_recorder()
-            .expect("failed to install prometheus metrics recorder");
-        tracing::info!("prometheus metrics enabled at /metrics");
-        Some(handle)
-    } else {
-        None
-    };
+    let metrics_handle = metrics_setup::install_prometheus_recorder();
 
     tracing::info!(version = VERSION, "starting scryer");
 
@@ -791,6 +783,13 @@ async fn run_application() {
 
     let addr: SocketAddr = bind.parse().expect("invalid bind address");
     let shutdown_token = CancellationToken::new();
+
+    // Drain raw histogram samples on a timer; without upkeep an instance with metrics enabled
+    // and no scraper accumulates samples without bound. The task exits on the shutdown token.
+    if let Some(ref handle) = metrics_handle {
+        let _upkeep = metrics_setup::spawn_upkeep(handle.clone(), shutdown_token.clone());
+    }
+
     let indexer_accounting_shutdown = IndexerAccountingShutdown::default();
     let startup_base_path = base_path.clone();
     let bootstrap_base_path = base_path.clone();
@@ -894,6 +893,10 @@ async fn run_application() {
             }
         }
     }
+
+    // Close any SSH tunnels a proxy configuration brought up, so their sessions
+    // do not outlive the server that needed them.
+    scryer_application::tunnel_proxy::stop_all_tunnels();
     drain_indexer_accounting_on_shutdown(&indexer_accounting_shutdown).await;
 }
 
@@ -1021,6 +1024,9 @@ async fn bootstrap_application(
         .run_early(datastore.indexer_configs(), &customization_store)
         .await
         .map_err(|error| format!("required early application migration failed: {error}"))?;
+    application_migrator
+        .run_proxy_compatibility(datastore.proxy_configs())
+        .await?;
     record_post_upgrade_auto_backup_pending_if_needed(
         bootstrap_settings_store.clone(),
         &version_lifecycle,
@@ -1179,31 +1185,35 @@ async fn bootstrap_application(
         .filter(|plugin| plugin.descriptor.plugin_type() == "notification")
         .cloned()
         .collect::<Vec<_>>();
+    // Built first because every other plugin family's command host takes it:
+    // the host-owned `ArchiveExtract` service delegates to whatever extractor
+    // is installed, so the extractor provider has to exist before the families
+    // that borrow it.
+    let dynamic_archive_extractor_plugin_provider =
+        Arc::new(scryer_plugins::DynamicArchiveExtractorPluginProvider::new(
+            scryer_plugins::build_archive_extractor_plugin_provider_from_runtime_plugins(
+                &archive_extractor_runtime_plugins,
+                &disabled_builtin_plugins,
+            ),
+        ));
+    let archive_extractor_plugin_provider: Arc<dyn ArchiveExtractorPluginProvider> =
+        dynamic_archive_extractor_plugin_provider.clone();
+    // Wired unconditionally; the admin setting (default off) is what decides
+    // whether an import ever asks it anything.
+    let srrdb_filename_lookup: Arc<dyn scryer_application::SrrdbFilenameLookup> =
+        Arc::new(scryer_application::SrrdbHttpFilenameLookup::new(
+            url::Url::parse(scryer_application::SRRDB_API_BASE_URL)
+                .expect("srrdb API base URL is a constant and must parse"),
+        ));
     let download_client_plugin_provider: Arc<dyn DownloadClientPluginProvider> =
         Arc::new(scryer_plugins::DynamicDownloadClientPluginProvider::new(
             scryer_plugins::build_download_client_plugin_provider_from_runtime_plugins(
                 &download_client_runtime_plugins,
                 &disabled_builtin_plugins,
-            ),
+            )
+            .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
         ));
     let download_client_category_snapshot_store = DownloadClientCategorySnapshotStore::default();
-    let download_client = Arc::new(
-        PrioritizedDownloadClientRouter::new(
-            download_client_configs.clone(),
-            settings_for_router.clone(),
-            staged_nzb_store.clone(),
-            staged_nzb_pipeline_limit.clone(),
-            Some(download_client_plugin_provider.clone()),
-        )
-        .with_indexer_config_repositories(
-            indexer_configs.clone(),
-            datastore.indexer_proxy_configs(),
-        )
-        .with_download_client_category_snapshot_store(
-            download_client_category_snapshot_store.clone(),
-        )
-        .with_seed_goal_resolution(datastore.seeding_profiles()),
-    );
     let indexer_stats = datastore.indexer_stats_tracker();
     let _ = indexer_accounting_shutdown.set(indexer_stats.clone());
     // Seed the API hit counters from the persisted rows before any indexer
@@ -1218,18 +1228,18 @@ async fn bootstrap_application(
     let indexer_errors = datastore.indexer_errors();
     let indexer_error_recorder =
         Arc::new(BlockingIndexerErrorRecorder::new(indexer_errors.clone()));
-    let upstream_scheduler = datastore
-        .upstream_scheduler()
-        .await
-        .map_err(|e| format!("failed to initialize upstream scheduler: {e}"))?;
 
+    // The indexer plugin provider is built before the artifact resolver and
+    // the download router because the resolver consults it for indexer-owned
+    // grab resolution.
     let dynamic_provider = Arc::new(scryer_plugins::DynamicPluginProvider::new(
         scryer_plugins::build_indexer_plugin_provider_from_runtime_plugins(
             &indexer_runtime_plugins,
             &disabled_builtin_plugins,
         )
         .with_indexer_error_recorder(indexer_error_recorder)
-        .with_indexer_stats_tracker(indexer_stats.clone()),
+        .with_indexer_stats_tracker(indexer_stats.clone())
+        .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
     ));
     let plugin_provider: Arc<dyn IndexerPluginProvider> = Arc::new(
         NativeProwlarrIndexerProvider::new_with_indexer_error_repository(
@@ -1238,19 +1248,47 @@ async fn bootstrap_application(
         )
         .with_indexer_stats_tracker(indexer_stats.clone()),
     );
+
+    // Artifacts are resolved at the indexer boundary, so this is built before
+    // the download router: browser downloads go through it, and it consults
+    // the plugin provider for indexer-owned grab resolution.
+    let indexer_artifact_resolver: Arc<dyn IndexerArtifactResolver> = Arc::new(
+        scryer_infrastructure_acquisition::indexers::artifact_resolver::AcquisitionIndexerArtifactResolver::new(
+            datastore.indexer_configs(),
+            datastore.proxy_configs(),
+            staged_nzb_store.clone(),
+            staged_nzb_pipeline_limit.clone(),
+        )
+        .with_indexer_stats_tracker(indexer_stats.clone())
+        .with_indexer_plugin_provider(plugin_provider.clone()),
+    );
+
+    let download_client = Arc::new(
+        PrioritizedDownloadClientRouter::new(
+            download_client_configs.clone(),
+            settings_for_router.clone(),
+            staged_nzb_store.clone(),
+            staged_nzb_pipeline_limit.clone(),
+            Some(download_client_plugin_provider.clone()),
+        )
+        .with_indexer_config_repositories(indexer_configs.clone(), datastore.proxy_configs())
+        .with_indexer_artifact_resolver(indexer_artifact_resolver.clone())
+        .with_download_client_category_snapshot_store(
+            download_client_category_snapshot_store.clone(),
+        )
+        .with_seed_goal_resolution(datastore.seeding_profiles()),
+    );
+    let upstream_scheduler = datastore
+        .upstream_scheduler()
+        .await
+        .map_err(|e| format!("failed to initialize upstream scheduler: {e}"))?;
     let subtitle_plugin_provider: Arc<dyn SubtitlePluginProvider> =
         Arc::new(scryer_plugins::DynamicSubtitlePluginProvider::new(
             scryer_plugins::build_subtitle_plugin_provider_from_runtime_plugins(
                 &subtitle_runtime_plugins,
                 &disabled_builtin_plugins,
-            ),
-        ));
-    let archive_extractor_plugin_provider: Arc<dyn ArchiveExtractorPluginProvider> =
-        Arc::new(scryer_plugins::DynamicArchiveExtractorPluginProvider::new(
-            scryer_plugins::build_archive_extractor_plugin_provider_from_runtime_plugins(
-                &archive_extractor_runtime_plugins,
-                &disabled_builtin_plugins,
-            ),
+            )
+            .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
         ));
 
     let indexer_client = MultiIndexerSearchClient::new(
@@ -1258,20 +1296,12 @@ async fn bootstrap_application(
         indexer_stats.clone(),
         plugin_provider.clone(),
     )
-    .with_indexer_proxy_config_repository(datastore.indexer_proxy_configs())
+    .with_proxy_config_repository(datastore.proxy_configs())
     .with_search_learning_repository(indexer_learning)
     .with_indexer_error_repository(indexer_errors.clone())
     .with_upstream_scheduler(upstream_scheduler.clone());
 
     let indexer_client = Arc::new(indexer_client);
-    let indexer_artifact_resolver: Arc<dyn IndexerArtifactResolver> = Arc::new(
-        scryer_infrastructure_acquisition::indexers::artifact_resolver::AcquisitionIndexerArtifactResolver::new(
-            datastore.indexer_configs(),
-            datastore.indexer_proxy_configs(),
-            staged_nzb_store.clone(),
-            staged_nzb_pipeline_limit.clone(),
-        ).with_indexer_stats_tracker(indexer_stats.clone()),
-    );
     let title_images_for_route: Arc<dyn TitleImageRepository> = datastore.title_images();
     let image_proxy_runtime = Arc::new(ImageProxyRuntime::new(
         datastore.image_proxy(),
@@ -1370,14 +1400,15 @@ async fn bootstrap_application(
         scryer_plugins::build_notification_plugin_provider_from_runtime_plugins(
             &notification_runtime_plugins,
             &disabled_builtin_plugins,
-        ),
+        )
+        .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
     );
     let services = datastore
         .app_services_builder(indexer_client, download_client)
         .with_runtime_environment(
             compiled_binary_lane(),
             data_dir.clone(),
-            scryer_plugins::detect_supported_plugin_required_features(),
+            scryer_plugins::detect_plugin_runtime_capabilities(),
         )
         .with_download_client_category_snapshot_store(download_client_category_snapshot_store)
         .with_smg_registration_secret(
@@ -1419,6 +1450,7 @@ async fn bootstrap_application(
         .with_subtitle_provider_configs(subtitle_provider_configs)
         .with_subtitle_plugin_provider(subtitle_plugin_provider)
         .with_archive_extractor_plugin_provider(archive_extractor_plugin_provider)
+        .with_srrdb_filename_lookup(srrdb_filename_lookup)
         .with_notification_provider(Arc::new(notif_provider))
         .with_plugin_descriptor_loader(Arc::new(scryer_plugins::WasmPluginDescriptorLoader))
         .with_tracked_download_handle(TrackedDownloadHandle::new(tracked_download_tx))
@@ -1436,6 +1468,12 @@ async fn bootstrap_application(
         facet_registry,
         webauthn,
     );
+    app_use_case
+        .rebuild_request_rules_engine()
+        .await
+        .map_err(|error| {
+            format!("failed to rebuild persisted request rules at startup: {error}")
+        })?;
     if let Err(error) = app_use_case
         .refresh_download_client_category_admission()
         .await
@@ -1530,7 +1568,7 @@ async fn bootstrap_application(
             previous_version,
             VERSION,
         )
-        .await;
+        .await?;
     spawn_post_upgrade_auto_backup_if_pending(
         app_use_case.clone(),
         bootstrap_settings_store.clone(),
@@ -1580,6 +1618,21 @@ async fn bootstrap_application(
         tracing::warn!(error = %e, "failed to reconcile default library roots on startup");
     }
 
+    // A location operation is persisted and checkpointed precisely so a restart
+    // can pick it up where it stopped, without repeating verified work
+    // (FR-033). This runs after root reconciliation because a resumed move
+    // needs its roots to be the ones the plan was confirmed against.
+    match app_use_case.resume_interrupted_location_operations().await {
+        Ok(0) => {}
+        Ok(resumed) => tracing::info!(
+            resumed,
+            "resumed interrupted location operations from their last verified checkpoints"
+        ),
+        Err(e) => {
+            tracing::warn!(error = %e, "failed to resume interrupted location operations on startup");
+        }
+    }
+
     if let Err(e) = app_use_case.migrate_legacy_persona_preferences().await {
         tracing::warn!(error = %e, "failed to migrate legacy persona preferences on startup");
     }
@@ -1589,15 +1642,10 @@ async fn bootstrap_application(
     {
         tracing::warn!(error = %e, "failed to migrate canonical audio/persona settings on startup");
     }
-    if let Err(e) = app_use_case
-        .reconcile_and_activate_managed_trash_rule_packs()
+    app_use_case
+        .bootstrap_builtin_trash_rule_pack()
         .await
-    {
-        tracing::warn!(
-            error = %e,
-            "failed to reconcile managed TRaSH rule packs; managed packs stay excluded from the active rules engine until the next successful reconciliation"
-        );
-    }
+        .map_err(|error| format!("cannot activate the scoring configuration: {error}"))?;
     if let Err(e) = app_use_case
         .migrate_legacy_opensubtitles_provider_config()
         .await
@@ -1793,6 +1841,10 @@ async fn bootstrap_application(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));
+    tokio::spawn(scryer_application::start_full_hash_backfill_worker(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
     tokio::spawn(start_background_library_refresh_loop(
         app_use_case.clone(),
         shutdown_token.child_token(),
@@ -1903,6 +1955,10 @@ async fn bootstrap_application(
             get(emby_avatar_handler).with_state(auth_state.clone()),
         )
         .route(
+            "/api/indexer-search/artifacts",
+            post(download_indexer_search_artifacts_handler).with_state(auth_state.clone()),
+        )
+        .route(
             "/images/titles/{title_id}/{kind}/{variant}",
             get(title_image_handler).with_state(title_images_for_route),
         )
@@ -1917,13 +1973,14 @@ async fn bootstrap_application(
         ))
         .layer(CompressionLayer::new().zstd(true).br(true).gzip(true));
 
+    // Mounted after the rate-limit and compression layers on purpose: a scraper on a fixed
+    // interval must not be throttled, and the route does its own API-key check.
     if let Some(ref handle) = metrics_handle {
-        let h = handle.clone();
         compressed_router = compressed_router.route(
             "/metrics",
-            get(move || {
-                let h = h.clone();
-                async move { h.render() }
+            get(metrics_setup::metrics_endpoint).with_state(metrics_setup::MetricsRouteState {
+                auth: auth_state.clone(),
+                handle: handle.clone(),
             }),
         );
     }
@@ -1936,7 +1993,12 @@ async fn bootstrap_application(
         ))
         .layer(axum::middleware::from_fn(move |request, next| {
             cors_handler(request, next, cors_for_layer.clone())
-        }));
+        }))
+        // Outermost on purpose: serving metrics must observe the final status of every response,
+        // including the ones produced by the rate-limit, authless-guard and CORS layers rather
+        // than by a route handler. `Router::layer` still runs after routing, so `MatchedPath` is
+        // available and `route` stays a bounded template label.
+        .layer(axum::middleware::from_fn(http_metrics::record_http_metrics));
 
     match ui_asset_mode() {
         UiAssetMode::Filesystem(dist_dir) => {
@@ -3068,28 +3130,11 @@ async fn load_runtime_plugin_state(
 
 async fn bootstrap_plugin_installations(
     customization_store: &DatastoreCustomizationStore,
-    finalized_pending_restore: bool,
+    _finalized_pending_restore: bool,
 ) -> Result<(), String> {
-    let removed = customization_store
-        .delete_incompatible_external_plugin_installations(finalized_pending_restore)
-        .await
-        .map_err(|error| error.to_string())?;
-    for plugin_id in removed {
-        tracing::warn!(
-            plugin_id = plugin_id.as_str(),
-            "removed incompatible legacy external plugin installation during startup bootstrap"
-        );
-    }
-
+    // Compatibility migration needs the original installation and artifact.
+    // An unavailable runtime is never a reason to delete either.
     seed_builtin_plugin_installations(customization_store).await
-}
-
-fn preserves_legacy_nzbgeek_builtin_for_catalog_migration(
-    installation: &scryer_domain::PluginInstallation,
-) -> bool {
-    installation.plugin_id == LEGACY_NZBGEEK_PLUGIN_ID
-        && installation.is_builtin
-        && installation.source_kind == scryer_domain::PluginSourceKind::Bundled
 }
 
 async fn seed_builtin_plugin_installations(
@@ -3241,19 +3286,6 @@ async fn seed_builtin_plugin_installations(
         });
     }
 
-    let builtin_lookup_key = |plugin_type: &str, provider_type: &str| {
-        let family = match plugin_type {
-            "indexer" | "usenet_indexer" | "torrent_indexer" => "indexer",
-            other => other,
-        };
-        format!("{family}::{}", provider_type.trim().to_ascii_lowercase())
-    };
-
-    let builtin_keys = builtins
-        .iter()
-        .map(|builtin| builtin_lookup_key(&builtin.plugin_type, &builtin.provider_type))
-        .collect::<std::collections::HashSet<_>>();
-
     for builtin in builtins {
         customization_store
             .seed_builtin(
@@ -3266,29 +3298,6 @@ async fn seed_builtin_plugin_installations(
                 &builtin.plugin_type,
                 &builtin.provider_type,
             )
-            .await
-            .map_err(|error| error.to_string())?;
-    }
-
-    let stale_builtin_plugin_ids = customization_store
-        .list_plugin_installations()
-        .await
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .filter(|installation| {
-            installation.is_builtin
-                && !preserves_legacy_nzbgeek_builtin_for_catalog_migration(installation)
-                && !builtin_keys.contains(&builtin_lookup_key(
-                    &installation.plugin_type,
-                    &installation.provider_type,
-                ))
-        })
-        .map(|installation| installation.plugin_id)
-        .collect::<Vec<_>>();
-
-    for plugin_id in stale_builtin_plugin_ids {
-        customization_store
-            .delete_plugin_installation(&plugin_id)
             .await
             .map_err(|error| error.to_string())?;
     }
@@ -3843,7 +3852,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn runtime_plugin_state_succeeds_after_bootstrap_deletes_legacy_external_rows() {
+    async fn runtime_plugin_state_retains_legacy_external_rows_for_compatibility_repair() {
         let dir = tempdir().expect("tempdir");
         let db_path = dir.path().join("plugins.db");
         let services = SqliteServices::new(db_path.to_string_lossy())
@@ -3902,7 +3911,7 @@ mod tests {
                 .get_plugin_installation("legacy")
                 .await
                 .expect("read plugin installation")
-                .is_none()
+                .is_some()
         );
     }
 

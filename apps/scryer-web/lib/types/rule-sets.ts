@@ -5,6 +5,9 @@ export type RuleSetRecord = {
   regoSource: string;
   enabled: boolean;
   priority: number;
+  evaluationPhase?: "baseline" | "additional";
+  disabledReason?: string | null;
+  exclusiveGroup?: string | null;
   appliedFacets: string[];
   isManaged: boolean;
   managedKey: string | null;

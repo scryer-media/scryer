@@ -8,11 +8,10 @@ use scryer_interface_core::{
 };
 use scryer_interface_media::mappers::{
     from_download_client_config_with_fields, from_download_client_routing_entry,
-    from_indexer_config_with_fields, from_indexer_proxy_config, from_indexer_routing_entry,
-    from_jellyfin_server_user, from_library_paths_settings, from_media_server_connection,
-    from_media_server_user_group, from_media_settings, from_quality_profile_settings,
-    from_seeding_profile, from_service_settings, from_subtitle_provider_config,
-    from_user_with_auth_factor_status,
+    from_indexer_config_with_fields, from_indexer_routing_entry, from_jellyfin_server_user,
+    from_library_paths_settings, from_media_server_connection, from_media_server_user_group,
+    from_media_settings, from_proxy_config, from_quality_profile_settings, from_seeding_profile,
+    from_service_settings, from_subtitle_provider_config, from_user_with_auth_factor_status,
 };
 use scryer_interface_media::types::*;
 
@@ -63,6 +62,28 @@ fn from_recycle_bin_settings(
 ) -> RecycleBinSettingsPayload {
     RecycleBinSettingsPayload {
         enabled: settings.enabled,
+    }
+}
+
+fn from_verification_depth(depth: scryer_application::VerificationDepth) -> VerificationDepthValue {
+    match depth {
+        scryer_application::VerificationDepth::Full => VerificationDepthValue::Full,
+        scryer_application::VerificationDepth::Quick => VerificationDepthValue::Quick,
+    }
+}
+
+fn to_verification_depth(value: VerificationDepthValue) -> scryer_application::VerificationDepth {
+    match value {
+        VerificationDepthValue::Full => scryer_application::VerificationDepth::Full,
+        VerificationDepthValue::Quick => scryer_application::VerificationDepth::Quick,
+    }
+}
+
+fn from_verification_settings(
+    settings: scryer_application::VerificationSettings,
+) -> VerificationSettingsPayload {
+    VerificationSettingsPayload {
+        depth: from_verification_depth(settings.depth),
     }
 }
 
@@ -136,6 +157,22 @@ pub(crate) fn into_oauth_client_kind(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn retired_ui_theme_inputs_normalize_to_dark() {
+        assert_eq!(
+            to_app_ui_theme(UiThemeValue::Pride),
+            scryer_application::UiTheme::Dark
+        );
+        assert!(from_ui_theme(to_app_ui_theme(UiThemeValue::Pride)) == UiThemeValue::Dark);
+        for theme in [
+            UiThemeValue::Light,
+            UiThemeValue::Dark,
+            UiThemeValue::System,
+        ] {
+            assert!(from_ui_theme(to_app_ui_theme(theme)) == theme);
+        }
+    }
 
     #[test]
     fn external_auth_runtime_settings_maps_clean_connections() {
@@ -230,6 +267,10 @@ fn from_acquisition_settings(
 
 fn from_general_settings(settings: scryer_application::GeneralSettings) -> GeneralSettingsPayload {
     GeneralSettingsPayload {
+        api_explorer_enabled: settings.api_explorer_enabled,
+        experimental_features_enabled: settings.experimental_features_enabled,
+        personalized_discovery_enabled: settings.personalized_discovery_enabled,
+        srrdb_filename_recovery_enabled: settings.srrdb_filename_recovery_enabled,
         keep_history_forever: settings.keep_history_forever,
         history_retention_days: settings.history_retention_days,
         image_cache_max_size_mb: settings.image_cache_max_size_mb,
@@ -296,7 +337,6 @@ fn from_ui_theme(theme: scryer_application::UiTheme) -> UiThemeValue {
     match theme {
         scryer_application::UiTheme::Light => UiThemeValue::Light,
         scryer_application::UiTheme::Dark => UiThemeValue::Dark,
-        scryer_application::UiTheme::Pride => UiThemeValue::Pride,
         scryer_application::UiTheme::System => UiThemeValue::System,
     }
 }
@@ -304,8 +344,7 @@ fn from_ui_theme(theme: scryer_application::UiTheme) -> UiThemeValue {
 fn to_app_ui_theme(theme: UiThemeValue) -> scryer_application::UiTheme {
     match theme {
         UiThemeValue::Light => scryer_application::UiTheme::Light,
-        UiThemeValue::Dark => scryer_application::UiTheme::Dark,
-        UiThemeValue::Pride => scryer_application::UiTheme::Pride,
+        UiThemeValue::Dark | UiThemeValue::Pride => scryer_application::UiTheme::Dark,
         UiThemeValue::System => scryer_application::UiTheme::System,
     }
 }
@@ -577,6 +616,53 @@ fn from_delay_profile(profile: scryer_application::DelayProfile) -> DelayProfile
     }
 }
 
+/// Counts cross a `u64` application boundary and a signed GraphQL one. Nothing
+/// here can plausibly exceed `i32::MAX`, and saturating beats wrapping a title
+/// count into a negative number on the one pathological catalog that could.
+fn title_tag_count(value: u64) -> i32 {
+    i32::try_from(value).unwrap_or(i32::MAX)
+}
+
+pub(crate) fn from_title_tag_definition(
+    definition: scryer_domain::TitleTagDefinition,
+    title_count: u64,
+    series_movie_count: u64,
+) -> TitleTagDefinitionPayload {
+    TitleTagDefinitionPayload {
+        id: definition.id.into(),
+        label: definition.label,
+        description: definition.description,
+        title_count: title_tag_count(title_count),
+        series_movie_count: title_tag_count(series_movie_count),
+        created_at: definition.created_at,
+        updated_at: definition.updated_at,
+    }
+}
+
+pub(crate) fn from_title_tag_summary(
+    summary: scryer_application::TitleTagDefinitionSummary,
+) -> TitleTagDefinitionPayload {
+    from_title_tag_definition(
+        summary.definition,
+        summary.title_count,
+        summary.series_movie_count,
+    )
+}
+
+pub(crate) fn from_title_tag_rewrite_counts(
+    counts: scryer_application::TitleTagRewriteCounts,
+) -> TitleTagRewriteCountsPayload {
+    TitleTagRewriteCountsPayload {
+        titles: title_tag_count(counts.titles),
+        series_movies: title_tag_count(counts.series_movies),
+        delay_profiles: title_tag_count(counts.delay_profiles),
+        maintenance_rule_sets: title_tag_count(counts.maintenance_rule_sets),
+        release_rule_sets: title_tag_count(counts.release_rule_sets),
+        managed_tag_filters: title_tag_count(counts.managed_tag_filters),
+        request_rule_sets: title_tag_count(counts.request_rule_sets),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[Object]
 impl SettingsQueries {
@@ -628,6 +714,20 @@ impl SettingsQueries {
             .await
             .map_err(to_gql_error)?;
         Ok(from_recycle_bin_settings(settings))
+    }
+
+    /// Returns the verification depth applied to download-client completed-download copies. Location operations always verify in full and ignore it.
+    async fn verification_settings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<VerificationSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app
+            .get_verification_settings(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_verification_settings(settings))
     }
 
     /// Returns whether the scheduled plugin catalog refresh installs official patch updates automatically.
@@ -891,6 +991,28 @@ impl SettingsQueries {
         Ok(profiles.into_iter().map(from_delay_profile).collect())
     }
 
+    /// Lists every administrator-defined title tag with the number of titles carrying it.
+    ///
+    /// Readable by any authenticated caller: the tag picker and the catalog
+    /// filter both need the vocabulary, and the vocabulary says nothing about
+    /// any particular title.
+    async fn title_tag_definitions(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<TitleTagDefinitionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.title_tag_definitions(&actor)
+            .await
+            .map(|definitions| {
+                definitions
+                    .into_iter()
+                    .map(from_title_tag_summary)
+                    .collect()
+            })
+            .map_err(to_gql_error)
+    }
+
     /// Returns media settings for the requested content scope.
     async fn media_settings(
         &self,
@@ -1105,16 +1227,13 @@ impl SettingsQueries {
         })
     }
 
-    /// Lists configured indexer proxy settings.
-    async fn indexer_proxy_configs(
-        &self,
-        ctx: &Context<'_>,
-    ) -> GqlResult<Vec<IndexerProxyConfigPayload>> {
+    /// Lists configured proxy settings.
+    async fn proxy_configs(&self, ctx: &Context<'_>) -> GqlResult<Vec<ProxyConfigPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        app.list_indexer_proxy_configs(&actor)
+        app.list_proxy_configs(&actor)
             .await
-            .map(|configs| configs.into_iter().map(from_indexer_proxy_config).collect())
+            .map(|configs| configs.into_iter().map(from_proxy_config).collect())
             .map_err(to_gql_error)
     }
 

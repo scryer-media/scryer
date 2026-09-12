@@ -29,6 +29,10 @@ import {
   DashboardPanel,
   DashboardPanelEmpty,
 } from "@/components/views/dashboard/dashboard-panel";
+import {
+  CalendarEventHoverCard,
+  type CalendarEpisodeItem,
+} from "@/components/views/calendar-view";
 import { StorageUsageRing } from "@/components/views/dashboard/storage-usage-ring";
 import {
   usageTagBadgeTone,
@@ -52,6 +56,7 @@ import {
 } from "@/components/ui/table";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useAuth } from "@/lib/hooks/use-auth";
+import { useIsMobile } from "@/lib/hooks/use-mobile";
 import { facetById } from "@/lib/facets/registry";
 import type {
   DashboardImportedItem,
@@ -772,54 +777,147 @@ function ImportActivityRow({
 
 // ── Recently imported ───────────────────────────────────────────────────────
 
+type RecentlyImportedHoverPreview = {
+  item: DashboardImportedItem;
+  anchor: {
+    top: number;
+    right: number;
+    bottom: number;
+    left: number;
+  };
+};
+
+function calendarEpisodeForImportedItem(item: DashboardImportedItem): CalendarEpisodeItem {
+  const facet = normalizeFacet(item.facet)?.toLowerCase() ?? "series";
+  return {
+    id: item.id,
+    titleId: item.titleId,
+    libraryId: item.libraryId ?? "Unknown library",
+    libraryName: item.libraryId,
+    titleName: item.titleName ?? item.titleId,
+    titleFacet: facet,
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeTitle: item.quality,
+    overview: formatBytes(item.sizeBytes),
+    imageUrl: item.posterUrl,
+    airDate: item.occurredAt,
+    monitored: true,
+    playbackLinks: [],
+    mediaAvailability: { state: "UNMONITORED", primaryQualityLabel: null },
+  };
+}
+
 function RecentlyImportedPanel({ items }: { items: DashboardImportedItem[] }) {
   const t = useTranslate();
+  const isMobile = useIsMobile();
+  const [hoverPreview, setHoverPreview] =
+    React.useState<RecentlyImportedHoverPreview | null>(null);
+  const hoverTimerRef = React.useRef<number | null>(null);
+
+  const clearHoverTimer = React.useCallback(() => {
+    if (hoverTimerRef.current !== null) {
+      window.clearTimeout(hoverTimerRef.current);
+      hoverTimerRef.current = null;
+    }
+  }, []);
+
+  const scheduleHoverPreviewClose = React.useCallback(() => {
+    clearHoverTimer();
+    hoverTimerRef.current = window.setTimeout(() => {
+      setHoverPreview(null);
+      hoverTimerRef.current = null;
+    }, 180);
+  }, [clearHoverTimer]);
+
+  const handleRowMouseEnter = React.useCallback(
+    (item: DashboardImportedItem, target: HTMLElement) => {
+      if (isMobile) return;
+      clearHoverTimer();
+      const rect = target.getBoundingClientRect();
+      setHoverPreview({
+        item,
+        anchor: {
+          top: rect.top,
+          right: rect.right,
+          bottom: rect.bottom,
+          left: rect.left,
+        },
+      });
+    },
+    [clearHoverTimer, isMobile],
+  );
+
+  React.useEffect(() => () => clearHoverTimer(), [clearHoverTimer]);
+
+  React.useEffect(() => {
+    if (!hoverPreview) return;
+    const closePreview = () => setHoverPreview(null);
+    window.addEventListener("resize", closePreview);
+    window.addEventListener("scroll", closePreview, true);
+    return () => {
+      window.removeEventListener("resize", closePreview);
+      window.removeEventListener("scroll", closePreview, true);
+    };
+  }, [hoverPreview]);
 
   return (
-    <DashboardPanel
-      icon={Download}
-      title={t("dashboard.recentlyImported")}
-      linkTo={buildViewPath("activity", undefined, undefined, undefined, undefined, "history")}
-      linkLabel={t("dashboard.viewAll")}
-      bodyClassName={PREVIEW_PANE_CLASS}
-    >
-      {items.length === 0 ? (
-        <DashboardPanelEmpty message={t("dashboard.emptyImported")} />
-      ) : (
-        <ul>
-          {items.map((item) => {
-            const facet = normalizeFacet(item.facet);
-            return (
-              <li
-                key={item.id}
-                className="flex min-w-0 items-center gap-2 border-b border-border px-3 py-[7px] last:border-b-0"
-              >
-                <RowPoster posterUrl={item.posterUrl} facet={facet} />
-                <span className="flex min-w-0 flex-1 flex-col">
-                  <span className="truncate text-[12px] font-medium text-[var(--scry-ink2)]">
-                    {item.titleName ?? item.titleId}
+    <>
+      <DashboardPanel
+        icon={Download}
+        title={t("dashboard.recentlyImported")}
+        linkTo={buildViewPath("activity", undefined, undefined, undefined, undefined, "history")}
+        linkLabel={t("dashboard.viewAll")}
+        bodyClassName={PREVIEW_PANE_CLASS}
+      >
+        {items.length === 0 ? (
+          <DashboardPanelEmpty message={t("dashboard.emptyImported")} />
+        ) : (
+          <ul>
+            {items.map((item) => {
+              const facet = normalizeFacet(item.facet);
+              return (
+                <li
+                  key={item.id}
+                  className="flex min-w-0 items-center gap-2 border-b border-border px-3 py-[7px] last:border-b-0"
+                  onMouseEnter={(event) => handleRowMouseEnter(item, event.currentTarget)}
+                  onMouseLeave={scheduleHoverPreviewClose}
+                >
+                  <RowPoster posterUrl={item.posterUrl} facet={facet} />
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-[12px] font-medium text-[var(--scry-ink2)]">
+                      {item.titleName ?? item.titleId}
+                    </span>
+                    <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--scry-muted2)]">
+                      {facet ? <FacetChip facet={facet} /> : null}
+                      {item.quality ? (
+                        <span className="truncate">{item.quality}</span>
+                      ) : null}
+                      <span className="tabular-nums">{formatBytes(item.sizeBytes)}</span>
+                    </span>
                   </span>
-                  <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--scry-muted2)]">
-                    {facet ? <FacetChip facet={facet} /> : null}
-                    {item.quality ? (
-                      <span className="truncate">{item.quality}</span>
-                    ) : null}
-                    <span className="tabular-nums">{formatBytes(item.sizeBytes)}</span>
-                  </span>
-                </span>
-                {item.eventType === "FILE_UPGRADED" ? (
-                  <Badge tone="info" className="shrink-0 px-1 py-0 text-[10px]">
-                    <ArrowUp className="h-2.5 w-2.5" aria-hidden="true" />
-                    {t("dashboard.upgradeBadge")}
-                  </Badge>
-                ) : null}
-                <AgeLabel isoDate={item.occurredAt} />
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </DashboardPanel>
+                  {item.eventType === "FILE_UPGRADED" ? (
+                    <Badge tone="info" className="shrink-0 px-1 py-0 text-[10px]">
+                      <ArrowUp className="h-2.5 w-2.5" aria-hidden="true" />
+                      {t("dashboard.upgradeBadge")}
+                    </Badge>
+                  ) : null}
+                  <AgeLabel isoDate={item.occurredAt} />
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </DashboardPanel>
+      {!isMobile && hoverPreview ? (
+        <CalendarEventHoverCard
+          key={hoverPreview.item.id}
+          preview={{ episode: calendarEpisodeForImportedItem(hoverPreview.item), anchor: hoverPreview.anchor }}
+          onMouseEnter={clearHoverTimer}
+          onMouseLeave={scheduleHoverPreviewClose}
+        />
+      ) : null}
+    </>
   );
 }
 

@@ -58,9 +58,92 @@ pub struct AppRuntimeCatalogState {
     pub(crate) title_recommendation_refresh_queue:
         Arc<tokio::sync::Mutex<crate::catalog_workflow::TitleRecommendationRefreshQueue>>,
     pub(crate) title_recommendation_refresh_wake: Arc<tokio::sync::Notify>,
-    pub image_processing_limit: Arc<Semaphore>,
+    pub(crate) artwork_job_start_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) artwork_shutdown: tokio_util::sync::CancellationToken,
+    pub(crate) artwork_wait_reason: Arc<tokio::sync::RwLock<String>>,
     pub title_image_maintenance_lock: Arc<tokio::sync::RwLock<()>>,
     pub title_image_cache_clear_scheduled: Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) media_request_enrichment: MediaRequestEnrichmentCache,
+}
+
+/// How long one media-request enrichment stays reusable. Long enough that a requester who
+/// previews a decision, changes their profile a few times, and then submits is judged against one
+/// SMG read (FR-021); short enough that a metadata correction shows up in the next request.
+pub const MEDIA_REQUEST_ENRICHMENT_CACHE_TTL: std::time::Duration =
+    std::time::Duration::from_secs(300);
+
+/// Upper bound on cached enrichments. This is a per-process convenience cache, not a store: the
+/// bound is what keeps a burst of distinct drafts from turning it into a leak.
+pub const MEDIA_REQUEST_ENRICHMENT_CACHE_CAPACITY: usize = 256;
+
+/// Read-through cache in front of SMG for media-request enrichment.
+///
+/// Deliberately a `std::sync::Mutex<HashMap<..>>` rather than a new dependency: entries are
+/// small, the map is bounded at [`MEDIA_REQUEST_ENRICHMENT_CACHE_CAPACITY`], and every operation
+/// is a few pointer moves with no await inside the lock.
+///
+/// It does **not** single-flight: two simultaneous first calls for the same subject both reach
+/// SMG and the second insert wins. That is a duplicate read, never a wrong answer, and the
+/// alternative (a per-key lock held across an SMG round trip) is a far worse failure mode.
+#[derive(Clone, Default)]
+pub(crate) struct MediaRequestEnrichmentCache {
+    entries: Arc<std::sync::Mutex<MediaRequestEnrichmentEntries>>,
+}
+
+/// One cached enrichment: when it was stored, and what was stored.
+type MediaRequestEnrichmentEntry = (
+    std::time::Instant,
+    Arc<crate::media_requests::MediaRequestMetadataEnrichment>,
+);
+
+/// The cache's map, keyed by the enrichment subject.
+type MediaRequestEnrichmentEntries = HashMap<String, MediaRequestEnrichmentEntry>;
+
+impl MediaRequestEnrichmentCache {
+    pub(crate) fn get(
+        &self,
+        key: &str,
+    ) -> Option<Arc<crate::media_requests::MediaRequestMetadataEnrichment>> {
+        let now = std::time::Instant::now();
+        let mut entries = self.entries.lock().ok()?;
+        match entries.get(key) {
+            Some((stored_at, value))
+                if now.duration_since(*stored_at) < MEDIA_REQUEST_ENRICHMENT_CACHE_TTL =>
+            {
+                Some(Arc::clone(value))
+            }
+            Some(_) => {
+                entries.remove(key);
+                None
+            }
+            None => None,
+        }
+    }
+
+    pub(crate) fn insert(
+        &self,
+        key: String,
+        value: Arc<crate::media_requests::MediaRequestMetadataEnrichment>,
+    ) {
+        let now = std::time::Instant::now();
+        let Ok(mut entries) = self.entries.lock() else {
+            return;
+        };
+        entries.retain(|_, (stored_at, _)| {
+            now.duration_since(*stored_at) < MEDIA_REQUEST_ENRICHMENT_CACHE_TTL
+        });
+        while entries.len() >= MEDIA_REQUEST_ENRICHMENT_CACHE_CAPACITY {
+            let Some(oldest) = entries
+                .iter()
+                .min_by_key(|(_, (stored_at, _))| *stored_at)
+                .map(|(key, _)| key.clone())
+            else {
+                break;
+            };
+            entries.remove(&oldest);
+        }
+        entries.insert(key, (now, value));
+    }
 }
 
 pub const DOWNLOAD_QUEUE_SNAPSHOT_STALE_AFTER: chrono::Duration = chrono::Duration::seconds(30);
@@ -131,6 +214,96 @@ struct PendingDownloadQueueSnapshot {
     clear_refresh_error: bool,
 }
 
+pub(crate) const DOWNLOAD_QUEUE_ITEMS: &str = "scryer_download_queue_items";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_ITEMS: &str = "scryer_download_queue_snapshot_items";
+pub(crate) const DOWNLOAD_QUEUE_READ_MODEL_TOTAL: &str = "scryer_download_queue_read_model_total";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL: &str =
+    "scryer_download_queue_snapshot_refresh_total";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS: &str =
+    "scryer_download_queue_snapshot_updated_timestamp_seconds";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS: &str =
+    "scryer_download_queue_snapshot_age_seconds";
+pub(crate) const DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL: &str =
+    "scryer_download_queue_revision_notifications_total";
+pub(crate) const DOWNLOAD_QUEUE_SNAPSHOT_READY_TOTAL: &str =
+    "scryer_download_queue_snapshot_ready_total";
+pub(crate) const DOWNLOAD_QUEUE_PAGE_DURATION_SECONDS: &str =
+    "scryer_download_queue_page_duration_seconds";
+pub(crate) const DOWNLOAD_QUEUE_REFRESH_DURATION_SECONDS: &str =
+    "scryer_download_queue_refresh_duration_seconds";
+pub(crate) const DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS: &str =
+    "scryer_download_queue_poll_cycle_duration_seconds";
+pub(crate) const DOWNLOAD_QUEUE_LEGACY_SUBSCRIPTIONS: &str =
+    "scryer_download_queue_legacy_subscriptions";
+
+/// Registers HELP/UNIT metadata for the download-queue read-model families.
+///
+/// Public because the binary's metrics setup calls it once at startup, so the
+/// scrape surface is self-describing even before the first poll has run. The
+/// per-download-client families live in the router crate and are described by
+/// `scryer_infrastructure_acquisition::describe_download_client_router_metrics`.
+pub fn describe_download_queue_metrics() {
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_ITEMS,
+        "Download-queue items currently projected, by queue state."
+    );
+    metrics::describe_counter!(
+        DOWNLOAD_QUEUE_READ_MODEL_TOTAL,
+        "Download-queue read-model lookups, by whether the cached projection was reused (`hit`) \
+         or rebuilt (`miss`)."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_SNAPSHOT_ITEMS,
+        "Download-queue items in the most recently staged snapshot."
+    );
+    metrics::describe_counter!(
+        DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+        "Download-queue snapshot refreshes, by result: `success` (every polled client answered), \
+         `partial` (the snapshot was staged while at least one client read had failed) or \
+         `error` (no client read succeeded)."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS,
+        metrics::Unit::Seconds,
+        "Unix timestamp of the download-queue snapshot currently served, set on every commit."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS,
+        metrics::Unit::Seconds,
+        "Age of the download-queue snapshot currently served, refreshed once per poller tick \
+         (it moves whether or not anyone is looking at the queue page)."
+    );
+    metrics::describe_counter!(
+        DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL,
+        "Download-queue revision notifications broadcast to subscribers."
+    );
+    metrics::describe_counter!(
+        DOWNLOAD_QUEUE_SNAPSHOT_READY_TOTAL,
+        "Download-queue page queries served, by whether the snapshot had ever been committed \
+         (`ready`)."
+    );
+    metrics::describe_histogram!(
+        DOWNLOAD_QUEUE_PAGE_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Time to render one download-queue page from the in-memory read model."
+    );
+    metrics::describe_histogram!(
+        DOWNLOAD_QUEUE_REFRESH_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Time spent processing a collected download-client snapshot, excluding the client reads."
+    );
+    metrics::describe_histogram!(
+        DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS,
+        metrics::Unit::Seconds,
+        "Wall time of one download-queue poller tick: every client read plus the processing that \
+         follows it."
+    );
+    metrics::describe_gauge!(
+        DOWNLOAD_QUEUE_LEGACY_SUBSCRIPTIONS,
+        "Open legacy download-queue broadcast subscriptions."
+    );
+}
+
 #[derive(Clone)]
 pub struct DownloadQueueSnapshotCache {
     state: Arc<tokio::sync::RwLock<DownloadQueueSnapshot>>,
@@ -187,9 +360,15 @@ impl DownloadQueueSnapshotCache {
             updated_at: Utc::now(),
             clear_refresh_error,
         });
-        metrics::gauge!("scryer_download_queue_snapshot_items").set(item_count as f64);
-        metrics::counter!("scryer_download_queue_snapshot_refresh_total", "result" => "success")
-            .increment(1);
+        metrics::gauge!(DOWNLOAD_QUEUE_SNAPSHOT_ITEMS).set(item_count as f64);
+        // A partial stage keeps the previous refresh error standing: the poller
+        // saw *some* clients, not all of them. Reporting that as `success`
+        // made a degraded fleet look healthy on the dashboard.
+        metrics::counter!(
+            DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+            "result" => if clear_refresh_error { "success" } else { "partial" }
+        )
+        .increment(1);
         self.schedule_commit();
     }
 
@@ -326,7 +505,7 @@ impl DownloadQueueSnapshotCache {
         let changed = state.refresh_error.as_deref() != Some(error.as_str());
         if !changed {
             drop(state);
-            metrics::counter!("scryer_download_queue_snapshot_refresh_total", "result" => "error")
+            metrics::counter!(DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL, "result" => "error")
                 .increment(1);
             return;
         }
@@ -384,6 +563,11 @@ impl DownloadQueueSnapshotCache {
             state.items = Arc::from(pending.items);
         }
         state.updated_at = Some(pending.updated_at);
+        // Freshness is published from the commit, not from a page query: a
+        // gauge only a viewer moves freezes exactly when a stale snapshot most
+        // needs to be visible. Scrapers derive age as `time() - this`.
+        metrics::gauge!(DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS)
+            .set(pending.updated_at.timestamp_millis() as f64 / 1_000.0);
         state.ready = true;
         if pending.clear_refresh_error {
             state.refresh_error = None;
@@ -398,7 +582,7 @@ impl DownloadQueueSnapshotCache {
         };
         drop(state);
         self.sync_tx.send_replace(sync);
-        metrics::counter!("scryer_download_queue_revision_notifications_total").increment(1);
+        metrics::counter!(DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL).increment(1);
     }
 }
 
@@ -434,6 +618,75 @@ fn index_download_queue_items(
 #[cfg(test)]
 mod download_queue_snapshot_cache_tests {
     use super::*;
+    use metrics::with_local_recorder;
+    use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
+    use std::collections::BTreeMap;
+
+    /// Runs `body` on a private current-thread runtime with a thread-local
+    /// recorder installed, so the emitted series are observable without ever
+    /// installing a global recorder (which would make tests order-dependent).
+    fn with_recorded_metrics<T>(
+        body: impl FnOnce(&tokio::runtime::Runtime) -> T,
+    ) -> (T, Snapshotter) {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime");
+        let value = with_local_recorder(&recorder, || body(&runtime));
+        (value, snapshotter)
+    }
+
+    fn labels_of(key: &metrics::Key) -> BTreeMap<String, String> {
+        key.labels()
+            .map(|label| (label.key().to_string(), label.value().to_string()))
+            .collect()
+    }
+
+    /// One snapshot per test: `Snapshotter::snapshot` drains counter deltas, so
+    /// calling it once per assertion would report every series after the first
+    /// as zero.
+    type RecordedSeries = Vec<(String, BTreeMap<String, String>, DebugValue)>;
+
+    fn recorded(snapshotter: &Snapshotter) -> RecordedSeries {
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .map(|(key, _unit, _description, value)| {
+                (key.key().name().to_string(), labels_of(key.key()), value)
+            })
+            .collect()
+    }
+
+    fn counter_value(
+        recorded: &RecordedSeries,
+        name: &str,
+        labels: &[(&str, &str)],
+    ) -> Option<u64> {
+        let expected = labels
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect::<BTreeMap<_, _>>();
+        recorded
+            .iter()
+            .find_map(|(series_name, series_labels, value)| match value {
+                DebugValue::Counter(count) if series_name == name && *series_labels == expected => {
+                    Some(*count)
+                }
+                _ => None,
+            })
+    }
+
+    fn gauge_value(recorded: &RecordedSeries, name: &str) -> Option<f64> {
+        recorded
+            .iter()
+            .find_map(|(series_name, _labels, value)| match value {
+                DebugValue::Gauge(inner) if series_name == name => Some(**inner),
+                _ => None,
+            })
+    }
 
     fn item(index: usize) -> DownloadQueueItem {
         let id = format!("item-{index}");
@@ -612,6 +865,135 @@ mod download_queue_snapshot_cache_tests {
         assert!(recovered.refresh_error.is_none());
         assert!(!recovered.stale_at(Utc::now()));
     }
+
+    #[test]
+    fn partial_staging_is_reported_as_partial_not_success() {
+        let ((), snapshotter) = with_recorded_metrics(|runtime| {
+            runtime.block_on(async {
+                let cache = DownloadQueueSnapshotCache::default();
+                cache.stage_success(vec![item(1)]).await;
+                cache.stage_partial_success(vec![item(2)]).await;
+                cache.mark_refresh_failed("client unavailable").await;
+            });
+        });
+
+        let recorded = recorded(&snapshotter);
+        assert_eq!(
+            counter_value(
+                &recorded,
+                DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+                &[("result", "success")]
+            ),
+            Some(1),
+            "a full refresh is the only thing that may count as success"
+        );
+        assert_eq!(
+            counter_value(
+                &recorded,
+                DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+                &[("result", "partial")]
+            ),
+            Some(1)
+        );
+        assert_eq!(
+            counter_value(
+                &recorded,
+                DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+                &[("result", "error")]
+            ),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn commit_publishes_the_snapshot_updated_timestamp() {
+        let (expected, snapshotter) = with_recorded_metrics(|runtime| {
+            runtime.block_on(async {
+                let cache = DownloadQueueSnapshotCache::default();
+                cache.stage_success(vec![item(1)]).await;
+                let staged_at = cache
+                    .pending
+                    .lock()
+                    .await
+                    .as_ref()
+                    .map(|pending| pending.updated_at)
+                    .expect("a staged snapshot is pending");
+                cache.commit_pending().await;
+                assert_eq!(cache.snapshot().await.updated_at, Some(staged_at));
+                staged_at
+            })
+        });
+
+        assert_eq!(
+            gauge_value(
+                &recorded(&snapshotter),
+                DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS
+            ),
+            Some(expected.timestamp_millis() as f64 / 1_000.0),
+            "freshness must be published by the commit, not by a page query"
+        );
+    }
+
+    #[test]
+    fn describe_download_queue_metrics_registers_every_family() {
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        with_local_recorder(&recorder, || {
+            describe_download_queue_metrics();
+            // Descriptions alone are not "seen" metrics, so touch each family.
+            for family in [
+                DOWNLOAD_QUEUE_ITEMS,
+                DOWNLOAD_QUEUE_SNAPSHOT_ITEMS,
+                DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS,
+                DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS,
+                DOWNLOAD_QUEUE_LEGACY_SUBSCRIPTIONS,
+            ] {
+                metrics::gauge!(family).set(0.0);
+            }
+            for family in [
+                DOWNLOAD_QUEUE_READ_MODEL_TOTAL,
+                DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+                DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL,
+                DOWNLOAD_QUEUE_SNAPSHOT_READY_TOTAL,
+            ] {
+                metrics::counter!(family).increment(0);
+            }
+            for family in [
+                DOWNLOAD_QUEUE_PAGE_DURATION_SECONDS,
+                DOWNLOAD_QUEUE_REFRESH_DURATION_SECONDS,
+                DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS,
+            ] {
+                metrics::histogram!(family).record(0.0);
+            }
+        });
+
+        let described = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter_map(|(key, _unit, description, _value)| {
+                description.map(|description| (key.key().name().to_string(), description))
+            })
+            .map(|(name, _)| name)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        for family in [
+            DOWNLOAD_QUEUE_ITEMS,
+            DOWNLOAD_QUEUE_READ_MODEL_TOTAL,
+            DOWNLOAD_QUEUE_SNAPSHOT_ITEMS,
+            DOWNLOAD_QUEUE_SNAPSHOT_REFRESH_TOTAL,
+            DOWNLOAD_QUEUE_SNAPSHOT_UPDATED_TIMESTAMP_SECONDS,
+            DOWNLOAD_QUEUE_SNAPSHOT_AGE_SECONDS,
+            DOWNLOAD_QUEUE_REVISION_NOTIFICATIONS_TOTAL,
+            DOWNLOAD_QUEUE_SNAPSHOT_READY_TOTAL,
+            DOWNLOAD_QUEUE_PAGE_DURATION_SECONDS,
+            DOWNLOAD_QUEUE_REFRESH_DURATION_SECONDS,
+            DOWNLOAD_QUEUE_POLL_CYCLE_DURATION_SECONDS,
+            DOWNLOAD_QUEUE_LEGACY_SUBSCRIPTIONS,
+        ] {
+            assert!(described.contains(family), "missing HELP for {family}");
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -626,6 +1008,11 @@ pub struct AppRuntimeAcquisitionState {
     pub acquisition_wake: Arc<tokio::sync::Notify>,
     pub download_submission_guards: DownloadSubmissionGuardTable,
     pub download_failure_guards: DownloadFailureGuardTable,
+    /// Per-title exclusion between the background convergence walk and an
+    /// operator's title-scoped acquisition-search walk. See
+    /// [`AcquisitionTitleWalkLocks`] for why the two callers take it
+    /// differently.
+    pub(crate) title_walk_locks: AcquisitionTitleWalkLocks,
     pub(crate) release_candidate_passwords:
         Arc<std::sync::Mutex<HashMap<String, ReleaseCandidatePasswordTicket>>>,
     pub rss_seen_guids: Arc<tokio::sync::RwLock<HashSet<String>>>,
@@ -956,10 +1343,30 @@ impl ImportExecutionCoordinator {
         &self,
         destination: &std::path::Path,
     ) -> tokio::sync::OwnedMutexGuard<()> {
+        self.destination_permit(destination)
+            .await
+            .lock_owned()
+            .await
+    }
+
+    pub(crate) async fn try_acquire_destination(
+        &self,
+        destination: &std::path::Path,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.destination_permit(destination)
+            .await
+            .try_lock_owned()
+            .ok()
+    }
+
+    async fn destination_permit(
+        &self,
+        destination: &std::path::Path,
+    ) -> Arc<tokio::sync::Mutex<()>> {
         let stored_destination = crate::stored_paths::path_to_stored_string(destination);
         let key = crate::stored_paths::path_identity_key(&stored_destination)
             .unwrap_or(stored_destination);
-        let permit = {
+        {
             let mut permits = self.destination_permits.lock().await;
             permits.retain(|_, permit| permit.strong_count() > 0);
             if let Some(permit) = permits.get(&key).and_then(std::sync::Weak::upgrade) {
@@ -969,8 +1376,7 @@ impl ImportExecutionCoordinator {
                 permits.insert(key, Arc::downgrade(&permit));
                 permit
             }
-        };
-        permit.lock_owned().await
+        }
     }
 
     pub(crate) async fn acquire_preparation(&self) -> tokio::sync::OwnedSemaphorePermit {
@@ -983,6 +1389,11 @@ impl ImportExecutionCoordinator {
 
     pub(crate) fn try_acquire_preparation(&self) -> Option<tokio::sync::OwnedSemaphorePermit> {
         self.preparation_permit.clone().try_acquire_owned().ok()
+    }
+
+    pub(crate) fn has_foreground_work(&self) -> bool {
+        self.preparation_permit.available_permits() < MAX_CONCURRENT_IMPORT_PREPARATIONS
+            || self.finalization_permit.available_permits() < MAX_CONCURRENT_IMPORT_FINALIZATIONS
     }
 
     pub(crate) async fn acquire_finalization(&self) -> tokio::sync::OwnedSemaphorePermit {
@@ -1133,6 +1544,7 @@ pub enum ActiveImportStreamPhase {
     Extracting,
     Placing,
     Copying,
+    Verifying,
     Finalizing,
 }
 
@@ -1250,7 +1662,9 @@ impl ActiveImportStreamHandle {
     ) {
         let phase = match phase {
             scryer_domain::ImportTransferPhase::Extracting => ActiveImportStreamPhase::Extracting,
+            scryer_domain::ImportTransferPhase::Waiting => ActiveImportStreamPhase::Queued,
             scryer_domain::ImportTransferPhase::Copying => ActiveImportStreamPhase::Copying,
+            scryer_domain::ImportTransferPhase::Verifying => ActiveImportStreamPhase::Verifying,
             scryer_domain::ImportTransferPhase::Finalizing => ActiveImportStreamPhase::Finalizing,
         };
         self.tracker
@@ -1512,11 +1926,20 @@ pub struct AppRuntimeLibraryState {
         Arc<Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>,
     pub library_scan_title_walk_limit: Arc<Semaphore>,
     pub library_scan_analysis_limit: Arc<Semaphore>,
+    pub(crate) media_analysis_refresh_lock: Arc<tokio::sync::Mutex<()>>,
+    /// In-process fast path for the location ownership guard (FR-084, D7).
+    pub location_ownership: crate::location::ownership_guard::LocationOwnershipRegistry,
+    /// Which location operations have a runner alive in this process, so a
+    /// resume can never start a second one over live checkpoints (FR-033).
+    pub location_runners: crate::location::ownership_guard::LocationRunnerRegistry,
 }
 
 #[derive(Clone)]
 pub struct AppRuntimeJobState {
     pub job_run_tracker: JobRunTracker,
+    pub(crate) full_hash_start_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) full_hash_execution_lock: Arc<tokio::sync::Mutex<()>>,
+    pub(crate) full_hash_shutdown: tokio_util::sync::CancellationToken,
     pub discovery_sync_wake: Arc<tokio::sync::Notify>,
     pub backup_execution_guards: BackupExecutionGuardTable,
     pub interactive_operation_guards: InteractiveOperationGuardTable,
@@ -1541,6 +1964,7 @@ pub struct AppRuntimeHealthState {
 pub struct AppRuntimePluginState {
     pub plugin_operation_guards: PluginOperationGuardTable,
     pub plugin_install_orchestrator: PluginInstallOrchestrator,
+    pub(crate) compatibility_blockers: Arc<tokio::sync::RwLock<HashMap<String, String>>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1714,16 +2138,22 @@ impl AppRuntimeState {
                     crate::catalog_workflow::TitleRecommendationRefreshQueue::default(),
                 )),
                 title_recommendation_refresh_wake: Arc::new(tokio::sync::Notify::new()),
-                image_processing_limit: Arc::new(Semaphore::new(4)),
+                artwork_job_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                artwork_shutdown: tokio_util::sync::CancellationToken::new(),
+                artwork_wait_reason: Arc::new(tokio::sync::RwLock::new(
+                    "Waiting for the nightly window".to_string(),
+                )),
                 title_image_maintenance_lock: Arc::new(tokio::sync::RwLock::new(())),
                 title_image_cache_clear_scheduled: Arc::new(std::sync::atomic::AtomicBool::new(
                     false,
                 )),
+                media_request_enrichment: MediaRequestEnrichmentCache::default(),
             },
             acquisition: AppRuntimeAcquisitionState {
                 acquisition_wake: Arc::new(tokio::sync::Notify::new()),
                 download_submission_guards: DownloadSubmissionGuardTable::default(),
                 download_failure_guards: DownloadFailureGuardTable::default(),
+                title_walk_locks: AcquisitionTitleWalkLocks::default(),
                 release_candidate_passwords: Arc::new(std::sync::Mutex::new(HashMap::new())),
                 rss_seen_guids: Arc::new(tokio::sync::RwLock::new(HashSet::new())),
                 rss_unknown_age_last_warned_at: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
@@ -1756,9 +2186,16 @@ impl AppRuntimeState {
                 library_scan_analysis_limit: Arc::new(Semaphore::new(
                     GLOBAL_LIBRARY_SCAN_ANALYSIS_CONCURRENCY,
                 )),
+                media_analysis_refresh_lock: Arc::new(tokio::sync::Mutex::new(())),
+                location_ownership:
+                    crate::location::ownership_guard::LocationOwnershipRegistry::new(),
+                location_runners: crate::location::ownership_guard::LocationRunnerRegistry::new(),
             },
             jobs: AppRuntimeJobState {
                 job_run_tracker: JobRunTracker::new(),
+                full_hash_start_lock: Arc::new(tokio::sync::Mutex::new(())),
+                full_hash_execution_lock: Arc::new(tokio::sync::Mutex::new(())),
+                full_hash_shutdown: tokio_util::sync::CancellationToken::new(),
                 discovery_sync_wake: Arc::new(tokio::sync::Notify::new()),
                 backup_execution_guards: BackupExecutionGuardTable::default(),
                 interactive_operation_guards: InteractiveOperationGuardTable::default(),
@@ -1773,6 +2210,7 @@ impl AppRuntimeState {
             plugins: AppRuntimePluginState {
                 plugin_operation_guards: PluginOperationGuardTable::default(),
                 plugin_install_orchestrator: PluginInstallOrchestrator::default(),
+                compatibility_blockers: Arc::new(tokio::sync::RwLock::new(HashMap::new())),
             },
             integrations: AppRuntimeIntegrationState {
                 managed_indexer_sync_lock: Arc::new(tokio::sync::Mutex::new(())),

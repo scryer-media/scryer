@@ -430,6 +430,10 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "application_migrations",
         classification: BackupTableClassification::Export,
     },
+    BackupTableCatalogEntry {
+        table: "application_compatibility_journal",
+        classification: BackupTableClassification::Export,
+    },
     // Legacy: no current migration creates this table, but installs that
     // upgraded through the pre-0122 schema may still carry it. The entry is
     // deliberately retained — an `Ignore` entry for an absent table costs
@@ -735,7 +739,7 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
-        table: "indexer_proxy_configs",
+        table: "proxy_configs",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -754,13 +758,143 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "library_roots",
         classification: BackupTableClassification::Export,
     },
+    // Root-id remaps are the durable audit and compatibility bridge for ids
+    // held outside the database; rebuilding them would lose that history.
+    BackupTableCatalogEntry {
+        table: "library_root_id_remaps",
+        classification: BackupTableClassification::Export,
+    },
     BackupTableCatalogEntry {
         table: "library_scan_unmatched_items",
         classification: BackupTableClassification::Export,
     },
+    // Location operations are resumable, user-visible Activity records. Their
+    // checkpoints, verification proofs, and ownership history are part of the
+    // same durable operation record.
+    BackupTableCatalogEntry {
+        table: "location_operations",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_operation_title_checkpoints",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_operation_verifications",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_operation_owned_entities",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_file_resolutions",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_transfer_progress",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "location_transfer_titles",
+        classification: BackupTableClassification::Export,
+    },
+    // Stream generations belong to the target instance. Keep its seeded row
+    // and never restore an older generation from another instance's backup.
+    BackupTableCatalogEntry {
+        table: "location_transfer_runtime",
+        classification: BackupTableClassification::Ignore,
+    },
     BackupTableCatalogEntry {
         table: "login_verification_challenges",
         classification: BackupTableClassification::Ignore,
+    },
+    // Maintenance rules and exclusions are user intent. Evaluation,
+    // candidate, and action rows preserve grace periods and the audit trail,
+    // so they cannot be regenerated without changing lifecycle semantics.
+    BackupTableCatalogEntry {
+        table: "maintenance_rule_sets",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_rule_set_libraries",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_rule_revisions",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_rule_exclusions",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_evaluation_runs",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "lifecycle_candidates",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "lifecycle_action_runs",
+        classification: BackupTableClassification::Export,
+    },
+    // Sequence steps, immutable attempts, and Search receipts preserve both
+    // mutation attribution and durable deduplication across a restore. The
+    // terminal membership is the once-per-match latch, so every part of this
+    // sequence safety state must remain with its candidate history.
+    BackupTableCatalogEntry {
+        table: "maintenance_action_steps",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_action_step_attempts",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_action_job_receipts",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "maintenance_sequence_terminal_memberships",
+        classification: BackupTableClassification::Export,
+    },
+    // Request rules are user intent in exactly the way maintenance rules are,
+    // and their revisions are what a stored decision points at: dropping them
+    // would leave every trace naming a rule revision that no longer exists.
+    BackupTableCatalogEntry {
+        table: "request_rule_sets",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "request_rule_set_libraries",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "request_rule_revisions",
+        classification: BackupTableClassification::Export,
+    },
+    // The decision trace is the audit record of why a request resolved the way
+    // it did; it cannot be recomputed, because the metadata it was judged on
+    // has moved on.
+    BackupTableCatalogEntry {
+        table: "request_rule_decisions",
+        classification: BackupTableClassification::Export,
+    },
+    // A lifecycle claim is what holds media against deletion. Losing one on a
+    // restore would silently expose a leased title to the next maintenance
+    // pass, so it is exported like the candidates and action runs above.
+    BackupTableCatalogEntry {
+        table: "lifecycle_claims",
+        classification: BackupTableClassification::Export,
+    },
+    // The admin-defined tag registry is user intent: every title and delay
+    // profile tag points at one of its rows, and a restore without it would
+    // refuse the very labels the restored titles carry.
+    BackupTableCatalogEntry {
+        table: "title_tag_definitions",
+        classification: BackupTableClassification::Export,
     },
     // A manual-import selection is deliberate user intent — the files a user
     // picked and the targets they mapped them to — held until the import
@@ -821,6 +955,16 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     BackupTableCatalogEntry {
         table: "emby_media_server_details",
         classification: BackupTableClassification::Export,
+    },
+    // Normalized watch observations are durable user data. Sync health is a
+    // local snapshot that the next provider sweep can regenerate.
+    BackupTableCatalogEntry {
+        table: "media_server_user_media_signals",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "media_server_signal_sync_state",
+        classification: BackupTableClassification::ResetOnRestore,
     },
     BackupTableCatalogEntry {
         table: "media_request_external_ids",
@@ -936,6 +1080,14 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
     },
     BackupTableCatalogEntry {
         table: "rule_set_history",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "rule_pack_installations",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "rule_pack_members",
         classification: BackupTableClassification::Export,
     },
     BackupTableCatalogEntry {
@@ -1067,6 +1219,90 @@ impl BackupBundleInspectSummary {
     pub fn total_rows(&self) -> u64 {
         self.row_counts.values().copied().sum()
     }
+}
+
+/// Tables this build expects to find in a restorable bundle.
+///
+/// The set is a property of the catalog above, not of any live connection, so
+/// inspect-time validation can reach the same answer the apply path reaches
+/// without opening a datastore.
+pub fn backup_export_table_names() -> Vec<String> {
+    BACKUP_TABLE_CATALOG
+        .iter()
+        .filter(|entry| entry.classification == BackupTableClassification::Export)
+        .map(|entry| entry.table.to_string())
+        .collect()
+}
+
+/// Guidance appended to every table-set rejection.
+///
+/// A bundle restores only into the Scryer version that wrote it; cross-version
+/// restore is not a supported operation. Stating the supported rollback path
+/// here keeps the advice with the only error an operator sees.
+pub const RESTORE_VERSION_CONTRACT_HINT: &str = "A backup restores only into the same Scryer version that created it. To roll back, start a fresh container on the previous version and apply this backup on its first boot.";
+
+pub fn validate_restore_manifest_table_set(
+    row_counts: &BTreeMap<String, u64>,
+    export_tables: &[String],
+    source_migration_key: Option<&str>,
+) -> AppResult<()> {
+    let expected_tables = export_tables.iter().cloned().collect::<BTreeSet<_>>();
+    let manifest_tables = row_counts.keys().cloned().collect::<BTreeSet<_>>();
+    if manifest_tables == expected_tables {
+        return Ok(());
+    }
+
+    let missing = expected_tables
+        .difference(&manifest_tables)
+        .cloned()
+        .collect::<Vec<_>>();
+    let unexpected = manifest_tables
+        .difference(&expected_tables)
+        .cloned()
+        .collect::<Vec<_>>();
+    if unexpected.is_empty()
+        && source_migration_key
+            .and_then(migration_number)
+            .is_some_and(|number| {
+                missing.iter().all(|table| match table.as_str() {
+                    "rule_pack_installations" | "rule_pack_members" => number < 225,
+                    "location_transfer_progress" | "location_transfer_titles" => number < 234,
+                    "location_file_resolutions" => number < 235,
+                    _ => false,
+                })
+            })
+    {
+        return Ok(());
+    }
+    Err(AppError::Validation(format!(
+        "backup bundle table set does not match the current restore catalog: missing [{}], unexpected [{}]. {}",
+        missing.join(", "),
+        unexpected.join(", "),
+        RESTORE_VERSION_CONTRACT_HINT
+    )))
+}
+
+/// Apply the restore gate to an inspected bundle before the operator commits to it.
+///
+/// `applyRestoreBundle` runs the same check against a freshly migrated schema.
+/// Running it at inspect time costs nothing and turns a late, destructive-looking
+/// failure into an answer the operator gets while they can still act on it.
+pub fn validate_inspected_bundle_is_restorable(
+    summary: &BackupBundleInspectSummary,
+) -> AppResult<()> {
+    validate_restore_manifest_table_set(
+        &summary.row_counts,
+        &backup_export_table_names(),
+        summary.source_migration_key.as_deref(),
+    )
+}
+
+fn migration_number(migration_key: &str) -> Option<u32> {
+    migration_key
+        .split_once('_')
+        .map_or(migration_key, |(number, _)| number)
+        .parse()
+        .ok()
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2601,5 +2837,106 @@ mod tests {
             plaintext.extend_from_slice(&buffer[..read]);
         }
         Ok(plaintext)
+    }
+}
+
+#[cfg(test)]
+mod restore_gate_tests {
+    use super::*;
+
+    fn summary_with(
+        row_counts: BTreeMap<String, u64>,
+        source_migration_key: Option<&str>,
+    ) -> BackupBundleInspectSummary {
+        BackupBundleInspectSummary {
+            format_version: BACKUP_FORMAT_VERSION.to_string(),
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+            source_scryer_version: "0.19.16".to_string(),
+            source_engine: "sqlite".to_string(),
+            source_migration_key: source_migration_key.map(str::to_string),
+            encrypted: true,
+            row_counts,
+        }
+    }
+
+    #[test]
+    fn export_table_names_match_the_catalog_export_entries() {
+        let names = backup_export_table_names();
+        assert!(names.contains(&"plugin_installations".to_string()));
+        assert!(
+            !names.contains(&"_sqlx_migrations".to_string()),
+            "ignored catalog entries must not be treated as expected bundle tables"
+        );
+        assert_eq!(
+            names.len(),
+            BACKUP_TABLE_CATALOG
+                .iter()
+                .filter(|entry| entry.classification == BackupTableClassification::Export)
+                .count()
+        );
+    }
+
+    #[test]
+    fn inspect_accepts_a_bundle_this_build_can_restore() {
+        let row_counts = backup_export_table_names()
+            .into_iter()
+            .map(|table| (table, 0))
+            .collect::<BTreeMap<_, _>>();
+        validate_inspected_bundle_is_restorable(&summary_with(row_counts, Some("0233_fixture")))
+            .expect("a bundle carrying exactly this build's export tables must inspect clean");
+    }
+
+    #[test]
+    fn inspect_rejects_a_bundle_whose_table_set_apply_would_refuse() {
+        // A bundle from an older line: it lacks tables this build exports and
+        // carries one this build renamed away.
+        let mut row_counts = backup_export_table_names()
+            .into_iter()
+            .map(|table| (table, 0))
+            .collect::<BTreeMap<_, _>>();
+        row_counts.remove("application_compatibility_journal");
+        row_counts.insert("indexer_proxy_configs".to_string(), 0);
+
+        let error = validate_inspected_bundle_is_restorable(&summary_with(
+            row_counts,
+            Some("0211_fixture"),
+        ))
+        .expect_err("inspect must refuse what apply would refuse");
+        let message = error.to_string();
+        assert!(
+            message.contains("application_compatibility_journal"),
+            "{message}"
+        );
+        assert!(message.contains("indexer_proxy_configs"), "{message}");
+        assert!(
+            message.contains(RESTORE_VERSION_CONTRACT_HINT),
+            "the refusal must state the supported rollback path: {message}"
+        );
+    }
+
+    #[test]
+    fn late_0_20_tolerance_list_still_applies_at_inspect_time() {
+        let mut row_counts = backup_export_table_names()
+            .into_iter()
+            .map(|table| (table, 0))
+            .collect::<BTreeMap<_, _>>();
+        for table in [
+            "rule_pack_installations",
+            "rule_pack_members",
+            "location_transfer_progress",
+            "location_transfer_titles",
+            "location_file_resolutions",
+        ] {
+            row_counts.remove(table);
+        }
+
+        validate_inspected_bundle_is_restorable(&summary_with(
+            row_counts.clone(),
+            Some("0224_prior_change"),
+        ))
+        .expect("bundles predating those tables must keep restoring");
+
+        validate_inspected_bundle_is_restorable(&summary_with(row_counts, Some("0235_later")))
+            .expect_err("a bundle new enough to carry them must still provide them");
     }
 }

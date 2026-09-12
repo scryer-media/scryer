@@ -1,211 +1,183 @@
+//! Subtitle-*sync* alignment, on the subtitle component world.
+//!
+//! # Why this file came back
+//!
+//! Alignment was never a `PluginSubtitleCommand`. It rode its own
+//! [`SubtitleSyncPluginProcessRequest`] over the Preview 1 stdin/stdout command
+//! transport, and when that transport was deleted the capability was orphaned:
+//! the loader logged a warning and handed the application `None`, so every
+//! align job degraded to "no sync plugin installed".
+//!
+//! It is restored here without a WIT revision. The
+//! `scryer:subtitle/subtitle-provider@1.0.0` world's `process` payload is
+//! opaque UTF-8 JSON carrying the SDK's command envelope, and the SDK — not the
+//! WIT — owns the operation set. Adding `PluginSubtitleCommand::Sync`, whose
+//! payload is the Preview 1 request type verbatim, was therefore enough: a sync
+//! plugin already ships a `ProviderDescriptor::Subtitle`, so it validates,
+//! classifies and instantiates as the subtitle world exactly like a catalog
+//! provider, and [`process_subtitle_component`] moves the bytes.
+//!
+//! # Why this is a separate client from `WasmSubtitleClient`
+//!
+//! The two share a world but not a shape. A catalog provider is configured
+//! (`SubtitleProviderConfig`, host bindings, allowed hosts) and is instantiated
+//! once per configured provider row; a sync plugin has no configuration at all
+//! and is instantiated once per *job*, because its preopens are derived from
+//! the media file being aligned. Folding them together would mean a spec that
+//! is rebuilt per call for one caller and cached for the other, so they stay
+//! apart — as they were before the teardown.
+//!
+//! # The filesystem contract
+//!
+//! Alignment is the one plugin operation that moves real files. The guest sees
+//! five fixed roots and nothing else:
+//!
+//! | Guest root   | Backed by                       | Mode     |
+//! |--------------|---------------------------------|----------|
+//! | `/input`     | the media file's parent dir     | read-only  |
+//! | `/subtitle`  | a per-job temp dir              | read-only  |
+//! | `/reference` | a per-job temp dir (optional)   | read-only  |
+//! | `/output`    | a per-job temp dir              | writable |
+//! | `/scratch`   | a per-job temp dir              | writable |
+//!
+//! The host stages the subtitle bytes in, and reads the rewritten subtitle back
+//! out under the symlink-rejecting containment check in
+//! [`read_guest_output_file`]. Every temp dir is owned by the prepared job and
+//! is removed when it drops.
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use scryer_application::{AppError, AppResult, SubtitleSyncClient, SubtitleSyncJob};
-
-use crate::blocking::run_blocking_plugin_call;
-use crate::legacy_runtime::{LegacyPlugin, LegacyPluginSpec};
-use crate::runtime_backing::{PluginInstanceSpec, PluginRuntimeBacking, PreopenSpec};
-use crate::types::{
-    AudioStreamSelector, EXPORT_SUBSYNC_ALIGN, PluginDescriptor, SubtitleSyncAlignInputRef,
-    SubtitleSyncAlignRequest, SubtitleSyncAlignResponse, SubtitleSyncCommandAlignRequest,
+use scryer_plugin_sdk::command::{
+    PluginCommand, PluginCommandRequest, PluginCommandResult, PluginSubtitleCommand,
+    PluginSubtitleCommandResult,
+};
+use scryer_plugin_sdk::{
+    AudioStreamSelector, PluginResult, SubtitleSyncAlignResponse, SubtitleSyncCommandAlignRequest,
     SubtitleSyncCommandAlignResponse, SubtitleSyncCommandInputFile,
     SubtitleSyncCommandOutputSubtitle, SubtitleSyncCommandOutputTarget,
-    SubtitleSyncCommandSubtitleFile, SubtitleSyncInputSubtitle, SubtitleSyncPluginOperation,
-    SubtitleSyncPluginProcessRequest, SubtitleSyncPluginResponse, SubtitleSyncReferenceSubtitle,
-    SubtitleSyncRewrittenSubtitle, decode_plugin_result,
+    SubtitleSyncCommandSubtitleFile, SubtitleSyncPluginOperation, SubtitleSyncPluginProcessRequest,
+    SubtitleSyncPluginResponse, SubtitleSyncRewrittenSubtitle,
 };
-use crate::wasmtime_host::{SubtitleSyncInvocation, process_subtitle_sync};
+
+use crate::runtime_backing::{PluginInstanceSpec, PluginRuntimeBacking, PreopenSpec};
+use crate::types::PluginDescriptor;
+use crate::wasmtime_host::command_host::CommandHost;
+use crate::wasmtime_host::{SubtitleComponentInvocation, process_subtitle_component};
 
 const GUEST_INPUT_ROOT: &str = "/input";
 const GUEST_SUBTITLE_ROOT: &str = "/subtitle";
 const GUEST_REFERENCE_ROOT: &str = "/reference";
 const GUEST_OUTPUT_ROOT: &str = "/output";
 const GUEST_SCRATCH_ROOT: &str = "/scratch";
-const SUBTITLE_SYNC_TIMEOUT_SECONDS: u64 = 60 * 60;
+
+/// Alignment decodes and correlates a whole audio track, so it keeps the
+/// hour-long budget the Preview 1 runner used rather than the 30s budget a
+/// catalog lookup runs under.
+const SUBTITLE_SYNC_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
 const MAX_REWRITTEN_SUBTITLE_BYTES: u64 = 16 * 1024 * 1024;
 
+/// A subtitle-sync plugin, backed by the subtitle component world.
+///
+/// Components are instance-per-invocation, so this holds only the verified
+/// artifact bytes and the descriptor; the [`PluginInstanceSpec`] is built per
+/// job because its preopens depend on the media file being aligned.
 pub struct WasmSubtitleSyncClient {
     wasm_bytes: Arc<Vec<u8>>,
-    descriptor: PluginDescriptor,
     plugin_id: String,
     plugin_version: String,
-    backing: PluginRuntimeBacking,
 }
 
 impl WasmSubtitleSyncClient {
-    pub fn new(wasm_bytes: Vec<u8>, descriptor: PluginDescriptor) -> Self {
-        let backing = PluginRuntimeBacking::for_descriptor(&descriptor);
-        Self {
+    /// Classify the artifact, then build the client.
+    ///
+    /// Classification happens here rather than at first align for the same
+    /// reason it does in [`crate::subtitle_adapter::WasmSubtitleClient`]: a
+    /// subtitle descriptor looks identical whether the artifact is a stale
+    /// pre-component build or a `scryer:subtitle/subtitle-provider@1.0.0`
+    /// component, so the operator-facing upgrade diagnostic belongs at provider
+    /// construction. An installed Preview 1 subtitle-sync plugin therefore
+    /// reports "rebuild against the component ABI", not a missing-import trap
+    /// an hour into an align job.
+    pub fn new(wasm_bytes: Vec<u8>, descriptor: &PluginDescriptor) -> Result<Self, String> {
+        PluginRuntimeBacking::for_artifact(descriptor, &wasm_bytes)?;
+        Ok(Self {
             wasm_bytes: Arc::new(wasm_bytes),
             plugin_id: descriptor.id.clone(),
             plugin_version: descriptor.version.clone(),
-            descriptor,
-            backing,
-        }
+        })
     }
 }
 
 #[async_trait]
 impl SubtitleSyncClient for WasmSubtitleSyncClient {
     async fn align_subtitle(&self, job: SubtitleSyncJob) -> AppResult<SubtitleSyncAlignResponse> {
-        match self.backing {
-            PluginRuntimeBacking::LegacyReactor => self.align_subtitle_legacy(job).await,
-            PluginRuntimeBacking::WasmtimeSubtitleSync => self.align_subtitle_command(job).await,
-            PluginRuntimeBacking::WasmtimeArchive => Err(AppError::Repository(
-                "subtitle sync plugin cannot use the archive runtime backing".to_string(),
-            )),
-            PluginRuntimeBacking::WasmtimeCommand => Err(AppError::Repository(
-                "subtitle sync plugin cannot use the generic command runtime backing".to_string(),
-            )),
-            PluginRuntimeBacking::WasmtimeIndexerComponent => Err(AppError::Repository(
-                "subtitle sync plugin cannot use the indexer component runtime backing".to_string(),
-            )),
-        }
-    }
-}
+        let prepared = PreparedSubtitleSyncCommand::new(job)?;
+        let spec = prepared.instance_spec(Arc::clone(&self.wasm_bytes));
 
-impl WasmSubtitleSyncClient {
-    async fn align_subtitle_legacy(
-        &self,
-        job: SubtitleSyncJob,
-    ) -> AppResult<SubtitleSyncAlignResponse> {
-        let scratch_dir = tempfile::tempdir().map_err(|error| {
-            AppError::Repository(format!(
-                "failed to create subtitle sync scratch directory: {error}"
-            ))
-        })?;
-        let input_path = job.input_path.clone();
-        let guest_input_path = guest_file_path(GUEST_INPUT_ROOT, &input_path)?;
-        let request = SubtitleSyncAlignRequest {
-            input: SubtitleSyncAlignInputRef {
-                path: guest_input_path,
-            },
-            subtitle: SubtitleSyncInputSubtitle {
-                content_base64: BASE64.encode(&job.subtitle_content),
-                format: job.subtitle_format,
-                file_name: job.subtitle_file_name,
-                encoding_hint: job.subtitle_encoding_hint,
-            },
-            reference_subtitle: job.reference_subtitle.map(|subtitle| {
-                SubtitleSyncReferenceSubtitle {
-                    content_base64: BASE64.encode(&subtitle.content),
-                    format: subtitle.format,
-                    file_name: subtitle.file_name,
-                    encoding_hint: subtitle.encoding_hint,
-                }
-            }),
-            subtitle_spans: Vec::new(),
-            max_offset_seconds: job.max_offset_seconds,
-            sync_options: Some(job.sync_options),
-            selector: Some(AudioStreamSelector::Default),
-            expected_codec: job.expected_codec,
-        };
-        let input = serde_json::to_string(&request).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to serialize subtitle sync request: {error}"
-            ))
-        })?;
-
-        let spec = build_subtitle_sync_spec(
-            self.wasm_bytes.as_slice(),
-            &self.descriptor,
-            &input_path,
-            scratch_dir.path(),
-        );
-        let output = run_blocking_plugin_call(
-            std::time::Duration::from_secs(SUBTITLE_SYNC_TIMEOUT_SECONDS),
-            "subtitle sync plugin",
-            move || {
-                let mut plugin = LegacyPlugin::instantiate(spec).map_err(|error| {
-                    AppError::Repository(format!("failed to compile subtitle sync plugin: {error}"))
-                })?;
-                if !plugin.function_exists(EXPORT_SUBSYNC_ALIGN) {
-                    return Err(AppError::Repository(format!(
-                        "plugin does not export {EXPORT_SUBSYNC_ALIGN}"
-                    )));
-                }
-                plugin
-                    .call_string(EXPORT_SUBSYNC_ALIGN, &input)
-                    .map_err(|error| plugin_call_error(EXPORT_SUBSYNC_ALIGN, error))
+        let response = process_subtitle_component(
+            &spec,
+            &PluginCommandRequest::new(PluginCommand::Subtitle(PluginSubtitleCommand::Sync(
+                prepared.request.clone(),
+            ))),
+            SubtitleComponentInvocation {
+                plugin_id: &self.plugin_id,
+                plugin_version: &self.plugin_version,
+                operation: "Sync",
             },
         )
         .await?;
 
-        decode_plugin_result(&output, EXPORT_SUBSYNC_ALIGN)
-    }
-
-    async fn align_subtitle_command(
-        &self,
-        job: SubtitleSyncJob,
-    ) -> AppResult<SubtitleSyncAlignResponse> {
-        let prepared = PreparedSubtitleSyncCommand::new(job)?;
-        let input = serde_json::to_string(&prepared.request).map_err(|error| {
-            AppError::Repository(format!(
-                "failed to serialize subtitle sync command request: {error}"
-            ))
-        })?;
-        let spec = prepared.instance_spec(Arc::clone(&self.wasm_bytes));
-        let plugin_id = self.plugin_id.clone();
-        let plugin_version = self.plugin_version.clone();
-
-        tokio::time::timeout(
-            std::time::Duration::from_secs(SUBTITLE_SYNC_TIMEOUT_SECONDS),
-            async move {
-                let invocation = SubtitleSyncInvocation {
-                    plugin_id: &plugin_id,
-                    plugin_version: &plugin_version,
-                    operation: "Align",
-                };
-                let response = process_subtitle_sync(&spec, &input, invocation).await?;
-                let align = match response.response {
-                    SubtitleSyncPluginResponse::Align { response } => *response,
-                    other => {
-                        return Err(AppError::Repository(format!(
-                            "subtitle sync plugin returned unexpected response kind: {other:?}"
-                        )));
-                    }
-                };
-                prepared.command_response_to_legacy(align)
-            },
-        )
-        .await
-        .map_err(|_| {
-            AppError::Repository(format!(
-                "subtitle sync command plugin timed out after {SUBTITLE_SYNC_TIMEOUT_SECONDS} seconds"
-            ))
-        })?
+        let PluginCommandResult::Subtitle(result) = response.response else {
+            return Err(AppError::Repository(format!(
+                "subtitle sync plugin {} returned a response for another plugin family",
+                self.plugin_id
+            )));
+        };
+        let PluginSubtitleCommandResult::Sync(result) = result else {
+            return Err(AppError::Repository(format!(
+                "subtitle sync plugin {} answered an align request with another operation",
+                self.plugin_id
+            )));
+        };
+        let process = match result {
+            PluginResult::Ok(process) => process,
+            PluginResult::Err(error) => {
+                return Err(AppError::Repository(format!(
+                    "subtitle sync plugin {} refused the align: plugin error {:?}: {}",
+                    self.plugin_id, error.code, error.public_message
+                )));
+            }
+        };
+        let align = match process.response {
+            SubtitleSyncPluginResponse::Align { response } => *response,
+            other => {
+                return Err(AppError::Repository(format!(
+                    "subtitle sync plugin returned unexpected response kind: {other:?}"
+                )));
+            }
+        };
+        prepared.align_response_to_port(align)
     }
 }
 
 impl std::fmt::Debug for WasmSubtitleSyncClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("WasmSubtitleSyncClient")
-            .field("plugin_id", &self.descriptor.id)
-            .field("plugin_name", &self.descriptor.name)
+            .field("plugin_id", &self.plugin_id)
+            .field("plugin_version", &self.plugin_version)
             .finish()
     }
 }
 
-pub(crate) fn build_subtitle_sync_spec(
-    wasm_bytes: &[u8],
-    descriptor: &PluginDescriptor,
-    input_path: &Path,
-    scratch_dir: &Path,
-) -> LegacyPluginSpec {
-    let input_root = input_path.parent().unwrap_or_else(|| Path::new("."));
-
-    let mut spec = LegacyPluginSpec::new(wasm_bytes.to_vec(), descriptor.id.clone());
-    spec.timeout = std::time::Duration::from_secs(SUBTITLE_SYNC_TIMEOUT_SECONDS);
-    spec.preopens
-        .push(PreopenSpec::read_only(input_root, GUEST_INPUT_ROOT));
-    spec.preopens
-        .push(PreopenSpec::writable(scratch_dir, GUEST_SCRATCH_ROOT));
-    spec
-}
-
+/// One align job's staged filesystem and the request that names it.
+///
+/// The temp dirs are fields rather than locals because they must outlive the
+/// invocation: dropping a [`tempfile::TempDir`] deletes the directory, and the
+/// guest reads `/subtitle` and writes `/output` while this is alive.
 struct PreparedSubtitleSyncCommand {
     request: SubtitleSyncPluginProcessRequest,
     media_root: PathBuf,
@@ -323,6 +295,15 @@ impl PreparedSubtitleSyncCommand {
         })
     }
 
+    /// The per-job instance spec.
+    ///
+    /// `CommandHost::disabled()` is deliberate: a sync plugin has no
+    /// configuration, makes no HTTP requests and opens no sockets — it decodes
+    /// audio and correlates it against subtitle timings. The
+    /// `scryer:host/services@1.0.0` import the component world declares is
+    /// still served, and answers every request in-band with `Unsupported`, so a
+    /// plugin that reaches for a capability gets a typed refusal rather than a
+    /// trap.
     fn instance_spec(&self, wasm: Arc<Vec<u8>>) -> PluginInstanceSpec {
         let mut preopens = vec![
             PreopenSpec::read_only(self.media_root.clone(), GUEST_INPUT_ROOT),
@@ -339,13 +320,16 @@ impl PreparedSubtitleSyncCommand {
         PluginInstanceSpec {
             wasm,
             preopens,
-            timeout: std::time::Duration::from_secs(SUBTITLE_SYNC_TIMEOUT_SECONDS),
+            timeout: SUBTITLE_SYNC_TIMEOUT,
             memory_max_bytes: None,
-            command_host: crate::wasmtime_host::command_host::CommandHost::disabled(),
+            command_host: CommandHost::disabled(),
         }
     }
 
-    fn command_response_to_legacy(
+    /// Turn the guest's align response into the application port's response,
+    /// reading the rewritten subtitle back out of `/output` when one was
+    /// applied.
+    fn align_response_to_port(
         &self,
         response: SubtitleSyncCommandAlignResponse,
     ) -> AppResult<SubtitleSyncAlignResponse> {
@@ -453,8 +437,7 @@ fn read_guest_output_file(output_root: &Path, path: &Path) -> AppResult<Vec<u8>>
     }
     if metadata.len() > MAX_REWRITTEN_SUBTITLE_BYTES {
         return Err(AppError::Validation(format!(
-            "subtitle sync plugin output exceeds {} bytes",
-            MAX_REWRITTEN_SUBTITLE_BYTES
+            "subtitle sync plugin output exceeds {MAX_REWRITTEN_SUBTITLE_BYTES} bytes"
         )));
     }
 
@@ -485,14 +468,11 @@ fn read_guest_output_file(output_root: &Path, path: &Path) -> AppResult<Vec<u8>>
     })
 }
 
-fn plugin_call_error(export: &str, error: AppError) -> AppError {
-    AppError::Repository(format!("{export}() failed: {error}"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::SubtitleSyncOptions;
+    use scryer_plugin_sdk::SubtitleSyncOptions;
+    use scryer_plugin_sdk::host::{PluginConfigGetRequest, PluginHostRequest, PluginHostResponse};
 
     fn sample_job() -> SubtitleSyncJob {
         SubtitleSyncJob {
@@ -536,22 +516,20 @@ mod tests {
             .expect("stage guest output");
 
         let response = applied_response(prepared.guest_output_path.clone());
-        let legacy = prepared
-            .command_response_to_legacy(response)
-            .expect("legacy response");
+        let port = prepared
+            .align_response_to_port(response)
+            .expect("port response");
 
-        let rewritten = legacy
-            .rewritten_subtitle
-            .expect("rewritten subtitle present");
+        let rewritten = port.rewritten_subtitle.expect("rewritten subtitle present");
         let decoded = BASE64
             .decode(rewritten.content_base64)
             .expect("decode base64");
         assert_eq!(decoded, b"rewritten-subtitle-bytes");
     }
 
-    // A malicious command-model guest can write anything into its writable
-    // `/output` preopen, including a symlink pointing at a sensitive host file.
-    // The host must refuse to follow it rather than exfiltrate the target.
+    // A malicious guest can write anything into its writable `/output` preopen,
+    // including a symlink pointing at a sensitive host file. The host must
+    // refuse to follow it rather than exfiltrate the target.
     #[cfg(unix)]
     #[test]
     fn rejects_symlink_escaping_output_dir() {
@@ -560,8 +538,7 @@ mod tests {
         // A sensitive host file that lives OUTSIDE the writable output preopen.
         let secret_dir = tempfile::tempdir().expect("secret dir");
         let secret_path = secret_dir.path().join("credentials.env");
-        let secret = b"INDEXER_API_KEY=super-secret-value";
-        std::fs::write(&secret_path, secret).expect("write secret");
+        std::fs::write(&secret_path, b"INDEXER_API_KEY=super-secret-value").expect("write secret");
 
         // Guest writes the "rewritten subtitle" as a symlink to the secret.
         std::os::unix::fs::symlink(&secret_path, &prepared.host_output_path)
@@ -569,7 +546,7 @@ mod tests {
 
         let response = applied_response(prepared.guest_output_path.clone());
         let error = prepared
-            .command_response_to_legacy(response)
+            .align_response_to_port(response)
             .expect_err("symlink escape must be rejected");
 
         assert!(
@@ -596,11 +573,60 @@ mod tests {
 
         let response = applied_response(prepared.guest_output_path.clone());
         let error = prepared
-            .command_response_to_legacy(response)
+            .align_response_to_port(response)
             .expect_err("symlink output must be rejected");
         assert!(
             matches!(error, AppError::Validation(_)),
             "expected a validation error, got {error:?}"
         );
+    }
+
+    /// The align job's staged filesystem is what the guest actually sees, so
+    /// the preopen set is part of the contract rather than an implementation
+    /// detail: five roots, only `/output` and `/scratch` writable.
+    #[test]
+    fn stages_the_documented_preopen_set() {
+        let prepared = PreparedSubtitleSyncCommand::new(sample_job()).expect("prepare command");
+        let spec = prepared.instance_spec(Arc::new(Vec::new()));
+
+        let mut roots = spec
+            .preopens
+            .iter()
+            .map(|preopen| (preopen.guest_path.as_str(), preopen.writable))
+            .collect::<Vec<_>>();
+        roots.sort_unstable();
+        assert_eq!(
+            roots,
+            vec![
+                ("/input", false),
+                ("/output", true),
+                ("/scratch", true),
+                ("/subtitle", false),
+            ]
+        );
+    }
+
+    /// A sync plugin is offered no host services at all; the world's import is
+    /// still served and refuses in-band.
+    #[test]
+    fn offers_no_host_services() {
+        let prepared = PreparedSubtitleSyncCommand::new(sample_job()).expect("prepare command");
+        let spec = prepared.instance_spec(Arc::new(Vec::new()));
+        let request =
+            postcard::to_allocvec(&PluginHostRequest::ConfigGet(PluginConfigGetRequest {
+                key: "anything".to_string(),
+            }))
+            .expect("encode host request");
+
+        let encoded = spec
+            .command_host
+            .call_bytes(&request)
+            .expect("host call is served");
+        let response: PluginHostResponse =
+            postcard::from_bytes(&encoded).expect("decode host response");
+        let PluginHostResponse::ConfigGet(PluginResult::Err(error)) = response else {
+            panic!("expected an in-band config refusal");
+        };
+        assert_eq!(error.code, scryer_plugin_sdk::PluginErrorCode::Unsupported);
     }
 }

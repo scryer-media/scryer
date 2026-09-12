@@ -13,7 +13,7 @@ export const RULE_TEMPLATE_CATEGORIES = [
   "Size",
   "Audio",
   "Anime",
-  "Blocking",
+  "Penalties",
 ] as const;
 
 export const RULE_TEMPLATES: RuleTemplate[] = [
@@ -97,8 +97,8 @@ score_entry["x264_4k_penalty"] := -200 if {
   // ── Size ───────────────────────────────────────────────────────
   {
     id: "block-oversized",
-    title: "Block oversized releases (>100 GiB)",
-    description: "Hard-block any release larger than 100 GiB",
+    title: "Penalize oversized releases (>100 GiB)",
+    description: "Apply -10000 above 100 GiB; other scores can offset this penalty",
     category: "Size",
     regoSource: `import rego.v1
 
@@ -120,8 +120,8 @@ score_entry["compact_bonus"] := 150 if {
   },
   {
     id: "block-tiny-releases",
-    title: "Block suspiciously small releases",
-    description: "Block releases under 100 MiB that are likely fakes or samples",
+    title: "Penalize suspiciously small releases",
+    description: "Penalize releases under 100 MiB that are likely fakes or samples",
     category: "Size",
     regoSource: `import rego.v1
 
@@ -135,8 +135,8 @@ score_entry["too_small"] := scryer.block_score() if {
   // ── Audio ──────────────────────────────────────────────────────
   {
     id: "require-japanese-audio",
-    title: "Require Japanese audio (post-download)",
-    description: "Block imports that don't contain a Japanese audio track",
+    title: "Prefer Japanese audio (post-download)",
+    description: "Apply -10000 without Japanese audio. Use profile required languages for a mandatory requirement",
     category: "Audio",
     appliedFacets: ["anime"],
     regoSource: `import rego.v1
@@ -153,8 +153,8 @@ has_japanese_audio if {
   },
   {
     id: "require-english-audio",
-    title: "Require English audio (post-download)",
-    description: "Block imports that don't contain an English audio track",
+    title: "Prefer English audio (post-download)",
+    description: "Apply -10000 without English audio. Use profile required languages for a mandatory requirement",
     category: "Audio",
     regoSource: `import rego.v1
 
@@ -221,8 +221,8 @@ score_entry["preferred_anime_group"] := 400 if {
   },
   {
     id: "block-mini-encodes",
-    title: "Block mini encodes",
-    description: "Block releases from known mini-encode groups",
+    title: "Penalize mini encodes",
+    description: "Penalize releases from known mini-encode groups",
     category: "Anime",
     appliedFacets: ["anime"],
     regoSource: `import rego.v1
@@ -237,12 +237,12 @@ score_entry["block_mini_encode"] := scryer.block_score() if {
 }`,
   },
 
-  // ── Blocking ───────────────────────────────────────────────────
+  // ── Penalties ───────────────────────────────────────────────────
   {
     id: "block-old-releases",
-    title: "Block releases older than 1 year",
-    description: "Hard-block releases published more than 365 days ago",
-    category: "Blocking",
+    title: "Penalize releases older than 1 year",
+    description: "Strongly penalize releases published more than 365 days ago",
+    category: "Penalties",
     regoSource: `import rego.v1
 
 score_entry["too_old"] := scryer.block_score() if {
@@ -251,9 +251,9 @@ score_entry["too_old"] := scryer.block_score() if {
   },
   {
     id: "block-password-protected",
-    title: "Block password-protected releases",
-    description: "Hard-block releases flagged as password protected",
-    category: "Blocking",
+    title: "Penalize password-protected releases",
+    description: "Strongly penalize releases flagged as password protected",
+    category: "Penalties",
     regoSource: `import rego.v1
 
 score_entry["password_protected"] := scryer.block_score() if {
@@ -262,9 +262,9 @@ score_entry["password_protected"] := scryer.block_score() if {
   },
   {
     id: "require-release-group",
-    title: "Require release group",
-    description: "Block releases that do not expose a normalized release-group tag",
-    category: "Blocking",
+    title: "Prefer a release group",
+    description: "Penalize releases that do not expose a normalized release-group tag",
+    category: "Penalties",
     regoSource: `import rego.v1
 
 score_entry["missing_release_group"] := scryer.block_score() if {
@@ -273,9 +273,9 @@ score_entry["missing_release_group"] := scryer.block_score() if {
   },
   {
     id: "block-obfuscated-retagged",
-    title: "Block obfuscated or retagged releases",
-    description: "Hard-block releases with normalized obfuscation or retagging signals",
-    category: "Blocking",
+    title: "Penalize obfuscated or retagged releases",
+    description: "Strongly penalize releases with normalized obfuscation or retagging signals",
+    category: "Penalties",
     regoSource: `import rego.v1
 
 score_entry["obfuscated_release"] := scryer.block_score() if {
@@ -288,9 +288,9 @@ score_entry["retagged_release"] := scryer.block_score() if {
   },
   {
     id: "block-low-quality-groups",
-    title: "Block known low-quality groups",
-    description: "Hard-block releases from groups known for poor quality",
-    category: "Blocking",
+    title: "Penalize known low-quality groups",
+    description: "Strongly penalize releases from groups known for poor quality",
+    category: "Penalties",
     regoSource: `import rego.v1
 
 blocked_groups := {"yify", "yts"}
@@ -304,9 +304,9 @@ score_entry["blocked_group"] := scryer.block_score() if {
   },
   {
     id: "block-hardcoded-subs",
-    title: "Block hardcoded subtitles",
-    description: "Hard-block releases with hardcoded (burned-in) subtitles",
-    category: "Blocking",
+    title: "Penalize hardcoded subtitles",
+    description: "Strongly penalize releases with hardcoded (burned-in) subtitles",
+    category: "Penalties",
     regoSource: `import rego.v1
 
 score_entry["hardcoded_subs"] := scryer.block_score() if {

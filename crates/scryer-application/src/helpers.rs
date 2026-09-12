@@ -68,6 +68,39 @@ pub fn nice_thread() {
 #[cfg(not(unix))]
 pub fn nice_thread() {}
 
+/// Set priority once on a dedicated background worker, never on a shared runtime thread.
+pub fn background_worker_priority() -> std::io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let result = unsafe {
+            libc::pthread_set_qos_class_self_np(libc::qos_class_t::QOS_CLASS_BACKGROUND, 0)
+        };
+        if result != 0 {
+            return Err(std::io::Error::from_raw_os_error(result));
+        }
+        let mut class = libc::qos_class_t::QOS_CLASS_UNSPECIFIED;
+        let mut relative_priority = 0;
+        let result = unsafe {
+            libc::pthread_get_qos_class_np(libc::pthread_self(), &mut class, &mut relative_priority)
+        };
+        if result != 0 {
+            return Err(std::io::Error::from_raw_os_error(result));
+        }
+        if !matches!(class, libc::qos_class_t::QOS_CLASS_BACKGROUND) {
+            return Err(std::io::Error::other("background QoS did not take effect"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        // On Linux PRIO_PROCESS with id 0 addresses the calling thread.
+        let current = unsafe { libc::getpriority(libc::PRIO_PROCESS, 0) };
+        if unsafe { libc::setpriority(libc::PRIO_PROCESS, 0, current.max(10)) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn normalize_release_attempt_hint(raw: Option<&str>) -> Option<String> {
     let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
     let Ok(mut url) = url::Url::parse(raw) else {
@@ -282,6 +315,8 @@ pub enum HashDomain {
     DeletePreview,
     /// Rename-plan content hash.
     RenamePlan,
+    /// Location-operation plan fingerprint (FR-081).
+    LocationPlan,
     /// Indexer credential fingerprint inside the search identity.
     IndexerSecret,
     /// Search-diagnostics query signature.
@@ -290,6 +325,8 @@ pub enum HashDomain {
     IndexerSearchIdentity,
     /// Interactive-search candidate identity within one session.
     CandidateSessionIdentity,
+    /// Serialized request-rule input document (spec 0003 FR-016).
+    RequestRuleInput,
 }
 
 impl HashDomain {
@@ -307,10 +344,12 @@ impl HashDomain {
             Self::AuthorizationFingerprint => "scryer.auth.fingerprint.v1",
             Self::DeletePreview => "scryer.library.delete-preview.v1",
             Self::RenamePlan => "scryer.library.rename-plan.v1",
+            Self::LocationPlan => "scryer.location.plan.v1",
             Self::IndexerSecret => "scryer.indexer.secret.v1",
             Self::IndexerQuerySignature => "scryer.indexer.query-signature.v1",
             Self::IndexerSearchIdentity => "scryer.indexer.search-identity.v1",
             Self::CandidateSessionIdentity => "scryer.indexer.candidate-session.v1",
+            Self::RequestRuleInput => "scryer.request-rule.input.v1",
         }
     }
 }
@@ -486,6 +525,78 @@ fn normalize_tag(raw: String) -> String {
     raw.trim().to_lowercase()
 }
 
+/// Namespace inside `Title::tags` reserved for structured settings
+/// (quality profile, monitor type, anime metadata, ...). User tags may never
+/// enter it, and user-tag writes may never disturb what is already there.
+pub const RESERVED_TITLE_TAG_PREFIX: &str = "scryer:";
+
+/// Longest normalized user label. Long enough for a real phrase, short enough
+/// that a chip renders and a Rego comparison stays readable.
+pub const MAX_USER_TITLE_TAG_LEN: usize = 64;
+
+/// Ceiling on user tags carried by one title. Reserved `scryer:` entries do not
+/// count against it — they are settings, not membership.
+pub const MAX_USER_TAGS_PER_TITLE: usize = 50;
+
+/// Whether `tag` is a reserved structured settings entry rather than a user tag.
+pub fn is_reserved_title_tag(tag: &str) -> bool {
+    tag.starts_with(RESERVED_TITLE_TAG_PREFIX)
+}
+
+/// Canonical form of a user-supplied tag label.
+///
+/// Trims, lowercases, and collapses every run of internal whitespace to one
+/// space, so `"  Needs   Review "` and `"needs review"` are the same tag. Rego
+/// compares exactly, so lowercasing here is what makes
+/// `"keep" in input.facts.tags` reliable for rule authors.
+///
+/// Rejects, with a plain-English message naming the problem: an empty label,
+/// control characters, anything longer than [`MAX_USER_TITLE_TAG_LEN`], and the
+/// reserved `scryer:` namespace.
+pub fn normalize_user_title_tag(raw: &str) -> Result<String, String> {
+    if raw.chars().any(|character| {
+        character.is_control() && character != '\t' && character != '\n' && character != '\r'
+    }) {
+        return Err("a tag cannot contain control characters".to_string());
+    }
+
+    let normalized = raw
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+
+    if normalized.is_empty() {
+        return Err("a tag cannot be empty".to_string());
+    }
+    if is_reserved_title_tag(&normalized) {
+        return Err(format!(
+            "'{normalized}' uses the reserved '{RESERVED_TITLE_TAG_PREFIX}' prefix, which is kept for built-in title settings"
+        ));
+    }
+    if normalized.chars().count() > MAX_USER_TITLE_TAG_LEN {
+        return Err(format!(
+            "'{normalized}' is longer than the {MAX_USER_TITLE_TAG_LEN} character limit for a tag"
+        ));
+    }
+
+    Ok(normalized)
+}
+
+/// Normalize a whole list, dropping duplicates and preserving first-seen order.
+/// The first rejection wins, so the caller reports one clear problem.
+pub fn normalize_user_title_tags(raw: &[String]) -> Result<Vec<String>, String> {
+    let mut seen = HashSet::new();
+    let mut out = Vec::with_capacity(raw.len());
+    for value in raw {
+        let normalized = normalize_user_title_tag(value)?;
+        if seen.insert(normalized.clone()) {
+            out.push(normalized);
+        }
+    }
+    Ok(out)
+}
+
 fn normalize_show_text(raw: String) -> Option<String> {
     let value = raw.trim().to_string();
     if value.is_empty() { None } else { Some(value) }
@@ -558,6 +669,71 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn user_title_tag_normalization_folds_case_and_whitespace() {
+        assert_eq!(
+            normalize_user_title_tag("  Needs   Review \t").expect("label should normalize"),
+            "needs review"
+        );
+        assert_eq!(
+            normalize_user_title_tag("KEEP").expect("label should normalize"),
+            "keep"
+        );
+        // Two spellings of the same intent collapse onto one registry row.
+        assert_eq!(
+            normalize_user_title_tag("Needs\nReview").expect("label should normalize"),
+            normalize_user_title_tag("needs review").expect("label should normalize")
+        );
+    }
+
+    #[test]
+    fn user_title_tag_normalization_rejects_the_reserved_namespace() {
+        let error = normalize_user_title_tag("scryer:quality-profile:1080p")
+            .expect_err("the reserved namespace must be refused");
+        assert!(error.contains("scryer:"), "{error}");
+
+        // Case folding happens before the check, so a shouted prefix cannot
+        // sneak a structured settings entry in through the user-tag door.
+        assert!(normalize_user_title_tag("SCRYER:monitor-type:all").is_err());
+        assert!(is_reserved_title_tag("scryer:monitor-type:all"));
+        assert!(!is_reserved_title_tag("needs review"));
+    }
+
+    #[test]
+    fn user_title_tag_normalization_rejects_empty_control_and_overlong_labels() {
+        assert!(normalize_user_title_tag("   ").is_err());
+        assert!(normalize_user_title_tag("bad\u{0007}tag").is_err());
+
+        let longest = "a".repeat(MAX_USER_TITLE_TAG_LEN);
+        assert_eq!(
+            normalize_user_title_tag(&longest).expect("the boundary length is allowed"),
+            longest
+        );
+        let error = normalize_user_title_tag(&"a".repeat(MAX_USER_TITLE_TAG_LEN + 1))
+            .expect_err("one character past the limit must be refused");
+        assert!(
+            error.contains(&MAX_USER_TITLE_TAG_LEN.to_string()),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn user_title_tag_list_normalization_dedupes_and_reports_the_first_problem() {
+        assert_eq!(
+            normalize_user_title_tags(&[
+                "Keep".to_string(),
+                "keep".to_string(),
+                " Needs  Review ".to_string(),
+            ])
+            .expect("labels should normalize"),
+            vec!["keep".to_string(), "needs review".to_string()]
+        );
+        assert!(
+            normalize_user_title_tags(&["keep".to_string(), "scryer:monitor-type:all".to_string()])
+                .is_err()
+        );
+    }
 
     #[test]
     fn release_selection_signature_is_credential_free_and_versioned() {

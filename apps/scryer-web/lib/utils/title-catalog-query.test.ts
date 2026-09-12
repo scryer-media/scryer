@@ -50,6 +50,7 @@ test("title catalog variables include normalized advanced filters", () => {
       rootFolderIds: ["root-2", "root-1"],
       genreTagKeys: ["canonical:genre:beta", "canonical:genre:alpha"],
       themeTagKeys: ["canonical:theme:sample"],
+      userTagLabels: ["Needs  Review", "keep"],
       minimumYear: 2000,
       maximumYear: 2020,
       minimumRating: 7.5,
@@ -65,10 +66,84 @@ test("title catalog variables include normalized advanced filters", () => {
     rootFolderIds: ["root-1", "root-2"],
     genreTagKeys: ["canonical:genre:alpha", "canonical:genre:beta"],
     themeTagKeys: ["canonical:theme:sample"],
+    tags: ["keep", "needs review"],
     minimumYear: 2000,
     maximumYear: 2020,
     minimumRating: 7.5,
   });
+});
+
+test("a user-tag filter alone is enough to send a filter input", () => {
+  const variables = buildTitleCatalogQueryVariables({
+    facet: "series",
+    libraryIds: [],
+    query: "",
+    filters: EMPTY_TITLE_QUICK_FILTERS,
+    advancedFilters: {
+      ...EMPTY_TITLE_ADVANCED_FILTERS,
+      userTagLabels: ["keep"],
+    },
+    sort: { key: "name", direction: "asc" },
+    limit: 72,
+    offset: 0,
+  });
+
+  assert.deepEqual(variables.filter, {
+    monitored: null,
+    contentStatuses: [],
+    tags: ["keep"],
+  });
+});
+
+test("user-tag filters round-trip through the query key and drop reserved entries", () => {
+  const base = {
+    facet: "movie",
+    query: "",
+    libraryIds: [],
+    filters: EMPTY_TITLE_QUICK_FILTERS,
+    sort: { key: "name", direction: "asc" },
+  };
+
+  const unfilteredKey = titleCatalogQueryKey({
+    ...base,
+    advancedFilters: EMPTY_TITLE_ADVANCED_FILTERS,
+  });
+  const taggedKey = titleCatalogQueryKey({
+    ...base,
+    advancedFilters: {
+      ...EMPTY_TITLE_ADVANCED_FILTERS,
+      userTagLabels: ["keep"],
+    },
+  });
+  // Selection order and spelling are not part of the filter's identity, but
+  // which labels were picked is.
+  const reorderedKey = titleCatalogQueryKey({
+    ...base,
+    advancedFilters: {
+      ...EMPTY_TITLE_ADVANCED_FILTERS,
+      userTagLabels: ["archive", "KEEP"],
+    },
+  });
+  const sameSetKey = titleCatalogQueryKey({
+    ...base,
+    advancedFilters: {
+      ...EMPTY_TITLE_ADVANCED_FILTERS,
+      userTagLabels: ["keep", "archive"],
+    },
+  });
+  // A reserved entry can never reach the wire, so it cannot change the key.
+  const reservedKey = titleCatalogQueryKey({
+    ...base,
+    advancedFilters: {
+      ...EMPTY_TITLE_ADVANCED_FILTERS,
+      userTagLabels: ["scryer:quality-profile:hd"],
+    },
+  });
+
+  assert.notEqual(unfilteredKey, taggedKey);
+  assert.notEqual(taggedKey, reorderedKey);
+  assert.equal(reorderedKey, sameSetKey);
+  assert.equal(reservedKey, unfilteredKey);
 });
 
 test("title catalog query key changes when advanced filters change", () => {

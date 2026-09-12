@@ -17,7 +17,9 @@ function resolveWsUrl(): string {
 }
 
 export const wsClient = createClient({
-  url: resolveWsUrl(),
+  // Resolved on each connection attempt, not at import: modules that import
+  // the client must still load where `window` does not exist.
+  url: resolveWsUrl,
   connectionParams: async () => {
     const token = getAuthToken();
     if (token) {

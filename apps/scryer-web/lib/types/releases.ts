@@ -1,3 +1,5 @@
+import type { ScoringEntryKind } from "@/lib/utils/release-decision-explanation";
+
 export type DownloadSourceKind = "NZB_FILE" | "NZB_URL" | "TORRENT_FILE" | "MAGNET_URI";
 
 export type ReleaseQueueScope =
@@ -10,6 +12,8 @@ export type ReleaseQueueScope =
 
 export type Release = {
   source: string | null;
+  /** Indexer configuration that returned the release; null when the indexer is unknown. */
+  indexerId?: string | null;
   title: string;
   link: string | null;
   downloadUrl: string | null;
@@ -20,6 +24,12 @@ export type Release = {
   publishedAt: string | null;
   thumbsUp?: number | null;
   thumbsDown?: number | null;
+  /** Grab count the indexer reports; usenet's counterpart to seeders/peers. */
+  grabs?: number | null;
+  /** Torrent swarm counts; null for usenet results. Selected by the search documents. */
+  seeders?: number | null;
+  peers?: number | null;
+  freeleech?: boolean | null;
   parsedRelease?: {
     rawTitle: string;
     normalizedTitle: string;
@@ -44,7 +54,7 @@ export type Release = {
     blockCodes: string[];
     releaseScore: number;
     preferenceScore: number;
-    scoringLog: { code: string; delta: number; source: string; ruleSetName?: string | null }[];
+    scoringLog: { code: string; delta: number; kind?: ScoringEntryKind; source: string; ruleSetName?: string | null }[];
   } | null;
   autoEligible?: boolean | null;
   autoDecisionCode?: string | null;

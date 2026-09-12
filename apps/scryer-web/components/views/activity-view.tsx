@@ -311,7 +311,13 @@ function ActivityTableLoadingMask({ label }: { label: string }) {
   );
 }
 
-export function ActivityView({ state }: { state: ActivityViewState }) {
+export function ActivityView({
+  state,
+  operationPanel,
+}: {
+  state: ActivityViewState;
+  operationPanel?: import("react").ReactNode;
+}) {
   const t = useTranslate();
   const isMobile = useIsMobile();
   const {
@@ -1338,6 +1344,7 @@ export function ActivityView({ state }: { state: ActivityViewState }) {
               </div>
             </div>
           </div>
+          {operationPanel && <div className="mb-6">{operationPanel}</div>}
         <Card
           id={selectorId("activity-view", activeTab)}
           className="min-h-0 flex-1 rounded-none border-0 bg-transparent shadow-none"

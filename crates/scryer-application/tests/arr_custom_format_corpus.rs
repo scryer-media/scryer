@@ -1,4 +1,6 @@
-use scryer_rules::{rewrite_package_declaration, validation::validate_user_rule};
+use scryer_rules::{
+    rewrite_package_declaration, runtime::RuntimeLimits, validation::validate_user_rule_with_limits,
+};
 use serde::Deserialize;
 use std::collections::HashSet;
 
@@ -18,6 +20,15 @@ struct TranslatedFormat {
 
 #[test]
 fn translated_arr_corpus_passes_regorus_validation() {
+    // The release-scoring budget is one second per evaluation in every build.
+    // Several translated formats blow through that in an unoptimised test
+    // binary (positional matchers re-scan the title per character), so the
+    // corpus dry run widens the budget: this test guards translation
+    // correctness, not interpreter speed.
+    let limits = RuntimeLimits {
+        max_execution_time: std::time::Duration::from_secs(60),
+        ..RuntimeLimits::release_defaults()
+    };
     let corpus: Corpus =
         serde_json::from_str(include_str!("fixtures/arr_custom_formats_rego.json"))
             .expect("checked-in translator output must be valid JSON");
@@ -54,7 +65,7 @@ fn translated_arr_corpus_passes_regorus_validation() {
         // policy and its runtime wrapper with the registered Scryer builtins.
         let rule_id = "arr_import_corpus";
         let rewritten = rewrite_package_declaration(&format.rego_source, rule_id);
-        match validate_user_rule(&rewritten, rule_id) {
+        match validate_user_rule_with_limits(&rewritten, rule_id, &limits) {
             Ok(result) if result.valid => {
                 if format.status == "translated" {
                     accepted[source] += 1;

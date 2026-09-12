@@ -6,7 +6,7 @@ export type IndexerRecord = {
   name: string;
   providerType: string;
   baseUrl: string;
-  indexerProxyConfigId: string | null;
+  proxyConfigId: string | null;
   downloadClientId: string | null;
   /** Seeding profile assigned to this indexer. null inherits the routing/global default. */
   seedingProfileId: string | null;
@@ -54,25 +54,10 @@ export type IndexerCapsCategory = {
   label: string | null;
 };
 
-export type IndexerProxyRecord = {
-  id: string;
-  name: string;
-  providerType: string;
-  protocol: string;
-  baseUrl: string;
-  requestTimeoutSeconds: number;
-  isEnabled: boolean;
-  lastHealthStatus: string | null;
-  lastErrorMessage: string | null;
-  lastErrorAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
-
 export type IndexerDraft = {
   name: string;
   providerType: string;
-  indexerProxyConfigId: string | null;
+  proxyConfigId: string | null;
   downloadClientId: string | null;
   seedingProfileId: string | null;
   storedSecretKeys: string[];
@@ -80,14 +65,6 @@ export type IndexerDraft = {
   enableInteractiveSearch: boolean;
   enableAutoSearch: boolean;
   configValues: Record<string, string>;
-};
-
-export type IndexerProxyDraft = {
-  providerType: "byparr" | "trawl";
-  name: string;
-  baseUrl: string;
-  requestTimeoutSeconds: number;
-  isEnabled: boolean;
 };
 
 export type ConfigFieldOption = {
@@ -102,9 +79,22 @@ export type ConfigFieldTypeValue =
   | "MULTILINE"
   | "BOOL"
   | "SELECT"
+  | "FILTERED_SELECT"
   | "NUMBER"
   | "PATH"
   | "TAG";
+
+export type ConditionOpValue = "EQ" | "NE" | "IN" | "NOT_IN" | "NON_EMPTY";
+
+/// A predicate over another field's current value.
+///
+/// `EQ`/`NE` compare against the first entry of `values`, `IN`/`NOT_IN` against
+/// the whole set, and `NON_EMPTY` ignores it.
+export type FieldCondition = {
+  key: string;
+  op: ConditionOpValue;
+  values: string[];
+};
 
 export type ConfigFieldValueSourceValue = "USER" | "HOST_BINDING";
 export type ConfigFieldRoleValue = "CONNECTION_URL";
@@ -120,6 +110,13 @@ export type ConfigFieldDef = {
   hostBinding: string | null;
   options: ConfigFieldOption[];
   helpText: string | null;
+  /// Shown only while this holds; null means always shown.
+  visibleWhen: FieldCondition | null;
+  /// Required while this holds, on top of `required`. A field hidden by
+  /// `visibleWhen` is never required, whatever this says.
+  requiredWhen: FieldCondition | null;
+  /// Belongs behind the form's advanced disclosure rather than shown up front.
+  advanced: boolean;
 };
 
 export type ProviderTypeInfo = {
@@ -131,11 +128,16 @@ export type ProviderTypeInfo = {
   recommendedFacets: Array<"MOVIE" | "SERIES" | "ANIME">;
 };
 
+/// Which of a provider's declared fields the form offers.
+///
+/// Host-bound values are supplied by the host, so they are configuration the
+/// operator never sees. Everything else is the plugin's to decide — this used
+/// to take a provider type and filter on it, and nothing should reintroduce
+/// that: a form that knows provider names is a form that drifts from them.
 export function visibleIndexerConfigFields(
-  _providerType: string,
   configFields: ConfigFieldDef[],
 ): ConfigFieldDef[] {
-  return configFields;
+  return configFields.filter((field) => field.valueSource !== "HOST_BINDING");
 }
 
 export type IndexerCategoryRoutingSettings = {

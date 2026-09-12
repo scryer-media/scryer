@@ -33,7 +33,7 @@ pub use notification::{
     PluginNotificationTargetResult, coalesce_media_updates, rich_embed_from_request,
     to_script_environment, to_webhook_json,
 };
-pub const SDK_VERSION: &str = "3.10.0";
+pub const SDK_VERSION: &str = "3.11.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -650,6 +650,7 @@ pub enum ArchivePluginFormat {
     Zip,
     #[serde(rename = "7z")]
     SevenZip,
+    Xz,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -944,6 +945,10 @@ pub enum ConfigFieldType {
     Multiline,
     Bool,
     Select,
+    /// Enumerated selection rendered with a filter box. Same `options` payload
+    /// as `Select`; declare it when the list is long enough that scanning it
+    /// unaided is the wrong ask.
+    FilteredSelect,
     Number,
     Path,
     Tag,
@@ -977,7 +982,36 @@ impl PluginHostBindingId {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+/// How a [`FieldCondition`] compares another field's value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ConditionOp {
+    #[default]
+    Eq,
+    Ne,
+    In,
+    NotIn,
+    /// Holds when the referenced field has a non-blank value. Ignores `values`.
+    NonEmpty,
+}
+
+/// A predicate over another configuration field's current value.
+///
+/// The host evaluates these, so the operator set is closed rather than an
+/// expression language: a plugin declares what it depends on, it does not run
+/// logic in the form.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
+pub struct FieldCondition {
+    /// Key of the field whose value is tested.
+    pub key: String,
+    pub op: ConditionOp,
+    /// Values compared against. `eq`/`ne` use the first, `in`/`not_in` the
+    /// whole set, and `non_empty` ignores it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
 pub struct ConfigFieldDef {
     pub key: String,
     pub label: String,
@@ -996,6 +1030,16 @@ pub struct ConfigFieldDef {
     pub options: Vec<ConfigFieldOption>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub help_text: Option<String>,
+    /// Shown only while this holds. `None` means always shown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visible_when: Option<FieldCondition>,
+    /// Required while this holds, in addition to `required`. A field hidden by
+    /// `visible_when` is never required, whatever this says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required_when: Option<FieldCondition>,
+    /// Placed behind the form's advanced disclosure rather than shown up front.
+    #[serde(default)]
+    pub advanced: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, JsonSchema, PartialEq, Eq)]
@@ -1070,9 +1114,15 @@ pub enum PluginErrorDetails {
 pub struct PluginError {
     pub code: PluginErrorCode,
     pub public_message: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    // No `skip_serializing_if` on the optional fields: this type also crosses
+    // the host-call transport as postcard, which is not self-describing —
+    // skipping a `None` writes fewer fields than the derived deserializer
+    // reads, so a natural in-band `Unsupported` answer would be undecodable by
+    // the guest. `default` keeps old JSON documents (which omitted the fields)
+    // deserializing.
+    #[serde(default)]
     pub debug_message: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub retry_after_seconds: Option<i64>,
     #[serde(default)]
     pub details: Option<PluginErrorDetails>,
@@ -1092,6 +1142,11 @@ pub struct ArchivePluginProcessRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
+// PAR2 recovery is deliberately absent here. Verifying and repairing a PAR2 set
+// is plugin-internal and data-driven: an extractor scans the source directory it
+// is given, notices the `.par2` files, and repairs before extracting as part of
+// processing. The host neither orchestrates nor observes it, so it is not an
+// operation on this enum.
 pub enum ArchivePluginOperation {
     Inspect {
         source_dir: String,
@@ -2914,6 +2969,14 @@ mod tests {
     }
 
     #[test]
+    fn xz_archive_format_uses_xz_wire_value() {
+        let json = serde_json::to_string(&ArchivePluginFormat::Xz).unwrap();
+        assert_eq!(json, "\"xz\"");
+        let parsed: ArchivePluginFormat = serde_json::from_str("\"xz\"").unwrap();
+        assert_eq!(parsed, ArchivePluginFormat::Xz);
+    }
+
+    #[test]
     fn effective_host_sdk_constraint_widens_legacy_minor_line() {
         assert_eq!(
             effective_host_sdk_constraint(Some("1.5.0"), ">=1.5.0, <1.6.0"),
@@ -3376,6 +3439,32 @@ mod tests {
                 .expect("missing torrent capability");
             assert!(!torrent.supported_sources.is_empty());
         }
+    }
+
+    /// `PluginError` crosses the component host-call transport as postcard,
+    /// which is positional: every field the deserializer reads must have been
+    /// written. A `skip_serializing_if` on the optional fields would make the
+    /// natural in-band `Unsupported` answer (both options `None`) undecodable
+    /// by the guest — this pins the round trip so that attribute can never
+    /// quietly return.
+    #[test]
+    fn plugin_error_round_trips_through_postcard_with_no_optional_fields() {
+        let error = PluginError {
+            code: PluginErrorCode::Unsupported,
+            public_message: "x".to_string(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        };
+
+        let encoded = postcard::to_stdvec(&error).unwrap();
+        let decoded: PluginError = postcard::from_bytes(&encoded).unwrap();
+
+        assert!(matches!(decoded.code, PluginErrorCode::Unsupported));
+        assert_eq!(decoded.public_message, "x");
+        assert_eq!(decoded.debug_message, None);
+        assert_eq!(decoded.retry_after_seconds, None);
+        assert!(decoded.details.is_none());
     }
 
     #[test]
@@ -4239,5 +4328,92 @@ mod tests {
             manual_interaction: None,
             media_request: None,
         }
+    }
+
+    /// A descriptor written before the condition vocabulary existed must still
+    /// load, and must mean "always shown, never additionally required, not
+    /// advanced" — otherwise every shipped plugin changes shape on upgrade.
+    #[test]
+    fn config_field_without_condition_keys_keeps_prior_meaning() {
+        let json = r#"{
+            "key": "api_key",
+            "label": "API Key",
+            "field_type": "password",
+            "required": false
+        }"#;
+        let field: ConfigFieldDef = serde_json::from_str(json).expect("legacy field should load");
+        assert_eq!(field.key, "api_key");
+        assert_eq!(field.field_type, ConfigFieldType::Password);
+        assert_eq!(field.visible_when, None);
+        assert_eq!(field.required_when, None);
+        assert!(!field.advanced);
+    }
+
+    /// The reverse direction: a plugin built against a newer SDK must not brick
+    /// an older host. Nothing here sets `deny_unknown_fields`, and this test is
+    /// what keeps it that way.
+    #[test]
+    fn config_field_ignores_keys_a_newer_sdk_might_add() {
+        let json = r#"{
+            "key": "api_key",
+            "label": "API Key",
+            "field_type": "password",
+            "some_future_key": {"nested": true}
+        }"#;
+        let field: ConfigFieldDef =
+            serde_json::from_str(json).expect("unknown keys should be ignored");
+        assert_eq!(field.key, "api_key");
+    }
+
+    #[test]
+    fn config_field_round_trips_conditions_and_advanced() {
+        let field = ConfigFieldDef {
+            key: "definition_yaml".to_string(),
+            label: "Cardigann Definition".to_string(),
+            field_type: ConfigFieldType::Multiline,
+            visible_when: Some(FieldCondition {
+                key: "definition".to_string(),
+                op: ConditionOp::Eq,
+                values: vec!["custom".to_string()],
+            }),
+            required_when: Some(FieldCondition {
+                key: "definition".to_string(),
+                op: ConditionOp::In,
+                values: vec!["custom".to_string(), "byo".to_string()],
+            }),
+            advanced: true,
+            ..Default::default()
+        };
+        let encoded = serde_json::to_string(&field).expect("field should encode");
+        let decoded: ConfigFieldDef = serde_json::from_str(&encoded).expect("field should decode");
+        assert_eq!(decoded, field);
+    }
+
+    /// `non_empty` carries no values, and `values` is skipped when empty. The
+    /// operator has to survive that on its own rather than being inferred from
+    /// the payload.
+    #[test]
+    fn non_empty_condition_round_trips_without_values() {
+        let condition = FieldCondition {
+            key: "cookie".to_string(),
+            op: ConditionOp::NonEmpty,
+            values: vec![],
+        };
+        let encoded = serde_json::to_string(&condition).expect("condition should encode");
+        assert!(
+            !encoded.contains("values"),
+            "empty values should be skipped"
+        );
+        let decoded: FieldCondition =
+            serde_json::from_str(&encoded).expect("condition should decode");
+        assert_eq!(decoded, condition);
+    }
+
+    #[test]
+    fn filtered_select_is_a_distinct_field_type() {
+        let decoded: ConfigFieldType =
+            serde_json::from_str("\"filtered_select\"").expect("variant should decode");
+        assert_eq!(decoded, ConfigFieldType::FilteredSelect);
+        assert_ne!(ConfigFieldType::FilteredSelect, ConfigFieldType::Select);
     }
 }

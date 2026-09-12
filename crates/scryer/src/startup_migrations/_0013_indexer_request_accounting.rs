@@ -66,10 +66,10 @@ pub async fn migrate(datastore: &StoreDatastore) -> Result<(), String> {
             SqlRuntime::execute(
                 SqlExec::Tx(tx),
                 "UPDATE indexers
-                    SET indexer_proxy_config_id = NULL
-                  WHERE indexer_proxy_config_id IN (
+                    SET proxy_config_id = NULL
+                  WHERE proxy_config_id IN (
                       SELECT id
-                        FROM indexer_proxy_configs
+                        FROM proxy_configs
                        WHERE LOWER(TRIM(provider_type)) IN ('byparr', 'trawl')
                   )
                     AND (
@@ -208,13 +208,13 @@ mod tests {
         ] {
             let actual = SqlRuntime::fetch_optional(
                 datastore.read_exec(),
-                "SELECT indexer_proxy_config_id FROM indexers WHERE id = {}",
+                "SELECT proxy_config_id FROM indexers WHERE id = {}",
                 &[SqlArg::Text(id.to_string())],
             )
             .await
             .expect("read indexer")
             .expect("indexer")
-            .opt_text("indexer_proxy_config_id")
+            .opt_text("proxy_config_id")
             .expect("proxy id");
             assert_eq!(actual.as_deref(), expected);
         }
@@ -310,7 +310,7 @@ mod tests {
             SqlRuntime::execute_write(
                 datastore,
                 "seed_indexer_proxy_config",
-                "INSERT INTO indexer_proxy_configs
+                "INSERT INTO proxy_configs
                     (id, name, provider_type, protocol, base_url, created_at, updated_at)
                  VALUES ({}, {}, {}, {}, {}, {}, {})",
                 vec![
@@ -345,7 +345,7 @@ mod tests {
                 "seed_indexer",
                 "INSERT INTO indexers
                     (id, name, provider_type, base_url, managed_parent_config_id,
-                     indexer_proxy_config_id, created_at, updated_at)
+                     proxy_config_id, created_at, updated_at)
                  VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
                 vec![
                     SqlArg::Text(id.to_string()),
@@ -442,14 +442,14 @@ mod tests {
                 grab_current bigint, grab_max bigint, queries_today bigint NOT NULL DEFAULT 0,
                 last_query_at timestamptz, last_reset_at timestamptz NOT NULL,
                 updated_at timestamptz NOT NULL) ON COMMIT PRESERVE ROWS",
-            "CREATE TEMP TABLE indexer_proxy_configs (
+            "CREATE TEMP TABLE proxy_configs (
                 id text PRIMARY KEY, name text NOT NULL, provider_type text NOT NULL,
                 protocol text NOT NULL, base_url text NOT NULL, created_at timestamptz NOT NULL,
                 updated_at timestamptz NOT NULL) ON COMMIT PRESERVE ROWS",
             "CREATE TEMP TABLE indexers (
                 id text PRIMARY KEY, name text NOT NULL, provider_type text NOT NULL,
                 base_url text NOT NULL, managed_parent_config_id text,
-                indexer_proxy_config_id text, created_at timestamptz NOT NULL,
+                proxy_config_id text, created_at timestamptz NOT NULL,
                 updated_at timestamptz NOT NULL) ON COMMIT PRESERVE ROWS",
         ] {
             sqlx::query(statement)

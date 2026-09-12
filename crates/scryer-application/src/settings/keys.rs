@@ -40,6 +40,36 @@ pub const USE_SEASON_FOLDERS_KEY: &str = "rename.use_season_folders";
 // Discovery region seam. Read like metadata_language; a future
 // preferences UI only has to write this key (defaults to "US" -> unchanged).
 pub const DISCOVERY_REGION_KEY: &str = "discovery.region";
+// Instance-wide opt in for surfaces that are still being finished. Absent row
+// means disabled, so existing installs keep the unfinished surfaces hidden.
+pub const EXPERIMENTAL_FEATURES_ENABLED_KEY: &str = "ui.experimental_features_enabled";
+pub const API_EXPLORER_ENABLED_KEY: &str = "ui.api_explorer_enabled";
+// Instance-wide opt out for sending the library context to the metadata
+// gateway. Stored in the positive sense; absent row means enabled, so existing
+// installs keep personalized discovery working with no data change.
+pub const DISCOVERY_PERSONALIZED_ENABLED_KEY: &str = "discovery.personalized_enabled";
+// Rail-quality rollback levers. All four are unseeded and read like
+// `discovery.region`: an absent row means the default below, so an install that
+// never touches them gets the new behaviour, and an operator who hits a bad
+// interaction can turn one rule off without a downgrade.
+//
+// Excludes mediums the library owns none of, and caps a rail's share of a
+// medium at twice the library's. Absent row means enabled.
+pub const DISCOVERY_MEDIUM_AFFINITY_GATE_KEY: &str = "discovery.medium_affinity_gate";
+// Requires a confident, corroborated canonical genre before a genre rail claims
+// an item. Absent row means enabled.
+pub const DISCOVERY_GENRE_RAIL_CORROBORATION_KEY: &str = "discovery.genre_rail_corroboration";
+// Requires edge, rating or popularity evidence before an item may fill a
+// personalized rail. Absent row means enabled.
+pub const DISCOVERY_GENRE_RAIL_CREDIBILITY_GATE_KEY: &str = "discovery.genre_rail_credibility_gate";
+// "relevance" (default) orders personalized rails by SMG's blended relevance;
+// "legacy" restores the pre-154 rank_score ordering.
+pub const DISCOVERY_RAIL_ORDER_KEY: &str = "discovery.rail_order";
+pub const DISCOVERY_RAIL_ORDER_LEGACY: &str = "legacy";
+// Instance-wide opt in for asking srrdb.com to recover obfuscated filenames
+// during automatic SABnzbd/NZBGet imports. Absent row means disabled, so no
+// install talks to the third-party service until an administrator opts in.
+pub const SRRDB_FILENAME_RECOVERY_ENABLED_KEY: &str = "imports.srrdb_filename_recovery.enabled";
 pub const HISTORY_KEEP_FOREVER_KEY: &str = "history.keep_forever";
 pub const HISTORY_RETENTION_DAYS_KEY: &str = "history.retention_days";
 pub const IMAGE_CACHE_MAX_SIZE_MB_KEY: &str = "images.cache.max_size_mb";
@@ -67,9 +97,43 @@ pub const LEGACY_TOTP_REQUIRE_CONFIG_STEP_UP_KEY: &str = "auth.totp.require_conf
 pub const LEGACY_TOTP_REQUIRE_PASSWORD_LOGIN_KEY: &str = "auth.totp.require_local_login";
 pub const TOTP_REQUIRE_JELLYFIN_LOGIN_KEY: &str = "auth.totp.require_jellyfin_login";
 pub const TOTP_REQUIRE_EMBY_LOGIN_KEY: &str = "auth.totp.require_emby_login";
+// ── Maintenance instance gates (RFC 137 section 10) ─────────────────────────
+// Five independent instance-wide switches, every one of them off unless a row
+// says otherwise. They are deliberately not one JSON blob: each gate authorizes
+// a different blast radius, and a partially-written blob must never be able to
+// turn a stronger one on. A missing row reads as off, so losing the settings
+// table disarms maintenance rather than arming it.
+/// Lets the scheduled evaluator run at all. Off means no rule is evaluated and
+/// nothing is recorded.
+pub const MAINTENANCE_GATE_EVALUATION_KEY: &str = "maintenance.gate.evaluation";
+/// Lets candidate results reach the API for rules that are not in shadow mode.
+pub const MAINTENANCE_GATE_RESULT_DISPLAY_KEY: &str = "maintenance.gate.result_display";
+/// Reserved for the executor wave: provider collection projection and lifecycle
+/// notifications. Stored now, consumed by nothing in this build.
+pub const MAINTENANCE_GATE_PRESENTATION_EFFECTS_KEY: &str = "maintenance.gate.presentation_effects";
+/// Reserved for the executor wave: low and medium risk actions.
+pub const MAINTENANCE_GATE_REVERSIBLE_EFFECTS_KEY: &str = "maintenance.gate.reversible_effects";
+/// Reserved for the executor wave: high risk actions.
+pub const MAINTENANCE_GATE_DESTRUCTIVE_EFFECTS_KEY: &str = "maintenance.gate.destructive_effects";
+
+// ── Request rule instance gate (spec 0003 FR-013) ───────────────────────────
+/// Lets request rules be evaluated at all. Off means every request is decided
+/// by the library's Auto-Approve permission exactly as it was before rules
+/// existed. A missing row reads as off, so an instance that has never been
+/// configured evaluates nothing.
+///
+/// One key, not five: a request rule votes and has no effects to arm
+/// separately (see `request_rules::gates`).
+pub const REQUEST_RULE_GATE_EVALUATION_KEY: &str = "request_rules.evaluation_enabled";
+
 pub const RECYCLE_BIN_ENABLED_KEY: &str = "recycle_bin.enabled";
 pub const RECYCLE_BIN_PATH_KEY: &str = "recycle_bin.path";
 pub const RECYCLE_BIN_RETENTION_DAYS_KEY: &str = "recycle_bin.retention_days";
+pub const VERIFICATION_DEPTH_KEY: &str = "verification.depth";
+/// Where the full-hash backfill job resumes (FR-047). Internal bookkeeping, not
+/// an operator-facing preference: it holds the media-file id the last run
+/// stopped after, and is cleared when a sweep reaches the end of the queue.
+pub const FULL_HASH_BACKFILL_CURSOR_KEY: &str = "verification.full_hash_backfill.cursor";
 
 pub(crate) fn default_indexer_routing_categories_for_scope(scope_id: &str) -> Vec<String> {
     match scope_id {

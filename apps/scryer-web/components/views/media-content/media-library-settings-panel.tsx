@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
+import { ChangeRootDialog } from "@/components/dialogs/change-root-dialog";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
@@ -33,9 +34,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
 import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
-import { AVAILABLE_LANGUAGES } from "@/lib/i18n";
+import { METADATA_LANGUAGES } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { DownloadClientRoutingPanel } from "@/components/views/media-content/download-client-routing-panel";
@@ -288,6 +290,9 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
   onActiveLibraryNameChange,
 }: MediaLibrarySettingsPanelProps) {
   const t = useTranslate();
+  // Root changes are still being finished, so the row action and its dialog
+  // only exist when the instance has opted in.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const [mode, setMode] = React.useState<"existing" | "new">("existing");
   const [deleteLibraryOpen, setDeleteLibraryOpen] = React.useState(false);
   const [pendingLibrarySelection, setPendingLibrarySelection] = React.useState<
@@ -327,6 +332,10 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
   const [savedSettings, setSavedSettings] = React.useState<LibrarySettingsRecord | null>(null);
   const [browserOpen, setBrowserOpen] = React.useState(false);
   const [editingIndex, setEditingIndex] = React.useState<number | null>(null);
+  // FR-020's single action, opened from one root row. Held by root id rather
+  // than by draft index: the dialog talks to the server about a configured
+  // root, and a draft row that was never saved is not one.
+  const [changeRootId, setChangeRootId] = React.useState<string | null>(null);
   const lastHydratedRoutingKeyRef = React.useRef<string | null>(null);
   const [secondaryNavTarget, setSecondaryNavTarget] =
     React.useState<HTMLElement | null>(null);
@@ -736,6 +745,25 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
     !rootsEqual(draftRoots, savedRoots, localPathStyle) ||
     hasSettingsChanges;
   const shouldBlockNavigation = hasDraftChanges && !saving;
+  // A root change is planned against the *stored* configuration, so it is
+  // offered only while the panel has nothing unsaved to contradict it.
+  const canChangeRoot =
+    experimentalFeaturesEnabled &&
+    mode !== "new" &&
+    !!activeLibrary &&
+    !hasDraftChanges &&
+    !actionBusy;
+  const changeRootTarget = React.useMemo(
+    () => savedRoots.find((candidate) => candidate.id === changeRootId) ?? null,
+    [changeRootId, savedRoots],
+  );
+  const changeRootOtherRoots = React.useMemo(
+    () =>
+      savedRoots.filter(
+        (candidate) => !!candidate.id && candidate.id !== changeRootId,
+      ),
+    [changeRootId, savedRoots],
+  );
   const libraryNavigationBlocker = useBlocker(shouldBlockNavigation);
 
   useBeforeUnload(
@@ -1251,6 +1279,25 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                               {t("settings.rootFolderSetDefault")}
                             </Button>
                           )}
+                          {rf.id && experimentalFeaturesEnabled ? (
+                            <Button
+                              id={selectorId("media-library-root-change", rf.path)}
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 shrink-0 px-2 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                              onClick={() => setChangeRootId(rf.id ?? null)}
+                              disabled={!canChangeRoot}
+                              title={
+                                canChangeRoot
+                                  ? undefined
+                                  : t("rootChange.unavailableWhileUnsaved")
+                              }
+                            >
+                              <HardDrive className="mr-1 h-3.5 w-3.5" />
+                              {t("rootChange.rowAction")}
+                            </Button>
+                          ) : null}
                           <IconButton
                             id={selectorId("media-library-root-edit", rf.path)}
                             label={t("label.edit")}
@@ -1333,7 +1380,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                       <SelectItem value={INHERIT_VALUE}>
                         {t("settings.libraryInheritGlobal")}
                       </SelectItem>
-                      {AVAILABLE_LANGUAGES.map((language) => (
+                      {METADATA_LANGUAGES.map((language) => (
                         <SelectItem key={language.code} value={language.code}>
                           {language.label}
                         </SelectItem>
@@ -2050,6 +2097,27 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
         initialPath={browserInitialPath}
         title={browserTitle}
       />
+      {experimentalFeaturesEnabled && activeLibrary && changeRootTarget?.id ? (
+        <ChangeRootDialog
+          open
+          onOpenChange={(next) => {
+            if (!next) {
+              setChangeRootId(null);
+            }
+          }}
+          libraryId={activeLibrary.id}
+          root={{
+            id: changeRootTarget.id,
+            path: changeRootTarget.path,
+            isDefault: changeRootTarget.isDefault,
+          }}
+          otherRoots={changeRootOtherRoots.map((candidate) => ({
+            id: candidate.id ?? "",
+            path: candidate.path,
+            isDefault: candidate.isDefault,
+          }))}
+        />
+      ) : null}
       <ConfirmDialog
         open={deleteLibraryOpen}
         title={t("settings.libraryDeleteButton")}

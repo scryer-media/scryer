@@ -10,31 +10,49 @@ import {
   Database,
   Download,
   FolderCog,
+  History,
+  Inbox,
+  ListChecks,
   Puzzle,
   Rss,
+  ScanSearch,
   Server,
   Settings2,
   ShieldCheck,
+  ShieldAlert,
   Network,
   SlidersHorizontal,
+  Tag,
   Timer,
   UploadCloud,
   User,
   Users,
+  Wrench,
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
-import type { IndexerSettingsTab, SettingsSection } from "@/components/root/types";
+import type {
+  IndexerSettingsTab,
+  MaintenanceRulesSection,
+  RulesSection,
+  SettingsSection,
+} from "@/components/root/types";
 import type { LocaleCode, LanguageOption } from "@/lib/i18n";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
   buildIndexerSettingsPath,
+  buildRulesPath,
   buildViewPath,
   indexerSettingsTabFromPath,
+  indexerSettingsTabsFor,
+  maintenanceRulesSectionFromPath,
+  rulesSectionFromPath,
+  rulesSectionsFor,
 } from "@/lib/utils/routing";
 import {
   type ProviderCatalogFamily,
@@ -65,6 +83,9 @@ const SettingsUsersContainer = lazy(async () => ({
 const SettingsIndexersContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-indexers-container")).SettingsIndexersContainer,
 }));
+const SettingsIndexerSearchContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-indexer-search-container")).SettingsIndexerSearchContainer,
+}));
 const SettingsMediaServersContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-media-servers-container")).SettingsMediaServersContainer,
 }));
@@ -76,6 +97,9 @@ const SettingsAcquisitionContainer = lazy(async () => ({
 }));
 const SettingsDelayProfilesContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-delay-profiles-container")).SettingsDelayProfilesContainer,
+}));
+const SettingsTitleTagsContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-title-tags-container")).SettingsTitleTagsContainer,
 }));
 const SettingsSeedingProfilesContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-seeding-profiles-container")).SettingsSeedingProfilesContainer,
@@ -89,11 +113,20 @@ const SettingsProfileContainer = lazy(async () => ({
 const SettingsRulesContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-rules-container")).SettingsRulesContainer,
 }));
+const SettingsMaintenanceRulesContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-maintenance-rules-container")).SettingsMaintenanceRulesContainer,
+}));
+const SettingsRequestRulesContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-request-rules-container")).SettingsRequestRulesContainer,
+}));
 const SettingsPluginsContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-plugins-container")).SettingsPluginsContainer,
 }));
 const SettingsNotificationsContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-notifications-container")).SettingsNotificationsContainer,
+}));
+const SettingsProxiesContainer = lazy(async () => ({
+  default: (await import("@/components/containers/settings/settings-proxies-container")).SettingsProxiesContainer,
 }));
 const SettingsPostProcessingContainer = lazy(async () => ({
   default: (await import("@/components/containers/settings/settings-post-processing-container")).SettingsPostProcessingContainer,
@@ -144,45 +177,47 @@ const SUBTITLES_FILTERED_PLUGIN_LAYOUT: DockedReferenceLayout = {
   railClass: "sticky top-[26px] z-auto min-w-[320px] max-w-[560px] flex-[1_1_560px]",
 };
 
-const INDEXER_SETTINGS_TABS: {
-  tab: IndexerSettingsTab;
-  labelKey: string;
-  icon: LucideIcon;
-}[] = [
-  { tab: "indexers", labelKey: "settings.indexers", icon: Database },
-  { tab: "proxies", labelKey: "settings.indexerProxies", icon: Network },
-  { tab: "seedingProfiles", labelKey: "settings.seedingProfiles", icon: UploadCloud },
-];
+const INDEXER_SETTINGS_TAB_ITEMS: Record<
+  IndexerSettingsTab,
+  { labelKey: string; icon: LucideIcon }
+> = {
+  indexers: { labelKey: "settings.indexers", icon: Database },
+  search: { labelKey: "settings.indexerSearch", icon: ScanSearch },
+  seedingProfiles: { labelKey: "settings.seedingProfiles", icon: UploadCloud },
+};
 
-/// Pane switcher for the Indexers page. Indexers, their proxies, and the
-/// seeding profiles they apply are three views of the same subject, so they
-/// share a page instead of scattering across the settings nav. Same shape as
-/// the Wanted view's section rail.
+/// Pane switcher for the Indexers page. An indexer and the seeding profile it
+/// applies are two views of the same subject, so they share a page instead of
+/// scattering across the settings nav. Same shape as the Wanted view's section
+/// rail.
 function IndexerSettingsSubnav({
   activeTab,
+  tabs,
   t,
 }: {
   activeTab: IndexerSettingsTab;
+  tabs: IndexerSettingsTab[];
   t: ReturnType<typeof useTranslate>;
 }) {
   return (
-    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 md:h-full md:w-[218px] md:overflow-y-auto md:border-b-0 md:border-r md:p-[22px_14px]">
+    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 2xl:h-full 2xl:w-[218px] 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r 2xl:p-[22px_14px]">
       <nav
         id="settings-indexers-subnav"
-        className="flex gap-2 overflow-x-auto pb-1 md:flex-col md:overflow-visible md:pb-0"
+        className="flex gap-2 overflow-x-auto pb-1 2xl:flex-col 2xl:overflow-visible 2xl:pb-0"
         aria-label={t("settings.indexers")}
       >
-        {INDEXER_SETTINGS_TABS.map((item) => {
+        {tabs.map((tab) => {
+          const item = INDEXER_SETTINGS_TAB_ITEMS[tab];
           const Icon = item.icon;
-          const active = activeTab === item.tab;
+          const active = activeTab === tab;
           return (
             <Link
-              key={item.tab}
-              id={selectorId("settings-indexers-subnav", item.tab)}
-              to={buildIndexerSettingsPath(item.tab)}
+              key={tab}
+              id={selectorId("settings-indexers-subnav", tab)}
+              to={buildIndexerSettingsPath(tab)}
               aria-current={active ? "page" : undefined}
               className={cn(
-                "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] md:w-full",
+                "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
                 active &&
                   "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
               )}
@@ -202,6 +237,123 @@ function IndexerSettingsSubnav({
   );
 }
 
+const RULES_SECTION_ITEMS: Record<
+  RulesSection,
+  { labelKey: string; icon: LucideIcon }
+> = {
+  scoring: { labelKey: "settings.rulesScoring", icon: SlidersHorizontal },
+  maintenance: { labelKey: "settings.maintenanceRules", icon: Wrench },
+  request: { labelKey: "settings.requestRules", icon: Inbox },
+};
+
+const MAINTENANCE_RULES_SECTIONS: {
+  section: MaintenanceRulesSection;
+  labelKey: string;
+  icon: LucideIcon;
+}[] = [
+  { section: "rules", labelKey: "settings.maintenanceNavRules", icon: Wrench },
+  {
+    section: "candidates",
+    labelKey: "settings.maintenanceCandidatesTitle",
+    icon: ListChecks,
+  },
+  { section: "history", labelKey: "settings.maintenanceNavHistory", icon: History },
+  { section: "gates", labelKey: "settings.maintenanceNavGates", icon: ShieldAlert },
+];
+
+/// Kind switcher for the Rules page. Scoring and maintenance rules are two
+/// kinds of the same subject, so they share a page instead of taking a sidebar
+/// entry each. Same shape as the Wanted view's section rail.
+function RulesSubnav({
+  activeSection,
+  maintenanceRulesSection,
+  sections,
+  t,
+}: {
+  activeSection: RulesSection;
+  maintenanceRulesSection: MaintenanceRulesSection;
+  sections: RulesSection[];
+  t: ReturnType<typeof useTranslate>;
+}) {
+  // With only one kind on offer there is nothing to switch between, so the rail
+  // is a column of dead space rather than navigation.
+  if (sections.length < 2) {
+    return null;
+  }
+  return (
+    <aside className="w-full shrink-0 border-b border-[var(--scry-border3)] bg-[var(--scry-surfF)] p-3 2xl:h-full 2xl:w-[218px] 2xl:overflow-y-auto 2xl:border-b-0 2xl:border-r 2xl:p-[22px_14px]">
+      <nav
+        id="settings-rules-subnav"
+        className="flex gap-2 overflow-x-auto pb-1 2xl:flex-col 2xl:overflow-visible 2xl:pb-0"
+        aria-label={t("nav.rules")}
+      >
+        {sections.map((section) => {
+          const item = RULES_SECTION_ITEMS[section];
+          const Icon = item.icon;
+          const active = activeSection === section;
+          return (
+            <div key={section} className="contents">
+              <Link
+                id={selectorId("settings-rules-subnav", section)}
+                to={buildRulesPath(section)}
+                aria-current={active ? "page" : undefined}
+                className={cn(
+                  "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
+                  active &&
+                    "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
+                )}
+              >
+                <Icon
+                  className={cn(
+                    "h-[17px] w-[17px] text-[var(--scry-muted2)]",
+                    active && "text-[var(--scry-accent-text)]",
+                  )}
+                />
+                <span className="whitespace-nowrap">{t(item.labelKey)}</span>
+              </Link>
+              {section === "maintenance" && active ? (
+                <div className="flex shrink-0 gap-2 2xl:ml-3 2xl:flex-col 2xl:border-l 2xl:border-[var(--scry-border3)] 2xl:pl-3">
+                  {MAINTENANCE_RULES_SECTIONS.map((maintenanceItem) => {
+                    const MaintenanceIcon = maintenanceItem.icon;
+                    const maintenanceActive =
+                      maintenanceRulesSection === maintenanceItem.section;
+                    return (
+                      <Link
+                        key={maintenanceItem.section}
+                        id={selectorId(
+                          "settings-maintenance-rules-subnav",
+                          maintenanceItem.section,
+                        )}
+                        to={buildRulesPath("maintenance", maintenanceItem.section)}
+                        aria-current={maintenanceActive ? "page" : undefined}
+                        className={cn(
+                          "flex h-9 shrink-0 items-center gap-2 rounded-[9px] px-3 text-[13px] font-medium text-[var(--scry-muted)] transition hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)] 2xl:w-full",
+                          maintenanceActive &&
+                            "bg-[linear-gradient(90deg,rgba(var(--scry-accent-rgb),0.26),rgba(var(--scry-accent-rgb),0.08))] text-[var(--scry-ink2)] shadow-[inset_2px_0_0_var(--scry-accent-ring)]",
+                        )}
+                      >
+                        <MaintenanceIcon
+                          className={cn(
+                            "h-[17px] w-[17px] text-[var(--scry-muted2)]",
+                            maintenanceActive && "text-[var(--scry-accent-text)]",
+                          )}
+                        />
+                        <span className="whitespace-nowrap">
+                          {t(maintenanceItem.labelKey)}
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </nav>
+    </aside>
+  );
+}
+
 type SettingsContainerProps = {
   settingsSection: SettingsSection;
   userId?: string;
@@ -213,6 +365,7 @@ type SettingsContainerProps = {
   uiLanguage: LocaleCode;
   onSelectLanguage: (code: string) => void;
   pluginUpdateCount: number;
+  pluginBlockedCount: number;
 };
 
 export const SettingsContainer = memo(function SettingsContainer({
@@ -226,12 +379,36 @@ export const SettingsContainer = memo(function SettingsContainer({
   uiLanguage,
   onSelectLanguage,
   pluginUpdateCount,
+  pluginBlockedCount,
 }: SettingsContainerProps) {
   const t = useTranslate();
   const client = useClient();
   // The Indexers page's pane lives in the path rather than in state so a pane
   // can be linked to and reloaded into.
-  const indexerSettingsTab = indexerSettingsTabFromPath(useLocation().pathname);
+  const pathname = useLocation().pathname;
+  const indexerSettingsTab = indexerSettingsTabFromPath(pathname);
+  // Same for the Rules page's two levels of pane. The kind is derivable from
+  // the settings section, but the maintenance pane exists only in the path.
+  const rulesSection = rulesSectionFromPath(pathname);
+  const maintenanceRulesSection = maintenanceRulesSectionFromPath(pathname);
+  // Maintenance rules are still being finished. With the switch off the Rules
+  // page keeps only its scoring kind, and a held maintenance link resolves to
+  // scoring rather than 404ing or bouncing.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const rulesSections = rulesSectionsFor(experimentalFeaturesEnabled);
+  const maintenanceRulesHidden =
+    settingsSection === "maintenanceRules" && !experimentalFeaturesEnabled;
+  const requestRulesHidden =
+    settingsSection === "requestRules" && !experimentalFeaturesEnabled;
+  const effectiveRulesSection =
+    maintenanceRulesHidden || requestRulesHidden ? "scoring" : rulesSection;
+  // Indexer search is on the same footing: with the switch off the Indexers
+  // page keeps its list and seeding profiles, and a held search link lands on
+  // the list.
+  const indexerSettingsTabs = indexerSettingsTabsFor(experimentalFeaturesEnabled);
+  const effectiveIndexerSettingsTab = indexerSettingsTabs.includes(indexerSettingsTab)
+    ? indexerSettingsTab
+    : "indexers";
   const [indexerDownloadClientMappingCatalogResource, setIndexerDownloadClientMappingCatalogResource] =
     useState<IndexerDownloadClientMappingCatalogResource>({
       catalog: null,
@@ -316,9 +493,11 @@ export const SettingsContainer = memo(function SettingsContainer({
     settingsSection !== "downloadClients" &&
     settingsSection !== "notifications" &&
     settingsSection !== "subtitles";
-  // Pages that render an inline plugins rail anchored to the top of the content pane.
+  // Pages that render an inline plugins rail anchored to the top of the content
+  // pane. The Search pane owns its full width (its own refine rail plus a
+  // 1020px table), so the plugins rail stays with the provider panes.
   const showReferenceRail =
-    settingsSection === "indexers" ||
+    (settingsSection === "indexers" && effectiveIndexerSettingsTab !== "search") ||
     settingsSection === "downloadClients" ||
     settingsSection === "notifications" ||
     settingsSection === "subtitles";
@@ -403,8 +582,18 @@ export const SettingsContainer = memo(function SettingsContainer({
                   ? t("settings.indexers")
                   : settingsSection === "downloadClients"
                     ? t("settings.downloadClients")
+                    : settingsSection === "proxies"
+                      ? t("settings.proxies")
                     : settingsSection === "rules"
-                      ? t("settings.rules")
+                      ? t("settings.rulesScoring")
+                      : settingsSection === "maintenanceRules"
+                        ? maintenanceRulesHidden
+                          ? t("settings.rulesScoring")
+                          : t("settings.maintenanceRules")
+                      : settingsSection === "requestRules"
+                        ? requestRulesHidden
+                          ? t("settings.rulesScoring")
+                          : t("settings.requestRules")
                       : settingsSection === "plugins"
                         ? t("settings.plugins")
                         : settingsSection === "notifications"
@@ -415,6 +604,8 @@ export const SettingsContainer = memo(function SettingsContainer({
                               ? t("settings.subtitles")
                               : settingsSection === "delayProfiles"
                                 ? t("settings.delayProfiles")
+                                : settingsSection === "titleTags"
+                                  ? t("settings.titleTags")
                                 : settingsSection === "acquisition"
                                   ? t("settings.acquisition")
                                   : t("settings.qualityProfiles");
@@ -444,6 +635,12 @@ export const SettingsContainer = memo(function SettingsContainer({
       visible: canManageCatalogSettings,
     },
     {
+      section: "titleTags" as const,
+      label: t("settings.titleTags"),
+      icon: Tag,
+      visible: canManageCatalogSettings,
+    },
+    {
       section: "plugins" as const,
       label: t("settings.plugins"),
       icon: Puzzle,
@@ -453,14 +650,20 @@ export const SettingsContainer = memo(function SettingsContainer({
   const showPrimarySettingsSubnav = primarySettingsNav.some(
     (item) => item.section === settingsSection,
   );
-  const usesAutomationHeader =
+  // Both kinds of rule are panes of one page, so both carry its gutter.
+  const isRulesSection =
     settingsSection === "rules" ||
+    settingsSection === "maintenanceRules" ||
+    settingsSection === "requestRules";
+  const usesAutomationHeader =
+    isRulesSection ||
     settingsSection === "subtitles" ||
     settingsSection === "post-processing" ||
     settingsSection === "acquisition";
   const usesIntegrationsHeader =
     settingsSection === "downloadClients" ||
     settingsSection === "indexers" ||
+    settingsSection === "proxies" ||
     settingsSection === "mediaServers" ||
     settingsSection === "notifications";
   const usesAccessHeader = settingsSection === "security" || settingsSection === "users";
@@ -469,6 +672,10 @@ export const SettingsContainer = memo(function SettingsContainer({
     switch (settingsSection) {
       case "rules":
         return SlidersHorizontal;
+      case "maintenanceRules":
+        return maintenanceRulesHidden ? SlidersHorizontal : Wrench;
+      case "requestRules":
+        return requestRulesHidden ? SlidersHorizontal : Inbox;
       case "post-processing":
         return FolderCog;
       case "subtitles":
@@ -479,6 +686,8 @@ export const SettingsContainer = memo(function SettingsContainer({
         return Database;
       case "downloadClients":
         return Download;
+      case "proxies":
+        return Network;
       case "mediaServers":
         return Server;
       case "notifications":
@@ -499,13 +708,22 @@ export const SettingsContainer = memo(function SettingsContainer({
   // The Indexers page's panes are pages in their own right, so the header and
   // the breadcrumb name the pane rather than the section that hosts it.
   const activeIndexerTab =
-    settingsSection === "indexers" && indexerSettingsTab !== "indexers"
-      ? INDEXER_SETTINGS_TABS.find((item) => item.tab === indexerSettingsTab)
+    settingsSection === "indexers" && effectiveIndexerSettingsTab !== "indexers"
+      ? INDEXER_SETTINGS_TAB_ITEMS[effectiveIndexerSettingsTab]
       : undefined;
-  const pageLabel = activeIndexerTab
-    ? t(activeIndexerTab.labelKey)
-    : settingsSectionLabel;
-  const PageIcon = activeIndexerTab ? activeIndexerTab.icon : SettingsSectionIcon;
+  // Same for the Maintenance Rules panes. The rule list is the page itself
+  // rather than a pane of it, so it adds no crumb and keeps the page's icon.
+  const activeMaintenancePane =
+    settingsSection === "maintenanceRules" &&
+    !maintenanceRulesHidden &&
+    maintenanceRulesSection !== "rules"
+      ? MAINTENANCE_RULES_SECTIONS.find(
+          (item) => item.section === maintenanceRulesSection,
+        )
+      : undefined;
+  const activePane = activeIndexerTab ?? activeMaintenancePane;
+  const pageLabel = activePane ? t(activePane.labelKey) : settingsSectionLabel;
+  const PageIcon = activePane ? activePane.icon : SettingsSectionIcon;
   const breadcrumbRootLabel =
     usesAutomationHeader
       ? t("nav.group.automation")
@@ -562,8 +780,21 @@ export const SettingsContainer = memo(function SettingsContainer({
                     )}
                   />
                   <span className="whitespace-nowrap">{item.label}</span>
+                  {item.section === "plugins" && pluginBlockedCount > 0 ? (
+                    <span
+                      data-ui="settings-nav-plugin-blocked-count"
+                      className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--scry-danger-solid)] px-1 text-xs font-medium tabular-nums text-[var(--scry-danger-on-solid)]"
+                    >
+                      {pluginBlockedCount}
+                    </span>
+                  ) : null}
                   {item.section === "plugins" && pluginUpdateCount > 0 ? (
-                    <span className="ml-auto inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--scry-warning-solid)] px-1 text-xs font-medium tabular-nums text-[var(--scry-warning-on-solid)]">
+                    <span
+                      className={cn(
+                        "inline-flex h-5 min-w-5 items-center justify-center rounded-md bg-[var(--scry-warning-solid)] px-1 text-xs font-medium tabular-nums text-[var(--scry-warning-on-solid)]",
+                        pluginBlockedCount > 0 ? "ml-1" : "ml-auto",
+                      )}
+                    >
                       {pluginUpdateCount}
                     </span>
                   ) : null}
@@ -574,7 +805,19 @@ export const SettingsContainer = memo(function SettingsContainer({
         </aside>
       ) : null}
       {settingsSection === "indexers" ? (
-        <IndexerSettingsSubnav activeTab={indexerSettingsTab} t={t} />
+        <IndexerSettingsSubnav
+          activeTab={effectiveIndexerSettingsTab}
+          tabs={indexerSettingsTabs}
+          t={t}
+        />
+      ) : null}
+      {isRulesSection ? (
+        <RulesSubnav
+          activeSection={effectiveRulesSection}
+          maintenanceRulesSection={maintenanceRulesSection}
+          sections={rulesSections}
+          t={t}
+        />
       ) : null}
       <main
         ref={settingsContentRef}
@@ -591,11 +834,15 @@ export const SettingsContainer = memo(function SettingsContainer({
                   ? "max-w-none"
                   : "max-w-[1280px]"
               : settingsSection === "rules" ||
+                  settingsSection === "maintenanceRules" ||
+                  settingsSection === "requestRules" ||
                   settingsSection === "post-processing"
                 ? "max-w-none"
                 : settingsSection === "users"
                   ? "max-w-[1620px]"
-                  : "max-w-[1280px]",
+                  : settingsSection === "indexers"
+                    ? "max-w-[1640px]"
+                    : "max-w-[1280px]",
           )}
         >
           <div
@@ -617,10 +864,14 @@ export const SettingsContainer = memo(function SettingsContainer({
           <div className="mb-4 flex items-center gap-1.5 text-[12.5px] text-[var(--scry-faint)]">
             <span>{breadcrumbRootLabel}</span>
             <ChevronRight className="h-3.5 w-3.5" />
-            {activeIndexerTab ? (
+            {activePane ? (
               <>
                 <Link
-                  to={buildIndexerSettingsPath("indexers")}
+                  to={
+                    activeIndexerTab
+                      ? buildIndexerSettingsPath("indexers")
+                      : buildRulesPath("maintenance")
+                  }
                   className="transition hover:text-[var(--scry-ink2)]"
                 >
                   {settingsSectionLabel}
@@ -653,6 +904,7 @@ export const SettingsContainer = memo(function SettingsContainer({
                 settingsSection !== "general" &&
                 settingsSection !== "qualityProfiles" &&
                 settingsSection !== "delayProfiles" &&
+                settingsSection !== "titleTags" &&
                 settingsSection !== "plugins" ? (
                   <p className="mt-1 max-w-[640px] text-[13.5px] text-[var(--scry-muted)]">
                     {t("settings.sectionTitle", { section: settingsSectionLabel })}
@@ -706,11 +958,13 @@ export const SettingsContainer = memo(function SettingsContainer({
             <SettingsMediaServersContainer />
           ) : settingsSection === "indexers" ? (
             <>
-              {indexerSettingsTab === "seedingProfiles" ? (
+              {effectiveIndexerSettingsTab === "seedingProfiles" ? (
                 <SettingsSeedingProfilesContainer />
+              ) : effectiveIndexerSettingsTab === "search" ? (
+                <SettingsIndexerSearchContainer />
               ) : (
                 <SettingsIndexersContainer
-                  indexerSettingsTab={indexerSettingsTab}
+                  indexerSettingsTab={effectiveIndexerSettingsTab}
                   providerCatalogVersion={providerCatalogVersions.INDEXER}
                   indexerDownloadClientMappingCatalogResource={
                     indexerDownloadClientMappingCatalogResource
@@ -733,9 +987,23 @@ export const SettingsContainer = memo(function SettingsContainer({
               onDownloadClientsChanged={refreshIndexerDownloadClientMappingCatalog}
             />
           ) : settingsSection === "rules" ? (
-            <SettingsRulesContainer />
+            <SettingsRulesContainer canManageCatalogSettings={canManageCatalogSettings} canManageSystemSettings={canManageSystemSettings} />
+          ) : settingsSection === "maintenanceRules" ? (
+            maintenanceRulesHidden ? (
+              <SettingsRulesContainer canManageCatalogSettings={canManageCatalogSettings} canManageSystemSettings={canManageSystemSettings} />
+            ) : (
+              <SettingsMaintenanceRulesContainer section={maintenanceRulesSection} />
+            )
+          ) : settingsSection === "requestRules" ? (
+            requestRulesHidden ? (
+              <SettingsRulesContainer canManageCatalogSettings={canManageCatalogSettings} canManageSystemSettings={canManageSystemSettings} />
+            ) : (
+              <SettingsRequestRulesContainer />
+            )
           ) : settingsSection === "plugins" ? (
             <SettingsPluginsContainer />
+          ) : settingsSection === "proxies" ? (
+            <SettingsProxiesContainer />
           ) : settingsSection === "notifications" ? (
             <SettingsNotificationsContainer
               providerCatalogVersion={providerCatalogVersions.NOTIFICATION}
@@ -748,6 +1016,10 @@ export const SettingsContainer = memo(function SettingsContainer({
             />
           ) : settingsSection === "delayProfiles" ? (
             <SettingsDelayProfilesContainer />
+          ) : settingsSection === "titleTags" ? (
+            <SettingsTitleTagsContainer
+              canManageCatalogSettings={canManageCatalogSettings}
+            />
           ) : settingsSection === "acquisition" ? (
             <SettingsAcquisitionContainer />
           ) : (

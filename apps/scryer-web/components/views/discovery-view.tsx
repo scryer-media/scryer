@@ -22,6 +22,7 @@ import {
   X,
 } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useInstanceFeatures } from "@/lib/context/instance-features-context";
 import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { Button } from "@/components/ui/button";
 import { MultiSelectDropdown } from "@/components/ui/multi-select-dropdown";
@@ -1216,6 +1217,7 @@ export function DiscoveryView({
   onAction,
 }: DiscoveryViewProps) {
   const t = useTranslate();
+  const { personalizedDiscoveryEnabled } = useInstanceFeatures();
   const manageableFacetSet = React.useMemo(
     () => new Set(manageableFacets),
     [manageableFacets],
@@ -1609,6 +1611,12 @@ export function DiscoveryView({
             </Button>
           </div>
         ) : null}
+
+        {personalizedDiscoveryEnabled ? null : (
+          <p className="mb-5 text-sm text-muted-foreground">
+            {t("discovery.personalizedDisabled")}
+          </p>
+        )}
 
         {heroItem ? (
           <div className="mb-7 grid grid-cols-1 items-stretch gap-5 lg:grid-cols-[minmax(0,clamp(30rem,42vw,50rem))_minmax(0,1fr)] lg:min-h-[clamp(440px,46vh,520px)]">

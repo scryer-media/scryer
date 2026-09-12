@@ -112,6 +112,8 @@ pub(super) fn discovery_item_record(
         relation_count: Some(item.relation_count),
         source_subject_count: Some(item.source_subject_count),
         rank_score: Some(item.rank_score),
+        recommendation_score: item.recommendation_score,
+        base_rank: item.base_rank,
         matched_subject_keys: item.matched_subject_keys.clone(),
         matched_subject_titles: item.matched_subject_titles.clone(),
         matched_subject_count: item.matched_subject_count,

@@ -158,6 +158,7 @@ async fn check_with_lookup_remaps_remote_completed_download_paths_before_readine
                 client_priority: 0,
                 created_at: Utc::now(),
                 updated_at: Utc::now(),
+                proxy_config_id: None,
             }],
         }),
     );

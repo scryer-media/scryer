@@ -452,6 +452,9 @@ async fn graphql_introspection_exposes_plugin_config_field_metadata_enums() {
           fieldRole: __type(name: "PluginConfigFieldRoleValue") {
             enumValues { name }
           }
+          conditionOp: __type(name: "PluginConditionOpValue") {
+            enumValues { name }
+          }
         }
         "#,
         json!({}),
@@ -481,6 +484,20 @@ async fn graphql_introspection_exposes_plugin_config_field_metadata_enums() {
     );
     assert_eq!(field("role")["type"]["kind"], "ENUM");
     assert_eq!(field("role")["type"]["name"], "PluginConfigFieldRoleValue");
+    // Conditions are nullable objects: absent means "always shown" / "never
+    // additionally required", which is what every field declared before the
+    // condition vocabulary existed deserializes to.
+    assert_eq!(field("visibleWhen")["type"]["kind"], "OBJECT");
+    assert_eq!(
+        field("visibleWhen")["type"]["name"],
+        "PluginFieldConditionPayload"
+    );
+    assert_eq!(field("requiredWhen")["type"]["kind"], "OBJECT");
+    assert_eq!(
+        field("requiredWhen")["type"]["name"],
+        "PluginFieldConditionPayload"
+    );
+    assert_eq!(field("advanced")["type"]["kind"], "NON_NULL");
 
     let enum_names = |path: &str| -> Vec<&str> {
         body["data"][path]["enumValues"]
@@ -498,6 +515,7 @@ async fn graphql_introspection_exposes_plugin_config_field_metadata_enums() {
             "MULTILINE",
             "BOOL",
             "SELECT",
+            "FILTERED_SELECT",
             "NUMBER",
             "PATH",
             "TAG"
@@ -505,6 +523,10 @@ async fn graphql_introspection_exposes_plugin_config_field_metadata_enums() {
     );
     assert_eq!(enum_names("valueSource"), vec!["USER", "HOST_BINDING"]);
     assert_eq!(enum_names("fieldRole"), vec!["CONNECTION_URL"]);
+    assert_eq!(
+        enum_names("conditionOp"),
+        vec!["EQ", "NE", "IN", "NOT_IN", "NON_EMPTY"]
+    );
 }
 
 #[tokio::test]

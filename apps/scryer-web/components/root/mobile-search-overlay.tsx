@@ -14,18 +14,22 @@ import { HorizontalRail } from "@/components/common/horizontal-scroll-fade";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import { IconButton } from "@/components/ui/icon-button";
 import {
-  SearchCatalogResultButton,
+  SearchCatalogResultCard,
   SearchEmptyState,
   SearchFooterTip,
   SearchMetadataPosterButton,
   SearchRouteCommandButton,
   SearchSectionLoading,
 } from "@/components/root/global-search-parts";
+import type { LibraryRecord } from "@/lib/types/titles";
 import {
+  buildCatalogLibraryMembers,
+  buildCatalogResultPresentation,
   buildCatalogSearchSections,
   buildGlobalSearchTabs,
   buildMetadataResultCounts,
   buildMetadataSearchActionState,
+  metadataSearchItemFromCatalogTitle,
   countHiddenCatalogResultsForFilters,
   countHiddenMetadataResultsForFilters,
   countHiddenRouteCommandResultsForFilters,
@@ -125,13 +129,17 @@ export function MobileSearchOverlay({
   const [activeFilters, setActiveFilters] = React.useState<
     GlobalSearchFilterKey[]
   >([]);
+  // `libraries` narrows the dialog to the libraries that may take the title;
+  // absent, the dialog offers every library of the facet the viewer may use.
   const [addDialogTarget, setAddDialogTarget] = React.useState<{
     result: MetadataTvdbSearchItem;
     facet: Facet;
+    libraries?: LibraryRecord[];
   } | null>(null);
   const [requestDialogTarget, setRequestDialogTarget] = React.useState<{
     result: MetadataTvdbSearchItem;
     facet: Facet;
+    libraries?: LibraryRecord[];
   } | null>(null);
   const closingAfterSuccessfulActionRef = React.useRef(false);
   const setMobileSearchInputRef = React.useCallback(
@@ -163,6 +171,10 @@ export function MobileSearchOverlay({
   const catalogSearchSections = React.useMemo(
     () => buildCatalogSearchSections(catalogSearchResults, globalSearch),
     [catalogSearchResults, globalSearch],
+  );
+  const catalogLibraryMembers = React.useMemo(
+    () => buildCatalogLibraryMembers(catalogSearchResults),
+    [catalogSearchResults],
   );
 
   const metadataResultCounts = React.useMemo(
@@ -559,8 +571,12 @@ export function MobileSearchOverlay({
   );
 
   const handleOpenAddDialog = React.useCallback(
-    (result: MetadataTvdbSearchItem, facet: Facet) => {
-      setAddDialogTarget({ result, facet });
+    (
+      result: MetadataTvdbSearchItem,
+      facet: Facet,
+      libraries?: LibraryRecord[],
+    ) => {
+      setAddDialogTarget({ result, facet, libraries });
       void ensureCatalogConfigReady(facet);
     },
     [ensureCatalogConfigReady],
@@ -706,49 +722,84 @@ export function MobileSearchOverlay({
     ) => {
       const targetView: ViewId =
         facet === "SERIES" ? "series" : facet === "ANIME" ? "anime" : "movies";
-      const tvdbId = (title.externalIds ?? [])
-        .find((externalId) => externalId.source.toLowerCase() === "tvdb")
-        ?.value.trim();
       const posterUrl = selectPosterVariantUrl(title.posterUrl, "w70");
       const facetLabel = sectionLabelForFacet(t, facet);
-      const libraryLabel = title.libraryName?.trim() || null;
-      const statusLabel = title.contentStatus?.trim() || null;
-      const secondaryParts = [
-        title.year ? String(title.year) : null,
-        libraryLabel && libraryLabel !== facetLabel ? libraryLabel : null,
-        statusLabel,
-        tvdbId ? `TVDB ${tvdbId}` : null,
-      ].filter(Boolean);
-      const viewTitleLabel = `${t("search.view")}: ${title.name}`;
+      const presentation = buildCatalogResultPresentation({
+        title,
+        libraryMembers: catalogLibraryMembers,
+        manageableLibraries: librariesByFacet[facet],
+        requestableLibraries: requestableLibrariesByFacet[facet],
+        canAdd: catalogQualityProfileOptions.length > 0,
+      });
+      const searchItem = presentation.action
+        ? metadataSearchItemFromCatalogTitle(title)
+        : null;
+      const action =
+        presentation.action && searchItem
+          ? {
+              kind: presentation.action,
+              label:
+                presentation.action === "add"
+                  ? t("search.addToAnotherLibrary")
+                  : t("search.requestForAnotherLibrary"),
+              onClick: () => {
+                if (presentation.action === "add") {
+                  handleOpenAddDialog(
+                    searchItem,
+                    facet,
+                    presentation.addableLibraries,
+                  );
+                  return;
+                }
+                setRequestDialogTarget({
+                  result: searchItem,
+                  facet,
+                  libraries: presentation.requestableLibraries,
+                });
+              },
+            }
+          : null;
 
       return (
-        <SearchCatalogResultButton
+        <SearchCatalogResultCard
           id={selectorId("global-search-catalog-result", facet, title.id)}
           key={title.id}
-          onClick={() => {
-            resetGlobalSearch();
-            onOpenOverview?.(targetView, {
-              id: title.id,
-              slug: title.slug ?? null,
-              libraryId: title.libraryId,
-              librarySlug: title.librarySlug ?? null,
-            });
-          }}
-          onKeyDown={handleMobileSearchResultKeyDown}
-          ariaLabel={viewTitleLabel}
+          action={action}
+          chooseLibraryLabel={t("search.chooseLibraryToView", {
+            name: title.name,
+          })}
           createdAt={title.createdAt}
           emptyLabel={t("label.noArt")}
           externalIds={title.externalIds}
           facet={facet}
           facetLabel={facetLabel}
+          libraries={presentation.members.map((member) => ({
+            titleId: member.id,
+            libraryId: member.libraryId,
+            libraryName: member.libraryName?.trim() || facetLabel,
+          }))}
           metadataFetchedAt={title.metadataFetchedAt}
+          monitored={title.monitored}
           monitoredLabel={
             title.monitored ? t("search.monitored") : t("search.unmonitored")
           }
+          onKeyDown={handleMobileSearchResultKeyDown}
+          onView={(library) => {
+            const member =
+              presentation.members.find(
+                (candidate) => candidate.id === library.titleId,
+              ) ?? title;
+            resetGlobalSearch();
+            onOpenOverview?.(targetView, {
+              id: member.id,
+              slug: member.slug ?? null,
+              libraryId: member.libraryId,
+              librarySlug: member.librarySlug ?? null,
+            });
+          }}
           posterAlt={t("media.posterAlt", { name: title.name })}
           posterUrl={posterUrl}
           resultAttribute="data-mobile-global-search-result"
-          secondaryParts={secondaryParts}
           surface="mobile"
           titleId={title.id}
           titleName={title.name}
@@ -757,7 +808,17 @@ export function MobileSearchOverlay({
         />
       );
     },
-    [handleMobileSearchResultKeyDown, onOpenOverview, resetGlobalSearch, t],
+    [
+      catalogLibraryMembers,
+      catalogQualityProfileOptions.length,
+      handleMobileSearchResultKeyDown,
+      handleOpenAddDialog,
+      librariesByFacet,
+      onOpenOverview,
+      requestableLibrariesByFacet,
+      resetGlobalSearch,
+      t,
+    ],
   );
 
   const renderMetadataItem = React.useCallback(
@@ -1213,6 +1274,7 @@ export function MobileSearchOverlay({
           addDialogTarget?.facet ?? "SERIES",
         )}
         manageableLibraries={
+          addDialogTarget?.libraries ??
           librariesByFacet[addDialogTarget?.facet ?? "SERIES"]
         }
         rootFolderOptions={
@@ -1226,6 +1288,7 @@ export function MobileSearchOverlay({
         result={requestDialogTarget?.result ?? EMPTY_SEARCH_RESULT}
         facet={requestDialogTarget?.facet ?? "SERIES"}
         requestableLibraries={
+          requestDialogTarget?.libraries ??
           requestableLibrariesByFacet[requestDialogTarget?.facet ?? "SERIES"]
         }
         qualityProfileOptions={catalogQualityProfileOptions}

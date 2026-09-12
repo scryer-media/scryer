@@ -1,8 +1,8 @@
 use crate::library_scan::{
     DiscoveryContextChangeType, DiscoveryContextChangedSubjectInput, DiscoveryContextChangesInput,
-    DiscoveryContextSnapshotPageResult, DiscoveryContextSnapshotSubmitInput,
-    DiscoveryDashboardResult, DiscoveryDashboardSection, DiscoveryExternalIdInput,
-    DiscoveryPublicFeedInput, DiscoverySubjectInput, DiscoveryTitle,
+    DiscoveryContextMediumMixInput, DiscoveryContextSnapshotPageResult,
+    DiscoveryContextSnapshotSubmitInput, DiscoveryDashboardResult, DiscoveryDashboardSection,
+    DiscoveryExternalIdInput, DiscoveryPublicFeedInput, DiscoverySubjectInput, DiscoveryTitle,
 };
 use crate::ports::{
     CatalogDiscoveryGroup, CatalogDiscoveryGroupKind, CatalogDiscoveryQuery,
@@ -15,6 +15,11 @@ use crate::ports::{
     DiscoveryRankComponentRecord, DiscoverySectionItemsRecord, DiscoverySectionRecord,
     DiscoverySectionResult, DiscoverySourceTagRecord, DiscoverySubmittedSubjectRecord,
     DiscoverySyncStatus, TitleExternalIdLookup,
+};
+use crate::settings::keys::{
+    DISCOVERY_GENRE_RAIL_CORROBORATION_KEY, DISCOVERY_GENRE_RAIL_CREDIBILITY_GATE_KEY,
+    DISCOVERY_MEDIUM_AFFINITY_GATE_KEY, DISCOVERY_RAIL_ORDER_KEY, DISCOVERY_RAIL_ORDER_LEGACY,
+    SETTINGS_SCOPE_SYSTEM,
 };
 use crate::{AppError, AppResult, AppUseCase};
 use chrono::{DateTime, Utc};
@@ -50,6 +55,46 @@ const DISCOVERY_MIN_CREDIBLE_RATING_SOURCE_COUNT: usize = 2;
 /// lockstep with SMG's display-evidence bar (CanonicalRatingDisplayMinVotes)
 /// so a rating SMG displays is never ranked non-credible here for votes alone.
 const DISCOVERY_CREDIBLE_RATING_MIN_VOTES: i32 = 25;
+/// A rail's share of one medium may not exceed this multiple of the library's
+/// share of that medium. Shared across the three mediums by design: anime and
+/// Western animation are separate mediums under one rule.
+const DISCOVERY_MEDIUM_SHARE_MULTIPLIER: f64 = 2.0;
+/// Floor under the proportional cap, so a library that owns a single anime can
+/// still be shown a couple rather than none.
+const DISCOVERY_MEDIUM_SHARE_MIN_SLOTS: usize = 2;
+/// A label earns a rail only when at least this many owned titles carry it...
+const DISCOVERY_RAIL_LABEL_SUPPORT_MIN_CARRIERS: usize = 3;
+/// ...or this share of the library, whichever is larger. Three crime titles in
+/// a ten-title library must not earn a Crime rail with the same authority as
+/// forty in three hundred.
+const DISCOVERY_RAIL_LABEL_SUPPORT_SHARE: f64 = 0.10;
+/// Growth in submitted subjects since the last snapshot run that, on its own,
+/// justifies re-snapshotting ahead of the normal cadence. A library that has
+/// grown by a quarter is a different library.
+const DISCOVERY_LIBRARY_GROWTH_RESNAPSHOT_SHARE: f64 = 0.25;
+/// A personalized rail is emitted with however many items pass the evidence
+/// floor, and dropped entirely below this many. Short rails are a feature: they
+/// say the system knows little yet. Padding to `limit` from the evidence-less
+/// tail is what produced the alphabetical junk this floor exists to stop.
+const DISCOVERY_RAIL_MIN_ITEMS: usize = 8;
+/// `rank_score` at or below this is the evidence-less band: SMG's semantic
+/// floor (~1.0) and the affiliation-key-only 0. Anything above it was reached
+/// by a real relation edge.
+const DISCOVERY_EVIDENCE_LESS_RANK_SCORE_CEILING: f64 = 1.5;
+/// Below this many owned titles the library gets FOR_YOU and nothing else.
+const DISCOVERY_RAIL_BUDGET_MIN_OWNED_TITLES: usize = 10;
+/// At or above this many owned titles the full label ladder composes; between
+/// the two tiers the ladder is one theme rail and one genre rail.
+const DISCOVERY_RAIL_BUDGET_FULL_LADDER_OWNED_TITLES: usize = 50;
+/// Width of the label ladder per family (genres, themes) at the full tier.
+const DISCOVERY_RAIL_LADDER_LABELS: usize = 2;
+/// SMG scores a provider's own genre list at 0.95, caps name-alias matches at
+/// 0.9 and phrase-sequence guesses at 0.85. This line keeps the first two and
+/// drops the guesses.
+const DISCOVERY_CORROBORATED_GENRE_MIN_CONFIDENCE: f64 = 0.9;
+/// Distinct sources that make a confident genre corroborated on their own,
+/// without a provider genre key.
+const DISCOVERY_CORROBORATED_GENRE_MIN_SOURCES: usize = 2;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -98,6 +143,11 @@ impl DiscoveryContextDefaults {
 pub(crate) struct DiscoveryLibraryContext {
     pub(crate) subjects: Vec<DiscoveryLibrarySubject>,
     pub(crate) subject_provenance: Vec<DiscoveryLibrarySubject>,
+    /// Owned titles per medium, computed from the same classifier that gates
+    /// the rails. Sent to SMG on every submission and folded into the
+    /// fingerprint, so a library that gains its first anime invalidates the
+    /// cached run rather than serving a pool built without anime.
+    pub(crate) medium_mix: DiscoveryLibraryMediumMix,
     pub(crate) fingerprint: String,
 }
 
@@ -162,6 +212,7 @@ struct CanonicalExternalId {
 struct CanonicalContext<'a> {
     schema_version: u8,
     defaults: &'a DiscoveryContextDefaults,
+    medium_mix: DiscoveryContextMediumMixInput,
     subjects: &'a [CanonicalSubject],
 }
 
@@ -176,13 +227,16 @@ struct DiscoverySubjectParts {
 mod catalog;
 mod context;
 mod home;
+mod medium;
 mod records;
 
 use catalog::*;
 use context::*;
 use home::*;
+use medium::*;
 use records::*;
 
+pub(crate) use catalog::discovery_library_growth_warrants_snapshot;
 pub(crate) use context::{
     build_discovery_library_context, coalesce_pending_context_change, incremental_item_records,
     pending_context_change_from_domain_event, public_feed_item_records,
@@ -344,7 +398,11 @@ impl AppUseCase {
     ) -> AppResult<DiscoveryHomeFilterOptions> {
         let visibility = self.discovery_visibility(actor).await?;
         let readable_library_ids = &visibility.readable_library_ids;
-        let can_view_personalized = !readable_library_ids.is_empty();
+        // The instance-wide switch is a second input to the same per-caller
+        // gate, so every read path below serves public rows only when it is
+        // off without needing a branch of its own.
+        let can_view_personalized =
+            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let status = self
             .load_discovery_sync_status_for_visibility(can_view_personalized)
             .await?;
@@ -384,7 +442,11 @@ impl AppUseCase {
         let discovery_home_started_at = Instant::now();
         let visibility = self.discovery_visibility(actor).await?;
         let readable_library_ids = &visibility.readable_library_ids;
-        let can_view_personalized = !readable_library_ids.is_empty();
+        // The instance-wide switch is a second input to the same per-caller
+        // gate, so every read path below serves public rows only when it is
+        // off without needing a branch of its own.
+        let can_view_personalized =
+            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let status = self
             .load_discovery_sync_status_for_visibility(can_view_personalized)
             .await?;
@@ -484,8 +546,13 @@ impl AppUseCase {
                 filter_submitted_subjects_for_libraries(&submitted_subjects, readable_library_ids);
             home_submitted_subjects = submitted_subjects.clone();
             resolve_discovery_matched_subjects(&mut personalized_items, &submitted_subjects)?;
+            let rail_settings = self.discovery_rail_composition_settings().await;
             let library_profile = self
-                .discovery_library_affinity_profile(readable_library_ids, &submitted_subjects)
+                .discovery_library_affinity_profile(
+                    readable_library_ids,
+                    &submitted_subjects,
+                    rail_settings.genre_rail_corroboration,
+                )
                 .await?;
             let complete_collection_candidates = self
                 .services
@@ -515,6 +582,8 @@ impl AppUseCase {
             personalized_sections = personalized_section_results(
                 &personalized_items,
                 &library_profile,
+                &candidates_by_id,
+                rail_settings,
                 include_unresolved,
                 limit,
             );
@@ -716,7 +785,11 @@ impl AppUseCase {
     ) -> AppResult<DiscoveryItemsResult> {
         let visibility = self.discovery_visibility(actor).await?;
         let readable_library_ids = &visibility.readable_library_ids;
-        let can_view_personalized = !readable_library_ids.is_empty();
+        // The instance-wide switch is a second input to the same per-caller
+        // gate, so every read path below serves public rows only when it is
+        // off without needing a branch of its own.
+        let can_view_personalized =
+            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let readable_library_id_list = sorted_discovery_library_ids(readable_library_ids);
         let state = self
             .services
@@ -777,7 +850,11 @@ impl AppUseCase {
 
         let visibility = self.discovery_visibility(actor).await?;
         let readable_library_ids = &visibility.readable_library_ids;
-        let can_view_personalized = !readable_library_ids.is_empty();
+        // The instance-wide switch is a second input to the same per-caller
+        // gate, so every read path below serves public rows only when it is
+        // off without needing a branch of its own.
+        let can_view_personalized =
+            !readable_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let readable_library_id_list = sorted_discovery_library_ids(readable_library_ids);
         let state = self
             .services
@@ -863,7 +940,8 @@ impl AppUseCase {
                 .cloned()
                 .collect()
         };
-        let can_view_personalized = !effective_library_ids.is_empty();
+        let can_view_personalized =
+            !effective_library_ids.is_empty() && self.personalized_discovery_enabled().await?;
         let effective_library_id_list = sorted_discovery_library_ids(&effective_library_ids);
         let state = self
             .services
@@ -977,13 +1055,19 @@ impl AppUseCase {
         let remaining_public_sections = public_sections;
 
         if !personalized_candidates.is_empty() && groups.len() < max_groups {
+            let rail_settings = self.discovery_rail_composition_settings().await;
             let library_profile = self
-                .discovery_library_affinity_profile(&effective_library_ids, &submitted_subjects)
+                .discovery_library_affinity_profile(
+                    &effective_library_ids,
+                    &submitted_subjects,
+                    rail_settings.genre_rail_corroboration,
+                )
                 .await?;
             catalog_personalized_groups(
                 &mut groups,
                 &personalized_candidates,
                 &library_profile,
+                rail_settings,
                 limit,
                 max_groups,
                 &mut emitted_item_keys,
@@ -1145,6 +1229,7 @@ impl AppUseCase {
         &self,
         allowed_library_ids: &HashSet<String>,
         submitted_subjects: &[DiscoverySubmittedSubjectRecord],
+        genre_rail_corroboration: bool,
     ) -> AppResult<DiscoveryLibraryAffinityProfile> {
         let mut library_ids = allowed_library_ids.iter().cloned().collect::<Vec<_>>();
         library_ids.sort();
@@ -1169,14 +1254,95 @@ impl AppUseCase {
                 .list_for_libraries(None, &library_ids, None)
                 .await?;
         }
-        Ok(DiscoveryLibraryAffinityProfile {
-            genre_labels: top_owned_title_labels(
-                &titles,
-                |title| canonical_tag_labels(&title.canonical_tags, "genre"),
-                2,
-            ),
-            tag_labels: top_owned_title_labels(&titles, |title| title.tags.iter(), 2),
-        })
+        Ok(discovery_library_affinity_profile_from_titles(
+            &titles,
+            genre_rail_corroboration,
+        ))
+    }
+
+    /// Reads the four rail-quality rollback levers. They are unseeded, so an
+    /// absent row is the default and a fresh install needs no data change.
+    pub(crate) async fn discovery_rail_composition_settings(
+        &self,
+    ) -> DiscoveryRailCompositionSettings {
+        let defaults = DiscoveryRailCompositionSettings::default();
+        let rail_order = self
+            .read_setting_string_value_for_scope(
+                SETTINGS_SCOPE_SYSTEM,
+                DISCOVERY_RAIL_ORDER_KEY,
+                None,
+            )
+            .await
+            .ok()
+            .flatten()
+            .filter(|value| {
+                value
+                    .trim()
+                    .eq_ignore_ascii_case(DISCOVERY_RAIL_ORDER_LEGACY)
+            })
+            .map(|_| DiscoveryRailOrder::Legacy)
+            .unwrap_or(defaults.rail_order);
+        DiscoveryRailCompositionSettings {
+            medium_affinity_gate: self
+                .read_discovery_rail_switch(
+                    DISCOVERY_MEDIUM_AFFINITY_GATE_KEY,
+                    defaults.medium_affinity_gate,
+                )
+                .await,
+            genre_rail_corroboration: self
+                .read_discovery_rail_switch(
+                    DISCOVERY_GENRE_RAIL_CORROBORATION_KEY,
+                    defaults.genre_rail_corroboration,
+                )
+                .await,
+            evidence_gate: self
+                .read_discovery_rail_switch(
+                    DISCOVERY_GENRE_RAIL_CREDIBILITY_GATE_KEY,
+                    defaults.evidence_gate,
+                )
+                .await,
+            rail_order,
+        }
+    }
+
+    async fn read_discovery_rail_switch(&self, key: &str, default: bool) -> bool {
+        self.read_setting_bool_value(key, None)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or(default)
+    }
+}
+
+/// The library profile, computed from owned titles alone so the same numbers
+/// drive the medium mix sent to SMG and the gate applied to what comes back.
+pub(super) fn discovery_library_affinity_profile_from_titles(
+    titles: &[Title],
+    genre_rail_corroboration: bool,
+) -> DiscoveryLibraryAffinityProfile {
+    let support_floor = discovery_rail_label_support_floor(titles.len());
+    DiscoveryLibraryAffinityProfile {
+        genre_labels: top_owned_title_labels(
+            titles,
+            |title| {
+                corroborated_canonical_genre_labels(&title.canonical_tags, genre_rail_corroboration)
+            },
+            DISCOVERY_RAIL_LADDER_LABELS,
+            support_floor,
+        ),
+        // Theme affinity used to be read out of `title.tags`, which is the
+        // one place a user's own tag vocabulary lives. Tags are private
+        // catalog state and are never sent to SMG, so the theme rails are
+        // sourced from canonical theme tags, exactly as the genre rails are
+        // sourced from canonical genre tags.
+        theme_labels: top_owned_title_labels(
+            titles,
+            |title| canonical_tag_labels(&title.canonical_tags, "theme"),
+            DISCOVERY_RAIL_LADDER_LABELS,
+            support_floor,
+        ),
+        medium_mix: DiscoveryLibraryMediumMix::from_titles(titles),
+        owned_title_count: titles.len(),
     }
 }
 

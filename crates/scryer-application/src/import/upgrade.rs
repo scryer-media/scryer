@@ -1094,7 +1094,7 @@ async fn prepare_replacement_before_old_removal(
         &new_file_id,
         prepared.accepted.as_ref(),
     )
-    .await;
+    .await?;
 
     if let Err(reason) = validate_replacement_media_file(
         app,

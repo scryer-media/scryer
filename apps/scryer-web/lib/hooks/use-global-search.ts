@@ -97,6 +97,10 @@ export type MetadataCatalogRequestOptions = {
   requestedQualityProfileId?: string;
   requestedMonitorType?: MetadataCatalogMonitorType;
   requestedMonitorSelection?: MonitorSelectionDraft;
+  /// How long the requester wants the media kept, in days. Omitted means
+  /// forever, which is what Scryer granted before leases existed — there is no
+  /// separate "forever" flag on the requester side.
+  requestedLeaseDays?: number;
 };
 
 export type AnimeCatalogDefaults = {
@@ -367,6 +371,40 @@ function normalizeCatalogAddRequestKey(
     .join("|");
 
   return `${facet}|${normalizedIds}`;
+}
+
+/// The submit input, built once and used twice: by the submit mutation and by
+/// the request dialog's pre-flight query, which takes the *same* input type. A
+/// pre-flight that answered about a different document than the submit would
+/// send would be worse than no pre-flight at all, so the two share this.
+export function submitMediaRequestInput(
+  result: MetadataTvdbSearchItem,
+  facet: Facet,
+  options: MetadataCatalogRequestOptions,
+) {
+  return {
+    libraryId: options.libraryId.trim(),
+    facet,
+    title: result.name.trim(),
+    externalIds: metadataResultExternalIds(result),
+    year: result.year ?? undefined,
+    overview: result.overview || undefined,
+    sortTitle: result.sortTitle || undefined,
+    slug: result.slug || undefined,
+    runtimeMinutes: result.runtimeMinutes ?? undefined,
+    language: result.language || undefined,
+    contentStatus: result.status || undefined,
+    rating: result.rating ?? undefined,
+    ratingSources: result.ratingSources,
+    externalRatings: result.externalRatings,
+    requestedQualityProfileId: options.requestedQualityProfileId || undefined,
+    requestedMonitorType: options.requestedMonitorType || undefined,
+    requestedMonitorSelection:
+      options.requestedMonitorType === "ADVANCED"
+        ? monitorSelectionInput(options.requestedMonitorSelection)
+        : undefined,
+    requestedLeaseDays: options.requestedLeaseDays ?? undefined,
+  };
 }
 
 function metadataResultExternalIds(result: MetadataTvdbSearchItem): ExternalId[] {
@@ -1562,28 +1600,7 @@ export function useGlobalSearch({
       pendingRequestKeysRef.current.add(requestKey);
       try {
         const { error } = await client.mutation(submitMediaRequestMutation, {
-          input: {
-            libraryId,
-            facet,
-            title: name,
-            externalIds,
-            year: result.year ?? undefined,
-            overview: result.overview || undefined,
-            sortTitle: result.sortTitle || undefined,
-            slug: result.slug || undefined,
-            runtimeMinutes: result.runtimeMinutes ?? undefined,
-            language: result.language || undefined,
-            contentStatus: result.status || undefined,
-            rating: result.rating ?? undefined,
-            ratingSources: result.ratingSources,
-            externalRatings: result.externalRatings,
-            requestedQualityProfileId: options.requestedQualityProfileId || undefined,
-            requestedMonitorType: options.requestedMonitorType || undefined,
-            requestedMonitorSelection:
-              options.requestedMonitorType === "ADVANCED"
-                ? monitorSelectionInput(options.requestedMonitorSelection)
-                : undefined,
-          },
+          input: submitMediaRequestInput(result, facet, options),
         }).toPromise();
         if (error) throw error;
         setGlobalStatus(t("status.requestSubmitted", { name }));

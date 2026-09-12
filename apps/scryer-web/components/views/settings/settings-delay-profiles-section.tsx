@@ -5,7 +5,8 @@ import { InfoHelp } from "@/components/common/info-help";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
-import { Checkbox, CheckboxField } from "@/components/ui/checkbox";
+import { FacetSelect, FacetTags } from "@/components/common/facet-select";
+import { CheckboxField } from "@/components/ui/checkbox";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
@@ -22,7 +23,6 @@ import {
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
   DelayProfileDraft,
-  DelayProfileFacet,
   ParsedDelayProfile,
 } from "@/lib/types/delay-profiles";
 import {
@@ -48,12 +48,6 @@ type SettingsDelayProfilesSectionProps = {
   isEditorOpen: boolean;
   editorMode: "create" | "edit";
   startCreateProfile: () => void;
-};
-
-const FACET_LABELS: Record<string, string> = {
-  movie: "Movies",
-  series: "TV Series",
-  anime: "Anime",
 };
 
 const DELAY_PANEL_CLASS =
@@ -120,18 +114,6 @@ export function SettingsDelayProfilesSection({
     return nextValue === "" ? 0 : Number(nextValue);
   }
 
-  function toggleFacet(facet: DelayProfileFacet) {
-    setDraft((prev) => {
-      const has = prev.applies_to_facets.includes(facet);
-      return {
-        ...prev,
-        applies_to_facets: has
-          ? prev.applies_to_facets.filter((f) => f !== facet)
-          : [...prev.applies_to_facets, facet],
-      };
-    });
-  }
-
   function updateProtocolMode(mode: DelayProfileProtocolMode) {
     setDraft((prev) => applyDelayProfileProtocolMode(prev, mode));
   }
@@ -194,12 +176,12 @@ export function SettingsDelayProfilesSection({
                           ? `≥ ${profile.bypass_score_threshold}`
                           : "—"}
                       </TableCell>
-                      <TableCell className="truncate text-center">
-                        {profile.applies_to_facets.length === 0
-                          ? t("settings.delayProfileAllFacets")
-                          : profile.applies_to_facets
-                              .map((f) => FACET_LABELS[f] ?? f)
-                              .join(", ")}
+                      <TableCell className="text-center">
+                        <FacetTags
+                          className="justify-center"
+                          values={profile.applies_to_facets}
+                          emptyLabel={t("settings.delayProfileAllFacets")}
+                        />
                       </TableCell>
                       <TableCell className="text-center">{profile.priority}</TableCell>
                       <TableCell className="text-center">
@@ -396,18 +378,14 @@ export function SettingsDelayProfilesSection({
                 label={t("settings.delayProfileFacetsLabel")}
                 help={t("settings.delayProfileFacetsHelp")}
               />
-              <div className="flex flex-wrap gap-4">
-                {FACET_OPTIONS.map((facet) => (
-                  <label key={facet} className="flex items-center gap-2 text-sm text-[var(--scry-ink2)]">
-                    <Checkbox
-                      id={selectorId("settings-delay-profile-facet", facet)}
-                      checked={draft.applies_to_facets.includes(facet)}
-                      onCheckedChange={() => toggleFacet(facet)}
-                    />
-                    {FACET_LABELS[facet] ?? facet}
-                  </label>
-                ))}
-              </div>
+              <FacetSelect
+                idPrefix="settings-delay-profile-facet"
+                values={FACET_OPTIONS}
+                selected={draft.applies_to_facets}
+                onChange={(next) => {
+                  setDraft((prev) => ({ ...prev, applies_to_facets: next }));
+                }}
+              />
             </div>
 
             {/* Tags */}

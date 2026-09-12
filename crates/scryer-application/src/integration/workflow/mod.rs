@@ -19,7 +19,7 @@ use std::{
 // This facade keeps the previous module scope while the former junk drawer is
 // mechanically split into functional source files.
 include!("indexers.rs");
-include!("indexer_proxies.rs");
+include!("proxies.rs");
 include!("seeding_profiles.rs");
 include!("managed_indexers.rs");
 include!("download_clients.rs");

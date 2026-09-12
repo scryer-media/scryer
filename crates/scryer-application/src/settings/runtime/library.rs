@@ -671,14 +671,14 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
 
         let can_request = self
-            .has_granted_library_permission(
+            .has_library_permission(
                 actor,
                 &library.id,
                 scryer_domain::LibraryPermission::Request,
             )
             .await?;
         let can_manage = self
-            .has_granted_library_permission(
+            .has_library_permission(
                 actor,
                 &library.id,
                 scryer_domain::LibraryPermission::ManageTitles,
@@ -713,7 +713,7 @@ impl AppUseCase {
             .await?
             .ok_or_else(|| AppError::NotFound(format!("library {library_id}")))?;
         let can_manage_titles = self
-            .has_granted_library_permission(
+            .has_library_permission(
                 actor,
                 &library.id,
                 scryer_domain::LibraryPermission::ManageTitles,

@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-use async_graphql::{Context, Error, ID, Object, Result as GqlResult};
+use async_graphql::{Context, Error, ID, MaybeUndefined, Object, Result as GqlResult};
 use chrono::{DateTime, Utc};
 use scryer_application::{
     AcquisitionSettings as AppAcquisitionSettings, ApiKeyExpiryPreset as AppApiKeyExpiryPreset,
@@ -15,11 +15,14 @@ use scryer_application::{
     UpdateRecycleBinSettings as AppUpdateRecycleBinSettings,
     UpdateSecuritySettings as AppUpdateSecuritySettings,
     UpdateSubtitleSettings as AppUpdateSubtitleSettings,
+    UpdateVerificationSettings as AppUpdateVerificationSettings,
 };
 
 use super::{
     from_api_key, from_oauth_client_registration, from_plugin_auto_update_settings,
-    from_ui_settings, into_oauth_client_kind, ui_settings_update_from_input,
+    from_title_tag_definition, from_title_tag_rewrite_counts, from_ui_settings,
+    from_verification_settings, into_oauth_client_kind, to_verification_depth,
+    ui_settings_update_from_input,
 };
 use scryer_interface_core::{
     AuthlessDefaultSession, LoginAttemptPrincipal, LoginErrorClassification,
@@ -111,6 +114,10 @@ fn from_acquisition_settings(
 
 fn from_general_settings(settings: scryer_application::GeneralSettings) -> GeneralSettingsPayload {
     GeneralSettingsPayload {
+        api_explorer_enabled: settings.api_explorer_enabled,
+        experimental_features_enabled: settings.experimental_features_enabled,
+        personalized_discovery_enabled: settings.personalized_discovery_enabled,
+        srrdb_filename_recovery_enabled: settings.srrdb_filename_recovery_enabled,
         keep_history_forever: settings.keep_history_forever,
         history_retention_days: settings.history_retention_days,
         image_cache_max_size_mb: settings.image_cache_max_size_mb,
@@ -887,6 +894,10 @@ impl SettingsMutations {
             .update_general_settings(
                 &actor,
                 AppUpdateGeneralSettings {
+                    api_explorer_enabled: input.api_explorer_enabled,
+                    experimental_features_enabled: input.experimental_features_enabled,
+                    personalized_discovery_enabled: input.personalized_discovery_enabled,
+                    srrdb_filename_recovery_enabled: input.srrdb_filename_recovery_enabled,
                     keep_history_forever: input.keep_history_forever,
                     history_retention_days: input.history_retention_days,
                     image_cache_max_size_mb: input.image_cache_max_size_mb,
@@ -938,6 +949,30 @@ impl SettingsMutations {
             .map_err(to_gql_error)?;
 
         Ok(from_recycle_bin_settings(settings))
+    }
+
+    /// Saves the verification depth applied to download-client completed-download copies, after checking the system-settings permission. Location operations always verify in full and ignore it.
+    async fn update_verification_settings(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Verification depth to save.")] input: UpdateVerificationSettingsInput,
+    ) -> GqlResult<VerificationSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+
+        let settings = app
+            .update_verification_settings(
+                &actor,
+                AppUpdateVerificationSettings {
+                    depth: to_verification_depth(input.depth),
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(from_verification_settings(settings))
     }
 
     /// Saves the automatic official-plugin patch update setting after checking the system-settings permission.
@@ -1408,6 +1443,103 @@ impl SettingsMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(DelayProfileDeletionPayload { id: ID::from(id) })
+    }
+
+    /// Defines a new title tag after checking the catalog-settings permission.
+    ///
+    /// Deciding which tags exist is catalog configuration, exactly like a delay
+    /// profile. Deciding which titles carry them is title management and is
+    /// checked per library by `updateTitleTags` instead.
+    async fn create_title_tag_definition(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Label to define and an optional note; the label is normalized before it is stored."
+        )]
+        input: CreateTitleTagDefinitionInput,
+    ) -> GqlResult<TitleTagDefinitionMutationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageCatalogSettings)
+                .await?;
+        let definition = app
+            .create_title_tag_definition(&actor, &input.label, input.description)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(TitleTagDefinitionMutationPayload {
+            // A tag nothing carries yet rewrote nothing, so the counts are the
+            // zero value rather than a separate payload shape.
+            definition: from_title_tag_definition(definition, 0, 0),
+            counts: from_title_tag_rewrite_counts(Default::default()),
+        })
+    }
+
+    /// Renames or re-describes a title tag after checking the catalog-settings permission.
+    ///
+    /// A rename rewrites every title and delay profile carrying the old label.
+    /// Rule sources are immutable and are never rewritten, so the returned
+    /// counts name how many rules referenced the old label and will stop
+    /// matching.
+    async fn update_title_tag_definition(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Tag identity plus the replacement label or description; omitted fields keep their current values."
+        )]
+        input: UpdateTitleTagDefinitionInput,
+    ) -> GqlResult<TitleTagDefinitionMutationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageCatalogSettings)
+                .await?;
+        let description = match input.description {
+            MaybeUndefined::Undefined => None,
+            MaybeUndefined::Null => Some(None),
+            MaybeUndefined::Value(value) => Some(Some(value)),
+        };
+        let updated = app
+            .update_title_tag_definition(&actor, input.id.as_str(), input.label, description)
+            .await
+            .map_err(to_gql_error)?;
+        let title_count = updated.counts.titles;
+        let series_movie_count = updated.counts.series_movies;
+        Ok(TitleTagDefinitionMutationPayload {
+            definition: from_title_tag_definition(
+                updated.definition,
+                title_count,
+                series_movie_count,
+            ),
+            counts: from_title_tag_rewrite_counts(updated.counts),
+        })
+    }
+
+    /// Deletes a title tag and strips it from every title and delay profile.
+    async fn delete_title_tag_definition(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID of the title tag to delete.")] id: ID,
+    ) -> GqlResult<TitleTagDefinitionDeletionPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor =
+            require_config_app_permission(ctx, scryer_domain::AppPermission::ManageCatalogSettings)
+                .await?;
+        let id = id.to_string();
+        let definition = app
+            .title_tag_definitions(&actor)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .find(|summary| summary.definition.id == id)
+            .ok_or_else(|| to_gql_error(AppError::NotFound(format!("title tag {id}"))))?;
+        let counts = app
+            .delete_title_tag_definition(&actor, &id)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(TitleTagDefinitionDeletionPayload {
+            id: ID::from(id),
+            label: definition.definition.label,
+            counts: from_title_tag_rewrite_counts(counts),
+        })
     }
 
     /// Saves media settings for one content scope, with nullable fields passed through as application update semantics.

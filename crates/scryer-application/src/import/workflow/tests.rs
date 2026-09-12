@@ -2,6 +2,9 @@
 mod tests {
     #[cfg(unix)]
     use super::is_sample_file;
+    // Only the runtime-media-analysis tests below use these; gating the import
+    // keeps the default-feature lane free of unused-import warnings without
+    // breaking the workspace lane, where feature unification turns them on.
     use super::{
         CompletedDownloadSubmissionMatch, CompletedDownloadSubmissionResolution,
         CompletedImportEvidenceInputs, CompletedImportEvidenceSource,
@@ -9,15 +12,16 @@ mod tests {
         IMPORT_TRANSFER_HEARTBEAT_INTERVAL, ManualImportCandidateMapping, ReleaseEvidence,
         SelectedCompletedImportEvidence, StoredCompletedImportRequestPayload,
         completed_import_error_message_is_retryable, completed_import_status_for_result,
-        discover_manual_import_video_candidates, download_submission_persistence_may_be_in_flight,
+        download_submission_persistence_may_be_in_flight,
         manual_episode_suggestion_for_grabbed_scope, parse_import_release_for_title,
-        qualify_manual_import_video_candidate, resolved_episode_ids_are_within_expected,
-        sanitized_title_folder_component,
+        resolved_episode_ids_are_within_expected, sanitized_title_folder_component,
         select_completed_import_evidence, should_persist_import_transfer_heartbeat,
         skip_reason_for_import_check_code, stamp_scryer_submission_origin,
         submission_has_scryer_origin, validate_manual_import_candidate_mapping_targets,
         validate_manual_import_source_under_trusted_root,
     };
+    #[cfg(feature = "runtime-media-analysis")]
+    use super::{discover_manual_import_video_candidates, qualify_manual_import_video_candidate};
     use crate::{DownloadSubmission, DownloadSubmissionPurpose, SubmissionScope};
     use chrono::Utc;
     use scryer_domain::MediaFacet;
@@ -271,7 +275,7 @@ mod tests {
     ) -> CompletedDownloadSubmissionResolution {
         CompletedDownloadSubmissionResolution::Matched(Box::new(CompletedDownloadSubmissionMatch {
             submission: DownloadSubmission {
-    download_id: scryer_domain::download_identity::DownloadId::new(),
+                download_id: scryer_domain::download_identity::DownloadId::new(),
                 title_id: title_id.to_string(),
                 facet: facet.to_string(),
                 download_client_id: Some("client-1".to_string()),
@@ -1088,7 +1092,9 @@ mod tests {
     #[test]
     fn invalid_and_sample_check_codes_are_permanent_policy_mismatches() {
         assert_eq!(
-            skip_reason_for_import_check_code(crate::import_checks::ImportCheckCode::InvalidExtension),
+            skip_reason_for_import_check_code(
+                crate::import_checks::ImportCheckCode::InvalidExtension
+            ),
             ImportSkipReason::PolicyMismatch
         );
         assert_eq!(
@@ -1102,7 +1108,9 @@ mod tests {
             ImportSkipReason::PolicyMismatch
         );
         assert_eq!(
-            skip_reason_for_import_check_code(crate::import_checks::ImportCheckCode::StillUnpacking),
+            skip_reason_for_import_check_code(
+                crate::import_checks::ImportCheckCode::StillUnpacking
+            ),
             ImportSkipReason::DownloadInProgress
         );
     }
@@ -1167,7 +1175,10 @@ mod tests {
 
         // These execution races lack a structured outcome and remain the only
         // message-based retry hints. Import-check rejection reasons are typed.
-        for transient in ["source changed during copy", "destination temporarily unavailable"] {
+        for transient in [
+            "source changed during copy",
+            "destination temporarily unavailable",
+        ] {
             result.error_message = Some(transient.to_string());
             assert_eq!(
                 completed_import_status_for_result(&result, ImportStatus::Failed),
@@ -1563,6 +1574,7 @@ mod tests {
     fn manual_import_candidate_mapping_validation_requires_unique_candidate_and_exactly_one_target()
     {
         let neither = ManualImportCandidateMapping {
+            disc_selection: None,
             candidate_id: "candidate-1".to_string(),
             episode_id: None,
             series_movie_link_id: None,
@@ -1572,6 +1584,7 @@ mod tests {
         assert!(err.to_string().contains("requires episode_id"));
 
         let both = ManualImportCandidateMapping {
+            disc_selection: None,
             candidate_id: "candidate-1".to_string(),
             episode_id: Some("episode-1".to_string()),
             series_movie_link_id: Some("series-movie-link-1".to_string()),
@@ -1581,6 +1594,7 @@ mod tests {
         assert!(err.to_string().contains("cannot include both"));
 
         let series_movie = ManualImportCandidateMapping {
+            disc_selection: None,
             candidate_id: "candidate-1".to_string(),
             episode_id: None,
             series_movie_link_id: Some("series-movie-link-1".to_string()),
@@ -1593,6 +1607,7 @@ mod tests {
         // manual import with no action that could ever succeed: the UI sends
         // exactly this and the server refused it.
         let movie = ManualImportCandidateMapping {
+            disc_selection: None,
             candidate_id: "candidate-1".to_string(),
             episode_id: None,
             series_movie_link_id: None,
@@ -1603,6 +1618,7 @@ mod tests {
         // The facet only relaxes the missing-target rule; a contradictory
         // mapping is still rejected.
         let movie_with_both = ManualImportCandidateMapping {
+            disc_selection: None,
             candidate_id: "candidate-1".to_string(),
             episode_id: Some("episode-1".to_string()),
             series_movie_link_id: Some("series-movie-link-1".to_string()),
@@ -1615,6 +1631,7 @@ mod tests {
         assert!(err.to_string().contains("cannot include both"));
 
         let duplicate = ManualImportCandidateMapping {
+            disc_selection: None,
             candidate_id: "candidate-1".to_string(),
             episode_id: Some("episode-1".to_string()),
             series_movie_link_id: None,
@@ -2106,7 +2123,13 @@ mod series_movie_naming_tests {
     #[test]
     fn the_release_date_resolves_a_special_the_name_could_not() {
         let episodes = vec![
-            episode("ep-s0e1", "0", "1", Some("Behind the Scenes"), Some("2023-01-02")),
+            episode(
+                "ep-s0e1",
+                "0",
+                "1",
+                Some("Behind the Scenes"),
+                Some("2023-01-02"),
+            ),
             episode(
                 "ep-s0e2",
                 "0",
@@ -2185,7 +2208,12 @@ mod series_movie_naming_tests {
             "Quiet Harbor - Quiet Harbor: Graduation.mkv"
         );
         assert_eq!(
-            series_movie_import_filename("Quiet Harbor", Some(""), "Quiet Harbor: Graduation", "mkv"),
+            series_movie_import_filename(
+                "Quiet Harbor",
+                Some(""),
+                "Quiet Harbor: Graduation",
+                "mkv"
+            ),
             "Quiet Harbor - Quiet Harbor: Graduation.mkv"
         );
     }

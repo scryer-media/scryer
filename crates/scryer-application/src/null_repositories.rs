@@ -10,6 +10,7 @@ use scryer_domain::{
 };
 
 use scryer_domain::RuleSet;
+use scryer_domain::{MaintenanceRuleRevision, MaintenanceRuleSet};
 
 use crate::contracts::{
     ClientJobLocator, DownloadClientBindingRecord, DownloadRecord, ObservationResolution,
@@ -49,21 +50,21 @@ use crate::{
     ExternalImportSetupSecretDraftSaveResult, ExternalImportSetupSecretDraftStatus, FileImporter,
     HousekeepingRepository, ImageProxyCacheControl, ImageProxyCacheEntryRecord,
     ImageProxyCacheUsage, ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord,
-    ImportArtifact, ImportArtifactRepository, ImportRepository, IndexerProxyConfigRepository,
-    IndexerQueryStats, IndexerSearchLearningKey, IndexerSearchLearningRecord,
-    IndexerSearchLearningRepository, IndexerStatsTracker, JobKey, JobRunRecord, JobRunRepository,
-    LibraryProbeRepository, LibraryProbeSignature, LibraryRepository, LibraryRootDraft,
-    LibraryScanUnmatchedItem, LibraryScanUnmatchedItemRepository, MediaFileRepository,
+    ImportArtifact, ImportArtifactRepository, ImportRepository, IndexerQueryStats,
+    IndexerSearchLearningKey, IndexerSearchLearningRecord, IndexerSearchLearningRepository,
+    IndexerStatsTracker, JobKey, JobRunRecord, JobRunRepository, LibraryProbeRepository,
+    LibraryProbeSignature, LibraryRepository, LibraryRootDraft, LibraryScanUnmatchedItem,
+    LibraryScanUnmatchedItemRepository, MaintenanceRuleSetRepository, MediaFileRepository,
     MediaRequestCounts, MediaRequestQuery, MediaRequestRepository, MediaRequestResolution,
     NewBlocklistEntry, NewMediaRequest, NotificationChannelRepository,
     NotificationSubscriptionRepository, OAuthAuthorizationCodeRecord, OAuthConnectedAppRecord,
     OAuthRefreshGrantRecord, OAuthRefreshRotationOutcome, OAuthRefreshTokenRecord, OAuthRepository,
     PendingRelease, PendingReleaseRepository, PendingReleasesPageQuery, PendingStagedNzb,
     PluginDescriptorLoader, PluginInstallationRepository, PostProcessingScriptRepository,
-    ReleaseDecision, RuleSetRepository, SchedulerAdmission, SchedulerBatchDecision,
-    SchedulerBatchRequest, SchedulerFeedback, SchedulerLease, SchedulerSnapshot,
-    SchedulerSnapshotFilter, ScopeIndexerCoverageRepository, SeedingProfileRepository,
-    SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
+    ProxyConfigRepository, ReleaseDecision, RuleSetRepository, SchedulerAdmission,
+    SchedulerBatchDecision, SchedulerBatchRequest, SchedulerFeedback, SchedulerLease,
+    SchedulerSnapshot, SchedulerSnapshotFilter, ScopeIndexerCoverageRepository,
+    SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
     TitleEpisodeProgressSummary, TitleImageBlob, TitleImageKind, TitleImageProcessor,
     TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantSpec,
     TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary, UiSettings,
@@ -108,7 +109,7 @@ impl SeedingProfileRepository for NullSeedingProfileRepository {
 }
 
 #[derive(Default)]
-pub struct NullIndexerProxyConfigRepository;
+pub struct NullProxyConfigRepository;
 
 #[derive(Default)]
 pub struct NullIndexerErrorRepository;
@@ -141,29 +142,29 @@ impl IndexerErrorRepository for NullIndexerErrorRepository {
 }
 
 #[async_trait]
-impl IndexerProxyConfigRepository for NullIndexerProxyConfigRepository {
+impl ProxyConfigRepository for NullProxyConfigRepository {
     async fn list(
         &self,
-        _provider_type: Option<scryer_domain::IndexerProxyProviderType>,
-    ) -> AppResult<Vec<scryer_domain::IndexerProxyConfig>> {
+        _provider_type: Option<scryer_domain::ProxyProviderType>,
+    ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
         Ok(Vec::new())
     }
 
-    async fn get_by_id(&self, _id: &str) -> AppResult<Option<scryer_domain::IndexerProxyConfig>> {
+    async fn get_by_id(&self, _id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
         Ok(None)
     }
 
     async fn create(
         &self,
-        config: scryer_domain::IndexerProxyConfig,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
         Ok(config)
     }
 
     async fn update(
         &self,
-        config: scryer_domain::IndexerProxyConfig,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig> {
         Ok(config)
     }
 
@@ -174,10 +175,24 @@ impl IndexerProxyConfigRepository for NullIndexerProxyConfigRepository {
     async fn record_health(
         &self,
         _id: &str,
-        _status: scryer_domain::IndexerProxyHealthStatus,
+        _status: scryer_domain::ProxyHealthStatus,
         _error_message: Option<String>,
         _error_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn pin_host_key(
+        &self,
+        _id: &str,
+        _fingerprint: &str,
+        _pinned_at: chrono::DateTime<chrono::Utc>,
+        _expected_updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool> {
+        Ok(true)
+    }
+
+    async fn clear_host_key(&self, _id: &str) -> AppResult<()> {
         Ok(())
     }
 }
@@ -787,6 +802,169 @@ impl WorkflowOperationRepository for NullWorkflowOperationRepository {
 }
 
 #[derive(Default)]
+pub struct NullLocationOperationRepository;
+
+#[async_trait]
+impl crate::ports::LocationOperationRepository for NullLocationOperationRepository {
+    async fn create_location_operation(
+        &self,
+        _operation: &crate::location::model::LocationOperation,
+        _plan_json: Option<&str>,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn get_location_operation(
+        &self,
+        _operation_id: &str,
+    ) -> AppResult<Option<crate::location::model::LocationOperation>> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn get_location_operation_plan_json(
+        &self,
+        _operation_id: &str,
+    ) -> AppResult<Option<String>> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn list_active_location_operations(
+        &self,
+    ) -> AppResult<Vec<crate::location::model::LocationOperation>> {
+        Ok(Vec::new())
+    }
+
+    async fn update_location_operation_progress(
+        &self,
+        _progress: &crate::ports::LocationOperationProgress,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn set_location_operation_job_run(
+        &self,
+        _operation_id: &str,
+        _job_run_id: &str,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn request_location_operation_cancel(&self, _operation_id: &str) -> AppResult<bool> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn reopen_location_operation(&self, _operation_id: &str) -> AppResult<bool> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn location_operation_cancel_requested(&self, _operation_id: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn upsert_location_title_checkpoint(
+        &self,
+        _checkpoint: &crate::location::model::TitleCheckpoint,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn list_location_title_checkpoints(
+        &self,
+        _operation_id: &str,
+    ) -> AppResult<Vec<crate::location::model::TitleCheckpoint>> {
+        Ok(Vec::new())
+    }
+
+    async fn record_location_file_verification(
+        &self,
+        _record: &crate::location::model::FileVerificationRecord,
+    ) -> AppResult<()> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn list_location_file_verifications(
+        &self,
+        _operation_id: &str,
+        _title_id: Option<&str>,
+    ) -> AppResult<Vec<crate::location::model::FileVerificationRecord>> {
+        Ok(Vec::new())
+    }
+
+    async fn verified_destination_paths(
+        &self,
+        _operation_id: &str,
+        _title_id: &str,
+    ) -> AppResult<std::collections::BTreeSet<String>> {
+        Ok(std::collections::BTreeSet::new())
+    }
+
+    async fn claim_location_operation_ownership(
+        &self,
+        _operation_id: &str,
+        _entities: &[crate::location::ownership_guard::OwnedEntity],
+    ) -> AppResult<crate::ports::LocationOwnershipOutcome> {
+        Err(location_operation_repository_missing())
+    }
+
+    async fn release_location_operation_ownership(&self, _operation_id: &str) -> AppResult<u64> {
+        Ok(0)
+    }
+
+    async fn location_ownership_holder(
+        &self,
+        _entity: &crate::location::ownership_guard::OwnedEntity,
+    ) -> AppResult<Option<String>> {
+        Ok(None)
+    }
+
+    async fn list_location_ownership_claims(
+        &self,
+    ) -> AppResult<Vec<crate::ports::LocationOwnershipClaim>> {
+        Ok(Vec::new())
+    }
+}
+
+/// Reads answer "nothing is happening" so a guard consulting an unconfigured
+/// datastore never invents a conflict; writes fail loudly rather than pretending
+/// an operation was persisted.
+fn location_operation_repository_missing() -> AppError {
+    AppError::Repository("location operation repository is not configured".to_string())
+}
+
+/// The US7 merge engine with no datastore behind it.
+///
+/// Unlike the location-operation null repository, **both** halves fail here.
+/// There is no safe "nothing is happening" answer for a merge: an empty
+/// snapshot would plan a merge over a destination the engine cannot see, which
+/// is precisely the guess FR-066 exists to prevent. A deployment with no merge
+/// store configured must refuse the merge, not perform an unexamined one.
+#[derive(Default)]
+pub struct NullTitleMergeRepository;
+
+#[async_trait]
+impl crate::location::merge::engine::TitleMergeRepository for NullTitleMergeRepository {
+    async fn load_merge_snapshot(
+        &self,
+        _source_title_id: &str,
+        _destination_title_id: &str,
+        _current_operation_id: Option<&str>,
+    ) -> AppResult<crate::location::merge::engine::MergeCatalogSnapshot> {
+        Err(title_merge_repository_missing())
+    }
+
+    async fn execute_title_merge(
+        &self,
+        _plan: &crate::location::merge::engine::MergePlan,
+    ) -> AppResult<crate::location::merge::engine::MergeOutcome> {
+        Err(title_merge_repository_missing())
+    }
+}
+
+fn title_merge_repository_missing() -> AppError {
+    AppError::Repository("title merge repository is not configured".to_string())
+}
+
+#[derive(Default)]
 pub struct NullMediaFileRepository;
 
 #[async_trait]
@@ -1323,6 +1501,484 @@ impl RuleSetRepository for NullRuleSetRepository {
 }
 
 #[derive(Default)]
+pub struct NullMaintenanceRuleSetRepository;
+
+#[async_trait]
+impl MaintenanceRuleSetRepository for NullMaintenanceRuleSetRepository {
+    async fn list_rule_sets(&self) -> AppResult<Vec<MaintenanceRuleSet>> {
+        Ok(vec![])
+    }
+    async fn get_rule_set(&self, _id: &str) -> AppResult<Option<MaintenanceRuleSet>> {
+        Ok(None)
+    }
+    async fn create_rule_set(
+        &self,
+        _rule_set: &MaintenanceRuleSet,
+        _revision: &MaintenanceRuleRevision,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn add_revision(
+        &self,
+        _revision: &MaintenanceRuleRevision,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn get_revision(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+    ) -> AppResult<Option<MaintenanceRuleRevision>> {
+        Ok(None)
+    }
+    async fn list_revisions(&self, _rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>> {
+        Ok(vec![])
+    }
+    async fn update_rule_set_metadata(
+        &self,
+        _id: &str,
+        _name: &str,
+        _description: &str,
+        _library_ids: &[String],
+        _disarm: bool,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn delete_rule_set(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        _id: &str,
+        _mode: scryer_domain::MaintenanceEvaluationMode,
+        _enabled: bool,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+    async fn update_rule_set_arming(
+        &self,
+        _id: &str,
+        _arming: scryer_domain::MaintenanceEffectArming,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "maintenance rule repository is not configured".to_string(),
+        ))
+    }
+}
+
+/// Reads answer empty and writes refuse: an assembly with no maintenance
+/// evaluation store has no candidates, so the evaluator finds nothing to
+/// reconcile rather than silently dropping rows it believed it wrote.
+#[derive(Default)]
+pub struct NullMaintenanceEvaluationRepository;
+
+const MAINTENANCE_EVALUATION_NOT_CONFIGURED: &str =
+    "maintenance evaluation repository is not configured";
+
+#[async_trait]
+impl crate::ports::MaintenanceCandidateRepository for NullMaintenanceEvaluationRepository {
+    async fn get_active_subject_candidate(
+        &self,
+        _rule_set_id: &str,
+        _subject_kind: &str,
+        _subject_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
+        Ok(None)
+    }
+    async fn list_candidates(
+        &self,
+        _query: &crate::ports::MaintenanceCandidateQuery,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
+        Ok(vec![])
+    }
+    async fn max_subject_match_generation(
+        &self,
+        _rule_set_id: &str,
+        _subject_kind: &str,
+        _subject_id: &str,
+    ) -> AppResult<i64> {
+        Ok(0)
+    }
+    async fn create_candidate(
+        &self,
+        _candidate: &scryer_domain::LifecycleCandidate,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn record_candidate_match(
+        &self,
+        _id: &str,
+        _last_matched_at: DateTime<Utc>,
+        _reason_codes: &[String],
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn hold_candidate(
+        &self,
+        _id: &str,
+        _held_since: DateTime<Utc>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn transition_candidate_state(
+        &self,
+        _id: &str,
+        _state: scryer_domain::MaintenanceCandidateState,
+        _state_reason: &str,
+        _expected_states: &[scryer_domain::MaintenanceCandidateState],
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        // A refusal, not `Ok(false)`: an unconfigured store never wrote the row,
+        // which is a different thing from losing a race for it.
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn finish_leased_candidate(
+        &self,
+        _id: &str,
+        _expected_lease_updated_at: DateTime<Utc>,
+        _state: scryer_domain::MaintenanceCandidateState,
+        _state_reason: &str,
+        _finished_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn cancel_active_candidates_for_rule(
+        &self,
+        _rule_set_id: &str,
+        _state_reason: &str,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn count_candidates_by_state(
+        &self,
+        _rule_set_id: &str,
+    ) -> AppResult<Vec<(scryer_domain::MaintenanceCandidateState, i64)>> {
+        Ok(vec![])
+    }
+    async fn list_due_candidates(
+        &self,
+        _rule_set_id: &str,
+        _due_before: DateTime<Utc>,
+        _stale_before: DateTime<Utc>,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>> {
+        Ok(vec![])
+    }
+    async fn lease_candidate_for_execution(
+        &self,
+        _id: &str,
+        _stale_before: DateTime<Utc>,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn record_candidate_attempts(
+        &self,
+        _id: &str,
+        _action_attempts: i64,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl crate::ports::LifecycleActionRunRepository for NullMaintenanceEvaluationRepository {
+    async fn latest_scoped_deletion_action_run(
+        &self,
+        _candidate_id: &str,
+        _match_generation: i64,
+        _action_kind: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleActionRun>> {
+        Ok(None)
+    }
+
+    async fn start_action_run(&self, _run: &scryer_domain::LifecycleActionRun) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn finish_action_run(&self, _run: &scryer_domain::LifecycleActionRun) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn finish_held_action_run_and_release_attempt(
+        &self,
+        _run: &scryer_domain::LifecycleActionRun,
+        _expected_attempt: i64,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn list_action_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _candidate_id: Option<&str>,
+        _limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>> {
+        Ok(vec![])
+    }
+    async fn list_sequence_history_action_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _candidate_id: Option<&str>,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>> {
+        Ok(vec![])
+    }
+    async fn list_non_sequence_action_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _candidate_id: Option<&str>,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>> {
+        Ok(vec![])
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceActionStepRepository for NullMaintenanceEvaluationRepository {
+    async fn get_action_step(
+        &self,
+        _key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Option<scryer_domain::MaintenanceActionStepRun>> {
+        Ok(None)
+    }
+
+    async fn claim_action_step(
+        &self,
+        _step: &scryer_domain::MaintenanceActionStepRun,
+        _stale_before: DateTime<Utc>,
+        _lease_id: &str,
+        _leased_at: DateTime<Utc>,
+    ) -> AppResult<crate::ports::MaintenanceActionStepClaim> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn checkpoint_action_step(
+        &self,
+        _step: &scryer_domain::MaintenanceActionStepRun,
+        _expected_lease_id: &str,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn finish_action_step(
+        &self,
+        _step: &scryer_domain::MaintenanceActionStepRun,
+        _expected_lease_id: &str,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn list_action_steps(
+        &self,
+        _candidate_id: &str,
+        _match_generation: i64,
+        _revision_number: i64,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>> {
+        Ok(vec![])
+    }
+
+    async fn list_action_steps_for_candidates(
+        &self,
+        _candidates: &[crate::ports::MaintenanceActionStepCandidateKey],
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>> {
+        Ok(vec![])
+    }
+
+    async fn list_action_step_attempts(
+        &self,
+        _key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepAttempt>> {
+        Ok(vec![])
+    }
+
+    async fn get_action_job_receipt(
+        &self,
+        _key: &scryer_domain::MaintenanceActionStepKey,
+        _dispatch_attempt: i64,
+    ) -> AppResult<Option<scryer_domain::MaintenanceActionJobReceipt>> {
+        Ok(None)
+    }
+
+    async fn list_action_job_receipts(
+        &self,
+        _key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>> {
+        Ok(vec![])
+    }
+
+    async fn list_action_job_receipts_for_steps(
+        &self,
+        _steps: &[scryer_domain::MaintenanceActionStepKey],
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>> {
+        Ok(vec![])
+    }
+
+    async fn claim_action_job_dispatch(
+        &self,
+        _receipt: &scryer_domain::MaintenanceActionJobReceipt,
+    ) -> AppResult<crate::ports::MaintenanceActionJobReceiptClaim> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn transition_action_job_receipt(
+        &self,
+        _transition: &crate::ports::MaintenanceActionJobReceiptTransition,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceSequenceCompletionRepository for NullMaintenanceEvaluationRepository {
+    async fn get_active_sequence_completion(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+        _subject_kind: &str,
+        _subject_id: &str,
+    ) -> AppResult<Option<scryer_domain::MaintenanceSequenceTerminalMembership>> {
+        Ok(None)
+    }
+
+    async fn list_active_sequence_completions(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+        _after_id: Option<&str>,
+        _limit: usize,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceSequenceTerminalMembership>> {
+        Ok(vec![])
+    }
+
+    async fn finish_sequence_terminal_membership_and_candidate(
+        &self,
+        _membership: &scryer_domain::MaintenanceSequenceTerminalMembership,
+        _expected_candidate_state: scryer_domain::MaintenanceCandidateState,
+        _expected_candidate_updated_at: DateTime<Utc>,
+        _terminal_candidate_state: scryer_domain::MaintenanceCandidateState,
+        _state_reason: &str,
+        _finished_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+
+    async fn release_sequence_completion_on_confirmed_non_match(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+        _subject_kind: &str,
+        _subject_id: &str,
+        _released_at: DateTime<Utc>,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceExclusionRepository for NullMaintenanceEvaluationRepository {
+    async fn list_exclusions(
+        &self,
+        _rule_set_id: Option<&str>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceRuleExclusion>> {
+        Ok(vec![])
+    }
+    async fn get_exclusion(
+        &self,
+        _id: &str,
+    ) -> AppResult<Option<scryer_domain::MaintenanceRuleExclusion>> {
+        Ok(None)
+    }
+    async fn create_exclusion(
+        &self,
+        _exclusion: &scryer_domain::MaintenanceRuleExclusion,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn delete_exclusion(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+#[async_trait]
+impl crate::ports::MaintenanceEvaluationRunRepository for NullMaintenanceEvaluationRepository {
+    async fn start_evaluation_run(
+        &self,
+        _run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn finish_evaluation_run(
+        &self,
+        _run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            MAINTENANCE_EVALUATION_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn list_evaluation_runs(
+        &self,
+        _rule_set_id: Option<&str>,
+        _limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>> {
+        Ok(vec![])
+    }
+}
+
+#[derive(Default)]
 pub struct NullPostProcessingScriptRepository;
 
 #[async_trait]
@@ -1389,7 +2045,12 @@ pub struct NullBuiltinDownloadClientConnectionTester;
 
 #[async_trait]
 impl BuiltinDownloadClientConnectionTester for NullBuiltinDownloadClientConnectionTester {
-    async fn test_connection(&self, _client_type: &str, _config_json: &str) -> AppResult<()> {
+    async fn test_connection(
+        &self,
+        _client_type: &str,
+        _config_json: &str,
+        _proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> AppResult<()> {
         Err(AppError::Repository(
             "download client connection tester is not configured".to_string(),
         ))
@@ -2489,6 +3150,12 @@ impl LibraryRepository for NullLibraryRepository {
         ))
     }
 
+    async fn set_root_path(&self, _root_id: &str, _path: &str) -> AppResult<Library> {
+        Err(AppError::Repository(
+            "library repository not configured".into(),
+        ))
+    }
+
     async fn delete_library(&self, _library_id: &str) -> AppResult<bool> {
         Ok(false)
     }
@@ -2575,6 +3242,7 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         _requested_quality_profile_name: String,
         _requested_monitor_type: Option<String>,
         _requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
+        _requested_lease_days: Option<i64>,
         _updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
         Err(AppError::Repository(
@@ -2587,6 +3255,262 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         _library_ids: &[String],
     ) -> AppResult<MediaRequestCounts> {
         Ok(MediaRequestCounts::default())
+    }
+
+    async fn requester_user_ids_by_title_ids(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<String>>> {
+        Ok(std::collections::HashMap::new())
+    }
+
+    async fn count_for_requester(
+        &self,
+        _user_id: &str,
+        _status: Option<scryer_domain::MediaRequestStatus>,
+        _since: Option<DateTime<Utc>>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+
+    async fn history_for_fingerprint(
+        &self,
+        _identity_fingerprint: &str,
+    ) -> AppResult<Vec<MediaRequest>> {
+        Ok(Vec::new())
+    }
+
+    async fn latest_request_at_for_user(&self, _user_id: &str) -> AppResult<Option<DateTime<Utc>>> {
+        Ok(None)
+    }
+
+    /// A no-op rather than a refusal: the caller has already submitted the
+    /// request and is only stamping provenance onto it, and a null repository
+    /// has no row to stamp. Failing here would turn "no store configured" into
+    /// a warning on every submission.
+    async fn record_decision_on_request(
+        &self,
+        _request_id: &str,
+        _decision_id: Option<&str>,
+        _rule_set_ids: &[String],
+        _tags: &[String],
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
+    async fn rewrite_pending_policy_tag(
+        &self,
+        _label: &str,
+        _replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+}
+
+/// Reads answer empty and writes refuse: an assembly with no request-rule store
+/// has no rules, so the evaluator finds nothing to apply rather than silently
+/// dropping a rule it believed it wrote.
+#[derive(Default)]
+pub struct NullRequestRuleSetRepository;
+
+const REQUEST_RULE_NOT_CONFIGURED: &str = "request rule repository is not configured";
+
+#[async_trait]
+impl crate::ports::RequestRuleSetRepository for NullRequestRuleSetRepository {
+    async fn list_rule_sets(&self) -> AppResult<Vec<scryer_domain::RequestRuleSet>> {
+        Ok(Vec::new())
+    }
+    async fn get_rule_set(&self, _id: &str) -> AppResult<Option<scryer_domain::RequestRuleSet>> {
+        Ok(None)
+    }
+    async fn create_rule_set(
+        &self,
+        _rule_set: &scryer_domain::RequestRuleSet,
+        _revision: &scryer_domain::RequestRuleRevision,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn add_revision(
+        &self,
+        _revision: &scryer_domain::RequestRuleRevision,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn get_revision(
+        &self,
+        _rule_set_id: &str,
+        _revision_number: i64,
+    ) -> AppResult<Option<scryer_domain::RequestRuleRevision>> {
+        Ok(None)
+    }
+    async fn list_revisions(
+        &self,
+        _rule_set_id: &str,
+    ) -> AppResult<Vec<scryer_domain::RequestRuleRevision>> {
+        Ok(Vec::new())
+    }
+    async fn update_rule_set_metadata(
+        &self,
+        _id: &str,
+        _name: &str,
+        _description: &str,
+        _library_ids: &[String],
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        _id: &str,
+        _mode: scryer_domain::RequestRuleEvaluationMode,
+        _enabled: bool,
+        _updated_at: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn delete_rule_set(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            REQUEST_RULE_NOT_CONFIGURED.to_string(),
+        ))
+    }
+}
+
+/// A trace that cannot be written must not be silently discarded: recording is
+/// the one thing FR-016 requires of every evaluation, so the write refuses
+/// rather than pretending.
+#[derive(Default)]
+pub struct NullRequestRuleDecisionRepository;
+
+#[async_trait]
+impl crate::ports::RequestRuleDecisionRepository for NullRequestRuleDecisionRepository {
+    async fn record(&self, _decision: &scryer_domain::RequestRuleDecisionRecord) -> AppResult<()> {
+        Err(AppError::Repository(
+            "request rule decision repository is not configured".to_string(),
+        ))
+    }
+    async fn latest_for_request(
+        &self,
+        _request_id: &str,
+    ) -> AppResult<Option<scryer_domain::RequestRuleDecisionRecord>> {
+        Ok(None)
+    }
+    async fn list_recent(
+        &self,
+        _limit: usize,
+        _outcome: Option<scryer_domain::RequestDecisionOutcome>,
+    ) -> AppResult<Vec<scryer_domain::RequestRuleDecisionRecord>> {
+        Ok(Vec::new())
+    }
+    async fn count_for_rule_set(&self, _rule_set_id: &str) -> AppResult<u64> {
+        Ok(0)
+    }
+}
+
+/// No claim store means no lease can be created, so writes refuse. Reads answer
+/// empty, which is the honest shape: an instance without the table has no
+/// holds — the executor's own unreadable-store hold covers the case where the
+/// store exists but cannot answer.
+#[derive(Default)]
+pub struct NullLifecycleClaimRepository;
+
+const LIFECYCLE_CLAIM_NOT_CONFIGURED: &str = "lifecycle claim repository is not configured";
+
+#[async_trait]
+impl crate::ports::LifecycleClaimRepository for NullLifecycleClaimRepository {
+    async fn create(&self, _claim: &scryer_domain::LifecycleClaim) -> AppResult<()> {
+        Err(AppError::Repository(
+            LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn get(&self, _id: &str) -> AppResult<Option<scryer_domain::LifecycleClaim>> {
+        Ok(None)
+    }
+    async fn list_for_title(
+        &self,
+        _title_id: &str,
+    ) -> AppResult<Vec<scryer_domain::LifecycleClaim>> {
+        Ok(Vec::new())
+    }
+    async fn list_live_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<scryer_domain::LifecycleClaim>>> {
+        Ok(std::collections::HashMap::new())
+    }
+    async fn list_retention_history_for_titles(
+        &self,
+        _title_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<scryer_domain::LifecycleClaim>>> {
+        Ok(std::collections::HashMap::new())
+    }
+    async fn list_dormant(&self, _limit: usize) -> AppResult<Vec<scryer_domain::LifecycleClaim>> {
+        Ok(Vec::new())
+    }
+    async fn activate(
+        &self,
+        _id: &str,
+        _starts_at: DateTime<Utc>,
+        _expires_at: Option<DateTime<Utc>>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn expire_due(&self, _now: DateTime<Utc>) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn release_for_producer_ref(
+        &self,
+        _producer: scryer_domain::LifecycleClaimProducer,
+        _producer_ref: &str,
+        _reason: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn release_claim(&self, _id: &str, _reason: &str, _now: DateTime<Utc>) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn release_for_title(
+        &self,
+        _title_id: &str,
+        _reason: &str,
+        _now: DateTime<Utc>,
+    ) -> AppResult<u64> {
+        Ok(0)
+    }
+    async fn extend(
+        &self,
+        _id: &str,
+        _expires_at: DateTime<Utc>,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn convert_to_permanent(
+        &self,
+        _id: &str,
+        _replacement: &scryer_domain::LifecycleClaim,
+        _now: DateTime<Utc>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            LIFECYCLE_CLAIM_NOT_CONFIGURED.to_string(),
+        ))
+    }
+    async fn count_live_for_user(&self, _user_id: &str) -> AppResult<u64> {
+        Ok(0)
     }
 }
 
@@ -2986,6 +3910,14 @@ impl UserExternalAccountRepository for NullUserExternalAccountRepository {
         Ok(None)
     }
 
+    async fn list_verified_by_connection(
+        &self,
+        _: scryer_domain::ExternalAccountProvider,
+        _: &str,
+    ) -> AppResult<Vec<scryer_domain::UserExternalAccount>> {
+        Ok(Vec::new())
+    }
+
     async fn update(
         &self,
         _: scryer_domain::UserExternalAccount,
@@ -3165,6 +4097,90 @@ impl ExternalIdentityVerifier for NullExternalIdentityVerifier {
     async fn list_plex_users(&self, _: &str, _: Option<&str>) -> AppResult<Vec<PlexServerUser>> {
         Err(AppError::Repository(
             "external identity verification is not configured".into(),
+        ))
+    }
+}
+
+// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+
+/// Playback probe for an assembly with no media-server integration.
+///
+/// Returns an empty snapshot, which the fold reads as `Clear`: nothing can be
+/// playing on servers Scryer does not know about. This is deliberately *not*
+/// `Unreachable` — "no connection configured" is a known answer, while "a
+/// configured connection did not respond" is not.
+#[derive(Default)]
+pub struct NullMediaServerPlaybackProbe;
+
+#[async_trait]
+impl crate::ports::MediaServerPlaybackProbe for NullMediaServerPlaybackProbe {
+    async fn active_playback(&self) -> AppResult<crate::ports::PlaybackActivitySnapshot> {
+        Ok(crate::ports::PlaybackActivitySnapshot::empty(Utc::now()))
+    }
+}
+
+/// No signal store configured: reads are empty and writes are refused.
+///
+/// Writes fail loudly rather than silently succeeding, because a sync sweep
+/// that "worked" against a store that kept nothing would leave the sync state
+/// claiming a success that produced no observations.
+#[derive(Default)]
+pub struct NullMediaServerSignalRepository;
+
+#[async_trait]
+impl crate::ports::MediaServerSignalRepository for NullMediaServerSignalRepository {
+    async fn replace_participant_signals(
+        &self,
+        _: &str,
+        _: &str,
+        _: &[scryer_domain::NewUserMediaSignal],
+    ) -> AppResult<u64> {
+        Err(AppError::Repository("not configured".into()))
+    }
+
+    async fn movie_signals_for_titles(
+        &self,
+        _: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<scryer_domain::UserMediaSignal>>> {
+        Ok(std::collections::HashMap::new())
+    }
+
+    async fn episode_signals_for_titles(
+        &self,
+        _: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<scryer_domain::UserMediaSignal>>> {
+        Ok(std::collections::HashMap::new())
+    }
+
+    async fn signal_sync_states(
+        &self,
+    ) -> AppResult<Vec<scryer_domain::MediaServerSignalSyncState>> {
+        Ok(Vec::new())
+    }
+
+    async fn upsert_signal_sync_state(
+        &self,
+        _: &scryer_domain::MediaServerSignalSyncState,
+    ) -> AppResult<()> {
+        Err(AppError::Repository("not configured".into()))
+    }
+}
+
+/// No signal adapter configured. Every fetch is an error rather than an empty
+/// list: "this participant has watched nothing" and "nobody asked the server"
+/// are different facts, and the second one must not be recorded as the first.
+#[derive(Default)]
+pub struct NullMediaServerSignalSource;
+
+#[async_trait]
+impl crate::ports::MediaServerSignalSource for NullMediaServerSignalSource {
+    async fn fetch_played_items(
+        &self,
+        _: &scryer_domain::MediaServerConnection,
+        _: &str,
+    ) -> AppResult<Vec<crate::ports::ProviderPlayedItem>> {
+        Err(AppError::Repository(
+            "media-server signal source is not configured".into(),
         ))
     }
 }
@@ -3517,6 +4533,7 @@ pub mod test_nulls {
             _: Option<u32>,
             _: Option<u32>,
             _: Option<u32>,
+            _: Option<i32>,
             _: Vec<scryer_domain::TaggedAlias>,
             _: Option<crate::IndexerSearchLearningContext>,
             _: tokio_util::sync::CancellationToken,
@@ -3539,7 +4556,12 @@ pub mod test_nulls {
 
     #[async_trait]
     impl BuiltinDownloadClientConnectionTester for NullDownloadClient {
-        async fn test_connection(&self, _: &str, _: &str) -> AppResult<()> {
+        async fn test_connection(
+            &self,
+            _: &str,
+            _: &str,
+            _: Option<&scryer_domain::ProxyConfig>,
+        ) -> AppResult<()> {
             Err(AppError::Repository("not configured".into()))
         }
     }

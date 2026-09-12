@@ -1,20 +1,21 @@
-use std::collections::HashSet;
-use std::sync::Arc;
+use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use scryer_application::challenge_solver as solver;
+use scryer_application::transport_proxy;
 use scryer_application::{
     AppError, AppResult, CONNECTION_TEST_INDEXER_ID, CapturedIndexerHttpResponse,
-    IndexerConfigRepository, IndexerErrorOperation, IndexerProxyConfigRepository,
-    IndexerRequestResult, IndexerRequestTally, IndexerStatsTracker, NullIndexerStatsTracker,
+    IndexerConfigRepository, IndexerErrorOperation, IndexerPluginProvider, IndexerRequestResult,
+    IndexerRequestTally, IndexerStatsTracker, NullIndexerStatsTracker, ProxyConfigRepository,
     RateLimitCooldownAction, ResolvedDownloadArtifact, extract_magnet_info_hash,
     is_valid_magnet_uri, normalize_torrent_info_hash,
 };
-use scryer_domain::IndexerConfig;
+use scryer_domain::{IndexerConfig, ProxyConfig};
 use scryer_outbound_http::{
     DestinationKey, OutboundHttpClient, OutboundHttpError, PluginEgressPolicy, RateLimitRegistry,
-    RequestPolicy, generic_reqwest_client, indexer_proxy_reqwest_client,
-    prepare_plugin_http_target, prepare_plugin_http_target_from_url,
+    RequestPolicy, generic_reqwest_client, prepare_plugin_http_target,
+    prepare_plugin_http_target_from_url, proxy_reqwest_client,
 };
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
@@ -40,30 +41,247 @@ pub enum ArtifactFetchResponse {
 #[derive(Clone)]
 pub struct IndexerArtifactTransport {
     outbound_http: OutboundHttpClient,
+    proxy_clients: Arc<Mutex<HashMap<String, ArtifactProxyClient>>>,
     indexer_configs: Arc<dyn IndexerConfigRepository>,
-    proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
+    proxy_configs: Arc<dyn ProxyConfigRepository>,
     indexer_stats: Arc<dyn IndexerStatsTracker>,
+    /// Lets an indexer that owns an authenticated grab flow resolve its own
+    /// artifacts ahead of the host's direct, transport-proxy, and
+    /// challenge-solver fetches.
+    indexer_plugin_provider: Option<Arc<dyn IndexerPluginProvider>>,
+}
+
+const MAX_ARTIFACT_PROXY_CLIENTS: usize = 32;
+const ARTIFACT_PROXY_CLIENT_TTL: Duration = Duration::from_secs(300);
+
+struct ArtifactProxyClient {
+    revision: String,
+    endpoint: String,
+    created_at: Instant,
+    client: reqwest::Client,
+}
+
+/// How one artifact hop leaves the host.
+#[derive(Clone, Copy)]
+enum ArtifactEgress<'a> {
+    /// Resolve and pin every hop through the guarded plugin target.
+    Direct,
+    /// Dial the operator's transport proxy instead. The destination is
+    /// validated syntactically but not resolved here, because with
+    /// `remote_dns` that name belongs to the proxy and may not resolve locally
+    /// at all. The caller has already confirmed the URL matches the assigned
+    /// indexer's origin.
+    TransportProxy(&'a ProxyConfig),
+}
+
+/// How an indexer's assigned proxy takes part in its artifact fetches.
+enum ArtifactProxyRoute {
+    Direct,
+    /// A transport or tunnel proxy solves nothing: the fetch is the direct
+    /// fetch, dialled through the operator's proxy instead of straight out.
+    TransportProxy(ProxyConfig),
+    ChallengeSolver(ProxyConfig),
+}
+
+impl ArtifactProxyRoute {
+    fn proxy(&self) -> Option<&ProxyConfig> {
+        match self {
+            Self::Direct => None,
+            Self::TransportProxy(proxy) | Self::ChallengeSolver(proxy) => Some(proxy),
+        }
+    }
 }
 
 impl IndexerArtifactTransport {
     pub fn new(
         indexer_configs: Arc<dyn IndexerConfigRepository>,
-        proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
+        proxy_configs: Arc<dyn ProxyConfigRepository>,
     ) -> Self {
         Self {
             outbound_http: OutboundHttpClient::new(
                 generic_reqwest_client(),
                 RateLimitRegistry::new(),
             ),
+            proxy_clients: Arc::new(Mutex::new(HashMap::new())),
             indexer_configs,
             proxy_configs,
             indexer_stats: Arc::new(NullIndexerStatsTracker),
+            indexer_plugin_provider: None,
         }
     }
 
     pub fn with_indexer_stats_tracker(mut self, stats: Arc<dyn IndexerStatsTracker>) -> Self {
         self.indexer_stats = stats;
         self
+    }
+
+    /// Enable indexer-owned grab resolution ahead of the host's direct,
+    /// transport-proxy, and challenge-solver fetches. Indexers with no grab
+    /// flow answer `None` and leave those paths unchanged.
+    pub fn with_indexer_plugin_provider(
+        mut self,
+        indexer_plugin_provider: Arc<dyn IndexerPluginProvider>,
+    ) -> Self {
+        self.indexer_plugin_provider = Some(indexer_plugin_provider);
+        self
+    }
+
+    /// Drain proxy health observations recorded by the fetches above into the
+    /// repository. One drain, shared with the search path.
+    pub async fn flush_proxy_health(&self) {
+        solver::flush_solver_health(self.proxy_configs.as_ref()).await;
+    }
+
+    /// Resolve how the indexer's assigned proxy, if any, takes part in an
+    /// artifact fetch. Fail-closed: an assignment that cannot be loaded or is
+    /// disabled is an error, never "carry on unproxied".
+    async fn proxy_route(&self, config: &IndexerConfig) -> AppResult<ArtifactProxyRoute> {
+        let Some(proxy_id) = config.proxy_config_id.as_deref() else {
+            return Ok(ArtifactProxyRoute::Direct);
+        };
+        let proxy = self
+            .proxy_configs
+            .get_by_id(proxy_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::DownloadSubmitUnavailable(
+                    "The assigned indexer proxy is no longer available.".into(),
+                )
+            })?;
+        // Prowlarr owns challenge handling for its parent and synchronized
+        // children, so a challenge solver assigned there is ignored. Transport
+        // and tunnel proxies only carry bytes and still apply.
+        if proxy.is_challenge_solver()
+            && (config.is_prowlarr_nab_proxy()
+                || config.provider_type.trim().eq_ignore_ascii_case("prowlarr"))
+        {
+            return Ok(ArtifactProxyRoute::Direct);
+        }
+        if !proxy.is_enabled {
+            return Err(AppError::DownloadSubmitUnavailable(
+                "The assigned indexer proxy is disabled.".into(),
+            ));
+        }
+        Ok(if proxy.is_challenge_solver() {
+            ArtifactProxyRoute::ChallengeSolver(proxy)
+        } else {
+            ArtifactProxyRoute::TransportProxy(proxy)
+        })
+    }
+
+    /// An indexer that owns an authenticated grab flow resolves the artifact
+    /// itself: a private tracker will not serve the file to a bare fetch, and
+    /// the plugin already holds that session. Providers without such a flow
+    /// answer `None` and leave the transport paths untouched.
+    async fn indexer_owned_artifact(
+        &self,
+        config: &IndexerConfig,
+        proxy: Option<&ProxyConfig>,
+        download_url: &str,
+    ) -> AppResult<Option<ResolvedDownloadArtifact>> {
+        let Some(provider) = self.indexer_plugin_provider.as_ref() else {
+            return Ok(None);
+        };
+        let Some(client) = provider.client_for_provider_with_proxy(config, proxy) else {
+            return Ok(None);
+        };
+        client.resolve_download(download_url).await
+    }
+
+    /// Reuse connection pools across artifact requests and redirect hops. The
+    /// cache belongs to this transport, carries no indexer credentials, and
+    /// never bypasses the route lookup or the redirect loop's per-hop checks.
+    fn proxy_client(&self, proxy: &ProxyConfig) -> Result<reqwest::Client, String> {
+        let revision = transport_proxy::transport_proxy_revision(proxy);
+        // A restarted tunnel front must invalidate the pool even if settings
+        // did not change. SSH also rechecks the current host-key decision here.
+        let endpoint = transport_proxy::proxy_egress_url(proxy)?;
+        let mut clients = self
+            .proxy_clients
+            .lock()
+            .expect("artifact proxy client cache lock");
+        clients.retain(|_, entry| entry.created_at.elapsed() < ARTIFACT_PROXY_CLIENT_TTL);
+        if let Some(entry) = clients.get(&proxy.id)
+            && entry.revision == revision
+            && entry.endpoint == endpoint
+        {
+            return Ok(entry.client.clone());
+        }
+        clients.remove(&proxy.id);
+        let client = transport_proxy::transport_proxied_reqwest_client_with_redirect_policy(
+            proxy,
+            "",
+            reqwest::redirect::Policy::none(),
+        )?;
+        if clients.len() >= MAX_ARTIFACT_PROXY_CLIENTS
+            && let Some(oldest) = clients
+                .iter()
+                .min_by_key(|(_, entry)| entry.created_at)
+                .map(|(id, _)| id.clone())
+        {
+            clients.remove(&oldest);
+        }
+        clients.insert(
+            proxy.id.clone(),
+            ArtifactProxyClient {
+                revision,
+                endpoint,
+                created_at: Instant::now(),
+                client: client.clone(),
+            },
+        );
+        Ok(client)
+    }
+
+    /// Pick the client and URL for one redirect hop under the chosen egress.
+    async fn hop_target(
+        &self,
+        current: &url::Url,
+        remaining: Duration,
+        policy: &PluginEgressPolicy,
+        egress: ArtifactEgress<'_>,
+    ) -> AppResult<(reqwest::Client, url::Url)> {
+        match egress {
+            ArtifactEgress::Direct => {
+                let target = timeout(
+                    remaining,
+                    prepare_plugin_http_target_from_url(
+                        current.clone(),
+                        "indexer download artifact",
+                        policy,
+                    ),
+                )
+                .await
+                .map_err(|_| {
+                    AppError::DownloadSubmitUnavailable(
+                        "The download artifact fetch timed out.".into(),
+                    )
+                })?
+                .map_err(|_| {
+                    AppError::DownloadSubmitUnavailable(
+                        "Scryer refused an unsafe download artifact destination.".into(),
+                    )
+                })?;
+                Ok((target.client().clone(), target.url().clone()))
+            }
+            ArtifactEgress::TransportProxy(proxy) => {
+                let url = scryer_outbound_http::validate_operator_http_url(
+                    current.as_str(),
+                    "indexer download artifact",
+                )
+                .map_err(|error| {
+                    tracing::warn!(error = %error, "blocked unsafe indexer download artifact URL");
+                    AppError::DownloadSubmitUnavailable(
+                        "Scryer refused an unsafe download artifact destination.".into(),
+                    )
+                })?;
+                let client = self.proxy_client(proxy).map_err(|message| {
+                    transport_proxy::record_transport_proxy_failure(proxy, &message);
+                    AppError::DownloadSubmitUnavailable(message)
+                })?;
+                Ok((client, url))
+            }
+        }
     }
 
     fn tally(&self, config: Option<&IndexerConfig>) -> IndexerRequestTally {
@@ -125,31 +343,66 @@ impl IndexerArtifactTransport {
                         None,
                         None,
                         tally,
+                        ArtifactEgress::Direct,
                     )
                     .await
                     .map(Some);
             }
         };
-        if config.indexer_proxy_config_id.is_some()
-            && !config.is_prowlarr_nab_proxy()
-            && !config.provider_type.trim().eq_ignore_ascii_case("prowlarr")
-        {
-            return Ok(None);
-        }
         let policy = PluginEgressPolicy::for_operator_configured_url(&config.base_url);
         let destination_cooldown_key = DestinationKey::from(config.rate_limit_domain_key());
+        // Resolve the assigned proxy first: both the origin guard and the
+        // indexer-owned grab below need it, and a misconfigured proxy must fail
+        // the same way whichever path ends up resolving the artifact.
+        let route = self.proxy_route(&config).await?;
+        if route.proxy().is_some() && !same_origin(&config, download_url) {
+            return Err(AppError::Validation(
+                "Proxied download URL does not match the assigned indexer origin.".into(),
+            ));
+        }
+        if let Some(artifact) = self
+            .indexer_owned_artifact(&config, route.proxy(), download_url)
+            .await?
+        {
+            return Ok(Some(ArtifactFetchResponse::Resolved(artifact)));
+        }
         let tally = self.tally(Some(&config));
-        self.fetch_response_direct(
-            &config.name,
-            download_url,
-            scryer_outbound_http::STANDARD_HTTP_TIMEOUT,
-            &policy,
-            Some(&config.base_url),
-            Some(destination_cooldown_key),
-            tally,
-        )
-        .await
-        .map(Some)
+        match route {
+            ArtifactProxyRoute::Direct => self
+                .fetch_response_direct(
+                    &config.name,
+                    download_url,
+                    scryer_outbound_http::STANDARD_HTTP_TIMEOUT,
+                    &policy,
+                    Some(&config.base_url),
+                    Some(destination_cooldown_key),
+                    tally,
+                    ArtifactEgress::Direct,
+                )
+                .await
+                .map(Some),
+            ArtifactProxyRoute::TransportProxy(proxy) => {
+                let response = self
+                    .fetch_response_direct(
+                        solver::solver_provider_name(proxy.provider_type),
+                        download_url,
+                        scryer_outbound_http::effective_proxy_request_timeout(
+                            proxy.request_timeout_seconds,
+                        ),
+                        &policy,
+                        Some(&config.base_url),
+                        Some(destination_cooldown_key),
+                        tally,
+                        ArtifactEgress::TransportProxy(&proxy),
+                    )
+                    .await?;
+                transport_proxy::record_transport_proxy_success(&proxy);
+                Ok(Some(response))
+            }
+            // Solver routes keep the buffered path: a solver may return the
+            // artifact inline rather than through a response stream.
+            ArtifactProxyRoute::ChallengeSolver(_) => Ok(None),
+        }
     }
 
     pub async fn resolve(
@@ -205,6 +458,7 @@ impl IndexerArtifactTransport {
                         None,
                         &tally,
                         info_hash_hint,
+                        ArtifactEgress::Direct,
                     )
                     .await;
             }
@@ -212,68 +466,61 @@ impl IndexerArtifactTransport {
         let policy = PluginEgressPolicy::for_operator_configured_url(&config.base_url);
         let destination_cooldown_key = DestinationKey::from(config.rate_limit_domain_key());
         let tally = self.tally(Some(&config));
-        // Prowlarr owns challenge handling for its parent and synchronized children.
-        if config.is_prowlarr_nab_proxy()
-            || config.provider_type.trim().eq_ignore_ascii_case("prowlarr")
-        {
-            return self
-                .fetch_and_classify(
-                    &config.name,
-                    download_url,
-                    &[],
-                    scryer_outbound_http::STANDARD_HTTP_TIMEOUT,
-                    &policy,
-                    Some(&config.base_url),
-                    Some(destination_cooldown_key.clone()),
-                    &tally,
-                    info_hash_hint,
-                )
-                .await;
-        }
-        let Some(proxy_id) = config.indexer_proxy_config_id.as_deref() else {
-            return self
-                .fetch_and_classify(
-                    &config.name,
-                    download_url,
-                    &[],
-                    scryer_outbound_http::STANDARD_HTTP_TIMEOUT,
-                    &policy,
-                    Some(&config.base_url),
-                    Some(destination_cooldown_key.clone()),
-                    &tally,
-                    info_hash_hint,
-                )
-                .await;
-        };
-        if !same_origin(&config, download_url) {
+        let route = self.proxy_route(&config).await?;
+        if route.proxy().is_some() && !same_origin(&config, download_url) {
             return Err(AppError::Validation(
                 "Proxied download URL does not match the assigned indexer origin.".into(),
             ));
         }
-        let proxy = self
-            .proxy_configs
-            .get_by_id(proxy_id)
-            .await?
-            .ok_or_else(|| {
-                AppError::DownloadSubmitUnavailable(
-                    "The assigned indexer solver is no longer available.".into(),
+        match route {
+            ArtifactProxyRoute::Direct => {
+                self.fetch_and_classify(
+                    &config.name,
+                    download_url,
+                    &[],
+                    scryer_outbound_http::STANDARD_HTTP_TIMEOUT,
+                    &policy,
+                    Some(&config.base_url),
+                    Some(destination_cooldown_key.clone()),
+                    &tally,
+                    info_hash_hint,
+                    ArtifactEgress::Direct,
                 )
-            })?;
-        if !proxy.is_enabled {
-            return Err(AppError::DownloadSubmitUnavailable(
-                "The assigned indexer solver is disabled.".into(),
-            ));
+                .await
+            }
+            ArtifactProxyRoute::TransportProxy(proxy) => {
+                let artifact = self
+                    .fetch_and_classify(
+                        solver::solver_provider_name(proxy.provider_type),
+                        download_url,
+                        &[],
+                        scryer_outbound_http::effective_proxy_request_timeout(
+                            proxy.request_timeout_seconds,
+                        ),
+                        &policy,
+                        Some(&config.base_url),
+                        Some(destination_cooldown_key.clone()),
+                        &tally,
+                        info_hash_hint,
+                        ArtifactEgress::TransportProxy(&proxy),
+                    )
+                    .await?;
+                transport_proxy::record_transport_proxy_success(&proxy);
+                Ok(artifact)
+            }
+            ArtifactProxyRoute::ChallengeSolver(proxy) => {
+                self.resolve_via_solver(
+                    &proxy,
+                    download_url,
+                    info_hash_hint,
+                    &policy,
+                    &config.base_url,
+                    destination_cooldown_key,
+                    &tally,
+                )
+                .await
+            }
         }
-        self.resolve_via_solver(
-            &proxy,
-            download_url,
-            info_hash_hint,
-            &policy,
-            &config.base_url,
-            destination_cooldown_key,
-            &tally,
-        )
-        .await
     }
 
     #[expect(
@@ -282,7 +529,7 @@ impl IndexerArtifactTransport {
     )]
     async fn resolve_via_solver(
         &self,
-        proxy: &scryer_domain::IndexerProxyConfig,
+        proxy: &scryer_domain::ProxyConfig,
         url: &str,
         hint: Option<String>,
         policy: &PluginEgressPolicy,
@@ -300,9 +547,8 @@ impl IndexerArtifactTransport {
                 )
             })?;
         let headers = solver::SolvedSessionCache::shared().session_headers(&proxy.id, url);
-        let timeout = scryer_outbound_http::effective_indexer_proxy_request_timeout(
-            proxy.request_timeout_seconds,
-        );
+        let timeout =
+            scryer_outbound_http::effective_proxy_request_timeout(proxy.request_timeout_seconds);
         match self
             .fetch_and_classify(
                 name,
@@ -314,6 +560,7 @@ impl IndexerArtifactTransport {
                 Some(destination_cooldown_key.clone()),
                 tally,
                 hint.clone(),
+                ArtifactEgress::Direct,
             )
             .await
         {
@@ -330,8 +577,7 @@ impl IndexerArtifactTransport {
         if !headers.is_empty() {
             solver::SolvedSessionCache::shared().invalidate(&proxy.id, url);
         }
-        let solver_http =
-            OutboundHttpClient::new(indexer_proxy_reqwest_client(), RateLimitRegistry::new());
+        let solver_http = OutboundHttpClient::new(proxy_reqwest_client(), RateLimitRegistry::new());
         let response = tokio::time::timeout(
             timeout,
             solver_http.send_with_rate_limit_and_dispatch_observer(
@@ -361,6 +607,7 @@ impl IndexerArtifactTransport {
         )
         .await
         .map_err(|_| {
+            tally.note_result(IndexerRequestResult::NoResponse);
             AppError::DownloadSubmitUnavailable(
                 solver::solver_error_message(provider, solver::SolverErrorKind::Unreachable).into(),
             )
@@ -377,15 +624,31 @@ impl IndexerArtifactTransport {
         let body = read_body(response, SOLVER_RESPONSE_MAX_BYTES)
             .await
             .map_err(|_| {
+                tally.note_result(IndexerRequestResult::NoResponse);
                 AppError::DownloadSubmitUnavailable(
                     solver::solver_error_message(provider, solver::SolverErrorKind::Unreadable)
                         .into(),
                 )
             })?;
-        let solution = solver::parse_solver_solution(&body)
-            .map_err(|e| AppError::DownloadSubmitUnavailable(e.message(provider).into()))?;
+        let solution = solver::parse_solver_solution(&body).map_err(|e| {
+            tally.note_result(IndexerRequestResult::NoResponse);
+            AppError::DownloadSubmitUnavailable(e.message(provider).into())
+        })?;
         solver::SolvedSessionCache::shared().store_solution(&proxy.id, url, &solution);
         let solution_status = solution.status.unwrap_or(status.as_u16());
+        tally.note_response(&CapturedIndexerHttpResponse {
+            status: solution_status,
+            headers: Vec::new(),
+            body: solution
+                .response
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes()
+                .iter()
+                .take(64 * 1024)
+                .copied()
+                .collect(),
+        });
         if solution_status == 429
             || solver::solved_body_looks_rate_limited(
                 solution.response.as_deref().unwrap_or_default().as_bytes(),
@@ -413,6 +676,7 @@ impl IndexerArtifactTransport {
                     Some(destination_cooldown_key),
                     tally,
                     hint,
+                    ArtifactEgress::Direct,
                 )
                 .await;
         }
@@ -440,6 +704,7 @@ impl IndexerArtifactTransport {
         destination_cooldown_key: Option<DestinationKey>,
         tally: &IndexerRequestTally,
         hint: Option<String>,
+        egress: ArtifactEgress<'_>,
     ) -> AppResult<ResolvedDownloadArtifact> {
         let fetched = self
             .fetch(
@@ -451,6 +716,7 @@ impl IndexerArtifactTransport {
                 indexer_base_url,
                 destination_cooldown_key,
                 tally,
+                egress,
             )
             .await?;
         classify(
@@ -476,6 +742,7 @@ impl IndexerArtifactTransport {
         indexer_base_url: Option<&str>,
         destination_cooldown_key: Option<DestinationKey>,
         tally: &IndexerRequestTally,
+        egress: ArtifactEgress<'_>,
     ) -> AppResult<(Vec<u8>, Option<serde_json::Value>, Option<String>)> {
         let original = url::Url::parse(raw)
             .map_err(|_| AppError::Validation("Download artifact URL is invalid.".into()))?;
@@ -502,37 +769,22 @@ impl IndexerArtifactTransport {
                     "The download artifact fetch timed out.".into(),
                 ));
             }
-            let target = timeout(
-                remaining,
-                prepare_plugin_http_target_from_url(
-                    current.clone(),
-                    "indexer download artifact",
-                    policy,
-                ),
-            )
-            .await
-            .map_err(|_| {
-                AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
-            })?
-            .map_err(|_| {
-                AppError::DownloadSubmitUnavailable(
-                    "Scryer refused an unsafe download artifact destination.".into(),
-                )
-            })?;
+            let (hop_client, hop_url) =
+                self.hop_target(&current, remaining, policy, egress).await?;
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(AppError::DownloadSubmitUnavailable(
                     "The download artifact fetch timed out.".into(),
                 ));
             }
-            let same = origin.0 == target.url().scheme()
+            let same = origin.0 == hop_url.scheme()
                 && origin
                     .1
                     .as_deref()
-                    .zip(target.url().host_str())
+                    .zip(hop_url.host_str())
                     .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
-                && origin.2 == target.url().port_or_known_default();
-            let mut builder = target.client().get(target.url().clone()).timeout(remaining);
+                && origin.2 == hop_url.port_or_known_default();
+            let mut builder = hop_client.get(hop_url.clone()).timeout(remaining);
             if same {
                 for (k, v) in session_headers {
                     builder = builder.header(k, v);
@@ -573,30 +825,27 @@ impl IndexerArtifactTransport {
             )
             .await
             .map_err(|_| {
+                tally.note_result(IndexerRequestResult::NoResponse);
                 AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
             })?
-            .map_err(|e| match e {
-                OutboundHttpError::RateLimited(rate_limited) => AppError::TemporaryUnavailable {
-                    message: "The download artifact destination is rate limited.".into(),
-                    retry_after: rate_limited.retry_after,
-                    rate_limit_cooldown: RateLimitCooldownAction::AlreadyRecorded,
-                },
-                OutboundHttpError::Transport { source, .. } if source.is_timeout() => {
-                    tally.note_result(IndexerRequestResult::NoResponse);
-                    AppError::DownloadSubmitUnavailable(
-                        "The download artifact fetch timed out.".into(),
+            .map_err(|error| map_artifact_outbound_error_via(name, tally, error, egress))?;
+            let mut captured = CapturedIndexerHttpResponse {
+                status: response.status().as_u16(),
+                headers: response
+                    .headers()
+                    .iter()
+                    .map(
+                        |(key, value)| scryer_application::CapturedIndexerHttpHeader {
+                            name: key.to_string(),
+                            value: value.as_bytes().to_vec(),
+                        },
                     )
-                }
-                OutboundHttpError::Transport { .. } => {
-                    tally.note_result(IndexerRequestResult::NoResponse);
-                    AppError::DownloadSubmitUnavailable(format!(
-                        "Scryer could not fetch the download artifact from '{name}'."
-                    ))
-                }
-                _ => AppError::DownloadSubmitUnavailable(format!(
-                    "Scryer could not fetch the download artifact from '{name}'."
-                )),
-            })?;
+                    .collect(),
+                body: Vec::new(),
+            };
+            if !response.status().is_success() {
+                tally.note_response(&captured);
+            }
             if response.status().is_redirection() {
                 if hops == 5 {
                     return Err(AppError::Validation(
@@ -658,10 +907,15 @@ impl IndexerArtifactTransport {
             let final_url = Some(response.url().to_string());
             let headers = selected_headers(&response);
             let bytes = read_body(response, ARTIFACT_MAX_BYTES).await.map_err(|_| {
+                tally.note_result(IndexerRequestResult::NoResponse);
                 AppError::DownloadSubmitUnavailable(
                     "Scryer could not read the download artifact.".into(),
                 )
             })?;
+            captured
+                .body
+                .extend_from_slice(&bytes[..bytes.len().min(64 * 1024)]);
+            tally.note_response(&captured);
             return Ok((bytes, headers, final_url));
         }
         Err(AppError::Validation(
@@ -682,6 +936,7 @@ impl IndexerArtifactTransport {
         indexer_base_url: Option<&str>,
         destination_cooldown_key: Option<DestinationKey>,
         tally: IndexerRequestTally,
+        egress: ArtifactEgress<'_>,
     ) -> AppResult<ArtifactFetchResponse> {
         let mut current = url::Url::parse(raw)
             .map_err(|_| AppError::Validation("Download artifact URL is invalid.".into()))?;
@@ -699,23 +954,8 @@ impl IndexerArtifactTransport {
                     "The download artifact fetch timed out.".into(),
                 ));
             }
-            let target = timeout(
-                remaining,
-                prepare_plugin_http_target_from_url(
-                    current.clone(),
-                    "indexer download artifact",
-                    policy,
-                ),
-            )
-            .await
-            .map_err(|_| {
-                AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
-            })?
-            .map_err(|_| {
-                AppError::DownloadSubmitUnavailable(
-                    "Scryer refused an unsafe download artifact destination.".into(),
-                )
-            })?;
+            let (hop_client, hop_url) =
+                self.hop_target(&current, remaining, policy, egress).await?;
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 return Err(AppError::DownloadSubmitUnavailable(
@@ -734,7 +974,7 @@ impl IndexerArtifactTransport {
                 self.outbound_http
                     .send_with_rate_limit_and_dispatch_observer(
                         request_policy,
-                        || target.client().get(target.url().clone()).timeout(remaining),
+                        || hop_client.get(hop_url.clone()).timeout(remaining),
                         |_| async {},
                         |actual_url| {
                             let indexer_request = indexer_base_url
@@ -756,7 +996,7 @@ impl IndexerArtifactTransport {
                 tally.note_result(IndexerRequestResult::NoResponse);
                 AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
             })?
-            .map_err(|error| map_artifact_outbound_error(name, &tally, error))?;
+            .map_err(|error| map_artifact_outbound_error_via(name, &tally, error, egress))?;
             if !response.status().is_success() {
                 tally.note_response(&CapturedIndexerHttpResponse {
                     status: response.status().as_u16(),
@@ -832,6 +1072,26 @@ impl IndexerArtifactTransport {
             "The download artifact redirect loop was exhausted.".into(),
         ))
     }
+}
+
+/// `map_artifact_outbound_error`, with connector failures on a proxied hop
+/// attributed to the proxy rather than the indexer, by name.
+fn map_artifact_outbound_error_via(
+    name: &str,
+    tally: &IndexerRequestTally,
+    error: OutboundHttpError,
+    egress: ArtifactEgress<'_>,
+) -> AppError {
+    if let ArtifactEgress::TransportProxy(proxy) = egress
+        && let OutboundHttpError::Transport { source, .. } = &error
+        && !source.is_timeout()
+        && let Some(message) = transport_proxy::transport_proxy_connect_failure(proxy, source)
+    {
+        tally.note_result(IndexerRequestResult::NoResponse);
+        transport_proxy::record_transport_proxy_failure(proxy, &message);
+        return AppError::DownloadSubmitUnavailable(message);
+    }
+    map_artifact_outbound_error(name, tally, error)
 }
 
 fn map_artifact_outbound_error(
@@ -1145,15 +1405,21 @@ fn parse_bencode_dict(
 }
 
 fn parse_bencode_string(bytes: &[u8], offset: usize) -> Result<(usize, usize, usize), ()> {
-    let colon = bytes[offset..]
+    let colon = bytes
+        .get(offset..)
+        .ok_or(())?
         .iter()
         .position(|b| *b == b':')
         .map(|p| offset + p)
         .ok_or(())?;
-    if colon == offset {
+    let length_token = &bytes[offset..colon];
+    if length_token.is_empty()
+        || !length_token.iter().all(u8::is_ascii_digit)
+        || (length_token.len() > 1 && length_token[0] == b'0')
+    {
         return Err(());
     }
-    let length = std::str::from_utf8(&bytes[offset..colon])
+    let length = std::str::from_utf8(length_token)
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .ok_or(())?;
@@ -1220,6 +1486,102 @@ mod tests {
     struct CountingStats {
         sent: AtomicU32,
         gate: Option<scryer_application::IndexerDispatchGate>,
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn artifact_proxy_pool_reuses_connections_and_expires_on_profile_edits() {
+        use scryer_tunnel::test_support::{CLIENT_ED25519_PEM, SshServerDouble, SshServerOptions};
+        let ssh = SshServerDouble::start(SshServerOptions::default()).await;
+        let origin = MockServer::start().await;
+        Mock::given(path("/artifact"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("artifact"))
+            .mount(&origin)
+            .await;
+        Mock::given(path("/redirect"))
+            .respond_with(ResponseTemplate::new(302).insert_header("location", "/artifact"))
+            .mount(&origin)
+            .await;
+        let transport = transport(Arc::new(CountingStats::default()));
+        let mut proxy = test_proxy(&format!("ssh://{}", ssh.addr()), true);
+        proxy.id = "artifact-proxy-pool".into();
+        proxy.provider_type = scryer_domain::ProxyProviderType::SshTunnel;
+        proxy.protocol = None;
+        proxy.username_encrypted = Some("operator".into());
+        proxy.private_key_encrypted = Some(CLIENT_ED25519_PEM.into());
+        for _ in 0..3 {
+            let client = transport.proxy_client(&proxy).unwrap();
+            assert_eq!(
+                client
+                    .get(format!("{}/artifact", origin.uri()))
+                    .send()
+                    .await
+                    .unwrap()
+                    .text()
+                    .await
+                    .unwrap(),
+                "artifact"
+            );
+        }
+        assert_eq!(
+            ssh.forwarded_targets().len(),
+            1,
+            "three requests share a single SSH channel and TCP connection"
+        );
+        let client = transport.proxy_client(&proxy).unwrap();
+        let response = client
+            .get(format!("{}/redirect", origin.uri()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(
+            response.status(),
+            302,
+            "redirect policy remains owned by the artifact loop"
+        );
+        response.bytes().await.unwrap();
+        proxy.updated_at += chrono::Duration::seconds(1);
+        let client = transport.proxy_client(&proxy).unwrap();
+        assert_eq!(
+            client
+                .get(format!("{}/artifact", origin.uri()))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "artifact"
+        );
+        assert_eq!(ssh.forwarded_targets().len(), 2);
+        {
+            let mut clients = transport.proxy_clients.lock().unwrap();
+            clients.get_mut(&proxy.id).unwrap().created_at -= ARTIFACT_PROXY_CLIENT_TTL;
+        }
+        let client = transport.proxy_client(&proxy).unwrap();
+        assert_eq!(
+            client
+                .get(format!("{}/artifact", origin.uri()))
+                .send()
+                .await
+                .unwrap()
+                .text()
+                .await
+                .unwrap(),
+            "artifact"
+        );
+        assert_eq!(ssh.forwarded_targets().len(), 3);
+        scryer_application::tunnel_proxy::stop_tunnel(&proxy.id);
+        for i in 0..40 {
+            let mut proxy = test_proxy("http://127.0.0.1:1", true);
+            proxy.id = format!("bounded-cache-{i}");
+            proxy.provider_type = scryer_domain::ProxyProviderType::Http;
+            proxy.protocol = None;
+            transport.proxy_client(&proxy).unwrap();
+        }
+        assert_eq!(
+            transport.proxy_clients.lock().unwrap().len(),
+            MAX_ARTIFACT_PROXY_CLIENTS
+        );
     }
 
     impl IndexerStatsTracker for CountingStats {
@@ -1320,7 +1682,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
             .mount(&server)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport(stats.clone());
         let tally = IndexerRequestTally::new(
             "id".into(),
@@ -1337,6 +1702,7 @@ mod tests {
                 None,
                 None,
                 tally,
+                ArtifactEgress::Direct,
             )
             .await;
         assert!(matches!(
@@ -1368,7 +1734,10 @@ mod tests {
                 .expect(1)
                 .mount(&server)
                 .await;
-            let stats = Arc::new(CountingStats::default());
+            let stats = Arc::new(CountingStats {
+                sent: AtomicU32::new(0),
+                gate: None,
+            });
             let response = transport(stats)
                 .fetch_response(None, &server.uri())
                 .await
@@ -1419,7 +1788,7 @@ mod tests {
     fn transport(stats: Arc<CountingStats>) -> IndexerArtifactTransport {
         IndexerArtifactTransport::new(
             Arc::new(TestConfigRepository::default()),
-            Arc::new(scryer_application::NullIndexerProxyConfigRepository),
+            Arc::new(scryer_application::NullProxyConfigRepository),
         )
         .with_indexer_stats_tracker(stats)
     }
@@ -1438,7 +1807,7 @@ mod tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: proxy_id.map(str::to_string),
+            proxy_config_id: proxy_id.map(str::to_string),
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -1462,7 +1831,7 @@ mod tests {
             Arc::new(TestConfigRepository {
                 configs: vec![config],
             }),
-            Arc::new(scryer_application::NullIndexerProxyConfigRepository),
+            Arc::new(scryer_application::NullProxyConfigRepository),
         )
         .with_indexer_stats_tracker(stats)
     }
@@ -1470,7 +1839,7 @@ mod tests {
     fn transport_with_config_and_proxy(
         stats: Arc<CountingStats>,
         config: IndexerConfig,
-        proxy: scryer_domain::IndexerProxyConfig,
+        proxy: scryer_domain::ProxyConfig,
     ) -> IndexerArtifactTransport {
         IndexerArtifactTransport::new(
             Arc::new(TestConfigRepository {
@@ -1481,16 +1850,30 @@ mod tests {
         .with_indexer_stats_tracker(stats)
     }
 
-    fn test_proxy(base_url: &str, is_enabled: bool) -> scryer_domain::IndexerProxyConfig {
+    fn test_proxy(base_url: &str, is_enabled: bool) -> scryer_domain::ProxyConfig {
         let now = Utc::now();
-        scryer_domain::IndexerProxyConfig {
+        scryer_domain::ProxyConfig {
             id: "solver".into(),
             name: "fixture solver".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
-            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            provider_type: scryer_domain::ProxyProviderType::Byparr,
+            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             base_url: base_url.into(),
             request_timeout_seconds: 5,
             is_enabled,
+            username_encrypted: None,
+            password_encrypted: None,
+            remote_dns: false,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
             last_health_status: None,
             last_error_message: None,
             last_error_at: None,
@@ -1499,32 +1882,29 @@ mod tests {
         }
     }
 
-    struct SingleProxyRepository(scryer_domain::IndexerProxyConfig);
+    struct SingleProxyRepository(scryer_domain::ProxyConfig);
 
     #[async_trait]
-    impl IndexerProxyConfigRepository for SingleProxyRepository {
+    impl ProxyConfigRepository for SingleProxyRepository {
         async fn list(
             &self,
-            _: Option<scryer_domain::IndexerProxyProviderType>,
-        ) -> AppResult<Vec<scryer_domain::IndexerProxyConfig>> {
+            _: Option<scryer_domain::ProxyProviderType>,
+        ) -> AppResult<Vec<scryer_domain::ProxyConfig>> {
             Ok(vec![self.0.clone()])
         }
-        async fn get_by_id(
-            &self,
-            id: &str,
-        ) -> AppResult<Option<scryer_domain::IndexerProxyConfig>> {
+        async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
             Ok((id == self.0.id).then(|| self.0.clone()))
         }
         async fn create(
             &self,
-            config: scryer_domain::IndexerProxyConfig,
-        ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+            config: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
             Ok(config)
         }
         async fn update(
             &self,
-            config: scryer_domain::IndexerProxyConfig,
-        ) -> AppResult<scryer_domain::IndexerProxyConfig> {
+            config: scryer_domain::ProxyConfig,
+        ) -> AppResult<scryer_domain::ProxyConfig> {
             Ok(config)
         }
         async fn delete(&self, _: &str) -> AppResult<()> {
@@ -1533,10 +1913,22 @@ mod tests {
         async fn record_health(
             &self,
             _: &str,
-            _: scryer_domain::IndexerProxyHealthStatus,
+            _: scryer_domain::ProxyHealthStatus,
             _: Option<String>,
             _: Option<chrono::DateTime<Utc>>,
         ) -> AppResult<()> {
+            Ok(())
+        }
+        async fn pin_host_key(
+            &self,
+            _: &str,
+            _: &str,
+            _: chrono::DateTime<Utc>,
+            _: chrono::DateTime<Utc>,
+        ) -> AppResult<bool> {
+            Ok(true)
+        }
+        async fn clear_host_key(&self, _: &str) -> AppResult<()> {
             Ok(())
         }
     }
@@ -1549,7 +1941,10 @@ mod tests {
             .expect(0)
             .mount(&server)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport_with_config(
             Arc::clone(&stats),
             test_config(&server.uri(), Some("missing")),
@@ -1560,14 +1955,17 @@ mod tests {
         let Err(error) = result else {
             panic!("missing solver must fail");
         };
-        assert!(error.to_string().contains("solver is no longer available"));
+        assert!(error.to_string().contains("proxy is no longer available"));
         assert!(server.received_requests().await.unwrap().is_empty());
         assert_eq!(stats.sent.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
     async fn metadata_destination_is_rejected_before_dispatch() {
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport_with_config(
             Arc::clone(&stats),
             test_config("http://169.254.169.254", None),
@@ -1598,7 +1996,10 @@ mod tests {
             .expect(0)
             .mount(&server)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport_with_config_and_proxy(
             Arc::clone(&stats),
             test_config(&server.uri(), Some("solver")),
@@ -1610,7 +2011,7 @@ mod tests {
         let Err(error) = result else {
             panic!("disabled solver must fail");
         };
-        assert!(error.to_string().contains("solver is disabled"));
+        assert!(error.to_string().contains("proxy is disabled"));
         assert!(server.received_requests().await.unwrap().is_empty());
         assert_eq!(stats.sent.load(Ordering::SeqCst), 0);
     }
@@ -1623,7 +2024,10 @@ mod tests {
             .expect(0)
             .mount(&server)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport_with_config_and_proxy(
             Arc::clone(&stats),
             test_config(&server.uri(), Some("solver")),
@@ -1661,7 +2065,10 @@ mod tests {
             )
             .mount(&server)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport(Arc::clone(&stats));
         let tally = IndexerRequestTally::new(
             "id".into(),
@@ -1678,6 +2085,7 @@ mod tests {
                 Some(&server.uri()),
                 None,
                 tally,
+                ArtifactEgress::Direct,
             )
             .await
             .expect("redirect fetch");
@@ -1716,6 +2124,7 @@ mod tests {
                 None,
                 None,
                 tally,
+                ArtifactEgress::Direct,
             )
             .await;
         let Err(error) = result else {
@@ -1745,7 +2154,10 @@ mod tests {
             .respond_with(ResponseTemplate::new(302).insert_header("Location", "/a"))
             .mount(&server)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport(Arc::clone(&stats));
         let tally = IndexerRequestTally::new(
             "id".into(),
@@ -1762,6 +2174,7 @@ mod tests {
                 None,
                 None,
                 tally,
+                ArtifactEgress::Direct,
             )
             .await
             .expect("magnet redirect");
@@ -1784,6 +2197,7 @@ mod tests {
                 None,
                 None,
                 tally,
+                ArtifactEgress::Direct,
             )
             .await;
         let Err(error) = loop_result else {
@@ -1792,8 +2206,10 @@ mod tests {
         assert!(error.to_string().contains("redirect looped"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn cross_origin_redirect_strips_session_headers() {
+        let recorder = ResultRecorder::default();
+        let _recording = metrics::set_default_local_recorder(&recorder);
         let target = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/final"))
@@ -1810,7 +2226,10 @@ mod tests {
             )
             .mount(&origin)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport(Arc::clone(&stats));
         let tally = IndexerRequestTally::new(
             "id".into(),
@@ -1828,15 +2247,20 @@ mod tests {
                 Some(&origin.uri()),
                 None,
                 &tally,
+                ArtifactEgress::Direct,
             )
             .await
             .expect("fetch succeeds");
         let target_request = target.received_requests().await.unwrap().pop().unwrap();
         assert!(target_request.headers.get("cookie").is_none());
+        drop(tally);
+        assert_request_outcomes(&recorder, &["http_302", "success"]);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn quota_response_with_assigned_solver_does_not_dispatch_solver() {
+        let recorder = ResultRecorder::default();
+        let _recording = metrics::set_default_local_recorder(&recorder);
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/grab"))
@@ -1849,17 +2273,34 @@ mod tests {
             .expect(0)
             .mount(&server)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport(Arc::clone(&stats));
         let now = Utc::now();
-        let proxy = scryer_domain::IndexerProxyConfig {
+        let proxy = scryer_domain::ProxyConfig {
             id: "solver".into(),
             name: "fixture solver".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
-            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            provider_type: scryer_domain::ProxyProviderType::Byparr,
+            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             base_url: server.uri(),
             request_timeout_seconds: 5,
             is_enabled: true,
+            username_encrypted: None,
+            password_encrypted: None,
+            remote_dns: false,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
             last_health_status: None,
             last_error_message: None,
             last_error_at: None,
@@ -1893,6 +2334,8 @@ mod tests {
         ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         assert_eq!(stats.sent.load(Ordering::SeqCst), 1);
+        drop(tally);
+        assert_request_outcomes(&recorder, &["newznab_request_limit_reached"]);
     }
 
     #[tokio::test]
@@ -1916,17 +2359,34 @@ mod tests {
                 .expect(0)
                 .mount(&server)
                 .await;
-            let stats = Arc::new(CountingStats::default());
+            let stats = Arc::new(CountingStats {
+                sent: AtomicU32::new(0),
+                gate: None,
+            });
             let transport = transport(Arc::clone(&stats));
             let now = Utc::now();
-            let proxy = scryer_domain::IndexerProxyConfig {
+            let proxy = scryer_domain::ProxyConfig {
                 id: "solver".into(),
                 name: "fixture solver".into(),
-                provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
-                protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                provider_type: scryer_domain::ProxyProviderType::Byparr,
+                protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
                 base_url: server.uri(),
                 request_timeout_seconds: 5,
                 is_enabled: true,
+                username_encrypted: None,
+                password_encrypted: None,
+                remote_dns: false,
+                private_key_encrypted: None,
+                private_key_passphrase_encrypted: None,
+                peer_public_key: None,
+                preshared_key_encrypted: None,
+                tunnel_public_key: None,
+                tunnel_addresses: Vec::new(),
+                tunnel_dns_servers: Vec::new(),
+                tunnel_mtu: None,
+                tunnel_keepalive_seconds: None,
+                host_key_fingerprint: None,
+                host_key_pinned_at: None,
                 last_health_status: None,
                 last_error_message: None,
                 last_error_at: None,
@@ -1974,8 +2434,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn assigned_solver_uses_successful_direct_artifact_without_solver_post() {
+        let recorder = ResultRecorder::default();
+        let _recording = metrics::set_default_local_recorder(&recorder);
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/grab"))
@@ -1988,17 +2450,34 @@ mod tests {
             .expect(0)
             .mount(&server)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport(Arc::clone(&stats));
         let now = Utc::now();
-        let proxy = scryer_domain::IndexerProxyConfig {
+        let proxy = scryer_domain::ProxyConfig {
             id: "solver".into(),
             name: "fixture solver".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
-            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            provider_type: scryer_domain::ProxyProviderType::Byparr,
+            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             base_url: server.uri(),
             request_timeout_seconds: 5,
             is_enabled: true,
+            username_encrypted: None,
+            password_encrypted: None,
+            remote_dns: false,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
             last_health_status: None,
             last_error_message: None,
             last_error_at: None,
@@ -2027,10 +2506,14 @@ mod tests {
         assert!(matches!(artifact, ResolvedDownloadArtifact::Nzb { .. }));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         assert_eq!(stats.sent.load(Ordering::SeqCst), 1);
+        drop(tally);
+        assert_request_outcomes(&recorder, &["success"]);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn solver_post_counts_as_an_indexer_request_alongside_direct_grabs() {
+        let recorder = ResultRecorder::default();
+        let _recording = metrics::set_default_local_recorder(&recorder);
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/grab"))
@@ -2045,17 +2528,34 @@ mod tests {
             })))
             .mount(&server)
             .await;
-        let stats = Arc::new(CountingStats::default());
+        let stats = Arc::new(CountingStats {
+            sent: AtomicU32::new(0),
+            gate: None,
+        });
         let transport = transport(Arc::clone(&stats));
         let now = Utc::now();
-        let proxy = scryer_domain::IndexerProxyConfig {
+        let proxy = scryer_domain::ProxyConfig {
             id: "solver".into(),
             name: "fixture solver".into(),
-            provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
-            protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+            provider_type: scryer_domain::ProxyProviderType::Byparr,
+            protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
             base_url: server.uri(),
             request_timeout_seconds: 5,
             is_enabled: true,
+            username_encrypted: None,
+            password_encrypted: None,
+            remote_dns: false,
+            private_key_encrypted: None,
+            private_key_passphrase_encrypted: None,
+            peer_public_key: None,
+            preshared_key_encrypted: None,
+            tunnel_public_key: None,
+            tunnel_addresses: Vec::new(),
+            tunnel_dns_servers: Vec::new(),
+            tunnel_mtu: None,
+            tunnel_keepalive_seconds: None,
+            host_key_fingerprint: None,
+            host_key_pinned_at: None,
             last_health_status: None,
             last_error_message: None,
             last_error_at: None,
@@ -2101,6 +2601,28 @@ mod tests {
             stats.sent.load(Ordering::SeqCst),
             3,
             "two direct grabs plus one solver-relayed grab each spend indexer quota"
+        );
+        drop(tally);
+        assert_request_outcomes(
+            &recorder,
+            &["http_server_error", "http_server_error", "success"],
+        );
+    }
+
+    fn assert_request_outcomes(recorder: &ResultRecorder, expected: &[&str]) {
+        let actual: Vec<_> = recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(label, count)| (label.clone(), count.load(Ordering::Relaxed)))
+            .collect();
+        assert_eq!(
+            actual,
+            expected
+                .iter()
+                .map(|label| (label.to_string(), 1))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2222,5 +2744,169 @@ mod tests {
             let bytes = format!("d4:infod6:lengthi{integer}eee").into_bytes();
             assert!(super::torrent_hash(&bytes).is_some(), "{integer}");
         }
+    }
+
+    #[test]
+    fn torrent_classification_rejects_noncanonical_string_lengths() {
+        for bytes in [
+            &b"d04:infode"[..],
+            b"d+4:infode",
+            b"d 4:infode",
+            b"d4:infod4:name04:testee",
+            b"d4:infod4:name00:ee",
+            b"d4:infod04:name4:testee",
+            b"d4:infod4:name999999999999999999999999999999:testee",
+            b"d4:infod4:name4:tes",
+        ] {
+            assert!(classify("fixture", None, None, bytes.to_vec(), None).is_err());
+        }
+        for bytes in [&b"d4:infod4:name0:ee"[..], b"d4:infod4:name4:testee"] {
+            assert!(torrent_hash(bytes).is_some());
+        }
+    }
+
+    struct ResolvingIndexerClient {
+        calls: std::sync::Mutex<Vec<String>>,
+        artifact: Option<ResolvedDownloadArtifact>,
+    }
+
+    #[async_trait]
+    impl scryer_application::IndexerClient for ResolvingIndexerClient {
+        async fn search(
+            &self,
+            _query: String,
+            _ids: std::collections::HashMap<String, String>,
+            _category: Option<String>,
+            _facet: Option<String>,
+            _id_search_facet: Option<String>,
+            _newznab_categories: Option<Vec<String>>,
+            _indexer_routing: Option<scryer_application::IndexerRoutingPlan>,
+            _mode: scryer_application::SearchMode,
+            _operation: scryer_application::IndexerErrorOperation,
+            _season: Option<u32>,
+            _episode: Option<u32>,
+            _absolute_episode: Option<u32>,
+            _year: Option<i32>,
+            _tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+            _learning_context: Option<scryer_application::IndexerSearchLearningContext>,
+            _cancel_token: CancellationToken,
+        ) -> AppResult<scryer_application::IndexerSearchResponse> {
+            Err(AppError::Repository(
+                "search is not used in this test".to_string(),
+            ))
+        }
+
+        async fn resolve_download(
+            &self,
+            download_url: &str,
+        ) -> AppResult<Option<ResolvedDownloadArtifact>> {
+            self.calls.lock().unwrap().push(download_url.to_string());
+            Ok(self.artifact.clone())
+        }
+    }
+
+    struct ResolvingIndexerProvider {
+        client: Arc<dyn scryer_application::IndexerClient>,
+    }
+
+    impl IndexerPluginProvider for ResolvingIndexerProvider {
+        fn client_for_provider(
+            &self,
+            _config: &IndexerConfig,
+        ) -> Option<Arc<dyn scryer_application::IndexerClient>> {
+            Some(Arc::clone(&self.client))
+        }
+
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["cardigann".to_string()]
+        }
+
+        fn scoring_policies(&self) -> Vec<scryer_rules::UserPolicy> {
+            vec![]
+        }
+    }
+
+    #[tokio::test]
+    async fn indexer_owned_download_resolution_runs_before_direct_fallback() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(0)
+            .mount(&server)
+            .await;
+        let client = Arc::new(ResolvingIndexerClient {
+            calls: std::sync::Mutex::new(Vec::new()),
+            artifact: Some(ResolvedDownloadArtifact::TorrentFile {
+                bytes: b"torrent bytes".to_vec(),
+                file_name: Some("release.torrent".to_string()),
+                content_type: Some("application/x-bittorrent".to_string()),
+                info_hash_hint: Some("0123456789012345678901234567890123456789".to_string()),
+            }),
+        });
+        let transport = transport_with_config(
+            Arc::new(CountingStats {
+                sent: AtomicU32::new(0),
+                gate: None,
+            }),
+            test_config(&server.uri(), None),
+        )
+        .with_indexer_plugin_provider(Arc::new(ResolvingIndexerProvider {
+            client: client.clone(),
+        }));
+        let download_url = format!("{}/download/1", server.uri());
+
+        let response = transport
+            .fetch_response(Some("indexer"), &download_url)
+            .await
+            .expect("indexer-owned resolution should avoid the direct fallback");
+
+        assert_eq!(
+            client.calls.lock().unwrap().as_slice(),
+            std::slice::from_ref(&download_url)
+        );
+        assert!(matches!(
+            response,
+            Some(ArtifactFetchResponse::Resolved(ResolvedDownloadArtifact::TorrentFile {
+                ref bytes,
+                ..
+            })) if bytes == b"torrent bytes"
+        ));
+    }
+
+    #[tokio::test]
+    async fn indexers_without_a_grab_flow_fall_through_to_the_direct_fetch() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "application/x-nzb")
+                    .set_body_bytes(b"<nzb/>".to_vec()),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Arc::new(ResolvingIndexerClient {
+            calls: std::sync::Mutex::new(Vec::new()),
+            artifact: None,
+        });
+        let transport = transport_with_config(
+            Arc::new(CountingStats {
+                sent: AtomicU32::new(0),
+                gate: None,
+            }),
+            test_config(&server.uri(), None),
+        )
+        .with_indexer_plugin_provider(Arc::new(ResolvingIndexerProvider {
+            client: client.clone(),
+        }));
+        let download_url = format!("{}/download/2", server.uri());
+
+        let response = transport
+            .fetch_response(Some("indexer"), &download_url)
+            .await
+            .expect("a `None` grab answer keeps the direct fetch");
+
+        assert_eq!(client.calls.lock().unwrap().len(), 1);
+        assert!(matches!(response, Some(ArtifactFetchResponse::Http(_))));
     }
 }

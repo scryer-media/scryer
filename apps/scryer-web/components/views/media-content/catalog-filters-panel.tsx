@@ -9,12 +9,15 @@ import {
   RefreshCw,
   Search,
   SlidersHorizontal,
+  Sparkles,
   Star,
   Tag,
   X,
 } from "lucide-react";
 
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
+import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
+import { availableTitleTagLabels } from "@/lib/utils/title-tags";
 import { Input } from "@/components/ui/input";
 import {
   MultiSelectDropdown,
@@ -203,6 +206,28 @@ export function CatalogFiltersPanel({
     (themeTagKeys: string[]) => onFiltersChange({ themeTagKeys }),
     [onFiltersChange],
   );
+  // The user-tag vocabulary comes from the registry rather than from the
+  // catalog's own facet counts: a defined tag nothing carries yet should still
+  // be offerable, and there is no free text to fall back on.
+  const { definitions: tagDefinitions, loading: tagDefinitionsLoading } =
+    useTitleTagDefinitions();
+  const userTagOptions = React.useMemo(
+    () =>
+      availableTitleTagLabels(tagDefinitions, []).map((label) => ({
+        value: label,
+        label,
+      })),
+    [tagDefinitions],
+  );
+  const userTagLabels = React.useMemo(
+    () => new Map(userTagOptions.map((option) => [option.value, option.label])),
+    [userTagOptions],
+  );
+  const handleUserTagChange = React.useCallback(
+    (userTagLabelValues: string[]) =>
+      onFiltersChange({ userTagLabels: userTagLabelValues }),
+    [onFiltersChange],
+  );
   const minimumYearBound = options.minimumYear ?? DEFAULT_MINIMUM_YEAR;
   const maximumYearBound = Math.max(
     options.maximumYear ?? defaultMaximumYear(),
@@ -229,6 +254,7 @@ export function CatalogFiltersPanel({
     filters.rootFolderIds.length > 0 ||
     filters.genreTagKeys.length > 0 ||
     filters.themeTagKeys.length > 0 ||
+    filters.userTagLabels.length > 0 ||
     filters.minimumYear !== null ||
     filters.maximumYear !== null ||
     minimumRating > 0;
@@ -384,9 +410,12 @@ export function CatalogFiltersPanel({
             }
           />
         </div>
+        {/* Themes are SMG-derived canonical tag keys, not user tags. They used
+            to be labelled with the generic "Tags" wording, which now belongs to
+            the administrator-defined registry below. */}
         <div className="mb-4 min-w-0">
-          <FilterLabel icon={<Tag className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}>
-            {t("discovery.tags")}
+          <FilterLabel icon={<Sparkles className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}>
+            {t("title.catalogFilters.themes")}
           </FilterLabel>
           <MultiSelectDropdown
             options={themeOptions}
@@ -394,7 +423,7 @@ export function CatalogFiltersPanel({
             onSelectedValuesChange={handleThemeChange}
             triggerLabel={
               filters.themeTagKeys.length === 0
-                ? t("discovery.selectTags")
+                ? t("title.catalogFilters.selectThemes")
                 : filters.themeTagKeys.length === 1
                   ? (themeLabels.get(filters.themeTagKeys[0]) ??
                     filters.themeTagKeys[0])
@@ -402,7 +431,7 @@ export function CatalogFiltersPanel({
                       count: filters.themeTagKeys.length,
                     })
             }
-            ariaLabel={t("discovery.tags")}
+            ariaLabel={t("title.catalogFilters.themes")}
             size="compact"
             chrome="toolbar"
           />
@@ -418,6 +447,50 @@ export function CatalogFiltersPanel({
             }
           />
         </div>
+      </div>
+
+      {/* User tags: any-of, drawn from the administrator-defined registry. An
+          empty registry has nothing to offer and no free text to fall back on,
+          so the control says where tags come from instead. */}
+      <div className="mb-4 min-w-0">
+        <FilterLabel icon={<Tag className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />}>
+          {t("title.catalogFilters.userTags")}
+        </FilterLabel>
+        {userTagOptions.length === 0 && !tagDefinitionsLoading ? (
+          <p className="text-[11.5px] text-[var(--scry-faint)]">
+            {t("title.tagsEmptyRegistry")}
+          </p>
+        ) : (
+          <MultiSelectDropdown
+            options={userTagOptions}
+            selectedValues={filters.userTagLabels}
+            onSelectedValuesChange={handleUserTagChange}
+            triggerLabel={
+              filters.userTagLabels.length === 0
+                ? t("title.catalogFilters.selectUserTags")
+                : filters.userTagLabels.length === 1
+                  ? filters.userTagLabels[0]
+                  : t("title.catalogFilters.selectedCount", {
+                      count: filters.userTagLabels.length,
+                    })
+            }
+            ariaLabel={t("title.catalogFilters.userTags")}
+            disabled={tagDefinitionsLoading}
+            size="compact"
+            chrome="toolbar"
+          />
+        )}
+        <FilterChips
+          values={filters.userTagLabels}
+          labels={userTagLabels}
+          onRemove={(label) =>
+            onFiltersChange({
+              userTagLabels: filters.userTagLabels.filter(
+                (candidate) => candidate !== label,
+              ),
+            })
+          }
+        />
       </div>
 
       <div className="mb-2.5 flex items-center justify-between">

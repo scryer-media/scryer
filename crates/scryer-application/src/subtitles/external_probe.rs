@@ -180,7 +180,7 @@ async fn resolve_external_subtitle_with_detector(
     if let Some(cache_entry) =
         existing_cache.filter(|cache_entry| cache_matches_fingerprint(cache_entry, &fingerprint))
     {
-        metrics::counter!("subtitle_external_probe_cache_hit_total").increment(1);
+        metrics::counter!("scryer_subtitle_external_probe_cache_hit_total").increment(1);
         tracing::debug!(
             path = %subtitle_path.display(),
             "external subtitle probe cache hit"
@@ -192,7 +192,7 @@ async fn resolve_external_subtitle_with_detector(
         });
     }
 
-    metrics::counter!("subtitle_external_probe_cache_miss_total").increment(1);
+    metrics::counter!("scryer_subtitle_external_probe_cache_miss_total").increment(1);
     tracing::debug!(
         path = %subtitle_path.display(),
         "external subtitle probe cache miss"
@@ -221,7 +221,7 @@ async fn resolve_external_subtitle_with_detector(
 
     if should_probe_content(extension, needs_language_probe, needs_hi_probe) {
         if fingerprint.size_bytes > MAX_TEXT_PROBE_SIZE_BYTES {
-            metrics::counter!("subtitle_external_probe_skipped_size_total").increment(1);
+            metrics::counter!("scryer_subtitle_external_probe_skipped_size_total").increment(1);
             tracing::debug!(
                 path = %subtitle_path.display(),
                 size_bytes = fingerprint.size_bytes,
@@ -232,7 +232,7 @@ async fn resolve_external_subtitle_with_detector(
             match read_subtitle_to_string(subtitle_path).await {
                 Ok(decoded) => {
                     if decoded.had_errors && has_excessive_replacement_chars(&decoded.text) {
-                        metrics::counter!("subtitle_external_probe_decode_failed_total")
+                        metrics::counter!("scryer_subtitle_external_probe_decode_failed_total")
                             .increment(1);
                         tracing::debug!(
                             path = %subtitle_path.display(),
@@ -240,7 +240,7 @@ async fn resolve_external_subtitle_with_detector(
                             "skipping external subtitle content probe after lossy decode"
                         );
                     } else if !is_likely_text_subtitle_payload(&decoded) {
-                        metrics::counter!("subtitle_external_probe_skipped_non_text_total")
+                        metrics::counter!("scryer_subtitle_external_probe_skipped_non_text_total")
                             .increment(1);
                         tracing::debug!(
                             path = %subtitle_path.display(),
@@ -282,8 +282,10 @@ async fn resolve_external_subtitle_with_detector(
                         }
 
                         if needs_language_probe && language.is_none() {
-                            metrics::counter!("subtitle_external_probe_unresolved_language_total")
-                                .increment(1);
+                            metrics::counter!(
+                                "scryer_subtitle_external_probe_unresolved_language_total"
+                            )
+                            .increment(1);
                             tracing::debug!(
                                 path = %subtitle_path.display(),
                                 encoding = %decoded.encoding_name,

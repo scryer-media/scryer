@@ -197,25 +197,59 @@ pub async fn load_title_metadata_tags(
     exec: SqlExec<'_, '_>,
     title_ids: &[String],
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
-    load_metadata_tags(exec, TITLE_METADATA_TABLES, title_ids).await
+    load_metadata_tags(exec, TITLE_METADATA_TABLES, title_ids, None).await
 }
 
 pub async fn load_discovery_title_metadata_tags(
     exec: SqlExec<'_, '_>,
     discovery_title_ids: &[String],
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
-    load_metadata_tags(exec, DISCOVERY_TITLE_METADATA_TABLES, discovery_title_ids).await
+    load_metadata_tags(
+        exec,
+        DISCOVERY_TITLE_METADATA_TABLES,
+        discovery_title_ids,
+        None,
+    )
+    .await
+}
+
+/// Load one canonical tag category with its full provenance (confidence,
+/// sources, source tag keys).
+///
+/// Discovery home composition needs genre provenance for up to a couple of
+/// thousand pool candidates in order to tell a provider-asserted genre from an
+/// AniList tag that was promoted into one. Loading every category for that many
+/// titles would multiply the source/source-key joins across ~30 tags per title
+/// for no gain, so the category is pushed into the query.
+pub async fn load_discovery_title_metadata_tags_in_category(
+    exec: SqlExec<'_, '_>,
+    discovery_title_ids: &[String],
+    category: &str,
+) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
+    load_metadata_tags(
+        exec,
+        DISCOVERY_TITLE_METADATA_TABLES,
+        discovery_title_ids,
+        Some(category),
+    )
+    .await
 }
 
 async fn load_metadata_tags(
     exec: SqlExec<'_, '_>,
     tables: MetadataTables,
     owner_ids: &[String],
+    category: Option<&str>,
 ) -> AppResult<BTreeMap<String, Vec<CanonicalMediaTag>>> {
     if owner_ids.is_empty() {
         return Ok(BTreeMap::new());
     }
     let placeholders = bind_placeholders(owner_ids.len());
+    let category_clause = if category.is_some() {
+        " AND LOWER(TRIM(t.category)) = {}"
+    } else {
+        ""
+    };
     let sql = format!(
         "SELECT
             t.{owner_column} AS owner_id,
@@ -232,7 +266,7 @@ async fn load_metadata_tags(
             ON ts.{owner_column} = t.{owner_column} AND ts.tag_key = t.tag_key
          LEFT JOIN {tag_source_keys} tsk
             ON tsk.{owner_column} = t.{owner_column} AND tsk.tag_key = t.tag_key
-         WHERE t.{owner_column} IN ({placeholders})
+         WHERE t.{owner_column} IN ({placeholders}){category_clause}
          ORDER BY t.{owner_column}, t.sort_index, t.category, t.name,
                   ts.sort_index, ts.source, tsk.sort_index, tsk.source_tag_key",
         owner_column = tables.owner_column,
@@ -240,11 +274,14 @@ async fn load_metadata_tags(
         tag_sources = tables.tag_sources,
         tag_source_keys = tables.tag_source_keys,
     );
-    let args = owner_ids
+    let mut args = owner_ids
         .iter()
         .cloned()
         .map(SqlArg::Text)
         .collect::<Vec<_>>();
+    if let Some(category) = category {
+        args.push(SqlArg::Text(category.trim().to_ascii_lowercase()));
+    }
     let rows = SqlRuntime::fetch_all(exec, &sql, &args).await?;
     rows_to_tags_by_owner(&rows)
 }

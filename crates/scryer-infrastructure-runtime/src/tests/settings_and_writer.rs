@@ -456,6 +456,7 @@ async fn serialized_writer_handles_download_client_reorder() {
         last_seen_at: None,
         created_at: now,
         updated_at: now,
+        proxy_config_id: None,
     };
     let client_b = DownloadClientConfig {
         id: "client-b".to_string(),
@@ -469,6 +470,7 @@ async fn serialized_writer_handles_download_client_reorder() {
         last_seen_at: None,
         created_at: now,
         updated_at: now,
+        proxy_config_id: None,
     };
 
     DownloadClientConfigRepository::create(&store, client_a.clone())
@@ -1017,5 +1019,79 @@ async fn release_attempt_queries_exclude_pending_attempts_from_failed_signatures
         Some("Rejected.Movie.2024.1080p.WEB-DL-GRP")
     );
 
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn atomic_global_settings_patch_rolls_back_an_earlier_gate_on_later_failure() {
+    let (services, db) = temp_services("atomic_maintenance_gates").await;
+    let settings = SettingsStore::new(services.datastore(), services.encryption_key_state());
+    let keys = [
+        "maintenance.evaluation_enabled",
+        "maintenance.destructive_effects_enabled",
+    ];
+    settings
+        .batch_ensure_setting_definitions(
+            keys.iter()
+                .map(|key| crate::types::SettingDefinitionSeed {
+                    category: "general".into(),
+                    scope: "system".into(),
+                    key_name: (*key).into(),
+                    data_type: "boolean".into(),
+                    default_value_json: "true".into(),
+                    is_sensitive: false,
+                    validation_json: None,
+                })
+                .collect(),
+        )
+        .await
+        .unwrap();
+    for key in keys {
+        settings
+            .upsert_setting_json("system", key, None, "true".into(), "test", None)
+            .await
+            .unwrap();
+    }
+    sqlx::query("CREATE TRIGGER fail_second_gate BEFORE UPDATE ON settings_values WHEN NEW.setting_definition_id IN (SELECT id FROM settings_definitions WHERE key_name = 'maintenance.destructive_effects_enabled') BEGIN SELECT RAISE(ABORT, 'injected gate failure'); END")
+        .execute(services.pool()).await.unwrap();
+    let patch = keys
+        .iter()
+        .map(|key| (key.to_string(), "false".to_string()))
+        .collect::<Vec<_>>();
+    assert!(
+        settings
+            .upsert_global_settings_json("system", &patch, "test", None)
+            .await
+            .is_err()
+    );
+    for key in keys {
+        assert_eq!(
+            settings
+                .get_setting_json("system", key, None)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("true")
+        );
+    }
+    sqlx::query("DROP TRIGGER fail_second_gate")
+        .execute(services.pool())
+        .await
+        .unwrap();
+    settings
+        .upsert_global_settings_json("system", &patch, "test", None)
+        .await
+        .unwrap();
+    for key in keys {
+        assert_eq!(
+            settings
+                .get_setting_json("system", key, None)
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("false")
+        );
+    }
+    services.pool().close().await;
     let _ = std::fs::remove_file(db);
 }

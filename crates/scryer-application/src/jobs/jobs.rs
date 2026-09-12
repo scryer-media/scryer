@@ -1,10 +1,10 @@
 use super::*;
 use crate::discovery::{
     DiscoveryContextDefaults, DiscoveryLibraryContext, build_discovery_library_context,
-    coalesce_pending_context_change, incremental_item_records,
-    pending_context_change_from_domain_event, pending_context_changes_need_snapshot_reconciliation,
-    public_feed_item_records, public_feed_section_records, snapshot_facet_records,
-    snapshot_item_records,
+    coalesce_pending_context_change, discovery_library_growth_warrants_snapshot,
+    incremental_item_records, pending_context_change_from_domain_event,
+    pending_context_changes_need_snapshot_reconciliation, public_feed_item_records,
+    public_feed_section_records, snapshot_facet_records, snapshot_item_records,
 };
 use crate::domain_events::{DomainEventActor, new_job_run_domain_event};
 use crate::event_views::replay_library_scan_state;
@@ -99,6 +99,13 @@ fn is_background_library_refresh_job(job_key: JobKey) -> bool {
         JobKey::BackgroundLibraryRefreshMovies
             | JobKey::BackgroundLibraryRefreshSeries
             | JobKey::BackgroundLibraryRefreshAnime
+    )
+}
+
+fn is_library_scan_job(job_key: JobKey) -> bool {
+    matches!(
+        job_key,
+        JobKey::LibraryScanMovies | JobKey::LibraryScanSeries | JobKey::LibraryScanAnime
     )
 }
 
@@ -227,6 +234,11 @@ struct DiscoveryNextRunCandidates {
     /// bucket is seed-jittered, it could land inside the first-snapshot
     /// window and pre-empt the wake the state actually scheduled.
     incremental_reload_possible: bool,
+    /// False when the instance-wide personalized discovery switch is off. Both
+    /// personalized candidates are then excluded and the fallback settles on
+    /// the public feed slot instead of waking on an incremental bucket that
+    /// cannot do any work.
+    personalized_enabled: bool,
     next_context: DateTime<Utc>,
     next_public: DateTime<Utc>,
     bootstrap_quiet_until: Option<DateTime<Utc>>,
@@ -242,6 +254,7 @@ fn discovery_next_run_at(
     let DiscoveryNextRunCandidates {
         next_incremental,
         incremental_reload_possible,
+        personalized_enabled,
         next_context,
         next_public,
         bootstrap_quiet_until,
@@ -250,19 +263,31 @@ fn discovery_next_run_at(
         pending_changes_quiet_at,
     } = candidates;
     [
-        incremental_reload_possible.then_some(next_incremental),
-        Some(next_context),
+        (personalized_enabled && incremental_reload_possible).then_some(next_incremental),
+        personalized_enabled.then_some(next_context),
         Some(next_public),
-        bootstrap_quiet_until,
+        personalized_enabled
+            .then_some(bootstrap_quiet_until)
+            .flatten(),
         backoff_until,
-        scan_blocked_retry_at,
-        pending_changes_quiet_at,
+        // A blocked scan only ever holds up personalized work; the public feed
+        // does not care, so it is not a wake reason while the switch is off.
+        personalized_enabled
+            .then_some(scan_blocked_retry_at)
+            .flatten(),
+        personalized_enabled
+            .then_some(pending_changes_quiet_at)
+            .flatten(),
     ]
     .into_iter()
     .flatten()
     .filter(|candidate| *candidate >= now)
     .min()
-    .unwrap_or(next_incremental)
+    .unwrap_or(if personalized_enabled {
+        next_incremental
+    } else {
+        next_public
+    })
 }
 
 fn discovery_pending_changes_quiet_at(
@@ -462,6 +487,9 @@ struct HousekeepingRunSummary {
 #[derive(Clone, Debug, serde::Serialize)]
 struct DiscoverySyncRunSummary {
     state_created: bool,
+    /// False when the instance-wide personalized discovery switch is off. The
+    /// run then refreshes the public feed and sends nothing else to SMG.
+    personalized_discovery_enabled: bool,
     trigger_source: String,
     subject_count: usize,
     subject_fingerprint: String,
@@ -717,7 +745,23 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         let next_runs = self.runtime.jobs.job_run_tracker.all_next_runs().await;
-        Ok(crate::jobs::all_job_definitions(&next_runs))
+        let mut definitions = crate::jobs::all_job_definitions(&next_runs);
+        if let Some(job) = definitions
+            .iter_mut()
+            .find(|job| job.key == JobKey::ArtworkEncoding)
+        {
+            let now = self.runtime.environment.now().with_timezone(&chrono::Local);
+            job.schedule.description = format!(
+                "Daily 03:00–09:00 host local time; host now {} (UTC{})",
+                now.format("%Y-%m-%d %H:%M"),
+                now.format("%:z")
+            );
+            job.description = format!(
+                "Encode pending artwork. Run now overrides the nightly window. {}.",
+                self.runtime.catalog.artwork_wait_reason.read().await,
+            );
+        }
+        Ok(definitions)
     }
 
     async fn actor_can_view_interactive_job_run(
@@ -992,6 +1036,46 @@ impl AppUseCase {
     pub async fn trigger_job(&self, actor: &User, job_key: JobKey) -> AppResult<JobRun> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
+        let hash_start = if job_key == JobKey::FullHashBackfill {
+            let guard = self.runtime.jobs.full_hash_start_lock.lock().await;
+            if self.runtime.jobs.full_hash_shutdown.is_cancelled() {
+                return Err(AppError::Validation(
+                    "Full-hash backfill is shutting down".into(),
+                ));
+            }
+            if let Some(active) = self
+                .runtime
+                .jobs
+                .job_run_tracker
+                .active_run_for_job(job_key)
+                .await
+            {
+                return Ok(active);
+            }
+            Some(guard)
+        } else {
+            None
+        };
+        let artwork_start = if job_key == JobKey::ArtworkEncoding {
+            let guard = self.runtime.catalog.artwork_job_start_lock.lock().await;
+            if self.runtime.catalog.artwork_shutdown.is_cancelled() {
+                return Err(AppError::Validation(
+                    "Artwork encoding is shutting down".into(),
+                ));
+            }
+            if let Some(active) = self
+                .runtime
+                .jobs
+                .job_run_tracker
+                .active_run_for_job(job_key)
+                .await
+            {
+                return Ok(active);
+            }
+            Some(guard)
+        } else {
+            None
+        };
         if !job_key.manual_trigger_allowed() {
             return Err(AppError::Validation(format!(
                 "{} can only run on its configured schedule",
@@ -1015,6 +1099,8 @@ impl AppUseCase {
             .upsert_active_run(run_payload.clone())
             .await;
         let event_actor = DomainEventActor::from(actor);
+        drop(artwork_start);
+        drop(hash_start);
         let _ = self
             .append_domain_event(new_job_run_domain_event(
                 event_actor.clone(),
@@ -1051,9 +1137,45 @@ impl AppUseCase {
         job_key: JobKey,
         trigger_source: JobTriggerSource,
     ) -> AppResult<()> {
-        if is_background_library_refresh_job(job_key) {
+        let hash_start = if job_key == JobKey::FullHashBackfill {
+            let guard = self.runtime.jobs.full_hash_start_lock.lock().await;
+            if self.runtime.jobs.full_hash_shutdown.is_cancelled()
+                || self
+                    .runtime
+                    .jobs
+                    .job_run_tracker
+                    .has_active_job(job_key)
+                    .await
+            {
+                return Ok(());
+            }
+            Some(guard)
+        } else {
+            None
+        };
+        let artwork_start = if job_key == JobKey::ArtworkEncoding {
+            let guard = self.runtime.catalog.artwork_job_start_lock.lock().await;
+            if self.runtime.catalog.artwork_shutdown.is_cancelled() {
+                return Ok(());
+            }
+            if self
+                .runtime
+                .jobs
+                .job_run_tracker
+                .has_active_job(job_key)
+                .await
+            {
+                return Ok(());
+            }
+            Some(guard)
+        } else {
+            None
+        };
+        // A facet's scheduled scan and refresh are one run per library, so a
+        // second library of the facet is scanned rather than skipped.
+        if is_background_library_refresh_job(job_key) || is_library_scan_job(job_key) {
             return self
-                .run_scheduled_background_library_refresh_jobs_now(job_key, trigger_source)
+                .run_scheduled_library_jobs_now(job_key, trigger_source)
                 .await;
         }
 
@@ -1067,6 +1189,8 @@ impl AppUseCase {
             .job_run_tracker
             .upsert_active_run(run_payload)
             .await;
+        drop(artwork_start);
+        drop(hash_start);
         let _ = self
             .append_domain_event(new_job_run_domain_event(
                 None,
@@ -1125,16 +1249,18 @@ impl AppUseCase {
             })
     }
 
-    async fn run_scheduled_background_library_refresh_jobs_now(
+    /// Run a facet-scoped library job once per library of that facet, each
+    /// as its own run carrying the library id, one after another.
+    async fn run_scheduled_library_jobs_now(
         &self,
         job_key: JobKey,
         trigger_source: JobTriggerSource,
     ) -> AppResult<()> {
-        let facet = job_key_library_facet(job_key).expect("background refresh facet");
+        let facet = job_key_library_facet(job_key).expect("library job facet");
         let libraries = self.services.catalog.libraries.list(Some(facet)).await?;
         if libraries.is_empty() {
             return Err(AppError::Validation(format!(
-                "{} has no libraries to refresh",
+                "{} has no libraries",
                 job_key.display_name()
             )));
         }
@@ -1424,15 +1550,24 @@ impl AppUseCase {
         let actor = actor.unwrap_or_else(User::system_execution_actor);
         match job_key {
             JobKey::LibraryScanMovies | JobKey::LibraryScanSeries | JobKey::LibraryScanAnime => {
-                let facet = job_key_library_facet(job_key).expect("library scan facet");
-                let summary = self
-                    .scan_library_with_tracking(
+                let summary = if let Some(library_id) = job_run_library_id(run) {
+                    self.scan_library_by_id_with_tracking(
+                        &actor,
+                        library_id,
+                        Some(run_id.to_string()),
+                        LibraryScanMode::Full,
+                    )
+                    .await?
+                } else {
+                    let facet = job_key_library_facet(job_key).expect("library scan facet");
+                    self.scan_library_with_tracking(
                         &actor,
                         facet,
                         Some(run_id.to_string()),
                         LibraryScanMode::Full,
                     )
-                    .await?;
+                    .await?
+                };
                 Ok(JobExecutionOutcome::from_library_scan(&summary))
             }
             JobKey::BackgroundLibraryRefreshMovies
@@ -1500,9 +1635,28 @@ impl AppUseCase {
             )),
             JobKey::PluginRegistryRefresh => {
                 self.refresh_plugin_catalog_internal().await?;
-                Ok(plugin_registry_refresh_outcome(
-                    self.run_scheduled_plugin_auto_update().await,
-                ))
+                let mut outcome =
+                    plugin_registry_refresh_outcome(self.run_scheduled_plugin_auto_update().await);
+                let packs = self.run_scheduled_rule_pack_auto_update().await;
+                if !packs.updated.is_empty() || !packs.failed.is_empty() {
+                    let message = outcome.summary_text.get_or_insert_with(String::new);
+                    message.push_str(&format!(
+                        "; auto-updated {} rule pack(s); {} pack update(s) failed",
+                        packs.updated.len(),
+                        packs.failed.len()
+                    ));
+                    let mut summary = outcome
+                        .summary_json
+                        .as_deref()
+                        .and_then(|value| serde_json::from_str::<serde_json::Value>(value).ok())
+                        .unwrap_or_else(|| json!({}));
+                    summary["rulePacks"] = json!(packs);
+                    outcome.summary_json = serde_json::to_string(&summary).ok();
+                    if !packs.failed.is_empty() {
+                        outcome.status_override = Some(JobRunStatus::Warning);
+                    }
+                }
+                Ok(outcome)
             }
             JobKey::Housekeeping => {
                 let report = self.run_scheduled_housekeeping().await?;
@@ -1608,7 +1762,125 @@ impl AppUseCase {
                     serde_json::to_string(&CountSummary { count }).ok(),
                 ))
             }
+            JobKey::MaintenanceRuleEvaluation => {
+                let report = self.run_maintenance_rule_evaluation_job().await?;
+                let summary_json = serde_json::to_string(&report).ok();
+                // Lease bookkeeping runs whether or not the gate is open, so it
+                // is reported on both paths: an operator reading "nothing was
+                // evaluated" still needs to see that leases moved.
+                let lease_text = format!(
+                    "{} request lease(s) expired, {} started",
+                    report.leases_expired, report.leases_activated
+                );
+                if !report.gate_enabled {
+                    return Ok(JobExecutionOutcome::new(
+                        Some(format!(
+                            "Maintenance evaluation is disabled by the instance gate; nothing was evaluated ({lease_text})"
+                        )),
+                        summary_json,
+                    ));
+                }
+                let summary_text = format!(
+                    "Evaluated {} rule(s) over {} title(s): {} candidate(s) opened, {} canceled, {} superseded, {} held; {lease_text}",
+                    report.rules_evaluated,
+                    report.titles_evaluated,
+                    report.candidates_created,
+                    report.candidates_canceled,
+                    report.candidates_superseded,
+                    report.candidates_held,
+                );
+                if report.rules_failed > 0 {
+                    Ok(JobExecutionOutcome::warning(
+                        Some(format!(
+                            "{summary_text}; {} rule(s) failed and their candidates were held",
+                            report.rules_failed
+                        )),
+                        summary_json,
+                    ))
+                } else {
+                    Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
+                }
+            }
+            JobKey::LifecycleActionHandling => {
+                let report = self.run_lifecycle_action_handling_job().await?;
+                let summary_json = serde_json::to_string(&report).ok();
+                if !report.gates_enabled {
+                    return Ok(JobExecutionOutcome::new(
+                        Some(
+                            "Both instance effect gates are off; no maintenance actions executed"
+                                .to_string(),
+                        ),
+                        summary_json,
+                    ));
+                }
+                let summary_text = format!(
+                    "Considered {} candidate(s) across {} armed rule(s): {} executed, {} already satisfied, {} held, {} canceled, {} failed",
+                    report.candidates_considered,
+                    report.rules_eligible,
+                    report.executed,
+                    report.already_satisfied,
+                    report.held,
+                    report.canceled,
+                    report.failed,
+                );
+                if report.failed > 0 {
+                    Ok(JobExecutionOutcome::warning(
+                        Some(summary_text),
+                        summary_json,
+                    ))
+                } else {
+                    Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
+                }
+            }
+            JobKey::MediaServerSignalSync => {
+                let report = self.run_media_server_signal_sync_job().await?;
+                crate::media_server_signals::log_signal_sync_report(&report);
+                let summary_json = serde_json::to_string(&report).ok();
+                let summary_text = crate::media_server_signals::signal_sync_summary(&report);
+                // A failed connection or participant is a warning, not an
+                // error: the sweep still stored everything it could read, and
+                // the per-connection state row carries the reason.
+                if report.connections_failed > 0 || report.participants_failed > 0 {
+                    Ok(JobExecutionOutcome::warning(
+                        Some(format!(
+                            "{summary_text}; {} connection(s) and {} participant(s) failed",
+                            report.connections_failed, report.participants_failed
+                        )),
+                        summary_json,
+                    ))
+                } else {
+                    Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
+                }
+            }
+            JobKey::FullHashBackfill => {
+                use futures_util::FutureExt;
+                // Keep a panicking backfill from leaving an active tracker
+                // entry that would block every later manual/scheduled retry.
+                let summary = std::panic::AssertUnwindSafe(self.run_full_hash_backfill_job())
+                    .catch_unwind()
+                    .await
+                    .map_err(|_| AppError::Repository("Full-hash backfill panicked".into()))??;
+                let mut outcome = JobExecutionOutcome::new(
+                    Some(summary.summary_text()),
+                    serde_json::to_string(&summary).ok(),
+                );
+                if summary.cancelled {
+                    outcome.status_override = Some(JobRunStatus::Warning);
+                }
+                Ok(outcome)
+            }
             JobKey::DiscoverySync => self.run_discovery_sync_job(run.trigger_source).await,
+            JobKey::ArtworkEncoding => {
+                let summary = self.run_artwork_encoding(run).await?;
+                let mut outcome = JobExecutionOutcome::new(
+                    Some(summary.text()),
+                    serde_json::to_string(&summary).ok(),
+                );
+                if summary.failed > 0 {
+                    outcome.status_override = Some(JobRunStatus::Warning);
+                }
+                Ok(outcome)
+            }
             JobKey::TitleImageCacheRefresh => {
                 let summary = self.run_title_image_cache_refresh().await?;
                 Ok(JobExecutionOutcome::new(
@@ -1642,6 +1914,9 @@ impl AppUseCase {
             JobKey::ApplicationUpgrade => Err(AppError::Validation(
                 "application upgrade jobs must be started from the application upgrade mutation"
                     .into(),
+            )),
+            JobKey::LocationOperation => Err(AppError::Validation(
+                "location operations must be started from the location operation mutation".into(),
             )),
         }
     }
@@ -1696,6 +1971,11 @@ impl AppUseCase {
     ) -> AppResult<JobExecutionOutcome> {
         let now = self.runtime.environment.now();
         let scheduler_seed = self.discovery_scheduler_seed().await?;
+        // Instance-wide opt out. When off, nothing about the local library
+        // leaves this instance: no context snapshot, no incremental change
+        // submit, and no scheduling bookkeeping for either. The public feed
+        // (region and language only) keeps refreshing.
+        let personalized_discovery_enabled = self.personalized_discovery_enabled().await?;
         let titles = self.services.catalog.titles.list(None, None).await?;
         let defaults = DiscoveryContextDefaults {
             region: self.discovery_region().await,
@@ -1746,7 +2026,7 @@ impl AppUseCase {
                 DISCOVERY_SYNC_DAILY_BACKSTOP_SECONDS + state.public_feed_jitter_seconds,
             );
 
-        if state.last_success_generation_id.is_some() {
+        if personalized_discovery_enabled && state.last_success_generation_id.is_some() {
             if state.next_incremental_reload_eligible_at.is_none() {
                 state.next_incremental_reload_eligible_at = Some(next_incremental);
                 state.updated_at = now;
@@ -1820,11 +2100,37 @@ impl AppUseCase {
             && pending_changes_are_quiet
             && incremental_changes_need_snapshot_reconciliation;
 
+        // A fresh install rebuilds its library over hours: the first snapshot
+        // lands on whatever had been imported by then, and the normal cadence
+        // would leave the user looking at rails built for a library they no
+        // longer have. Growth past the label-support floor, or by a quarter,
+        // buys a new snapshot instead of a day of waiting.
+        let last_snapshot_subject_count = match state.last_success_generation_id.as_deref() {
+            Some(run_id) => self
+                .services
+                .library
+                .discovery
+                .get_discovery_sync_run(run_id)
+                .await?
+                .map(|run| run.subject_count.max(0) as usize),
+            None => None,
+        };
+        let library_growth_snapshot_due = personalized_discovery_enabled
+            && subject_context_changed
+            && last_snapshot_subject_count.is_some_and(|previous| {
+                discovery_library_growth_warrants_snapshot(previous, library_context.subjects.len())
+            });
+
         let active_scan_count = self.active_library_scan_run_count().await?;
         let scans_active = active_scan_count > 0;
         let snapshot_backoff_ready = state.backoff_until.is_none_or(|until| now >= until);
-        let first_snapshot_pending =
-            state.last_success_generation_id.is_none() && !library_context.subjects.is_empty();
+        // With personalized discovery off there is no first snapshot to reach
+        // for, so the acceleration, the bootstrap-quiet wake, and the silent
+        // wake below all stay inert and none of them writes a
+        // `next_context_snapshot_eligible_at`.
+        let first_snapshot_pending = personalized_discovery_enabled
+            && state.last_success_generation_id.is_none()
+            && !library_context.subjects.is_empty();
         let discovery_sync_tracker_due = trigger_source == JobTriggerSource::ScheduledInterval
             && self
                 .runtime
@@ -1883,7 +2189,9 @@ impl AppUseCase {
             && state.inflight_context_snapshot_run_id.is_none()
             && !manual_context_cooldown_active
             && snapshot_backoff_ready;
-        let context_snapshot_due = if snapshot_resume_due {
+        let context_snapshot_due = if !personalized_discovery_enabled {
+            false
+        } else if snapshot_resume_due {
             true
         } else if snapshot_can_submit && state.last_success_generation_id.is_none() {
             // First snapshot: let the bootstrap quiet window elapse so library churn
@@ -1903,7 +2211,8 @@ impl AppUseCase {
                 && (state
                     .next_context_snapshot_eligible_at
                     .is_some_and(|gate| now >= gate)
-                    || full_snapshot_reconciliation_due)
+                    || full_snapshot_reconciliation_due
+                    || library_growth_snapshot_due)
                 && state.last_success_generation_id.is_some()
         };
 
@@ -1941,7 +2250,8 @@ impl AppUseCase {
             None
         };
 
-        let incremental_due = context_snapshot.is_none()
+        let incremental_due = personalized_discovery_enabled
+            && context_snapshot.is_none()
             && !scans_active
             && state.last_success_generation_id.is_some()
             && !pending_changes.is_empty()
@@ -1994,6 +2304,7 @@ impl AppUseCase {
             DiscoveryNextRunCandidates {
                 next_incremental: effective_next_incremental,
                 incremental_reload_possible: state.last_success_generation_id.is_some(),
+                personalized_enabled: personalized_discovery_enabled,
                 next_context: effective_next_context,
                 next_public: effective_next_public,
                 bootstrap_quiet_until: state.bootstrap_quiet_until,
@@ -2013,6 +2324,7 @@ impl AppUseCase {
 
         let summary = DiscoverySyncRunSummary {
             state_created,
+            personalized_discovery_enabled,
             trigger_source: trigger_source.as_str().to_string(),
             subject_count: library_context.subjects.len(),
             subject_fingerprint: library_context.fingerprint.clone(),
@@ -2052,17 +2364,29 @@ impl AppUseCase {
             )
             .await?;
             return Ok(JobExecutionOutcome::warning(
-                Some("Discovery sync deferred; no work is currently eligible".to_string()),
+                Some(if personalized_discovery_enabled {
+                    "Discovery sync deferred; no work is currently eligible".to_string()
+                } else {
+                    "Discovery sync deferred; personalized discovery disabled; public feed only"
+                        .to_string()
+                }),
                 summary_json,
             ));
         }
 
         Ok(JobExecutionOutcome::new(
-            Some(format!(
-                "Discovery sync evaluated {} local subjects; next incremental reload window at {}",
-                library_context.subjects.len(),
-                effective_next_incremental.to_rfc3339()
-            )),
+            Some(if personalized_discovery_enabled {
+                format!(
+                    "Discovery sync evaluated {} local subjects; next incremental reload window at {}",
+                    library_context.subjects.len(),
+                    effective_next_incremental.to_rfc3339()
+                )
+            } else {
+                format!(
+                    "Discovery sync: personalized discovery disabled; public feed only; next public feed window at {}",
+                    effective_next_public.to_rfc3339()
+                )
+            }),
             summary_json,
         ))
     }
@@ -3086,7 +3410,9 @@ impl AppUseCase {
             .await
     }
 
-    async fn discovery_scheduler_seed(&self) -> AppResult<String> {
+    /// Stable per-instance seed for schedule jitter. Named for its first
+    /// consumer; every scheduled job that wants a deterministic offset uses it.
+    pub(crate) async fn discovery_scheduler_seed(&self) -> AppResult<String> {
         if let Some(existing) = self
             .read_setting_string_value(SCHEDULER_INSTANCE_ID_KEY, None)
             .await?
@@ -3140,6 +3466,7 @@ impl AppUseCase {
         run.summary_json = summary_json;
         run.completed_at = Some(completed_at);
         run.updated_at = completed_at;
+        record_job_freshness_gauges(run.job_key, run.status, completed_at);
         let updated = self.services.events.job_runs.update_job_run(&run).await?;
         self.runtime
             .jobs
@@ -3182,6 +3509,7 @@ impl AppUseCase {
         run.summary_text = Some(format!("Failed: {error_text}"));
         run.completed_at = Some(completed_at);
         run.updated_at = completed_at;
+        record_job_freshness_gauges(run.job_key, run.status, completed_at);
         let updated = self.services.events.job_runs.update_job_run(&run).await?;
         self.runtime
             .jobs
@@ -3200,6 +3528,19 @@ impl AppUseCase {
             ))
             .await;
         Ok(())
+    }
+}
+
+/// Records the freshness gauges for a job run that has just reached a terminal
+/// status.
+///
+/// Both terminal paths (`finish_job_run` and `fail_job_run`) go through here so
+/// "when did this job last run, and when did it last succeed" is answered the
+/// same way on both. Which statuses count as a success lives in
+/// [`crate::metrics_support::job_completion_gauge_values`].
+fn record_job_freshness_gauges(job_key: JobKey, status: JobRunStatus, completed_at: DateTime<Utc>) {
+    for (name, value) in crate::metrics_support::job_completion_gauge_values(status, completed_at) {
+        metrics::gauge!(name, "job_key" => job_key.as_str()).set(value);
     }
 }
 
@@ -3433,6 +3774,7 @@ mod tests {
         let candidates = |incremental_reload_possible: bool| DiscoveryNextRunCandidates {
             next_incremental: now + chrono::Duration::seconds(37),
             incremental_reload_possible,
+            personalized_enabled: true,
             next_context: now + chrono::Duration::seconds(358),
             next_public: now + chrono::Duration::days(1),
             bootstrap_quiet_until: None,
@@ -3450,6 +3792,51 @@ mod tests {
             discovery_next_run_at(now, candidates(true)),
             now + chrono::Duration::seconds(37),
             "after the first snapshot the incremental bucket is a normal wake candidate"
+        );
+    }
+
+    #[test]
+    fn discovery_next_run_settles_on_the_public_slot_when_personalized_is_disabled() {
+        // With personalized discovery off, neither the incremental bucket nor
+        // the context gate can do any work, so waking on either is pure waste.
+        // The public feed slot is the only real candidate, including in the
+        // fallback branch where every remaining candidate is already in the
+        // past.
+        let now = Utc.timestamp_opt(10_000, 0).unwrap();
+        let next_public = now + chrono::Duration::days(1);
+        let disabled = DiscoveryNextRunCandidates {
+            next_incremental: now + chrono::Duration::seconds(37),
+            incremental_reload_possible: true,
+            personalized_enabled: false,
+            next_context: now + chrono::Duration::seconds(358),
+            next_public,
+            bootstrap_quiet_until: Some(now + chrono::Duration::seconds(90)),
+            backoff_until: None,
+            scan_blocked_retry_at: Some(now + chrono::Duration::seconds(120)),
+            pending_changes_quiet_at: Some(now + chrono::Duration::seconds(60)),
+        };
+        assert_eq!(
+            discovery_next_run_at(now, disabled),
+            next_public,
+            "disabled: only the public feed slot is a wake reason"
+        );
+
+        let elapsed_public = now - chrono::Duration::seconds(5);
+        let fallback = DiscoveryNextRunCandidates {
+            next_incremental: now + chrono::Duration::seconds(37),
+            incremental_reload_possible: true,
+            personalized_enabled: false,
+            next_context: now + chrono::Duration::seconds(358),
+            next_public: elapsed_public,
+            bootstrap_quiet_until: None,
+            backoff_until: None,
+            scan_blocked_retry_at: None,
+            pending_changes_quiet_at: None,
+        };
+        assert_eq!(
+            discovery_next_run_at(now, fallback),
+            elapsed_public,
+            "disabled fallback: the public slot, not the incremental bucket"
         );
     }
 

@@ -263,7 +263,19 @@ fn from_credit(
     }
 }
 
-pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaRequestPayload {
+/// Project one media request.
+///
+/// `policy` carries the decision trace and the lease claim, which live in other
+/// tables and are therefore read by the caller in one batch rather than one
+/// query per row (see `AppUseCase::media_request_policy_facts`). Passing `None`
+/// projects the request with no lease and no decision — exactly what a request
+/// that was never evaluated looks like — so a call site that has no use for the
+/// policy detail pays nothing for it.
+pub fn from_media_request(
+    app: &AppUseCase,
+    request: MediaRequest,
+    policy: Option<&scryer_application::request_rules::MediaRequestPolicyFacts>,
+) -> MediaRequestPayload {
     let owner_id = request.id.to_string();
     let poster_url = app.media_image_url(
         request.poster_url.as_deref(),
@@ -288,6 +300,13 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
                 "w1280",
             )
         });
+    let policy_projection = super::request_rules::project_media_request_policy(&request, policy);
+    let metadata = super::request_rules::from_media_request_metadata(
+        &scryer_application::MediaRequestMetadataSnapshotExt::metadata_snapshot(&request),
+    );
+    let requested_lease_days = request.requested_lease_days;
+    let approved_lease_days = request.approved_lease_days;
+    let policy_tags = request.policy_tags.clone();
     let rating_summary = request.rating_summary;
     MediaRequestPayload {
         id: request.id.into(),
@@ -355,6 +374,14 @@ pub fn from_media_request(app: &AppUseCase, request: MediaRequest) -> MediaReque
         created_by_user_id: request.created_by_user_id.into(),
         created_at: request.created_at,
         updated_at: request.updated_at,
+        requested_lease_days: requested_lease_days
+            .map(|days| i32::try_from(days).unwrap_or(i32::MAX)),
+        approved_lease_days: approved_lease_days
+            .map(|days| i32::try_from(days).unwrap_or(i32::MAX)),
+        lease: policy_projection.lease,
+        decision: policy_projection.decision,
+        policy_tags,
+        metadata,
     }
 }
 
@@ -750,6 +777,7 @@ pub fn from_series_movie_link(
         monitoring_override: link.monitoring_override,
         metadata_active: link.metadata_active,
         monitored: link.monitored,
+        tags: link.tags,
     }
 }
 
@@ -793,6 +821,9 @@ pub fn from_episode_media_availability(
             EpisodeMediaAvailabilityStateValue::PendingScan
         }
         EpisodeMediaAvailabilityState::ScanFailed => EpisodeMediaAvailabilityStateValue::ScanFailed,
+        EpisodeMediaAvailabilityState::ReviewRequired => {
+            EpisodeMediaAvailabilityStateValue::ReviewRequired
+        }
         EpisodeMediaAvailabilityState::Missing => EpisodeMediaAvailabilityStateValue::Missing,
         EpisodeMediaAvailabilityState::Unmonitored => {
             EpisodeMediaAvailabilityStateValue::Unmonitored
@@ -859,6 +890,8 @@ pub fn from_calendar_episode(
 
 pub fn from_title_media_file(file: scryer_application::TitleMediaFile) -> TitleMediaFilePayload {
     TitleMediaFilePayload {
+        analysis: file.analysis_details.into(),
+        analysis_attempt: file.analysis_attempt.map(Into::into),
         id: file.id.into(),
         title_id: file.title_id.into(),
         episode_id: file.episode_id.map(Into::into),
@@ -889,6 +922,8 @@ pub fn from_title_media_file(file: scryer_application::TitleMediaFile) -> TitleM
             .audio_streams
             .into_iter()
             .map(|s| crate::types::AudioStreamDetailPayload {
+                profile: s.profile,
+                name: s.name,
                 codec: s.codec,
                 channels: s.channels,
                 language: s.language,
@@ -980,6 +1015,97 @@ pub fn from_import_record(record: scryer_domain::ImportRecord) -> ImportRecordPa
     }
 }
 
+use scryer_application::location::folder_match::{
+    ChangeTitleFolderPreview, ChangeTitleFolderResult, DisplacedTitleRepair, FolderMatchOutcome,
+    FolderMatchOwnership, FolderMatchResolution, FolderMatchTitleRef,
+};
+
+/// Stored paths carry an internal escape form for names the platform cannot
+/// spell in UTF-8; the API always hands back the real path.
+fn display_path(path: &str) -> String {
+    scryer_application::stored_paths::stored_path_to_display_string(path)
+}
+
+pub fn folder_match_resolution_into_application(
+    value: FolderMatchResolutionValue,
+) -> FolderMatchResolution {
+    match value {
+        FolderMatchResolutionValue::Assign => FolderMatchResolution::Assign,
+        FolderMatchResolutionValue::Swap => FolderMatchResolution::Swap,
+        FolderMatchResolutionValue::TakeOver => FolderMatchResolution::TakeOver,
+    }
+}
+
+fn from_folder_match_resolution(resolution: FolderMatchResolution) -> FolderMatchResolutionValue {
+    match resolution {
+        FolderMatchResolution::Assign => FolderMatchResolutionValue::Assign,
+        FolderMatchResolution::Swap => FolderMatchResolutionValue::Swap,
+        FolderMatchResolution::TakeOver => FolderMatchResolutionValue::TakeOver,
+    }
+}
+
+fn from_folder_match_ownership(ownership: FolderMatchOwnership) -> FolderMatchOwnershipValue {
+    match ownership {
+        FolderMatchOwnership::Unowned => FolderMatchOwnershipValue::Unowned,
+        FolderMatchOwnership::OwnedByThisTitle => FolderMatchOwnershipValue::OwnedByThisTitle,
+        FolderMatchOwnership::OwnedByAnotherTitle => FolderMatchOwnershipValue::OwnedByAnotherTitle,
+    }
+}
+
+fn from_folder_match_outcome(outcome: FolderMatchOutcome) -> FolderMatchOutcomeValue {
+    match outcome {
+        FolderMatchOutcome::AlreadyOwned => FolderMatchOutcomeValue::AlreadyOwned,
+        FolderMatchOutcome::Assigned => FolderMatchOutcomeValue::Assigned,
+        FolderMatchOutcome::Swapped => FolderMatchOutcomeValue::Swapped,
+        FolderMatchOutcome::TakenOver => FolderMatchOutcomeValue::TakenOver,
+    }
+}
+
+fn from_folder_match_title_ref(title: FolderMatchTitleRef) -> FolderMatchTitleRefPayload {
+    FolderMatchTitleRefPayload {
+        id: ID::from(title.title_id),
+        name: title.title_name,
+        // Stored paths are an internal encoding; the API always shows the real one.
+        folder_path: title.folder_path.as_deref().map(display_path),
+    }
+}
+
+fn from_displaced_title_repair(displaced: DisplacedTitleRepair) -> DisplacedTitleRepairPayload {
+    DisplacedTitleRepairPayload {
+        id: ID::from(displaced.title_id),
+        name: displaced.title_name,
+        previous_folder_path: display_path(&displaced.previous_folder_path),
+        repair_reason_code: displaced.repair_reason_code,
+    }
+}
+
+pub fn from_change_title_folder_preview(
+    preview: ChangeTitleFolderPreview,
+) -> ChangeTitleFolderPreviewPayload {
+    ChangeTitleFolderPreviewPayload {
+        facet: MediaFacetValue::from_domain(preview.facet),
+        title: from_folder_match_title_ref(preview.title),
+        library_id: ID::from(preview.library_id),
+        library_name: preview.library_name,
+        current_root_id: preview.current_root_id.map(ID::from),
+        current_root_path: preview.current_root_path.as_deref().map(display_path),
+        selected_folder_path: display_path(&preview.selected_folder_path),
+        selected_root_id: ID::from(preview.selected_root_id),
+        selected_root_path: display_path(&preview.selected_root_path),
+        ownership: from_folder_match_ownership(preview.ownership),
+        current_owner: preview.current_owner.map(from_folder_match_title_ref),
+        current_folder_tracked_media_count: preview.current_folder_tracked_media_count as i32,
+        selected_folder_tracked_media_count: preview.selected_folder_tracked_media_count as i32,
+        files_will_move: preview.files_will_move,
+        no_op: preview.no_op,
+        available_resolutions: preview
+            .available_resolutions
+            .into_iter()
+            .map(from_folder_match_resolution)
+            .collect(),
+    }
+}
+
 /// Domain selection -> GraphQL payload.
 pub fn monitor_selection_payload(
     selection: &scryer_domain::MonitorSelection,
@@ -1001,6 +1127,21 @@ pub fn monitor_selection_payload(
                     .collect(),
             })
             .collect(),
+    }
+}
+
+pub fn from_change_title_folder_result(
+    result: ChangeTitleFolderResult,
+) -> ChangeTitleFolderPayload {
+    ChangeTitleFolderPayload {
+        outcome: from_folder_match_outcome(result.outcome),
+        title: from_folder_match_title_ref(result.title),
+        previous_folder_path: result.previous_folder_path.as_deref().map(display_path),
+        detached_media_file_count: result.detached_media_file_count as i32,
+        scan: result.scan.map(from_library_scan_summary),
+        swapped_title: result.swapped_title.map(from_folder_match_title_ref),
+        swapped_title_scan: result.swapped_title_scan.map(from_library_scan_summary),
+        displaced_title: result.displaced_title.map(from_displaced_title_repair),
     }
 }
 

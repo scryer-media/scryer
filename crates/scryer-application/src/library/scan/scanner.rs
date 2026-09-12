@@ -193,6 +193,21 @@ pub struct DiscoveryCollectionCompletionInput {
     pub include_future: bool,
 }
 
+/// How many owned titles the library holds of each medium.
+///
+/// Medium is an axis, not a genre: live action, (western) animation and anime
+/// are three nearly disjoint universes, and a zero count is the strongest
+/// negative signal a library can send. SMG hard-excludes a medium whose count
+/// is zero from retrieval and rerank, and applies a prior above zero. Scryer
+/// always sends the mix and keeps its own composition gate as the guarantee.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveryContextMediumMixInput {
+    pub live_action: i32,
+    pub animation: i32,
+    pub anime: i32,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DiscoveryContextSnapshotSubmitInput {
@@ -205,6 +220,9 @@ pub struct DiscoveryContextSnapshotSubmitInput {
     pub include_unresolved: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context_fingerprint: Option<String>,
+    /// Always sent. The gateway treats an absent mix as "no medium prior",
+    /// which is exactly the behaviour this plan removes.
+    pub medium_mix: DiscoveryContextMediumMixInput,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -241,6 +259,8 @@ pub struct DiscoveryContextChangesInput {
     pub context_fingerprint: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub previous_context_fingerprint: Option<String>,
+    /// Always sent, same contract as the snapshot submit input.
+    pub medium_mix: DiscoveryContextMediumMixInput,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -391,21 +411,11 @@ pub struct DiscoveryExternalId {
     pub key: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct DiscoveryContentCertification {
-    pub value: String,
-    pub source: String,
-    pub release_type: Option<i32>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
-pub struct DiscoveryContentRating {
-    pub country: String,
-    #[serde(default)]
-    pub certifications: Vec<DiscoveryContentCertification>,
-    pub age_rating: Option<i32>,
-    pub age_rating_source: Option<String>,
-}
+/// Discovery's content-rating shape is the same one the catalog and the request metadata
+/// snapshot carry, so both names resolve to one definition in [`crate::types`] rather than to
+/// two structs that have to be kept in step by hand.
+pub type DiscoveryContentCertification = crate::types::ContentCertification;
+pub type DiscoveryContentRating = crate::types::ContentRating;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct DiscoveryTitle {
@@ -456,7 +466,29 @@ pub struct DiscoveryTitle {
     pub edge_count: i32,
     pub relation_count: i32,
     pub source_subject_count: i32,
+    /// Strength of the single strongest relation edge that reached this target
+    /// from any library subject, with the edge's provider tier baked in. It is
+    /// **not** relevance and **not** popularity: a semantic-only candidate sits
+    /// at ~1.0 and an affiliation-key-only candidate at 0. Order by
+    /// [`DiscoveryTitle::recommendation_score`] and reason about
+    /// recognisability with [`DiscoveryTitle::base_rank`].
     pub rank_score: f64,
+    /// SMG's blended relevance score for this target against the submitted
+    /// library context (0 when the target was never reranked).
+    ///
+    /// Only the context snapshot and context changes documents request this
+    /// field; the public feed, More Like This and collection completion
+    /// documents share this struct and do not, so it must tolerate absence.
+    /// That does not weaken the minimum-gateway contract: the snapshot and
+    /// changes fragments request it unconditionally, and a gateway that does
+    /// not export it rejects the whole query at validation, which fails the
+    /// sync loudly before any row could silently degrade to edge strength.
+    #[serde(default)]
+    pub recommendation_score: Option<f64>,
+    /// The target's own popularity base rank (0 when unknown). Same contract
+    /// and same absence rule as `recommendation_score`.
+    #[serde(default)]
+    pub base_rank: Option<f64>,
     pub best_source: String,
     #[serde(default)]
     pub matched_subject_keys: Vec<String>,
@@ -531,7 +563,7 @@ impl DiscoveryRatingProvenance {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MovieMetadata {
     pub target_key: Option<String>,
     pub smg_id: Option<i64>,
@@ -557,6 +589,12 @@ pub struct MovieMetadata {
     pub tmdb_release_date: Option<String>,
     pub ratings: crate::TitleRatingSummary,
     pub credits: Vec<crate::TitleCredit>,
+    pub genres: Vec<String>,
+    pub content_ratings: Vec<crate::types::ContentRating>,
+    pub mdblist: Option<crate::types::MdblistSummary>,
+    pub awards: Vec<crate::types::TitleAward>,
+    pub tmdb_vote_average: Option<f64>,
+    pub tmdb_vote_count: Option<i64>,
 }
 
 #[derive(Debug, Clone)]
@@ -579,7 +617,7 @@ pub struct MovieTitleBulkResult {
     pub missing_ref_indexes: Vec<usize>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SeriesMetadata {
     pub target_key: Option<String>,
     pub tvdb_id: i64,
@@ -609,6 +647,10 @@ pub struct SeriesMetadata {
     pub anime_numbering_bridge: Option<scryer_domain::AnimeNumberingBridge>,
     pub ratings: crate::TitleRatingSummary,
     pub credits: Vec<crate::TitleCredit>,
+    pub genres: Vec<String>,
+    pub content_ratings: Vec<crate::types::ContentRating>,
+    pub mdblist: Option<crate::types::MdblistSummary>,
+    pub awards: Vec<crate::types::TitleAward>,
 }
 
 #[derive(Debug, Clone)]
@@ -721,6 +763,19 @@ pub trait MetadataGateway: Send + Sync {
         limit: i32,
         language: &str,
     ) -> AppResult<MultiMetadataSearchResult>;
+
+    /// Search every facet, including movies without a TVDB identity, in one request.
+    async fn search_titles_multi(
+        &self,
+        query: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<MultiMetadataSearchResult> {
+        let _ = (query, limit, language);
+        Err(AppError::Repository(
+            "metadata gateway combined search is not implemented".into(),
+        ))
+    }
 
     async fn get_movie(&self, tvdb_id: i64, language: &str) -> AppResult<MovieMetadata>;
 

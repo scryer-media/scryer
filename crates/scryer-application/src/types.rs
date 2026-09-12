@@ -29,6 +29,54 @@ pub enum MetadataFieldUpdate<T> {
     Clear,
 }
 
+/// One certification published by a rating board for a country, e.g. `PG-13` from `tmdb`.
+///
+/// Shared by discovery (`DiscoveryContentCertification` is an alias for this type) and by the
+/// request metadata snapshot, so the two can never drift apart.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ContentCertification {
+    pub value: String,
+    pub source: String,
+    pub release_type: Option<i32>,
+}
+
+/// A country's content rating: its certifications plus the minimum age SMG derived from them.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ContentRating {
+    pub country: String,
+    pub certifications: Vec<ContentCertification>,
+    pub age_rating: Option<i32>,
+    pub age_rating_source: Option<String>,
+}
+
+/// MDBList's view of a title, as republished by SMG.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MdblistSummary {
+    pub mdblist_id: String,
+    pub trakt_id: Option<i64>,
+    pub score: Option<f64>,
+    pub score_average: Option<f64>,
+    pub age_rating: Option<i32>,
+    pub certification: String,
+    /// Common Sense Media's "recommended" flag; `None` means MDBList has no opinion.
+    pub commonsense: Option<bool>,
+}
+
+/// One award claim (win or nomination) SMG resolved for a title.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TitleAward {
+    pub award_qid: String,
+    pub award_label: String,
+    pub year: Option<i32>,
+    pub recipient_qid: String,
+    pub recipient_label: String,
+    pub claim_side: String,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct TitleMetadataUpdate {
     pub name: Option<String>,
@@ -137,6 +185,22 @@ pub struct RecycleBinSettings {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateRecycleBinSettings {
     pub enabled: bool,
+}
+
+/// How thoroughly a download-client completed-download copy is proven before
+/// its source may be touched (FR-042).
+///
+/// Location operations do not read it: `LOCATION_OPERATION_VERIFICATION_DEPTH`
+/// forces full depth for every library move, root change, and consolidation,
+/// because those relocate the user's only copy.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VerificationSettings {
+    pub depth: crate::location::model::VerificationDepth,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateVerificationSettings {
+    pub depth: crate::location::model::VerificationDepth,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -619,6 +683,8 @@ pub struct MediaFileAssociations {
 
 #[derive(Clone, Debug)]
 pub struct TitleMediaFile {
+    pub analysis_details: scryer_media_types::AnalysisDetails,
+    pub analysis_attempt: Option<scryer_media_types::AnalysisAttempt>,
     pub id: String,
     pub title_id: String,
     pub episode_id: Option<String>,
@@ -635,6 +701,10 @@ pub struct TitleMediaFile {
     pub role: crate::MediaFileRole,
     pub source_signature_scheme: Option<String>,
     pub source_signature_value: Option<String>,
+    /// Persisted full-file hashes (migration 0205, FR-041/046/047), separate
+    /// from the sampled head+tail proof above. `None` when nothing has read the
+    /// file end to end yet, or when a scan invalidated the stored values.
+    pub content_hashes: Option<crate::location::model::PersistedContentHashes>,
     pub quality_label: Option<String>,
     pub scan_status: String,
     pub created_at: String,
@@ -841,9 +911,76 @@ pub struct TitleCatalogFilter {
     pub root_folder_ids: Vec<String>,
     pub genre_tag_keys: Vec<String>,
     pub theme_tag_keys: Vec<String>,
+    /// Normalized user-tag labels, matched any-of against `titles.tags`. These
+    /// are registry labels, not the SMG-derived canonical keys the two
+    /// `*_tag_keys` lists above carry.
+    pub user_tags: Vec<String>,
     pub minimum_year: Option<i32>,
     pub maximum_year: Option<i32>,
     pub minimum_rating: Option<f64>,
+}
+
+/// A registry row plus how many titles currently carry its label.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleTagDefinitionSummary {
+    pub definition: scryer_domain::TitleTagDefinition,
+    pub title_count: u64,
+    /// Series movies carrying the label. Counted separately from `title_count`
+    /// because a series movie is a link row rather than a title: the two are
+    /// different objects an operator manages in different places, and summing
+    /// them would claim a rename touched titles it never saw.
+    pub series_movie_count: u64,
+}
+
+/// How much membership a registry write moved, per owner kind.
+///
+/// Titles and series-movie links are two independent bags, so a rename that
+/// rewrote one and not the other has to be able to say so.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TitleTagMembershipCounts {
+    pub titles: u64,
+    pub series_movies: u64,
+}
+
+/// What a rename or delete actually rewrote.
+///
+/// `titles` and `delay_profiles` are rewrites the operation performed — as is
+/// the rewrite of pending requests' policy tags, which is not counted here
+/// because an approver's queue is not a place the operator has to go and fix
+/// anything. The last four are references it found and deliberately did *not*
+/// rewrite: Rego revisions are immutable and managed tag filters are SMG-owned,
+/// so a rule that named the old label stops matching rather than silently
+/// changing meaning.
+///
+/// The four reference counts are kept apart rather than summed so the warning
+/// can name what the operator has to go and look at: a maintenance rule, a
+/// release rule, a request rule, or a managed pack's tag filter are four
+/// different places.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TitleTagRewriteCounts {
+    pub titles: u64,
+    /// Series-movie links rewritten. A second membership bag, so a rename that
+    /// touched no title can still have touched series movies.
+    pub series_movies: u64,
+    pub delay_profiles: u64,
+    pub maintenance_rule_sets: u64,
+    pub release_rule_sets: u64,
+    /// Release rule sets whose managed `tag_filter` list carries the label.
+    /// A managed pack can appear here and in `release_rule_sets` at once; the
+    /// two answer different questions.
+    pub managed_tag_filters: u64,
+    /// Request rule sets whose current revision emits the label. Their tags
+    /// land on the title an approval creates, so a rename leaves the rule
+    /// emitting a label nothing defines and the tag simply stops appearing.
+    pub request_rule_sets: u64,
+}
+
+/// Outcome of a registry rename/describe: the row as it now stands, and what
+/// the write touched or merely noticed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TitleTagDefinitionUpdate {
+    pub definition: scryer_domain::TitleTagDefinition,
+    pub counts: TitleTagRewriteCounts,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -2061,7 +2198,7 @@ pub fn indexer_search_identity(
         "endpoint": config.base_url.trim().trim_end_matches('/'),
         "config": config_json,
         "secret_fingerprint": secret_fingerprint,
-        "proxy": config.indexer_proxy_config_id,
+        "proxy": config.proxy_config_id,
         "routing": search_relevant_managed_indexer_metadata(config.managed_metadata_json.as_deref()),
         "caps": caps,
         "search_semantics": search_semantics_version,
@@ -2158,6 +2295,9 @@ pub struct IndexerSearchStrategyRequest {
     pub season: Option<u32>,
     pub episode: Option<u32>,
     pub absolute_episode: Option<u32>,
+    /// The subject's known release year, or `None` when the search has no
+    /// year the host can vouch for.
+    pub year: Option<i32>,
     pub tagged_aliases: Vec<TaggedAlias>,
 }
 
@@ -3158,6 +3298,7 @@ pub enum EpisodeMediaAvailabilityState {
     Available,
     PendingScan,
     ScanFailed,
+    ReviewRequired,
     Missing,
     Unmonitored,
 }
@@ -3459,7 +3600,6 @@ pub enum UiTheme {
     Light,
     #[default]
     Dark,
-    Pride,
     System,
 }
 
@@ -3468,7 +3608,6 @@ impl UiTheme {
         match self {
             Self::Light => "light",
             Self::Dark => "dark",
-            Self::Pride => "pride",
             Self::System => "system",
         }
     }
@@ -3476,8 +3615,8 @@ impl UiTheme {
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim() {
             "light" => Some(Self::Light),
-            "dark" => Some(Self::Dark),
-            "pride" => Some(Self::Pride),
+            // Normalize the retired theme when reading existing preferences.
+            "dark" | "pride" => Some(Self::Dark),
             "system" => Some(Self::System),
             _ => None,
         }
@@ -3885,7 +4024,7 @@ mod indexer_search_identity_tests {
             is_enabled: true,
             enable_interactive_search: true,
             enable_auto_search: true,
-            indexer_proxy_config_id: None,
+            proxy_config_id: None,
             download_client_id: None,
             seeding_profile_id: None,
             managed_parent_config_id: None,
@@ -3961,7 +4100,7 @@ mod indexer_search_identity_tests {
             },
             {
                 let mut value = original.clone();
-                value.indexer_proxy_config_id = Some("proxy-1".into());
+                value.proxy_config_id = Some("proxy-1".into());
                 value
             },
             {

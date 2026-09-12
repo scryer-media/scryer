@@ -22,8 +22,8 @@ use scryer_application::{
     AppError, DownloadClient, DownloadClientAddRequest, DownloadClientPluginProvider,
     DownloadSourceKind, DownloadSubmissionPurpose, IndexerArtifactLease,
     IndexerArtifactResolutionRequest, IndexerArtifactResolver, IndexerConfigRepository,
-    NullIndexerProxyConfigRepository, NullSettingsRepository, NullStagedNzbStore,
-    PreparedIndexerArtifact, StagedNzbRef,
+    NullProxyConfigRepository, NullSettingsRepository, NullStagedNzbStore, PreparedIndexerArtifact,
+    StagedNzbRef,
 };
 use scryer_domain::DownloadClientConfig;
 use scryer_infrastructure_acquisition::downloads::{
@@ -86,8 +86,8 @@ async fn nab_artifacts_use_assigned_solver_and_host_session_without_plugin_clien
 }
 
 async fn assert_host_nab_artifacts(use_solver: bool) {
-    use scryer_application::{IndexerProxyConfigRepository, ResolvedDownloadArtifact};
-    use scryer_infrastructure_acquisition::indexers::proxy_config_store::IndexerProxyConfigStore;
+    use scryer_application::{ProxyConfigRepository, ResolvedDownloadArtifact};
+    use scryer_infrastructure_acquisition::proxy_config_store::ProxyConfigStore;
 
     let ctx = TestContext::new().await;
     let configs: Arc<dyn IndexerConfigRepository> = Arc::new(IndexerConfigStore::new(
@@ -95,7 +95,10 @@ async fn assert_host_nab_artifacts(use_solver: bool) {
         ctx.db.encryption_key_state(),
     ));
     let solver_server = MockServer::start().await;
-    let proxies = Arc::new(IndexerProxyConfigStore::new(ctx.db.datastore()));
+    let proxies = Arc::new(ProxyConfigStore::new(
+        ctx.db.datastore(),
+        ctx.db.encryption_key_state(),
+    ));
     let staged_dir = tempfile::tempdir().expect("staged artifacts directory");
     let store = Arc::new(
         FileSystemStagedNzbStore::new(staged_dir.path())
@@ -114,14 +117,28 @@ async fn assert_host_nab_artifacts(use_solver: bool) {
         let proxy_id = if use_solver {
             let now = chrono::Utc::now();
             let proxy = proxies
-                .create(scryer_domain::IndexerProxyConfig {
+                .create(scryer_domain::ProxyConfig {
                     id: scryer_domain::Id::new().0,
                     name: "fixture solver".into(),
-                    provider_type: scryer_domain::IndexerProxyProviderType::Byparr,
-                    protocol: scryer_domain::ChallengeSolverProtocol::RequestSolutionV1,
+                    provider_type: scryer_domain::ProxyProviderType::Byparr,
+                    protocol: Some(scryer_domain::ChallengeSolverProtocol::RequestSolutionV1),
                     base_url: solver_server.uri(),
                     request_timeout_seconds: 5,
                     is_enabled: true,
+                    username_encrypted: None,
+                    password_encrypted: None,
+                    remote_dns: false,
+                    private_key_encrypted: None,
+                    private_key_passphrase_encrypted: None,
+                    peer_public_key: None,
+                    preshared_key_encrypted: None,
+                    tunnel_public_key: None,
+                    tunnel_addresses: Vec::new(),
+                    tunnel_dns_servers: Vec::new(),
+                    tunnel_mtu: None,
+                    tunnel_keepalive_seconds: None,
+                    host_key_fingerprint: None,
+                    host_key_pinned_at: None,
                     last_health_status: None,
                     last_error_message: None,
                     last_error_at: None,
@@ -148,7 +165,7 @@ async fn assert_host_nab_artifacts(use_solver: bool) {
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
-                indexer_proxy_config_id: proxy_id.clone(),
+                proxy_config_id: proxy_id.clone(),
                 download_client_id: None,
                 seeding_profile_id: None,
                 managed_parent_config_id: None,
@@ -274,7 +291,7 @@ async fn resolve_direct_nzb_request(
     ));
     let resolver = AcquisitionIndexerArtifactResolver::new(
         indexer_configs,
-        Arc::new(NullIndexerProxyConfigRepository),
+        Arc::new(NullProxyConfigRepository),
         store,
         Arc::new(Semaphore::new(4)),
     );
@@ -319,6 +336,7 @@ async fn resolve_direct_nzb_request(
         is_recent: None,
         season_pack: None,
         purpose: DownloadSubmissionPurpose::Standard,
+        pinned_download_client_id: None,
     };
     (lease, request)
 }
@@ -619,6 +637,7 @@ fn qbittorrent_wasm_client(base_url: &str) -> Arc<dyn DownloadClient> {
         last_seen_at: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        proxy_config_id: None,
     };
     provider
         .client_for_config(&config)
@@ -651,6 +670,7 @@ fn request_with_staged_nzb(
         seed_goal_seconds: None,
         tracker_min_seed_ratio: None,
         tracker_min_seed_time_minutes: None,
+        pinned_download_client_id: None,
         season_pack_seed_ratio: None,
         season_pack_seed_time_minutes: None,
         is_recent: None,
@@ -1458,6 +1478,7 @@ fn router_config(id: &str, base_url: &str, priority: i64, enabled: bool) -> Down
         last_seen_at: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        proxy_config_id: None,
     }
 }
 
@@ -1601,6 +1622,7 @@ async fn router_skips_client_with_invalid_config() {
         last_seen_at: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        proxy_config_id: None,
     };
     insert_download_client_config(&ctx, bad_config).await;
 
@@ -1635,6 +1657,7 @@ async fn router_skips_client_missing_base_url() {
         last_seen_at: None,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
+        proxy_config_id: None,
     };
     insert_download_client_config(&ctx, no_url_config).await;
 

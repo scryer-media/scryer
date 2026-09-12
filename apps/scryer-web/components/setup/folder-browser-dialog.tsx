@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useClient } from "urql";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { File, Folder, FolderOpen, ChevronRight, ArrowUp, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,6 +24,15 @@ interface DirectoryEntry {
   isDirectory: boolean;
 }
 
+type BrowserRow =
+  | { kind: "parent"; path: string }
+  | { kind: "entry"; entry: DirectoryEntry };
+
+// Rows are uniform by construction: a 2rem icon tile, py-2 padding, a hairline
+// border and the mb-1 gap. A fixed pitch keeps the scrollbar honest without
+// paying for per-row measurement.
+const BROWSER_ROW_HEIGHT = 54;
+
 interface FolderBrowserDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -30,6 +40,7 @@ interface FolderBrowserDialogProps {
   selectionTypes: Array<"folder" | "file">;
   initialPath?: string;
   title?: string;
+  preventCloseAutoFocus?: boolean;
 }
 
 export function FolderBrowserDialog({
@@ -39,6 +50,7 @@ export function FolderBrowserDialog({
   selectionTypes,
   initialPath = "/",
   title,
+  preventCloseAutoFocus = false,
 }: FolderBrowserDialogProps) {
   const client = useClient();
   const t = useTranslate();
@@ -57,6 +69,7 @@ export function FolderBrowserDialog({
   const [error, setError] = useState<string | null>(null);
   const [browsedPath, setBrowsedPath] = useState<string | null>(null);
   const breadcrumbRef = useRef<HTMLDivElement | null>(null);
+  const listScrollRef = useRef<HTMLDivElement | null>(null);
 
   const browse = useCallback(
     async (path: string) => {
@@ -101,10 +114,45 @@ export function FolderBrowserDialog({
   const pathSegments = currentPath.split("/").filter(Boolean);
   const canSelect = !loading && error === null && browsedPath === currentPath;
 
+  // A directory can hold hundreds of entries and each row carries its own icon,
+  // so render only what the viewport needs. The parent row joins the same list
+  // to keep the whole scroll height under the virtualizer.
+  const rows = useMemo<BrowserRow[]>(() => {
+    const next: BrowserRow[] = [];
+    if (parentPath !== null) {
+      next.push({ kind: "parent", path: parentPath });
+    }
+    for (const entry of entries) {
+      next.push({ kind: "entry", entry });
+    }
+    return next;
+  }, [entries, parentPath]);
+
+  const rowVirtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => listScrollRef.current,
+    getItemKey: (index) => {
+      const row = rows[index];
+      return row?.kind === "entry" ? row.entry.path : "..";
+    },
+    estimateSize: () => BROWSER_ROW_HEIGHT,
+    overscan: 8,
+  });
+
+  const virtualRows = rowVirtualizer.getVirtualItems();
+  const totalRowSize = rowVirtualizer.getTotalSize();
+  const topSpacerHeight = virtualRows[0]?.start ?? 0;
+  const bottomSpacerHeight = virtualRows.length
+    ? Math.max(totalRowSize - virtualRows[virtualRows.length - 1].end, 0)
+    : 0;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         id="folder-browser-dialog"
+        onCloseAutoFocus={
+          preventCloseAutoFocus ? (event) => event.preventDefault() : undefined
+        }
         className="w-[calc(100vw-2rem)] overflow-hidden border-[var(--scry-border)] bg-[var(--scry-surf)] p-0 text-[var(--scry-ink2)] shadow-[0_24px_80px_rgba(0,0,0,0.55)] sm:max-w-[42rem]"
       >
         <DialogHeader className="border-b border-[var(--scry-border3)] bg-[linear-gradient(180deg,rgba(255,255,255,0.04),rgba(255,255,255,0))] px-4 py-3 sm:px-5">
@@ -213,20 +261,69 @@ export function FolderBrowserDialog({
                 ) : null}
               </div>
             ) : (
-              <div className="h-full min-w-0 max-w-full overflow-x-hidden overflow-y-auto p-2">
-                {parentPath !== null && (
-                  <button
-                    id="folder-browser-up"
-                    type="button"
-                    onClick={() => browse(parentPath)}
-                    className="mb-1 grid w-full min-w-0 max-w-full grid-cols-[2rem_minmax(0,1fr)] items-center gap-2.5 overflow-hidden rounded-[10px] border border-transparent px-3 py-2 text-left text-sm text-[var(--scry-muted3)] transition-colors hover:border-[var(--scry-border3)] hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
-                  >
-                    <span className="grid h-8 w-8 place-items-center rounded-[9px] bg-[var(--scry-inset)]">
-                      <ArrowUp className="h-4 w-4 shrink-0" />
-                    </span>
-                    <span className="min-w-0 truncate">..</span>
-                  </button>
-                )}
+              <div
+                ref={listScrollRef}
+                className="h-full min-w-0 max-w-full overflow-x-hidden overflow-y-auto p-2"
+              >
+                {topSpacerHeight > 0 ? (
+                  <div aria-hidden style={{ height: topSpacerHeight }} />
+                ) : null}
+                {virtualRows.map((virtualRow) => {
+                  const row = rows[virtualRow.index];
+                  if (!row) {
+                    return null;
+                  }
+                  if (row.kind === "parent") {
+                    return (
+                      <button
+                        id="folder-browser-up"
+                        key={virtualRow.key}
+                        type="button"
+                        onClick={() => browse(row.path)}
+                        className="mb-1 grid w-full min-w-0 max-w-full grid-cols-[2rem_minmax(0,1fr)] items-center gap-2.5 overflow-hidden rounded-[10px] border border-transparent px-3 py-2 text-left text-sm text-[var(--scry-muted3)] transition-colors hover:border-[var(--scry-border3)] hover:bg-[var(--scry-hover)] hover:text-[var(--scry-ink2)]"
+                      >
+                        <span className="grid h-8 w-8 place-items-center rounded-[9px] bg-[var(--scry-inset)]">
+                          <ArrowUp className="h-4 w-4 shrink-0" />
+                        </span>
+                        <span className="min-w-0 truncate">..</span>
+                      </button>
+                    );
+                  }
+                  const { entry } = row;
+                  return (
+                    <button
+                      id={selectorId("folder-browser-entry", entry.path)}
+                      key={virtualRow.key}
+                      type="button"
+                      onClick={() => {
+                        if (entry.isDirectory) {
+                          void browse(entry.path);
+                          return;
+                        }
+                        onSelect(entry.path);
+                        onOpenChange(false);
+                      }}
+                      className="mb-1 grid w-full min-w-0 max-w-full grid-cols-[2rem_minmax(0,1fr)] items-center gap-2.5 overflow-hidden rounded-[10px] border border-transparent px-3 py-2 text-left text-sm transition-colors hover:border-[var(--scry-border3)] hover:bg-[var(--scry-hover)]"
+                    >
+                      <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-[var(--scry-inset)] text-[var(--scry-accent-text)]">
+                        {entry.isDirectory ? (
+                          <Folder className="h-4 w-4 shrink-0" />
+                        ) : (
+                          <File className="h-4 w-4 shrink-0" />
+                        )}
+                      </span>
+                      <span
+                        className="block min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-[var(--font-code)] text-[var(--scry-ink2)]"
+                        title={entry.name}
+                      >
+                        {entry.name}
+                      </span>
+                    </button>
+                  );
+                })}
+                {bottomSpacerHeight > 0 ? (
+                  <div aria-hidden style={{ height: bottomSpacerHeight }} />
+                ) : null}
                 {entries.length === 0 && !loading && (
                   <div className="px-3 py-10 text-center text-sm text-[var(--scry-muted3)]">
                     {canSelectFiles
@@ -234,36 +331,6 @@ export function FolderBrowserDialog({
                       : t("folderBrowser.emptyFolders")}
                   </div>
                 )}
-                {entries.map((entry) => (
-                  <button
-                    id={selectorId("folder-browser-entry", entry.path)}
-                    key={entry.path}
-                    type="button"
-                    onClick={() => {
-                      if (entry.isDirectory) {
-                        void browse(entry.path);
-                        return;
-                      }
-                      onSelect(entry.path);
-                      onOpenChange(false);
-                    }}
-                    className="mb-1 grid w-full min-w-0 max-w-full grid-cols-[2rem_minmax(0,1fr)] items-center gap-2.5 overflow-hidden rounded-[10px] border border-transparent px-3 py-2 text-left text-sm transition-colors hover:border-[var(--scry-border3)] hover:bg-[var(--scry-hover)]"
-                  >
-                    <span className="grid h-8 w-8 shrink-0 place-items-center rounded-[9px] bg-[var(--scry-inset)] text-[var(--scry-accent-text)]">
-                      {entry.isDirectory ? (
-                        <Folder className="h-4 w-4 shrink-0" />
-                      ) : (
-                        <File className="h-4 w-4 shrink-0" />
-                      )}
-                    </span>
-                    <span
-                      className="block min-w-0 max-w-full overflow-hidden text-ellipsis whitespace-nowrap font-[var(--font-code)] text-[var(--scry-ink2)]"
-                      title={entry.name}
-                    >
-                      {entry.name}
-                    </span>
-                  </button>
-                ))}
               </div>
             )}
           </div>

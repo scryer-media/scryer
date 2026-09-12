@@ -13,6 +13,7 @@ import {
   Inbox,
   LayoutDashboard,
   ListChecks,
+  Network,
   Puzzle,
   Server,
   Settings,
@@ -22,6 +23,7 @@ import {
   Trash2,
   User,
   Users,
+  Wrench,
 } from "lucide-react";
 import type {
   ActivitySection,
@@ -52,6 +54,12 @@ type BuildRouteCommandsArgs = {
   t: Translate;
   user: AuthUser;
   activityImportCount?: number;
+  /**
+   * Whether surfaces that are still being finished are offered on this
+   * instance. Defaults to off so a caller that has not read the switch yet
+   * never surfaces a command for a page the sidebar is hiding.
+   */
+  experimentalFeaturesEnabled?: boolean;
   onNavigate: (
     nextView: ViewId,
     nextSettingsSection?: SettingsSection,
@@ -90,6 +98,7 @@ export function buildRouteCommands({
   t,
   user,
   activityImportCount = 0,
+  experimentalFeaturesEnabled = false,
   onNavigate,
 }: BuildRouteCommandsArgs): RouteCommand[] {
   const canViewCatalog = hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.view);
@@ -385,14 +394,37 @@ export function buildRouteCommands({
           icon: Settings,
           onSelect: buildNavigate(onNavigate, "settings", "delayProfiles"),
         } satisfies RouteCommand, {
+          id: "settings-title-tags",
+          label: `${settingsGroupLabel} / ${t("settings.titleTags")}`,
+          description: t("settings.titleTags"),
+          groupLabel: settingsGroupLabel,
+          keywords: ["settings", "tags", "labels", "titles", "registry"],
+          icon: Settings,
+          onSelect: buildNavigate(onNavigate, "settings", "titleTags"),
+        } satisfies RouteCommand, {
           id: "settings-rules",
-          label: `${automationGroupLabel} / ${t("settings.rules")}`,
-          description: t("settings.rules"),
+          label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.rulesScoring")}`,
+          description: t("settings.rulesScoring"),
           groupLabel: automationGroupLabel,
           keywords: ["settings", "rules", "rego", "opa", "scoring", "custom"],
           icon: SlidersHorizontal,
           onSelect: buildNavigate(onNavigate, "settings", "rules"),
-        } satisfies RouteCommand, {
+        } satisfies RouteCommand,
+        // Maintenance rules are still being finished, so the palette offers the
+        // page only when the instance has opted in. Its catalog-settings
+        // permission still gates the whole group above.
+        ...(experimentalFeaturesEnabled
+          ? [{
+              id: "settings-maintenance-rules",
+              label: `${automationGroupLabel} / ${t("nav.rules")} / ${t("settings.maintenanceRules")}`,
+              description: t("settings.maintenanceRules"),
+              groupLabel: automationGroupLabel,
+              keywords: ["settings", "maintenance", "rules", "rego", "cleanup", "prune"],
+              icon: Wrench,
+              onSelect: buildNavigate(onNavigate, "settings", "maintenanceRules"),
+            } satisfies RouteCommand]
+          : []),
+        {
           id: "settings-post-processing",
           label: `${automationGroupLabel} / ${t("settings.postProcessing")}`,
           description: t("settings.postProcessing"),
@@ -424,21 +456,40 @@ export function buildRouteCommands({
           label: `${integrationsGroupLabel} / ${t("settings.indexers")}`,
           description: t("settings.indexers"),
           groupLabel: integrationsGroupLabel,
-          // Seeding profiles and indexer proxies are panes of this page, so the
-          // palette has to find it by their names too.
+          // Seeding profiles are a pane of this page, so the palette has to
+          // find it by their names too.
           keywords: [
             "settings",
             "indexers",
             "feeds",
             "search",
             "sources",
-            "proxies",
             "seeding",
             "profiles",
             "ratio",
           ],
           icon: Database,
           onSelect: buildNavigate(onNavigate, "settings", "indexers"),
+        } satisfies RouteCommand, {
+          id: "settings-proxies",
+          label: `${integrationsGroupLabel} / ${t("settings.proxies")}`,
+          description: t("settings.proxies"),
+          groupLabel: integrationsGroupLabel,
+          keywords: [
+            "settings",
+            "proxies",
+            "proxy",
+            "solver",
+            "byparr",
+            "trawl",
+            "socks",
+            "socks5",
+            "http",
+            "tunnel",
+            "ssh",
+          ],
+          icon: Network,
+          onSelect: buildNavigate(onNavigate, "settings", "proxies"),
         } satisfies RouteCommand, {
           id: "settings-media-servers",
           label: `${integrationsGroupLabel} / ${t("settings.mediaServers")}`,

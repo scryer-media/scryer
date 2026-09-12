@@ -4,7 +4,7 @@ import { useClient } from "urql";
 import { myUiSettingsQuery } from "@/lib/graphql/queries";
 import { AUTH_SESSION_CHANGED_EVENT, getAuthToken } from "@/lib/hooks/use-auth";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
-import { applyHighlightColor, isDarkTheme } from "@/lib/theme";
+import { applyHighlightColor, fromUiThemeValue, isDarkTheme, toUiThemeValue } from "@/lib/theme";
 import type { UiSettings } from "@/lib/types/settings";
 
 export const DEFAULT_UI_SETTINGS: UiSettings = {
@@ -30,12 +30,13 @@ type UiSettingsContextValue = {
   refreshUiSettings: () => Promise<void>;
 };
 
-const UiSettingsContext = React.createContext<UiSettingsContextValue | null>(null);
+export const UiSettingsContext = React.createContext<UiSettingsContextValue | null>(null);
 
 function normalizeUiSettings(settings: Partial<UiSettings> | null | undefined): UiSettings {
   return {
     ...DEFAULT_UI_SETTINGS,
     ...settings,
+    theme: toUiThemeValue(fromUiThemeValue(settings?.theme)),
     tableColumns: settings?.tableColumns ?? [],
   };
 }
@@ -46,7 +47,7 @@ function uiSettingsErrorMessage(error: unknown): string {
 
 export function uiSettingsInputFromSettings(settings: UiSettings): UiSettings {
   return {
-    theme: settings.theme,
+    theme: toUiThemeValue(fromUiThemeValue(settings.theme)),
     dateTimeFormat: settings.dateTimeFormat,
     highlightColor: settings.highlightColor,
     secondaryColor: settings.secondaryColor,

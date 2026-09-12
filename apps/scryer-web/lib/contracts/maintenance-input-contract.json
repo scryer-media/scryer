@@ -1,0 +1,1487 @@
+{
+  "sections": [
+    {
+      "titleKey": "settings.refMaintSectionInput",
+      "path": "input",
+      "fields": [
+        {
+          "field": "schema_version",
+          "type": "number",
+          "descKey": "settings.refMaintInputSchemaVersion"
+        },
+        {
+          "field": "evaluation_time",
+          "type": "string",
+          "descKey": "settings.refMaintInputEvaluationTime"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionSubject",
+      "path": "input.subject",
+      "fields": [
+        {
+          "field": "kind",
+          "type": "string",
+          "descKey": "settings.refMaintSubjectKind"
+        },
+        {
+          "field": "title_id",
+          "type": "string",
+          "descKey": "settings.refMaintSubjectTitleId"
+        },
+        {
+          "field": "subject_id",
+          "type": "string",
+          "descKey": "settings.refMaintSubjectId"
+        },
+        {
+          "field": "collection_id",
+          "type": "string?",
+          "descKey": "settings.refMaintCollectionId"
+        },
+        {
+          "field": "season_number",
+          "type": "number?",
+          "descKey": "settings.refMaintSubjectSeasonNumber"
+        },
+        {
+          "field": "episode_id",
+          "type": "string?",
+          "descKey": "settings.refMaintSubjectEpisodeId"
+        },
+        {
+          "field": "facet",
+          "type": "string",
+          "descKey": "settings.refMaintSubjectFacet"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refMaintSubjectName"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refMaintSubjectYear"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionLibrary",
+      "path": "input.library",
+      "fields": [
+        {
+          "field": "id",
+          "type": "string",
+          "descKey": "settings.refMaintLibraryId"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refMaintLibraryName"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionFacts",
+      "path": "input.facts",
+      "fields": [
+        {
+          "field": "monitored",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsMonitored"
+        },
+        {
+          "field": "tags",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsTags"
+        },
+        {
+          "field": "quality_profile_id",
+          "type": "string",
+          "descKey": "settings.refMaintFactsQualityProfileId"
+        },
+        {
+          "field": "added_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedAt"
+        },
+        {
+          "field": "added_by_user_id",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedByUserId"
+        },
+        {
+          "field": "added_by_username",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedByUsername"
+        },
+        {
+          "field": "requested",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsRequested"
+        },
+        {
+          "field": "requested_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsRequestedByUserIds"
+        },
+        {
+          "field": "requested_by_usernames",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsRequestedByUsernames"
+        },
+        {
+          "field": "first_imported_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsFirstImportedAt"
+        },
+        {
+          "field": "last_upgraded_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsLastUpgradedAt"
+        },
+        {
+          "field": "has_file",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsHasFile"
+        },
+        {
+          "field": "file_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsFileCount"
+        },
+        {
+          "field": "total_file_size_bytes",
+          "type": "number",
+          "descKey": "settings.refMaintFactsTotalFileSizeBytes"
+        },
+        {
+          "field": "files",
+          "type": "object[]",
+          "descKey": "settings.refMaintFactsFiles"
+        },
+        {
+          "field": "episode_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsEpisodeCount"
+        },
+        {
+          "field": "episode_file_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsEpisodeFileCount"
+        },
+        {
+          "field": "monitored_episode_count",
+          "type": "number",
+          "descKey": "settings.refMaintFactsMonitoredEpisodeCount"
+        },
+        {
+          "field": "episode_position_by_air_date",
+          "type": "number",
+          "descKey": "settings.refMaintFactsEpisodePositionByAirDate"
+        },
+        {
+          "field": "season_position_by_air_date",
+          "type": "number",
+          "descKey": "settings.refMaintFactsSeasonPositionByAirDate"
+        },
+        {
+          "field": "active_downloads",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsActiveDownloads"
+        },
+        {
+          "field": "watched_by_user_ids",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchedByUserIds"
+        },
+        {
+          "field": "last_watched_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsLastWatchedAt"
+        },
+        {
+          "field": "watched_by_any_requester",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchedByAnyRequester"
+        },
+        {
+          "field": "watched_by_all_requesters",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchedByAllRequesters"
+        },
+        {
+          "field": "keep_claim_active",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsKeepClaimActive"
+        },
+        {
+          "field": "request_lease_state",
+          "type": "string",
+          "descKey": "settings.refMaintFactsRequestLeaseState"
+        },
+        {
+          "field": "request_lease_expires_at",
+          "type": "string",
+          "descKey": "settings.refMaintFactsRequestLeaseExpiresAt"
+        },
+        {
+          "field": "active_retention_claims",
+          "type": "number",
+          "descKey": "settings.refMaintFactsActiveRetentionClaims"
+        },
+        {
+          "field": "series_movies",
+          "type": "object[]",
+          "descKey": "settings.refMaintFactsSeriesMovies"
+        },
+        {
+          "field": "storage_root_id",
+          "type": "string",
+          "descKey": "settings.refMaintFactsStorageRootId"
+        },
+        {
+          "field": "storage_available_bytes",
+          "type": "number",
+          "descKey": "settings.refMaintFactsStorageAvailableBytes"
+        },
+        {
+          "field": "storage_total_bytes",
+          "type": "number",
+          "descKey": "settings.refMaintFactsStorageTotalBytes"
+        },
+        {
+          "field": "storage_available_percent",
+          "type": "number",
+          "descKey": "settings.refMaintFactsStorageAvailablePercent"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionSeriesMovies",
+      "path": "input.facts.series_movies[]",
+      "fields": [
+        {
+          "field": "link_id",
+          "type": "string",
+          "descKey": "settings.refMaintSeriesMovieLinkId"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refMaintSeriesMovieName"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refMaintSeriesMovieYear"
+        },
+        {
+          "field": "monitored",
+          "type": "bool",
+          "descKey": "settings.refMaintSeriesMovieMonitored"
+        },
+        {
+          "field": "has_file",
+          "type": "bool",
+          "descKey": "settings.refMaintSeriesMovieHasFile"
+        },
+        {
+          "field": "tags",
+          "type": "string[]",
+          "descKey": "settings.refMaintSeriesMovieTags"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionFiles",
+      "path": "input.facts.files[]",
+      "fields": [
+        {
+          "field": "size_bytes",
+          "type": "number?",
+          "descKey": "settings.refMaintFileSizeBytes"
+        },
+        {
+          "field": "quality",
+          "type": "string?",
+          "descKey": "settings.refMaintFileQuality"
+        },
+        {
+          "field": "video_codec",
+          "type": "string?",
+          "descKey": "settings.refMaintFileVideoCodec"
+        },
+        {
+          "field": "video_width",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoWidth"
+        },
+        {
+          "field": "video_height",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoHeight"
+        },
+        {
+          "field": "audio_languages",
+          "type": "string[]",
+          "descKey": "settings.refMaintFileAudioLanguages"
+        },
+        {
+          "field": "subtitle_languages",
+          "type": "string[]",
+          "descKey": "settings.refMaintFileSubtitleLanguages"
+        },
+        {
+          "field": "added_at",
+          "type": "string?",
+          "descKey": "settings.refMaintFileAddedAt"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionObservations",
+      "path": "input.observations",
+      "fields": [
+        {
+          "field": "monitored",
+          "type": "object",
+          "descKey": "settings.refMaintFactsMonitored"
+        },
+        {
+          "field": "tags",
+          "type": "object",
+          "descKey": "settings.refMaintFactsTags"
+        },
+        {
+          "field": "quality_profile_id",
+          "type": "object",
+          "descKey": "settings.refMaintFactsQualityProfileId"
+        },
+        {
+          "field": "added_at",
+          "type": "object",
+          "descKey": "settings.refMaintFactsAddedAt"
+        },
+        {
+          "field": "added_by_user_id",
+          "type": "object",
+          "descKey": "settings.refMaintFactsAddedByUserId"
+        },
+        {
+          "field": "added_by_username",
+          "type": "object",
+          "descKey": "settings.refMaintFactsAddedByUsername"
+        },
+        {
+          "field": "requested",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequested"
+        },
+        {
+          "field": "requested_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequestedByUserIds"
+        },
+        {
+          "field": "requested_by_usernames",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequestedByUsernames"
+        },
+        {
+          "field": "first_imported_at",
+          "type": "object",
+          "descKey": "settings.refMaintFactsFirstImportedAt"
+        },
+        {
+          "field": "last_upgraded_at",
+          "type": "object",
+          "descKey": "settings.refMaintFactsLastUpgradedAt"
+        },
+        {
+          "field": "has_file",
+          "type": "object",
+          "descKey": "settings.refMaintFactsHasFile"
+        },
+        {
+          "field": "file_count",
+          "type": "object",
+          "descKey": "settings.refMaintFactsFileCount"
+        },
+        {
+          "field": "total_file_size_bytes",
+          "type": "object",
+          "descKey": "settings.refMaintFactsTotalFileSizeBytes"
+        },
+        {
+          "field": "files",
+          "type": "object",
+          "descKey": "settings.refMaintFactsFiles"
+        },
+        {
+          "field": "episode_count",
+          "type": "object",
+          "descKey": "settings.refMaintFactsEpisodeCount"
+        },
+        {
+          "field": "episode_file_count",
+          "type": "object",
+          "descKey": "settings.refMaintFactsEpisodeFileCount"
+        },
+        {
+          "field": "monitored_episode_count",
+          "type": "object",
+          "descKey": "settings.refMaintFactsMonitoredEpisodeCount"
+        },
+        {
+          "field": "episode_position_by_air_date",
+          "type": "object",
+          "descKey": "settings.refMaintFactsEpisodePositionByAirDate"
+        },
+        {
+          "field": "season_position_by_air_date",
+          "type": "object",
+          "descKey": "settings.refMaintFactsSeasonPositionByAirDate"
+        },
+        {
+          "field": "active_downloads",
+          "type": "object",
+          "descKey": "settings.refMaintFactsActiveDownloads"
+        },
+        {
+          "field": "watched_by_user_ids",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchedByUserIds"
+        },
+        {
+          "field": "last_watched_at",
+          "type": "object",
+          "descKey": "settings.refMaintFactsLastWatchedAt"
+        },
+        {
+          "field": "watched_by_any_requester",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchedByAnyRequester"
+        },
+        {
+          "field": "watched_by_all_requesters",
+          "type": "object",
+          "descKey": "settings.refMaintFactsWatchedByAllRequesters"
+        },
+        {
+          "field": "keep_claim_active",
+          "type": "object",
+          "descKey": "settings.refMaintFactsKeepClaimActive"
+        },
+        {
+          "field": "request_lease_state",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequestLeaseState"
+        },
+        {
+          "field": "request_lease_expires_at",
+          "type": "object",
+          "descKey": "settings.refMaintFactsRequestLeaseExpiresAt"
+        },
+        {
+          "field": "active_retention_claims",
+          "type": "object",
+          "descKey": "settings.refMaintFactsActiveRetentionClaims"
+        },
+        {
+          "field": "series_movies",
+          "type": "object",
+          "descKey": "settings.refMaintFactsSeriesMovies"
+        },
+        {
+          "field": "storage_root_id",
+          "type": "object",
+          "descKey": "settings.refMaintFactsStorageRootId"
+        },
+        {
+          "field": "storage_available_bytes",
+          "type": "object",
+          "descKey": "settings.refMaintFactsStorageAvailableBytes"
+        },
+        {
+          "field": "storage_total_bytes",
+          "type": "object",
+          "descKey": "settings.refMaintFactsStorageTotalBytes"
+        },
+        {
+          "field": "storage_available_percent",
+          "type": "object",
+          "descKey": "settings.refMaintFactsStorageAvailablePercent"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsMonitored",
+      "path": "input.observations.monitored",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsMonitoredValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsTags",
+      "path": "input.observations.tags",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsTagsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsQualityProfileId",
+      "path": "input.observations.quality_profile_id",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsQualityProfileIdValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsAddedAt",
+      "path": "input.observations.added_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsAddedByUserId",
+      "path": "input.observations.added_by_user_id",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedByUserIdValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsAddedByUsername",
+      "path": "input.observations.added_by_username",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsAddedByUsernameValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequested",
+      "path": "input.observations.requested",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsRequestedValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequestedByUserIds",
+      "path": "input.observations.requested_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsRequestedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequestedByUsernames",
+      "path": "input.observations.requested_by_usernames",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsRequestedByUsernamesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsFirstImportedAt",
+      "path": "input.observations.first_imported_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsFirstImportedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsLastUpgradedAt",
+      "path": "input.observations.last_upgraded_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsLastUpgradedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsHasFile",
+      "path": "input.observations.has_file",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsHasFileValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsFileCount",
+      "path": "input.observations.file_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsFileCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsTotalFileSizeBytes",
+      "path": "input.observations.total_file_size_bytes",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsTotalFileSizeBytesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsFiles",
+      "path": "input.observations.files",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refMaintFactsFilesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsEpisodeCount",
+      "path": "input.observations.episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsEpisodeFileCount",
+      "path": "input.observations.episode_file_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsEpisodeFileCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsMonitoredEpisodeCount",
+      "path": "input.observations.monitored_episode_count",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsMonitoredEpisodeCountValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsEpisodePositionByAirDate",
+      "path": "input.observations.episode_position_by_air_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsEpisodePositionByAirDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsSeasonPositionByAirDate",
+      "path": "input.observations.season_position_by_air_date",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsSeasonPositionByAirDateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsActiveDownloads",
+      "path": "input.observations.active_downloads",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsActiveDownloadsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchedByUserIds",
+      "path": "input.observations.watched_by_user_ids",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string[]",
+          "descKey": "settings.refMaintFactsWatchedByUserIdsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsLastWatchedAt",
+      "path": "input.observations.last_watched_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsLastWatchedAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchedByAnyRequester",
+      "path": "input.observations.watched_by_any_requester",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchedByAnyRequesterValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsWatchedByAllRequesters",
+      "path": "input.observations.watched_by_all_requesters",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsWatchedByAllRequestersValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsKeepClaimActive",
+      "path": "input.observations.keep_claim_active",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "bool",
+          "descKey": "settings.refMaintFactsKeepClaimActiveValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequestLeaseState",
+      "path": "input.observations.request_lease_state",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsRequestLeaseStateValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsRequestLeaseExpiresAt",
+      "path": "input.observations.request_lease_expires_at",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsRequestLeaseExpiresAtValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsActiveRetentionClaims",
+      "path": "input.observations.active_retention_claims",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsActiveRetentionClaimsValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsSeriesMovies",
+      "path": "input.observations.series_movies",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "object[]",
+          "descKey": "settings.refMaintFactsSeriesMoviesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsStorageRootId",
+      "path": "input.observations.storage_root_id",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "string",
+          "descKey": "settings.refMaintFactsStorageRootIdValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsStorageAvailableBytes",
+      "path": "input.observations.storage_available_bytes",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsStorageAvailableBytesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsStorageTotalBytes",
+      "path": "input.observations.storage_total_bytes",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsStorageTotalBytesValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintFactsStorageAvailablePercent",
+      "path": "input.observations.storage_available_percent",
+      "fields": [
+        {
+          "field": "status",
+          "type": "string",
+          "descKey": "settings.refMaintObsStatus"
+        },
+        {
+          "field": "value",
+          "type": "number",
+          "descKey": "settings.refMaintFactsStorageAvailablePercentValue"
+        },
+        {
+          "field": "observed_at",
+          "type": "string?",
+          "descKey": "settings.refMaintObsObservedAt"
+        },
+        {
+          "field": "reason",
+          "type": "string?",
+          "descKey": "settings.refMaintObsReason"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionObsSeriesMovies",
+      "path": "input.observations.series_movies.value[]",
+      "fields": [
+        {
+          "field": "link_id",
+          "type": "string",
+          "descKey": "settings.refMaintSeriesMovieLinkId"
+        },
+        {
+          "field": "name",
+          "type": "string",
+          "descKey": "settings.refMaintSeriesMovieName"
+        },
+        {
+          "field": "year",
+          "type": "number?",
+          "descKey": "settings.refMaintSeriesMovieYear"
+        },
+        {
+          "field": "monitored",
+          "type": "bool",
+          "descKey": "settings.refMaintSeriesMovieMonitored"
+        },
+        {
+          "field": "has_file",
+          "type": "bool",
+          "descKey": "settings.refMaintSeriesMovieHasFile"
+        },
+        {
+          "field": "tags",
+          "type": "string[]",
+          "descKey": "settings.refMaintSeriesMovieTags"
+        }
+      ]
+    },
+    {
+      "titleKey": "settings.refMaintSectionObsFiles",
+      "path": "input.observations.files.value[]",
+      "fields": [
+        {
+          "field": "size_bytes",
+          "type": "number?",
+          "descKey": "settings.refMaintFileSizeBytes"
+        },
+        {
+          "field": "quality",
+          "type": "string?",
+          "descKey": "settings.refMaintFileQuality"
+        },
+        {
+          "field": "video_codec",
+          "type": "string?",
+          "descKey": "settings.refMaintFileVideoCodec"
+        },
+        {
+          "field": "video_width",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoWidth"
+        },
+        {
+          "field": "video_height",
+          "type": "number?",
+          "descKey": "settings.refMaintFileVideoHeight"
+        },
+        {
+          "field": "audio_languages",
+          "type": "string[]",
+          "descKey": "settings.refMaintFileAudioLanguages"
+        },
+        {
+          "field": "subtitle_languages",
+          "type": "string[]",
+          "descKey": "settings.refMaintFileSubtitleLanguages"
+        },
+        {
+          "field": "added_at",
+          "type": "string?",
+          "descKey": "settings.refMaintFileAddedAt"
+        }
+      ]
+    }
+  ]
+}

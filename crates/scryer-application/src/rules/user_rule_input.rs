@@ -23,6 +23,9 @@ pub(crate) struct RuleContextInfo<'a> {
     pub existing_score: Option<i32>,
     pub search_mode: &'a str,
     pub runtime_minutes: Option<i32>,
+    pub coverage_total_runtime_minutes: Option<i32>,
+    pub coverage_member_runtime_minutes: Option<i32>,
+    pub coverage_member_count: Option<i32>,
     pub is_filler: bool,
 }
 
@@ -62,6 +65,7 @@ pub(crate) fn build_rule_input(
     UserRuleInput {
         release: ReleaseDoc {
             raw_title: parsed.raw_title.clone(),
+            normalized_tokens: parsed.normalized_tokens.clone(),
             quality: parsed.quality.clone(),
             source: parsed.source.as_ref().map(ToString::to_string),
             video_codec: parsed.video_codec.as_ref().map(ToString::to_string),
@@ -77,6 +81,7 @@ pub(crate) fn build_rule_input(
             is_dual_audio: parsed.is_dual_audio,
             is_atmos: parsed.is_atmos,
             is_dolby_vision: parsed.is_dolby_vision,
+            has_hdr_fallback: parsed.has_hdr_fallback,
             detected_hdr: parsed.detected_hdr,
             is_remux: parsed.is_remux,
             is_bd_disk: parsed.is_bd_disk,
@@ -109,11 +114,6 @@ pub(crate) fn build_rule_input(
                 .map(|value| (chrono::Utc::now() - value.with_timezone(&chrono::Utc)).num_days()),
             thumbs_up: release_runtime.thumbs_up,
             thumbs_down: release_runtime.thumbs_down,
-            guide_facts: parsed
-                .guide_facts
-                .iter()
-                .map(|fact| fact.code.clone())
-                .collect(),
             extra: release_runtime.extra.cloned().unwrap_or_default(),
         },
         profile: ProfileDoc {
@@ -165,7 +165,26 @@ pub(crate) fn build_rule_input(
             allow_bd_disk: profile.criteria.allow_bd_disk,
             allow_upgrades: profile.criteria.allow_upgrades,
             prefer_dual_audio: profile.criteria.prefer_dual_audio,
-            required_audio_languages: profile.criteria.required_audio_languages.clone(),
+            required_audio_languages: crate::audio_requirements::normalize_required_audio_languages(
+                profile.criteria.required_audio_languages.clone(),
+            ),
+            scoring_persona: match profile.criteria.resolve_persona(Some(category)) {
+                crate::ScoringPersona::Balanced => "balanced",
+                crate::ScoringPersona::Audiophile => "audiophile",
+                crate::ScoringPersona::Efficient => "efficient",
+                crate::ScoringPersona::Compatible => "compatible",
+            }
+            .to_string(),
+            scoring_overrides: ScoringOverridesDoc {
+                allow_x265_non4k: profile.criteria.scoring_overrides.allow_x265_non4k,
+                block_dv_without_fallback: profile
+                    .criteria
+                    .scoring_overrides
+                    .block_dv_without_fallback,
+                prefer_compact_encodes: profile.criteria.scoring_overrides.prefer_compact_encodes,
+                prefer_lossless_audio: profile.criteria.scoring_overrides.prefer_lossless_audio,
+                block_upscaled: profile.criteria.scoring_overrides.block_upscaled,
+            },
         },
         context: ContextDoc {
             title_id: context.title_id.map(str::to_owned),
@@ -176,11 +195,26 @@ pub(crate) fn build_rule_input(
             original_country: title_language_context.original_country,
             inferred_original_audio_language: title_language_context
                 .inferred_original_audio_language,
-            tags: context.title_tags.to_vec(),
+            // User-defined labels only. Reserved `scryer:` entries share the
+            // storage but are per-title settings, and a release rule reading a
+            // quality profile or a monitor type out of a field called `tags`
+            // would be reading a setting the profile system already applied.
+            // The full bag is still available where it is actually needed —
+            // `title_audio_language_context` above reads the anime entries
+            // straight from `context.title_tags`.
+            tags: context
+                .title_tags
+                .iter()
+                .filter(|tag| !crate::is_reserved_title_tag(tag))
+                .cloned()
+                .collect(),
             has_existing_file: context.has_existing_file,
             existing_score: context.existing_score,
             search_mode: context.search_mode.to_string(),
             runtime_minutes: context.runtime_minutes,
+            coverage_total_runtime_minutes: context.coverage_total_runtime_minutes,
+            coverage_member_runtime_minutes: context.coverage_member_runtime_minutes,
+            coverage_member_count: context.coverage_member_count,
             is_anime,
             is_filler: context.is_filler,
         },
@@ -250,6 +284,7 @@ pub(crate) fn file_doc_from_analysis(analysis: &crate::MediaFileAnalysis) -> scr
     );
 
     scryer_rules::FileDoc {
+        details: analysis.details.clone(),
         video_codec: analysis.video_codec.as_ref().map(ToString::to_string),
         video_width: analysis.video_width,
         video_height: analysis.video_height,
@@ -348,6 +383,7 @@ mod tests {
                 code: "quality_tier_0".to_string(),
                 delta: 1200,
                 source: ScoringSource::Builtin,
+                kind: crate::quality_profile::ScoringEntryKind::ScoreContribution,
             }],
             allowed: true,
             block_codes: vec![],
@@ -397,6 +433,9 @@ mod tests {
                 existing_score: Some(900),
                 search_mode: "post_download",
                 runtime_minutes: Some(120),
+                coverage_total_runtime_minutes: Some(120),
+                coverage_member_runtime_minutes: Some(120),
+                coverage_member_count: Some(1),
                 is_filler: false,
             },
             Some(file_doc_from_analysis(
@@ -407,8 +446,17 @@ mod tests {
         let value = serde_json::to_value(input).unwrap();
         assert_eq!(value["context"]["search_mode"], "post_download");
         assert_eq!(value["context"]["existing_score"], 900);
+        assert_eq!(value["context"]["coverage_total_runtime_minutes"], 120);
+        assert_eq!(value["context"]["coverage_member_runtime_minutes"], 120);
+        assert_eq!(value["context"]["coverage_member_count"], 1);
         assert!(value["release"]["is_password_protected"].is_null());
-        assert_eq!(value["file"]["num_chapters"], 0);
+        assert_eq!(value["release"]["normalized_tokens"][0], "TEST");
+        assert_eq!(value["profile"]["scoring_persona"], "balanced");
+        assert!(value["profile"]["scoring_overrides"]["block_upscaled"].is_null());
+        assert!(
+            value["file"]["num_chapters"].is_null(),
+            "lightweight probing leaves chapter inventory unknown"
+        );
         assert_eq!(value["file"]["audio_profile"], "LC");
         assert_eq!(value["file"]["audio_streams"][0]["codec"], "aac");
         assert_eq!(value["file"]["audio_streams"][0]["profile"], "LC");
@@ -440,6 +488,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -484,6 +535,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -527,6 +581,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -563,6 +620,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -604,6 +664,9 @@ mod tests {
                 existing_score: None,
                 search_mode: "auto",
                 runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
                 is_filler: false,
             },
             None,
@@ -613,5 +676,60 @@ mod tests {
         assert_eq!(value["release"]["has_release_group"], false);
         assert_eq!(value["release"]["is_obfuscated"], true);
         assert_eq!(value["release"]["is_retagged"], true);
+    }
+    /// `title.tags` on the release-rule context is the admin registry's
+    /// vocabulary, not the whole storage bag. A reserved entry reaching a rule
+    /// here would let a release rule branch on a per-title setting the profile
+    /// system already applied.
+    #[test]
+    fn structured_settings_entries_never_reach_the_context_tags() {
+        let title_tags = [
+            "scryer:quality-profile:profile-one".to_string(),
+            "keep".to_string(),
+            "scryer:anime-media-type:tv".to_string(),
+            "anime-hd".to_string(),
+            "needs review".to_string(),
+        ];
+        let input = build_rule_input(
+            &test_parsed(),
+            &test_profile(),
+            &test_decision(),
+            ReleaseRuntimeInfo {
+                size_bytes: None,
+                published_at: None,
+                thumbs_up: None,
+                thumbs_down: None,
+                is_password_protected: None,
+                extra: None,
+                indexer_languages: None,
+            },
+            RuleContextInfo {
+                title_id: Some("title-1"),
+                library_name: Some("Movies"),
+                category: Some("movie"),
+                original_language: None,
+                original_country: None,
+                title_tags: &title_tags,
+                has_existing_file: false,
+                existing_score: None,
+                search_mode: "auto",
+                runtime_minutes: None,
+                coverage_total_runtime_minutes: None,
+                coverage_member_runtime_minutes: None,
+                coverage_member_count: None,
+                is_filler: false,
+            },
+            None,
+        );
+
+        let value = serde_json::to_value(input).unwrap();
+        assert_eq!(
+            value["context"]["tags"],
+            serde_json::json!(["keep", "anime-hd", "needs review"])
+        );
+        // The unfiltered bag is still read where it matters: it drives the
+        // language context, which is why the filter lives here and not at the
+        // caller.
+        assert_eq!(value["context"]["is_anime"], true);
     }
 }

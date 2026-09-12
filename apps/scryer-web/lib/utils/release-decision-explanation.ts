@@ -1,7 +1,16 @@
+export type ScoringEntryKind = "score_contribution" | "mandatory_rejection" | "final_score_rejection";
+
 export type ReleaseDecisionExplanationEntry = {
   code: string;
   delta: number;
+  kind?: ScoringEntryKind;
 };
+
+export function scoringEntryText(entry: { delta: number; kind?: ScoringEntryKind }, t: (key: string) => string): string {
+  if (entry.kind === "mandatory_rejection") return t("scoring.mandatoryRejection");
+  if (entry.kind === "final_score_rejection") return t("scoring.finalScoreRejection");
+  return entry.delta > 0 ? `+${entry.delta}` : String(entry.delta);
+}
 
 export function parseDecisionExplanation(
   explanationJson: unknown,
@@ -24,7 +33,8 @@ export function parseDecisionExplanation(
       return [];
     }
 
-    return [{ code: entry.code, delta: entry.delta }];
+    const kind = "kind" in entry && (entry.kind === "score_contribution" || entry.kind === "mandatory_rejection" || entry.kind === "final_score_rejection") ? entry.kind : undefined;
+    return [{ code: entry.code, delta: entry.delta, ...(kind ? { kind } : {}) }];
   });
 }
 

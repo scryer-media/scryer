@@ -422,6 +422,7 @@ impl AppUseCase {
                         SubmissionScope::EpisodeSet { .. } | SubmissionScope::Collection { .. }
                     )
                     .then_some(true),
+                    pinned_download_client_id: None,
                 },
                 scope: scope.clone(),
                 conflict_policy,
@@ -430,6 +431,13 @@ impl AppUseCase {
                 release_size_bytes: size_bytes,
             })
             .await;
+
+        record_grab_submission_outcome(
+            GrabTrigger::Manual,
+            &title.facet,
+            source_provider_name.as_deref(),
+            &job_result,
+        );
 
         let grab = match job_result {
             Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission))
@@ -455,13 +463,6 @@ impl AppUseCase {
             }
             Ok(CanonicalDownloadSubmissionOutcome::Accepted(submitted)) => {
                 let grab = submitted.grab.clone();
-                {
-                    let facet_label = serde_json::to_string(&title.facet)
-                        .unwrap_or_else(|_| "\"other\"".to_string())
-                        .trim_matches('"')
-                        .to_string();
-                    metrics::counter!("scryer_grabs_total", "indexer" => "manual", "facet" => facet_label).increment(1);
-                }
                 self.record_indexer_grab(indexer_id.as_deref(), source_provider_name.as_deref());
                 if source_title_for_attempt.is_none() {
                     // The persisted indexer release title is THE name the

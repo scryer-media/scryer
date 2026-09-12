@@ -3,6 +3,11 @@ use crate::contracts::{
     ClientJobLocator, DownloadClientBindingRecord, DownloadRecord, ObservationResolution,
     ObservedClientJob, TerminalDownloadHistoryRow,
 };
+use crate::location::model::{
+    FileVerificationRecord, LocationOperation, LocationOperationCounters, LocationOperationState,
+    LocationReasonCode, TitleCheckpoint,
+};
+use crate::location::ownership_guard::{OwnedEntity, OwnershipConflict};
 use crate::types::{
     ApiKeyRecord, EpisodeMediaAvailability, IndexerSearchPlanCapability, IndexerSearchPlanRequest,
     IndexerSearchPlanSummary, IndexerSearchStrategyEventSink, LoginVerificationChallengeRecord,
@@ -14,8 +19,8 @@ use chrono::{DateTime, Utc};
 use scryer_domain::download_identity::DownloadId;
 use scryer_domain::{
     AnimeNumberingBridge, CanonicalMediaTag, ImportTransferPhase, ImportType, IndexerCapsSnapshot,
-    MonitorSelection, PersistedPluginWasmPayload, title_catalog_name_tie_key,
-    title_catalog_sort_key_for_title,
+    MaintenanceRuleRevision, MaintenanceRuleSet, MonitorSelection, PersistedPluginWasmPayload,
+    title_catalog_name_tie_key, title_catalog_sort_key_for_title,
 };
 use scryer_plugin_sdk::{
     ArchivePluginFormat, ArchivePluginProcessRequest, ArchivePluginProcessResponse,
@@ -30,6 +35,13 @@ use tokio::sync::Notify;
 
 pub const NOTIFICATION_REQUEST_SCHEMA_VERSION: u32 = 1;
 const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
+
+/// Fallback for repositories that have no tag registry behind them (the null
+/// repository and the non-SQL test doubles). Reads answer empty; writes say so
+/// rather than pretending to succeed.
+fn title_tag_registry_unsupported() -> AppError {
+    AppError::Repository("this repository does not store the title tag registry".to_string())
+}
 
 /// Admission gate for observed indexer dispatches during orderly shutdown.
 /// The transport holds an admission while it invokes its dispatch observer;
@@ -606,7 +618,13 @@ pub struct DiscoveryItemRecord {
     pub edge_count: Option<i32>,
     pub relation_count: Option<i32>,
     pub source_subject_count: Option<i32>,
+    /// Strongest single edge score, not relevance and not popularity. See
+    /// `recommendation_score` / `base_rank` for those.
     pub rank_score: Option<f64>,
+    /// SMG's blended relevance score for this item against the library context.
+    pub recommendation_score: Option<f64>,
+    /// The target's own popularity base rank.
+    pub base_rank: Option<f64>,
     pub matched_subject_keys: Vec<String>,
     pub matched_subject_titles: Vec<String>,
     pub matched_subject_count: i32,
@@ -909,12 +927,128 @@ pub trait TitleRepository: Send + Sync {
             })
             .count() as u64)
     }
+    /// Every registry row with the number of titles currently carrying its
+    /// label, ordered by label. Reading the registry is unprivileged, so this
+    /// is the one tag method every repository is expected to answer.
+    async fn list_title_tag_definitions(&self) -> AppResult<Vec<TitleTagDefinitionSummary>> {
+        Ok(Vec::new())
+    }
+
+    /// Every defined label, ordered, with no membership counts.
+    ///
+    /// The registry gate runs on every title add, every raw tag write, every
+    /// tag patch, and every maintenance candidate the executor touches. Those
+    /// paths only need to know whether a label exists; the counted list scans
+    /// every bag per definition and must not be paid there. Repositories that
+    /// keep a real table override this with a plain `SELECT label`.
+    async fn list_title_tag_labels(&self) -> AppResult<Vec<String>> {
+        Ok(self
+            .list_title_tag_definitions()
+            .await?
+            .into_iter()
+            .map(|summary| summary.definition.label)
+            .collect())
+    }
+
+    async fn get_title_tag_definition(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_domain::TitleTagDefinition>> {
+        let _ = id;
+        Ok(None)
+    }
+
+    /// Insert a registry row. A label that already exists is a validation
+    /// error, not a repository error: the caller reports it to a human.
+    async fn create_title_tag_definition(
+        &self,
+        definition: &scryer_domain::TitleTagDefinition,
+    ) -> AppResult<scryer_domain::TitleTagDefinition> {
+        let _ = definition;
+        Err(title_tag_registry_unsupported())
+    }
+
+    /// Rename and/or re-describe a registry row, rewriting every `titles.tags`
+    /// and `series_movie_links.tags` bag that carries the old label in the
+    /// *same* transaction, and return the row plus what was rewritten.
+    ///
+    /// `label` of `None` leaves the label alone; `description` of `None` leaves
+    /// the description alone, `Some(None)` clears it.
+    ///
+    /// Delay-profile tag lists are not rewritten here: they live in the
+    /// settings catalog, behind a different repository, so the application
+    /// service does that half immediately afterwards.
+    async fn update_title_tag_definition(
+        &self,
+        id: &str,
+        label: Option<String>,
+        description: Option<Option<String>>,
+        updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<(
+        scryer_domain::TitleTagDefinition,
+        crate::TitleTagMembershipCounts,
+    )> {
+        let _ = (id, label, description, updated_at);
+        Err(title_tag_registry_unsupported())
+    }
+
+    /// Remove a registry row and strip its label from every title and every
+    /// series movie in the same transaction. Returns the row that was removed
+    /// and what the strip touched.
+    async fn delete_title_tag_definition(
+        &self,
+        id: &str,
+    ) -> AppResult<(
+        scryer_domain::TitleTagDefinition,
+        crate::TitleTagMembershipCounts,
+    )> {
+        let _ = id;
+        Err(title_tag_registry_unsupported())
+    }
+
+    /// Patch one title's user tags as a read-modify-write inside a single
+    /// transaction, so a concurrent options save and a tag save cannot clobber
+    /// each other's half of the bag.
+    ///
+    /// `add` and `remove` carry already-normalized, already-registry-validated
+    /// labels; `remove` is applied first so a label in both lists ends up
+    /// present. Reserved `scryer:` entries are preserved exactly as stored, and
+    /// the result is refused if it would exceed [`crate::MAX_USER_TAGS_PER_TITLE`].
+    async fn update_user_tags(
+        &self,
+        title_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<Title> {
+        let _ = (title_id, add, remove);
+        Err(title_tag_registry_unsupported())
+    }
+
     async fn list_without_external_ids(
         &self,
         facet: Option<MediaFacet>,
         query: Option<String>,
     ) -> AppResult<Vec<Title>> {
         self.list(facet, query).await
+    }
+    /// How many titles one library holds, for the request-rule
+    /// `library_title_count` fact (spec 0003 §3.2).
+    ///
+    /// Defaulted over `list_for_libraries` rather than left abstract: it is a
+    /// single scalar feeding one advisory fact, every implementation can answer
+    /// it, and a store is free to override it with a `SELECT COUNT(*)`. The
+    /// default reads more rows than it needs; the fact is not on a hot loop —
+    /// one call per request evaluation.
+    async fn count_titles_in_library(&self, library_id: &str) -> AppResult<u64> {
+        let library_id = library_id.trim();
+        if library_id.is_empty() {
+            return Ok(0);
+        }
+        let library_ids = [library_id.to_string()];
+        Ok(self
+            .list_for_libraries(None, &library_ids, None)
+            .await?
+            .len() as u64)
     }
     async fn list_delete_preview_info(&self) -> AppResult<Vec<TitleDeletePreviewInfo>> {
         Ok(self
@@ -1116,6 +1250,9 @@ pub trait TitleRepository: Send + Sync {
             maximum_year,
         })
     }
+    /// Every title matching any exact `(source, value)` pair. Titles are only
+    /// unique within a library, so callers must not treat this as a single-row
+    /// lookup.
     async fn list_by_external_ids(&self, source: &str, values: &[String]) -> AppResult<Vec<Title>>;
     async fn list_by_external_id_lookups(
         &self,
@@ -1428,6 +1565,43 @@ pub trait TitleRepository: Send + Sync {
     ) -> AppResult<Title>;
     async fn delete(&self, id: &str) -> AppResult<()>;
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()>;
+    /// Move a title into another library and onto a root in that library, in one
+    /// transaction, carrying its library projections with it (FR-056).
+    ///
+    /// The title keeps its id, so everything keyed on it — settings and tags on
+    /// the row, monitored state, history, requests, media files, episodes —
+    /// is preserved with no rewrite. What must be written alongside `library_id`
+    /// is every projection of it, `title_external_ids.library_id` above all:
+    /// that column is the key destination-title detection matches on (FR-055),
+    /// and a title that kept its old value there would keep answering identity
+    /// lookups for the library it left.
+    ///
+    /// `facet` is the series↔anime conversion (FR-057), and it belongs to this
+    /// call rather than to a second one: a title's facet and its library's facet
+    /// are one invariant — `AppUseCase::title_root_folder_path` refuses a title
+    /// whose facet does not match its library — so a transfer that wrote the
+    /// library without the facet would leave a row every later path lookup
+    /// rejects. `None` leaves the facet alone, which is every same-facet move.
+    /// `drop_tag_prefixes` names the reserved `scryer:*` prefixes whose values
+    /// were derived under the old facet and must not survive the conversion; the
+    /// caller decides that policy, not the store.
+    ///
+    /// Defaults to an error rather than a silent no-op: a repository that cannot
+    /// perform the transfer must fail the title, never report a move it did not
+    /// make (C4).
+    async fn transfer_to_library(
+        &self,
+        id: &str,
+        library_id: &str,
+        root_folder_id: &str,
+        facet: Option<MediaFacet>,
+        drop_tag_prefixes: &[String],
+    ) -> AppResult<()> {
+        let _ = (library_id, root_folder_id, facet, drop_tag_prefixes);
+        Err(AppError::Repository(format!(
+            "this title repository cannot transfer title {id} between libraries"
+        )))
+    }
     async fn clear_folder_path(&self, id: &str) -> AppResult<()>;
     async fn clear_metadata_language_for_all(&self) -> AppResult<u64>;
     async fn list_page_after_id(
@@ -1624,6 +1798,18 @@ fn title_matches_catalog_filter(title: &Title, filter: &TitleCatalogFilter) -> b
         return false;
     }
 
+    // User tags are any-of over the label bag. Registry labels are already
+    // normalized, and so is everything the write paths put in the bag, so this
+    // is an exact comparison on both sides.
+    if !filter.user_tags.is_empty()
+        && !filter
+            .user_tags
+            .iter()
+            .any(|wanted| title.tags.iter().any(|tag| tag == wanted))
+    {
+        return false;
+    }
+
     // The fallback repository surface has no normalized rating projection.
     // Treat those titles as unrated; the production store applies this in SQL.
     if filter.minimum_rating.is_some() {
@@ -1747,6 +1933,21 @@ pub trait LibraryRepository: Send + Sync {
         slug: String,
         roots: Vec<LibraryRootDraft>,
     ) -> AppResult<Library>;
+    /// Replace one root's configured path, keeping its identity (FR-021,
+    /// FR-078). Returns the library as it stands afterwards.
+    ///
+    /// # Why this is not [`LibraryRepository::update`]
+    ///
+    /// `update` is a replace-on-write of the whole root list, and it re-keys
+    /// root identity **by normalized path**: a root whose path is absent from
+    /// the submitted list is a *removed* root (refused outright while titles
+    /// reference it), and a path that is not already stored is allocated a
+    /// brand-new synthetic id. A path change submitted through `update` is
+    /// therefore read as "delete root A, create root B" — which is exactly the
+    /// identity change FR-021 forbids, and which the referenced-root guard
+    /// rejects before it can even happen. A root change needs the one write
+    /// `update` cannot express: the same row, a different path.
+    async fn set_root_path(&self, root_id: &str, path: &str) -> AppResult<Library>;
     async fn delete_library(&self, library_id: &str) -> AppResult<bool>;
     async fn app_permission_mask_for_user(&self, user_id: &str) -> AppResult<AppPermissionMask>;
     async fn set_app_permission_mask_for_user(
@@ -1781,6 +1982,12 @@ pub struct NewMediaRequest {
     pub requested_monitor_type: Option<String>,
     /// Season/series-movie picks captured for the `advanced` monitor type.
     pub requested_monitor_selection: Option<MonitorSelection>,
+    /// Lease the requester asked for, in days; `None` means forever
+    /// (spec 0003 FR-040).
+    pub requested_lease_days: Option<i64>,
+    /// Versioned metadata snapshot captured at submit (spec 0003 FR-030),
+    /// already serialized. `{}` when nothing was captured.
+    pub metadata_snapshot_json: String,
     pub external_ids: Vec<ExternalId>,
     pub created_by_user_id: String,
 }
@@ -1788,11 +1995,25 @@ pub struct NewMediaRequest {
 #[derive(Clone, Debug)]
 pub struct MediaRequestResolution {
     pub status: scryer_domain::MediaRequestStatus,
-    pub resolved_by_user_id: String,
+    /// Who resolved it. `None` when policy did (spec 0003 §4.4): a rule-driven
+    /// denial has no human resolver, and the column is nullable in both
+    /// dialects, so inventing a system user id would be a lie the UI would
+    /// render as a person's decision.
+    pub resolved_by_user_id: Option<String>,
     pub resolved_at: chrono::DateTime<chrono::Utc>,
     pub created_title_id: Option<String>,
     pub approved_quality_profile_id: Option<String>,
     pub approved_quality_profile_name: Option<String>,
+    /// Lease the approver granted, in days; `None` means forever
+    /// (spec 0003 FR-040).
+    pub approved_lease_days: Option<i64>,
+    /// Trace that produced this resolution, when rules decided it
+    /// (spec 0003 FR-016).
+    pub decision_id: Option<String>,
+    /// Rule sets that voted for the outcome.
+    pub decided_by_rule_set_ids: Vec<String>,
+    /// Tags the rules emitted (spec 0003 FR-050).
+    pub policy_tags: Vec<String>,
     pub event: NewDomainEvent,
 }
 
@@ -1841,6 +2062,9 @@ pub trait MediaRequestRepository: Send + Sync {
 
     async fn get(&self, request_id: &str) -> AppResult<Option<MediaRequest>>;
 
+    /// Resolve matching pending rows while preserving each sibling's lease
+    /// and policy provenance. Persistent stores must commit approval retention
+    /// claims and resolution events atomically with the request transitions.
     async fn resolve_pending_overlapping(
         &self,
         request: &MediaRequest,
@@ -1853,6 +2077,13 @@ pub trait MediaRequestRepository: Send + Sync {
         resolution: MediaRequestResolution,
     ) -> AppResult<MediaRequestResolutionResult>;
 
+    /// `requested_lease_days` is the lease the requester now wants; `None`
+    /// means forever (spec 0003 FR-040). It is always written, because the edit
+    /// form always carries the current value — there is no "leave it alone".
+    // Eight parameters because the edit form always carries every preference
+    // it can change; bundling them into a struct would hide that "absent"
+    // never means "leave it alone" here.
+    #[allow(clippy::too_many_arguments)]
     async fn update_pending_request_preferences(
         &self,
         request_id: &str,
@@ -1860,11 +2091,30 @@ pub trait MediaRequestRepository: Send + Sync {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<MonitorSelection>,
+        requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult>;
 
     async fn count_pending_by_facet(&self, library_ids: &[String])
     -> AppResult<MediaRequestCounts>;
+
+    /// Requester user ids for each of `title_ids`, keyed by title id.
+    ///
+    /// A title appears in the map exactly when at least one media request
+    /// created it, so key presence — not a non-empty list — is the answer to
+    /// "was this requested". Each entry lists the submitters of those requests
+    /// in request order, then everyone else who joined them in the order they
+    /// did, deduped keeping the first appearance. The order is stable across
+    /// calls: the facts document is compared between runs, so an order that
+    /// drifted would read as a changed fact.
+    ///
+    /// Batched on purpose: maintenance evaluation asks this for a whole chunk
+    /// of titles at once, and a per-title query would make the pass scale with
+    /// the library.
+    async fn requester_user_ids_by_title_ids(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<String>>>;
 
     async fn count_quality_profile_references(
         &self,
@@ -1890,6 +2140,63 @@ pub trait MediaRequestRepository: Send + Sync {
     }
 
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>>;
+
+    /// How many requests `user_id` submitted, optionally narrowed to one status
+    /// and to requests created at or after `since`.
+    ///
+    /// Counts submissions, not joins: the requester-history facts
+    /// (`pending_request_count`, `approved_last_30d`, …) ask what this person
+    /// asked for, and a user who seconded someone else's request did not.
+    async fn count_for_requester(
+        &self,
+        user_id: &str,
+        status: Option<scryer_domain::MediaRequestStatus>,
+        since: Option<DateTime<Utc>>,
+    ) -> AppResult<u64>;
+
+    /// Every request ever made for this identity, any requester, any status,
+    /// newest first. Feeds `previous_request_count` / `previously_denied` /
+    /// `previously_approved`.
+    async fn history_for_fingerprint(
+        &self,
+        identity_fingerprint: &str,
+    ) -> AppResult<Vec<MediaRequest>>;
+
+    /// When `user_id` last submitted anything, for `days_since_last_request`.
+    /// `None` when they never have — a real answer, not an unknown.
+    async fn latest_request_at_for_user(&self, user_id: &str) -> AppResult<Option<DateTime<Utc>>>;
+
+    /// Stamp the request-rule verdict onto a request row that is *not* being
+    /// resolved (spec 0003 FR-016).
+    ///
+    /// Submit and edit evaluate every request, including the ones that end up
+    /// waiting for a human — and those rows still have to say which trace judged
+    /// them, so an approver can see the policy verdict beside the request. The
+    /// resolve paths carry the same three fields on
+    /// [`MediaRequestResolution`]; this is the pending case, which has no
+    /// resolution to ride along with.
+    async fn record_decision_on_request(
+        &self,
+        request_id: &str,
+        decision_id: Option<&str>,
+        rule_set_ids: &[String],
+        tags: &[String],
+    ) -> AppResult<()>;
+
+    /// Rename `label` to `replacement`, or drop it when `replacement` is
+    /// `None`, in the `policy_tags` of every **pending** request. Returns how
+    /// many rows changed.
+    ///
+    /// The title tag registry stores membership by label, so a rename is a data
+    /// migration across every place a label is held — and a pending request
+    /// holds one that an approver is about to apply. Resolved requests are
+    /// deliberately excluded: their policy tags record what was decided, and a
+    /// rewrite would falsify the history the decision trace explains.
+    async fn rewrite_pending_policy_tag(
+        &self,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64>;
 }
 
 #[async_trait]
@@ -2022,6 +2329,15 @@ pub trait ImageProxyRepository: Send + Sync {
         limit: u32,
     ) -> AppResult<Vec<ImageProxyCacheEntryRecord>>;
 
+    /// Keyset pagination keeps both admission and failure retries bounded per run.
+    async fn list_cached_jpegs(
+        &self,
+        _limit: usize,
+        _after: Option<(&str, &str)>,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        Ok(Vec::new())
+    }
+
     /// Sums the persisted `byte_size` scalars without reading entry rows.
     async fn image_proxy_cache_usage(&self) -> AppResult<ImageProxyCacheUsage>;
 
@@ -2041,10 +2357,43 @@ pub trait ImageProxyRepository: Send + Sync {
 pub trait ImageProxyCacheControl: Send + Sync {
     async fn clear_cache(&self) -> AppResult<()>;
     async fn set_configured_max_bytes(&self, value: u64) -> AppResult<()>;
+
+    async fn list_cached_jpegs(
+        &self,
+        _limit: usize,
+        _after: Option<(&str, &str)>,
+    ) -> AppResult<Vec<ImageProxyCacheEntryRecord>> {
+        Ok(Vec::new())
+    }
+
+    /// Returns false when an entry was evicted or refreshed since admission.
+    async fn optimize_cached_jpeg(
+        &self,
+        _entry: ImageProxyCacheEntryRecord,
+        _processor: std::sync::Arc<dyn TitleImageProcessor>,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn wait_for_cached_jpeg(&self) {
+        std::future::pending::<()>().await;
+    }
 }
 
 #[async_trait]
 pub trait TitleImageProcessor: Send + Sync {
+    /// A separate fast preset for disposable proxy artwork, on the configured pool.
+    async fn encode_cached_jpeg(&self, _bytes: Vec<u8>, _width: u32) -> AppResult<Vec<u8>> {
+        Err(AppError::Validation(
+            "cached JPEG encoding is unavailable".into(),
+        ))
+    }
+
+    /// Configure the shared CPU budget before an exclusive artwork run starts.
+    async fn configure_encoding_workers(&self, _workers: usize) -> AppResult<()> {
+        Ok(())
+    }
+
     async fn fetch_and_process_image(
         &self,
         kind: TitleImageKind,
@@ -2101,6 +2450,27 @@ pub trait ShowRepository: Send + Sync {
         title_id: &str,
         retained_link_ids: &[String],
     ) -> AppResult<()>;
+    /// Patch one series movie's user tags as a read-modify-write inside a
+    /// single transaction, the same way
+    /// [`TitleRepository::update_user_tags`] patches a title.
+    ///
+    /// `add` and `remove` carry already-normalized, already-registry-validated
+    /// labels; removals are applied first so a label named in both lists ends
+    /// up present. Reserved `scryer:` entries are preserved exactly as stored —
+    /// nothing writes one to a link today, but a bag is a bag — and the result
+    /// is refused if it would exceed [`crate::MAX_USER_TAGS_PER_TITLE`].
+    ///
+    /// Defaulted rather than required so the null repository and the non-SQL
+    /// test doubles need no boilerplate.
+    async fn update_series_movie_link_user_tags(
+        &self,
+        link_id: &str,
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<scryer_domain::SeriesMovieLink> {
+        let _ = (link_id, add, remove);
+        Err(title_tag_registry_unsupported())
+    }
     async fn list_collections_for_title(&self, title_id: &str) -> AppResult<Vec<Collection>>;
     async fn list_collection_external_ids(
         &self,
@@ -2495,6 +2865,19 @@ pub trait UserExternalAccountRepository: Send + Sync {
         connection_id: &str,
         username: &str,
     ) -> AppResult<Option<scryer_domain::UserExternalAccount>>;
+    /// Every verified link on one connection: the participant set for
+    /// media-server signal sync (RFC 137, "Participant sets and multi-user
+    /// identity").
+    ///
+    /// "Verified" is all three of active status, a recorded `verified_at`, and
+    /// a non-empty `external_user_id` — a pending or disabled link, or one
+    /// without a provider user id, cannot be read on the provider's behalf and
+    /// must not silently become a participant.
+    async fn list_verified_by_connection(
+        &self,
+        provider: scryer_domain::ExternalAccountProvider,
+        connection_id: &str,
+    ) -> AppResult<Vec<scryer_domain::UserExternalAccount>>;
     async fn update(
         &self,
         account: scryer_domain::UserExternalAccount,
@@ -2818,6 +3201,27 @@ pub trait ExternalIdentityVerifier: Send + Sync {
         connection: &scryer_domain::MediaServerConnection,
     ) -> AppResult<Vec<MediaServerCatalogItem>> {
         self.scan_media_server_catalog(connection).await
+    }
+
+    /// Ask one connected media server to re-read specific folders (FR-088).
+    ///
+    /// `paths` are already expressed in the *server's* filesystem namespace —
+    /// the caller applies the connection's path mappings before getting here,
+    /// because only the caller knows which side of the mapping it holds.
+    ///
+    /// This is deliberately a targeted refresh and never a full library scan: a
+    /// completed location operation knows exactly which folders changed, and a
+    /// whole-library scan on every move is the behaviour FR-088 exists to
+    /// avoid. Implementations that cannot express "just this folder" for a
+    /// provider skip that path rather than widening it.
+    async fn refresh_media_server_paths(
+        &self,
+        _connection: &scryer_domain::MediaServerConnection,
+        _paths: &[String],
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "media server targeted refresh is not configured".into(),
+        ))
     }
 
     async fn verify_plex(
@@ -3198,6 +3602,12 @@ pub trait TotpRepository: Send + Sync {
 #[async_trait]
 pub trait DomainEventRepository: Send + Sync {
     async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent>;
+    /// Append by stable event ID, returning the original event on replay.
+    async fn append_once(&self, _event: NewDomainEvent) -> AppResult<DomainEvent> {
+        Err(AppError::Repository(
+            "idempotent domain event append is not supported".into(),
+        ))
+    }
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>>;
     async fn list(&self, filter: &DomainEventFilter) -> AppResult<Vec<DomainEvent>>;
     async fn count_title_history_page_events(
@@ -3298,30 +3708,55 @@ pub trait IndexerConfigRepository: Send + Sync {
 }
 
 #[async_trait]
-pub trait IndexerProxyConfigRepository: Send + Sync {
+pub trait ProxyConfigRepository: Send + Sync {
     async fn list(
         &self,
-        provider_type: Option<scryer_domain::IndexerProxyProviderType>,
-    ) -> AppResult<Vec<scryer_domain::IndexerProxyConfig>>;
-    async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::IndexerProxyConfig>>;
+        provider_type: Option<scryer_domain::ProxyProviderType>,
+    ) -> AppResult<Vec<scryer_domain::ProxyConfig>>;
+    async fn get_by_id(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>>;
+    /// Load editable values even when runtime validation blocks this proxy.
+    async fn get_for_edit(&self, id: &str) -> AppResult<Option<scryer_domain::ProxyConfig>> {
+        self.get_by_id(id).await
+    }
     async fn create(
         &self,
-        config: scryer_domain::IndexerProxyConfig,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig>;
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig>;
     async fn update(
         &self,
-        config: scryer_domain::IndexerProxyConfig,
-    ) -> AppResult<scryer_domain::IndexerProxyConfig>;
+        config: scryer_domain::ProxyConfig,
+    ) -> AppResult<scryer_domain::ProxyConfig>;
     async fn delete(&self, id: &str) -> AppResult<()>;
     /// Persist a health observation without bumping `updated_at`, which
     /// doubles as the plugin client cache revision for proxied indexers.
     async fn record_health(
         &self,
         id: &str,
-        status: scryer_domain::IndexerProxyHealthStatus,
+        status: scryer_domain::ProxyHealthStatus,
         error_message: Option<String>,
         error_at: Option<chrono::DateTime<chrono::Utc>>,
     ) -> AppResult<()>;
+    /// Atomically pin a host key for the expected config revision. Returns false
+    /// for a stale/deleted row or a conflicting existing pin; matching pins are idempotent.
+    ///
+    /// Like `record_health` this deliberately leaves `updated_at` alone. The
+    /// tunnel engine pins immediately after the connect that just succeeded;
+    /// bumping the cache revision there would evict the session that did the
+    /// pinning, on every first connect.
+    async fn pin_host_key(
+        &self,
+        id: &str,
+        fingerprint: &str,
+        pinned_at: chrono::DateTime<chrono::Utc>,
+        expected_updated_at: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<bool>;
+    /// Drop the pin so the next connect trusts the server afresh, after a
+    /// legitimate rekey.
+    ///
+    /// This one *does* bump `updated_at`: it is an operator edit whose whole
+    /// purpose is that the next connection be a new one, so any cached client
+    /// or session built on the old pin has to go.
+    async fn clear_host_key(&self, id: &str) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -3497,6 +3932,19 @@ pub trait SettingsRepository: Send + Sync {
         source: &str,
         updated_by_user_id: Option<String>,
     ) -> AppResult<()>;
+
+    /// Persist a global settings patch atomically. A failed patch changes no key.
+    async fn upsert_global_settings_json(
+        &self,
+        _scope: &str,
+        _values: &[(String, String)],
+        _source: &str,
+        _updated_by_user_id: Option<String>,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "atomic settings patches are not configured".into(),
+        ))
+    }
 
     async fn delete_setting_value(
         &self,
@@ -4469,9 +4917,37 @@ pub trait ImportArtifactRepository: Send + Sync {
     }
 }
 
+/// Outcome of the Search-specific durable job boundary. An existing accepted
+/// receipt is sufficient for the action policy and deliberately does not imply
+/// that historical job metadata remains retained.
+#[derive(Clone, Debug)]
+pub enum MaintenanceSearchJobRunCreation {
+    Created {
+        run: Box<JobRunRecord>,
+        receipt: scryer_domain::MaintenanceActionJobReceipt,
+    },
+    Existing {
+        receipt: scryer_domain::MaintenanceActionJobReceipt,
+    },
+}
+
 #[async_trait]
 pub trait JobRunRepository: Send + Sync {
     async fn create_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord>;
+
+    /// Atomically creates a policy Search job and its durable accepted receipt.
+    /// A duplicate `(step key, dispatch attempt)` returns the original receipt
+    /// and must never create or spawn another Search job. Implementations may
+    /// retain job history independently; receipt evidence outlives pruning.
+    async fn create_maintenance_search_job_run(
+        &self,
+        _run: &JobRunRecord,
+        _receipt: &scryer_domain::MaintenanceActionJobReceipt,
+    ) -> AppResult<MaintenanceSearchJobRunCreation> {
+        Err(AppError::Repository(
+            "maintenance Search dispatch is not configured".to_string(),
+        ))
+    }
 
     async fn update_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord>;
 
@@ -4565,6 +5041,279 @@ pub trait StagedNzbStore: Send + Sync {
     fn mark_artifact_active(&self, path: &Path) -> AppResult<()>;
 
     fn mark_artifact_inactive(&self, path: &Path) -> AppResult<()>;
+}
+
+/// A live (title, root) ownership claim held by a location operation (FR-084,
+/// D7). Rows stay open until the operation releases them, so the guard survives
+/// a restart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocationOwnershipClaim {
+    pub operation_id: String,
+    pub entity: OwnedEntity,
+    pub acquired_at: DateTime<Utc>,
+}
+
+/// The state and counters one checkpoint boundary writes back to the operation
+/// row. Grouped so a progress write is one statement, not a field-by-field
+/// scatter.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocationOperationProgress {
+    pub operation_id: String,
+    pub state: LocationOperationState,
+    pub counters: LocationOperationCounters,
+    /// Files that could only be proven at the quick floor (FR-042/043).
+    pub verification_fallback_count: i64,
+    /// Failure or warning explanation for Activity; `None` leaves the stored
+    /// value untouched only when `clear_detail` is false.
+    pub detail: Option<String>,
+    /// Clear a stored detail that no longer applies.
+    pub clear_detail: bool,
+    /// Why the operation stopped short; travels with `detail` and is cleared
+    /// with it, so a code never outlives the explanation it belongs to.
+    pub reason_code: Option<LocationReasonCode>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Persistence for location operations (D5, migration 0218): the operation row,
+/// its per-title checkpoints, its per-file verification records, and the
+/// ownership registry the concurrency guard reads.
+///
+/// The runner in [`crate::location::executor`] is the only writer of operation
+/// state; the guard in [`crate::location::ownership_guard`] is the only reader
+/// of the ownership rows outside the runner.
+#[async_trait]
+pub trait LocationOperationRepository: Send + Sync {
+    async fn save_file_resolution(
+        &self,
+        _record: &crate::location::resolution::FileResolution,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "file resolution storage is not configured".into(),
+        ))
+    }
+
+    async fn file_resolutions_for_sources(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+        sources: &[String],
+    ) -> AppResult<Vec<crate::location::resolution::FileResolution>> {
+        Ok(self
+            .file_resolutions(operation_id, title_id)
+            .await?
+            .into_iter()
+            .filter(|row| sources.contains(&row.source_path))
+            .collect())
+    }
+    async fn file_resolutions(
+        &self,
+        _operation_id: &str,
+        _title_id: &str,
+    ) -> AppResult<Vec<crate::location::resolution::FileResolution>> {
+        Ok(Vec::new())
+    }
+    async fn allocate_transfer_generation(&self) -> AppResult<i64> {
+        Ok(1)
+    }
+    async fn transfer_high_water(&self, _operation_id: &str) -> AppResult<i64> {
+        Ok(0)
+    }
+    async fn transfer_titles_initialized(&self, _operation_id: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn mark_transfer_titles_initialized(&self, _operation_id: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn save_transfer_high_water(
+        &self,
+        _operation_id: &str,
+        _basis_points: i64,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+    /// Seed missing summaries without overwriting checkpoints on resume.
+    /// Persistent stores override this with bounded bulk inserts.
+    async fn seed_transfer_titles(
+        &self,
+        operation_id: &str,
+        titles: &[crate::location::live::TransferTitle],
+    ) -> AppResult<()> {
+        for title in titles {
+            if self
+                .transfer_title(operation_id, &title.title_id)
+                .await?
+                .is_none()
+            {
+                self.upsert_transfer_title(operation_id, title).await?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn upsert_transfer_title(
+        &self,
+        _operation_id: &str,
+        _title: &crate::location::live::TransferTitle,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+    async fn transfer_title_page(
+        &self,
+        _operation_id: &str,
+        _offset: i64,
+        _limit: i64,
+    ) -> AppResult<Vec<crate::location::live::TransferTitle>> {
+        Ok(Vec::new())
+    }
+    async fn transfer_title_count(&self, _operation_id: &str) -> AppResult<i64> {
+        Ok(0)
+    }
+    async fn transfer_title(
+        &self,
+        _operation_id: &str,
+        _title_id: &str,
+    ) -> AppResult<Option<crate::location::live::TransferTitle>> {
+        Ok(None)
+    }
+
+    /// Persists a confirmed operation. `plan_json` is the serialized plan the
+    /// user confirmed, kept so a resumed run does not have to rebuild it.
+    async fn create_location_operation(
+        &self,
+        operation: &LocationOperation,
+        plan_json: Option<&str>,
+    ) -> AppResult<()>;
+
+    async fn get_location_operation(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Option<LocationOperation>>;
+
+    async fn get_location_operation_plan_json(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Option<String>>;
+
+    /// Every operation in a non-terminal state, oldest first: what restart
+    /// resume walks (FR-033).
+    async fn list_active_location_operations(&self) -> AppResult<Vec<LocationOperation>>;
+
+    async fn update_location_operation_progress(
+        &self,
+        progress: &LocationOperationProgress,
+    ) -> AppResult<()>;
+
+    /// Points the operation at the Activity job run for its *current* execution
+    /// (FR-091).
+    ///
+    /// A start writes the column through
+    /// [`LocationOperationRepository::create_location_operation`]; only a resume
+    /// needs this, because every resumed attempt gets its own run and the
+    /// operation names the latest one.
+    async fn set_location_operation_job_run(
+        &self,
+        operation_id: &str,
+        job_run_id: &str,
+    ) -> AppResult<()>;
+
+    /// Records a cancel request (FR-092). Returns false when the operation is
+    /// already terminal, so a late cancel cannot resurrect a finished run.
+    async fn request_location_operation_cancel(&self, operation_id: &str) -> AppResult<bool>;
+
+    /// Reopens a `failed` or `canceled` operation so the runner can walk its
+    /// plan again: the row goes back to `queued` with its failure explanation,
+    /// reason code, completion instant, and cancel request cleared, and every
+    /// `failed` title checkpoint goes back to `pending` (settled titles and
+    /// verified files are untouched, so nothing is repeated). Returns false
+    /// when the operation is not in one of those two states, so a retry cannot
+    /// reopen a finished or a live run.
+    async fn reopen_location_operation(&self, operation_id: &str) -> AppResult<bool>;
+
+    /// Whether a cancel has been requested. Read at every title boundary, so a
+    /// cancel issued by another process is honored.
+    async fn location_operation_cancel_requested(&self, operation_id: &str) -> AppResult<bool>;
+
+    /// Writes a title's checkpoint. Called on every title state transition; the
+    /// row is the unit a resume restarts from (FR-092).
+    async fn upsert_location_title_checkpoint(&self, checkpoint: &TitleCheckpoint)
+    -> AppResult<()>;
+
+    /// Checkpoints in plan order.
+    async fn list_location_title_checkpoints(
+        &self,
+        operation_id: &str,
+    ) -> AppResult<Vec<TitleCheckpoint>>;
+
+    /// Persists one file's verification outcome. Idempotent on
+    /// (operation, destination path) — the 0206 unique index — so a resumed
+    /// operation re-recording a file cannot duplicate its history.
+    async fn record_location_file_verification(
+        &self,
+        record: &FileVerificationRecord,
+    ) -> AppResult<()>;
+
+    async fn location_file_verifications_for_paths(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+        paths: &[String],
+    ) -> AppResult<Vec<FileVerificationRecord>> {
+        Ok(self
+            .list_location_file_verifications(operation_id, Some(title_id))
+            .await?
+            .into_iter()
+            .filter(|record| paths.contains(&record.destination_path))
+            .collect())
+    }
+
+    async fn list_location_file_verifications(
+        &self,
+        operation_id: &str,
+        title_id: Option<&str>,
+    ) -> AppResult<Vec<FileVerificationRecord>>;
+
+    /// Destination paths this operation already proved for `title_id`. Resume
+    /// reads this and never re-copies or re-verifies them (FR-092).
+    async fn verified_destination_paths(
+        &self,
+        operation_id: &str,
+        title_id: &str,
+    ) -> AppResult<BTreeSet<String>>;
+
+    /// Claims every entity for the operation, or reports the conflicts and
+    /// claims nothing (FR-084). All-or-nothing: a partially owned operation
+    /// could interleave with the operation holding the rest.
+    async fn claim_location_operation_ownership(
+        &self,
+        operation_id: &str,
+        entities: &[OwnedEntity],
+    ) -> AppResult<LocationOwnershipOutcome>;
+
+    /// Releases every claim the operation holds, returning how many were open.
+    async fn release_location_operation_ownership(&self, operation_id: &str) -> AppResult<u64>;
+
+    /// The operation currently holding `entity`, if any. The choke-point query
+    /// behind the guard (T016).
+    async fn location_ownership_holder(&self, entity: &OwnedEntity) -> AppResult<Option<String>>;
+
+    /// Every open claim, for the in-process guard cache and diagnostics.
+    async fn list_location_ownership_claims(&self) -> AppResult<Vec<LocationOwnershipClaim>>;
+}
+
+/// Result of an ownership claim attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocationOwnershipOutcome {
+    /// Every requested entity is now owned by the operation.
+    Claimed,
+    /// At least one entity is owned by another operation; nothing was claimed.
+    Conflict(Vec<OwnershipConflict>),
+}
+
+impl LocationOwnershipOutcome {
+    pub fn is_claimed(&self) -> bool {
+        matches!(self, Self::Claimed)
+    }
 }
 
 #[async_trait]
@@ -5050,6 +5799,33 @@ pub trait FileImporter: Send + Sync {
         source: &Path,
     ) -> AppResult<scryer_domain::ImportSourceSnapshot>;
 
+    /// Put the operator's configured permissions on a file a *location
+    /// operation* placed (FR-031).
+    ///
+    /// Imports get their modes as part of `import_file_with_…_permissions`,
+    /// but a verified move writes the destination itself, so it needs a way to
+    /// ask for the same treatment afterwards. The default is deliberately a
+    /// no-op: an importer that cannot set modes must never guess at them, and a
+    /// move must not silently change access an operator did not configure.
+    async fn apply_placed_file_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let _ = (path, permissions);
+        Ok(())
+    }
+
+    /// Directory twin of [`FileImporter::apply_placed_file_permissions`].
+    async fn apply_placed_directory_permissions(
+        &self,
+        path: &Path,
+        permissions: &ImportFilePermissions,
+    ) -> AppResult<()> {
+        let _ = (path, permissions);
+        Ok(())
+    }
+
     async fn import_file(
         &self,
         source: &Path,
@@ -5110,6 +5886,43 @@ pub trait FileImporter: Send + Sync {
         .await
     }
 
+    /// [`FileImporter::import_file_with_execution_context`] with the operator's
+    /// verification depth (FR-045).
+    ///
+    /// An importer that copies bytes must compute the streaming CRC + BLAKE3
+    /// during the copy, prove the destination at `depth` before the source
+    /// becomes removable (FR-044), and report both on
+    /// [`ImportFileResult::verification`]. The default ignores the depth and
+    /// delegates: an importer that cannot verify reports no verification rather
+    /// than an unfounded pass.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "file placement keeps transfer, permission, source-snapshot, lane, and verification context explicit"
+    )]
+    async fn import_file_verified_with_execution_context(
+        &self,
+        source: &Path,
+        dest: &Path,
+        mode: scryer_domain::ImportMode,
+        expected_source: Option<&scryer_domain::ImportSourceSnapshot>,
+        progress: Option<ImportFileTransferProgressSender>,
+        permissions: &ImportFilePermissions,
+        context: &ImportFileExecutionContext,
+        depth: crate::location::model::VerificationDepth,
+    ) -> AppResult<ImportFileResult> {
+        let _ = depth;
+        self.import_file_with_execution_context(
+            source,
+            dest,
+            mode,
+            expected_source,
+            progress,
+            permissions,
+            context,
+        )
+        .await
+    }
+
     async fn remove_import_source_after_verified_import(
         &self,
         guard: scryer_domain::ImportSourceCleanupGuard,
@@ -5130,7 +5943,44 @@ pub trait FileImporter: Send + Sync {
 
 #[async_trait]
 pub trait MediaAnalyzer: Send + Sync {
+    async fn diagnose_file(
+        &self,
+        _path: PathBuf,
+        _selection: scryer_media_types::DiscSelection,
+    ) -> AppResult<scryer_media_types::StructuralDiagnostics> {
+        Err(crate::AppError::Validation(
+            "structural diagnostics are unsupported by this analyzer".into(),
+        ))
+    }
     async fn analyze_file(&self, path: PathBuf) -> AppResult<MediaAnalysisOutcome>;
+    async fn analyze_file_with_selection(
+        &self,
+        path: PathBuf,
+        selection: scryer_media_types::DiscSelection,
+    ) -> AppResult<MediaAnalysisOutcome> {
+        if selection.title_id.is_some() || !selection.episode_mappings.is_empty() {
+            return Err(crate::AppError::Validation(
+                "disc title selection is unsupported by this analyzer".into(),
+            ));
+        }
+        self.analyze_file(path).await
+    }
+}
+
+/// One row off the full-hash backfill queue (FR-047).
+///
+/// Deliberately narrow: the job hashes a path, so it only needs the identity,
+/// the path, and the recorded size to sanity-check against. Hydrating whole
+/// media-file records to walk a catalog-sized queue would defeat the "low
+/// impact" half of the requirement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MediaFileHashCandidate {
+    pub id: String,
+    pub title_id: String,
+    /// Stored-path string; the job resolves it through
+    /// [`crate::stored_paths`] like every other path consumer.
+    pub file_path: String,
+    pub size_bytes: i64,
 }
 
 #[async_trait]
@@ -5217,6 +6067,31 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(MissingScopeCandidates::default())
     }
 
+    async fn list_missing_scope_candidates_for_title(
+        &self,
+        title_id: Option<&str>,
+    ) -> AppResult<MissingScopeCandidates> {
+        let mut candidates = self.list_missing_scope_candidates().await?;
+        if let Some(title_id) = title_id {
+            candidates.episodes.retain(|item| item.title_id == title_id);
+            candidates.titles.retain(|item| item.title_id == title_id);
+            candidates
+                .series_movie_links
+                .retain(|item| item.title_id == title_id);
+        }
+        Ok(candidates)
+    }
+
+    /// Explicit title searches may override title monitoring without changing it.
+    /// Episode and series-movie monitoring still apply.
+    async fn list_missing_scope_candidates_for_search(
+        &self,
+        title_id: Option<&str>,
+        _respect_title_monitoring: bool,
+    ) -> AppResult<MissingScopeCandidates> {
+        self.list_missing_scope_candidates_for_title(title_id).await
+    }
+
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],
@@ -5242,6 +6117,38 @@ pub trait MediaFileRepository: Send + Sync {
         analysis: MediaFileAnalysis,
     ) -> AppResult<()>;
 
+    /// Publish only while the source row and previous analysis still match.
+    async fn update_media_file_analysis_if_unchanged(
+        &self,
+        expected: &TitleMediaFile,
+        analysis: MediaFileAnalysis,
+    ) -> AppResult<bool> {
+        let _ = (expected, analysis);
+        Ok(false)
+    }
+
+    /// Keep an unsuccessful attempt separate from the last successful analysis.
+    async fn list_media_files_needing_analysis(
+        &self,
+        library_id: &str,
+        revision: u32,
+        retry_before: chrono::DateTime<chrono::Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<TitleMediaFile>> {
+        let _ = (library_id, revision, retry_before, limit);
+        Ok(Vec::new())
+    }
+
+    /// Retain an unsuccessful attempt only while its source and saved selection match.
+    async fn record_media_analysis_attempt(
+        &self,
+        expected: &TitleMediaFile,
+        analysis: &MediaFileAnalysis,
+    ) -> AppResult<bool> {
+        let _ = (expected, analysis);
+        Ok(false)
+    }
+
     async fn update_media_file_source_signature(
         &self,
         file_id: &str,
@@ -5249,6 +6156,51 @@ pub trait MediaFileRepository: Send + Sync {
         source_signature_scheme: Option<String>,
         source_signature_value: Option<String>,
     ) -> AppResult<()>;
+
+    /// One page of the full-hash backfill queue (FR-047), ordered by id so the
+    /// cursor is a plain "everything after this id" and the ordering survives a
+    /// restart. Rows that already carry a full hash are excluded by the
+    /// migration 0205 partial index, so the queue drains monotonically.
+    ///
+    /// The default is an empty queue: a repository that does not implement the
+    /// backfill simply has no work, never phantom work.
+    async fn list_media_files_missing_full_hash(
+        &self,
+        after_id: Option<&str>,
+        limit: u32,
+    ) -> AppResult<Vec<MediaFileHashCandidate>> {
+        let _ = (after_id, limit);
+        Ok(Vec::new())
+    }
+
+    /// Persist the 0205 columns for one file. Writes all four together so a row
+    /// can never carry a hash whose vintage or CRC algorithm is unknown.
+    async fn update_media_file_content_hashes(
+        &self,
+        file_id: &str,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<()> {
+        let _ = (file_id, hashes);
+        Ok(())
+    }
+
+    /// Publish a backfill only if the unhashed row still describes the file read.
+    /// Unsupported stores leave the row queued rather than writing without a guard.
+    async fn update_media_file_content_hashes_if_unchanged(
+        &self,
+        expected: &TitleMediaFile,
+        hashes: &crate::location::model::PersistedContentHashes,
+    ) -> AppResult<bool> {
+        let _ = (expected, hashes);
+        Ok(false)
+    }
+
+    /// Clear the 0205 columns, putting the file back on the backfill queue
+    /// (FR-046). Returns whether a row actually changed.
+    async fn clear_media_file_content_hashes(&self, file_id: &str) -> AppResult<bool> {
+        let _ = file_id;
+        Ok(false)
+    }
 
     async fn update_media_file_path(&self, file_id: &str, file_path: &str) -> AppResult<()>;
 
@@ -5741,6 +6693,863 @@ pub trait RuleSetRepository: Send + Sync {
     async fn get_rule_set_by_managed_key(&self, key: &str) -> AppResult<Option<RuleSet>>;
     async fn delete_rule_set_by_managed_key(&self, key: &str) -> AppResult<()>;
     async fn list_rule_sets_by_managed_key_prefix(&self, prefix: &str) -> AppResult<Vec<RuleSet>>;
+
+    async fn list_rule_pack_installations(&self) -> AppResult<Vec<RulePackInstallation>> {
+        Ok(Vec::new())
+    }
+
+    async fn get_rule_pack_installation(
+        &self,
+        _pack_id: &str,
+    ) -> AppResult<Option<RulePackInstallation>> {
+        Ok(None)
+    }
+
+    async fn find_rule_pack_installation_by_rule_set_id(
+        &self,
+        _rule_set_id: &str,
+    ) -> AppResult<Option<RulePackInstallation>> {
+        Ok(None)
+    }
+
+    /// Applies the pack metadata, stable membership mapping, rule rows and
+    /// audit history as one optimistic-concurrency transaction. `false` means
+    /// the pack did not have `expected_revision` (or already exists on create).
+    async fn apply_rule_pack_installation(
+        &self,
+        _installation: &RulePackInstallation,
+        _expected_revision: Option<i64>,
+        _changed_rule_sets: &[RuleSet],
+        _history: &[RuleSetHistoryChange],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "rule pack persistence is not configured".to_string(),
+        ))
+    }
+
+    async fn uninstall_rule_pack(
+        &self,
+        _pack_id: &str,
+        _expected_revision: i64,
+        _history: &[RuleSetHistoryChange],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "rule pack persistence is not configured".to_string(),
+        ))
+    }
+
+    async fn copy_rule_pack_rule_set_to_custom(
+        &self,
+        _pack_id: &str,
+        _source_rule_set_id: &str,
+        _custom_rule_set: &RuleSet,
+        _expected_revision: i64,
+        _history: &[RuleSetHistoryChange],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "rule pack persistence is not configured".to_string(),
+        ))
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RuleSetHistoryChange {
+    pub rule_set_id: String,
+    pub action: String,
+    pub rego_source: Option<String>,
+    pub actor_id: Option<String>,
+}
+
+/// Persistence for user-authored maintenance rules (RFC 137 section 11).
+///
+/// Rule sets and their matcher revisions are two tables but one unit of change:
+/// a rule set with no revision has no matcher and no action, so
+/// [`Self::create_rule_set`] and [`Self::add_revision`] must each write both
+/// rows in a single transaction.
+#[async_trait]
+pub trait MaintenanceRuleSetRepository: Send + Sync {
+    async fn list_rule_sets(&self) -> AppResult<Vec<MaintenanceRuleSet>>;
+
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<MaintenanceRuleSet>>;
+
+    /// Insert the rule set and its first revision atomically.
+    async fn create_rule_set(
+        &self,
+        rule_set: &MaintenanceRuleSet,
+        revision: &MaintenanceRuleRevision,
+    ) -> AppResult<()>;
+
+    /// Append `revision`, repoint the rule set at it, and reset its
+    /// `effect_arming` to [`scryer_domain::MaintenanceEffectArming::None`] — all
+    /// three atomically. Existing revisions are never rewritten.
+    ///
+    /// The disarm is part of the same write on purpose: arming acknowledges the
+    /// blast radius of one specific matcher and action, so it must never outlive
+    /// the revision it was granted against. A new revision that left the rule
+    /// armed would execute destructively under an acknowledgement given for a
+    /// matcher that no longer exists.
+    async fn add_revision(
+        &self,
+        revision: &MaintenanceRuleRevision,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    async fn get_revision(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+    ) -> AppResult<Option<MaintenanceRuleRevision>>;
+
+    /// Newest revision first.
+    async fn list_revisions(&self, rule_set_id: &str) -> AppResult<Vec<MaintenanceRuleRevision>>;
+
+    /// Update the fields that carry no evaluation semantics. Never creates a
+    /// revision — the matcher, action, and grace period are untouched.
+    ///
+    /// `disarm` resets `effect_arming` to
+    /// [`scryer_domain::MaintenanceEffectArming::None`] in the *same* write. The
+    /// caller sets it when the library scope actually changed: scope is the
+    /// rule's blast radius, so a re-scoped rule is no longer the rule an
+    /// operator acknowledged, exactly as a new revision is not. Writing the two
+    /// separately would leave an instant in which the new scope is in force
+    /// under the old scope's arming.
+    async fn update_rule_set_metadata(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+        library_ids: &[String],
+        disarm: bool,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Removes the rule set; the FK cascade takes its revisions with it.
+    async fn delete_rule_set(&self, id: &str) -> AppResult<()>;
+
+    /// Atomically refuse deletion while any live candidate or action audit
+    /// exists, coordinating with concurrent candidate/run insertion.
+    async fn delete_rule_set_if_unused(&self, _id: &str) -> AppResult<()> {
+        Err(AppError::Repository(
+            "guarded maintenance deletion is not configured".into(),
+        ))
+    }
+
+    /// Move a rule set between evaluation modes. `enabled` is derived by the
+    /// caller from the mode so the two columns can never disagree; no revision
+    /// is created, because the matcher is untouched.
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        id: &str,
+        mode: scryer_domain::MaintenanceEvaluationMode,
+        enabled: bool,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    async fn update_rule_set_arming(
+        &self,
+        id: &str,
+        arming: scryer_domain::MaintenanceEffectArming,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+}
+
+/// Which candidates a read should return. Every field narrows; an empty
+/// `states` means every state.
+#[derive(Clone, Debug, Default)]
+pub struct MaintenanceCandidateQuery {
+    pub rule_set_id: Option<String>,
+    pub states: Vec<scryer_domain::MaintenanceCandidateState>,
+    pub library_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+/// Durable lifecycle candidates (RFC 137 section 8).
+///
+/// The store, not just the migration's partial unique index, is responsible for
+/// the one-active-candidate-per-(rule, kind, subject) invariant: a create is refused
+/// when an active candidate already exists.
+#[async_trait]
+pub trait MaintenanceCandidateRepository: Send + Sync {
+    /// The non-terminal candidate for this subject, if any.
+    async fn get_active_candidate(
+        &self,
+        rule_set_id: &str,
+        title_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>> {
+        self.get_active_subject_candidate(rule_set_id, "title", title_id)
+            .await
+    }
+
+    async fn get_active_subject_candidate(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleCandidate>>;
+
+    async fn list_candidates(
+        &self,
+        query: &MaintenanceCandidateQuery,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
+
+    /// Highest match generation ever recorded for this subject, terminal rows
+    /// included. Zero when the subject has never had a candidate.
+    async fn max_match_generation(&self, rule_set_id: &str, title_id: &str) -> AppResult<i64> {
+        self.max_subject_match_generation(rule_set_id, "title", title_id)
+            .await
+    }
+
+    async fn max_subject_match_generation(
+        &self,
+        rule_set_id: &str,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> AppResult<i64>;
+
+    async fn create_candidate(
+        &self,
+        candidate: &scryer_domain::LifecycleCandidate,
+    ) -> AppResult<()>;
+
+    /// Record a repeat match: advance `last_matched_at` and `last_evaluated_at`,
+    /// refresh the reason codes, and clear any hold. `first_matched_at` is
+    /// deliberately not a parameter — the grace clock never restarts on a
+    /// continuing membership (RFC 7.5).
+    async fn record_candidate_match(
+        &self,
+        id: &str,
+        last_matched_at: DateTime<Utc>,
+        reason_codes: &[String],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Record an inconclusive evaluation: advance `last_evaluated_at` and stamp
+    /// `held_since` if it is not already set. Never advances the clock and
+    /// never cancels.
+    async fn hold_candidate(
+        &self,
+        id: &str,
+        held_since: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Compare-and-set the candidate's state: the write lands only while the row
+    /// is still in one of `expected_states`, and the returned flag says whether
+    /// it did.
+    ///
+    /// The evaluator (8h) and the action handler (12h) are independently
+    /// schedulable and both write candidate state, so an unconditional UPDATE
+    /// here is a lost update: the evaluator could overwrite a leased `executing`
+    /// row, or clobber the executor's terminal write and leave a finished action
+    /// looking live. Every caller therefore names the states its decision was
+    /// made against — the executor's terminal writes expect `Executing`, meaning
+    /// they still hold the lease — and treats `false` as "someone else owns this
+    /// row now", never as an error.
+    async fn transition_candidate_state(
+        &self,
+        id: &str,
+        state: scryer_domain::MaintenanceCandidateState,
+        state_reason: &str,
+        expected_states: &[scryer_domain::MaintenanceCandidateState],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
+
+    /// Finish a candidate only while this worker still owns the exact
+    /// `Executing` lease it acquired. Sequence holds and retryable failures
+    /// must use this stronger form so a stale worker cannot overwrite a newer
+    /// execution lease.
+    async fn finish_leased_candidate(
+        &self,
+        id: &str,
+        expected_lease_updated_at: DateTime<Utc>,
+        state: scryer_domain::MaintenanceCandidateState,
+        state_reason: &str,
+        finished_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
+
+    /// Cancel every active candidate of one rule set in a single write. Used
+    /// when a whole rule is superseded or retired; returns how many rows moved.
+    async fn cancel_active_candidates_for_rule(
+        &self,
+        rule_set_id: &str,
+        state_reason: &str,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<u64>;
+
+    /// Candidate counts per state for one rule set, states with no rows omitted.
+    async fn count_candidates_by_state(
+        &self,
+        rule_set_id: &str,
+    ) -> AppResult<Vec<(scryer_domain::MaintenanceCandidateState, i64)>>;
+
+    /// Candidates of one rule whose materialized `due_at` has passed and whose
+    /// state can still reach execution (observing, pending_action, due,
+    /// blocked), plus any `executing` row abandoned by a crashed worker — one
+    /// untouched since `stale_before`. Ordered oldest due first.
+    ///
+    /// The stale-`executing` arm is what makes
+    /// [`Self::lease_candidate_for_execution`]'s reclaim reachable at all:
+    /// without it a candidate whose worker died mid-run is never selected again,
+    /// so it stays `executing` forever and keeps inflating the count destructive
+    /// arming makes an operator acknowledge.
+    async fn list_due_candidates(
+        &self,
+        rule_set_id: &str,
+        due_before: DateTime<Utc>,
+        stale_before: DateTime<Utc>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleCandidate>>;
+
+    /// Take the execution lease: a single conditional write moving the row to
+    /// `executing`, succeeding only from `due`, or from an `executing` row not
+    /// touched since `stale_before` (crash recovery). Returns whether this
+    /// caller won the lease.
+    async fn lease_candidate_for_execution(
+        &self,
+        id: &str,
+        stale_before: DateTime<Utc>,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
+
+    /// Persist the bounded attempt counter for the current generation.
+    ///
+    /// The executor writes this as a *reservation*, before the action's external
+    /// side effects begin, not as an after-the-fact tally of failures. That is
+    /// what makes a reclaimed execution compute attempt N+1 instead of colliding
+    /// with the `(idempotency_key, attempt)` row an interrupted attempt already
+    /// wrote — and it is what makes the attempt cap bound a crash loop, which a
+    /// counter only advanced on a *handled* failure never could.
+    async fn record_candidate_attempts(
+        &self,
+        id: &str,
+        action_attempts: i64,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+}
+
+/// Append-only record of action-handler attempts (RFC 137 section 8).
+#[async_trait]
+pub trait LifecycleActionRunRepository: Send + Sync {
+    /// Insert the attempt as `running` before anything is mutated, so an
+    /// interrupted attempt leaves evidence.
+    async fn start_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
+
+    /// Write the attempt's terminal status, hold reason, error, and detail.
+    async fn finish_action_run(&self, run: &scryer_domain::LifecycleActionRun) -> AppResult<()>;
+
+    /// Finish a storage-held running attempt and return its reservation in one
+    /// transaction. The release succeeds only while this exact generation,
+    /// action, attempt, and execution lease still belong to the candidate.
+    ///
+    /// Storage capacity and the filesystem guard are environmental holds, not
+    /// failures. Releasing their reservation avoids consuming retry budget or
+    /// colliding with the next attempt's execution idempotency key.
+    async fn finish_held_action_run_and_release_attempt(
+        &self,
+        run: &scryer_domain::LifecycleActionRun,
+        expected_attempt: i64,
+    ) -> AppResult<bool>;
+
+    /// The newest durable policy-deletion checkpoint for this exact candidate
+    /// generation and action, independently of later safety holds.
+    ///
+    /// A candidate can match again after a partial deletion was cancelled.
+    /// That later generation must create a new preview and grace period rather
+    /// than inheriting an old manifest.
+    async fn latest_scoped_deletion_action_run(
+        &self,
+        candidate_id: &str,
+        match_generation: i64,
+        action_kind: &str,
+    ) -> AppResult<Option<scryer_domain::LifecycleActionRun>>;
+
+    /// Newest first, optionally narrowed by rule set and/or candidate.
+    async fn list_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>>;
+
+    /// Newest-first operator summaries for v2 sequence executions only.
+    /// The durable history marker is filtered in storage before `limit`, so
+    /// internal scoped-deletion journals cannot hide a requested summary.
+    async fn list_sequence_history_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>>;
+
+    /// Newest-first legacy action runs only. This companion to the sequence
+    /// history query excludes v2 internal journals before `limit`.
+    async fn list_non_sequence_action_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::LifecycleActionRun>>;
+}
+
+/// Result of atomically acquiring the per-step lease. A stale running lease is
+/// reclaimed only through this operation; callers must never overwrite another
+/// worker's evidence by treating `Busy` as a retryable write failure.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MaintenanceActionStepClaim {
+    Claimed(scryer_domain::MaintenanceActionStepRun),
+    Busy,
+    Completed(scryer_domain::MaintenanceActionStepRun),
+}
+
+/// Candidate coordinates for a bounded sequence-progress projection. A caller
+/// supplies only the candidates already on its page; each can contribute at
+/// most seven current step rows.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct MaintenanceActionStepCandidateKey {
+    pub candidate_id: String,
+    pub match_generation: i64,
+    pub revision_number: i64,
+}
+
+/// Result of claiming an external-job dispatch attempt. The existing receipt
+/// carries its exact request hash and reconciliation evidence so callers can
+/// hold on an unknown state rather than submit blindly.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MaintenanceActionJobReceiptClaim {
+    Claimed(scryer_domain::MaintenanceActionJobReceipt),
+    Existing(scryer_domain::MaintenanceActionJobReceipt),
+}
+
+/// Compare-and-set request for durable job reconciliation. Keeping the state
+/// expectation, external identity, and evidence together avoids callers
+/// accidentally advancing a receipt with evidence from a different attempt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MaintenanceActionJobReceiptTransition {
+    pub key: scryer_domain::MaintenanceActionStepKey,
+    pub dispatch_attempt: i64,
+    pub expected_states: Vec<scryer_domain::MaintenanceActionJobReceiptState>,
+    pub next_state: scryer_domain::MaintenanceActionJobReceiptState,
+    pub job_run_id: Option<String>,
+    pub reconciliation_evidence_json: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Durable v2 step intent, attempt evidence, and external-job receipts.
+#[async_trait]
+pub trait MaintenanceActionStepRepository: Send + Sync {
+    async fn get_action_step(
+        &self,
+        key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Option<scryer_domain::MaintenanceActionStepRun>>;
+
+    /// Insert the intent before its mutation or atomically acquire/reclaim its
+    /// lease. The supplied evidence is used only for a new row or an eligible
+    /// next attempt; an existing running row is never overwritten here.
+    async fn claim_action_step(
+        &self,
+        step: &scryer_domain::MaintenanceActionStepRun,
+        stale_before: DateTime<Utc>,
+        lease_id: &str,
+        leased_at: DateTime<Utc>,
+    ) -> AppResult<MaintenanceActionStepClaim>;
+
+    /// Update only a currently running row owned by `expected_lease_id`. This
+    /// is the durable per-file checkpoint path; it cannot change the state or
+    /// erase a terminal result.
+    async fn checkpoint_action_step(
+        &self,
+        step: &scryer_domain::MaintenanceActionStepRun,
+        expected_lease_id: &str,
+    ) -> AppResult<bool>;
+
+    /// Compare-and-set a running owned step to its next result and write the
+    /// corresponding immutable attempt evidence.
+    async fn finish_action_step(
+        &self,
+        step: &scryer_domain::MaintenanceActionStepRun,
+        expected_lease_id: &str,
+    ) -> AppResult<bool>;
+
+    async fn list_action_steps(
+        &self,
+        candidate_id: &str,
+        match_generation: i64,
+        revision_number: i64,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>>;
+
+    /// Bounded page projection. This avoids one query per candidate when a
+    /// sequence-aware candidate list renders step progress.
+    async fn list_action_steps_for_candidates(
+        &self,
+        candidates: &[MaintenanceActionStepCandidateKey],
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepRun>>;
+
+    async fn list_action_step_attempts(
+        &self,
+        key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionStepAttempt>>;
+
+    async fn get_action_job_receipt(
+        &self,
+        key: &scryer_domain::MaintenanceActionStepKey,
+        dispatch_attempt: i64,
+    ) -> AppResult<Option<scryer_domain::MaintenanceActionJobReceipt>>;
+
+    async fn list_action_job_receipts(
+        &self,
+        key: &scryer_domain::MaintenanceActionStepKey,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>>;
+
+    /// Bounded receipt projection for the already bounded step list. Search
+    /// receipt states are therefore available to a candidate page without one
+    /// query per sequence step.
+    async fn list_action_job_receipts_for_steps(
+        &self,
+        steps: &[scryer_domain::MaintenanceActionStepKey],
+    ) -> AppResult<Vec<scryer_domain::MaintenanceActionJobReceipt>>;
+
+    /// Generic two-phase dispatch support for adapters whose job creation is
+    /// external. Search uses `JobRunRepository`'s stronger atomic creation
+    /// boundary instead of this method.
+    async fn claim_action_job_dispatch(
+        &self,
+        receipt: &scryer_domain::MaintenanceActionJobReceipt,
+    ) -> AppResult<MaintenanceActionJobReceiptClaim>;
+
+    async fn transition_action_job_receipt(
+        &self,
+        transition: &MaintenanceActionJobReceiptTransition,
+    ) -> AppResult<bool>;
+}
+
+/// A durable terminal-membership marker for a v2 sequence. It survives a
+/// terminal candidate so continuous raw matches cannot create a fresh
+/// generation and reset retry limits. Only a confirmed raw no-match releases
+/// it; unknown evaluation never does.
+#[async_trait]
+pub trait MaintenanceSequenceCompletionRepository: Send + Sync {
+    async fn get_active_sequence_completion(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        subject_kind: &str,
+        subject_id: &str,
+    ) -> AppResult<Option<scryer_domain::MaintenanceSequenceTerminalMembership>>;
+
+    /// Active markers in stable-ID keyset order for a reconciliation page. This
+    /// lets a storage-root pass release a marker only after it has observed an
+    /// exact raw no-match without a released early page starving later rows.
+    async fn list_active_sequence_completions(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        after_id: Option<&str>,
+        limit: usize,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceSequenceTerminalMembership>>;
+
+    /// Verify the durable per-step evidence and atomically write the terminal
+    /// membership marker before moving the candidate to its terminal state.
+    /// This closes the crash gap between a sequence completion and admission
+    /// of a new candidate for the same continuous match.
+    async fn finish_sequence_terminal_membership_and_candidate(
+        &self,
+        membership: &scryer_domain::MaintenanceSequenceTerminalMembership,
+        expected_candidate_state: scryer_domain::MaintenanceCandidateState,
+        expected_candidate_updated_at: DateTime<Utc>,
+        terminal_candidate_state: scryer_domain::MaintenanceCandidateState,
+        state_reason: &str,
+        finished_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
+
+    async fn release_sequence_completion_on_confirmed_non_match(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+        subject_kind: &str,
+        subject_id: &str,
+        released_at: DateTime<Utc>,
+    ) -> AppResult<bool>;
+}
+
+/// Subjects a maintenance rule must never act on (RFC 137 section 11).
+#[async_trait]
+pub trait MaintenanceExclusionRepository: Send + Sync {
+    /// Every exclusion, newest first, optionally narrowed to the ones that
+    /// apply to one rule: its own rows plus every global row.
+    async fn list_exclusions(
+        &self,
+        rule_set_id: Option<&str>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceRuleExclusion>>;
+
+    async fn get_exclusion(
+        &self,
+        id: &str,
+    ) -> AppResult<Option<scryer_domain::MaintenanceRuleExclusion>>;
+
+    async fn create_exclusion(
+        &self,
+        exclusion: &scryer_domain::MaintenanceRuleExclusion,
+    ) -> AppResult<()>;
+
+    async fn delete_exclusion(&self, id: &str) -> AppResult<()>;
+}
+
+/// Bounded per-rule records of what one evaluation pass did
+/// (RFC 137 section 11).
+#[async_trait]
+pub trait MaintenanceEvaluationRunRepository: Send + Sync {
+    /// Insert the run as `running`. Recorded before evaluation so an
+    /// interrupted pass leaves evidence rather than nothing.
+    async fn start_evaluation_run(
+        &self,
+        run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()>;
+
+    /// Write the terminal status, counts, timing, and error of a started run.
+    async fn finish_evaluation_run(
+        &self,
+        run: &scryer_domain::MaintenanceEvaluationRun,
+    ) -> AppResult<()>;
+
+    /// Newest first.
+    async fn list_evaluation_runs(
+        &self,
+        rule_set_id: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<scryer_domain::MaintenanceEvaluationRun>>;
+}
+
+/// The maintenance evaluation/execution tables land together, are written by
+/// the two maintenance job passes, and cascade from the same rule set, so they
+/// are wired as one service slot. The capability traits stay separate so a
+/// caller declares only what it uses.
+pub trait MaintenanceEvaluationRepository:
+    MaintenanceCandidateRepository
+    + MaintenanceExclusionRepository
+    + MaintenanceEvaluationRunRepository
+    + LifecycleActionRunRepository
+    + MaintenanceActionStepRepository
+    + MaintenanceSequenceCompletionRepository
+{
+}
+
+impl<T> MaintenanceEvaluationRepository for T where
+    T: MaintenanceCandidateRepository
+        + MaintenanceExclusionRepository
+        + MaintenanceEvaluationRunRepository
+        + LifecycleActionRunRepository
+        + MaintenanceActionStepRepository
+        + MaintenanceSequenceCompletionRepository
+{
+}
+
+/// Persistence for user-authored request rules (spec 0003 section 6).
+///
+/// Mirrors [`MaintenanceRuleSetRepository`] minus arming: a request rule votes
+/// and nothing else, so there is no blast radius for an operator to acknowledge
+/// and no disarm to carry in a write. Rule set and revision are still one unit
+/// of change — a rule set with no revision has no matcher — so
+/// [`Self::create_rule_set`] and [`Self::add_revision`] each write both rows in
+/// a single transaction.
+#[async_trait]
+pub trait RequestRuleSetRepository: Send + Sync {
+    async fn list_rule_sets(&self) -> AppResult<Vec<scryer_domain::RequestRuleSet>>;
+
+    async fn get_rule_set(&self, id: &str) -> AppResult<Option<scryer_domain::RequestRuleSet>>;
+
+    /// Insert the rule set and its first revision atomically.
+    async fn create_rule_set(
+        &self,
+        rule_set: &scryer_domain::RequestRuleSet,
+        revision: &scryer_domain::RequestRuleRevision,
+    ) -> AppResult<()>;
+
+    /// Append `revision` and repoint the rule set at it, atomically. Existing
+    /// revisions are never rewritten.
+    async fn add_revision(
+        &self,
+        revision: &scryer_domain::RequestRuleRevision,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    async fn get_revision(
+        &self,
+        rule_set_id: &str,
+        revision_number: i64,
+    ) -> AppResult<Option<scryer_domain::RequestRuleRevision>>;
+
+    /// Newest revision first.
+    async fn list_revisions(
+        &self,
+        rule_set_id: &str,
+    ) -> AppResult<Vec<scryer_domain::RequestRuleRevision>>;
+
+    /// Update the fields that carry no evaluation semantics. Never creates a
+    /// revision — the matcher is untouched.
+    async fn update_rule_set_metadata(
+        &self,
+        id: &str,
+        name: &str,
+        description: &str,
+        library_ids: &[String],
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Move a rule set between evaluation modes. `enabled` is derived by the
+    /// caller from the mode so the two columns can never disagree.
+    async fn update_rule_set_evaluation_mode(
+        &self,
+        id: &str,
+        mode: scryer_domain::RequestRuleEvaluationMode,
+        enabled: bool,
+        updated_at: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Removes the rule set; the FK cascade takes its revisions with it. The
+    /// decision traces are *not* cascaded: they are the explanation of past
+    /// decisions (spec 0003 FR-016) and outlive the rule that made them.
+    async fn delete_rule_set(&self, id: &str) -> AppResult<()>;
+}
+
+/// Append-only traces of request evaluations (spec 0003 FR-016).
+#[async_trait]
+pub trait RequestRuleDecisionRepository: Send + Sync {
+    async fn record(&self, decision: &scryer_domain::RequestRuleDecisionRecord) -> AppResult<()>;
+
+    async fn latest_for_request(
+        &self,
+        request_id: &str,
+    ) -> AppResult<Option<scryer_domain::RequestRuleDecisionRecord>>;
+
+    /// Newest first, optionally narrowed to one effective outcome.
+    async fn list_recent(
+        &self,
+        limit: usize,
+        outcome: Option<scryer_domain::RequestDecisionOutcome>,
+    ) -> AppResult<Vec<scryer_domain::RequestRuleDecisionRecord>>;
+
+    /// How many recorded decisions a rule set participated in.
+    ///
+    /// The rule ids live inside `votes_json` rather than in a join table, so
+    /// this is a substring match over that column. It is deliberately loose:
+    /// the number drives an "this rule has decided N requests" affordance in
+    /// the authoring UI, not any safety decision, and a rule id is a generated
+    /// opaque id, so a false positive would need one id to contain another.
+    async fn count_for_rule_set(&self, rule_set_id: &str) -> AppResult<u64>;
+}
+
+/// Title leases and keep claims (spec 0003 FR-041…FR-044).
+///
+/// Claims are released, never deleted: every terminal state is history the
+/// operator can still read (constitution C3).
+#[async_trait]
+pub trait LifecycleClaimRepository: Send + Sync {
+    async fn create(&self, claim: &scryer_domain::LifecycleClaim) -> AppResult<()>;
+
+    async fn get(&self, id: &str) -> AppResult<Option<scryer_domain::LifecycleClaim>>;
+
+    /// Every claim on a title, live and terminal, newest first.
+    async fn list_for_title(&self, title_id: &str)
+    -> AppResult<Vec<scryer_domain::LifecycleClaim>>;
+
+    /// Live (dormant or active) claims for each of `title_ids`, keyed by title
+    /// id. Titles with no live claim are absent rather than empty.
+    ///
+    /// Batched on purpose: the maintenance pass asks this for a whole chunk of
+    /// titles at once, and a per-title query would make the pass scale with the
+    /// library.
+    async fn list_live_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::LifecycleClaim>>>;
+
+    /// Live *and* expired retention claims for each of `title_ids`, keyed by
+    /// title id. Titles with no retention history are absent rather than empty.
+    ///
+    /// Separate from [`Self::list_live_for_titles`] because the
+    /// `request_lease_state` fact has to tell "this title's lease lapsed" apart
+    /// from "this title never had one", and only the expired rows carry that
+    /// difference. Released and converted claims are deliberately not returned:
+    /// they were withdrawn rather than spent, so they say nothing about whether
+    /// a lease ran out.
+    ///
+    /// Batched for the same reason its sibling is: the maintenance pass asks it
+    /// once per chunk of titles.
+    async fn list_retention_history_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::LifecycleClaim>>>;
+
+    /// Dormant claims awaiting a first import, oldest first.
+    async fn list_dormant(&self, limit: usize) -> AppResult<Vec<scryer_domain::LifecycleClaim>>;
+
+    /// Start a dormant claim's clock at the title's first import. A no-op on a
+    /// claim that is not dormant, so a replayed import cannot restart a window.
+    ///
+    /// `now` is the write time and `starts_at` is the lease's own beginning:
+    /// the reconcile pass backdates a lease to the import it missed, and
+    /// stamping `updated_at` with that backdated instant would make the row
+    /// look like it was written before it was.
+    async fn activate(
+        &self,
+        id: &str,
+        starts_at: DateTime<Utc>,
+        expires_at: Option<DateTime<Utc>>,
+        now: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Flip every active retention claim whose window has elapsed to expired.
+    /// Returns how many moved.
+    async fn expire_due(&self, now: DateTime<Utc>) -> AppResult<u64>;
+
+    /// Release every live claim produced by one request. Returns how many moved.
+    async fn release_for_producer_ref(
+        &self,
+        producer: scryer_domain::LifecycleClaimProducer,
+        producer_ref: &str,
+        reason: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64>;
+
+    /// Release one live claim by id — the administrator's explicit withdrawal
+    /// (spec 0003 FR-044). Returns how many moved, so a caller can tell a claim
+    /// that was already terminal from one it just released.
+    async fn release_claim(&self, id: &str, reason: &str, now: DateTime<Utc>) -> AppResult<u64>;
+
+    /// Release every live claim on a title — the title-delete path.
+    async fn release_for_title(
+        &self,
+        title_id: &str,
+        reason: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<u64>;
+
+    /// Push an active claim's expiry out. Only touches a live claim: extending
+    /// an expired lease would resurrect a hold the operator already saw lapse.
+    async fn extend(
+        &self,
+        id: &str,
+        expires_at: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Mark `id` converted and insert `replacement` (a keep) in one transaction,
+    /// so there is no instant in which the title carries neither.
+    async fn convert_to_permanent(
+        &self,
+        id: &str,
+        replacement: &scryer_domain::LifecycleClaim,
+        now: DateTime<Utc>,
+    ) -> AppResult<()>;
+
+    /// Live claims produced by requests this user submitted, for the
+    /// `active_lease_count` fact.
+    ///
+    /// Joined through `media_requests.created_by_user_id` on `producer_ref`
+    /// rather than taking a caller-supplied id list: the alternative asks the
+    /// caller to first read every request the user ever made, which is the more
+    /// expensive of the two by exactly that read.
+    async fn count_live_for_user(&self, user_id: &str) -> AppResult<u64>;
 }
 
 #[async_trait]
@@ -5835,6 +7644,15 @@ pub trait PluginDescriptorLoader: Send + Sync {
         &self,
         wasm_bytes: &[u8],
     ) -> AppResult<scryer_plugin_sdk::PluginDescriptor>;
+
+    /// Startup repair needs initialization validation as well as metadata.
+    /// Runtime adapters override this to instantiate with restricted services.
+    fn validate_startup_component(
+        &self,
+        wasm_bytes: &[u8],
+    ) -> AppResult<scryer_plugin_sdk::PluginDescriptor> {
+        self.load_descriptor_from_wasm_bytes(wasm_bytes)
+    }
 }
 
 /// The numbering evidence an application search gives the multi-indexer guard.
@@ -5866,6 +7684,12 @@ pub trait IndexerClient: Send + Sync {
     ) -> AppResult<()> {
         Ok(())
     }
+
+    /// Forget any in-memory backoff held for one indexer. Saving an indexer
+    /// with new credentials or a new endpoint is the operator's "try again":
+    /// the caller clears the persisted backoff row and this drops its mirror,
+    /// so the next search dispatches instead of skipping the indexer.
+    async fn reset_indexer_backoff(&self, _indexer_id: &str) {}
 
     fn search_plan_capability(&self) -> Option<IndexerSearchPlanCapability> {
         None
@@ -5902,6 +7726,10 @@ pub trait IndexerClient: Send + Sync {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        // The subject's known release year, carried for providers that accept a
+        // year qualifier. Only a genuinely known year is sent — never a guess,
+        // and never a series year for a season/episode search.
+        year: Option<i32>,
         tagged_aliases: Vec<TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,
         cancel_token: tokio_util::sync::CancellationToken,
@@ -5921,6 +7749,7 @@ pub trait IndexerClient: Send + Sync {
             season,
             episode,
             absolute_episode,
+            year,
             tagged_aliases,
             learning_context,
             cancel_token,
@@ -5970,6 +7799,7 @@ pub trait IndexerClient: Send + Sync {
         // it must never alter the external plugin search protocol.
         _numbering_context: IndexerSearchNumberingContext,
         absolute_episode: Option<u32>,
+        year: Option<i32>,
         tagged_aliases: Vec<TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,
         cancel_token: tokio_util::sync::CancellationToken,
@@ -5991,6 +7821,7 @@ pub trait IndexerClient: Send + Sync {
                     season,
                     episode,
                     absolute_episode,
+                    year,
                     tagged_aliases.clone(),
                     learning_context.clone(),
                     cancel_token.child_token(),
@@ -6042,6 +7873,7 @@ pub trait IndexerClient: Send + Sync {
         season: Option<u32>,
         episode: Option<u32>,
         absolute_episode: Option<u32>,
+        year: Option<i32>,
         tagged_aliases: Vec<TaggedAlias>,
         learning_context: Option<IndexerSearchLearningContext>,
         cancel_token: tokio_util::sync::CancellationToken,
@@ -6061,6 +7893,7 @@ pub trait IndexerClient: Send + Sync {
                 season,
                 episode,
                 absolute_episode,
+                year,
                 tagged_aliases,
                 learning_context,
                 cancel_token,
@@ -6077,6 +7910,17 @@ pub trait IndexerClient: Send + Sync {
 
     async fn prune_search_learning(&self, _indexer_id: &str) -> AppResult<()> {
         Ok(())
+    }
+
+    /// Resolve an indexer-owned download URL when the provider needs to run its
+    /// own authenticated grab flow. `None` preserves the router's normal direct
+    /// or challenge-solver artifact resolution, so an indexer that has no such
+    /// flow needs no implementation at all.
+    async fn resolve_download(
+        &self,
+        _download_url: &str,
+    ) -> AppResult<Option<ResolvedDownloadArtifact>> {
+        Ok(None)
     }
 }
 
@@ -6112,7 +7956,7 @@ pub trait IndexerPluginProvider: Send + Sync {
     fn client_for_provider_with_proxy(
         &self,
         config: &IndexerConfig,
-        _proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        _proxy_config: Option<&scryer_domain::ProxyConfig>,
     ) -> Option<Arc<dyn IndexerClient>> {
         self.client_for_provider(config)
     }
@@ -6125,7 +7969,7 @@ pub trait IndexerPluginProvider: Send + Sync {
     fn client_for_provider_with_accounting(
         &self,
         config: &IndexerConfig,
-        proxy_config: Option<&scryer_domain::IndexerProxyConfig>,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
         _accounting: Option<&IndexerAccountingContext>,
     ) -> Option<Arc<dyn IndexerClient>> {
         self.client_for_provider_with_proxy(config, proxy_config)
@@ -6271,6 +8115,19 @@ pub struct RuntimePluginLoad {
 
 pub trait DownloadClientPluginProvider: Send + Sync {
     fn client_for_config(&self, config: &DownloadClientConfig) -> Option<Arc<dyn DownloadClient>>;
+    /// Build a client whose egress goes through the operator's assigned proxy.
+    ///
+    /// Mirrors `IndexerPluginProvider::client_for_provider_with_proxy`. The
+    /// default ignores the proxy so test doubles that predate proxy support
+    /// keep compiling; the real provider overrides it and keys its cache on the
+    /// proxy revision.
+    fn client_for_config_with_proxy(
+        &self,
+        config: &DownloadClientConfig,
+        _proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> Option<Arc<dyn DownloadClient>> {
+        self.client_for_config(config)
+    }
     fn available_provider_types(&self) -> Vec<String>;
     fn builtin_provider_types(&self) -> Vec<String> {
         vec![]
@@ -6770,6 +8627,36 @@ pub trait ArchiveExtractorPluginProvider: Send + Sync {
     }
 }
 
+/// An outage-class srrdb failure: a timeout, a transport error, a 429, or a
+/// 5xx. It is the only signal that makes a caller stop asking within one
+/// import; every other failure is an ordinary miss and answers `Ok(None)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SrrdbOutage;
+
+impl std::fmt::Display for SrrdbOutage {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("srrdb lookup is unavailable")
+    }
+}
+
+impl std::error::Error for SrrdbOutage {}
+
+/// Recovers the original filename of an obfuscated extracted file.
+///
+/// The recovered name is a parsing input only; nothing here ever touches the
+/// filesystem.
+#[async_trait]
+pub trait SrrdbFilenameLookup: Send + Sync {
+    /// Ok(None) for every miss/ambiguity/failure; Err only for outage-class
+    /// failures the caller should stop retrying within this import (timeout,
+    /// transport, 429, 5xx).
+    async fn recover_filename(
+        &self,
+        crc32_hex: &str,
+        size_bytes: u64,
+    ) -> Result<Option<String>, SrrdbOutage>;
+}
+
 #[async_trait]
 pub trait NotificationChannelRepository: Send + Sync {
     async fn list_channels(&self) -> AppResult<Vec<scryer_domain::NotificationChannelConfig>>;
@@ -6817,7 +8704,14 @@ pub trait NotificationSubscriptionRepository: Send + Sync {
 
 #[async_trait]
 pub trait BuiltinDownloadClientConnectionTester: Send + Sync {
-    async fn test_connection(&self, client_type: &str, config_json: &str) -> AppResult<()>;
+    /// Probe a native download client, through the assigned proxy when there is
+    /// one, so a connection test exercises the same egress live traffic uses.
+    async fn test_connection(
+        &self,
+        client_type: &str,
+        config_json: &str,
+        proxy_config: Option<&scryer_domain::ProxyConfig>,
+    ) -> AppResult<()>;
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -6952,6 +8846,22 @@ pub trait DownloadClient: Send + Sync {
         &self,
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult>;
+
+    /// Resolve the release's own file without submitting it anywhere (D17).
+    ///
+    /// The submit path deliberately leaves NZB URLs unfetched so the download
+    /// client pulls them itself; handing the operator the raw file needs the
+    /// host-side fetch instead. Only the router implements this — an individual
+    /// client has no indexer provenance, proxy or plugin grab flow to resolve
+    /// the URL with.
+    async fn fetch_release_artifact(
+        &self,
+        _request: &DownloadClientAddRequest,
+    ) -> AppResult<ResolvedDownloadArtifact> {
+        Err(AppError::Validation(
+            "artifact download is not supported by this client".into(),
+        ))
+    }
 
     async fn submit_to_download_queue(
         &self,
@@ -7451,5 +9361,176 @@ pub trait SubtitleDownloadRepository: Send + Sync {
         provider_file_id: &str,
         language: &str,
         reason: Option<&str>,
+    ) -> AppResult<()>;
+}
+
+// ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
+//
+// Read-only observation ports the maintenance action executor consults before
+// it touches media. Nothing below writes, schedules, or executes anything.
+
+/// What one media-server connection reported when it was asked for its live
+/// playback sessions.
+///
+/// `Unreachable` is a first-class answer rather than an error: one server that
+/// is down, mis-credentialed, or returning garbage must not erase what the
+/// other connections truthfully reported. The fold in
+/// [`crate::maintenance_rules::safety`] is what turns an `Unreachable` into a
+/// fail-closed hold.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PlaybackProbeStatus {
+    /// The server answered and is streaming this many sessions right now.
+    ActiveSessions(u32),
+    /// The server answered and nothing is playing.
+    Idle,
+    /// The server could not be asked, or its answer could not be read. Carries
+    /// a terse, log-safe reason (never the credential).
+    Unreachable(String),
+}
+
+/// One enabled media-server connection's contribution to a playback snapshot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectionPlaybackActivity {
+    pub connection_id: String,
+    pub provider: scryer_domain::MediaServerProvider,
+    pub status: PlaybackProbeStatus,
+}
+
+/// Live playback across every enabled media-server connection, as of one
+/// instant. An empty `connections` list means Scryer has no enabled connection
+/// to ask — not that playback was ruled out.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlaybackActivitySnapshot {
+    pub connections: Vec<ConnectionPlaybackActivity>,
+    pub observed_at: DateTime<Utc>,
+}
+
+impl PlaybackActivitySnapshot {
+    /// A snapshot with no connections observed at `observed_at`.
+    pub fn empty(observed_at: DateTime<Utc>) -> Self {
+        Self {
+            connections: Vec::new(),
+            observed_at,
+        }
+    }
+}
+
+/// Observes live playback across every enabled media-server connection.
+///
+/// Implemented once in infrastructure; the implementation fans out internally
+/// over the configured connections so callers never learn how many servers
+/// exist or how each provider is queried. The probe never fails as a whole for
+/// a per-connection problem — that becomes
+/// [`PlaybackProbeStatus::Unreachable`]. An `Err` means the connection list
+/// itself could not be read.
+#[async_trait]
+pub trait MediaServerPlaybackProbe: Send + Sync {
+    async fn active_playback(&self) -> AppResult<PlaybackActivitySnapshot>;
+}
+
+// ── Media-server watch signals (RFC 137 section 7.3) ────────────────────────
+
+/// One played item exactly as a provider reported it, before any Scryer
+/// identity is attached.
+///
+/// This is the provider-neutral shape every adapter normalizes into: Jellyfin
+/// today, Emby and Plex next. It carries the provider's own ids and the
+/// external ids needed to map the item, and nothing else — no Scryer title id,
+/// because the adapter has no business resolving one, and no credential.
+///
+/// `external_ids` is keyed by lowercase source name (`tmdb`, `tvdb`, `imdb`)
+/// so mapping never has to know a provider's capitalization. For an episode,
+/// `series_external_ids` carries the *series'* ids: episode-level provider ids
+/// are unreliable across providers, so the series plus season/episode numbers
+/// is the join that actually holds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProviderPlayedItem {
+    pub provider_item_id: String,
+    pub kind: scryer_domain::MediaServerSignalKind,
+    pub name: Option<String>,
+    pub external_ids: std::collections::BTreeMap<String, String>,
+    /// Series-scoped ids for an episode. Empty for a movie.
+    pub series_external_ids: std::collections::BTreeMap<String, String>,
+    pub series_provider_item_id: Option<String>,
+    pub season_number: Option<i64>,
+    pub episode_number: Option<i64>,
+    pub played: bool,
+    pub play_count: i64,
+    pub last_played_at: Option<DateTime<Utc>>,
+}
+
+/// Reads one participant's played items from one media-server connection.
+///
+/// Implemented once in infrastructure and dispatched on
+/// [`scryer_domain::MediaServerConnection::provider`], so adding Emby or Plex
+/// is a new arm rather than a new seam. The implementation owns paging,
+/// truncation, and every provider-specific quirk; callers see only normalized
+/// items.
+///
+/// An `Err` is this participant's failure alone. The sync job records it
+/// against the connection and moves to the next participant; it never aborts
+/// the sweep, because one unreadable account must not blank every other
+/// person's watch history.
+#[async_trait]
+pub trait MediaServerSignalSource: Send + Sync {
+    async fn fetch_played_items(
+        &self,
+        connection: &scryer_domain::MediaServerConnection,
+        external_user_id: &str,
+    ) -> AppResult<Vec<ProviderPlayedItem>>;
+}
+
+/// Durable storage for normalized media-server watch signals.
+#[async_trait]
+pub trait MediaServerSignalRepository: Send + Sync {
+    /// Atomically replace one participant's signal set: insert the new rows
+    /// with a fresh `sync_generation`, then delete that participant's rows from
+    /// older generations. An item absent from the latest sweep is thereby
+    /// no-longer-played rather than stale.
+    ///
+    /// Returns the number of rows the participant now has. An empty `signals`
+    /// is a meaningful write, not a no-op: it means this person has nothing
+    /// played any more, and every prior row for them is removed.
+    async fn replace_participant_signals(
+        &self,
+        connection_id: &str,
+        external_user_id: &str,
+        signals: &[scryer_domain::NewUserMediaSignal],
+    ) -> AppResult<u64>;
+
+    /// Remove stored observations for retired account identities. Each pair is
+    /// `(external_user_id, scryer_user_id)` from a successful verified-account read.
+    async fn retain_connection_participants(
+        &self,
+        _connection_id: &str,
+        _participants: &[(String, String)],
+    ) -> AppResult<u64> {
+        Err(AppError::Repository(
+            "signal participant reconciliation is not configured".into(),
+        ))
+    }
+
+    /// Movie-level signals for a batch of title ids (`kind = 'movie'` only),
+    /// grouped by title id. Titles with no signals are absent from the map
+    /// rather than mapped to an empty vector, so a caller cannot mistake
+    /// "nobody watched it" for "no signal source is configured".
+    async fn movie_signals_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>>;
+
+    /// Episode-level signals (`kind = 'episode'`) grouped by the id of the
+    /// title that owns the episode, so a series' signals arrive in one bucket.
+    async fn episode_signals_for_titles(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<scryer_domain::UserMediaSignal>>>;
+
+    async fn signal_sync_states(&self)
+    -> AppResult<Vec<scryer_domain::MediaServerSignalSyncState>>;
+
+    async fn upsert_signal_sync_state(
+        &self,
+        state: &scryer_domain::MediaServerSignalSyncState,
     ) -> AppResult<()>;
 }

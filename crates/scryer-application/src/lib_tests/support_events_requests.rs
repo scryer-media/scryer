@@ -1,7 +1,9 @@
 use super::*;
+use std::sync::atomic::AtomicBool;
 
 #[derive(Default)]
 pub(super) struct MockDomainEventRepo {
+    pub(super) fail_append_many: AtomicBool,
     pub(super) events: Arc<Mutex<Vec<DomainEvent>>>,
     pub(super) subscriber_offsets: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
@@ -143,6 +145,20 @@ pub(super) async fn append_series_monitor_snapshot_chunk(
 
 #[async_trait]
 impl DomainEventRepository for MockDomainEventRepo {
+    async fn append_once(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+        if let Some(existing) = self
+            .events
+            .lock()
+            .await
+            .iter()
+            .find(|row| row.event_id == event.event_id)
+            .cloned()
+        {
+            return Ok(existing);
+        }
+        self.append(event).await
+    }
+
     async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
         let mut events = self.events.lock().await;
         let sequence = events
@@ -169,6 +185,11 @@ impl DomainEventRepository for MockDomainEventRepo {
     }
 
     async fn append_many(&self, events: Vec<NewDomainEvent>) -> AppResult<Vec<DomainEvent>> {
+        if self.fail_append_many.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic event append failure".into(),
+            ));
+        }
         let mut stored = Vec::with_capacity(events.len());
         for event in events {
             stored.push(self.append(event).await?);
@@ -321,6 +342,7 @@ impl DomainEventRepository for MockDomainEventRepo {
 
 #[derive(Default)]
 pub(super) struct MockMediaRequestRepo {
+    pub(super) fail_policy_tag_rewrites: AtomicBool,
     pub(super) requests: Arc<Mutex<Vec<MediaRequest>>>,
     pub(super) domain_events: Option<Arc<MockDomainEventRepo>>,
 }
@@ -330,6 +352,7 @@ impl MockMediaRequestRepo {
         Self {
             requests: Arc::new(Mutex::new(Vec::new())),
             domain_events: Some(domain_events),
+            fail_policy_tag_rewrites: AtomicBool::new(false),
         }
     }
 }
@@ -390,6 +413,12 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             requested_quality_profile_name: request.requested_quality_profile_name,
             requested_monitor_type: request.requested_monitor_type,
             requested_monitor_selection: request.requested_monitor_selection,
+            requested_lease_days: request.requested_lease_days,
+            approved_lease_days: None,
+            decision_id: None,
+            decided_by_rule_set_ids: Vec::new(),
+            policy_tags: Vec::new(),
+            metadata_snapshot_json: request.metadata_snapshot_json,
             external_ids: request.external_ids,
             requesters: vec![MediaRequestRequester {
                 user_id: requester.id.clone(),
@@ -443,12 +472,20 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                 })
         }) {
             candidate.status = resolution.status;
-            candidate.resolved_by_user_id = Some(resolution.resolved_by_user_id.clone());
+            candidate.resolved_by_user_id = resolution.resolved_by_user_id.clone();
             candidate.resolved_at = Some(resolution.resolved_at);
             candidate.created_title_id = resolution.created_title_id.clone();
             candidate.approved_quality_profile_id = resolution.approved_quality_profile_id.clone();
             candidate.approved_quality_profile_name =
                 resolution.approved_quality_profile_name.clone();
+            if candidate.id == request.id {
+                candidate.approved_lease_days = resolution.approved_lease_days;
+                candidate.decision_id = resolution.decision_id.clone();
+                candidate.decided_by_rule_set_ids = resolution.decided_by_rule_set_ids.clone();
+                candidate.policy_tags = resolution.policy_tags.clone();
+            } else if resolution.status == MediaRequestStatus::Approved {
+                candidate.approved_lease_days = candidate.requested_lease_days;
+            }
             candidate.updated_at = resolution.resolved_at;
             updated += 1;
         }
@@ -477,12 +514,16 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             candidate.id == request_id && candidate.status == MediaRequestStatus::Pending
         }) {
             candidate.status = resolution.status;
-            candidate.resolved_by_user_id = Some(resolution.resolved_by_user_id.clone());
+            candidate.resolved_by_user_id = resolution.resolved_by_user_id.clone();
             candidate.resolved_at = Some(resolution.resolved_at);
             candidate.created_title_id = resolution.created_title_id.clone();
             candidate.approved_quality_profile_id = resolution.approved_quality_profile_id.clone();
             candidate.approved_quality_profile_name =
                 resolution.approved_quality_profile_name.clone();
+            candidate.approved_lease_days = resolution.approved_lease_days;
+            candidate.decision_id = resolution.decision_id.clone();
+            candidate.decided_by_rule_set_ids = resolution.decided_by_rule_set_ids.clone();
+            candidate.policy_tags = resolution.policy_tags.clone();
             candidate.updated_at = resolution.resolved_at;
             updated += 1;
         }
@@ -507,6 +548,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<scryer_domain::MonitorSelection>,
+        requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
         let mut requests = self.requests.lock().await;
@@ -522,6 +564,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         request.requested_quality_profile_name = Some(requested_quality_profile_name);
         request.requested_monitor_type = requested_monitor_type;
         request.requested_monitor_selection = requested_monitor_selection;
+        request.requested_lease_days = requested_lease_days;
         request.updated_at = now;
         let updated = request.clone();
         drop(requests);
@@ -563,6 +606,56 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         Ok(counts)
     }
 
+    /// Mirrors the SQL store's contract: a title is a key only when a request
+    /// created it, and each list is submitter-first, deduped, in request order.
+    async fn requester_user_ids_by_title_ids(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<HashMap<String, Vec<String>>> {
+        let wanted: HashSet<&String> = title_ids.iter().collect();
+        let mut requests: Vec<MediaRequest> = self
+            .requests
+            .lock()
+            .await
+            .iter()
+            .filter(|request| {
+                request
+                    .created_title_id
+                    .as_ref()
+                    .is_some_and(|title_id| wanted.contains(title_id))
+            })
+            .cloned()
+            .collect();
+        requests.sort_by(|left, right| {
+            left.created_at
+                .cmp(&right.created_at)
+                .then_with(|| left.id.cmp(&right.id))
+        });
+
+        let mut by_title: HashMap<String, Vec<String>> = HashMap::new();
+        for request in requests {
+            let title_id = request
+                .created_title_id
+                .clone()
+                .expect("filtered to requests with a created title");
+            let entry = by_title.entry(title_id).or_default();
+            let mut requesters = request.requesters.clone();
+            requesters.sort_by(|left, right| {
+                left.requested_at
+                    .cmp(&right.requested_at)
+                    .then_with(|| left.user_id.cmp(&right.user_id))
+            });
+            for user_id in std::iter::once(request.created_by_user_id.clone())
+                .chain(requesters.into_iter().map(|requester| requester.user_id))
+            {
+                if !entry.contains(&user_id) {
+                    entry.push(user_id);
+                }
+            }
+        }
+        Ok(by_title)
+    }
+
     async fn list(&self, query: MediaRequestQuery) -> AppResult<Vec<MediaRequest>> {
         let requests = self.requests.lock().await;
         Ok(requests
@@ -585,5 +678,104 @@ impl MediaRequestRepository for MockMediaRequestRepo {
             })
             .cloned()
             .collect())
+    }
+
+    /// Mirrors the SQL store: submissions only, so a user who seconded someone
+    /// else's request is not counted as having asked for it.
+    async fn count_for_requester(
+        &self,
+        user_id: &str,
+        status: Option<MediaRequestStatus>,
+        since: Option<chrono::DateTime<Utc>>,
+    ) -> AppResult<u64> {
+        let requests = self.requests.lock().await;
+        Ok(requests
+            .iter()
+            .filter(|request| {
+                request.created_by_user_id == user_id
+                    && status.is_none_or(|status| request.status == status)
+                    && since.is_none_or(|since| request.created_at >= since)
+            })
+            .count() as u64)
+    }
+
+    async fn history_for_fingerprint(
+        &self,
+        identity_fingerprint: &str,
+    ) -> AppResult<Vec<MediaRequest>> {
+        let requests = self.requests.lock().await;
+        let mut history: Vec<MediaRequest> = requests
+            .iter()
+            .filter(|request| request.identity_fingerprint == identity_fingerprint)
+            .cloned()
+            .collect();
+        history.sort_by(|left, right| {
+            right
+                .created_at
+                .cmp(&left.created_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        Ok(history)
+    }
+
+    async fn latest_request_at_for_user(
+        &self,
+        user_id: &str,
+    ) -> AppResult<Option<chrono::DateTime<Utc>>> {
+        let requests = self.requests.lock().await;
+        Ok(requests
+            .iter()
+            .filter(|request| request.created_by_user_id == user_id)
+            .map(|request| request.created_at)
+            .max())
+    }
+
+    async fn record_decision_on_request(
+        &self,
+        request_id: &str,
+        decision_id: Option<&str>,
+        rule_set_ids: &[String],
+        tags: &[String],
+    ) -> AppResult<()> {
+        let mut requests = self.requests.lock().await;
+        let Some(request) = requests.iter_mut().find(|request| request.id == request_id) else {
+            return Ok(());
+        };
+        request.decision_id = decision_id.map(str::to_string);
+        request.decided_by_rule_set_ids = rule_set_ids.to_vec();
+        request.policy_tags = tags.to_vec();
+        request.updated_at = Utc::now();
+        Ok(())
+    }
+
+    async fn rewrite_pending_policy_tag(
+        &self,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        if self.fail_policy_tag_rewrites.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic pending policy tag rewrite failure".into(),
+            ));
+        }
+        let mut requests = self.requests.lock().await;
+        let mut changed = 0_u64;
+        for request in requests
+            .iter_mut()
+            .filter(|request| request.status == scryer_domain::MediaRequestStatus::Pending)
+        {
+            if !request.policy_tags.iter().any(|tag| tag == label) {
+                continue;
+            }
+            request.policy_tags.retain(|tag| tag != label);
+            if let Some(replacement) = replacement
+                && !request.policy_tags.iter().any(|tag| tag == replacement)
+            {
+                request.policy_tags.push(replacement.to_string());
+            }
+            request.updated_at = Utc::now();
+            changed += 1;
+        }
+        Ok(changed)
     }
 }

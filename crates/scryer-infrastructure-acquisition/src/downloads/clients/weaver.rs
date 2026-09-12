@@ -466,6 +466,15 @@ impl WeaverDownloadClient {
         }
     }
 
+    /// Replace the egress client, so an operator-assigned proxy carries this
+    /// client's traffic. Applied after construction because every existing
+    /// call site builds the default client and only the router knows whether a
+    /// proxy is assigned.
+    pub fn with_http_client(mut self, http_client: reqwest::Client) -> Self {
+        self.outbound_http = OutboundHttpClient::new(http_client, RateLimitRegistry::new());
+        self
+    }
+
     pub fn from_config(config: &DownloadClientConfig) -> AppResult<Self> {
         Self::from_config_with_staged_nzb_store(
             config,
@@ -2006,6 +2015,7 @@ mod tests {
             last_seen_at: None,
             created_at: Utc::now(),
             updated_at: Utc::now(),
+            proxy_config_id: None,
         }
     }
 
@@ -2081,6 +2091,7 @@ mod tests {
             season_pack_seed_time_minutes: None,
             is_recent: None,
             season_pack: None,
+            pinned_download_client_id: None,
         }
     }
 

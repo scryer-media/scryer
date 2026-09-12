@@ -4,6 +4,8 @@ import type {
   ContentSettingsSection,
   IndexerSettingsTab,
   LogsSection,
+  MaintenanceRulesSection,
+  RulesSection,
   SettingsSection,
   SystemSection,
   ViewId,
@@ -22,10 +24,14 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   mediaServers: "media-servers",
   indexers: "indexers",
   downloadClients: "download-clients",
+  proxies: "proxies",
   qualityProfiles: "quality-profiles",
   delayProfiles: "delay-profiles",
+  titleTags: "tags",
   acquisition: "acquisition",
   rules: "rules",
+  maintenanceRules: "maintenance-rules",
+  requestRules: "request-rules",
   plugins: "plugins",
   notifications: "notifications",
   "post-processing": "post-processing",
@@ -34,14 +40,116 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
 
 const AUTOMATION_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
   acquisition: "acquisition",
-  rules: "rules",
   subtitles: "subtitles",
   "post-processing": "post-processing",
 };
 
+/// Panes of the Rules page. Scoring, maintenance and request rules all hang off
+/// `/automation/rules`, so the sidebar carries one entry and the page's own
+/// gutter picks the kind.
+export const RULES_SECTION_PATH: Record<RulesSection, string> = {
+  scoring: "scoring",
+  maintenance: "maintenance",
+  request: "request",
+};
+
+const RULES_SECTION_BY_SEGMENT: Record<string, RulesSection> = {
+  scoring: "scoring",
+  "scoring-rules": "scoring",
+  maintenance: "maintenance",
+  "maintenance-rules": "maintenance",
+  maintenancerules: "maintenance",
+  request: "request",
+  "request-rules": "request",
+  requestrules: "request",
+};
+
+/// Panes of the Maintenance Rules page. The rule list is the default and has no
+/// segment of its own, so `/automation/rules/maintenance` keeps resolving to
+/// the list an existing maintenance-rules link expected.
+export const MAINTENANCE_RULES_SECTION_PATH: Record<MaintenanceRulesSection, string> = {
+  rules: "",
+  candidates: "candidates",
+  history: "history",
+  gates: "gates",
+};
+
+const MAINTENANCE_RULES_SECTION_BY_SEGMENT: Record<string, MaintenanceRulesSection> = {
+  rules: "rules",
+  candidates: "candidates",
+  history: "history",
+  runs: "history",
+  gates: "gates",
+  // Exclusions were their own pane before they moved in with the gates, so the
+  // segment redirects rather than 404ing on links people already hold.
+  exclusions: "gates",
+};
+
+/// Which kinds of rule the Rules page offers on this instance.
+///
+/// Maintenance and request rules are still being finished, so they are panes
+/// only when the instance has opted into experimental features. Scoring is
+/// always present, so a single-entry result also tells the page there is no
+/// kind to switch between and the rail can be dropped.
+export function rulesSectionsFor(experimentalFeaturesEnabled: boolean): RulesSection[] {
+  return experimentalFeaturesEnabled
+    ? ["scoring", "maintenance", "request"]
+    : ["scoring"];
+}
+
+/// The `rules` settings section is the Scoring pane, `maintenanceRules` the
+/// Maintenance pane and `requestRules` the Request pane. Which `SettingsSection`
+/// a pane maps to still decides its permissions, so the three stay distinct
+/// underneath one nav entry.
+export const RULES_SECTION_BY_SETTINGS_SECTION: Partial<
+  Record<SettingsSection, RulesSection>
+> = {
+  rules: "scoring",
+  maintenanceRules: "maintenance",
+  requestRules: "request",
+};
+
+/// Path of one Rules pane. Maintenance carries its own pane as a fourth
+/// segment; the maintenance rule list is the default and adds none.
+export function buildRulesPath(
+  section: RulesSection,
+  maintenanceSection: MaintenanceRulesSection = "rules",
+): string {
+  const base = `/automation/rules/${RULES_SECTION_PATH[section]}`;
+  if (section !== "maintenance") {
+    return base;
+  }
+  const segment = MAINTENANCE_RULES_SECTION_PATH[maintenanceSection];
+  return segment ? `${base}/${segment}` : base;
+}
+
+export function rulesSectionFromPath(pathname: string): RulesSection {
+  const segments = pathname.split("/").filter(Boolean);
+  const rulesAt = segments.findIndex((segment) => segment.toLowerCase() === "rules");
+  if (rulesAt < 0) {
+    return "scoring";
+  }
+  return RULES_SECTION_BY_SEGMENT[segments[rulesAt + 1]?.toLowerCase() ?? ""] ?? "scoring";
+}
+
+export function maintenanceRulesSectionFromPath(
+  pathname: string,
+): MaintenanceRulesSection {
+  const segments = pathname.split("/").filter(Boolean);
+  const rulesAt = segments.findIndex((segment) => segment.toLowerCase() === "rules");
+  if (rulesAt < 0) {
+    return "rules";
+  }
+  return (
+    MAINTENANCE_RULES_SECTION_BY_SEGMENT[segments[rulesAt + 2]?.toLowerCase() ?? ""] ??
+    "rules"
+  );
+}
+
 const INTEGRATIONS_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
   indexers: "indexers",
   downloadClients: "download-clients",
+  proxies: "proxies",
   mediaServers: "media-servers",
   notifications: "notifications",
 };
@@ -56,16 +164,20 @@ const SYSTEM_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
 /// `/integrations/indexers` keeps meaning what it always meant.
 export const INDEXER_TAB_PATH: Record<IndexerSettingsTab, string> = {
   indexers: "",
-  proxies: "proxies",
+  search: "search",
   seedingProfiles: "seeding-profiles",
 };
 
 const INDEXER_TAB_BY_SEGMENT: Record<string, IndexerSettingsTab> = {
-  proxies: "proxies",
-  "indexer-proxies": "proxies",
+  search: "search",
   "seeding-profiles": "seedingProfiles",
   seedingprofiles: "seedingProfiles",
 };
+
+/// Segments that used to name the Indexers page's proxies pane. Proxies are a
+/// section of their own now, so these are links people already have rather
+/// than panes, and they redirect instead of resolving.
+const MOVED_INDEXER_PROXY_SEGMENTS = new Set(["proxies", "indexer-proxies"]);
 
 /// Path of one Indexers pane. Seeding profiles used to be a settings section of
 /// its own, so `/settings/seeding-profiles` still redirects here.
@@ -81,6 +193,20 @@ export function indexerSettingsTabFromPath(pathname: string): IndexerSettingsTab
     return "indexers";
   }
   return INDEXER_TAB_BY_SEGMENT[segments[indexerAt + 1]?.toLowerCase() ?? ""] ?? "indexers";
+}
+
+/// Which panes the Indexers page offers on this instance.
+///
+/// Indexer search is still being finished, so it is a pane only when the
+/// instance has opted into experimental features. The indexer list is always
+/// present, so a held search link resolves there rather than 404ing or
+/// bouncing.
+export function indexerSettingsTabsFor(
+  experimentalFeaturesEnabled: boolean,
+): IndexerSettingsTab[] {
+  return experimentalFeaturesEnabled
+    ? ["indexers", "search", "seedingProfiles"]
+    : ["indexers", "seedingProfiles"];
 }
 
 export const CONTENT_SECTION_PATH: Record<ContentSettingsSection, string> = {
@@ -135,6 +261,12 @@ export function buildViewPath(
 ) {
   const base = `/${nextView}`;
   if (nextView === "settings" && nextSettingsSection) {
+    // Scoring and maintenance rules are panes of one page, so their canonical
+    // paths nest under `/automation/rules` rather than sitting beside it.
+    const rulesSection = RULES_SECTION_BY_SETTINGS_SECTION[nextSettingsSection];
+    if (rulesSection) {
+      return buildRulesPath(rulesSection);
+    }
     const automationPath = AUTOMATION_SETTINGS_SECTION_PATH[nextSettingsSection];
     if (automationPath) {
       return `/automation/${automationPath}`;
@@ -247,15 +379,36 @@ const MEDIA_SETTINGS_SECTIONS = new Set<ContentSettingsSection>([
 ]);
 const AUTOMATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   acquisition: "acquisition",
-  rules: "rules",
   subtitles: "subtitles",
   "post-processing": "post-processing",
   "post-procesing": "post-processing",
+};
+
+/// Segments that used to name a rules page of their own. Maintenance rules are
+/// a pane of the Rules page now, so these redirect rather than resolve.
+const MOVED_MAINTENANCE_RULES_SEGMENTS = new Set([
+  "maintenance-rules",
+  "maintenancerules",
+]);
+
+/// `/settings/...` segments that now name a Rules pane. Both were settings
+/// sections of their own before the two kinds of rule shared a page.
+const MOVED_SETTINGS_RULES_BY_SEGMENT: Record<string, RulesSection> = {
+  rules: "scoring",
+  "maintenance-rules": "maintenance",
+  maintenancerules: "maintenance",
+  // Request rules never had a settings section of their own, but the section
+  // path exists for the settings shell, so the spelling it implies resolves
+  // rather than 404ing.
+  "request-rules": "request",
+  requestrules: "request",
 };
 const INTEGRATION_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   indexers: "indexers",
   "download-clients": "downloadClients",
   downloadclients: "downloadClients",
+  proxies: "proxies",
+  "indexer-proxies": "proxies",
   "media-servers": "mediaServers",
   mediaservers: "mediaServers",
   notifications: "notifications",
@@ -267,6 +420,9 @@ const LOCAL_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
   qualityprofiles: "qualityProfiles",
   "delay-profiles": "delayProfiles",
   delayprofiles: "delayProfiles",
+  tags: "titleTags",
+  "title-tags": "titleTags",
+  titletags: "titleTags",
   plugins: "plugins",
 };
 const SYSTEM_SETTINGS_BY_SEGMENT: Record<string, SettingsSection> = {
@@ -329,6 +485,63 @@ function settingsRoute(section: SettingsSection): ParsedAppRoute {
   return parsedRoute(buildViewPath("settings", section), "settings", {
     settingsSection: section,
   });
+}
+
+/// `/automation/rules/...` — the Rules page and its two levels of panes.
+///
+/// A bare `/automation/rules` names the page rather than a pane, so it lands on
+/// Scoring rather than 404ing. Maintenance takes a further segment for its own
+/// pane, and the rule list is the pane a segment-less maintenance path means.
+function resolveRulesRoute(
+  currentPath: string,
+  rawSegments: string[],
+  normalizedSegments: string[],
+  search: string,
+  hash: string,
+): AppRouteResolution {
+  if (rawSegments.length === 2) {
+    return redirectTo(buildRulesPath("scoring"), search, hash);
+  }
+
+  const rulesSection = RULES_SECTION_BY_SEGMENT[normalizedSegments[2] ?? ""];
+  if (!rulesSection) {
+    return { kind: "not-found" };
+  }
+
+  // Scoring and request rules are one page each: neither carries a second level
+  // of panes, so a fourth segment names nothing.
+  if (rulesSection === "scoring" || rulesSection === "request") {
+    if (rawSegments.length !== 3) {
+      return { kind: "not-found" };
+    }
+    return canonicalOrRedirect(
+      currentPath,
+      settingsRoute(rulesSection === "scoring" ? "rules" : "requestRules"),
+      search,
+      hash,
+    );
+  }
+
+  if (rawSegments.length > 4) {
+    return { kind: "not-found" };
+  }
+
+  const maintenanceSection =
+    rawSegments.length === 3
+      ? "rules"
+      : MAINTENANCE_RULES_SECTION_BY_SEGMENT[normalizedSegments[3] ?? ""];
+  if (!maintenanceSection) {
+    return { kind: "not-found" };
+  }
+
+  return canonicalOrRedirect(
+    currentPath,
+    parsedRoute(buildRulesPath("maintenance", maintenanceSection), "settings", {
+      settingsSection: "maintenanceRules",
+    }),
+    search,
+    hash,
+  );
 }
 
 function resolveMediaRoute(
@@ -450,7 +663,7 @@ export function resolveAppRoute(
     );
   }
 
-  if (root === "discovery" || root === "requests" || root === "calendar") {
+  if (root === "discovery" || root === "requests" || root === "calendar" || root === "api-explorer") {
     if (rawSegments.length !== 1) {
       return { kind: "not-found" };
     }
@@ -514,6 +727,14 @@ export function resolveAppRoute(
       );
     }
 
+    if (section === "rules") {
+      return resolveRulesRoute(currentPath, rawSegments, normalizedSegments, search, hash);
+    }
+
+    if (MOVED_MAINTENANCE_RULES_SEGMENTS.has(section)) {
+      return redirectTo(buildRulesPath("maintenance"), search, hash);
+    }
+
     const settingsSection = AUTOMATION_SETTINGS_BY_SEGMENT[section];
     if (!settingsSection || rawSegments.length !== 2) {
       return { kind: "not-found" };
@@ -526,10 +747,14 @@ export function resolveAppRoute(
     if (!settingsSection) {
       return { kind: "not-found" };
     }
-    // The Indexers page carries panes (proxies, seeding profiles) as a third
-    // segment; every other integrations section is a bare two-segment path.
+    // The Indexers page carries its seeding-profiles pane as a third segment;
+    // every other integrations section is a bare two-segment path.
     if (settingsSection === "indexers" && rawSegments.length === 3) {
-      const tab = INDEXER_TAB_BY_SEGMENT[normalizedSegments[2] ?? ""];
+      const paneSegment = normalizedSegments[2] ?? "";
+      if (MOVED_INDEXER_PROXY_SEGMENTS.has(paneSegment)) {
+        return redirectTo(buildViewPath("settings", "proxies"), search, hash);
+      }
+      const tab = INDEXER_TAB_BY_SEGMENT[paneSegment];
       if (!tab) {
         return { kind: "not-found" };
       }
@@ -589,6 +814,10 @@ export function resolveAppRoute(
     const localSection = LOCAL_SETTINGS_BY_SEGMENT[section];
     if (localSection) {
       return canonicalOrRedirect(currentPath, settingsRoute(localSection), search, hash);
+    }
+    const movedRulesSection = MOVED_SETTINGS_RULES_BY_SEGMENT[section];
+    if (movedRulesSection) {
+      return redirectTo(buildRulesPath(movedRulesSection), search, hash);
     }
     const movedSection =
       AUTOMATION_SETTINGS_BY_SEGMENT[section] ??

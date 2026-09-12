@@ -230,6 +230,7 @@ impl FakeNotificationProvider {
                     host_binding: None,
                     options: vec![],
                     help_text: None,
+                    ..Default::default()
                 },
                 ConfigFieldDef {
                     key: "api_key".to_string(),
@@ -242,6 +243,7 @@ impl FakeNotificationProvider {
                     host_binding: None,
                     options: vec![],
                     help_text: None,
+                    ..Default::default()
                 },
                 ConfigFieldDef {
                     key: "path_mappings".to_string(),
@@ -258,6 +260,7 @@ impl FakeNotificationProvider {
                         config_overrides: Default::default(),
                     }],
                     help_text: Some("One mapping per line.".to_string()),
+                    ..Default::default()
                 },
             ],
             supports_test: true,
@@ -1846,6 +1849,7 @@ async fn notification_dispatcher_delivers_global_media_request_to_facet_scope() 
         schema_version: 1,
         stream: DomainEventStream::Global,
         payload: DomainEventPayload::MediaRequestSubmitted(MediaRequestSubmittedEventData {
+            requested_lease_days: None,
             request_id: "request-1".to_string(),
             library_id: "library-series".to_string(),
             facet: MediaFacet::Series,
@@ -2176,6 +2180,11 @@ async fn notification_dispatcher_prefers_local_catalog_metadata_over_snapshot() 
     let provider = Arc::new(FakeNotificationProvider::jellyfin());
     let app = app_with_notification_provider(&ctx, provider.clone());
     let user = default_user(&app).await;
+    // Creation is registry-gated now, so the label this fixture asserts on has
+    // to exist before a title can be born carrying it.
+    app.create_title_tag_definition(&user, "local-tag", None)
+        .await
+        .expect("tag should be defined");
 
     let title = app
         .add_title(

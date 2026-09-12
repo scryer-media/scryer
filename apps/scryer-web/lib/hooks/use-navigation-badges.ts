@@ -19,6 +19,7 @@ type NavigationBadgeCountsPayload = {
   pendingMediaRequestCounts?: PendingImportCounts | null;
   activityImportCount?: number | null;
   pluginUpdateCount?: number | null;
+  pluginBlockedCount?: number | null;
 };
 
 const EMPTY_PENDING_IMPORT_COUNTS: PendingImportCounts = {
@@ -56,6 +57,7 @@ export function useNavigationBadges({
     useState<PendingImportCounts | null>(null);
   const [manualImportRequiredCount, setManualImportRequiredCount] = useState(0);
   const [pluginUpdateCount, setPluginUpdateCount] = useState(0);
+  const [pluginBlockedCount, setPluginBlockedCount] = useState(0);
   const [scryerVersion, setScryerVersion] = useState<string | null>(null);
 
   const refreshScryerVersion = useCallback(async () => {
@@ -125,6 +127,7 @@ export function useNavigationBadges({
         Number(badgeCounts?.activityImportCount ?? 0),
       );
       setPluginUpdateCount(Number(badgeCounts?.pluginUpdateCount ?? 0));
+      setPluginBlockedCount(Number(badgeCounts?.pluginBlockedCount ?? 0));
     } catch (error) {
       console.warn("Failed to refresh navigation badges", error);
     }
@@ -199,6 +202,7 @@ export function useNavigationBadges({
     pendingMediaRequestCounts,
     manualImportRequiredCount,
     pluginUpdateCount,
+    pluginBlockedCount,
     scryerVersion,
   };
 }

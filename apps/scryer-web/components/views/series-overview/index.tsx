@@ -8,6 +8,7 @@ import { useClient } from "urql";
 import type { Release } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useDownloadConflictConfirmation } from "@/components/common/download-conflict-confirmation";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
@@ -67,7 +68,7 @@ import { TitleRatingsStrip } from "../title-ratings-strip";
 import { TitleSettingsPanel } from "./title-settings-panel";
 import { SeasonSection, SeriesMovieTimelineSection } from "./season-section";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
-import type { LibraryRootRecord } from "@/lib/types/titles";
+import type { LibraryRecord, LibraryRootRecord } from "@/lib/types/titles";
 import { localizedTitleStatus } from "../overview-localization";
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import {
@@ -141,6 +142,7 @@ type Props = {
   onSetCollectionMonitored?: (collectionId: string, monitored: boolean) => Promise<void>;
   onSetEpisodeMonitored?: (episodeId: string, monitored: boolean) => Promise<void>;
   onSetSeriesMovieMonitored?: (seriesMovieLinkId: string, monitored: boolean) => Promise<void>;
+  onSeriesMovieTagsChanged?: () => Promise<void> | void;
   onSetTitleMonitored?: (monitored: boolean) => Promise<void>;
   onSearchMonitored?: () => Promise<void> | void;
   onRefreshAndScan?: () => Promise<void> | void;
@@ -150,6 +152,12 @@ type Props = {
   defaultRootFolder?: string;
   renameEnabled?: boolean;
   rootFolders?: LibraryRootRecord[];
+  /**
+   * Every library the settings panel's move workflow may offer as a
+   * destination. Empty falls back to the title's own library and its roots,
+   * which is a same-library move and never a cross-library transfer.
+   */
+  libraries?: LibraryRecord[];
   onUpdateTitleOptions?: (options: TitleOptionUpdates) => Promise<void>;
   completedDownloads?: DownloadQueueItem[];
   onOpenManualImport?: (item: DownloadQueueItem) => void;
@@ -214,6 +222,7 @@ function SeriesOverviewViewImpl({
   onSetCollectionMonitored,
   onSetEpisodeMonitored,
   onSetSeriesMovieMonitored,
+  onSeriesMovieTagsChanged,
   onSetTitleMonitored,
   onSearchMonitored,
   onRefreshAndScan,
@@ -223,6 +232,7 @@ function SeriesOverviewViewImpl({
   defaultRootFolder,
   renameEnabled,
   rootFolders,
+  libraries,
   onUpdateTitleOptions,
   completedDownloads,
   onOpenManualImport,
@@ -250,6 +260,9 @@ function SeriesOverviewViewImpl({
   const emptyEpisodes = React.useMemo<CollectionEpisode[]>(() => [], []);
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
+  // Library and root moves are still being finished, so the panel's move entry
+  // point only exists when the instance has opted in.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const dateTimeFormat = useUiDateTimeFormat();
   const client = useClient();
   const { confirmReplaceConflict, replaceConflictDialog } =
@@ -1167,9 +1180,11 @@ function SeriesOverviewViewImpl({
                 defaultRootFolder={defaultRootFolder}
                 renameEnabled={renameEnabled !== false}
                 rootFolders={rootFolders ?? []}
+                libraries={libraries ?? []}
                 onUpdateTitleOptions={onUpdateTitleOptions}
                 onTitleChanged={onTitleChanged}
                 onOpenFixMatch={onOpenFixMatch}
+                experimentalFeaturesEnabled={experimentalFeaturesEnabled}
               />
             ) : undefined
           }
@@ -1250,6 +1265,7 @@ function SeriesOverviewViewImpl({
                       onQueueAdditionalFromSeriesMovieSearch={canManageTitle ? handleQueueAdditionalFromSeriesMovieSearch : undefined}
                       onAutoSearchSeriesMovie={canManageTitle && onAutoSearchSeriesMovie ? handleAutoSearchSeriesMovie : undefined}
                       onSetSeriesMovieMonitored={canManageTitle ? onSetSeriesMovieMonitored : undefined}
+                      onSeriesMovieTagsChanged={canManageTitle ? onSeriesMovieTagsChanged : undefined}
                       onDeleteFile={canManageTitle ? onDeleteFile : undefined}
                       onMakePrimaryFile={canManageTitle ? onMakePrimaryFile : undefined}
                       primaryMovieFileUpdatingId={primaryMovieFileUpdatingId}

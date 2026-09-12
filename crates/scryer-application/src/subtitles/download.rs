@@ -170,6 +170,8 @@ mod tests {
     use super::*;
     #[cfg(feature = "runtime-archives")]
     use crate::subtitles::{SubtitleMatch, SubtitleQuery};
+    #[cfg(feature = "runtime-archives")]
+    use std::io::Write;
 
     #[cfg(feature = "runtime-archives")]
     struct StaticProvider {
@@ -205,14 +207,15 @@ mod tests {
     async fn download_and_save_extracts_compressed_subtitle_before_writing() {
         let subtitle_content =
             b"[Script Info]\nTitle: Test\n\n[Events]\nDialogue: 0,0:00:01.00,0:00:02.00,Default,,0,0,0,,Hello\n";
-        let mut xz_content = Vec::new();
-        lzma_rs::xz_compress(&mut std::io::Cursor::new(subtitle_content), &mut xz_content).unwrap();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(subtitle_content).unwrap();
+        let gzip_content = encoder.finish().unwrap();
 
         let provider = StaticProvider {
-            content: xz_content,
+            content: gzip_content,
             format: "ass".to_string(),
-            filename: Some("release.ass.xz".to_string()),
-            content_type: Some("application/x-xz".to_string()),
+            filename: Some("release.ass.gz".to_string()),
+            content_type: Some("application/gzip".to_string()),
         };
         let temp = tempfile::tempdir().unwrap();
         let video_path = temp.path().join("Movie.mkv");

@@ -1,7 +1,9 @@
 use super::{CatalogRefreshStateValue, Long, MediaFacetValue};
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
-use scryer_domain::{ConfigFieldRole, ConfigFieldType, ConfigFieldValueSource};
+use scryer_domain::{
+    ConditionOp, ConfigFieldRole, ConfigFieldType, ConfigFieldValueSource, FieldCondition,
+};
 
 // ── Plugins ────────────────────────────────────────────────────────────────
 
@@ -75,6 +77,8 @@ pub struct RulePackRegistryEntryPayload {
     pub author: String,
     /// Rule-pack version.
     pub version: String,
+    /// Whether rules from the pack may be copied into user-authored rules.
+    pub customizable: bool,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -92,6 +96,89 @@ pub struct RulePackTemplatePayload {
     pub rego_source: String,
     /// Facets to which the template applies.
     pub applied_facets: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// One installed rule pack and its locally editable member settings.
+pub struct TrackedRulePackPayload {
+    /// Immutable registry rule-pack ID.
+    pub pack_id: String,
+    /// Display name recorded from the verified manifest.
+    pub name: String,
+    /// Installed immutable source version.
+    pub version: String,
+    /// Verified source digest for the installed version.
+    pub digest: String,
+    /// Whether this installed pack permits copying its rules into user-authored rules.
+    pub customizable: bool,
+    /// Optimistic-concurrency token for pack changes.
+    pub revision: Long,
+    /// Whether scheduled updates are enabled for this pack.
+    pub auto_update: bool,
+    /// Newer compatible registry version, or null when the installed version is current.
+    pub available_version: Option<String>,
+    /// Whether an automatic update is currently eligible for this pack.
+    pub auto_update_available: bool,
+    /// Most recent automatic-update failure, or null when none is recorded.
+    pub last_error: Option<String>,
+    /// UTC timestamp of the last successful installation or update.
+    pub last_updated: DateTime<Utc>,
+    /// Source templates and their local rule-set bindings.
+    pub members: Vec<TrackedRulePackMemberPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Local state of one source-template binding in a tracked rule pack.
+pub struct TrackedRulePackMemberPayload {
+    /// Stable template ID from the source pack.
+    pub template_id: String,
+    /// Local rule-set ID retained across source updates.
+    pub rule_set_id: ID,
+    /// Whether the template is absent from the current upstream version.
+    pub removed: bool,
+    /// Local enabled state, or null when the retained rule no longer exists.
+    pub enabled: Option<bool>,
+    /// Local evaluation priority, or null when the retained rule no longer exists.
+    pub priority: Option<i32>,
+    /// Local rule name, or null when the retained rule no longer exists.
+    pub name: Option<String>,
+    /// Local rule description, or null when the retained rule no longer exists.
+    pub description: Option<String>,
+    /// Local facet scope; empty when the retained rule no longer exists.
+    pub applied_facets: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Preview of the exact source version that a tracked-pack update would apply.
+pub struct TrackedRulePackPreviewPayload {
+    /// Candidate immutable source version.
+    pub version: String,
+    /// Candidate verified source digest.
+    pub digest: String,
+    /// Revision that must be supplied to apply this preview.
+    pub revision: Long,
+    /// Template IDs newly introduced by the candidate version.
+    pub added_template_ids: Vec<String>,
+    /// Template IDs whose source content changed in the candidate version.
+    pub changed_template_ids: Vec<String>,
+    /// Template IDs removed by the candidate version.
+    pub removed_template_ids: Vec<String>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Identifier returned after uninstalling a tracked rule pack.
+pub struct DeleteTrackedRulePackPayload {
+    /// Immutable registry rule-pack ID.
+    pub pack_id: String,
+}
+
+#[derive(InputObject, Clone)]
+/// Priority to retain for one tracked source template.
+pub struct TrackedRulePackPriorityInput {
+    /// Stable template ID from the source pack.
+    pub template_id: String,
+    /// Local evaluation priority.
+    pub priority: i32,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -288,6 +375,8 @@ pub enum PluginConfigFieldTypeValue {
     Bool,
     /// Enumerated selection.
     Select,
+    /// Enumerated selection rendered with a filter box.
+    FilteredSelect,
     /// Numeric value.
     Number,
     /// Filesystem path.
@@ -304,6 +393,7 @@ impl PluginConfigFieldTypeValue {
             ConfigFieldType::Multiline => Self::Multiline,
             ConfigFieldType::Bool => Self::Bool,
             ConfigFieldType::Select => Self::Select,
+            ConfigFieldType::FilteredSelect => Self::FilteredSelect,
             ConfigFieldType::Number => Self::Number,
             ConfigFieldType::Path => Self::Path,
             ConfigFieldType::Tag => Self::Tag,
@@ -346,6 +436,55 @@ impl PluginConfigFieldRoleValue {
     }
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Comparison a provider configuration field condition applies.
+pub enum PluginConditionOpValue {
+    /// Referenced value equals the first condition value.
+    Eq,
+    /// Referenced value differs from the first condition value.
+    Ne,
+    /// Referenced value is one of the condition values.
+    In,
+    /// Referenced value is none of the condition values.
+    NotIn,
+    /// Referenced value is non-blank.
+    NonEmpty,
+}
+
+impl PluginConditionOpValue {
+    pub fn from_domain(value: ConditionOp) -> Self {
+        match value {
+            ConditionOp::Eq => Self::Eq,
+            ConditionOp::Ne => Self::Ne,
+            ConditionOp::In => Self::In,
+            ConditionOp::NotIn => Self::NotIn,
+            ConditionOp::NonEmpty => Self::NonEmpty,
+        }
+    }
+}
+
+#[derive(SimpleObject, Clone)]
+/// Predicate over another configuration field's current value.
+pub struct PluginFieldConditionPayload {
+    /// Key of the field whose value is tested.
+    pub key: String,
+    /// Comparison applied to that field's value.
+    pub op: PluginConditionOpValue,
+    /// Values compared against; empty for NON_EMPTY.
+    pub values: Vec<String>,
+}
+
+impl PluginFieldConditionPayload {
+    pub fn from_domain(condition: FieldCondition) -> Self {
+        Self {
+            key: condition.key,
+            op: PluginConditionOpValue::from_domain(condition.op),
+            values: condition.values,
+        }
+    }
+}
+
 #[derive(SimpleObject, Clone)]
 /// Provider configuration field schema.
 pub struct PluginConfigFieldPayload {
@@ -369,6 +508,12 @@ pub struct PluginConfigFieldPayload {
     pub options: Vec<PluginConfigFieldOptionPayload>,
     /// Help text, or null when unavailable.
     pub help_text: Option<String>,
+    /// Condition gating visibility, or null when always shown.
+    pub visible_when: Option<PluginFieldConditionPayload>,
+    /// Condition that makes the field required, or null when it never applies.
+    pub required_when: Option<PluginFieldConditionPayload>,
+    /// Whether the field belongs behind the form's advanced disclosure.
+    pub advanced: bool,
 }
 
 #[derive(SimpleObject, Clone)]

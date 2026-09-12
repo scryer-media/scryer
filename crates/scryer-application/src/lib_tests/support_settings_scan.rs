@@ -31,6 +31,16 @@ impl SettingsRepository for MockSettingsRepo {
         Ok(())
     }
 
+    async fn upsert_global_settings_json(
+        &self,
+        _scope: &str,
+        _values: &[(String, String)],
+        _source: &str,
+        _updated_by_user_id: Option<String>,
+    ) -> AppResult<()> {
+        Ok(())
+    }
+
     async fn delete_setting_value(
         &self,
         _scope: &str,
@@ -136,6 +146,20 @@ impl SettingsRepository for StoredSettingsRepo {
             (scope.to_string(), key_name.to_string(), scope_id),
             value_json,
         );
+        Ok(())
+    }
+
+    async fn upsert_global_settings_json(
+        &self,
+        scope: &str,
+        values: &[(String, String)],
+        _source: &str,
+        _updated_by_user_id: Option<String>,
+    ) -> AppResult<()> {
+        let mut stored = self.values.lock().await;
+        for (key, value) in values {
+            stored.insert((scope.to_string(), key.clone(), None), value.clone());
+        }
         Ok(())
     }
 
@@ -514,11 +538,16 @@ impl MetadataGateway for BlockingBatchMetadataGateway {
 #[derive(Default, Clone)]
 pub(super) struct TrackingLibraryScanUnmatchedItemRepo {
     pub(super) items: Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>,
+    delete_error: Arc<Mutex<Option<String>>>,
 }
 
 impl TrackingLibraryScanUnmatchedItemRepo {
     pub(super) async fn items(&self) -> Vec<LibraryScanUnmatchedItem> {
         self.items.lock().await.clone()
+    }
+
+    pub(super) async fn fail_delete(&self, message: &str) {
+        *self.delete_error.lock().await = Some(message.to_string());
     }
 }
 
@@ -564,6 +593,9 @@ impl LibraryScanUnmatchedItemRepository for TrackingLibraryScanUnmatchedItemRepo
         facet: MediaFacet,
         item_path: &str,
     ) -> AppResult<()> {
+        if let Some(message) = self.delete_error.lock().await.clone() {
+            return Err(AppError::Repository(message));
+        }
         self.items.lock().await.retain(|item| {
             !(item.library_id == library_id && item.facet == facet && item.item_path == item_path)
         });
@@ -711,6 +743,22 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
         Ok(entries.iter().find(|entry| entry.id == id).cloned())
     }
 
+    async fn set_system_backoff(&self, id: &str, backoff: IndexerSystemBackoff) -> AppResult<()> {
+        let mut entries = self.store.lock().await;
+        for entry in entries.iter_mut().filter(|entry| entry.id == id) {
+            entry.disabled_until = Some(backoff.disabled_until);
+        }
+        Ok(())
+    }
+
+    async fn clear_system_backoff(&self, id: &str) -> AppResult<()> {
+        let mut entries = self.store.lock().await;
+        for entry in entries.iter_mut().filter(|entry| entry.id == id) {
+            entry.disabled_until = None;
+        }
+        Ok(())
+    }
+
     async fn touch_last_error(&self, id: &str) -> AppResult<()> {
         let mut entries = self.store.lock().await;
         let now = Utc::now();
@@ -740,7 +788,7 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
             is_enabled,
             enable_interactive_search,
             enable_auto_search,
-            indexer_proxy_config_id,
+            proxy_config_id,
             download_client_id,
             seeding_profile_id,
             managed_parent_config_id,
@@ -779,8 +827,8 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
         if let Some(enable_auto_search) = enable_auto_search {
             item.enable_auto_search = enable_auto_search;
         }
-        if let Some(indexer_proxy_config_id) = indexer_proxy_config_id {
-            item.indexer_proxy_config_id = indexer_proxy_config_id;
+        if let Some(proxy_config_id) = proxy_config_id {
+            item.proxy_config_id = proxy_config_id;
         }
         if let Some(download_client_id) = download_client_id {
             item.download_client_id = download_client_id;
@@ -923,6 +971,7 @@ impl DownloadClientConfigRepository for MockDownloadClientConfigRepo {
             client_type,
             config_json,
             is_enabled,
+            proxy_config_id,
         } = update;
         let mut entries = self.store.lock().await;
         let item = entries
@@ -941,6 +990,9 @@ impl DownloadClientConfigRepository for MockDownloadClientConfigRepo {
         }
         if let Some(is_enabled) = is_enabled {
             item.is_enabled = is_enabled;
+        }
+        if let Some(proxy_config_id) = proxy_config_id {
+            item.proxy_config_id = proxy_config_id;
         }
         item.updated_at = Utc::now();
 

@@ -16,6 +16,7 @@ use crate::media::monitor_selections::{
     replace_monitor_selection_tx,
 };
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
+use crate::storage::sql::json::{canonical_json_text, json_text_or};
 use crate::workflow::stores::append_domain_event_tx;
 
 #[derive(Clone)]
@@ -97,19 +98,80 @@ impl MediaRequestRepository for MediaRequestStore {
         .await
     }
 
+    /// Two reads rather than a UNION: the submitter and the additional
+    /// requesters live in different tables with different orderings, and
+    /// merging them in Rust keeps the SQL dialect-neutral instead of relying on
+    /// SQLite and Postgres agreeing on how a UNION orders mixed timestamp
+    /// columns.
+    async fn requester_user_ids_by_title_ids(
+        &self,
+        title_ids: &[String],
+    ) -> AppResult<std::collections::HashMap<String, Vec<String>>> {
+        let mut by_title: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        if title_ids.is_empty() {
+            return Ok(by_title);
+        }
+
+        let placeholders = std::iter::repeat_n("{}", title_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let args: Vec<SqlArg> = title_ids.iter().cloned().map(SqlArg::Text).collect();
+
+        // The submitter comes first for every request, so a title with a
+        // request is a key here even when it has no extra requester rows.
+        let submitters = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT created_title_id, created_by_user_id
+                   FROM media_requests
+                  WHERE created_title_id IN ({placeholders})
+                  ORDER BY created_at ASC, id ASC"
+            ),
+            &args,
+        )
+        .await?;
+        for row in &submitters {
+            by_title
+                .entry(row.text("created_title_id")?)
+                .or_default()
+                .push(row.text("created_by_user_id")?);
+        }
+
+        let requesters = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &format!(
+                "SELECT mr.created_title_id AS created_title_id, mrr.user_id
+                   FROM media_request_requesters mrr
+                   JOIN media_requests mr ON mr.id = mrr.request_id
+                  WHERE mr.created_title_id IN ({placeholders})
+                  ORDER BY mrr.requested_at ASC, mrr.user_id ASC"
+            ),
+            &args,
+        )
+        .await?;
+        for row in &requesters {
+            by_title
+                .entry(row.text("created_title_id")?)
+                .or_default()
+                .push(row.text("user_id")?);
+        }
+
+        for user_ids in by_title.values_mut() {
+            let mut seen = std::collections::HashSet::new();
+            user_ids.retain(|user_id| seen.insert(user_id.clone()));
+        }
+        Ok(by_title)
+    }
+
     async fn get(&self, request_id: &str) -> AppResult<Option<MediaRequest>> {
         let row = SqlRuntime::fetch_optional(
             self.datastore.read_exec(),
-            "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-                    poster_url, background_url, year, overview, runtime_minutes, language, content_status,
-                    rating_summary_json,
-                    requested_quality_profile_id, requested_quality_profile_name,
-                    requested_monitor_type,
-                    resolved_by_user_id, resolved_at, created_title_id,
-                    approved_quality_profile_id, approved_quality_profile_name,
-                    created_by_user_id, created_at, updated_at
-               FROM media_requests
-              WHERE id = {}",
+            &format!(
+                "SELECT {REQUEST_COLUMNS}
+                   FROM media_requests
+                  WHERE id = {{}}"
+            ),
             &[SqlArg::Text(request_id.to_string())],
         )
         .await?;
@@ -179,6 +241,7 @@ impl MediaRequestRepository for MediaRequestStore {
         requested_quality_profile_name: String,
         requested_monitor_type: Option<String>,
         requested_monitor_selection: Option<MonitorSelection>,
+        requested_lease_days: Option<i64>,
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult> {
         let request_id = request_id.to_string();
@@ -200,6 +263,7 @@ impl MediaRequestRepository for MediaRequestStore {
                         requested_quality_profile_name,
                         requested_monitor_type,
                         requested_monitor_selection,
+                        requested_lease_days,
                         updated_event,
                     )
                     .await
@@ -282,7 +346,173 @@ impl MediaRequestRepository for MediaRequestStore {
         }
         Ok(requests)
     }
+
+    /// Counts submissions, not joins: `created_by_user_id` is who asked, and a
+    /// user who seconded someone else's request did not ask for it.
+    async fn count_for_requester(
+        &self,
+        user_id: &str,
+        status: Option<MediaRequestStatus>,
+        since: Option<chrono::DateTime<Utc>>,
+    ) -> AppResult<u64> {
+        let mut sql = String::from(
+            "SELECT COUNT(*) AS request_count
+               FROM media_requests
+              WHERE created_by_user_id = {}",
+        );
+        let mut args = vec![SqlArg::Text(user_id.to_string())];
+        if let Some(status) = status {
+            sql.push_str(" AND status = {}");
+            args.push(SqlArg::Text(status.as_str().to_string()));
+        }
+        if let Some(since) = since {
+            sql.push_str(" AND created_at >= {}");
+            args.push(SqlArg::Timestamp(since));
+        }
+        let row = SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args).await?;
+        let Some(row) = row else {
+            return Ok(0);
+        };
+        Ok(row.i64("request_count")?.max(0) as u64)
+    }
+
+    /// Every status, every requester: the identity-history facts ask what has
+    /// been asked for this title before, and a previous denial is exactly the
+    /// row a status filter would hide.
+    async fn history_for_fingerprint(
+        &self,
+        identity_fingerprint: &str,
+    ) -> AppResult<Vec<MediaRequest>> {
+        let sql = format!(
+            "SELECT {REQUEST_COLUMNS}
+               FROM media_requests
+              WHERE identity_fingerprint = {{}}
+              ORDER BY created_at DESC, id DESC"
+        );
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            &sql,
+            &[SqlArg::Text(identity_fingerprint.to_string())],
+        )
+        .await?;
+        let mut requests = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mut request = row_to_media_request(&row)?;
+            request.external_ids =
+                load_media_request_external_ids(self.datastore.read_exec(), &request.id).await?;
+            requests.push(request);
+        }
+        Ok(requests)
+    }
+
+    async fn latest_request_at_for_user(
+        &self,
+        user_id: &str,
+    ) -> AppResult<Option<chrono::DateTime<Utc>>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT created_at
+               FROM media_requests
+              WHERE created_by_user_id = {}
+              ORDER BY created_at DESC, id DESC
+              LIMIT 1",
+            &[SqlArg::Text(user_id.to_string())],
+        )
+        .await?;
+        row.map(|row| row.timestamp("created_at")).transpose()
+    }
+
+    async fn record_decision_on_request(
+        &self,
+        request_id: &str,
+        decision_id: Option<&str>,
+        rule_set_ids: &[String],
+        tags: &[String],
+    ) -> AppResult<()> {
+        SqlRuntime::execute_write(
+            &self.datastore,
+            "record_media_request_decision",
+            "UPDATE media_requests
+                SET decision_id = {},
+                    decided_by_rule_set_ids = {},
+                    policy_tags_json = {},
+                    updated_at = {}
+              WHERE id = {}",
+            vec![
+                SqlArg::OptText(decision_id.map(str::to_string)),
+                SqlArg::Text(json_array_text(rule_set_ids)?),
+                SqlArg::Text(json_array_text(tags)?),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Text(request_id.to_string()),
+            ],
+        )
+        .await?;
+        Ok(())
+    }
+
+    async fn rewrite_pending_policy_tag(
+        &self,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        // The rewrite happens in Rust rather than in SQL: `policy_tags_json` is
+        // a JSON array whose element functions differ between SQLite and
+        // Postgres, and the pending set is small by construction — it is the
+        // approver's queue.
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT id, policy_tags_json
+               FROM media_requests
+              WHERE status = 'pending'",
+            &[],
+        )
+        .await?;
+
+        let mut changed = 0_u64;
+        for row in rows {
+            let id = row.text("id")?;
+            let tags = parse_json_array(&row, "policy_tags_json")?;
+            if !tags.iter().any(|tag| tag == label) {
+                continue;
+            }
+            let mut next: Vec<String> = tags.into_iter().filter(|tag| tag != label).collect();
+            if let Some(replacement) = replacement
+                && !next.iter().any(|tag| tag == replacement)
+            {
+                next.push(replacement.to_string());
+            }
+            SqlRuntime::execute_write(
+                &self.datastore,
+                "rewrite_media_request_policy_tag",
+                "UPDATE media_requests
+                    SET policy_tags_json = {},
+                        updated_at = {}
+                  WHERE id = {}
+                    AND status = 'pending'",
+                vec![
+                    SqlArg::Text(json_array_text(&next)?),
+                    SqlArg::Timestamp(Utc::now()),
+                    SqlArg::Text(id),
+                ],
+            )
+            .await?;
+            changed += 1;
+        }
+        Ok(changed)
+    }
 }
+
+/// Every read of `media_requests` selects the same column list, so the policy
+/// columns 0223 added cannot be picked up by one path and missed by another.
+const REQUEST_COLUMNS: &str = "id, library_id, facet, status, identity_fingerprint, title,
+        sort_title, slug, poster_url, background_url, year, overview, runtime_minutes, language,
+        content_status, rating_summary_json,
+        requested_quality_profile_id, requested_quality_profile_name, requested_monitor_type,
+        resolved_by_user_id, resolved_at, created_title_id,
+        approved_quality_profile_id, approved_quality_profile_name,
+        requested_lease_days, approved_lease_days, decision_id, decided_by_rule_set_ids,
+        policy_tags_json, metadata_snapshot_json,
+        created_by_user_id, created_at, updated_at";
 
 async fn insert_media_request_tx(
     tx: &mut SqlTx<'_>,
@@ -292,6 +522,14 @@ async fn insert_media_request_tx(
     let rating_summary_json = serde_json::to_string(&request.rating_summary).map_err(|error| {
         AppError::Repository(format!("serialize media request rating summary: {error}"))
     })?;
+    // The column is NOT NULL with a `{}` default; an empty snapshot string from
+    // a caller that captured nothing must land as that same empty object rather
+    // than as invalid JSON.
+    let metadata_snapshot_json = if request.metadata_snapshot_json.trim().is_empty() {
+        "{}".to_string()
+    } else {
+        request.metadata_snapshot_json.clone()
+    };
     tx.execute(
         "INSERT INTO media_requests (
             id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
@@ -299,12 +537,14 @@ async fn insert_media_request_tx(
             rating_summary_json,
             requested_quality_profile_id, requested_quality_profile_name,
             requested_monitor_type,
+            requested_lease_days, metadata_snapshot_json,
             created_by_user_id, created_at, updated_at
         ) VALUES (
             {}, {}, {}, {}, {}, {}, {}, {},
             {}, {}, {}, {}, {}, {}, {},
             {},
             {}, {}, {},
+            {}, {},
             {}, {}, {}
         )",
         &[
@@ -327,6 +567,8 @@ async fn insert_media_request_tx(
             SqlArg::OptText(request.requested_quality_profile_id.clone()),
             SqlArg::OptText(request.requested_quality_profile_name.clone()),
             SqlArg::OptText(request.requested_monitor_type.clone()),
+            SqlArg::OptI64(request.requested_lease_days),
+            SqlArg::Text(metadata_snapshot_json),
             SqlArg::Text(request.created_by_user_id.clone()),
             SqlArg::Timestamp(now),
             SqlArg::Timestamp(now),
@@ -391,11 +633,20 @@ async fn resolve_pending_overlapping_tx(
     let resolved_at = resolution.resolved_at;
     let mut args = vec![
         SqlArg::Text(resolution.status.as_str().to_string()),
-        SqlArg::Text(resolution.resolved_by_user_id),
+        SqlArg::OptText(resolution.resolved_by_user_id),
         SqlArg::Timestamp(resolved_at),
         SqlArg::OptText(resolution.created_title_id),
         SqlArg::OptText(resolution.approved_quality_profile_id),
         SqlArg::OptText(resolution.approved_quality_profile_name),
+        SqlArg::Text(request.id.clone()),
+        SqlArg::OptI64(resolution.approved_lease_days),
+        SqlArg::Text(resolution.status.as_str().to_string()),
+        SqlArg::Text(request.id.clone()),
+        SqlArg::OptText(resolution.decision_id.clone()),
+        SqlArg::Text(request.id.clone()),
+        SqlArg::Text(json_array_text(&resolution.decided_by_rule_set_ids)?),
+        SqlArg::Text(request.id.clone()),
+        SqlArg::Text(json_array_text(&resolution.policy_tags)?),
         SqlArg::Timestamp(resolved_at),
     ];
 
@@ -443,19 +694,95 @@ async fn resolve_pending_overlapping_tx(
                 created_title_id = {{}},
                 approved_quality_profile_id = {{}},
                 approved_quality_profile_name = {{}},
+                approved_lease_days = CASE WHEN id = {{}} THEN {{}}
+                    WHEN {{}} = 'approved' THEN requested_lease_days ELSE NULL END,
+                decision_id = CASE WHEN id = {{}} THEN {{}} ELSE decision_id END,
+                decided_by_rule_set_ids = CASE WHEN id = {{}} THEN {{}} ELSE decided_by_rule_set_ids END,
+                policy_tags_json = CASE WHEN id = {{}} THEN {{}} ELSE policy_tags_json END,
                 updated_at = {{}}
-          WHERE {where_clause}"
+          WHERE {where_clause}
+          RETURNING {REQUEST_COLUMNS}"
     );
-    let rows = tx.execute(&sql, &args).await?;
-    let event = if rows > 0 {
+    let rows = SqlRuntime::fetch_all(SqlExec::Tx(tx), &sql, &args).await?;
+    for row in &rows {
+        let resolved = row_to_media_request(row)?;
+        if resolved.status == MediaRequestStatus::Approved {
+            create_approved_request_claim_tx(tx, &resolved).await?;
+        }
+        if resolved.id != request.id {
+            let mut event = resolution.event.clone();
+            event.event_id = scryer_domain::Id::new().0;
+            if let scryer_domain::DomainEventPayload::MediaRequestApproved(data)
+            | scryer_domain::DomainEventPayload::MediaRequestRejected(data) = &mut event.payload
+            {
+                data.request_id = resolved.id.clone();
+                data.title_name = resolved.title.clone();
+                data.external_ids =
+                    load_media_request_external_ids(SqlExec::Tx(tx), &resolved.id).await?;
+                data.requested_quality_profile_id = resolved.requested_quality_profile_id;
+                data.requested_quality_profile_name = resolved.requested_quality_profile_name;
+                data.requested_monitor_type = resolved.requested_monitor_type;
+                data.approved_lease_days = resolved.approved_lease_days;
+                data.decided_by_rule_set_ids = resolved.decided_by_rule_set_ids;
+                data.decision_reason_codes.clear();
+                data.policy_tags = resolved.policy_tags;
+            }
+            append_domain_event_tx(tx, event).await?;
+        }
+    }
+    let event = if !rows.is_empty() {
         Some(append_domain_event_tx(tx, resolution.event).await?)
     } else {
         None
     };
     Ok(MediaRequestResolutionResult {
-        updated: rows,
+        updated: rows.len() as u64,
         event,
     })
+}
+
+/// The approval and its hold commit together. If claim persistence fails, the
+/// request stays pending, with no approval event, so an operator can retry.
+async fn create_approved_request_claim_tx(
+    tx: &mut SqlTx<'_>,
+    request: &MediaRequest,
+) -> AppResult<()> {
+    let title_id = request.created_title_id.as_ref().ok_or_else(|| {
+        AppError::Repository("approved request has no title for its retention claim".into())
+    })?;
+    let finite = request.approved_lease_days.is_some();
+    let now = request.resolved_at.unwrap_or(request.updated_at);
+    tx.execute(
+        "INSERT INTO lifecycle_claims
+         (id, title_id, library_id, producer, producer_ref, kind, state, duration_days,
+          starts_at, expires_at, created_by, created_at, updated_at, released_reason)
+         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+        &[
+            SqlArg::Text(scryer_domain::Id::new().0),
+            SqlArg::Text(title_id.clone()),
+            SqlArg::Text(request.library_id.clone()),
+            SqlArg::Text(
+                if finite {
+                    "request_lease"
+                } else {
+                    "request_permanent"
+                }
+                .into(),
+            ),
+            SqlArg::Text(request.id.clone()),
+            SqlArg::Text(if finite { "retain_until" } else { "keep" }.into()),
+            SqlArg::Text(if finite { "dormant" } else { "active" }.into()),
+            SqlArg::OptI64(request.approved_lease_days),
+            SqlArg::OptTimestamp((!finite).then_some(now)),
+            SqlArg::OptTimestamp(None),
+            SqlArg::Text(request.created_by_user_id.clone()),
+            SqlArg::Timestamp(now),
+            SqlArg::Timestamp(now),
+            SqlArg::OptText(None),
+        ],
+    )
+    .await?;
+    Ok(())
 }
 
 async fn resolve_pending_tx(
@@ -473,21 +800,39 @@ async fn resolve_pending_tx(
                     created_title_id = {},
                     approved_quality_profile_id = {},
                     approved_quality_profile_name = {},
+                    approved_lease_days = {},
+                    decision_id = {},
+                    decided_by_rule_set_ids = {},
+                    policy_tags_json = {},
                     updated_at = {}
               WHERE id = {} AND status = {}",
             &[
                 SqlArg::Text(resolution.status.as_str().to_string()),
-                SqlArg::Text(resolution.resolved_by_user_id),
+                SqlArg::OptText(resolution.resolved_by_user_id),
                 SqlArg::Timestamp(resolved_at),
                 SqlArg::OptText(resolution.created_title_id),
                 SqlArg::OptText(resolution.approved_quality_profile_id),
                 SqlArg::OptText(resolution.approved_quality_profile_name),
+                SqlArg::OptI64(resolution.approved_lease_days),
+                SqlArg::OptText(resolution.decision_id),
+                SqlArg::Text(json_array_text(&resolution.decided_by_rule_set_ids)?),
+                SqlArg::Text(json_array_text(&resolution.policy_tags)?),
                 SqlArg::Timestamp(resolved_at),
                 SqlArg::Text(request_id.to_string()),
                 SqlArg::Text(MediaRequestStatus::Pending.as_str().to_string()),
             ],
         )
         .await?;
+    if rows > 0 && resolution.status == MediaRequestStatus::Approved {
+        let row = SqlRuntime::fetch_optional(
+            SqlExec::Tx(tx),
+            &format!("SELECT {REQUEST_COLUMNS} FROM media_requests WHERE id = {{}}"),
+            &[SqlArg::Text(request_id.to_string())],
+        )
+        .await?
+        .ok_or_else(|| AppError::Repository("resolved request disappeared".into()))?;
+        create_approved_request_claim_tx(tx, &row_to_media_request(&row)?).await?;
+    }
     let event = if rows > 0 {
         Some(append_domain_event_tx(tx, resolution.event).await?)
     } else {
@@ -499,6 +844,9 @@ async fn resolve_pending_tx(
     })
 }
 
+// One parameter per column the edit writes, mirroring the port method it
+// implements; a struct here would only rename the same eight values.
+#[allow(clippy::too_many_arguments)]
 async fn update_pending_request_preferences_tx(
     tx: &mut SqlTx<'_>,
     request_id: &str,
@@ -506,6 +854,7 @@ async fn update_pending_request_preferences_tx(
     requested_quality_profile_name: String,
     requested_monitor_type: Option<String>,
     requested_monitor_selection: Option<MonitorSelection>,
+    requested_lease_days: Option<i64>,
     updated_event: NewDomainEvent,
 ) -> AppResult<MediaRequestUpdateResult> {
     let now = Utc::now();
@@ -515,12 +864,14 @@ async fn update_pending_request_preferences_tx(
                 SET requested_quality_profile_id = {},
                     requested_quality_profile_name = {},
                     requested_monitor_type = {},
+                    requested_lease_days = {},
                     updated_at = {}
               WHERE id = {} AND status = {}",
             &[
                 SqlArg::Text(requested_quality_profile_id),
                 SqlArg::Text(requested_quality_profile_name),
                 SqlArg::OptText(requested_monitor_type),
+                SqlArg::OptI64(requested_lease_days),
                 SqlArg::Timestamp(now),
                 SqlArg::Text(request_id.to_string()),
                 SqlArg::Text(MediaRequestStatus::Pending.as_str().to_string()),
@@ -554,16 +905,11 @@ async fn load_media_request_tx(
 ) -> AppResult<Option<MediaRequest>> {
     let row = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
-        "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-                poster_url, background_url, year, overview, runtime_minutes, language, content_status,
-                rating_summary_json,
-                requested_quality_profile_id, requested_quality_profile_name,
-                requested_monitor_type,
-                resolved_by_user_id, resolved_at, created_title_id,
-                approved_quality_profile_id, approved_quality_profile_name,
-                created_by_user_id, created_at, updated_at
-           FROM media_requests
-          WHERE id = {}",
+        &format!(
+            "SELECT {REQUEST_COLUMNS}
+               FROM media_requests
+              WHERE id = {{}}"
+        ),
         &[SqlArg::Text(request_id.to_string())],
     )
     .await?;
@@ -647,17 +993,10 @@ async fn load_media_request_requesters(
 }
 
 fn build_media_request_list_sql(query: &MediaRequestQuery) -> (String, Vec<SqlArg>) {
-    let mut sql = String::from(
-        "SELECT id, library_id, facet, status, identity_fingerprint, title, sort_title, slug,
-                poster_url, background_url, year, overview, runtime_minutes, language, content_status,
-                rating_summary_json,
-                requested_quality_profile_id, requested_quality_profile_name,
-                requested_monitor_type,
-                resolved_by_user_id, resolved_at, created_title_id,
-                approved_quality_profile_id, approved_quality_profile_name,
-                created_by_user_id, created_at, updated_at
+    let mut sql = format!(
+        "SELECT {REQUEST_COLUMNS}
            FROM media_requests
-          WHERE 1 = 1",
+          WHERE 1 = 1"
     );
     let mut args = Vec::new();
 
@@ -731,6 +1070,15 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
         created_title_id: row.opt_text("created_title_id")?,
         approved_quality_profile_id: row.opt_text("approved_quality_profile_id")?,
         approved_quality_profile_name: row.opt_text("approved_quality_profile_name")?,
+        requested_lease_days: row.opt_i64("requested_lease_days")?,
+        approved_lease_days: row.opt_i64("approved_lease_days")?,
+        decision_id: row.opt_text("decision_id")?,
+        // A JSON column that somehow holds something other than a string array
+        // reads back empty rather than failing the whole listing: policy
+        // provenance is explanatory, and losing it must not hide the request.
+        decided_by_rule_set_ids: parse_json_array(row, "decided_by_rule_set_ids")?,
+        policy_tags: parse_json_array(row, "policy_tags_json")?,
+        metadata_snapshot_json: json_text_or(row, "metadata_snapshot_json", "{}")?,
         external_ids: Vec::new(),
         requesters: Vec::new(),
         created_by_user_id: row.text("created_by_user_id")?,
@@ -738,3 +1086,194 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
         updated_at: row.timestamp("updated_at")?,
     })
 }
+
+/// Serialize a string list for one of the JSON text columns 0223 added.
+fn json_array_text(values: &[String]) -> AppResult<String> {
+    canonical_json_text(&values)
+}
+
+fn parse_json_array(row: &SqlRow, column: &str) -> AppResult<Vec<String>> {
+    let raw = json_text_or(row, column, "[]")?;
+    Ok(serde_json::from_str(&raw).unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    pub(super) async fn test_store() -> MediaRequestStore {
+        scryer_infrastructure_datastore::register_spellfix_auto_extension()
+            .expect("spellfix extension should register before migrations");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .expect("fresh migrations should apply");
+        MediaRequestStore::new(StoreDatastore::Sqlite {
+            pool,
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        })
+    }
+
+    /// The library and user rows the request's foreign keys point at.
+    ///
+    /// Requests are seeded directly rather than submitted — `submit` would drag
+    /// a domain event and an external-id table into a test whose whole subject
+    /// is one JSON column — but the schema still enforces its foreign keys, so
+    /// the two parents have to exist.
+    pub(super) async fn seed_owners(store: &MediaRequestStore) {
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_library_for_tag_rewrite",
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text("library-under-test".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text("Under test".to_string()),
+                SqlArg::Text("under-test".to_string()),
+                SqlArg::Bool(false),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Timestamp(Utc::now()),
+            ],
+        )
+        .await
+        .expect("seed the library row");
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_user_for_tag_rewrite",
+            "INSERT INTO users (id, username, password_hash, password_change_required, account_kind, status)
+             VALUES ({}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text("requester-under-test".to_string()),
+                SqlArg::Text("requester-under-test".to_string()),
+                SqlArg::OptText(None),
+                SqlArg::Bool(false),
+                SqlArg::Text("local".to_string()),
+                SqlArg::Text("active".to_string()),
+            ],
+        )
+        .await
+        .expect("seed the user row");
+    }
+
+    /// Insert a request row directly.
+    pub(super) async fn seed_request(
+        store: &MediaRequestStore,
+        id: &str,
+        status: &str,
+        policy_tags: &[&str],
+    ) {
+        let tags = policy_tags
+            .iter()
+            .map(|tag| (*tag).to_string())
+            .collect::<Vec<_>>();
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_media_request_for_tag_rewrite",
+            "INSERT INTO media_requests (
+                id, library_id, facet, status, identity_fingerprint, title,
+                policy_tags_json, created_by_user_id, created_at, updated_at
+            ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text("library-under-test".to_string()),
+                SqlArg::Text("movie".to_string()),
+                SqlArg::Text(status.to_string()),
+                SqlArg::Text(format!("fingerprint-{id}")),
+                SqlArg::Text(format!("Request {id}")),
+                SqlArg::Text(json_array_text(&tags).expect("serialize policy tags")),
+                SqlArg::Text("requester-under-test".to_string()),
+                SqlArg::Timestamp(Utc::now()),
+                SqlArg::Timestamp(Utc::now()),
+            ],
+        )
+        .await
+        .expect("seed the request row");
+    }
+
+    async fn policy_tags_of(store: &MediaRequestStore, id: &str) -> Vec<String> {
+        store
+            .get(id)
+            .await
+            .expect("read the request back")
+            .expect("the request exists")
+            .policy_tags
+    }
+
+    #[tokio::test]
+    async fn renaming_a_policy_tag_touches_pending_rows_and_leaves_history_alone() {
+        let store = test_store().await;
+        seed_owners(&store).await;
+        seed_request(&store, "pending-carrier", "pending", &["family", "keep"]).await;
+        seed_request(&store, "pending-bystander", "pending", &["keep"]).await;
+        // A resolved request records what was decided at the time; rewriting it
+        // would falsify the history its decision trace explains.
+        seed_request(&store, "approved-carrier", "approved", &["family"]).await;
+
+        let changed = store
+            .rewrite_pending_policy_tag("family", Some("family friendly"))
+            .await
+            .expect("the rewrite should succeed");
+        assert_eq!(changed, 1, "only the pending row carrying the label moved");
+
+        assert_eq!(
+            policy_tags_of(&store, "pending-carrier").await,
+            vec!["keep".to_string(), "family friendly".to_string()]
+        );
+        assert_eq!(
+            policy_tags_of(&store, "pending-bystander").await,
+            vec!["keep".to_string()]
+        );
+        assert_eq!(
+            policy_tags_of(&store, "approved-carrier").await,
+            vec!["family".to_string()],
+            "a resolved request keeps the label it was decided with"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_a_policy_tag_strips_it_without_disturbing_the_others() {
+        let store = test_store().await;
+        seed_owners(&store).await;
+        seed_request(&store, "pending-carrier", "pending", &["family", "keep"]).await;
+
+        let changed = store
+            .rewrite_pending_policy_tag("family", None)
+            .await
+            .expect("the rewrite should succeed");
+        assert_eq!(changed, 1);
+        assert_eq!(
+            policy_tags_of(&store, "pending-carrier").await,
+            vec!["keep".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rename_onto_a_label_the_row_already_carries_does_not_duplicate_it() {
+        let store = test_store().await;
+        seed_owners(&store).await;
+        seed_request(&store, "pending-both", "pending", &["family", "keep"]).await;
+
+        let changed = store
+            .rewrite_pending_policy_tag("family", Some("keep"))
+            .await
+            .expect("the rewrite should succeed");
+        assert_eq!(changed, 1);
+        assert_eq!(
+            policy_tags_of(&store, "pending-both").await,
+            vec!["keep".to_string()]
+        );
+    }
+}
+
+#[cfg(test)]
+#[path = "request_resolution_tests.rs"]
+mod request_resolution_tests;

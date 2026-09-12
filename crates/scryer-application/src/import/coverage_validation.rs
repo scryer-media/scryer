@@ -374,6 +374,7 @@ mod tests {
     ) -> crate::post_download_gate::ImportedFileAcceptance {
         crate::post_download_gate::ImportedFileAcceptance {
             analysis: duration_seconds.map(|duration_seconds| crate::MediaFileAnalysis {
+                details: Default::default(),
                 video_codec: None,
                 video_width: None,
                 video_height: None,

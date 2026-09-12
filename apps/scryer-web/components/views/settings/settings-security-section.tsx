@@ -354,6 +354,7 @@ export function SettingsSecuritySection({
               id="security-new-password"
               type="password"
               autoComplete="new-password"
+              ignorePasswordManagers
               value={newPassword}
               onChange={(event) => onNewPasswordChange(event.target.value)}
             />
@@ -371,6 +372,7 @@ export function SettingsSecuritySection({
               id="security-new-password-confirm"
               type="password"
               autoComplete="new-password"
+              ignorePasswordManagers
               value={newPasswordConfirm}
               onChange={(event) => onNewPasswordConfirmChange(event.target.value)}
             />
@@ -408,6 +410,7 @@ export function SettingsSecuritySection({
               id="security-confirm-password"
               type="password"
               autoComplete="current-password"
+              ignorePasswordManagers
               value={confirmPassword}
               onChange={(event) => onConfirmPasswordChange(event.target.value)}
             />

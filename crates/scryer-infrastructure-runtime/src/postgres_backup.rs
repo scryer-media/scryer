@@ -130,6 +130,7 @@ pub async fn restore_backup_bundle_into_postgres_pool(
     restore_bundle_parts_into_postgres_pool(
         pool,
         &payload.manifest().row_counts,
+        payload.manifest().source_migration_key.as_deref(),
         &payload.tables_dir(),
     )
     .await?;
@@ -150,6 +151,7 @@ pub async fn restore_prepared_backup_directory_into_postgres_pool(
     restore_bundle_parts_into_postgres_pool(
         pool,
         &payload.manifest().row_counts,
+        payload.manifest().source_migration_key.as_deref(),
         &payload.tables_dir(),
     )
     .await?;
@@ -165,12 +167,13 @@ pub async fn restore_prepared_backup_directory_into_postgres_pool(
 async fn restore_bundle_parts_into_postgres_pool(
     pool: &PgPool,
     row_counts: &BTreeMap<String, u64>,
+    source_migration_key: Option<&str>,
     tables_dir: &Path,
 ) -> AppResult<()> {
     validate_backup_catalog(pool).await?;
     let export_tables = ordered_export_tables(pool).await?;
     let restore_tables = ordered_restore_tables(pool).await?;
-    validate_restore_manifest_table_set(row_counts, &export_tables)?;
+    validate_restore_manifest_table_set(row_counts, &export_tables, source_migration_key)?;
 
     let mut tx = pool.begin().await.map_err(|error| {
         AppError::Repository(format!("failed to begin PostgreSQL restore: {error}"))
@@ -186,7 +189,10 @@ async fn restore_bundle_parts_into_postgres_pool(
             })?;
     }
 
-    for table in &export_tables {
+    for table in export_tables
+        .iter()
+        .filter(|table| row_counts.contains_key(*table))
+    {
         import_table_part(
             &mut tx,
             table,
@@ -198,7 +204,10 @@ async fn restore_bundle_parts_into_postgres_pool(
     rebuild_title_search_projection(&mut tx).await?;
     repair_sequences(&mut tx).await?;
 
-    for table in &export_tables {
+    for table in export_tables
+        .iter()
+        .filter(|table| row_counts.contains_key(*table))
+    {
         let expected_rows = row_counts.get(table).ok_or_else(|| {
             AppError::Validation(format!(
                 "backup bundle table set does not match the current restore catalog: missing [{}], unexpected []",

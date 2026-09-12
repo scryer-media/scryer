@@ -1,5 +1,7 @@
 use unicode_normalization::UnicodeNormalization;
 
+pub(crate) mod relaxed;
+
 const TRAILING_ARTICLES: &[&str] = &["a", "an", "the"];
 const MOVIE_LOW_SIGNAL_TOKENS: &[&str] = &[
     "a",
@@ -73,22 +75,10 @@ fn cleaned_search_title(title: &str) -> String {
 }
 
 fn canonical_tokens(title: &str) -> Vec<String> {
-    let mut normalized = String::new();
-    let mut previous_space = false;
-
-    for character in title.nfkc().flat_map(char::to_lowercase) {
-        if character.is_alphanumeric() {
-            normalized.push(character);
-            previous_space = false;
-        } else if character.is_whitespace() || is_separator(character) {
-            if !previous_space && !normalized.is_empty() {
-                normalized.push(' ');
-            }
-            previous_space = true;
-        }
-    }
-
-    normalized.split_whitespace().map(str::to_string).collect()
+    scryer_domain::title_spelling::normalize_title_spelling(title)
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
 }
 
 fn reorder_trailing_article(mut tokens: Vec<String>) -> Vec<String> {
@@ -106,32 +96,6 @@ fn reorder_trailing_article(mut tokens: Vec<String>) -> Vec<String> {
     }
 
     tokens
-}
-
-fn is_separator(character: char) -> bool {
-    matches!(
-        character,
-        '.' | ','
-            | ':'
-            | ';'
-            | '-'
-            | '_'
-            | '/'
-            | '\\'
-            | '&'
-            | '+'
-            | '('
-            | ')'
-            | '['
-            | ']'
-            | '{'
-            | '}'
-            | '\''
-            | '"'
-            | '!'
-            | '?'
-            | '~'
-    )
 }
 
 /// Levenshtein distance between two strings, or `None` once it is certain the

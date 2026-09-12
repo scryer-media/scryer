@@ -24,12 +24,14 @@ use super::{
     _0011_long_tail_reconverge_default as migration_0011,
     _0012_legacy_newznab_wrappers_01822 as migration_0012,
     _0013_indexer_request_accounting as migration_0013,
+    _0016_maintenance_show_fact_rearm as migration_0016,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MigrationPhase {
     Early,
     ApplicationReady,
+    Compatibility,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -112,6 +114,24 @@ const MIGRATIONS: &[MigrationSpec] = &[
     MigrationSpec {
         id: "0013_indexer_request_accounting",
         description: "establish the corrected indexer request accounting epoch",
+        phase: MigrationPhase::Early,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: super::_0014_plugin_components_020::ID,
+        description: "upgrade persisted plugins to compatible components",
+        phase: MigrationPhase::Compatibility,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: super::_0015_proxy_compatibility_020::ID,
+        description: "validate proxy configurations and retained provider assignments",
+        phase: MigrationPhase::Compatibility,
+        legacy_state_key: None,
+    },
+    MigrationSpec {
+        id: migration_0016::ID,
+        description: "require destructive maintenance-rule review after show facts become executable",
         phase: MigrationPhase::Early,
         legacy_state_key: None,
     },
@@ -260,8 +280,29 @@ impl ApplicationMigrator {
                     migration_0013::migrate(&self.ledger.datastore).await?;
                     self.record_success(spec, started).await?;
                 }
+                migration_0016::ID => {
+                    let started = Instant::now();
+                    migration_0016::migrate(&self.ledger.datastore).await?;
+                    self.record_success(spec, started).await?;
+                }
                 _ => unreachable!("early migration registry and dispatcher must agree"),
             }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn run_proxy_compatibility(
+        &mut self,
+        proxies: Arc<dyn scryer_application::ProxyConfigRepository>,
+    ) -> Result<(), String> {
+        let datastore = self.ledger.datastore.clone();
+        let spec = *MIGRATIONS
+            .iter()
+            .find(|spec| spec.id == super::_0015_proxy_compatibility_020::ID)
+            .unwrap();
+        let started = Instant::now();
+        if super::_0015_proxy_compatibility_020::migrate(&datastore, proxies).await? {
+            self.record_success(spec, started).await?;
         }
         Ok(())
     }
@@ -272,7 +313,22 @@ impl ApplicationMigrator {
         quality_profiles: Arc<QualityProfileStore>,
         previous_version: Option<&str>,
         current_version: &str,
-    ) {
+    ) -> Result<(), String> {
+        let datastore = self.ledger.datastore.clone();
+        let store = DatastoreCustomizationStore::new(datastore.clone());
+        if let Err(error) = app.resume_pending_title_tag_renames().await {
+            tracing::warn!(error = %error, "title tag rename recovery remains pending; retry the tag update after correcting the repository failure");
+        }
+        let spec = *MIGRATIONS
+            .iter()
+            .find(|spec| spec.id == super::_0014_plugin_components_020::ID)
+            .unwrap();
+        // Inspect per-installation progress even after global completion: a
+        // restored catalog can introduce another legacy artifact later.
+        let started = Instant::now();
+        if super::_0014_plugin_components_020::migrate(app, &datastore, &store).await? {
+            self.record_success(spec, started).await?;
+        }
         for spec in MIGRATIONS
             .iter()
             .copied()
@@ -376,6 +432,7 @@ impl ApplicationMigrator {
                 _ => unreachable!("application-ready migration registry and dispatcher must agree"),
             }
         }
+        Ok(())
     }
 
     async fn run_retryable<F>(&mut self, spec: MigrationSpec, migration: F)

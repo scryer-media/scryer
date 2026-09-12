@@ -38,15 +38,24 @@ mod emby_media_servers;
 mod external_import_setup_secret_drafts;
 mod imports_download_submissions;
 mod library_scan_unmatched;
+mod lifecycle_claims;
+mod maintenance_candidates;
+mod maintenance_rule_sets;
+mod media_request_policy;
+mod media_request_requesters;
+mod media_server_signals;
 mod migrations;
 mod oauth;
 mod permissions_users_shows;
 mod plugins;
+mod request_rules;
+mod rule_packs;
 mod scope_indexer_coverage;
 mod settings_and_writer;
 mod sql_runtime_gated_write;
 mod stores_migrations_regressions;
 mod title_images;
+mod title_tags;
 mod titles_metadata;
 mod wanted_items_and_search;
 mod workflow_operation;
@@ -69,6 +78,7 @@ fn test_descriptor_json(
             host_binding: None,
             options: Vec::new(),
             help_text: None,
+            ..Default::default()
         }]
     }
 

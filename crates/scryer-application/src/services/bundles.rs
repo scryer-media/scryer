@@ -12,6 +12,10 @@ pub struct AppCatalogServices {
     pub(crate) shows: Arc<dyn ShowRepository>,
     pub(crate) libraries: Arc<dyn LibraryRepository>,
     pub(crate) media_requests: Arc<dyn MediaRequestRepository>,
+    /// Title leases and keep claims (spec 0003 FR-041…FR-044). Catalog-side
+    /// because a claim is a hold on a title, not on the request that produced
+    /// it: an operator pin has no request at all.
+    pub(crate) lifecycle_claims: Arc<dyn crate::ports::LifecycleClaimRepository>,
 }
 
 #[derive(Clone)]
@@ -64,13 +68,22 @@ pub struct AppLibraryServices {
     pub(crate) title_image_processor: Arc<dyn TitleImageProcessor>,
     pub(crate) library_probe_signatures: Arc<dyn LibraryProbeRepository>,
     pub(crate) library_scan_unmatched_items: Arc<dyn LibraryScanUnmatchedItemRepository>,
+    /// Persisted location-operation state, read by the ownership guard (FR-084).
+    pub(crate) location_operations: Arc<dyn crate::ports::LocationOperationRepository>,
+    /// The US7 merge engine's Group 0 read and Groups 1–5 transaction. Read at
+    /// preview time to plan the merge (FR-066/FR-071) and again at the title
+    /// checkpoint to run it (FR-063–FR-067).
+    pub(crate) title_merges: Arc<dyn crate::location::merge::engine::TitleMergeRepository>,
 }
 
 #[derive(Clone)]
 pub struct AppIntegrationServices {
     pub(crate) indexer_configs: Arc<dyn IndexerConfigRepository>,
     pub(crate) indexer_errors: Arc<dyn IndexerErrorRepository>,
-    pub(crate) indexer_proxy_configs: Arc<dyn IndexerProxyConfigRepository>,
+    pub(crate) proxy_configs: Arc<dyn ProxyConfigRepository>,
+    /// Serializes proxy assignment, disablement, and deletion so no client or
+    /// indexer can retain a reference to a missing or disabled proxy.
+    pub(crate) proxy_assignment_lock: Arc<tokio::sync::Mutex<()>>,
     pub(crate) scope_indexer_coverage: Arc<dyn ScopeIndexerCoverageRepository>,
     pub(crate) indexer_caps_refresher: RuntimeFeature<Arc<dyn IndexerCapsSnapshotRefresher>>,
     pub(crate) indexer_client: Arc<dyn IndexerClient>,
@@ -91,6 +104,18 @@ pub struct AppIntegrationServices {
     pub(crate) subtitle_plugin_provider: RuntimeFeature<Arc<dyn SubtitlePluginProvider>>,
     pub(crate) archive_extractor_plugin_provider:
         RuntimeFeature<Arc<dyn ArchiveExtractorPluginProvider>>,
+    /// srrdb.com filename recovery for obfuscated automatic imports. Disabled
+    /// in every assembly that does not wire the production adapter, which is
+    /// indistinguishable from the admin setting being off.
+    pub(crate) srrdb_filename_lookup: RuntimeFeature<Arc<dyn crate::ports::SrrdbFilenameLookup>>,
+    /// Live playback observation across the media-server connections above
+    /// (RFC 137 §9.10, WP-G). Read-only; consulted by maintenance safety.
+    pub(crate) media_server_playback_probe: Arc<dyn crate::ports::MediaServerPlaybackProbe>,
+    /// Per-participant played-item reads from the same connections
+    /// (RFC 137 §7.3, WP-M). Provider dispatch lives inside the adapter.
+    pub(crate) media_server_signal_source: Arc<dyn crate::ports::MediaServerSignalSource>,
+    /// Durable normalized watch signals produced by that adapter.
+    pub(crate) media_server_signals: Arc<dyn crate::ports::MediaServerSignalRepository>,
 }
 
 #[derive(Clone)]
@@ -131,10 +156,24 @@ pub struct AppConfigServices {
 #[derive(Clone)]
 pub struct AppCustomizationServices {
     pub(crate) rule_sets: Arc<dyn RuleSetRepository>,
+    pub(crate) maintenance_rule_sets: Arc<dyn MaintenanceRuleSetRepository>,
+    pub(crate) maintenance_evaluation: Arc<dyn crate::ports::MaintenanceEvaluationRepository>,
+    /// User-authored request rules (spec 0003). Ships dark behind the same
+    /// experimental gate as maintenance.
+    pub(crate) request_rule_sets: Arc<dyn crate::ports::RequestRuleSetRepository>,
+    /// Append-only traces of every request evaluation (spec 0003 FR-016).
+    pub(crate) request_rule_decisions: Arc<dyn crate::ports::RequestRuleDecisionRepository>,
+    /// The compiled request-rules engine and the per-rule library scope map,
+    /// rebuilt by every mutating authoring call. It lives beside
+    /// [`Self::user_rules`] — the release engine — because both are compiled
+    /// artefacts of stored sources, swapped under a lock rather than rebuilt per
+    /// evaluation.
+    pub(crate) request_rules_engine: crate::request_rules::RequestRulesEngineHandle,
     pub(crate) pp_scripts: Arc<dyn PostProcessingScriptRepository>,
     pub(crate) plugin_installations: Arc<dyn PluginInstallationRepository>,
     pub(crate) plugin_descriptor_loader: Arc<dyn PluginDescriptorLoader>,
     pub(crate) user_rules: Arc<std::sync::RwLock<scryer_rules::UserRulesEngine>>,
+    pub(crate) rule_mutation_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -272,6 +311,7 @@ impl AppServices {
                 shows,
                 libraries: Arc::new(NullLibraryRepository),
                 media_requests: Arc::new(NullMediaRequestRepository),
+                lifecycle_claims: Arc::new(null_repositories::NullLifecycleClaimRepository),
             },
             identity: AppIdentityServices {
                 users,
@@ -300,13 +340,14 @@ impl AppServices {
                 library_scan_unmatched_items: Arc::new(
                     null_repositories::NullLibraryScanUnmatchedItemRepository,
                 ),
+                location_operations: Arc::new(null_repositories::NullLocationOperationRepository),
+                title_merges: Arc::new(null_repositories::NullTitleMergeRepository),
             },
             integrations: AppIntegrationServices {
                 indexer_configs,
                 indexer_errors: Arc::new(null_repositories::NullIndexerErrorRepository),
-                indexer_proxy_configs: Arc::new(
-                    null_repositories::NullIndexerProxyConfigRepository,
-                ),
+                proxy_configs: Arc::new(null_repositories::NullProxyConfigRepository),
+                proxy_assignment_lock: Arc::new(tokio::sync::Mutex::new(())),
                 scope_indexer_coverage: Arc::new(
                     null_repositories::NullScopeIndexerCoverageRepository,
                 ),
@@ -332,6 +373,14 @@ impl AppServices {
                 download_client_plugin_provider: RuntimeFeature::Disabled,
                 subtitle_plugin_provider: RuntimeFeature::Disabled,
                 archive_extractor_plugin_provider: RuntimeFeature::Disabled,
+                srrdb_filename_lookup: RuntimeFeature::Disabled,
+                media_server_playback_probe: Arc::new(
+                    null_repositories::NullMediaServerPlaybackProbe,
+                ),
+                media_server_signal_source: Arc::new(
+                    null_repositories::NullMediaServerSignalSource,
+                ),
+                media_server_signals: Arc::new(null_repositories::NullMediaServerSignalRepository),
             },
             workflow: AppWorkflowServices {
                 imports: Arc::new(NullImportRepository),
@@ -371,12 +420,26 @@ impl AppServices {
             },
             customization: AppCustomizationServices {
                 rule_sets: Arc::new(NullRuleSetRepository),
+                maintenance_rule_sets: Arc::new(
+                    null_repositories::NullMaintenanceRuleSetRepository,
+                ),
+                maintenance_evaluation: Arc::new(
+                    null_repositories::NullMaintenanceEvaluationRepository,
+                ),
+                request_rule_sets: Arc::new(null_repositories::NullRequestRuleSetRepository),
+                request_rule_decisions: Arc::new(
+                    null_repositories::NullRequestRuleDecisionRepository,
+                ),
+                request_rules_engine: Arc::new(std::sync::RwLock::new(
+                    crate::request_rules::RequestRulesEngineCache::default(),
+                )),
                 pp_scripts: Arc::new(NullPostProcessingScriptRepository),
                 plugin_installations: Arc::new(NullPluginInstallationRepository),
                 plugin_descriptor_loader: Arc::new(NullPluginDescriptorLoader),
                 user_rules: Arc::new(std::sync::RwLock::new(
                     scryer_rules::UserRulesEngine::empty(),
                 )),
+                rule_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             notifications: AppNotificationServices::Disabled,
         }

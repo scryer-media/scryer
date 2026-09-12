@@ -2,6 +2,63 @@ use super::*;
 
 const CACHED_SUBMISSION_STATE_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(30);
 
+/// Per-title exclusion for the staged acquisition walk.
+///
+/// Two walkers can reach one title: the background convergence cycle and an
+/// operator's title-scoped acquisition-search job. Both run the same stages —
+/// title pack, season packs, then episode scopes — and both hold their grab
+/// proposals until the end of the walk, arbitrating against the claims made
+/// inside that walk. Those claim sets are per-walk, so two concurrent walks over
+/// one title could each conclude that its pack is unopposed and grab both.
+///
+/// A title lock is the boundary that keeps the arbitration honest: only one walk
+/// over a title exists at a time, so the claims that matter are always the ones
+/// the current walk made. The two callers take it differently on purpose — the
+/// background cycle *tries* and moves on to the next title if an operator holds
+/// it (the cursor comes back next cycle), while the interactive job *waits*,
+/// because the operator asked for this title.
+///
+/// That wait is bounded only in the sense that a cycle's pass finishes: a pass
+/// over a several-hundred-episode title that spends an inline query per episode
+/// scope can run for minutes. The job reports the wait as its own progress step
+/// so its UI says why nothing is happening, rather than the wait being written
+/// off as brief.
+///
+/// The table mirrors `DownloadSubmissionGuardTable`: weak handles so an
+/// unlocked title drops out of the map instead of accumulating.
+#[derive(Clone, Default)]
+pub struct AcquisitionTitleWalkLocks {
+    locks: Arc<tokio::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>>,
+}
+
+impl AcquisitionTitleWalkLocks {
+    async fn handle(&self, title_id: &str) -> Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.locks.lock().await;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(existing) = locks.get(title_id).and_then(std::sync::Weak::upgrade) {
+            return existing;
+        }
+        let created = Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(title_id.to_string(), Arc::downgrade(&created));
+        created
+    }
+
+    /// Wait for the title's walk lock. Used by the interactive job.
+    pub(crate) async fn acquire(&self, title_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.handle(title_id).await.lock_owned().await
+    }
+
+    /// Take the title's walk lock if it is free, else `None`. Used by the
+    /// background cycle, which skips a title rather than blocking its whole
+    /// pass behind one operator-driven walk.
+    pub(crate) async fn try_acquire(
+        &self,
+        title_id: &str,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        self.handle(title_id).await.try_lock_owned().ok()
+    }
+}
+
 /// In-process guard table for download-submission dedupe and scope ownership.
 ///
 /// Scryer is intentionally single-instance, so the database lookup remains the

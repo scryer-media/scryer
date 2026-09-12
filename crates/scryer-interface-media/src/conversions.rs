@@ -353,8 +353,13 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::ProwlarrSync => AppJobKey::ProwlarrSync,
             Self::PendingReleaseProcessing => AppJobKey::PendingReleaseProcessing,
             Self::StagedNzbPrune => AppJobKey::StagedNzbPrune,
+            Self::FullHashBackfill => AppJobKey::FullHashBackfill,
             Self::DiscoverySync => AppJobKey::DiscoverySync,
             Self::TitleImageCacheRefresh => AppJobKey::TitleImageCacheRefresh,
+            Self::ArtworkEncoding => AppJobKey::ArtworkEncoding,
+            Self::MaintenanceRuleEvaluation => AppJobKey::MaintenanceRuleEvaluation,
+            Self::MediaServerSignalSync => AppJobKey::MediaServerSignalSync,
+            Self::LifecycleActionHandling => AppJobKey::LifecycleActionHandling,
             Self::TitleDeletion => AppJobKey::TitleDeletion,
             Self::TitleRename => AppJobKey::TitleRename,
             Self::MediaFileDeletion => AppJobKey::MediaFileDeletion,
@@ -362,6 +367,7 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::RecycleBinPurge => AppJobKey::RecycleBinPurge,
             Self::AcquisitionSearch => AppJobKey::AcquisitionSearch,
             Self::ApplicationUpgrade => AppJobKey::ApplicationUpgrade,
+            Self::LocationOperation => AppJobKey::LocationOperation,
         }
     }
 }
@@ -384,8 +390,13 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::ProwlarrSync => Self::ProwlarrSync,
             AppJobKey::PendingReleaseProcessing => Self::PendingReleaseProcessing,
             AppJobKey::StagedNzbPrune => Self::StagedNzbPrune,
+            AppJobKey::FullHashBackfill => Self::FullHashBackfill,
             AppJobKey::DiscoverySync => Self::DiscoverySync,
             AppJobKey::TitleImageCacheRefresh => Self::TitleImageCacheRefresh,
+            AppJobKey::ArtworkEncoding => Self::ArtworkEncoding,
+            AppJobKey::MaintenanceRuleEvaluation => Self::MaintenanceRuleEvaluation,
+            AppJobKey::MediaServerSignalSync => Self::MediaServerSignalSync,
+            AppJobKey::LifecycleActionHandling => Self::LifecycleActionHandling,
             AppJobKey::TitleDeletion => Self::TitleDeletion,
             AppJobKey::TitleRename => Self::TitleRename,
             AppJobKey::MediaFileDeletion => Self::MediaFileDeletion,
@@ -393,6 +404,7 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::RecycleBinPurge => Self::RecycleBinPurge,
             AppJobKey::AcquisitionSearch => Self::AcquisitionSearch,
             AppJobKey::ApplicationUpgrade => Self::ApplicationUpgrade,
+            AppJobKey::LocationOperation => Self::LocationOperation,
         }
     }
 }

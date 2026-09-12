@@ -1,0 +1,876 @@
+// Admin-defined title tags: registry CRUD and the per-title assignment patch.
+//
+// Two permissions meet here and must not be confused. Deciding *which* tags
+// exist is catalog configuration, exactly like a delay profile, so it needs
+// `AppPermission::ManageCatalogSettings`. Deciding which titles carry them is
+// title management, so it needs `LibraryPermission::ManageTitles` on each
+// affected title's library. Reading the registry is unprivileged: the picker
+// and the catalog filter need it for anyone who can see a title at all.
+
+const TITLE_TAG_PENDING_RENAMES_KEY: &str = "title_tags.pending_renames";
+const TITLE_TAG_PENDING_DELETIONS_KEY: &str = "title_tags.pending_deletions";
+static TITLE_TAG_REGISTRY_MUTATION: std::sync::LazyLock<tokio::sync::Mutex<()>> =
+    std::sync::LazyLock::new(|| tokio::sync::Mutex::new(()));
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingTitleTagRename {
+    previous_label: String,
+    next_label: String,
+    updated_by_user_id: Option<String>,
+}
+type PendingTitleTagRenames = std::collections::BTreeMap<String, PendingTitleTagRename>;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingTitleTagDeletion {
+    label: String,
+    updated_by_user_id: Option<String>,
+}
+type PendingTitleTagDeletions = std::collections::BTreeMap<String, PendingTitleTagDeletion>;
+
+impl AppUseCase {
+    /// Resume committed tag mutations after interruption. Called on startup and
+    /// before registry mutations, so a stale label cannot be reused while its
+    /// delay profiles or pending requests still need to move.
+    pub async fn resume_pending_title_tag_renames(&self) -> AppResult<()> {
+        let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
+        self.resume_pending_title_tag_mutations_locked().await
+    }
+
+    async fn resume_pending_title_tag_mutations_locked(&self) -> AppResult<()> {
+        self.resume_pending_title_tag_renames_locked().await?;
+        self.resume_pending_title_tag_deletions_locked().await?;
+        Ok(())
+    }
+
+    async fn resume_pending_title_tag_renames_locked(&self) -> AppResult<()> {
+        let pending = self
+            .read_setting_json_value::<PendingTitleTagRenames>(TITLE_TAG_PENDING_RENAMES_KEY, None)
+            .await?
+            .unwrap_or_default();
+        if pending.is_empty() {
+            return Ok(());
+        }
+        for (id, rename) in &pending {
+            let definition = self
+                .services
+                .catalog
+                .titles
+                .get_title_tag_definition(id)
+                .await?
+                .ok_or_else(|| {
+                    AppError::Validation(format!("pending rename refers to missing title tag {id}"))
+                })?;
+            if definition.label == rename.previous_label {
+                // The registry transaction never committed. Nothing outside
+                // that transaction could have been rewritten yet.
+                continue;
+            }
+            if definition.label != rename.next_label {
+                return Err(AppError::Validation(format!(
+                    "title tag {id} changed while its rename was pending"
+                )));
+            }
+            self.rewrite_delay_profile_tag(
+                rename.updated_by_user_id.clone(),
+                &rename.previous_label,
+                Some(&rename.next_label),
+            )
+            .await?;
+            self.rewrite_pending_request_policy_tag(
+                &rename.previous_label,
+                Some(&rename.next_label),
+            )
+            .await?;
+        }
+        self.upsert_system_setting_json(
+            TITLE_TAG_PENDING_RENAMES_KEY,
+            &PendingTitleTagRenames::new(),
+            None,
+        )
+        .await
+    }
+
+    /// Complete the settings-backed half of any deletion whose registry
+    /// transaction already committed. The registry and memberships live in one
+    /// transaction; delay profiles and pending requests live elsewhere, so the
+    /// intent makes the latter two writes safe to repeat after an interruption.
+    async fn resume_pending_title_tag_deletions_locked(
+        &self,
+    ) -> AppResult<std::collections::BTreeMap<String, u64>> {
+        let pending = self
+            .read_setting_json_value::<PendingTitleTagDeletions>(
+                TITLE_TAG_PENDING_DELETIONS_KEY,
+                None,
+            )
+            .await?
+            .unwrap_or_default();
+        if pending.is_empty() {
+            return Ok(std::collections::BTreeMap::new());
+        }
+
+        let mut rewritten_delay_profiles = std::collections::BTreeMap::new();
+        for (id, deletion) in &pending {
+            if self
+                .services
+                .catalog
+                .titles
+                .get_title_tag_definition(id)
+                .await?
+                .is_some()
+            {
+                // The registry transaction never committed, so no external
+                // rewrite can have started. The next delete attempt writes a
+                // fresh intent before trying the transaction again.
+                continue;
+            }
+            let delay_profiles = self
+                .rewrite_delay_profile_tag(
+                    deletion.updated_by_user_id.clone(),
+                    &deletion.label,
+                    None,
+                )
+                .await?;
+            // Pending requests expose their tags to an approver, so they must
+            // not retain a label the registry no longer defines.
+            self.rewrite_pending_request_policy_tag(&deletion.label, None)
+                .await?;
+            rewritten_delay_profiles.insert(id.clone(), delay_profiles);
+        }
+
+        self.upsert_system_setting_json(
+            TITLE_TAG_PENDING_DELETIONS_KEY,
+            &PendingTitleTagDeletions::new(),
+            None,
+        )
+        .await?;
+        Ok(rewritten_delay_profiles)
+    }
+
+    /// Every defined tag with its current title count.
+    ///
+    /// Deliberately unauthorized beyond being a request from a user: the tag
+    /// picker and the catalog filter pane both need the vocabulary, and the
+    /// vocabulary reveals nothing about any particular title.
+    pub async fn title_tag_definitions(
+        &self,
+        _actor: &User,
+    ) -> AppResult<Vec<crate::TitleTagDefinitionSummary>> {
+        self.services
+            .catalog
+            .titles
+            .list_title_tag_definitions()
+            .await
+    }
+
+    pub async fn create_title_tag_definition(
+        &self,
+        actor: &User,
+        label: &str,
+        description: Option<String>,
+    ) -> AppResult<scryer_domain::TitleTagDefinition> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
+        self.resume_pending_title_tag_mutations_locked().await?;
+        let label = crate::normalize_user_title_tag(label).map_err(AppError::Validation)?;
+        let now = Utc::now();
+        let definition = scryer_domain::TitleTagDefinition {
+            id: Id::new().0,
+            label,
+            description: normalize_title_tag_description(description),
+            created_by: Some(actor.id.clone()),
+            created_at: now,
+            updated_at: now,
+        };
+        let created = self
+            .services
+            .catalog
+            .titles
+            .create_title_tag_definition(&definition)
+            .await?;
+
+        self.emit_configuration_changed_event(
+            actor,
+            "title_tag",
+            Some(created.id.clone()),
+            scryer_domain::ConfigurationChangeAction::Saved,
+        )
+        .await;
+        Ok(created)
+    }
+
+    /// Rename and/or re-describe a tag.
+    ///
+    /// A rename is a data migration, not a label edit: membership is stored by
+    /// label, so the registry row, every title bag, and every delay profile's
+    /// tag list all have to move together. Rego revisions are immutable and are
+    /// *not* rewritten — the returned counts name how many rule sets mention
+    /// the old label so the caller can warn that those rules will stop matching.
+    pub async fn update_title_tag_definition(
+        &self,
+        actor: &User,
+        id: &str,
+        label: Option<String>,
+        description: Option<Option<String>>,
+    ) -> AppResult<crate::TitleTagDefinitionUpdate> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
+        self.resume_pending_title_tag_mutations_locked().await?;
+        let next_label = label
+            .map(|label| crate::normalize_user_title_tag(&label).map_err(AppError::Validation))
+            .transpose()?;
+        let description = description.map(normalize_title_tag_description);
+
+        let existing = self
+            .services
+            .catalog
+            .titles
+            .get_title_tag_definition(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))?;
+        let previous_label = existing.label.clone();
+        let renamed = next_label
+            .as_ref()
+            .is_some_and(|label| label != &previous_label);
+
+        // The rule-set scan runs before the write so the warning describes the
+        // label the operator is renaming away from, not what is left afterwards.
+        let references = if renamed {
+            self.count_rule_sets_referencing_title_tag(&previous_label)
+                .await?
+        } else {
+            RuleSetTagReferenceCounts::default()
+        };
+
+        if renamed {
+            let pending = std::collections::BTreeMap::from([(
+                id.to_string(),
+                PendingTitleTagRename {
+                    previous_label: previous_label.clone(),
+                    next_label: next_label.clone().expect("renamed label is present"),
+                    updated_by_user_id: Some(actor.id.clone()),
+                },
+            )]);
+            // Write intent before the registry transaction: a retry must still
+            // know the old label after that transaction has committed.
+            self.upsert_system_setting_json(
+                TITLE_TAG_PENDING_RENAMES_KEY,
+                &pending,
+                Some(actor.id.clone()),
+            )
+            .await?;
+        }
+        let (definition, membership) = self
+            .services
+            .catalog
+            .titles
+            .update_title_tag_definition(id, next_label, description, Utc::now())
+            .await?;
+
+        // These repositories cannot join the registry transaction. Leave the
+        // intent durable until both idempotent rewrites have completed.
+        let delay_profiles = if renamed {
+            self.rewrite_delay_profile_tag(
+                Some(actor.id.clone()),
+                &previous_label,
+                Some(&definition.label),
+            )
+            .await?
+        } else {
+            0
+        };
+
+        // A pending request's `policy_tags` is the list an approver is about to
+        // apply, so it has to follow the rename the same way a title bag does;
+        // resolved requests are history and keep the label they were decided
+        // with. The decision traces are audit records and are never rewritten.
+        if renamed {
+            self.rewrite_pending_request_policy_tag(&previous_label, Some(&definition.label))
+                .await?;
+            self.upsert_system_setting_json(
+                TITLE_TAG_PENDING_RENAMES_KEY,
+                &PendingTitleTagRenames::new(),
+                Some(actor.id.clone()),
+            )
+            .await?;
+        }
+
+        self.emit_configuration_changed_event(
+            actor,
+            "title_tag",
+            Some(definition.id.clone()),
+            scryer_domain::ConfigurationChangeAction::Saved,
+        )
+        .await;
+
+        Ok(crate::TitleTagDefinitionUpdate {
+            definition,
+            counts: crate::TitleTagRewriteCounts {
+                titles: membership.titles,
+                series_movies: membership.series_movies,
+                delay_profiles,
+                maintenance_rule_sets: references.maintenance,
+                release_rule_sets: references.release,
+                managed_tag_filters: references.managed_tag_filters,
+                request_rule_sets: references.request,
+            },
+        })
+    }
+
+    /// Delete a tag and strip it from every title and delay profile.
+    ///
+    /// Rules that name the label are left alone and simply stop matching, which
+    /// is the safe direction: a rule that no longer fires is visible in its run
+    /// history, a rule quietly repointed at a different set of titles is not.
+    pub async fn delete_title_tag_definition(
+        &self,
+        actor: &User,
+        id: &str,
+    ) -> AppResult<crate::TitleTagRewriteCounts> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
+        self.resume_pending_title_tag_renames_locked().await?;
+        let recovered = self.resume_pending_title_tag_deletions_locked().await?;
+        if let Some(delay_profiles) = recovered.get(id) {
+            self.emit_configuration_changed_event(
+                actor,
+                "title_tag",
+                Some(id.to_string()),
+                scryer_domain::ConfigurationChangeAction::Deleted,
+            )
+            .await;
+            return Ok(crate::TitleTagRewriteCounts {
+                delay_profiles: *delay_profiles,
+                ..Default::default()
+            });
+        }
+
+        let existing = self
+            .services
+            .catalog
+            .titles
+            .get_title_tag_definition(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title tag {id}")))?;
+        let references = self
+            .count_rule_sets_referencing_title_tag(&existing.label)
+            .await?;
+
+        // The registry transaction removes memberships and the definition
+        // together. Record the label first so the settings-backed rewrites can
+        // resume after that transaction commits but before this call returns.
+        let pending = std::collections::BTreeMap::from([(
+            id.to_string(),
+            PendingTitleTagDeletion {
+                label: existing.label.clone(),
+                updated_by_user_id: Some(actor.id.clone()),
+            },
+        )]);
+        self.upsert_system_setting_json(
+            TITLE_TAG_PENDING_DELETIONS_KEY,
+            &pending,
+            Some(actor.id.clone()),
+        )
+        .await?;
+
+        let (definition, membership) = self
+            .services
+            .catalog
+            .titles
+            .delete_title_tag_definition(id)
+            .await?;
+        let recovered = self.resume_pending_title_tag_deletions_locked().await?;
+        let delay_profiles = recovered.get(id).copied().ok_or_else(|| {
+            AppError::Repository(format!(
+                "title tag {id} was deleted without a recoverable rewrite intent"
+            ))
+        })?;
+
+        self.emit_configuration_changed_event(
+            actor,
+            "title_tag",
+            Some(definition.id.clone()),
+            scryer_domain::ConfigurationChangeAction::Deleted,
+        )
+        .await;
+
+        Ok(crate::TitleTagRewriteCounts {
+            titles: membership.titles,
+            series_movies: membership.series_movies,
+            delay_profiles,
+            maintenance_rule_sets: references.maintenance,
+            release_rule_sets: references.release,
+            managed_tag_filters: references.managed_tag_filters,
+            request_rule_sets: references.request,
+        })
+    }
+
+    /// Add and/or remove user tags across a set of titles.
+    ///
+    /// Every title's library is checked before the first write, so a bulk call
+    /// that touches one library the actor cannot manage changes nothing at all
+    /// rather than half-applying. Reserved `scryer:` entries are untouched: the
+    /// patch is applied inside the store transaction, so a concurrent options
+    /// save cannot be clobbered by this write or clobber it.
+    pub async fn update_title_tags(
+        &self,
+        actor: &User,
+        title_ids: &[String],
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<Vec<Title>> {
+        let add = crate::normalize_user_title_tags(add).map_err(AppError::Validation)?;
+        let remove = crate::normalize_user_title_tags(remove).map_err(AppError::Validation)?;
+        if add.is_empty() && remove.is_empty() {
+            return Err(AppError::Validation(
+                "at least one tag to add or remove must be provided".to_string(),
+            ));
+        }
+        require_disjoint_tag_patch(&add, &remove)?;
+        // Only additions are gated on the registry. Removing a label that was
+        // deleted from the registry while it was still on a title is cleanup,
+        // and refusing it would strand the title with a tag nothing can clear.
+        self.require_registered_title_tags(&add).await?;
+
+        let mut seen = HashSet::new();
+        let mut titles = Vec::new();
+        for title_id in title_ids {
+            if !seen.insert(title_id.clone()) {
+                continue;
+            }
+            let title = self
+                .services
+                .catalog
+                .titles
+                .get_by_id(title_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+            titles.push(title);
+        }
+        if titles.is_empty() {
+            return Err(AppError::Validation(
+                "at least one title must be provided".to_string(),
+            ));
+        }
+        for title in &titles {
+            self.require_library_permission(
+                actor,
+                &title.library_id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await?;
+        }
+
+        let mut _location_guards = Vec::with_capacity(titles.len());
+        for title in &titles {
+            _location_guards.push(
+                self.acquire_location_title_mutation(
+                    &crate::location::ownership_guard::TITLE_TAG_EDIT_ENTRY,
+                    &title.id,
+                )
+                .await?,
+            );
+        }
+        for title in &titles {
+            preflight_user_tag_patch(&title.tags, &add, &remove)?;
+        }
+        let mut updated = Vec::with_capacity(titles.len());
+        for title in &titles {
+            let title = self
+                .services
+                .catalog
+                .titles
+                .update_user_tags(&title.id, &add, &remove)
+                .await?;
+            self.emit_title_updated_activity(actor, &title).await;
+            updated.push(title);
+        }
+        Ok(updated)
+    }
+
+    /// Add and/or remove user tags across a set of series movies.
+    ///
+    /// A series movie is a `series_movie_links` row, not a title, so it carries
+    /// its own bag — but everything around that bag is the title rules: the same
+    /// registry gate, the same normalization, the same per-owner ceiling, and
+    /// the same all-checks-before-any-write ordering across a bulk call.
+    ///
+    /// Permission is `ManageTitles` on the library of the *series* the link
+    /// belongs to, because that is the title an operator manages: a series movie
+    /// has no library of its own, and `setSeriesMovieMonitored` already draws
+    /// the boundary in exactly this place.
+    pub async fn update_series_movie_tags(
+        &self,
+        actor: &User,
+        series_movie_link_ids: &[String],
+        add: &[String],
+        remove: &[String],
+    ) -> AppResult<Vec<scryer_domain::SeriesMovieLink>> {
+        let add = crate::normalize_user_title_tags(add).map_err(AppError::Validation)?;
+        let remove = crate::normalize_user_title_tags(remove).map_err(AppError::Validation)?;
+        if add.is_empty() && remove.is_empty() {
+            return Err(AppError::Validation(
+                "at least one tag to add or remove must be provided".to_string(),
+            ));
+        }
+        require_disjoint_tag_patch(&add, &remove)?;
+        // Additions only, for the same reason titles gate additions only:
+        // removing a label the registry no longer defines is cleanup.
+        self.require_registered_title_tags(&add).await?;
+
+        let mut seen = HashSet::new();
+        let mut links = Vec::new();
+        for link_id in series_movie_link_ids {
+            if !seen.insert(link_id.clone()) {
+                continue;
+            }
+            let link = self
+                .services
+                .catalog
+                .shows
+                .get_series_movie_link_by_id(link_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("series movie {link_id}")))?;
+            links.push(link);
+        }
+        if links.is_empty() {
+            return Err(AppError::Validation(
+                "at least one series movie must be provided".to_string(),
+            ));
+        }
+
+        // Every parent series is resolved and checked before the first write, so
+        // a bulk call spanning a library the actor cannot manage changes nothing
+        // rather than half-applying.
+        let mut parent_titles = HashMap::new();
+        for link in &links {
+            if parent_titles.contains_key(&link.series_title_id) {
+                continue;
+            }
+            let title = self
+                .services
+                .catalog
+                .titles
+                .get_by_id(&link.series_title_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound(format!("title {}", link.series_title_id)))?;
+            self.require_library_permission(
+                actor,
+                &title.library_id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await?;
+            parent_titles.insert(link.series_title_id.clone(), title);
+        }
+
+        let mut _location_guards = Vec::with_capacity(parent_titles.len());
+        for title in parent_titles.values() {
+            _location_guards.push(
+                self.acquire_location_title_mutation(
+                    &crate::location::ownership_guard::SERIES_MOVIE_TAG_EDIT_ENTRY,
+                    &title.id,
+                )
+                .await?,
+            );
+        }
+        for link in &links {
+            preflight_user_tag_patch(&link.tags, &add, &remove)?;
+        }
+        let mut updated = Vec::with_capacity(links.len());
+        let mut notified_titles = HashSet::new();
+        for link in &links {
+            let patched = self
+                .services
+                .catalog
+                .shows
+                .update_series_movie_link_user_tags(&link.id, &add, &remove)
+                .await?;
+            // The activity is on the parent series, once per series rather than
+            // once per movie: the series is the thing the operator is looking
+            // at, and a bulk tag of eight of its movies is one change to it.
+            if notified_titles.insert(patched.series_title_id.clone())
+                && let Some(title) = parent_titles.get(&patched.series_title_id)
+            {
+                self.emit_title_updated_activity(actor, title).await;
+            }
+            updated.push(patched);
+        }
+        Ok(updated)
+    }
+
+    /// Which of `labels` the registry does not define, in the order given.
+    ///
+    /// The read half of [`Self::require_registered_title_tags`], for callers
+    /// that need to decide what to do about an undefined label rather than
+    /// refuse outright — the maintenance executor holds its candidate instead
+    /// of failing it, and wants to know without catching an error.
+    pub(crate) async fn undefined_title_tag_labels(
+        &self,
+        labels: &[String],
+    ) -> AppResult<Vec<String>> {
+        let unprefixed = labels
+            .iter()
+            .filter(|label| !crate::is_reserved_title_tag(label))
+            .cloned()
+            .collect::<Vec<_>>();
+        if unprefixed.is_empty() {
+            return Ok(Vec::new());
+        }
+        let defined = self
+            .services
+            .catalog
+            .titles
+            .list_title_tag_labels()
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        Ok(unprefixed
+            .into_iter()
+            .filter(|label| !defined.contains(label))
+            .collect())
+    }
+
+    /// Refuse any unprefixed label the registry does not define.
+    ///
+    /// The gate lives here rather than in the store so both write paths share
+    /// it: the tag patch, and the raw whole-bag `updateTitle(tags:)` write.
+    pub(crate) async fn require_registered_title_tags(&self, labels: &[String]) -> AppResult<()> {
+        let unprefixed = labels
+            .iter()
+            .filter(|label| !crate::is_reserved_title_tag(label))
+            .collect::<Vec<_>>();
+        if unprefixed.is_empty() {
+            return Ok(());
+        }
+        let defined = self
+            .services
+            .catalog
+            .titles
+            .list_title_tag_labels()
+            .await?
+            .into_iter()
+            .collect::<HashSet<_>>();
+        for label in unprefixed {
+            if !defined.contains(label) {
+                return Err(AppError::Validation(format!(
+                    "'{label}' is not a defined tag; an administrator has to add it in Settings before it can be applied"
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Rewrite `label` to `replacement` (or drop it) across every delay
+    /// profile's tag list, returning how many profiles changed.
+    async fn rewrite_delay_profile_tag(
+        &self,
+        updated_by_user_id: Option<String>,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        let mut profiles = self.delay_profiles().await?;
+        let mut changed = 0_u64;
+        for profile in profiles.iter_mut() {
+            if !profile.tags.iter().any(|tag| tag == label) {
+                continue;
+            }
+            profile.tags.retain(|tag| tag != label);
+            if let Some(replacement) = replacement
+                && !profile.tags.iter().any(|tag| tag == replacement)
+            {
+                profile.tags.push(replacement.to_string());
+            }
+            changed += 1;
+        }
+        if changed == 0 {
+            return Ok(0);
+        }
+
+        self.upsert_system_setting_json(
+            crate::delay_profile::DELAY_PROFILE_CATALOG_KEY,
+            &profiles,
+            updated_by_user_id,
+        )
+        .await?;
+        let _ = self.runtime.events.settings_changed_broadcast.send(vec![
+            crate::delay_profile::DELAY_PROFILE_CATALOG_KEY.to_string(),
+        ]);
+        Ok(changed)
+    }
+
+    /// Rewrite `label` to `replacement` (or drop it) in every *pending*
+    /// request's policy tags, returning how many rows changed.
+    ///
+    /// Only pending rows: `policy_tags` on a resolved request records what was
+    /// decided, and rewriting it would falsify the history the decision trace
+    /// is joined against.
+    async fn rewrite_pending_request_policy_tag(
+        &self,
+        label: &str,
+        replacement: Option<&str>,
+    ) -> AppResult<u64> {
+        self.services
+            .catalog
+            .media_requests
+            .rewrite_pending_policy_tag(label, replacement)
+            .await
+    }
+
+    /// How many rule sets of each kind name `label`.
+    ///
+    /// The Rego counts are a plain substring search over stored source, on
+    /// purpose: this is a warning, not a rewrite. Rego revisions are immutable,
+    /// so nothing here can be corrected automatically, and an over-broad match
+    /// costs the operator one extra look at a rule while a missed match costs a
+    /// rule that silently stops firing.
+    ///
+    /// Request rules are matched a little more tightly, on the quoted label
+    /// (`"<label>"`) rather than the bare word, because a request matcher's
+    /// only use for a tag is inside a `tags contains "<label>"` head, and the
+    /// quotes keep a short label like `hd` from matching every identifier that
+    /// happens to contain it. It is still a substring match, not a parse: an
+    /// author who builds the string at runtime is not counted.
+    ///
+    /// The managed tag filter count is exact: a managed pack's `tag_filter` is
+    /// a list of labels, not free text, and it is SMG-owned, so it is neither
+    /// rewritten nor folded into the Rego count — the operator has to fix it
+    /// somewhere else. One managed pack can therefore be counted twice, once
+    /// per reason.
+    ///
+    /// Only each rule set's *current* revision is scanned. Older revisions are
+    /// immutable history and cannot fire, so naming them would send the
+    /// operator after rules that are already inert.
+    async fn count_rule_sets_referencing_title_tag(
+        &self,
+        label: &str,
+    ) -> AppResult<RuleSetTagReferenceCounts> {
+        let mut maintenance = 0_u64;
+        for rule_set in self
+            .services
+            .customization
+            .maintenance_rule_sets
+            .list_rule_sets()
+            .await?
+        {
+            if let Some(revision) = self
+                .services
+                .customization
+                .maintenance_rule_sets
+                .get_revision(&rule_set.id, rule_set.current_revision_number)
+                .await?
+                && revision.rego_source.contains(label)
+            {
+                maintenance += 1;
+            }
+        }
+
+        let mut release = 0_u64;
+        let mut managed_tag_filters = 0_u64;
+        for rule_set in self
+            .services
+            .customization
+            .rule_sets
+            .list_rule_sets()
+            .await?
+        {
+            if rule_set.rego_source.contains(label) {
+                release += 1;
+            }
+            if rule_set
+                .managed_tag_filter
+                .as_ref()
+                .is_some_and(|tags| tags.iter().any(|tag| tag == label))
+            {
+                managed_tag_filters += 1;
+            }
+        }
+
+        let quoted = format!("\"{label}\"");
+        let mut request = 0_u64;
+        for rule_set in self
+            .services
+            .customization
+            .request_rule_sets
+            .list_rule_sets()
+            .await?
+        {
+            if let Some(revision) = self
+                .services
+                .customization
+                .request_rule_sets
+                .get_revision(&rule_set.id, rule_set.current_revision_number)
+                .await?
+                && revision.rego_source.contains(&quoted)
+            {
+                request += 1;
+            }
+        }
+
+        Ok(RuleSetTagReferenceCounts {
+            maintenance,
+            release,
+            managed_tag_filters,
+            request,
+        })
+    }
+}
+
+/// The rule-set halves of [`crate::TitleTagRewriteCounts`], which none of these
+/// paths can rewrite: they are what the warning is about.
+#[derive(Clone, Copy, Debug, Default)]
+struct RuleSetTagReferenceCounts {
+    maintenance: u64,
+    release: u64,
+    managed_tag_filters: u64,
+    request: u64,
+}
+
+/// A description is either real text or absent; an all-whitespace one is the
+/// latter, so the UI never has to distinguish `""` from `NULL`.
+fn normalize_title_tag_description(description: Option<String>) -> Option<String> {
+    description
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+/// A label named on both sides of one patch is a contradiction, not a form
+/// state: the caller could not have meant both. Refusing it by name keeps the
+/// API's answer independent of which side happens to be applied first, and
+/// matches the bulk dialog, which never submits an overlap.
+fn require_disjoint_tag_patch(add: &[String], remove: &[String]) -> AppResult<()> {
+    if let Some(label) = add.iter().find(|label| remove.contains(*label)) {
+        return Err(AppError::Validation(format!(
+            "'{label}' is listed both to add and to remove; choose one"
+        )));
+    }
+    Ok(())
+}
+
+/// Reject deterministic ceiling failures across the whole request before any
+/// owner is written. Stores still enforce the ceiling inside each transaction
+/// against the current bag to cover concurrent updates.
+fn preflight_user_tag_patch(tags: &[String], add: &[String], remove: &[String]) -> AppResult<()> {
+    let mut remaining = tags
+        .iter()
+        .filter(|tag| crate::is_reserved_title_tag(tag) || !remove.contains(tag))
+        .cloned()
+        .collect::<Vec<_>>();
+    for label in add {
+        if !remaining.contains(label) {
+            remaining.push(label.clone());
+        }
+    }
+    let count = remaining
+        .iter()
+        .filter(|tag| !crate::is_reserved_title_tag(tag))
+        .count();
+    if count > crate::MAX_USER_TAGS_PER_TITLE {
+        return Err(AppError::Validation(format!(
+            "a title can carry at most {} tags; this change would leave it with {count}",
+            crate::MAX_USER_TAGS_PER_TITLE,
+        )));
+    }
+    Ok(())
+}

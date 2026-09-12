@@ -1,10 +1,12 @@
 
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useClient, useMutation } from "urql";
+import { useSearchParams } from "react-router";
 
 import { AssignTrackedDownloadTitleDialog } from "@/components/dialogs/assign-tracked-download-title-dialog";
 import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
 import { ActivityView } from "@/components/views/activity-view";
+import { LocationOperationPanel } from "@/components/views/activity/location-operation-panel";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
@@ -119,6 +121,13 @@ export const ActivityContainer = memo(function ActivityContainer({
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
   const client = useClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const locationOperationId = searchParams.get("operation")?.trim() || null;
+  const clearLocationOperation = useCallback(() => {
+    const next = new URLSearchParams(searchParams.toString());
+    next.delete("operation");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const [, executeQueueManualImport] = useMutation(queueManualImportMutation);
   const [, executeBeginManualImportSelection] = useMutation(
     beginManualImportSelectionMutation,
@@ -417,6 +426,10 @@ export const ActivityContainer = memo(function ActivityContainer({
         preview = extracted.data?.beginManualImportSelection;
       }
       const candidates: DirectMovieManualImportCandidate[] = preview?.files ?? [];
+      if (preview?.files?.some((file: { fileName: string }) => file.fileName.toLowerCase().endsWith(".iso"))) {
+        setManualImportItem(item);
+        return;
+      }
       const files = directMovieManualImportMappings(candidates);
       if (!preview?.selectionId || files.length === 0) {
         setGlobalStatus(t("queue.manualImportFailed"));
@@ -725,6 +738,14 @@ export const ActivityContainer = memo(function ActivityContainer({
   return (
     <>
       <ActivityView
+        operationPanel={
+          locationOperationId ? (
+            <LocationOperationPanel
+              operationId={locationOperationId}
+              onDismiss={clearLocationOperation}
+            />
+          ) : null
+        }
         state={{
           queueItems: visibleItems,
           queueLoading: visibleLoading,
@@ -804,6 +825,7 @@ export const ActivityContainer = memo(function ActivityContainer({
             }
           }}
           titleId={manualImportItem.titleId}
+          facet={manualImportItem.facet}
           titleName={manualImportItem.titleName}
           clientId={manualImportItem.clientId}
           clientType={manualImportItem.clientType}

@@ -7,8 +7,13 @@ import {
   FACET_REGISTRY,
   type FacetDefinition,
 } from "../../lib/facets/registry.ts";
+import type { MetadataTvdbSearchItem } from "../../lib/graphql/smg-queries.ts";
 import type { MetadataSearchResults } from "../../lib/hooks/use-global-search.ts";
-import type { Facet, TitleRecord } from "../../lib/types/titles.ts";
+import type {
+  Facet,
+  LibraryRecord,
+  TitleRecord,
+} from "../../lib/types/titles.ts";
 
 export type GlobalSearchTabKey = "all" | "library" | "actions" | Facet;
 export type GlobalSearchFilterKey = Exclude<GlobalSearchTabKey, "all">;
@@ -182,7 +187,9 @@ export function buildCatalogSearchSections(
   const buckets = Object.fromEntries(
     FACET_REGISTRY.map((f) => [f.id, [] as TitleRecord[]]),
   ) as CatalogSearchSections;
-  for (const title of catalogSearchResults) {
+  // A title held by several libraries is one result, not one per library;
+  // the card reads the other libraries from `buildCatalogLibraryMembers`.
+  for (const title of dedupeCatalogResultsByIdentity(catalogSearchResults)) {
     buckets[catalogFacetFromString(title.facet)].push(title);
   }
   if (query) {
@@ -191,6 +198,188 @@ export function buildCatalogSearchSections(
     }
   }
   return buckets;
+}
+
+function catalogTitleExternalId(
+  title: TitleRecord,
+  source: "smg" | "tvdb" | "tmdb" | "imdb",
+): string | null {
+  const value = (title.externalIds ?? [])
+    .find((externalId) => externalId.source.trim().toLowerCase() === source)
+    ?.value.trim();
+  return value || null;
+}
+
+/**
+ * The identity a catalog row shares with its copies in other libraries. Two
+ * rows are the same title to the searcher when they carry the same SMG or TVDB
+ * id within a facet; a row with neither stands alone. The facet is part of the
+ * key on purpose: the same show in a series library and an anime library is
+ * listed under each section, since each section offers its own libraries.
+ */
+export function catalogTitleIdentityKey(title: TitleRecord): string {
+  const facet = catalogFacetFromString(title.facet);
+  const smgId = catalogTitleExternalId(title, "smg");
+  if (smgId) {
+    return `${facet}|smg:${smgId}`;
+  }
+  const tvdbId = catalogTitleExternalId(title, "tvdb");
+  if (tvdbId) {
+    return `${facet}|tvdb:${tvdbId}`;
+  }
+  return `${facet}|title:${title.id}`;
+}
+
+/** Every library row of each title, keyed by identity, in result order. */
+export type CatalogLibraryMembers = Record<string, TitleRecord[]>;
+
+export function buildCatalogLibraryMembers(
+  titles: TitleRecord[],
+): CatalogLibraryMembers {
+  const members: CatalogLibraryMembers = {};
+  for (const title of titles) {
+    const key = catalogTitleIdentityKey(title);
+    const existing = members[key];
+    if (!existing) {
+      members[key] = [title];
+    } else if (!existing.some((member) => member.id === title.id)) {
+      existing.push(title);
+    }
+  }
+  return members;
+}
+
+/** One row per title: the first library row stands for the rest. */
+/**
+ * The row that stands for a title held in several libraries. A copy that was
+ * just added to a second library has no artwork or metadata yet, so the card
+ * shows the copy with art, then the one metadata reached, then the oldest.
+ */
+export function representativeCatalogMember(
+  members: TitleRecord[],
+): TitleRecord {
+  const score = (member: TitleRecord): number =>
+    (member.posterUrl ? 2 : 0) + (member.metadataFetchedAt ? 1 : 0);
+  return members.reduce((best, member) => {
+    const gap = score(member) - score(best);
+    if (gap > 0) {
+      return member;
+    }
+    if (gap < 0) {
+      return best;
+    }
+    const memberCreated = member.createdAt ?? "";
+    const bestCreated = best.createdAt ?? "";
+    return memberCreated && (!bestCreated || memberCreated < bestCreated)
+      ? member
+      : best;
+  }, members[0]);
+}
+
+export function dedupeCatalogResultsByIdentity(
+  titles: TitleRecord[],
+): TitleRecord[] {
+  return Object.values(buildCatalogLibraryMembers(titles)).map(
+    representativeCatalogMember,
+  );
+}
+
+export type CatalogResultLibraryAction = "add" | "request";
+
+/**
+ * What one "In Library" card can do beyond viewing (FR: multi-library search).
+ *
+ * - `members` are the rows that hold the title, one per library; the card
+ *   views the only one directly and offers a choice when there are several.
+ * - `addableLibraries` and `requestableLibraries` are the libraries of that
+ *   facet that do not hold it yet, split by what the viewer may do there.
+ * - `action` is the one button the card shows: adding wins over requesting
+ *   when both are possible, and neither shows once every library has it,
+ *   which is always the case with a single library.
+ */
+export type CatalogResultPresentation = {
+  members: TitleRecord[];
+  addableLibraries: LibraryRecord[];
+  requestableLibraries: LibraryRecord[];
+  action: CatalogResultLibraryAction | null;
+};
+
+export function buildCatalogResultPresentation({
+  title,
+  libraryMembers,
+  manageableLibraries,
+  requestableLibraries,
+  canAdd,
+}: {
+  title: TitleRecord;
+  libraryMembers: CatalogLibraryMembers;
+  manageableLibraries: LibraryRecord[];
+  requestableLibraries: LibraryRecord[];
+  /** False until the add configuration (quality profiles) has loaded. */
+  canAdd: boolean;
+}): CatalogResultPresentation {
+  const members = libraryMembers[catalogTitleIdentityKey(title)] ?? [title];
+  const held = new Set(members.map((member) => member.libraryId));
+  const addableLibraries = manageableLibraries.filter(
+    (library) => !held.has(library.id),
+  );
+  const requestable = requestableLibraries.filter(
+    (library) => !held.has(library.id),
+  );
+  const action: CatalogResultLibraryAction | null =
+    canAdd && addableLibraries.length > 0
+      ? "add"
+      : requestable.length > 0
+        ? "request"
+        : null;
+  return {
+    members,
+    addableLibraries,
+    requestableLibraries: requestable,
+    action,
+  };
+}
+
+/**
+ * The add and request dialogs work from a metadata search result. A catalog
+ * row already carries the same identity and the fields the add mutation sends,
+ * so a title that is in one library can be offered to another without a second
+ * metadata lookup. Null when the row has no metadata identity at all, since
+ * nothing could be added or requested from it.
+ */
+export function metadataSearchItemFromCatalogTitle(
+  title: TitleRecord,
+): MetadataTvdbSearchItem | null {
+  const smgId = catalogTitleExternalId(title, "smg");
+  const tvdbId = catalogTitleExternalId(title, "tvdb");
+  if (!smgId && !tvdbId) {
+    return null;
+  }
+  const tmdbId = catalogTitleExternalId(title, "tmdb");
+  const parsedSmgId = smgId ? Number(smgId) : Number.NaN;
+  const parsedTmdbId = tmdbId ? Number(tmdbId) : Number.NaN;
+  return {
+    tvdbId: tvdbId ?? "",
+    smgId: Number.isFinite(parsedSmgId) ? parsedSmgId : null,
+    tmdbId: Number.isFinite(parsedTmdbId) ? parsedTmdbId : null,
+    name: title.name,
+    imdbId: title.imdbId?.trim() || catalogTitleExternalId(title, "imdb"),
+    externalIds: (title.externalIds ?? []).map((externalId) => ({
+      source: externalId.source,
+      value: externalId.value,
+    })),
+    slug: title.slug ?? null,
+    type: null,
+    year: title.year ?? null,
+    status: title.contentStatus ?? null,
+    overview: title.overview ?? null,
+    popularity: title.popularity ?? null,
+    posterUrl: title.posterUrl ?? null,
+    backgroundUrl: title.backgroundUrl ?? null,
+    language: title.language ?? null,
+    runtimeMinutes: title.runtimeMinutes ?? null,
+    sortTitle: title.sortTitle ?? null,
+  };
 }
 
 export function buildMetadataResultCounts(

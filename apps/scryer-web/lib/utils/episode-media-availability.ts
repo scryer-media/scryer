@@ -3,6 +3,7 @@ export type EpisodeMediaAvailability = {
     | "AVAILABLE"
     | "PENDING_SCAN"
     | "SCAN_FAILED"
+    | "REVIEW_REQUIRED"
     | "MISSING"
     | "UNMONITORED";
   primaryQualityLabel: string | null;
@@ -25,6 +26,8 @@ export function episodeAvailabilityPill(
       };
     case "PENDING_SCAN":
       return { tone: "warning", label: translate("mediaFile.pendingScan") };
+    case "REVIEW_REQUIRED":
+      return { tone: "warning", label: translate("mediaFile.reviewRequired") };
     case "SCAN_FAILED":
       return { tone: "negative", label: translate("mediaFile.scanFailed") };
     case "MISSING":

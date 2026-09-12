@@ -1,6 +1,94 @@
 use super::*;
 
 #[tokio::test]
+async fn automatic_search_includes_permitted_upgrades_for_an_unmonitored_complete_title() {
+    for (upgrades_allowed, quality, score_cutoff, expected) in [
+        (true, "720P", None, 1),
+        (false, "720P", None, 0),
+        (true, "1080P", None, 0),
+        (true, "1080P", Some(1_000_000), 1),
+        (true, "720P", Some(1_000_000), 1),
+    ] {
+        let settings = Arc::new(StoredSettingsRepo::default());
+        settings
+            .set_value(
+                SETTINGS_SCOPE_SYSTEM,
+                QUALITY_PROFILE_ID_KEY,
+                r#""automatic-cutoff""#,
+            )
+            .await;
+        let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+        let mut profile = cutoff_projection_test_profile("automatic-cutoff", "1080P");
+        profile.criteria.allow_upgrades = upgrades_allowed;
+        profile.criteria.cutoff_score = score_cutoff;
+        quality_profiles.set_profiles(vec![profile]).await;
+        let media_files = Arc::new(MockMediaFileRepo::default());
+        let (app, user, _) =
+            bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files.clone());
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Automatic Cutoff".into(),
+                    facet: MediaFacet::Movie,
+                    monitored: false,
+                    year: Some(2024),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: format!("/fixture/Automatic.Cutoff.2024.{quality}.WEB-DL-GRP.mkv"),
+                quality_label: Some(quality.into()),
+                role: MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let automatic = AcquisitionSearchRequest {
+            automatic: true,
+            title_id: Some(title.id.clone()),
+            ..Default::default()
+        };
+        let scopes = app
+            .resolve_acquisition_search_scopes(&user, &automatic)
+            .await
+            .unwrap();
+        assert_eq!(
+            scopes.len(),
+            expected,
+            "quality={quality}, upgrades={upgrades_allowed}, score cutoff={score_cutoff:?}"
+        );
+        assert!(
+            app.resolve_acquisition_search_scopes(
+                &user,
+                &AcquisitionSearchRequest {
+                    title_id: Some(title.id.clone()),
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+            "legacy missing-only behavior is preserved"
+        );
+        assert!(
+            !app.services
+                .catalog
+                .titles
+                .get_by_id(&title.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+    }
+}
+
+#[tokio::test]
 async fn list_cutoff_unmet_titles_normalizes_lowercase_cutoff_tier() {
     let settings = Arc::new(StoredSettingsRepo::default());
     settings
@@ -533,6 +621,13 @@ async fn search_indexers_anime_required_original_and_english_accepts_dual_audio_
         "Anime.Show.S01E01.1080p.WEB-DL.DUAL.H.265",
     ));
     let (app, user) = bootstrap_with_search_settings_and_indexer(settings, indexer_client);
+    app.swap_user_rules_engine(
+        AppUseCase::build_user_rules_engine(
+            crate::rules::builtin_trash::baseline_rule_sets(),
+            Vec::new(),
+        )
+        .expect("bundled scoring rules compile"),
+    );
 
     app.create_download_client_config(
         &user,
@@ -542,6 +637,7 @@ async fn search_indexers_anime_required_original_and_english_accepts_dual_audio_
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -618,6 +714,7 @@ async fn search_indexers_for_title_uses_tagged_aliases_for_auto_evaluation() {
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -711,6 +808,7 @@ async fn search_indexers_for_title_returns_results_when_candidate_token_attachme
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -969,6 +1067,7 @@ async fn bootstrap_interactive_search_with_blocklist(
             config_json: "{}".to_string(),
             client_priority: 1,
             is_enabled: true,
+            proxy_config_id: None,
         },
     )
     .await
@@ -1455,6 +1554,15 @@ async fn a_multi_episode_files_landed_bar_matches_the_gates_incumbent_bar() {
     let (app, user, _) =
         bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files.clone());
 
+    // Soundtrack weights are supplied by the bundled rules in production.
+    app.swap_user_rules_engine(
+        AppUseCase::build_user_rules_engine(
+            crate::rules::builtin_trash::baseline_rule_sets(),
+            Vec::new(),
+        )
+        .expect("bundled scoring rules compile"),
+    );
+
     let title = app
         .add_title(
             &user,
@@ -1577,6 +1685,117 @@ async fn a_multi_episode_files_landed_bar_matches_the_gates_incumbent_bar() {
         Some(incumbent.score),
         "the displayed bar must be the number the gate compares against"
     );
+
+    // A physical ISO can contain episodes with different soundtracks. Its
+    // scope-specific bars must still match admission when requested together.
+    use scryer_media_types::{
+        DiscEpisodeMapping, DiscMetadata, DiscSelection, DiscTitle, ProbeReport, ProbeStatus,
+        StreamDetail, StreamKind, StreamMetadata,
+    };
+    let disc_titles: Vec<_> = [("00001", "truehd", 8), ("00002", "aac", 2)]
+        .into_iter()
+        .map(|(id, codec, channels)| DiscTitle {
+            id: id.into(),
+            duration_seconds: Some(1440.0),
+            report: ProbeReport {
+                status: ProbeStatus::Complete,
+                ..Default::default()
+            },
+            streams: vec![
+                StreamDetail {
+                    kind: StreamKind::Video,
+                    codec: Some("hevc".into()),
+                    width: Some(1920),
+                    height: Some(1080),
+                    metadata: StreamMetadata {
+                        id: Some("v0".into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                StreamDetail {
+                    kind: StreamKind::Audio,
+                    codec: Some(codec.into()),
+                    channels: Some(channels),
+                    language: Some("en".into()),
+                    metadata: StreamMetadata {
+                        channel_layout: Some(if channels == 8 { "7.1" } else { "stereo" }.into()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        })
+        .collect();
+    let disc = DiscMetadata {
+        selected_title_id: Some("00001".into()),
+        titles: disc_titles,
+        selection: DiscSelection {
+            episode_mappings: episode_ids
+                .iter()
+                .enumerate()
+                .map(|(index, id)| DiscEpisodeMapping {
+                    disc_title_id: format!("{:05}", index + 1),
+                    episode_ids: vec![id.clone()],
+                })
+                .collect(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    {
+        let mut store = media_files.store.lock().await;
+        for row in store.iter_mut().filter(|row| row.id == file_id) {
+            row.analysis_details.revision = scryer_media_types::ANALYSIS_REVISION;
+            row.analysis_details.disc = Some(disc.clone());
+        }
+    }
+    let scopes: Vec<_> = episode_ids
+        .iter()
+        .map(|id| crate::acquisition_workflow::LandedBarScope {
+            title_id: title.id.clone(),
+            episode_id: Some(id.clone()),
+            collection_id: None,
+            series_movie_link_id: None,
+        })
+        .collect();
+    let mut expected = Vec::new();
+    for episode_id in &episode_ids {
+        let subject = app
+            .admission_subject_for_scope(
+                &title,
+                &crate::SubmissionScope::Episode {
+                    episode_id: episode_id.clone(),
+                },
+                &scoring_context,
+                None,
+                crate::quality::canonical_context::SubjectIntent::Import,
+            )
+            .await;
+        expected.push(Some(
+            subject
+                .incumbents()
+                .first()
+                .expect("mapped disc episode")
+                .score,
+        ));
+    }
+    assert_ne!(
+        expected[0], expected[1],
+        "the authored soundtrack difference must affect this regression's scores"
+    );
+    assert_eq!(
+        app.landed_bars_for_scopes(&scopes).await,
+        expected,
+        "a file-wide cache must not replace episode-specific disc facts"
+    );
+    let reversed = [scopes[1].clone(), scopes[0].clone()];
+    assert_eq!(
+        app.landed_bars_for_scopes(&reversed).await,
+        [expected[1], expected[0]],
+        "scope order must not change the displayed score"
+    );
 }
 
 /// **F-3b-2 / D18.** A queued release is scored with the size it announced, so
@@ -1590,6 +1809,13 @@ async fn a_multi_episode_files_landed_bar_matches_the_gates_incumbent_bar() {
 #[tokio::test]
 async fn a_queued_releases_announced_size_is_part_of_its_score() {
     let (app, user) = bootstrap();
+    app.swap_user_rules_engine(
+        AppUseCase::build_user_rules_engine(
+            crate::rules::builtin_trash::baseline_rule_sets(),
+            Vec::new(),
+        )
+        .expect("bundled scoring rules compile"),
+    );
     let title = app
         .add_title(
             &user,

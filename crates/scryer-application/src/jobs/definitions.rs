@@ -10,6 +10,24 @@ use crate::{LibraryScanSession, LibraryScanStatus};
 
 const JOB_RUN_PUSH_INTERVAL: Duration = Duration::from_millis(500);
 
+/// Default cadence of the maintenance rule evaluator (RFC 137 section 10).
+/// The RFC adopts Maintainerr's familiar eight-hour rhythm as the native
+/// default; there is no clock-parity requirement, so this is a default rather
+/// than a contract.
+pub const MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS: i64 = 8 * 3600;
+
+/// RFC 137 section 10: collection/action handling defaults to every twelve
+/// hours.
+pub const LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS: i64 = 12 * 3600;
+
+/// Cadence of the media-server watch-signal sweep (RFC 137 section 7.3).
+///
+/// Six hours is chosen against what the data is for, not against how fast it
+/// changes: signals feed grace-period maintenance decisions measured in days,
+/// so four sweeps a day is ample, and each sweep is a full read of every
+/// participant's played set rather than a delta.
+pub const MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS: i64 = 6 * 3600;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JobCategory {
     Library,
@@ -153,7 +171,9 @@ pub enum JobKey {
     AutoBackup,
     PendingReleaseProcessing,
     StagedNzbPrune,
+    FullHashBackfill,
     DiscoverySync,
+    ArtworkEncoding,
     TitleImageCacheRefresh,
     TitleDeletion,
     TitleRename,
@@ -162,6 +182,10 @@ pub enum JobKey {
     RecycleBinPurge,
     AcquisitionSearch,
     ApplicationUpgrade,
+    MaintenanceRuleEvaluation,
+    LifecycleActionHandling,
+    MediaServerSignalSync,
+    LocationOperation,
 }
 
 impl JobKey {
@@ -182,7 +206,9 @@ impl JobKey {
             Self::AutoBackup => "auto_backup",
             Self::PendingReleaseProcessing => "pending_release_processing",
             Self::StagedNzbPrune => "staged_nzb_prune",
+            Self::FullHashBackfill => "full_hash_backfill",
             Self::DiscoverySync => "discovery_sync",
+            Self::ArtworkEncoding => "artwork_encoding",
             Self::TitleImageCacheRefresh => "title_image_cache_refresh",
             Self::TitleDeletion => "title_deletion",
             Self::TitleRename => "title_rename",
@@ -191,6 +217,10 @@ impl JobKey {
             Self::RecycleBinPurge => "recycle_bin_purge",
             Self::AcquisitionSearch => "acquisition_search",
             Self::ApplicationUpgrade => "application_upgrade",
+            Self::MaintenanceRuleEvaluation => "maintenance_rule_evaluation",
+            Self::LifecycleActionHandling => "lifecycle_action_handling",
+            Self::MediaServerSignalSync => "media_server_signal_sync",
+            Self::LocationOperation => "location_operation",
         }
     }
 
@@ -211,7 +241,9 @@ impl JobKey {
             "auto_backup" => Some(Self::AutoBackup),
             "pending_release_processing" => Some(Self::PendingReleaseProcessing),
             "staged_nzb_prune" => Some(Self::StagedNzbPrune),
+            "full_hash_backfill" => Some(Self::FullHashBackfill),
             "discovery_sync" => Some(Self::DiscoverySync),
+            "artwork_encoding" => Some(Self::ArtworkEncoding),
             "title_image_cache_refresh" => Some(Self::TitleImageCacheRefresh),
             "title_deletion" => Some(Self::TitleDeletion),
             "title_rename" => Some(Self::TitleRename),
@@ -220,6 +252,10 @@ impl JobKey {
             "recycle_bin_purge" => Some(Self::RecycleBinPurge),
             "acquisition_search" => Some(Self::AcquisitionSearch),
             "application_upgrade" => Some(Self::ApplicationUpgrade),
+            "maintenance_rule_evaluation" => Some(Self::MaintenanceRuleEvaluation),
+            "lifecycle_action_handling" => Some(Self::LifecycleActionHandling),
+            "media_server_signal_sync" => Some(Self::MediaServerSignalSync),
+            "location_operation" => Some(Self::LocationOperation),
             _ => None,
         }
     }
@@ -241,7 +277,9 @@ impl JobKey {
             Self::AutoBackup => "Automatic Backup",
             Self::PendingReleaseProcessing => "Pending Release Processing",
             Self::StagedNzbPrune => "Staged NZB Prune",
+            Self::FullHashBackfill => "Full Hash Backfill",
             Self::DiscoverySync => "Discovery Sync",
+            Self::ArtworkEncoding => "Artwork Encoding",
             Self::TitleImageCacheRefresh => "Title Image Cache Refresh",
             Self::TitleDeletion => "Title Deletion",
             Self::TitleRename => "Title Rename",
@@ -250,6 +288,10 @@ impl JobKey {
             Self::RecycleBinPurge => "Recycle Bin Purge",
             Self::AcquisitionSearch => "Acquisition Search",
             Self::ApplicationUpgrade => "Application Upgrade",
+            Self::MaintenanceRuleEvaluation => "Maintenance Rule Evaluation",
+            Self::LifecycleActionHandling => "Maintenance Action Handling",
+            Self::MediaServerSignalSync => "Media Server Signal Sync",
+            Self::LocationOperation => "Location Operation",
         }
     }
 
@@ -282,8 +324,14 @@ impl JobKey {
                 "Compatibility job; pending releases are re-evaluated during RSS sync."
             }
             Self::StagedNzbPrune => "Prune expired staged NZB artifacts.",
+            Self::FullHashBackfill => {
+                "Slowly compute missing full-file content hashes so duplicate detection and move verification have something to compare."
+            }
             Self::DiscoverySync => {
                 "Evaluate local discovery freshness and refresh SMG discovery snapshots."
+            }
+            Self::ArtworkEncoding => {
+                "Encode pending artwork overnight; Run now overrides the nightly window."
             }
             Self::TitleImageCacheRefresh => {
                 "Refresh remote artwork URLs from SMG and rebuild locally processed title images."
@@ -297,6 +345,18 @@ impl JobKey {
                 "Interactive acquisition search over the selected wanted/upgrade scopes."
             }
             Self::ApplicationUpgrade => "Download, verify, and apply a signed application upgrade.",
+            Self::MaintenanceRuleEvaluation => {
+                "Evaluate enabled maintenance rules and reconcile lifecycle candidates. Never executes an action."
+            }
+            Self::LifecycleActionHandling => {
+                "Execute due maintenance candidates of armed observe-mode rules, behind the instance effect gates and full safety rechecks."
+            }
+            Self::MediaServerSignalSync => {
+                "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals."
+            }
+            Self::LocationOperation => {
+                "Move title content and catalog placement between roots or libraries."
+            }
         }
     }
 
@@ -315,6 +375,7 @@ impl JobKey {
             Self::PluginRegistryRefresh
             | Self::HealthChecks
             | Self::AutoBackup
+            | Self::ArtworkEncoding
             | Self::DiscoverySync
             | Self::TitleImageCacheRefresh
             | Self::TitleDeletion
@@ -322,16 +383,23 @@ impl JobKey {
             | Self::MediaFileDeletion
             | Self::RecycleBinRestore
             | Self::RecycleBinPurge
-            | Self::ApplicationUpgrade => JobCategory::System,
-            Self::Housekeeping | Self::PendingReleaseProcessing | Self::StagedNzbPrune => {
-                JobCategory::Maintenance
-            }
+            | Self::ApplicationUpgrade
+            | Self::LocationOperation => JobCategory::System,
+            Self::Housekeeping
+            | Self::PendingReleaseProcessing
+            | Self::StagedNzbPrune
+            | Self::FullHashBackfill
+            | Self::MaintenanceRuleEvaluation
+            | Self::LifecycleActionHandling
+            | Self::MediaServerSignalSync => JobCategory::Maintenance,
         }
     }
 
     pub fn section(self) -> JobSection {
         match self {
-            Self::PendingReleaseProcessing | Self::StagedNzbPrune => JobSection::Maintenance,
+            Self::PendingReleaseProcessing | Self::StagedNzbPrune | Self::FullHashBackfill => {
+                JobSection::Maintenance
+            }
             _ => JobSection::Primary,
         }
     }
@@ -347,9 +415,13 @@ impl JobKey {
             | Self::PluginRegistryRefresh
             | Self::Housekeeping
             | Self::HealthChecks
-            | Self::StagedNzbPrune => JobScheduleKind::Interval,
+            | Self::StagedNzbPrune
+            | Self::FullHashBackfill
+            | Self::MaintenanceRuleEvaluation
+            | Self::LifecycleActionHandling
+            | Self::MediaServerSignalSync => JobScheduleKind::Interval,
             Self::DiscoverySync => JobScheduleKind::StartupAndInterval,
-            Self::AutoBackup => JobScheduleKind::DailyAtTime,
+            Self::AutoBackup | Self::ArtworkEncoding => JobScheduleKind::DailyAtTime,
             Self::LibraryScanMovies
             | Self::LibraryScanSeries
             | Self::LibraryScanAnime
@@ -361,7 +433,8 @@ impl JobKey {
             | Self::RecycleBinPurge
             | Self::PendingReleaseProcessing
             | Self::AcquisitionSearch
-            | Self::ApplicationUpgrade => JobScheduleKind::Manual,
+            | Self::ApplicationUpgrade
+            | Self::LocationOperation => JobScheduleKind::Manual,
         }
     }
 
@@ -377,8 +450,13 @@ impl JobKey {
             Self::Housekeeping => "Every 24 hours",
             Self::HealthChecks => "Every 6 hours",
             Self::AutoBackup => "Daily at configured local time",
+            Self::ArtworkEncoding => "Daily 03:00–09:00 host local time",
             Self::PendingReleaseProcessing => "Re-evaluated during RSS sync",
             Self::StagedNzbPrune => "Every hour",
+            Self::FullHashBackfill => "Every 30 minutes",
+            Self::MaintenanceRuleEvaluation => "Every 8 hours",
+            Self::LifecycleActionHandling => "Every 12 hours",
+            Self::MediaServerSignalSync => "Every 6 hours",
             Self::DiscoverySync => "Dynamic discovery evaluator with daily backstop",
             Self::LibraryScanMovies
             | Self::LibraryScanSeries
@@ -390,7 +468,8 @@ impl JobKey {
             | Self::RecycleBinRestore
             | Self::RecycleBinPurge
             | Self::AcquisitionSearch
-            | Self::ApplicationUpgrade => "Manual only",
+            | Self::ApplicationUpgrade
+            | Self::LocationOperation => "Manual only",
         }
     }
 
@@ -405,6 +484,10 @@ impl JobKey {
             Self::Housekeeping => Some(24 * 3600),
             Self::HealthChecks => Some(6 * 3600),
             Self::StagedNzbPrune => Some(3600),
+            Self::FullHashBackfill => Some(30 * 60),
+            Self::MaintenanceRuleEvaluation => Some(MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS),
+            Self::LifecycleActionHandling => Some(LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS),
+            Self::MediaServerSignalSync => Some(MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS),
             Self::DiscoverySync => Some(24 * 3600),
             _ => None,
         }
@@ -418,6 +501,8 @@ impl JobKey {
             Self::SubtitleSearch => Some(120),
             Self::HealthChecks => Some(30),
             Self::DiscoverySync => Some(30 * 60),
+            // Boot is the busiest moment there is; the first sweep waits it out.
+            Self::FullHashBackfill => Some(15 * 60),
             _ => None,
         }
     }
@@ -433,6 +518,7 @@ impl JobKey {
                 | Self::RecycleBinPurge
                 | Self::AcquisitionSearch
                 | Self::ApplicationUpgrade
+                | Self::LocationOperation
         )
     }
 
@@ -449,7 +535,7 @@ impl JobKey {
     }
 }
 
-pub const ALL_JOB_KEYS: [JobKey; 16] = [
+pub const ALL_JOB_KEYS: [JobKey; 21] = [
     JobKey::LibraryScanMovies,
     JobKey::LibraryScanSeries,
     JobKey::LibraryScanAnime,
@@ -464,8 +550,13 @@ pub const ALL_JOB_KEYS: [JobKey; 16] = [
     JobKey::AutoBackup,
     JobKey::PendingReleaseProcessing,
     JobKey::StagedNzbPrune,
+    JobKey::FullHashBackfill,
     JobKey::DiscoverySync,
+    JobKey::ArtworkEncoding,
     JobKey::TitleImageCacheRefresh,
+    JobKey::MaintenanceRuleEvaluation,
+    JobKey::LifecycleActionHandling,
+    JobKey::MediaServerSignalSync,
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -772,11 +863,24 @@ impl JobRunTracker {
     pub async fn set_next_run_at(&self, job_key: JobKey, next_run_at: DateTime<Utc>) {
         let mut state = self.state.lock().await;
         state.next_run_at.insert(job_key, next_run_at);
+        metrics::gauge!(
+            crate::metrics_support::JOB_NEXT_RUN_TIMESTAMP_SECONDS,
+            "job_key" => job_key.as_str()
+        )
+        .set(crate::metrics_support::unix_seconds(next_run_at));
     }
 
     pub async fn clear_next_run_at(&self, job_key: JobKey) {
         let mut state = self.state.lock().await;
         state.next_run_at.remove(&job_key);
+        // Zero rather than a removed series: an unscheduled job stays visible
+        // on the scrape, and `job_next_run == 0` is a condition PromQL can ask
+        // about without absent-handling.
+        metrics::gauge!(
+            crate::metrics_support::JOB_NEXT_RUN_TIMESTAMP_SECONDS,
+            "job_key" => job_key.as_str()
+        )
+        .set(0.0);
     }
 
     pub async fn next_run_at(&self, job_key: JobKey) -> Option<DateTime<Utc>> {
@@ -858,6 +962,72 @@ mod tests {
         assert!(definition.manual_trigger_allowed);
     }
 
+    #[test]
+    fn maintenance_rule_evaluation_is_registered_as_a_recurring_maintenance_job() {
+        let definition = JobDefinition::from_key(JobKey::MaintenanceRuleEvaluation, None);
+
+        assert_eq!(
+            JobKey::MaintenanceRuleEvaluation.as_str(),
+            "maintenance_rule_evaluation"
+        );
+        assert_eq!(
+            JobKey::parse("maintenance_rule_evaluation"),
+            Some(JobKey::MaintenanceRuleEvaluation)
+        );
+        assert!(
+            ALL_JOB_KEYS.contains(&JobKey::MaintenanceRuleEvaluation),
+            "the evaluator has to appear in the system-jobs surface to be observable"
+        );
+        assert_eq!(definition.display_name, "Maintenance Rule Evaluation");
+        assert_eq!(definition.category, JobCategory::Maintenance);
+        assert_eq!(definition.schedule.kind, JobScheduleKind::Interval);
+        assert_eq!(definition.schedule.description, "Every 8 hours");
+        assert_eq!(
+            definition.schedule.interval_seconds,
+            Some(MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS)
+        );
+        assert_eq!(
+            MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS,
+            8 * 3600,
+            "RFC 137 section 10 pins the default cadence at eight hours"
+        );
+        assert!(
+            definition.manual_trigger_allowed,
+            "an operator must be able to run a dark evaluation on demand"
+        );
+    }
+
+    #[test]
+    fn media_server_signal_sync_is_registered_as_a_recurring_maintenance_job() {
+        let definition = JobDefinition::from_key(JobKey::MediaServerSignalSync, None);
+
+        assert_eq!(
+            JobKey::MediaServerSignalSync.as_str(),
+            "media_server_signal_sync"
+        );
+        assert_eq!(
+            JobKey::parse("media_server_signal_sync"),
+            Some(JobKey::MediaServerSignalSync)
+        );
+        assert!(
+            ALL_JOB_KEYS.contains(&JobKey::MediaServerSignalSync),
+            "the sweep has to appear in the system-jobs surface to be observable"
+        );
+        assert_eq!(definition.display_name, "Media Server Signal Sync");
+        assert_eq!(definition.category, JobCategory::Maintenance);
+        assert_eq!(definition.schedule.kind, JobScheduleKind::Interval);
+        assert_eq!(definition.schedule.description, "Every 6 hours");
+        assert_eq!(
+            definition.schedule.interval_seconds,
+            Some(MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS)
+        );
+        assert_eq!(MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS, 6 * 3600);
+        assert!(
+            definition.manual_trigger_allowed,
+            "an operator must be able to refresh watch signals on demand"
+        );
+    }
+
     #[tokio::test]
     async fn terminal_library_scan_merge_keeps_run_active_until_final_upsert() {
         let tracker = JobRunTracker::new();
@@ -925,5 +1095,68 @@ mod tests {
             .upsert_active_run(active_after_merge[0].clone())
             .await;
         assert!(tracker.list_active().await.is_empty());
+    }
+
+    /// One gauge series as seen by the local recorder: `(name, labels, value)`.
+    type RecordedGauge = (String, Vec<(String, String)>, f64);
+
+    /// Every gauge series the local recorder saw.
+    fn recorded_gauges(snapshotter: &metrics_util::debugging::Snapshotter) -> Vec<RecordedGauge> {
+        snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .filter_map(|(key, _unit, _description, value)| match value {
+                metrics_util::debugging::DebugValue::Gauge(gauge) => {
+                    let key = key.key();
+                    let labels = key
+                        .labels()
+                        .map(|label| (label.key().to_string(), label.value().to_string()))
+                        .collect::<Vec<_>>();
+                    Some((key.name().to_string(), labels, gauge.into_inner()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn next_run_registry_publishes_the_job_freshness_gauge() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime builds");
+        let tracker = JobRunTracker::new();
+        let next_run_at = DateTime::from_timestamp(1_700_000_000, 0).expect("timestamp in range");
+
+        // Thread-local recorder, driven on the runtime's single thread, so the
+        // assertion never depends on (or disturbs) a global recorder.
+        let recorder = metrics_util::debugging::DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+        let (after_set, after_clear) = metrics::with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                tracker.set_next_run_at(JobKey::RssSync, next_run_at).await;
+                let after_set = recorded_gauges(&snapshotter);
+                tracker.clear_next_run_at(JobKey::RssSync).await;
+                (after_set, recorded_gauges(&snapshotter))
+            })
+        });
+
+        let expected_labels = vec![("job_key".to_string(), "rss_sync".to_string())];
+        assert_eq!(
+            after_set,
+            vec![(
+                crate::metrics_support::JOB_NEXT_RUN_TIMESTAMP_SECONDS.to_string(),
+                expected_labels.clone(),
+                1_700_000_000.0,
+            )]
+        );
+        assert_eq!(
+            after_clear,
+            vec![(
+                crate::metrics_support::JOB_NEXT_RUN_TIMESTAMP_SECONDS.to_string(),
+                expected_labels,
+                0.0,
+            )]
+        );
     }
 }

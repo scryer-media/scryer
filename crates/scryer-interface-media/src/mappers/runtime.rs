@@ -156,6 +156,9 @@ pub fn from_rule_set(rs: RuleSet) -> RuleSetPayload {
         rego_source: scryer_rules::strip_editor_source(&rs.rego_source),
         enabled: rs.enabled,
         priority: rs.priority,
+        evaluation_phase: rs.evaluation_phase.as_storage_str().to_string(),
+        disabled_reason: rs.disabled_reason,
+        exclusive_group: rs.exclusive_group,
         applied_facets: rs
             .applied_facets
             .iter()
@@ -331,6 +334,7 @@ pub fn from_notification_channel_with_fields(
         stored_secret_keys,
         media_server_connection_id: ch.media_server_connection_id.map(Into::into),
         is_enabled: ch.is_enabled,
+        blocked_reason: None,
         created_at: ch.created_at,
         updated_at: ch.updated_at,
     }

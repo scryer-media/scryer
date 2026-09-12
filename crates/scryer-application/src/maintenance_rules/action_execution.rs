@@ -1,0 +1,2655 @@
+//! Scheduled execution of due maintenance candidates (RFC 137 sections 8, 9.6,
+//! 9.8, 9.10, 10; tracks D2/D3, title scope).
+//!
+//! # What this module may do
+//!
+//! For rules that are enabled, in observe mode, and explicitly armed — and only
+//! while the matching instance effect gate is on — execute the rule's
+//! configured action on candidates whose grace has elapsed, through the same
+//! application use cases a human operator would drive: monitoring setters, the
+//! title metadata/profile path, the acquisition search job, and the
+//! preview-fingerprinted deletion workflow.
+//!
+//! # Fail-closed shape
+//!
+//! Every ambiguity defers. A candidate is re-evaluated against fresh facts
+//! immediately before its action: a subject that no longer matches cancels
+//! instead of acting, and one that cannot be decided holds. Live playback
+//! anywhere, an unreachable media server, and active or unattributable
+//! acquisition work all hold. A hold writes an action-run row saying why and
+//! leaves the candidate [`MaintenanceCandidateState::Blocked`], re-checked on
+//! the next pass. Nothing in this module deletes a file outside
+//! [`AppUseCase::delete_title_by_policy`], whose fingerprint check is the same
+//! one the human deletion dialog uses.
+
+use std::collections::{HashMap, HashSet};
+
+use chrono::{Duration, Utc};
+use scryer_domain::{
+    AppPermission, Id, LifecycleActionRun, LifecycleActionRunStatus, LifecycleCandidate,
+    MaintenanceActionJobReceipt, MaintenanceActionStepRun, MaintenanceCandidateState,
+    MaintenanceEffectArming, MaintenanceEvaluationMode, Title, User,
+};
+use scryer_rules::maintenance::{
+    MaintenanceOutcome, MaintenancePolicy, MaintenanceRulesEngine, MaintenanceRulesEvaluator,
+};
+use serde::Serialize;
+use tracing::warn;
+
+use crate::jobs::{JobKey, JobTriggerSource};
+use crate::maintenance_rules::action_catalog::{
+    MaintenanceActionKind, MaintenanceActionParameters, MaintenanceRiskClass,
+    MaintenanceSubjectKind as ActionSubjectKind, MaintenanceTimingMode, descriptor_for,
+};
+use crate::maintenance_rules::action_sequence::{
+    ACTION_SEQUENCE_KIND, MaintenanceActionDefinition, MaintenanceActionSequence,
+    MaintenanceActionStepKind, action_definition_from_persisted_json,
+};
+use crate::maintenance_rules::evaluation::MaintenanceEvaluationTrigger;
+use crate::maintenance_rules::facts::{
+    MaintenanceLibraryRef, MaintenanceTitleClaims, MaintenanceTitlePeople, MaintenanceTitleWatch,
+    QUALITY_PROFILE_TAG_PREFIX, build_subject_input_with_completed_retention_episodes,
+    claim_is_live_at,
+};
+use crate::maintenance_rules::safety::{MaintenanceActivityCheck, MaintenancePlaybackHold};
+use crate::maintenance_rules::sequence_execution::SequenceCandidateExecutionContext;
+use crate::maintenance_rules::sequence_history::maintenance_sequence_history_steps;
+use crate::maintenance_rules::service::MaintenanceRuleSetDetail;
+use crate::ports::MaintenanceActionStepCandidateKey;
+use crate::{AppError, AppResult, AppUseCase, PolicyDeleteAuthorization, WantedKind};
+
+/// Executed actions per rule per handler pass. Over-cap candidates simply stay
+/// due for the next pass (RFC 9.10's per-rule/per-run cap).
+pub const MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN: usize = 10;
+
+/// High-risk executions per handler pass across every rule.
+pub const MAINTENANCE_MAX_HIGH_RISK_ACTIONS_PER_RUN: usize = 10;
+
+/// High-risk failures in one pass that stop further high-risk work that pass —
+/// a circuit breaker against a systematically failing deletion path.
+pub const MAINTENANCE_HIGH_RISK_FAILURE_BREAKER: usize = 3;
+
+/// Failed attempts before a candidate is marked terminally failed.
+pub const MAINTENANCE_MAX_ACTION_ATTEMPTS: i64 = 3;
+
+/// An `executing` lease older than this is considered abandoned by a crashed
+/// run and may be re-leased.
+pub(super) const EXECUTION_LEASE_STALE_AFTER_MINUTES: i64 = 60;
+
+/// How many of a candidate's action-run rows a reclaim scans looking for the
+/// `running` row an interrupted attempt left behind. Attempts are capped at
+/// [`MAINTENANCE_MAX_ACTION_ATTEMPTS`] and holds append rows of their own, so a
+/// small bound covers every row that could still be open without reading a
+/// candidate's whole history.
+const MAINTENANCE_ORPHANED_RUN_SCAN_LIMIT: usize = 20;
+
+/// The states the executor may move a selected candidate into `due` from.
+///
+/// `executing` is absent on purpose: a stranded lease is reclaimed by
+/// [`MaintenanceCandidateRepository::lease_candidate_for_execution`]'s own stale
+/// arm, which is the only writer allowed to decide that a lease is abandoned.
+///
+/// [`MaintenanceCandidateRepository::lease_candidate_for_execution`]: crate::ports::MaintenanceCandidateRepository::lease_candidate_for_execution
+pub(super) const EXECUTOR_DUE_EXPECTED_STATES: &[MaintenanceCandidateState] = &[
+    MaintenanceCandidateState::Observing,
+    MaintenanceCandidateState::PendingAction,
+    MaintenanceCandidateState::Blocked,
+];
+
+/// The only state an executor's terminal write may move a candidate out of: the
+/// lease it took itself. Zero rows affected means this worker no longer owns the
+/// candidate — its lease went stale and was reclaimed while it worked — so the
+/// pass records [`CandidateOutcome::LeaseLost`] and writes nothing further
+/// rather than stamping a result over the new owner's.
+pub(super) const EXECUTOR_TERMINAL_EXPECTED_STATES: &[MaintenanceCandidateState] =
+    &[MaintenanceCandidateState::Executing];
+
+/// The action kinds [`AppUseCase::execute_maintenance_action`] actually
+/// dispatches for a title-scoped rule.
+///
+/// This is the single source of truth for "can a title rule run this action":
+/// authoring checks it (`validate_title_scope_action`) and the executor's match
+/// refuses everything outside it. Before, the two disagreed —
+/// `unmonitor_show_delete_existing_files` is show-subject, so it passed
+/// authoring, and then hard-failed at execution three times into a terminal
+/// `Failed` candidate. A kind is on this list only when the executor has a real
+/// implementation for every part of the promised action.
+///
+/// The web rule builder mirrors this list —
+/// `TITLE_EXECUTOR_UNSUPPORTED_ACTION_KINDS` in
+/// `apps/scryer-web/lib/utils/maintenance-rule-sets.ts` — so an operator is
+/// never offered an action the backend would refuse to save. Change one, change
+/// the other.
+pub const EXECUTABLE_TITLE_RULE_ACTIONS: &[MaintenanceActionKind] = &[
+    MaintenanceActionKind::DoNothing,
+    MaintenanceActionKind::UnmonitorScopeKeepFiles,
+    MaintenanceActionKind::UnmonitorTitleDeleteAllFiles,
+    MaintenanceActionKind::DeleteTitleAndFiles,
+    MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged,
+    MaintenanceActionKind::AddTags,
+    MaintenanceActionKind::RemoveTags,
+];
+
+/// The single supported scope/action matrix exposed to the rule builder.
+pub fn supported_scope_actions(
+    scope: scryer_domain::MaintenanceRuleSubjectKind,
+) -> &'static [MaintenanceActionKind] {
+    match scope {
+        scryer_domain::MaintenanceRuleSubjectKind::Title => EXECUTABLE_TITLE_RULE_ACTIONS,
+        scryer_domain::MaintenanceRuleSubjectKind::Season
+        | scryer_domain::MaintenanceRuleSubjectKind::Episode => &[
+            MaintenanceActionKind::DoNothing,
+            MaintenanceActionKind::UnmonitorScopeKeepFiles,
+            MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+        ],
+    }
+}
+
+/// Actions which remain meaningful when a rule is constrained to files on one
+/// configured storage root. Whole-record deletion is intentionally absent:
+/// the root filter may retain files elsewhere, while deleting the record would
+/// make that retained media untracked.
+pub fn supports_storage_scope(kind: MaintenanceActionKind) -> bool {
+    matches!(
+        kind,
+        MaintenanceActionKind::DoNothing
+            | MaintenanceActionKind::UnmonitorScopeKeepFiles
+            | MaintenanceActionKind::UnmonitorTitleDeleteAllFiles
+            | MaintenanceActionKind::UnmonitorScopeDeleteFiles
+    )
+}
+
+/// The refusal both the authoring check and the executor's rejection arm speak,
+/// so an operator reads the same sentence wherever they hit the boundary.
+pub(crate) fn title_rule_action_not_executable(kind: MaintenanceActionKind) -> String {
+    format!(
+        "this action cannot run for a title-scoped rule yet: {}",
+        kind.as_wire_str()
+    )
+}
+
+/// Stable `hold_reason` / `state_reason` values the executor writes. Part of
+/// the operator-visible contract, like `candidate_reason` on the evaluator.
+pub mod execution_reason {
+    /// The rule was disarmed, disabled, left observe mode, or its gate went
+    /// down between selection and execution.
+    pub const RULE_NOT_ELIGIBLE: &str = "rule_not_eligible";
+    /// Fresh re-evaluation at execution time no longer matches.
+    pub const NO_MATCH_AT_EXECUTION: &str = "no_match_at_execution";
+    /// Fresh re-evaluation could not decide, or errored.
+    pub const UNKNOWN_AT_EXECUTION: &str = "unknown_at_execution";
+    /// A playback session is active on a configured media server.
+    pub const PLAYBACK_HOLD: &str = "playback_hold";
+    /// A configured media server could not be asked about playback.
+    pub const PLAYBACK_UNKNOWN: &str = "playback_unknown";
+    /// The title has a grab, download, or import in flight.
+    pub const ACTIVE_ACQUISITION: &str = "active_acquisition";
+    /// Acquisition activity could not be ruled out.
+    pub const ACQUISITION_UNKNOWN: &str = "acquisition_unknown";
+    /// A storage-pressure deletion owns the conservative global filesystem
+    /// guard. This is a hold because another worker will release it.
+    pub const STORAGE_DELETION_IN_PROGRESS: &str = "storage_deletion_in_progress";
+    /// The action needs an application seam that does not exist yet
+    /// (`unmonitor_title_delete_all_files`'s title-preserving file deletion).
+    pub const ACTION_NOT_FULLY_SUPPORTED: &str = "action_not_fully_supported";
+    /// The subject no longer exists in the catalog.
+    pub const TITLE_MISSING: &str = "title_missing";
+    /// A location operation owns the title (FR-084); the action retries once
+    /// the operation releases it.
+    pub const LOCATION_OPERATION_HOLD: &str = "location_operation_hold";
+    /// This rule's per-pass action-step allowance was spent by earlier
+    /// sequence steps. The candidate remains blocked for the next pass.
+    pub const PASS_ACTION_STEP_BUDGET: &str = "pass_action_step_budget";
+    /// The shared high-risk allowance was spent by earlier destructive
+    /// sequence steps. Reversible predecessors may still run in a later pass.
+    pub const PASS_HIGH_RISK_STEP_BUDGET: &str = "pass_high_risk_step_budget";
+    /// A lifecycle claim still holds the title (spec 0003 FR-042): a request
+    /// lease that is running or has not started yet, or a keep claim. The
+    /// action retries once every claim has lapsed or been released — which is
+    /// why this is a hold and not a cancel.
+    pub const RETENTION_CLAIM_HOLD: &str = "retention_claim_hold";
+    /// The action completed.
+    pub const ACTION_SUCCEEDED: &str = "action_succeeded";
+    /// The postcondition already held; nothing was mutated.
+    pub const ALREADY_SATISFIED: &str = "already_satisfied";
+    /// A transient failure was recorded; the candidate is due again.
+    pub const RETRY_PENDING: &str = "retry_pending";
+    /// The attempt budget is exhausted or the failure was terminal.
+    pub const ACTION_FAILED: &str = "action_failed";
+    /// An attempt's worker stopped before it finished; the abandoned lease was
+    /// reclaimed and its `running` action-run row closed out.
+    pub const LEASE_RECLAIMED: &str = "lease_reclaimed";
+    /// A tag the action writes is no longer in the title-tag registry — an
+    /// administrator deleted it after the rule was authored. The candidate
+    /// holds rather than failing: redefining the tag makes the rule work again,
+    /// and writing a label nothing defines would put the catalog in a state the
+    /// assignment path itself refuses.
+    pub const TAG_NOT_DEFINED: &str = "tag_not_defined";
+    /// Another rule in this same pass would write the opposite patch for the
+    /// same label on this title. Both candidates hold: whichever ran last would
+    /// win, so the outcome would depend on rule order rather than on what the
+    /// operator asked for, and that is an authoring mistake to surface rather
+    /// than a race to resolve.
+    pub const TAG_PATCH_CONFLICT: &str = "tag_patch_conflict";
+}
+
+/// Job report for [`JobKey::LifecycleActionHandling`], serialized onto the run.
+#[derive(Debug, Default, Serialize)]
+pub struct MaintenanceActionHandlingReport {
+    /// False when both effect gates were off and the pass did nothing.
+    pub gates_enabled: bool,
+    pub rules_considered: usize,
+    pub rules_eligible: usize,
+    pub candidates_considered: usize,
+    pub executed: usize,
+    pub already_satisfied: usize,
+    pub held: usize,
+    pub canceled: usize,
+    pub failed: usize,
+    pub lease_lost: usize,
+}
+
+/// One action run with its title's display name resolved for rendering.
+#[derive(Clone, Debug)]
+pub struct MaintenanceActionRunView {
+    pub subject_label: String,
+    pub run: LifecycleActionRun,
+    pub title_name: String,
+    /// The immutable action definition of this run's candidate revision.
+    pub action_definition: Option<MaintenanceActionDefinition>,
+    /// Ordered current progress for v2 only. The bounded step rows and durable
+    /// receipts are loaded page-wise, never as one history query per run.
+    pub sequence_steps: Vec<MaintenanceActionStepProgressView>,
+}
+
+/// One ordered v2 operation and its latest durable evidence.
+#[derive(Clone, Debug)]
+pub struct MaintenanceActionStepProgressView {
+    pub step: crate::maintenance_rules::MaintenanceActionStep,
+    pub run: Option<MaintenanceActionStepRun>,
+    pub receipts: Vec<MaintenanceActionJobReceipt>,
+}
+
+#[derive(Clone)]
+pub(super) struct MaintenanceSequenceProjectionCoordinate {
+    pub candidate_id: String,
+    pub rule_set_id: String,
+    pub match_generation: i64,
+    pub revision_number: i64,
+}
+
+/// Outcome of one candidate's pass, folded into the report.
+pub(super) enum CandidateOutcome {
+    Executed,
+    AlreadySatisfied,
+    Held,
+    Canceled,
+    Failed,
+    LeaseLost,
+}
+
+/// One handler pass shares these limits across every v2 candidate of a rule.
+///
+/// Legacy actions retain their established candidate accounting. A sequence
+/// instead charges each claimed adapter dispatch, so a long sequence cannot
+/// spend an unbounded number of operations while appearing as one candidate.
+pub(super) struct MaintenanceSequencePassBudget {
+    remaining_rule_steps: usize,
+    remaining_high_risk_steps: usize,
+    dispatched_steps: usize,
+    dispatched_high_risk_steps: usize,
+    failed_high_risk_steps: usize,
+    last_dispatch_was_high_risk: bool,
+    last_dispatch_failure_recorded: bool,
+}
+
+impl MaintenanceSequencePassBudget {
+    pub(super) fn new(remaining_rule_steps: usize, remaining_high_risk_steps: usize) -> Self {
+        Self {
+            remaining_rule_steps,
+            remaining_high_risk_steps,
+            dispatched_steps: 0,
+            dispatched_high_risk_steps: 0,
+            failed_high_risk_steps: 0,
+            last_dispatch_was_high_risk: false,
+            last_dispatch_failure_recorded: false,
+        }
+    }
+
+    pub(super) fn hold_reason_before_dispatch(&self, high_risk: bool) -> Option<&'static str> {
+        if self.remaining_rule_steps == 0 {
+            Some(execution_reason::PASS_ACTION_STEP_BUDGET)
+        } else if high_risk && self.remaining_high_risk_steps == 0 {
+            Some(execution_reason::PASS_HIGH_RISK_STEP_BUDGET)
+        } else {
+            None
+        }
+    }
+
+    pub(super) fn record_dispatch(&mut self, high_risk: bool) {
+        debug_assert!(self.remaining_rule_steps > 0);
+        self.remaining_rule_steps -= 1;
+        self.dispatched_steps += 1;
+        self.last_dispatch_was_high_risk = high_risk;
+        self.last_dispatch_failure_recorded = false;
+        if high_risk {
+            debug_assert!(self.remaining_high_risk_steps > 0);
+            self.remaining_high_risk_steps -= 1;
+            self.dispatched_high_risk_steps += 1;
+        }
+    }
+
+    pub(super) fn record_failed_dispatch(&mut self) {
+        if self.last_dispatch_was_high_risk && !self.last_dispatch_failure_recorded {
+            self.failed_high_risk_steps += 1;
+            self.last_dispatch_failure_recorded = true;
+        }
+    }
+
+    pub(super) fn dispatched_steps(&self) -> usize {
+        self.dispatched_steps
+    }
+
+    pub(super) fn dispatched_high_risk_steps(&self) -> usize {
+        self.dispatched_high_risk_steps
+    }
+
+    pub(super) fn failed_high_risk_steps(&self) -> usize {
+        self.failed_high_risk_steps
+    }
+}
+
+/// A resolved revision keeps v1 dispatch separate from the v2 executor. The
+/// legacy arm continues to call the original implementation unchanged.
+enum EligibleRuleAction {
+    Legacy(MaintenanceActionKind),
+    Sequence(MaintenanceActionSequence),
+}
+
+/// What the pre-execution safety rechecks decided.
+pub(super) enum SafetyDecision {
+    /// Act on this title, which every check has just seen fresh.
+    Proceed(Box<Title>, Box<scryer_rules::maintenance::MaintenanceInput>),
+    /// Refuse and block the candidate with this reason.
+    Hold(&'static str),
+    /// The subject stopped matching (or vanished); cancel the candidate.
+    Cancel(&'static str),
+    /// An exclusion now covers the subject.
+    Excluded,
+}
+
+/// What an action implementation reports back.
+pub(super) enum ActionResult {
+    Executed {
+        detail: serde_json::Value,
+    },
+    AlreadySatisfied {
+        detail: serde_json::Value,
+    },
+    /// A storage-pressure matcher stopped matching after one or more files.
+    /// The resulting terminal cancellation lets a future match start a new
+    /// generation and grace period.
+    Canceled {
+        reason: &'static str,
+        detail: serde_json::Value,
+    },
+    /// Capacity or another live execution fact became unknown after work had
+    /// started. Keep the journal and remaining manifest for a later recheck.
+    Held {
+        reason: &'static str,
+        detail: serde_json::Value,
+    },
+}
+
+/// Fresh evidence and mutable execution state shared by an action dispatcher
+/// and its scoped-deletion implementation. Keeping this as one bundle makes
+/// the action boundary explicit without splitting a single lease across
+/// loosely related parameters.
+pub(super) struct MaintenanceExecutionContext<'a> {
+    pub(super) detail: &'a MaintenanceRuleSetDetail,
+    pub(super) candidate: &'a LifecycleCandidate,
+    pub(super) title: &'a Title,
+    pub(super) input: &'a scryer_rules::maintenance::MaintenanceInput,
+    pub(super) run: &'a mut LifecycleActionRun,
+    pub(super) evaluator: &'a mut MaintenanceRulesEvaluator,
+    pub(super) libraries: &'a HashMap<String, MaintenanceLibraryRef>,
+    pub(super) tag_conflicts: &'a Option<HashSet<String>>,
+}
+
+// ── Arming ──────────────────────────────────────────────────────────────────
+
+impl AppUseCase {
+    /// Set how far one rule's effects are armed.
+    ///
+    /// Destructive arming is the elevated, count-acknowledged step of RFC 9.10:
+    /// it applies only to rules whose action is high-risk, additionally
+    /// requires system-settings authority (RFC 15), and demands the caller
+    /// acknowledge the number of candidates the arming would expose. Arming is
+    /// deliberately independent of the instance gates — execution requires
+    /// both.
+    ///
+    /// Arming never outlives the revision it was granted against: what an
+    /// operator acknowledged is one matcher's blast radius under one action, so
+    /// appending a revision resets the rule to
+    /// [`MaintenanceEffectArming::None`] and this call has to be repeated
+    /// against the new matcher (see
+    /// [`AppUseCase::update_maintenance_rule_matcher`]). Mode changes and
+    /// metadata renames leave arming alone, because neither moves the matcher or
+    /// the action.
+    pub async fn set_maintenance_rule_arming(
+        &self,
+        actor: &User,
+        rule_set_id: &str,
+        arming: MaintenanceEffectArming,
+        acknowledged_candidate_count: Option<i64>,
+    ) -> AppResult<MaintenanceRuleSetDetail> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+        if arming == MaintenanceEffectArming::Destructive {
+            self.require_app_permission(actor, AppPermission::ManageSystemSettings)
+                .await?;
+        }
+
+        let rule_set = self.require_maintenance_rule_set(rule_set_id).await?;
+        let detail = self.load_maintenance_rule_detail(rule_set).await?;
+
+        if arming == MaintenanceEffectArming::Destructive {
+            let high_risk = match &detail.action_definition {
+                MaintenanceActionDefinition::Legacy(spec) => {
+                    descriptor_for(spec.kind).risk_class == MaintenanceRiskClass::High
+                }
+                MaintenanceActionDefinition::Sequence(sequence) => sequence
+                    .steps
+                    .iter()
+                    .any(|step| step.descriptor().risk_class == MaintenanceRiskClass::High),
+            };
+            if !high_risk {
+                return Err(AppError::Validation(
+                    "destructive arming applies only to rules whose action can delete files".into(),
+                ));
+            }
+            let current = self
+                .count_active_maintenance_candidates(&detail.rule_set.id)
+                .await?;
+            if acknowledged_candidate_count != Some(current) {
+                // The web client parses the count out of this exact message to
+                // re-present the confirmation; keep the shape stable.
+                return Err(AppError::Validation(format!(
+                    "destructive arming requires acknowledging the current candidate count ({current})"
+                )));
+            }
+        }
+
+        let now = Utc::now();
+        self.services
+            .customization
+            .maintenance_rule_sets
+            .update_rule_set_arming(&detail.rule_set.id, arming, now)
+            .await?;
+
+        let mut detail = detail;
+        detail.rule_set.effect_arming = arming;
+        detail.rule_set.updated_at = now;
+        Ok(detail)
+    }
+
+    /// Non-terminal candidates of one rule — the number destructive arming
+    /// makes the operator acknowledge.
+    pub(crate) async fn count_active_maintenance_candidates(
+        &self,
+        rule_set_id: &str,
+    ) -> AppResult<i64> {
+        Ok(self
+            .services
+            .customization
+            .maintenance_evaluation
+            .count_candidates_by_state(rule_set_id)
+            .await?
+            .into_iter()
+            .filter(|(state, _)| !state.is_terminal())
+            .map(|(_, count)| count)
+            .sum())
+    }
+
+    pub(super) async fn maintenance_sequence_projection(
+        &self,
+        coordinates: &[MaintenanceSequenceProjectionCoordinate],
+    ) -> AppResult<(
+        HashMap<String, Option<MaintenanceActionDefinition>>,
+        HashMap<String, Vec<MaintenanceActionStepProgressView>>,
+    )> {
+        let mut definitions = HashMap::new();
+        let mut definitions_by_revision: HashMap<
+            (String, i64),
+            Option<MaintenanceActionDefinition>,
+        > = HashMap::new();
+        for coordinate in coordinates {
+            let revision_key = (coordinate.rule_set_id.clone(), coordinate.revision_number);
+            if let Some(definition) = definitions_by_revision.get(&revision_key) {
+                definitions.insert(coordinate.candidate_id.clone(), definition.clone());
+                continue;
+            }
+            let definition = self
+                .services
+                .customization
+                .maintenance_rule_sets
+                .get_revision(&coordinate.rule_set_id, coordinate.revision_number)
+                .await?
+                .map(|revision| action_definition_from_persisted_json(&revision.action_spec_json))
+                .transpose()
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+            definitions_by_revision.insert(revision_key, definition.clone());
+            definitions.insert(coordinate.candidate_id.clone(), definition);
+        }
+        let keys: Vec<MaintenanceActionStepCandidateKey> = coordinates
+            .iter()
+            .map(|coordinate| MaintenanceActionStepCandidateKey {
+                candidate_id: coordinate.candidate_id.clone(),
+                match_generation: coordinate.match_generation,
+                revision_number: coordinate.revision_number,
+            })
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect();
+        let runs = self
+            .services
+            .customization
+            .maintenance_evaluation
+            .list_action_steps_for_candidates(&keys)
+            .await?;
+        let step_keys: Vec<_> = runs.iter().map(|run| run.key.clone()).collect();
+        let receipts = self
+            .services
+            .customization
+            .maintenance_evaluation
+            .list_action_job_receipts_for_steps(&step_keys)
+            .await?;
+        let mut runs_by_candidate: HashMap<String, HashMap<String, MaintenanceActionStepRun>> =
+            HashMap::new();
+        for run in runs {
+            runs_by_candidate
+                .entry(run.key.candidate_id.clone())
+                .or_default()
+                .insert(run.key.step_id.clone(), run);
+        }
+        let mut receipts_by_step: HashMap<_, Vec<MaintenanceActionJobReceipt>> = HashMap::new();
+        for receipt in receipts {
+            receipts_by_step
+                .entry(receipt.key.clone())
+                .or_default()
+                .push(receipt);
+        }
+        let mut progress = HashMap::new();
+        for coordinate in coordinates {
+            let Some(Some(MaintenanceActionDefinition::Sequence(sequence))) =
+                definitions.get(&coordinate.candidate_id)
+            else {
+                continue;
+            };
+            let candidate_runs = runs_by_candidate
+                .get(&coordinate.candidate_id)
+                .cloned()
+                .unwrap_or_default();
+            let steps = sequence
+                .steps
+                .iter()
+                .map(|step| {
+                    let run = candidate_runs.get(&step.id).cloned();
+                    let receipts = run
+                        .as_ref()
+                        .and_then(|run| receipts_by_step.get(&run.key))
+                        .cloned()
+                        .unwrap_or_default();
+                    MaintenanceActionStepProgressView {
+                        step: step.clone(),
+                        run,
+                        receipts,
+                    }
+                })
+                .collect();
+            progress.insert(coordinate.candidate_id.clone(), steps);
+        }
+        Ok((definitions, progress))
+    }
+
+    pub async fn list_maintenance_action_runs(
+        &self,
+        actor: &User,
+        rule_set_id: Option<&str>,
+        candidate_id: Option<&str>,
+        limit: Option<usize>,
+    ) -> AppResult<Vec<MaintenanceActionRunView>> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+        let limit = limit.unwrap_or(50).clamp(1, 200);
+        // A DeleteFiles step owns an internal scoped-deletion action run for
+        // fingerprints and crash recovery. Filter both streams in the store,
+        // before their limits apply, so those child journals cannot push an
+        // operator-visible legacy or sequence run off this history page.
+        let mut runs = self
+            .services
+            .customization
+            .maintenance_evaluation
+            .list_non_sequence_action_runs(rule_set_id, candidate_id, limit)
+            .await?;
+        runs.extend(
+            self.services
+                .customization
+                .maintenance_evaluation
+                .list_sequence_history_action_runs(rule_set_id, candidate_id, limit)
+                .await?,
+        );
+        runs.sort_by(|left, right| {
+            right
+                .started_at
+                .cmp(&left.started_at)
+                .then_with(|| right.id.cmp(&left.id))
+        });
+        runs.truncate(limit);
+        let names = self
+            .maintenance_title_names(runs.iter().map(|run| run.title_id.clone()))
+            .await?;
+        let summaries = self
+            .maintenance_subject_summaries(
+                runs.iter()
+                    .map(|row| (row.subject_kind.clone(), row.title_id.clone())),
+            )
+            .await?;
+        let coordinates: Vec<_> = runs
+            .iter()
+            .map(|run| MaintenanceSequenceProjectionCoordinate {
+                candidate_id: run.candidate_id.clone(),
+                rule_set_id: run.rule_set_id.clone(),
+                match_generation: run.match_generation,
+                revision_number: run.revision_number,
+            })
+            .collect();
+        let (definitions, sequence_steps) =
+            self.maintenance_sequence_projection(&coordinates).await?;
+        Ok(runs
+            .into_iter()
+            .map(|run| {
+                let title_name = crate::maintenance_rules::evaluation::maintenance_title_name(
+                    &names,
+                    &run.title_id,
+                );
+                let subject_label = serde_json::from_str::<serde_json::Value>(&run.detail)
+                    .ok()
+                    .and_then(|detail| {
+                        detail
+                            .get("subject_label")
+                            .and_then(serde_json::Value::as_str)
+                            .map(str::to_string)
+                    })
+                    .or_else(|| {
+                        summaries
+                            .get(&(run.subject_kind.clone(), run.subject_id.clone()))
+                            .map(|summary| summary.0.clone())
+                    })
+                    .unwrap_or_else(|| run.subject_id.clone());
+                let action_definition = definitions.get(&run.candidate_id).cloned().flatten();
+                // A completed history row must describe that particular lease,
+                // rather than the candidate's later durable step state. Running
+                // summaries deliberately retain the live projection.
+                let history_steps = match (
+                    action_definition.as_ref(),
+                    maintenance_sequence_history_steps(&run),
+                ) {
+                    (Some(MaintenanceActionDefinition::Sequence(sequence)), Some(snapshot))
+                        if run.status != LifecycleActionRunStatus::Running =>
+                    {
+                        Some(
+                            sequence
+                                .steps
+                                .iter()
+                                .map(|step| MaintenanceActionStepProgressView {
+                                    step: step.clone(),
+                                    run: snapshot.get(&step.id).map(|entry| entry.run.clone()),
+                                    receipts: snapshot
+                                        .get(&step.id)
+                                        .map(|entry| entry.receipts.clone())
+                                        .unwrap_or_default(),
+                                })
+                                .collect(),
+                        )
+                    }
+                    _ => None,
+                };
+                MaintenanceActionRunView {
+                    action_definition,
+                    sequence_steps: history_steps.unwrap_or_else(|| {
+                        sequence_steps
+                            .get(&run.candidate_id)
+                            .cloned()
+                            .unwrap_or_default()
+                    }),
+                    run,
+                    title_name,
+                    subject_label,
+                }
+            })
+            .collect())
+    }
+
+    /// Manual trigger for the action handler, mirroring
+    /// [`AppUseCase::run_maintenance_evaluation_now`].
+    pub async fn run_maintenance_action_handler_now(
+        &self,
+        actor: &User,
+    ) -> AppResult<MaintenanceEvaluationTrigger> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+
+        let gates = self.load_maintenance_gates().await?;
+        if !gates.reversible_effects_enabled && !gates.destructive_effects_enabled {
+            return Ok(MaintenanceEvaluationTrigger {
+                started: false,
+                message: Some(
+                    "both instance effect gates are off, so no actions can execute".to_string(),
+                ),
+            });
+        }
+
+        if self
+            .runtime
+            .jobs
+            .job_run_tracker
+            .has_active_job(JobKey::LifecycleActionHandling)
+            .await
+        {
+            return Ok(MaintenanceEvaluationTrigger {
+                started: false,
+                message: Some("an action-handling run is already in progress".to_string()),
+            });
+        }
+
+        let app = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = app
+                .run_scheduled_job_now(JobKey::LifecycleActionHandling, JobTriggerSource::Manual)
+                .await
+            {
+                warn!(error = %error, "manual maintenance action-handling run failed");
+            }
+        });
+
+        Ok(MaintenanceEvaluationTrigger {
+            started: true,
+            message: Some("Maintenance action handling started".to_string()),
+        })
+    }
+}
+
+// ── The handler ─────────────────────────────────────────────────────────────
+
+impl AppUseCase {
+    /// Job body for [`JobKey::LifecycleActionHandling`].
+    pub(crate) async fn run_lifecycle_action_handling_job(
+        &self,
+    ) -> AppResult<MaintenanceActionHandlingReport> {
+        let mut report = MaintenanceActionHandlingReport::default();
+        let gates = self.load_maintenance_gates().await?;
+        if !gates.reversible_effects_enabled && !gates.destructive_effects_enabled {
+            return Ok(report);
+        }
+        report.gates_enabled = true;
+
+        let rule_sets = self
+            .services
+            .customization
+            .maintenance_rule_sets
+            .list_rule_sets()
+            .await?;
+        report.rules_considered = rule_sets.len();
+
+        let libraries = self.maintenance_library_refs().await?;
+        let now = Utc::now();
+        let mut high_risk_executed = 0usize;
+        let mut high_risk_failures = 0usize;
+
+        // Every rule that could run this pass is resolved first, in one place.
+        // The tag-conflict scan below has to know what *other* rules are about
+        // to write before the first of them writes anything, and resolving a
+        // rule means reading its current revision — so the alternative is
+        // reading every revision twice.
+        let mut eligible_rules = Vec::new();
+        for rule_set in rule_sets {
+            if !rule_set.enabled
+                || rule_set.evaluation_mode != MaintenanceEvaluationMode::Observe
+                || rule_set.effect_arming == MaintenanceEffectArming::None
+            {
+                continue;
+            }
+            let detail = match self.load_maintenance_rule_detail(rule_set).await {
+                Ok(detail) => detail,
+                Err(error) => {
+                    warn!(error = %error, "skipping maintenance rule with unusable revision");
+                    continue;
+                }
+            };
+            let (action, high_risk, eligible) = match &detail.action_definition {
+                MaintenanceActionDefinition::Legacy(spec) => {
+                    let kind = spec.kind;
+                    let descriptor = descriptor_for(kind);
+                    if detail.revision.storage_root_id.is_some() && !supports_storage_scope(kind) {
+                        warn!(
+                            rule_set_id = detail.rule_set.id.as_str(),
+                            action_kind = kind.as_wire_str(),
+                            "skipping storage-root maintenance rule with unsupported action"
+                        );
+                        continue;
+                    }
+                    if descriptor.timing_mode == MaintenanceTimingMode::MembershipTracking {
+                        continue;
+                    }
+                    let high_risk = descriptor.risk_class == MaintenanceRiskClass::High;
+                    let eligible = if high_risk {
+                        gates.destructive_effects_enabled
+                            && detail.rule_set.effect_arming == MaintenanceEffectArming::Destructive
+                            && !detail.rule_set.destructive_rearm_required
+                    } else {
+                        gates.reversible_effects_enabled
+                    };
+                    (EligibleRuleAction::Legacy(kind), high_risk, eligible)
+                }
+                MaintenanceActionDefinition::Sequence(sequence) => {
+                    // An empty v2 definition tracks membership only, like
+                    // legacy DoNothing. It has no adapter, lease, history, or
+                    // terminal marker to create.
+                    if sequence.steps.is_empty() {
+                        continue;
+                    }
+                    if detail.revision.storage_root_id.is_some()
+                        && sequence
+                            .steps
+                            .iter()
+                            .any(|step| !step.descriptor().storage_root_allowed)
+                    {
+                        continue;
+                    }
+                    let high_risk = sequence
+                        .steps
+                        .iter()
+                        .any(|step| step.descriptor().risk_class == MaintenanceRiskClass::High);
+                    let has_reversible = sequence
+                        .steps
+                        .iter()
+                        .any(|step| step.descriptor().risk_class != MaintenanceRiskClass::High);
+                    let arming_allows_sequence = if high_risk {
+                        detail.rule_set.effect_arming == MaintenanceEffectArming::Destructive
+                            && !detail.rule_set.destructive_rearm_required
+                    } else {
+                        detail.rule_set.effect_arming != MaintenanceEffectArming::None
+                    };
+                    let eligible = arming_allows_sequence
+                        && (!high_risk || gates.destructive_effects_enabled)
+                        && (!has_reversible || gates.reversible_effects_enabled);
+                    (
+                        EligibleRuleAction::Sequence(sequence.clone()),
+                        high_risk,
+                        eligible,
+                    )
+                }
+            };
+            if !eligible {
+                continue;
+            }
+            report.rules_eligible += 1;
+            eligible_rules.push((detail, action, high_risk));
+        }
+
+        // Titles two rules would tag in opposite directions this pass. Computed
+        // before any of them acts, so both sides hold rather than the later one
+        // silently undoing the earlier one.
+        let tag_conflicts = self
+            .maintenance_tag_patch_conflicts(&eligible_rules, now)
+            .await;
+
+        for (detail, action, high_risk) in eligible_rules {
+            // One compile and evaluator per rule; every candidate's fresh
+            // re-evaluation reuses the evaluator sequentially.
+            let engine = match MaintenanceRulesEngine::build(&[MaintenancePolicy {
+                id: detail.rule_set.id.clone(),
+                name: detail.rule_set.name.clone(),
+                rego_source: detail.revision.rego_source.clone(),
+            }]) {
+                Ok(engine) => engine,
+                Err(error) => {
+                    warn!(error = %error, "skipping maintenance rule whose matcher no longer compiles");
+                    continue;
+                }
+            };
+            let mut evaluator = engine.evaluator();
+
+            // The selection covers abandoned leases as well as due work: a
+            // candidate whose worker died mid-run is `executing` with nothing
+            // driving it, and only this pass can hand it back to the lease's
+            // reclaim arm.
+            let due = self
+                .services
+                .customization
+                .maintenance_evaluation
+                .list_due_candidates(
+                    &detail.rule_set.id,
+                    now,
+                    now - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES),
+                    MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN * 2,
+                )
+                .await?;
+
+            let mut executed_this_rule = 0usize;
+            for candidate in due {
+                if executed_this_rule >= MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN {
+                    break;
+                }
+                let sequence_action = matches!(&action, EligibleRuleAction::Sequence(_));
+                if high_risk
+                    && (high_risk_executed >= MAINTENANCE_MAX_HIGH_RISK_ACTIONS_PER_RUN
+                        || high_risk_failures >= MAINTENANCE_HIGH_RISK_FAILURE_BREAKER)
+                {
+                    break;
+                }
+                report.candidates_considered += 1;
+                let mut sequence_budget = sequence_action.then(|| {
+                    MaintenanceSequencePassBudget::new(
+                        MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN.saturating_sub(executed_this_rule),
+                        if high_risk_failures >= MAINTENANCE_HIGH_RISK_FAILURE_BREAKER {
+                            0
+                        } else {
+                            MAINTENANCE_MAX_HIGH_RISK_ACTIONS_PER_RUN
+                                .saturating_sub(high_risk_executed)
+                        },
+                    )
+                });
+                let outcome = match &action {
+                    EligibleRuleAction::Legacy(kind) => {
+                        self.execute_one_maintenance_candidate(
+                            &detail,
+                            *kind,
+                            &mut evaluator,
+                            candidate,
+                            &libraries,
+                            &tag_conflicts,
+                        )
+                        .await
+                    }
+                    EligibleRuleAction::Sequence(sequence) => {
+                        self.execute_one_maintenance_sequence_candidate(
+                            candidate,
+                            SequenceCandidateExecutionContext {
+                                detail: &detail,
+                                sequence,
+                                evaluator: &mut evaluator,
+                                libraries: &libraries,
+                                tag_conflicts: &tag_conflicts,
+                                budget: sequence_budget
+                                    .as_mut()
+                                    .expect("sequence actions always have a step budget"),
+                            },
+                        )
+                        .await
+                    }
+                };
+                if outcome.is_err() {
+                    // The dispatch may have reached its adapter before a
+                    // persistence failure escaped. Charge a high-risk last
+                    // dispatch conservatively, matching the v1 error path.
+                    if let Some(budget) = sequence_budget.as_mut() {
+                        budget.record_failed_dispatch();
+                    }
+                }
+                if let Some(budget) = sequence_budget.as_ref() {
+                    executed_this_rule += budget.dispatched_steps();
+                    high_risk_executed += budget.dispatched_high_risk_steps();
+                    high_risk_failures += budget.failed_high_risk_steps();
+                }
+                match outcome {
+                    Ok(CandidateOutcome::Executed) => {
+                        report.executed += 1;
+                        if !sequence_action {
+                            executed_this_rule += 1;
+                        }
+                        if !sequence_action && high_risk {
+                            high_risk_executed += 1;
+                        }
+                    }
+                    Ok(CandidateOutcome::AlreadySatisfied) => {
+                        report.already_satisfied += 1;
+                        if !sequence_action {
+                            executed_this_rule += 1;
+                        }
+                    }
+                    Ok(CandidateOutcome::Held) => report.held += 1,
+                    Ok(CandidateOutcome::Canceled) => report.canceled += 1,
+                    Ok(CandidateOutcome::Failed) => {
+                        report.failed += 1;
+                        if !sequence_action {
+                            executed_this_rule += 1;
+                        }
+                        if !sequence_action && high_risk {
+                            high_risk_failures += 1;
+                        }
+                    }
+                    Ok(CandidateOutcome::LeaseLost) => report.lease_lost += 1,
+                    Err(error) => {
+                        // The side effect may have completed before its result
+                        // failed to persist. Charge the attempt conservatively.
+                        report.failed += 1;
+                        if !sequence_action {
+                            executed_this_rule += 1;
+                        }
+                        if !sequence_action && high_risk {
+                            high_risk_executed += 1;
+                            high_risk_failures += 1;
+                        }
+                        warn!(error = %error, "maintenance action handling failed for one candidate");
+                    }
+                }
+            }
+        }
+
+        Ok(report)
+    }
+
+    /// Title ids no tag action may write this pass, because two rules disagree
+    /// about the same label on them.
+    ///
+    /// "Disagree" is exact: one rule's `add_tags` and another's `remove_tags`
+    /// naming the same label, with both rules holding a due candidate for the
+    /// same title. Two rules that add different labels, or that patch different
+    /// titles, are not a conflict and both proceed — the bag is a set, and
+    /// disjoint edits to a set commute.
+    ///
+    /// Nothing here resolves the disagreement. Whichever rule ran last would
+    /// win, which makes the catalog depend on rule iteration order; the honest
+    /// answer is to hold both sides with a reason the operator can act on.
+    ///
+    /// The scan re-lists due candidates for tag rules only. That is one extra
+    /// bounded read per tag rule per pass, and it buys a decision made before
+    /// the first write instead of after it.
+    async fn maintenance_tag_patch_conflicts(
+        &self,
+        eligible_rules: &[(MaintenanceRuleSetDetail, EligibleRuleAction, bool)],
+        now: chrono::DateTime<Utc>,
+    ) -> Option<HashSet<String>> {
+        let mut added: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut removed: HashMap<String, HashSet<String>> = HashMap::new();
+
+        for (detail, action, _) in eligible_rules {
+            let (adds, removes): (Vec<String>, Vec<String>) = match action {
+                EligibleRuleAction::Legacy(kind) => {
+                    let MaintenanceActionDefinition::Legacy(spec) = &detail.action_definition
+                    else {
+                        continue;
+                    };
+                    match kind {
+                        MaintenanceActionKind::AddTags => {
+                            (spec.parameters.tag_labels().to_vec(), Vec::new())
+                        }
+                        MaintenanceActionKind::RemoveTags => {
+                            (Vec::new(), spec.parameters.tag_labels().to_vec())
+                        }
+                        _ => (Vec::new(), Vec::new()),
+                    }
+                }
+                EligibleRuleAction::Sequence(sequence) => (
+                    sequence
+                        .steps
+                        .iter()
+                        .filter(|step| step.kind == MaintenanceActionStepKind::AddTags)
+                        .flat_map(|step| step.parameters.tag_labels().iter().cloned())
+                        .collect(),
+                    sequence
+                        .steps
+                        .iter()
+                        .filter(|step| step.kind == MaintenanceActionStepKind::RemoveTags)
+                        .flat_map(|step| step.parameters.tag_labels().iter().cloned())
+                        .collect(),
+                ),
+            };
+            if adds.is_empty() && removes.is_empty() {
+                continue;
+            }
+            let due = match self
+                .services
+                .customization
+                .maintenance_evaluation
+                .list_due_candidates(
+                    &detail.rule_set.id,
+                    now,
+                    now - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES),
+                    MAINTENANCE_MAX_ACTIONS_PER_RULE_PER_RUN * 2,
+                )
+                .await
+            {
+                Ok(due) => due,
+                Err(error) => {
+                    // A later read may recover, but it cannot repair this
+                    // pass's incomplete conflict picture. Hold tag effects
+                    // without charging an attempt; unrelated effects may run.
+                    warn!(error = %error, "could not scan a tag rule for patch conflicts");
+                    return None;
+                }
+            };
+            for candidate in due {
+                if !adds.is_empty() {
+                    added
+                        .entry(candidate.title_id.clone())
+                        .or_default()
+                        .extend(adds.iter().cloned());
+                }
+                if !removes.is_empty() {
+                    removed
+                        .entry(candidate.title_id)
+                        .or_default()
+                        .extend(removes.iter().cloned());
+                }
+            }
+        }
+
+        Some(
+            added
+                .iter()
+                .filter(|(title_id, adds)| {
+                    removed
+                        .get(*title_id)
+                        .is_some_and(|removes| adds.iter().any(|label| removes.contains(label)))
+                })
+                .map(|(title_id, _)| title_id.clone())
+                .collect(),
+        )
+    }
+
+    /// Lease, recheck, and act on one candidate.
+    async fn execute_one_maintenance_candidate(
+        &self,
+        detail: &MaintenanceRuleSetDetail,
+        kind: MaintenanceActionKind,
+        evaluator: &mut MaintenanceRulesEvaluator,
+        candidate: LifecycleCandidate,
+        libraries: &HashMap<String, MaintenanceLibraryRef>,
+        tag_conflicts: &Option<HashSet<String>>,
+    ) -> AppResult<CandidateOutcome> {
+        let now = Utc::now();
+        let candidates = &self.services.customization.maintenance_evaluation;
+
+        // A candidate arriving already `executing` is an abandoned lease the
+        // selection reclaimed: it goes straight to the lease, whose stale arm is
+        // the only writer allowed to decide a lease is dead. Everything else is
+        // moved to `due` first — that transition is what makes ownership
+        // contestable — and a lost compare-and-set there means another writer
+        // reached the row between selection and now.
+        let reclaiming = candidate.state == MaintenanceCandidateState::Executing;
+        if !reclaiming
+            && candidate.state != MaintenanceCandidateState::Due
+            && !candidates
+                .transition_candidate_state(
+                    &candidate.id,
+                    MaintenanceCandidateState::Due,
+                    "due",
+                    EXECUTOR_DUE_EXPECTED_STATES,
+                    now,
+                )
+                .await?
+        {
+            return Ok(CandidateOutcome::LeaseLost);
+        }
+        let stale_before = now - Duration::minutes(EXECUTION_LEASE_STALE_AFTER_MINUTES);
+        if !candidates
+            .lease_candidate_for_execution(&candidate.id, stale_before, now)
+            .await?
+        {
+            return Ok(CandidateOutcome::LeaseLost);
+        }
+
+        if reclaiming {
+            // The interrupted attempt left a `running` row that will never be
+            // finished by anyone else. Close it out before this attempt starts,
+            // so the candidate's history reads as one abandoned attempt followed
+            // by a new one rather than two attempts that both appear live.
+            self.finalize_orphaned_maintenance_action_runs(&candidate.id)
+                .await?;
+        }
+
+        // Attempts are counted as reservations (see below), so a candidate that
+        // crash-looped through its budget is terminal here rather than being
+        // retried forever — the failure path that would normally notice never
+        // got to run.
+        let attempt = candidate.action_attempts + 1;
+        if attempt > MAINTENANCE_MAX_ACTION_ATTEMPTS {
+            return Ok(
+                if self
+                    .finish_maintenance_candidate(
+                        &candidate.id,
+                        MaintenanceCandidateState::Failed,
+                        execution_reason::ACTION_FAILED,
+                    )
+                    .await?
+                {
+                    CandidateOutcome::Failed
+                } else {
+                    CandidateOutcome::LeaseLost
+                },
+            );
+        }
+        let execution_key = maintenance_action_idempotency_key(detail, &candidate);
+        let run_id = Id::new().0;
+        let mut run = LifecycleActionRun {
+            id: run_id.clone(),
+            candidate_id: candidate.id.clone(),
+            rule_set_id: candidate.rule_set_id.clone(),
+            revision_number: candidate.revision_number,
+            title_id: candidate.title_id.clone(),
+            subject_kind: candidate.subject_kind.clone(),
+            subject_id: candidate.subject_id.clone(),
+            action_kind: candidate.action_kind.clone(),
+            match_generation: candidate.match_generation,
+            // Filled in below: holds carry a per-row key so repeated re-checks
+            // never collide, while the mutation path claims the execution key.
+            idempotency_key: String::new(),
+            attempt,
+            status: LifecycleActionRunStatus::Running,
+            hold_reason: None,
+            error: None,
+            detail: "{}".to_string(),
+            started_at: now,
+            finished_at: None,
+            created_at: now,
+        };
+
+        let decision = self
+            .maintenance_execution_safety_checks(
+                detail,
+                evaluator,
+                &candidate,
+                libraries,
+                tag_conflicts,
+            )
+            .await;
+
+        // Idempotency protects mutations, not evidence: a hold re-checks every
+        // pass and each refusal is its own appended row, so hold rows key on
+        // their own id. Only the path that is about to mutate claims the
+        // execution key, whose (key, attempt) uniqueness is what makes a
+        // crashed or concurrent duplicate attempt detectable.
+        if matches!(decision, SafetyDecision::Proceed(..)) {
+            // The attempt is *reserved* here — durably, and strictly before the
+            // run row and any external side effect. A counter only advanced
+            // after a handled failure leaves an interrupted attempt invisible:
+            // the reclaiming pass would compute the same attempt number, collide
+            // with the orphaned `(idempotency_key, attempt)` row, and hand the
+            // candidate back to `due` forever. Reserving first also makes the
+            // attempt cap bound a crash loop, not just a failure loop.
+            candidates
+                .record_candidate_attempts(&candidate.id, attempt, Utc::now())
+                .await?;
+            run.idempotency_key = execution_key;
+            if let Err(error) = candidates.start_action_run(&run).await {
+                candidates
+                    .transition_candidate_state(
+                        &candidate.id,
+                        MaintenanceCandidateState::Due,
+                        "duplicate_attempt_detected",
+                        EXECUTOR_TERMINAL_EXPECTED_STATES,
+                        Utc::now(),
+                    )
+                    .await?;
+                warn!(error = %error, "duplicate maintenance action attempt refused");
+                return Ok(CandidateOutcome::LeaseLost);
+            }
+        } else {
+            run.idempotency_key = format!("hold:{run_id}");
+            candidates.start_action_run(&run).await?;
+        }
+
+        // Every terminal write below is a compare-and-set against this worker's
+        // own lease: `false` means the lease went stale and was reclaimed while
+        // the action ran, so the pass reports `LeaseLost` and leaves the new
+        // owner's row alone. The action-run row is still finished either way —
+        // it is this worker's evidence of what it did, and that stays true no
+        // matter who owns the candidate now.
+        let outcome = match decision {
+            SafetyDecision::Hold(reason) => {
+                if self
+                    .finish_candidate_hold(&mut run, &candidate, reason)
+                    .await?
+                {
+                    CandidateOutcome::Held
+                } else {
+                    CandidateOutcome::LeaseLost
+                }
+            }
+            SafetyDecision::Cancel(reason) => {
+                run.status = LifecycleActionRunStatus::Held;
+                run.hold_reason = Some(reason.to_string());
+                run.finished_at = Some(Utc::now());
+                candidates.finish_action_run(&run).await?;
+                if self
+                    .finish_maintenance_candidate(
+                        &candidate.id,
+                        MaintenanceCandidateState::Canceled,
+                        reason,
+                    )
+                    .await?
+                {
+                    CandidateOutcome::Canceled
+                } else {
+                    CandidateOutcome::LeaseLost
+                }
+            }
+            SafetyDecision::Excluded => {
+                run.status = LifecycleActionRunStatus::Held;
+                run.hold_reason = Some(
+                    crate::maintenance_rules::evaluation::candidate_reason::EXCLUDED.to_string(),
+                );
+                run.finished_at = Some(Utc::now());
+                candidates.finish_action_run(&run).await?;
+                if self
+                    .finish_maintenance_candidate(
+                        &candidate.id,
+                        MaintenanceCandidateState::Excluded,
+                        crate::maintenance_rules::evaluation::candidate_reason::EXCLUDED,
+                    )
+                    .await?
+                {
+                    CandidateOutcome::Canceled
+                } else {
+                    CandidateOutcome::LeaseLost
+                }
+            }
+            SafetyDecision::Proceed(title, input) => {
+                let action_result = match self
+                    .runtime
+                    .jobs
+                    .interactive_operation_guards
+                    .try_acquire(&format!("maintenance-title:{}", candidate.title_id))
+                    .await
+                {
+                    Some(_title_guard) => {
+                        let mut context = MaintenanceExecutionContext {
+                            detail,
+                            candidate: &candidate,
+                            title: &title,
+                            input: &input,
+                            run: &mut run,
+                            evaluator,
+                            libraries,
+                            tag_conflicts,
+                        };
+                        self.execute_maintenance_action(kind, &mut context).await
+                    }
+                    None => Ok(ActionResult::Held {
+                        reason: execution_reason::LOCATION_OPERATION_HOLD,
+                        detail: serde_json::json!({"title_id": candidate.title_id}),
+                    }),
+                };
+                match action_result {
+                    Ok(ActionResult::Executed { detail: evidence }) => {
+                        run.status = LifecycleActionRunStatus::Succeeded;
+                        run.detail = evidence.to_string();
+                        run.finished_at = Some(Utc::now());
+                        candidates.finish_action_run(&run).await?;
+                        if self
+                            .finish_maintenance_candidate(
+                                &candidate.id,
+                                MaintenanceCandidateState::Succeeded,
+                                execution_reason::ACTION_SUCCEEDED,
+                            )
+                            .await?
+                        {
+                            CandidateOutcome::Executed
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
+                    }
+                    Ok(ActionResult::AlreadySatisfied { detail: evidence }) => {
+                        run.status = LifecycleActionRunStatus::AlreadySatisfied;
+                        run.detail = evidence.to_string();
+                        run.finished_at = Some(Utc::now());
+                        candidates.finish_action_run(&run).await?;
+                        if self
+                            .finish_maintenance_candidate(
+                                &candidate.id,
+                                MaintenanceCandidateState::Succeeded,
+                                execution_reason::ALREADY_SATISFIED,
+                            )
+                            .await?
+                        {
+                            CandidateOutcome::AlreadySatisfied
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
+                    }
+                    Ok(ActionResult::Canceled {
+                        reason,
+                        detail: evidence,
+                    }) => {
+                        run.status = LifecycleActionRunStatus::Held;
+                        run.hold_reason = Some(reason.to_string());
+                        run.detail = evidence.to_string();
+                        run.finished_at = Some(Utc::now());
+                        candidates.finish_action_run(&run).await?;
+                        if self
+                            .finish_maintenance_candidate(
+                                &candidate.id,
+                                MaintenanceCandidateState::Canceled,
+                                reason,
+                            )
+                            .await?
+                        {
+                            CandidateOutcome::Canceled
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
+                    }
+                    Ok(ActionResult::Held {
+                        reason,
+                        detail: evidence,
+                    }) => {
+                        run.detail = evidence.to_string();
+                        if self
+                            .finish_candidate_hold_and_release_attempt(&mut run, attempt, reason)
+                            .await?
+                        {
+                            CandidateOutcome::Held
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
+                    }
+                    Err(error) => {
+                        // The attempt was already reserved before the action
+                        // ran, so nothing is counted here — only the verdict on
+                        // the budget it consumed.
+                        let terminal = matches!(
+                            error,
+                            AppError::Validation(_)
+                                | AppError::Unauthorized(_)
+                                | AppError::NotFound(_)
+                        ) || attempt >= MAINTENANCE_MAX_ACTION_ATTEMPTS;
+                        run.status = LifecycleActionRunStatus::Failed;
+                        run.error = Some(error.to_string());
+                        run.finished_at = Some(Utc::now());
+                        candidates.finish_action_run(&run).await?;
+                        if self
+                            .finish_maintenance_candidate(
+                                &candidate.id,
+                                if terminal {
+                                    MaintenanceCandidateState::Failed
+                                } else {
+                                    MaintenanceCandidateState::Due
+                                },
+                                if terminal {
+                                    execution_reason::ACTION_FAILED
+                                } else {
+                                    execution_reason::RETRY_PENDING
+                                },
+                            )
+                            .await?
+                        {
+                            CandidateOutcome::Failed
+                        } else {
+                            CandidateOutcome::LeaseLost
+                        }
+                    }
+                }
+            }
+        };
+
+        Ok(outcome)
+    }
+
+    /// Returns whether this worker still held the lease when it wrote the hold.
+    async fn finish_candidate_hold(
+        &self,
+        run: &mut LifecycleActionRun,
+        candidate: &LifecycleCandidate,
+        reason: &'static str,
+    ) -> AppResult<bool> {
+        let candidates = &self.services.customization.maintenance_evaluation;
+        run.status = LifecycleActionRunStatus::Held;
+        run.hold_reason = Some(reason.to_string());
+        run.finished_at = Some(Utc::now());
+        candidates.finish_action_run(run).await?;
+        self.finish_maintenance_candidate(&candidate.id, MaintenanceCandidateState::Blocked, reason)
+            .await
+    }
+
+    /// A storage or guard hold happens after the attempt was reserved. Make the
+    /// held action evidence and refund inseparable: a crash before this write
+    /// retains the conservative reservation, while a completed hold leaves the
+    /// same attempt number available for a later recovered evaluation.
+    async fn finish_candidate_hold_and_release_attempt(
+        &self,
+        run: &mut LifecycleActionRun,
+        expected_attempt: i64,
+        reason: &'static str,
+    ) -> AppResult<bool> {
+        run.status = LifecycleActionRunStatus::Held;
+        run.hold_reason = Some(reason.to_string());
+        run.finished_at = Some(Utc::now());
+        run.idempotency_key = format!("hold:{}", run.id);
+        self.services
+            .customization
+            .maintenance_evaluation
+            .finish_held_action_run_and_release_attempt(run, expected_attempt)
+            .await
+    }
+
+    /// Write a candidate's post-execution state, but only while this worker
+    /// still owns the lease it took. `false` means it does not: another pass
+    /// reclaimed the candidate as stale, and this worker must stop writing.
+    pub(super) async fn finish_maintenance_candidate(
+        &self,
+        candidate_id: &str,
+        state: MaintenanceCandidateState,
+        reason: &str,
+    ) -> AppResult<bool> {
+        let moved = self
+            .services
+            .customization
+            .maintenance_evaluation
+            .transition_candidate_state(
+                candidate_id,
+                state,
+                reason,
+                EXECUTOR_TERMINAL_EXPECTED_STATES,
+                Utc::now(),
+            )
+            .await?;
+        if !moved {
+            warn!(
+                candidate_id,
+                "maintenance execution lease was lost before its result could be recorded"
+            );
+        }
+        Ok(moved)
+    }
+
+    /// Close out the `running` action-run rows an interrupted attempt left for
+    /// this candidate.
+    ///
+    /// A row stuck at `running` is not evidence of work in flight — the worker
+    /// that wrote it is gone — so it is finished as failed with a stable
+    /// [`execution_reason::LEASE_RECLAIMED`] message. Only rows already stored
+    /// are touched: the reclaiming attempt inserts its own row afterwards, at
+    /// the next attempt number, which is what keeps it clear of the orphan's
+    /// `(idempotency_key, attempt)` uniqueness.
+    async fn finalize_orphaned_maintenance_action_runs(&self, candidate_id: &str) -> AppResult<()> {
+        let candidates = &self.services.customization.maintenance_evaluation;
+        let orphans: Vec<LifecycleActionRun> = candidates
+            .list_action_runs(
+                None,
+                Some(candidate_id),
+                Some(MAINTENANCE_ORPHANED_RUN_SCAN_LIMIT),
+            )
+            .await?
+            .into_iter()
+            .filter(|run| run.status == LifecycleActionRunStatus::Running)
+            .collect();
+        for mut orphan in orphans {
+            orphan.status = LifecycleActionRunStatus::Failed;
+            orphan.error = Some(format!(
+                "{}: the worker holding this attempt stopped before it finished",
+                execution_reason::LEASE_RECLAIMED
+            ));
+            orphan.finished_at = Some(Utc::now());
+            candidates.finish_action_run(&orphan).await?;
+        }
+        Ok(())
+    }
+
+    /// The ordered pre-execution rechecks (RFC 8 step 3, RFC 9.10). Order
+    /// matters: eligibility first so a disarmed rule never even re-evaluates,
+    /// the matcher before the environment so "stopped matching" reads as a
+    /// cancel rather than a hold, and the environment holds last.
+    pub(super) async fn maintenance_execution_safety_checks(
+        &self,
+        detail: &MaintenanceRuleSetDetail,
+        evaluator: &mut MaintenanceRulesEvaluator,
+        candidate: &LifecycleCandidate,
+        libraries: &HashMap<String, MaintenanceLibraryRef>,
+        tag_conflicts: &Option<HashSet<String>>,
+    ) -> SafetyDecision {
+        // (1) Re-read the rule and the gates: both can move between selection
+        // and execution, and a lowered gate must stop a leased worker before
+        // its first external change (RFC section 8).
+        let fresh = match self
+            .require_maintenance_rule_set(&candidate.rule_set_id)
+            .await
+        {
+            Ok(rule_set) => rule_set,
+            // Only a rule that is genuinely gone cancels: the candidate's
+            // authorization no longer exists, so there is nothing to re-check
+            // later. Every other error is the repository being unreachable,
+            // which says nothing about the rule — it holds, like every sibling
+            // check on this path.
+            Err(AppError::NotFound(_)) => {
+                return SafetyDecision::Cancel(execution_reason::RULE_NOT_ELIGIBLE);
+            }
+            Err(_) => return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE),
+        };
+        let gates = match self.load_maintenance_gates().await {
+            Ok(gates) => gates,
+            Err(_) => return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE),
+        };
+        let sequence = match &detail.action_definition {
+            MaintenanceActionDefinition::Legacy(_) => None,
+            MaintenanceActionDefinition::Sequence(sequence) => Some(sequence),
+        };
+        let legacy_kind = MaintenanceActionKind::parse_wire_str(&candidate.action_kind);
+        if sequence.is_none() && legacy_kind.is_none() {
+            return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
+        }
+        if sequence.is_some() && candidate.action_kind != ACTION_SEQUENCE_KIND {
+            return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
+        }
+        if detail.revision.storage_root_id.is_some()
+            && sequence.is_none()
+            && !supports_storage_scope(legacy_kind.expect("checked above"))
+        {
+            return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
+        }
+        let high_risk = sequence.is_some_and(|sequence| {
+            sequence
+                .steps
+                .iter()
+                .any(|step| step.descriptor().risk_class == MaintenanceRiskClass::High)
+        }) || legacy_kind
+            .is_some_and(|kind| descriptor_for(kind).risk_class == MaintenanceRiskClass::High);
+        let sequence_requires_reversible = sequence.is_some_and(|sequence| {
+            sequence
+                .steps
+                .iter()
+                .any(|step| step.descriptor().risk_class != MaintenanceRiskClass::High)
+        });
+        let still_eligible = fresh.enabled
+            && fresh.evaluation_mode == MaintenanceEvaluationMode::Observe
+            && fresh.current_revision_number == candidate.revision_number
+            && if high_risk {
+                gates.destructive_effects_enabled
+                    && fresh.effect_arming == MaintenanceEffectArming::Destructive
+                    && !fresh.destructive_rearm_required
+                    && (!sequence_requires_reversible || gates.reversible_effects_enabled)
+            } else {
+                gates.reversible_effects_enabled
+                    && fresh.effect_arming != MaintenanceEffectArming::None
+            };
+        if !still_eligible {
+            return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
+        }
+
+        // (1b) Tag actions: the vocabulary has to still exist, and no sibling
+        // rule may be about to write the opposite patch on this title.
+        //
+        // Both checks belong here rather than in the action itself, because a
+        // hold from here costs no attempt: these are conditions that a later
+        // pass can find changed — an administrator redefines the tag, or the
+        // conflicting rule is disarmed — and burning the three-attempt budget
+        // on them would turn a fixable authoring problem into a terminally
+        // failed candidate.
+        let tag_labels: Vec<&String> = match &detail.action_definition {
+            MaintenanceActionDefinition::Legacy(spec) => {
+                spec.parameters.tag_labels().iter().collect()
+            }
+            MaintenanceActionDefinition::Sequence(sequence) => sequence
+                .steps
+                .iter()
+                .flat_map(|step| step.parameters.tag_labels().iter())
+                .collect(),
+        };
+        if !tag_labels.is_empty() {
+            let Some(tag_conflicts) = tag_conflicts else {
+                return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+            };
+            if tag_conflicts.contains(&candidate.title_id) {
+                return SafetyDecision::Hold(execution_reason::TAG_PATCH_CONFLICT);
+            }
+            let tag_labels: Vec<String> = tag_labels.into_iter().cloned().collect();
+            match self.undefined_title_tag_labels(&tag_labels).await {
+                Ok(undefined) if !undefined.is_empty() => {
+                    return SafetyDecision::Hold(execution_reason::TAG_NOT_DEFINED);
+                }
+                Ok(_) => {}
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            }
+        }
+
+        let exclusions = match self
+            .services
+            .customization
+            .maintenance_evaluation
+            .list_exclusions(Some(&candidate.rule_set_id))
+            .await
+        {
+            Ok(exclusions) => exclusions,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        if fresh.subject_kind.as_storage_str() != candidate.subject_kind
+            || (sequence.is_none()
+                && !supported_scope_actions(fresh.subject_kind)
+                    .contains(&legacy_kind.expect("checked above")))
+        {
+            return SafetyDecision::Hold(execution_reason::ACTION_NOT_FULLY_SUPPORTED);
+        }
+
+        // (3) Fresh matcher re-evaluation on current facts.
+        let title = match self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&candidate.title_id)
+            .await
+        {
+            Ok(Some(title)) => title,
+            Ok(None) => return SafetyDecision::Cancel(execution_reason::TITLE_MISSING),
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        // The rule's library scope is re-checked against the *fresh* rule and the
+        // *fresh* title, for the same reason its arming is: scope is the blast
+        // radius an operator acknowledged, and it can be narrowed — or the title
+        // moved — between the candidate being opened and this pass. Acting
+        // anyway is acting outside the acknowledged scope. An empty scope is
+        // instance-wide, which covers every library by definition.
+        if !fresh.library_ids.is_empty() && !fresh.library_ids.contains(&title.library_id) {
+            return SafetyDecision::Cancel(
+                crate::maintenance_rules::evaluation::candidate_reason::OUT_OF_SCOPE,
+            );
+        }
+        if let Some(sequence) = sequence {
+            let action_subject = match candidate.subject_kind.as_str() {
+                "title" if title.facet == scryer_domain::MediaFacet::Movie => {
+                    ActionSubjectKind::Movie
+                }
+                "title" => ActionSubjectKind::Show,
+                "season" => ActionSubjectKind::Season,
+                "episode" => ActionSubjectKind::Episode,
+                _ => return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE),
+            };
+            if sequence
+                .steps
+                .iter()
+                .any(|step| !step.descriptor().supports_subject(action_subject))
+            {
+                return SafetyDecision::Hold(execution_reason::ACTION_NOT_FULLY_SUPPORTED);
+            }
+        }
+        // (3b) A location operation that owns the title (FR-084). Destructive
+        // work waits for it the way it waits for playback and acquisition
+        // activity: the operation releases its claim on every terminal path,
+        // so this is a retry, not a verdict. An unreadable claim store holds
+        // the same way — acting on a claim Scryer could not read is acting on
+        // evidence it never had.
+        if high_risk {
+            match self
+                .location_ownership_denial_for_title(
+                    &crate::location::ownership_guard::MAINTENANCE_ACTION_ENTRY,
+                    &title.id,
+                )
+                .await
+            {
+                Ok(None) => {}
+                Ok(Some(_)) => {
+                    return SafetyDecision::Hold(execution_reason::LOCATION_OPERATION_HOLD);
+                }
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            }
+        }
+        // (3c) A lifecycle claim on the title (spec 0003 FR-042). Read here
+        // rather than left to the matcher, because this hold does not depend on
+        // the rule mentioning leases: a request the instance approved is a
+        // promise about *this title*, and every high-risk action waits for it
+        // the way it waits for a location operation. Dormant counts — a lease
+        // whose title has not been imported yet is the one case where deleting
+        // would destroy something nobody ever got.
+        //
+        // The same read answers the fact builder below, so preview, the
+        // scheduled pass, and this recheck all decide on one claim snapshot.
+        let recheck_time = Utc::now();
+        let claims_by_title = match self
+            .maintenance_claims_for_titles(std::slice::from_ref(&title))
+            .await
+        {
+            Ok(claims) => Some(claims),
+            // A claim store Scryer cannot read is a hold for a high-risk
+            // action, and unknown claim facts for everything else.
+            Err(_) if high_risk => {
+                return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+            }
+            Err(_) => None,
+        };
+        if high_risk
+            && let Some(claims) = claims_by_title.as_ref()
+            && claims.get(&title.id).is_some_and(|claims| {
+                claims
+                    .iter()
+                    // Derived against this recheck's own clock, exactly as the
+                    // facts are: a lease whose window elapsed since the last
+                    // sweep is spent, and holding on it would make the executor
+                    // disagree with the rule that selected the candidate.
+                    .any(|claim| claim_is_live_at(claim, recheck_time))
+            })
+        {
+            return SafetyDecision::Hold(execution_reason::RETENTION_CLAIM_HOLD);
+        }
+        let files_by_title = match self
+            .maintenance_files_for_titles(std::slice::from_ref(&title))
+            .await
+        {
+            Ok(files) => files,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        let library = libraries
+            .get(&title.library_id)
+            .cloned()
+            .unwrap_or_else(|| MaintenanceLibraryRef {
+                id: title.library_id.clone(),
+                name: String::new(),
+            });
+        let files = files_by_title
+            .get(&title.id)
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        // The same series-movie load the evaluator does, so the re-evaluation
+        // at execution time reads the identical fact document.
+        let series_movies_by_title = match self
+            .maintenance_series_movies_for_titles(std::slice::from_ref(&title))
+            .await
+        {
+            Ok(series_movies) => series_movies,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        // A people lookup that fails holds, like every other unresolvable
+        // signal on this path: re-evaluating on a fact snapshot Scryer could
+        // not fully assemble is how an action fires on evidence it never had.
+        let requesters_by_title = match self
+            .maintenance_requesters_for_titles(std::slice::from_ref(&title))
+            .await
+        {
+            Ok(requesters) => requesters,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        let usernames = match self.maintenance_usernames_by_id().await {
+            Ok(usernames) => usernames,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        // Watch signals are resolved on the same fail-closed terms: a gate or
+        // signal read that errors holds, and a gate that is merely closed makes
+        // every watch fact unknown, which holds any rule that reads one.
+        let watch_context = match self.maintenance_watch_context().await {
+            Ok(context) => context,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        let signals_by_title = match self
+            .maintenance_watch_signals_for_titles(&watch_context, std::slice::from_ref(&title))
+            .await
+        {
+            Ok(signals) => signals,
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        let people = MaintenanceTitlePeople {
+            requester_user_ids: requesters_by_title.get(&title.id).map(Vec::as_slice),
+            usernames: &usernames,
+        };
+        let watch = MaintenanceTitleWatch {
+            context: &watch_context,
+            signals: signals_by_title.get(&title.id).map(Vec::as_slice),
+        };
+        let claims = MaintenanceTitleClaims {
+            claims: claims_by_title
+                .as_ref()
+                .and_then(|claims| claims.get(&title.id))
+                .map(Vec::as_slice),
+            store_readable: claims_by_title.is_some(),
+        };
+        let subject = match self
+            .maintenance_resolve_subject(
+                &candidate.subject_kind,
+                &candidate.subject_id,
+                &title,
+                files,
+            )
+            .await
+        {
+            Ok(subject) => subject,
+            Err(AppError::NotFound(_)) => {
+                return SafetyDecision::Cancel(execution_reason::TITLE_MISSING);
+            }
+            Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+        };
+        if subject.excluded_by(&title.id, &exclusions) {
+            return SafetyDecision::Excluded;
+        }
+        if high_risk && candidate.subject_kind != "title" && subject.ambiguous_files {
+            return SafetyDecision::Hold("ambiguous_episode_file_coverage");
+        }
+        let sequence_delete_files_step_id = sequence.and_then(|sequence| {
+            sequence
+                .steps
+                .iter()
+                .find(|step| {
+                    step.kind == crate::maintenance_rules::MaintenanceActionStepKind::DeleteFiles
+                })
+                .map(|step| step.id.as_str())
+        });
+        let deletion_checkpoint = if let Some(step_id) = sequence_delete_files_step_id {
+            match self
+                .maintenance_deletion_checkpoint_for_step(
+                    candidate,
+                    detail.revision.storage_root_id.as_deref(),
+                    Some(step_id),
+                )
+                .await
+            {
+                Ok(checkpoint) => checkpoint,
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            }
+        } else if sequence.is_none()
+            && matches!(
+                legacy_kind.expect("checked above"),
+                MaintenanceActionKind::UnmonitorScopeDeleteFiles
+                    | MaintenanceActionKind::UnmonitorTitleDeleteAllFiles
+            )
+        {
+            match self
+                .maintenance_deletion_checkpoint(
+                    candidate,
+                    detail.revision.storage_root_id.as_deref(),
+                )
+                .await
+            {
+                Ok(checkpoint) => checkpoint,
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            }
+        } else {
+            None
+        };
+        // A storage-scoped rule's subject may move after its preview. Even
+        // unmonitor-and-keep-files changes the whole subject, so it must not
+        // run once no actual owned file remains on the selected root.
+        let mut storage_journal_cleanup_only = false;
+        if detail.revision.storage_root_id.is_some() {
+            let storage_owned_files = if candidate.subject_kind == "title" {
+                match self.maintenance_title_deletion_files(&title).await {
+                    Ok(files) => files,
+                    Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+                }
+            } else if subject.ambiguous_files {
+                return SafetyDecision::Hold("ambiguous_episode_file_coverage");
+            } else {
+                subject.files.clone()
+            };
+            match self
+                .maintenance_root_file_summary(
+                    &storage_owned_files,
+                    detail.revision.storage_root_id.as_deref(),
+                )
+                .await
+            {
+                Ok(summary) if matches!(summary.file_count, Some(count) if count > 0) => {}
+                Ok(summary) => {
+                    let Some(checkpoint) = deletion_checkpoint.as_ref() else {
+                        return if matches!(summary.file_count, Some(0)) {
+                            SafetyDecision::Cancel(
+                                crate::maintenance_rules::evaluation::candidate_reason::OUT_OF_SCOPE,
+                            )
+                        } else {
+                            SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION)
+                        };
+                    };
+                    match self
+                        .maintenance_storage_checkpoint_can_resume(
+                            checkpoint,
+                            &storage_owned_files,
+                            detail.revision.storage_root_id.as_deref(),
+                        )
+                        .await
+                    {
+                        Ok(true) => match self
+                            .maintenance_storage_checkpoint_needs_catalog_cleanup(
+                                checkpoint,
+                                &storage_owned_files,
+                            )
+                            .await
+                        {
+                            Ok(cleanup_only) => storage_journal_cleanup_only = cleanup_only,
+                            Err(_) => {
+                                return SafetyDecision::Hold(
+                                    execution_reason::UNKNOWN_AT_EXECUTION,
+                                );
+                            }
+                        },
+                        Ok(false) | Err(_) => {
+                            return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+                        }
+                    }
+                }
+                Err(_) => {
+                    return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+                }
+            }
+        }
+        let completed_retention_episode_ids = deletion_checkpoint
+            .as_ref()
+            .map(|checkpoint| checkpoint.completed_retention_episode_ids());
+        let mut input = build_subject_input_with_completed_retention_episodes(
+            recheck_time,
+            &title,
+            &library,
+            &subject,
+            people,
+            watch,
+            claims,
+            series_movies_by_title
+                .get(&title.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            completed_retention_episode_ids.as_ref(),
+        );
+        // The capacity snapshot must be fresh for this lease. Baseline restore
+        // below deliberately excludes storage facts, so a resumed deletion
+        // cannot match against the capacity it observed before deleting.
+        if self
+            .populate_maintenance_storage_facts(
+                &mut input,
+                detail.revision.storage_root_id.as_deref(),
+            )
+            .await
+            .is_err()
+        {
+            return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+        }
+        if detail.revision.storage_root_id.is_some()
+            && !matches!(
+                input.facts.storage_available_bytes,
+                scryer_rules::maintenance::Observation::Known { .. }
+            )
+        {
+            return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+        }
+        if sequence.is_none() {
+            if let Some(checkpoint) = deletion_checkpoint.as_ref() {
+                checkpoint.restore_baseline_if_started(&mut input);
+            }
+        } else if let Some(checkpoint) = deletion_checkpoint.as_ref() {
+            checkpoint.restore_sequence_owned_file_deltas(&mut input);
+        }
+        // Sequence baselines are intentionally narrow. A completed Unmonitor
+        // may keep only its own monitored fact stable for later steps, and
+        // only after the persisted postcondition still holds. An external
+        // re-monitor is live evidence, so it is never hidden by a baseline.
+        if let Some(sequence) = sequence {
+            let completed_steps = match self
+                .services
+                .customization
+                .maintenance_evaluation
+                .list_action_steps(
+                    &candidate.id,
+                    candidate.match_generation,
+                    candidate.revision_number,
+                )
+                .await
+            {
+                Ok(steps) => steps,
+                Err(_) => return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION),
+            };
+            let sequence_hash = match sequence.content_hash() {
+                Ok(hash) => hash,
+                Err(_) => return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE),
+            };
+            for step in &sequence.steps {
+                let Some(run) = completed_steps
+                    .iter()
+                    .find(|run| run.key.step_id == step.id)
+                else {
+                    continue;
+                };
+                if !run.state.is_completion_success() {
+                    continue;
+                }
+                if !super::sequence_execution::persisted_sequence_step_is_compatible(
+                    run,
+                    candidate,
+                    &sequence_hash,
+                    step,
+                ) {
+                    return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
+                }
+                let before = serde_json::from_str::<serde_json::Value>(&run.before_state_json)
+                    .map_err(|_| ())
+                    .ok();
+                let provenance = serde_json::from_str::<serde_json::Value>(&run.provenance_json)
+                    .map_err(|_| ())
+                    .ok();
+                match step.kind {
+                    crate::maintenance_rules::MaintenanceActionStepKind::Unmonitor => {
+                        let crate::maintenance_rules::MaintenanceActionStepParameters::Unmonitor {
+                            include_descendants,
+                        } = &step.parameters
+                        else {
+                            return SafetyDecision::Hold(execution_reason::RULE_NOT_ELIGIBLE);
+                        };
+                        match self
+                            .maintenance_unmonitoring_is_confirmed(
+                                candidate,
+                                &title,
+                                *include_descendants,
+                            )
+                            .await
+                        {
+                            Ok(true) => {
+                                let monitoring_changed = provenance
+                                    .as_ref()
+                                    .and_then(|value| value.get("monitoring_changed"))
+                                    .and_then(serde_json::Value::as_bool)
+                                    == Some(true);
+                                let before_monitored = before
+                                    .as_ref()
+                                    .and_then(|value| value.get("facts_monitored"))
+                                    .and_then(serde_json::Value::as_bool);
+                                if monitoring_changed {
+                                    if let Some(before_monitored) = before_monitored {
+                                        input.facts.monitored =
+                                            scryer_rules::maintenance::Observation::known(
+                                                before_monitored,
+                                            );
+                                    }
+                                    if let Some(before_count) = before
+                                        .as_ref()
+                                        .and_then(|value| {
+                                            value.get("facts_monitored_episode_count")
+                                        })
+                                        .and_then(serde_json::Value::as_i64)
+                                    {
+                                        input.facts.monitored_episode_count =
+                                            scryer_rules::maintenance::Observation::known(
+                                                before_count,
+                                            );
+                                    }
+                                }
+                            }
+                            // A later external re-monitor is live input for
+                            // the matcher. Do not restore our earlier value
+                            // or manufacture a no-match here: DeleteFiles
+                            // independently rechecks this destructive
+                            // prerequisite immediately before every unlink.
+                            Ok(false) => {}
+                            Err(_) => {
+                                return SafetyDecision::Hold(
+                                    execution_reason::UNKNOWN_AT_EXECUTION,
+                                );
+                            }
+                        }
+                    }
+                    crate::maintenance_rules::MaintenanceActionStepKind::AddTags
+                    | crate::maintenance_rules::MaintenanceActionStepKind::RemoveTags => {
+                        let changed_tags = provenance
+                            .as_ref()
+                            .and_then(|value| value.get("changed_tags"))
+                            .and_then(serde_json::Value::as_array)
+                            .map(|tags| {
+                                tags.iter()
+                                    .filter_map(serde_json::Value::as_str)
+                                    .map(str::to_string)
+                                    .collect::<Vec<_>>()
+                            })
+                            .unwrap_or_default();
+                        if let scryer_rules::maintenance::Observation::Known { value, .. } =
+                            &mut input.facts.tags
+                        {
+                            for tag in changed_tags {
+                                match step.kind {
+                                    crate::maintenance_rules::MaintenanceActionStepKind::AddTags
+                                        if value.contains(&tag) => value.retain(|current| current != &tag),
+                                    crate::maintenance_rules::MaintenanceActionStepKind::RemoveTags
+                                        if !value.contains(&tag) => value.push(tag),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    crate::maintenance_rules::MaintenanceActionStepKind::ChangeQualityProfile => {
+                        let profile_changed = provenance
+                            .as_ref()
+                            .and_then(|value| value.get("profile_changed"))
+                            .and_then(serde_json::Value::as_bool)
+                            == Some(true);
+                        let target = provenance
+                            .as_ref()
+                            .and_then(|value| value.get("quality_profile_id"))
+                            .and_then(serde_json::Value::as_str);
+                        let current_matches_target = target.is_some_and(|target| {
+                            matches!(
+                                &input.facts.quality_profile_id,
+                                scryer_rules::maintenance::Observation::Known { value, .. }
+                                    if crate::settings::runtime::quality_profile_ids_equal(value, target)
+                            )
+                        });
+                        if profile_changed && current_matches_target {
+                            match before
+                                .as_ref()
+                                .and_then(|value| value.get("quality_profile_id"))
+                                .and_then(serde_json::Value::as_str)
+                            {
+                                Some(previous) => {
+                                    input.facts.quality_profile_id =
+                                        scryer_rules::maintenance::Observation::known(
+                                            previous.to_string(),
+                                        );
+                                }
+                                None => {
+                                    input.facts.quality_profile_id =
+                                        scryer_rules::maintenance::Observation::absent();
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let outcome = evaluator
+            .evaluate(&input)
+            .ok()
+            .and_then(|result| result.records.first().map(|record| record.decision.outcome));
+        match outcome {
+            Some(MaintenanceOutcome::Match) => {}
+            Some(MaintenanceOutcome::NoMatch) if !storage_journal_cleanup_only => {
+                return SafetyDecision::Cancel(execution_reason::NO_MATCH_AT_EXECUTION);
+            }
+            // Every exact journal path is already absent. Continue only far
+            // enough to remove its stale media-file row and record progress.
+            Some(MaintenanceOutcome::NoMatch) => {}
+            Some(MaintenanceOutcome::Unknown) | None => {
+                return SafetyDecision::Hold(execution_reason::UNKNOWN_AT_EXECUTION);
+            }
+        }
+
+        // (4) Playback holds every action kind (RFC 9.10), unknown included.
+        match self.maintenance_playback_hold().await {
+            Ok(MaintenancePlaybackHold::Clear) => {}
+            Ok(MaintenancePlaybackHold::Hold { .. }) => {
+                return SafetyDecision::Hold(execution_reason::PLAYBACK_HOLD);
+            }
+            Ok(MaintenancePlaybackHold::Unknown { .. }) | Err(_) => {
+                return SafetyDecision::Hold(execution_reason::PLAYBACK_UNKNOWN);
+            }
+        }
+
+        // (5) Acquisition activity, unknown included.
+        match self.title_has_active_acquisition(&candidate.title_id).await {
+            Ok(MaintenanceActivityCheck::Clear) => {}
+            Ok(MaintenanceActivityCheck::Active) => {
+                return SafetyDecision::Hold(execution_reason::ACTIVE_ACQUISITION);
+            }
+            Ok(MaintenanceActivityCheck::Unknown { .. }) | Err(_) => {
+                return SafetyDecision::Hold(execution_reason::ACQUISITION_UNKNOWN);
+            }
+        }
+
+        SafetyDecision::Proceed(Box::new(title), Box::new(input))
+    }
+
+    /// Perform the action through existing use cases, as the system actor.
+    async fn execute_maintenance_action(
+        &self,
+        kind: MaintenanceActionKind,
+        context: &mut MaintenanceExecutionContext<'_>,
+    ) -> AppResult<ActionResult> {
+        let detail = context.detail;
+        let candidate = context.candidate;
+        let title = context.title;
+        let input = context.input;
+        let run = &mut *context.run;
+        let evaluator = &mut *context.evaluator;
+        let libraries = context.libraries;
+        let tag_conflicts = context.tag_conflicts;
+        let actor = User::system_execution_actor();
+        let MaintenanceActionDefinition::Legacy(spec) = &detail.action_definition else {
+            return Err(AppError::Validation(
+                "sequence actions must use the sequence executor".to_string(),
+            ));
+        };
+        match kind {
+            MaintenanceActionKind::DoNothing => {
+                // Unreachable: MembershipTracking is filtered at selection.
+                Ok(ActionResult::AlreadySatisfied {
+                    detail: serde_json::json!({}),
+                })
+            }
+            MaintenanceActionKind::UnmonitorScopeKeepFiles => {
+                if candidate.subject_kind != "title" {
+                    self.unmonitor_maintenance_child(candidate, title).await?;
+                    return Ok(ActionResult::Executed {
+                        detail: serde_json::json!({"unmonitored": true}),
+                    });
+                }
+                if !title.monitored {
+                    return Ok(ActionResult::AlreadySatisfied {
+                        detail: serde_json::json!({ "monitored": false }),
+                    });
+                }
+                self.set_title_monitored(&actor, &title.id, false).await?;
+                Ok(ActionResult::Executed {
+                    detail: serde_json::json!({ "unmonitored": true }),
+                })
+            }
+            MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged => {
+                self.execute_profile_change_and_search(spec, candidate, title, &actor)
+                    .await
+            }
+            MaintenanceActionKind::AddTags | MaintenanceActionKind::RemoveTags => {
+                self.execute_tag_patch(spec, kind, title, &actor).await
+            }
+            MaintenanceActionKind::DeleteTitleAndFiles => {
+                let preview = self.preview_delete_title_files(&actor, &title.id).await?;
+                let authorization = PolicyDeleteAuthorization {
+                    rule_set_id: candidate.rule_set_id.clone(),
+                    candidate_id: candidate.id.clone(),
+                    revision_number: candidate.revision_number,
+                };
+                self.delete_title_by_policy(
+                    &actor,
+                    &title.id,
+                    &preview.fingerprint,
+                    &authorization,
+                )
+                .await?;
+                Ok(ActionResult::Executed {
+                    detail: serde_json::json!({
+                        "deleted_title": true,
+                        "preview_fingerprint": preview.fingerprint,
+                        "media_count": preview.media_count,
+                        "total_file_count": preview.total_file_count,
+                    }),
+                })
+            }
+            MaintenanceActionKind::UnmonitorTitleDeleteAllFiles
+            | MaintenanceActionKind::UnmonitorScopeDeleteFiles => {
+                let mut scoped_context = MaintenanceExecutionContext {
+                    detail,
+                    candidate,
+                    title,
+                    input,
+                    run,
+                    evaluator,
+                    libraries,
+                    tag_conflicts,
+                };
+                self.execute_scoped_maintenance_deletion(&mut scoped_context, None, true, None)
+                    .await
+            }
+            MaintenanceActionKind::UnmonitorShowDeleteExistingFiles
+            | MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty
+            | MaintenanceActionKind::UnmonitorSeasonThenUnmonitorShowIfEmpty => {
+                // Exactly the complement of `EXECUTABLE_TITLE_RULE_ACTIONS`, and
+                // the authoring check now refuses the same set, so a rule
+                // carrying one of these can no longer be saved. Rules stored
+                // before that check existed still land here, which is why the
+                // arm stays: a stored candidate carrying an undispatched action
+                // is refused rather than silently reinterpreted. The match is
+                // deliberately exhaustive so a new catalog kind is a compile
+                // error until it is placed on one side or the other.
+                Err(AppError::Validation(title_rule_action_not_executable(kind)))
+            }
+        }
+    }
+
+    /// Apply the rule's tag patch to the subject title.
+    ///
+    /// One `update_title_tags` call as the system actor, which is the same
+    /// application operation the tag picker and the bulk dialog drive: the
+    /// registry gate, the normalization, the reserved-namespace guard, the
+    /// per-title ceiling, and the in-transaction merge that keeps a concurrent
+    /// options save from clobbering the bag are all that call's, not
+    /// reimplemented here.
+    ///
+    /// `already_satisfied` is a real postcondition check rather than a
+    /// first-attempt special case: the action is `ensure_state`, so "every
+    /// label is already on (or already off) the title" is exactly the state it
+    /// exists to ensure, and reporting it as executed would claim a mutation
+    /// that did not happen.
+    async fn execute_tag_patch(
+        &self,
+        spec: &crate::maintenance_rules::MaintenanceActionSpec,
+        kind: MaintenanceActionKind,
+        title: &Title,
+        actor: &User,
+    ) -> AppResult<ActionResult> {
+        let MaintenanceActionParameters::Tags { tags } = &spec.parameters else {
+            return Err(AppError::Validation(
+                "tag action has no tags configured".to_string(),
+            ));
+        };
+        let adding = kind == MaintenanceActionKind::AddTags;
+        let present = |label: &String| title.tags.iter().any(|tag| tag == label);
+        let pending: Vec<String> = tags
+            .iter()
+            .filter(|label| {
+                if adding {
+                    !present(label)
+                } else {
+                    present(label)
+                }
+            })
+            .cloned()
+            .collect();
+
+        if pending.is_empty() {
+            return Ok(ActionResult::AlreadySatisfied {
+                detail: serde_json::json!({
+                    "tags": tags,
+                    "operation": kind.as_wire_str(),
+                }),
+            });
+        }
+
+        let (add, remove): (&[String], &[String]) = if adding {
+            (&pending, &[])
+        } else {
+            (&[], &pending)
+        };
+        self.update_title_tags(actor, std::slice::from_ref(&title.id), add, remove)
+            .await?;
+
+        Ok(ActionResult::Executed {
+            detail: serde_json::json!({
+                "tags": tags,
+                "changed_tags": pending,
+                "operation": kind.as_wire_str(),
+            }),
+        })
+    }
+
+    /// RFC 9.3's combined profile workflow: change the profile only when it
+    /// differs, then run the normal search once.
+    ///
+    /// Retry postcondition: when a prior attempt exists and the profile already
+    /// equals the target, the profile step is treated as done and only the
+    /// search is re-run — a first-attempt already-target subject instead
+    /// reports `already_satisfied` with no search (the RFC's "searches only
+    /// when the profile actually changes").
+    async fn execute_profile_change_and_search(
+        &self,
+        spec: &crate::maintenance_rules::MaintenanceActionSpec,
+        candidate: &LifecycleCandidate,
+        title: &Title,
+        actor: &User,
+    ) -> AppResult<ActionResult> {
+        let MaintenanceActionParameters::ChangeQualityProfile {
+            target_quality_profile_id,
+        } = &spec.parameters
+        else {
+            return Err(AppError::Validation(
+                "quality-profile action has no target profile".to_string(),
+            ));
+        };
+        let target = target_quality_profile_id.trim();
+
+        let profiles = self.load_quality_profile_settings().await?;
+        if !profiles
+            .profiles
+            .iter()
+            .any(|profile| crate::settings::runtime::quality_profile_ids_equal(&profile.id, target))
+        {
+            return Err(AppError::Validation(format!(
+                "target quality profile '{target}' does not exist"
+            )));
+        }
+
+        let current = title
+            .tags
+            .iter()
+            .find_map(|tag| tag.strip_prefix(QUALITY_PROFILE_TAG_PREFIX))
+            .map(str::trim);
+        let already_target = current.is_some_and(|current| {
+            crate::settings::runtime::quality_profile_ids_equal(current, target)
+        });
+
+        if already_target && candidate.action_attempts == 0 {
+            return Ok(ActionResult::AlreadySatisfied {
+                detail: serde_json::json!({ "quality_profile_id": target }),
+            });
+        }
+
+        if !already_target {
+            let mut tags: Vec<String> = title
+                .tags
+                .iter()
+                .filter(|tag| !tag.starts_with(QUALITY_PROFILE_TAG_PREFIX))
+                .cloned()
+                .collect();
+            tags.push(format!("{QUALITY_PROFILE_TAG_PREFIX}{target}"));
+            self.update_title_metadata(actor, &title.id, None, None, Some(tags))
+                .await?;
+        }
+
+        // The normal search path: cutoff upgrade when a file exists to
+        // upgrade, missing otherwise.
+        let has_file = !self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await?
+            .is_empty();
+        self.start_acquisition_search_job(
+            actor,
+            crate::AcquisitionSearchRequest {
+                automatic: false,
+                wanted_kind: if has_file {
+                    WantedKind::CutoffUpgrade
+                } else {
+                    WantedKind::Missing
+                },
+                facet: None,
+                library_ids: Vec::new(),
+                title_id: Some(title.id.clone()),
+                season_number: None,
+                wanted_item_id: None,
+            },
+        )
+        .await?;
+
+        Ok(ActionResult::Executed {
+            detail: serde_json::json!({
+                "quality_profile_id": target,
+                "profile_changed": !already_target,
+                "searched": true,
+            }),
+        })
+    }
+}
+
+/// Stable across retries of one candidate generation and action; `attempt`
+/// distinguishes retries (RFC 9.8's attempt key: action schema, revision,
+/// match generation, subject, parameter hash — all of which are pinned by the
+/// candidate id + generation + the revision's serialized action spec).
+fn maintenance_action_idempotency_key(
+    detail: &MaintenanceRuleSetDetail,
+    candidate: &LifecycleCandidate,
+) -> String {
+    let params_hash = scryer_rules::runtime::content_hash(&detail.revision.action_spec_json);
+    format!(
+        "{}:{}:{}:{}",
+        candidate.id,
+        candidate.match_generation,
+        candidate.action_kind,
+        &params_hash[..16]
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::maintenance_rules::MaintenanceActionSpec;
+    use crate::maintenance_rules::service::validate_title_scope_action;
+
+    /// The kinds spelled out in `execute_maintenance_action`'s rejection arm,
+    /// restated here literally. This list and that arm are edited together; the
+    /// test below is what makes a one-sided edit fail.
+    const EXECUTOR_REJECTION_ARM_KINDS: &[MaintenanceActionKind] = &[
+        MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+        MaintenanceActionKind::UnmonitorScopeDeleteFiles,
+        MaintenanceActionKind::UnmonitorSeasonDeleteFilesThenDeleteShowIfEmpty,
+        MaintenanceActionKind::UnmonitorSeasonThenUnmonitorShowIfEmpty,
+    ];
+
+    fn spec_for(kind: MaintenanceActionKind) -> MaintenanceActionSpec {
+        match kind {
+            MaintenanceActionKind::ChangeQualityProfileAndSearchIfChanged => {
+                MaintenanceActionSpec::change_quality_profile("profile-1")
+            }
+            MaintenanceActionKind::AddTags | MaintenanceActionKind::RemoveTags => {
+                MaintenanceActionSpec::tags(kind, vec!["needs review".to_string()])
+            }
+            _ => MaintenanceActionSpec::new(kind),
+        }
+    }
+
+    /// Every catalog kind is either dispatched by the title executor or refused
+    /// by it, and authoring answers identically for every one of them.
+    ///
+    /// This is the mechanical link the `unmonitor_show_delete_existing_files`
+    /// trap needed: it was savable (show-subject, so the descriptor check passed)
+    /// and then unconditionally refused at execution, so a rule using it failed
+    /// three attempts into a terminal `Failed` and never recovered.
+    #[test]
+    fn authoring_and_the_title_executor_agree_on_every_action_kind() {
+        for kind in MaintenanceActionKind::ALL.iter().copied() {
+            let dispatched = EXECUTABLE_TITLE_RULE_ACTIONS.contains(&kind);
+            let refused = EXECUTOR_REJECTION_ARM_KINDS.contains(&kind);
+            assert_ne!(
+                dispatched, refused,
+                "{kind:?} must appear on exactly one of the executor's two sides"
+            );
+
+            let authored = validate_title_scope_action(&spec_for(kind)).is_ok();
+            assert_eq!(
+                authored, dispatched,
+                "{kind:?}: authoring must accept exactly what the executor dispatches"
+            );
+        }
+
+        assert_eq!(
+            EXECUTABLE_TITLE_RULE_ACTIONS.len() + EXECUTOR_REJECTION_ARM_KINDS.len(),
+            MaintenanceActionKind::ALL.len(),
+            "the two sides must together cover the closed catalog exactly once"
+        );
+    }
+
+    /// The specific regression: the show-subject delete action is savable no
+    /// longer, and the refusal says so in words an operator can act on.
+    #[test]
+    fn a_show_scoped_delete_action_is_refused_at_authoring_time() {
+        let refused = validate_title_scope_action(&spec_for(
+            MaintenanceActionKind::UnmonitorShowDeleteExistingFiles,
+        ))
+        .expect_err("an action the executor cannot dispatch must not be savable");
+        assert!(
+            refused
+                .to_string()
+                .contains("cannot run for a title-scoped rule"),
+            "{refused}"
+        );
+    }
+}

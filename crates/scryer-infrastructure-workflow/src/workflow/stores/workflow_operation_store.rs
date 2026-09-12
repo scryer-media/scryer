@@ -3,11 +3,12 @@ use super::*;
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
-    AppError, AppResult, JobKey, JobRunRecord, JobRunRepository, WorkflowOperationInfo,
-    WorkflowOperationRepository,
+    AppError, AppResult, JobKey, JobRunRecord, JobRunRepository, MaintenanceSearchJobRunCreation,
+    WorkflowOperationInfo, WorkflowOperationRepository,
 };
+use scryer_domain::{MaintenanceActionJobReceipt, MaintenanceActionJobReceiptState};
 
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, StoreDatastore};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
 #[derive(Clone)]
 pub struct WorkflowOperationStore {
@@ -73,6 +74,111 @@ impl JobRunRepository for WorkflowOperationStore {
         )
         .await?;
         job_run_record_from_workflow(record)
+    }
+
+    async fn create_maintenance_search_job_run(
+        &self,
+        run: &JobRunRecord,
+        receipt: &MaintenanceActionJobReceipt,
+    ) -> AppResult<MaintenanceSearchJobRunCreation> {
+        receipt
+            .validate_schema()
+            .map_err(|error| AppError::Validation(error.to_string()))?;
+        if receipt.state != MaintenanceActionJobReceiptState::Accepted
+            || receipt.job_run_id.as_deref() != Some(run.id.as_str())
+            || run.job_key != JobKey::AcquisitionSearch
+        {
+            return Err(AppError::Validation(
+                "maintenance Search requires an accepted receipt for its acquisition job run"
+                    .into(),
+            ));
+        }
+
+        let run = run.clone();
+        let receipt = receipt.clone();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "create_maintenance_search_job_run",
+            move |tx| {
+                let run = run.clone();
+                let receipt = receipt.clone();
+                Box::pin(async move {
+                    if let Some(existing) = find_accepted_maintenance_search_receipt(tx, &receipt)
+                        .await?
+                    {
+                        return Ok(MaintenanceSearchJobRunCreation::Existing { receipt: existing });
+                    }
+                    if let Some(existing) = find_maintenance_search_receipt_for_attempt(tx, &receipt)
+                        .await?
+                    {
+                        return Ok(MaintenanceSearchJobRunCreation::Existing { receipt: existing });
+                    }
+
+                    let inserted = SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "INSERT INTO maintenance_action_job_receipts
+                         (candidate_id, match_generation, revision_number, step_id, dispatch_attempt,
+                          schema_version, logical_request_key, request_hash, job_run_id, state,
+                          reconciliation_evidence_json, created_at, updated_at)
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+                         ON CONFLICT DO NOTHING",
+                        &maintenance_search_receipt_args(&receipt),
+                    )
+                    .await?;
+                    if inserted != 1 {
+                        let existing = find_accepted_maintenance_search_receipt(tx, &receipt)
+                            .await?
+                            .or(find_maintenance_search_receipt_for_attempt(tx, &receipt).await?)
+                            .ok_or_else(|| {
+                                AppError::Repository(
+                                    "maintenance Search receipt insert raced without a durable winner".into(),
+                                )
+                            })?;
+                        return Ok(MaintenanceSearchJobRunCreation::Existing { receipt: existing });
+                    }
+
+                    let progress_json = json_arg_for_tx(tx, run.progress_json.as_deref())?;
+                    let summary_json = json_arg_for_tx(tx, run.summary_json.as_deref())?;
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "INSERT INTO workflow_operations
+                         (id, operation_type, status, job_key, trigger_source, actor_user_id,
+                          progress_json, summary_json, summary_text, error_text, started_at,
+                          completed_at, created_at, updated_at)
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                        &[
+                            SqlArg::Text(run.id.clone()),
+                            SqlArg::Text(run.operation_type.clone()),
+                            SqlArg::Text(run.status.as_str().to_string()),
+                            SqlArg::Text(run.job_key.as_str().to_string()),
+                            SqlArg::Text(run.trigger_source.as_str().to_string()),
+                            SqlArg::OptText(run.actor_user_id.clone()),
+                            progress_json,
+                            summary_json,
+                            SqlArg::OptText(run.summary_text.clone()),
+                            SqlArg::OptText(run.error_text.clone()),
+                            SqlArg::Timestamp(run.started_at),
+                            SqlArg::OptTimestamp(run.completed_at),
+                            SqlArg::Timestamp(run.created_at),
+                            SqlArg::Timestamp(run.updated_at),
+                        ],
+                    )
+                    .await?;
+                    let run = fetch_optional_workflow_operation(SqlExec::Tx(tx), &run.id)
+                        .await?
+                        .ok_or_else(|| {
+                            AppError::Repository(
+                                "failed to reload atomic maintenance Search job run".into(),
+                            )
+                        })?;
+                    Ok(MaintenanceSearchJobRunCreation::Created {
+                        run: Box::new(job_run_record_from_workflow(run)?),
+                        receipt,
+                    })
+                })
+            },
+        )
+        .await
     }
 
     async fn update_job_run(&self, run: &JobRunRecord) -> AppResult<JobRunRecord> {
@@ -212,4 +318,105 @@ impl JobRunRepository for WorkflowOperationStore {
     async fn reconcile_interrupted_job_runs(&self, excluded_run_ids: &[String]) -> AppResult<u64> {
         reconcile_interrupted_job_runs(&self.datastore, excluded_run_ids).await
     }
+}
+
+fn maintenance_search_receipt_args(receipt: &MaintenanceActionJobReceipt) -> Vec<SqlArg> {
+    vec![
+        SqlArg::Text(receipt.key.candidate_id.clone()),
+        SqlArg::I64(receipt.key.match_generation),
+        SqlArg::I64(receipt.key.revision_number),
+        SqlArg::Text(receipt.key.step_id.clone()),
+        SqlArg::I64(receipt.dispatch_attempt),
+        SqlArg::I32(receipt.schema_version as i32),
+        SqlArg::Text(receipt.logical_request_key.clone()),
+        SqlArg::Text(receipt.request_hash.clone()),
+        SqlArg::OptText(receipt.job_run_id.clone()),
+        SqlArg::Text(receipt.state.as_storage_str().to_string()),
+        SqlArg::Text(receipt.reconciliation_evidence_json.clone()),
+        SqlArg::Timestamp(receipt.created_at),
+        SqlArg::Timestamp(receipt.updated_at),
+    ]
+}
+
+async fn find_accepted_maintenance_search_receipt(
+    tx: &mut SqlTx<'_>,
+    receipt: &MaintenanceActionJobReceipt,
+) -> AppResult<Option<MaintenanceActionJobReceipt>> {
+    SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT candidate_id, match_generation, revision_number, step_id, dispatch_attempt,
+                schema_version, logical_request_key, request_hash, job_run_id, state,
+                reconciliation_evidence_json, created_at, updated_at
+           FROM maintenance_action_job_receipts
+          WHERE candidate_id = {} AND match_generation = {} AND revision_number = {}
+            AND step_id = {} AND request_hash = {} AND state IN ('accepted', 'completed')
+          ORDER BY created_at ASC, dispatch_attempt ASC
+          LIMIT 1",
+        &[
+            SqlArg::Text(receipt.key.candidate_id.clone()),
+            SqlArg::I64(receipt.key.match_generation),
+            SqlArg::I64(receipt.key.revision_number),
+            SqlArg::Text(receipt.key.step_id.clone()),
+            SqlArg::Text(receipt.request_hash.clone()),
+        ],
+    )
+    .await?
+    .as_ref()
+    .map(maintenance_search_receipt_from_row)
+    .transpose()
+}
+
+async fn find_maintenance_search_receipt_for_attempt(
+    tx: &mut SqlTx<'_>,
+    receipt: &MaintenanceActionJobReceipt,
+) -> AppResult<Option<MaintenanceActionJobReceipt>> {
+    SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT candidate_id, match_generation, revision_number, step_id, dispatch_attempt,
+                schema_version, logical_request_key, request_hash, job_run_id, state,
+                reconciliation_evidence_json, created_at, updated_at
+           FROM maintenance_action_job_receipts
+          WHERE candidate_id = {} AND match_generation = {} AND revision_number = {}
+            AND step_id = {} AND dispatch_attempt = {}
+          LIMIT 1",
+        &[
+            SqlArg::Text(receipt.key.candidate_id.clone()),
+            SqlArg::I64(receipt.key.match_generation),
+            SqlArg::I64(receipt.key.revision_number),
+            SqlArg::Text(receipt.key.step_id.clone()),
+            SqlArg::I64(receipt.dispatch_attempt),
+        ],
+    )
+    .await?
+    .as_ref()
+    .map(maintenance_search_receipt_from_row)
+    .transpose()
+}
+
+fn maintenance_search_receipt_from_row(row: &SqlRow) -> AppResult<MaintenanceActionJobReceipt> {
+    let state =
+        MaintenanceActionJobReceiptState::parse_storage(&row.text("state")?).ok_or_else(|| {
+            AppError::Repository("maintenance Search receipt has an invalid state".into())
+        })?;
+    let receipt = MaintenanceActionJobReceipt {
+        schema_version: row.i32("schema_version")? as u32,
+        key: scryer_domain::MaintenanceActionStepKey {
+            candidate_id: row.text("candidate_id")?,
+            match_generation: row.i64("match_generation")?,
+            revision_number: row.i64("revision_number")?,
+            step_id: row.text("step_id")?,
+        },
+        dispatch_attempt: row.i64("dispatch_attempt")?,
+        logical_request_key: row.text("logical_request_key")?,
+        request_hash: row.text("request_hash")?,
+        job_run_id: row.opt_text("job_run_id")?,
+        state,
+        reconciliation_evidence_json: row.text("reconciliation_evidence_json")?,
+        created_at: row.timestamp("created_at")?,
+        updated_at: row.timestamp("updated_at")?,
+    };
+    receipt
+        .validate_schema()
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+    Ok(receipt)
 }

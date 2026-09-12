@@ -126,6 +126,41 @@ pub struct PluginProcessExecResponse {
     pub stderr: Vec<u8>,
 }
 
+/// A bounded archive submitted to the host-owned extraction service.
+///
+/// The host stages `content` into a private workspace, delegates extraction to
+/// the installed archive-extractor plugin, and returns the extracted members.
+/// This is a general-purpose service: any command plugin family that needs to
+/// open a container it cannot decode itself uses it, rather than each family
+/// growing its own bespoke extraction call.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginArchiveExtractRequest {
+    pub content: Vec<u8>,
+    /// One of the `ArchivePluginFormat` wire values: `rar`, `zip`, `7z`, `xz`.
+    pub format: String,
+    /// Preferred staged file name. The host sanitizes it and falls back to a
+    /// generated name derived from `format`.
+    #[serde(default)]
+    pub filename: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+}
+
+/// One member read back out of a host-extracted archive.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginArchiveExtractedFile {
+    /// Path relative to the extraction root, using `/` separators.
+    pub relative_path: String,
+    pub content: Vec<u8>,
+}
+
+/// The members extracted by the host-owned archive-extraction service.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginArchiveExtractResponse {
+    #[serde(default)]
+    pub files: Vec<PluginArchiveExtractedFile>,
+}
+
 /// A single request over the native host-service transport.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub enum PluginHostRequest {
@@ -143,6 +178,7 @@ pub enum PluginHostRequest {
     SocketStartTls(SocketStartTlsRequest),
     SocketClose(SocketCloseRequest),
     ProcessExec(PluginProcessExecRequest),
+    ArchiveExtract(PluginArchiveExtractRequest),
 }
 
 /// A single response over the native host-service transport.
@@ -162,4 +198,5 @@ pub enum PluginHostResponse {
     SocketStartTls(PluginResult<SocketStartTlsResponse>),
     SocketClose(PluginResult<SocketCloseResponse>),
     ProcessExec(PluginResult<PluginProcessExecResponse>),
+    ArchiveExtract(PluginResult<PluginArchiveExtractResponse>),
 }

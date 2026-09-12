@@ -1,0 +1,66 @@
+package scryer:archive@1.0.0;
+
+/// Host crypto/CRC services for archive extractors.
+///
+/// Semantics are the frozen §5 ABI the core-module archive host served
+/// natively (`host_aes_cbc_decrypt` / `host_crc32`): the same aws-lc AES-CBC
+/// core and the same seeded reflected IEEE CRC-32. Only the plumbing changes —
+/// a component cannot hand the host raw guest pointers, so buffers cross the
+/// boundary as `list<u8>` values and the `-3` / `-1` "out of bounds or missing
+/// memory export" statuses have no counterpart here; the canonical ABI owns
+/// that validation.
+interface crypto {
+  /// Length/alignment rejections, in the frozen validation order: key length
+  /// first, then block alignment.
+  enum aes-error {
+    /// `key` was neither 16 nor 32 bytes (statuses -1).
+    bad-key-length,
+    /// `data` was not a whole number of 16-byte AES blocks (status -2).
+    bad-block-length,
+    /// `iv` was not exactly 16 bytes. The core ABI read a fixed 16 bytes at an
+    /// `iv` pointer and so could not express this; passing the IV by value can.
+    bad-iv-length,
+  }
+
+  /// AES-CBC decrypt `data` under `key`/`iv`, stateless per call. `iv` must be
+  /// 16 bytes. An empty `data` decrypts to an empty list. The returned list has
+  /// the same length as `data` (this replaces the in-place decrypt of the core
+  /// ABI, which is not expressible across a component boundary).
+  aes-cbc-decrypt: func(
+    key: list<u8>,
+    iv: list<u8>,
+    data: list<u8>,
+  ) -> result<list<u8>, aes-error>;
+
+  /// Reflected IEEE CRC-32 resumed from `seed` over `data`. An empty `data`
+  /// returns `seed` unchanged, so a guest can stream a member in chunks.
+  crc32: func(seed: u32, data: list<u8>) -> u32;
+}
+
+/// The archive-extractor contract.
+///
+/// Both payloads are UTF-8 JSON, matching the indexer worlds: `describe`
+/// returns a `PluginDescriptor` document and `process` exchanges a
+/// `ArchivePluginProcessRequest` for a `ArchivePluginProcessResponse`. Keeping
+/// the payloads as opaque byte strings is what lets the SDK own the operation
+/// set — `inspect`, `extract-archive`, `verify-par2`, `repair-par2` and the
+/// PAR2 report on the response — without a WIT revision per shape change.
+///
+/// WASI Preview 2 is imported implicitly: the host links the full p2 surface
+/// (`wasmtime_wasi::p2::add_to_linker_async`), so a guest sees its preopened
+/// read-only source directory, its writable output directory, and its private
+/// `TMPDIR` scratch directory through `wasi:filesystem`. This mirrors the
+/// indexer worlds, which likewise leave the WASI imports off the world and let
+/// the linker satisfy whatever the guest toolchain emits.
+world archive-extractor {
+  import crypto;
+
+  enum invocation-error {
+    failed,
+    cancelled,
+    invalid-response,
+  }
+
+  export describe: func() -> list<u8>;
+  export process: func(request: list<u8>) -> result<list<u8>, invocation-error>;
+}

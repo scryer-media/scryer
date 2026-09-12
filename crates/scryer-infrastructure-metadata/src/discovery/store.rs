@@ -20,7 +20,8 @@ use tracing::debug;
 
 use crate::media::canonical_tags::{
     load_discovery_title_metadata_ratings, load_discovery_title_metadata_tags,
-    replace_discovery_title_metadata_ratings_tx, replace_discovery_title_metadata_tags_tx,
+    load_discovery_title_metadata_tags_in_category, replace_discovery_title_metadata_ratings_tx,
+    replace_discovery_title_metadata_tags_tx,
 };
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore, repo_err,
@@ -94,6 +95,8 @@ const ITEM_COLUMNS: &[&str] = &[
     "relation_count",
     "source_subject_count",
     "rank_score",
+    "recommendation_score",
+    "base_rank",
     "matched_subject_count",
     "tmdb_collection_id",
     "tmdb_collection_name",
@@ -143,6 +146,8 @@ const OCCURRENCE_COLUMNS: &[&str] = &[
     "relation_count",
     "source_subject_count",
     "rank_score",
+    "recommendation_score",
+    "base_rank",
     "matched_subject_count",
     "owned_in_input",
     "tombstoned_by_run_id",
@@ -1517,6 +1522,15 @@ fn typed_null_rating_expression(datastore: &StoreDatastore) -> &'static str {
     }
 }
 
+/// A typed NULL float column. Postgres infers `text` for a bare `NULL` inside a
+/// `UNION` branch, so every synthetic float column has to name its type.
+fn typed_null_f64_expression(datastore: &StoreDatastore, alias: &str) -> String {
+    match datastore {
+        StoreDatastore::Sqlite { .. } => format!("CAST(NULL AS REAL) AS {alias}"),
+        StoreDatastore::Postgres { .. } => format!("CAST(NULL AS DOUBLE PRECISION) AS {alias}"),
+    }
+}
+
 fn discovery_item_projection(
     datastore: &StoreDatastore,
     item_alias: &str,
@@ -1581,6 +1595,8 @@ fn discovery_item_projection_with_presentation(
         format!("{item_alias}.relation_count AS relation_count"),
         format!("{item_alias}.source_subject_count AS source_subject_count"),
         format!("{item_alias}.rank_score AS rank_score"),
+        format!("{item_alias}.recommendation_score AS recommendation_score"),
+        format!("{item_alias}.base_rank AS base_rank"),
         format!("{item_alias}.matched_subject_count AS matched_subject_count"),
         format!("{title_alias}.tmdb_collection_id AS tmdb_collection_id"),
         format!("{title_alias}.tmdb_collection_name AS tmdb_collection_name"),
@@ -1635,6 +1651,11 @@ fn title_more_like_this_projection(datastore: &StoreDatastore) -> String {
         "title_more_like_this_items.relation_count AS relation_count".to_string(),
         "title_more_like_this_items.source_subject_count AS source_subject_count".to_string(),
         "title_more_like_this_items.rank_score AS rank_score".to_string(),
+        // More Like This is a per-title shelf, not a library-context rail: SMG
+        // never reranked these rows against a context profile, so there is no
+        // relevance score or base rank to project.
+        typed_null_f64_expression(datastore, "recommendation_score"),
+        typed_null_f64_expression(datastore, "base_rank"),
         "0 AS matched_subject_count".to_string(),
         "t.tmdb_collection_id AS tmdb_collection_id".to_string(),
         "t.tmdb_collection_name AS tmdb_collection_name".to_string(),
@@ -2196,8 +2217,9 @@ async fn fetch_personalized_home_candidates(
          JOIN discovery_titles t
            ON t.id = i.discovery_title_id
          WHERE {}
-         ORDER BY COALESCE(i.rank_score, -999999999.0) DESC,
-                  COALESCE(t.sort_title, t.display_title) ASC,
+         ORDER BY COALESCE(i.recommendation_score, -999999999.0) DESC,
+                  COALESCE(i.rank_score, -999999999.0) DESC,
+                  i.sort_index ASC,
                   t.target_key ASC
          LIMIT {{}}",
         discovery_home_candidate_projection(datastore, "i", "t"),
@@ -3488,6 +3510,24 @@ async fn hydrate_discovery_home_candidate_selection(
         }
     }
 
+    // Genre provenance for the corroboration gate. A canonical genre facet term
+    // carries no confidence and no sources, so "Crime" asserted by a single
+    // AniList tag is indistinguishable from "Crime" on a provider genre list
+    // until the tag rows are read. Genres only: the theme rails do not gate on
+    // corroboration, and loading every category here would multiply the
+    // source/source-key joins across the whole pool for no gain.
+    let genre_tags_by_title =
+        load_discovery_title_metadata_tags_in_category(datastore.read_exec(), &title_ids, "genre")
+            .await?;
+    for (title_id, tags) in genre_tags_by_title {
+        let Some(indexes) = title_indexes.get(&title_id) else {
+            continue;
+        };
+        for index in indexes {
+            candidates[*index].item.canonical_tags = tags.clone();
+        }
+    }
+
     let matched_rows = fetch_child_rows(
         datastore,
         "SELECT item_id, subject_key, sort_index
@@ -4229,6 +4269,8 @@ fn item_from_row(row: &SqlRow) -> AppResult<DiscoveryItemRecord> {
         relation_count: row.opt_i32("relation_count")?,
         source_subject_count: row.opt_i32("source_subject_count")?,
         rank_score: row.opt_f64("rank_score")?,
+        recommendation_score: row.opt_f64("recommendation_score")?,
+        base_rank: row.opt_f64("base_rank")?,
         matched_subject_keys: Vec::new(),
         matched_subject_titles: Vec::new(),
         matched_subject_count: row.i32("matched_subject_count")?,
@@ -5114,6 +5156,8 @@ fn occurrence_args(item: &DiscoveryItemRecord, discovery_title_id: &str) -> Vec<
         SqlArg::OptI32(item.relation_count),
         SqlArg::OptI32(item.source_subject_count),
         SqlArg::OptF64(item.rank_score),
+        SqlArg::OptF64(item.recommendation_score),
+        SqlArg::OptF64(item.base_rank),
         SqlArg::I32(item.matched_subject_count),
         SqlArg::Bool(item.owned_in_input),
         SqlArg::OptText(item.tombstoned_by_run_id.clone()),
@@ -6793,6 +6837,8 @@ mod tests {
                         relation_count: Some(0),
                         source_subject_count: Some(1),
                         rank_score: Some(0.42),
+                        recommendation_score: None,
+                        base_rank: None,
                         matched_subject_keys: vec![
                             "tvdb:series:1".to_string(),
                             "tvdb:series:1".to_string(),
@@ -6871,6 +6917,8 @@ mod tests {
                         relation_count: Some(0),
                         source_subject_count: Some(1),
                         rank_score: Some(0.1),
+                        recommendation_score: None,
+                        base_rank: None,
                         matched_subject_keys: vec!["tvdb:series:1".to_string()],
                         matched_subject_titles: vec!["Example Series".to_string()],
                         matched_subject_count: 1,
@@ -8283,6 +8331,182 @@ mod tests {
         let _ = std::fs::remove_file(db);
     }
 
+    #[tokio::test]
+    async fn sqlite_personalized_home_candidates_order_by_recommendation_then_rank() {
+        // The pool is loaded in relevance order, so the composer's own ordering
+        // starts from SMG's blended score rather than from a single strong edge.
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_personalized_home_order_{}.db",
+            Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let store = DiscoveryStore::new(services.datastore());
+        let now = Utc::now();
+        let run_id = "run-personalized-home-order";
+        store
+            .upsert_discovery_sync_run(&discovery_prune_run(
+                run_id,
+                "context_snapshot",
+                "complete",
+                now,
+            ))
+            .await
+            .expect("run should upsert");
+
+        // (target, recommendation_score, rank_score, sort_index)
+        let rows: [(&str, Option<f64>, Option<f64>, i32); 5] = [
+            ("tmdb:movie:1", Some(0.10), Some(90.0), 0),
+            ("tmdb:movie:2", Some(0.90), Some(1.0), 4),
+            ("tmdb:movie:3", Some(0.50), Some(2.0), 3),
+            ("tmdb:movie:4", Some(0.50), Some(9.0), 2),
+            ("tmdb:movie:5", None, Some(50.0), 1),
+        ];
+        let items = rows
+            .iter()
+            .map(|(target, recommendation, rank, sort_index)| {
+                let mut item = discovery_prune_item(run_id, now);
+                item.id = format!("{run_id}:{target}");
+                item.target_key = (*target).to_string();
+                item.sort_index = *sort_index;
+                item.poster_url = Some("https://example.com/poster.jpg".to_string());
+                item.recommendation_score = *recommendation;
+                item.rank_score = *rank;
+                item.library_provenance = vec![DiscoveryItemLibraryProvenanceRecord {
+                    subject_key: (*target).to_string(),
+                    title_id: Some(format!("library-{target}")),
+                    library_id: Some("movie-library".to_string()),
+                }];
+                item
+            })
+            .collect::<Vec<_>>();
+        store
+            .replace_discovery_items(run_id, &items)
+            .await
+            .expect("items should upsert");
+
+        let candidates = fetch_personalized_home_candidates(
+            &store.datastore,
+            run_id,
+            &["movie-library".to_string()],
+            &["movie".to_string()],
+            true,
+            &DiscoveryHomeFilters::default(),
+            None,
+            18,
+        )
+        .await
+        .expect("personalized home candidates should load");
+
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|candidate| candidate.item.target_key.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "tmdb:movie:2",
+                "tmdb:movie:4",
+                "tmdb:movie:3",
+                "tmdb:movie:1",
+                "tmdb:movie:5",
+            ],
+            "relevance leads, rank_score breaks ties, sort_index breaks those, \
+             and a missing recommendation score sorts last"
+        );
+        assert_eq!(candidates[0].item.recommendation_score, Some(0.90));
+
+        let _ = std::fs::remove_file(db);
+    }
+
+    async fn discovery_item_column_names(pool: &sqlx::SqlitePool) -> Vec<String> {
+        sqlx::query_scalar("SELECT name FROM pragma_table_info('discovery_items')")
+            .fetch_all(pool)
+            .await
+            .expect("discovery_items columns should load")
+    }
+
+    #[tokio::test]
+    async fn sqlite_relevance_score_migration_applies_to_fresh_and_existing_databases() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_discovery_relevance_migration_{}.db",
+            Utc::now().timestamp_micros()
+        ));
+
+        // Fresh install: the columns and the relevance index are simply there.
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+        let columns = discovery_item_column_names(&services.pool).await;
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "recommendation_score")
+        );
+        assert!(columns.iter().any(|column| column == "base_rank"));
+        let index: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master
+              WHERE type = 'index'
+                AND name = 'idx_discovery_items_generation_recommendation'",
+        )
+        .fetch_optional(&services.pool)
+        .await
+        .expect("index lookup should succeed");
+        assert_eq!(
+            index.as_deref(),
+            Some("idx_discovery_items_generation_recommendation")
+        );
+
+        // Existing install: rewind to the pre-0238 shape and reopen. The
+        // migration has to be additive enough to run against a populated table.
+        sqlx::query(
+            "INSERT INTO discovery_sync_runs (id, kind, status, started_at, created_at, updated_at)
+             VALUES ('legacy-run', 'context_snapshot', 'complete', datetime('now'), \
+                     datetime('now'), datetime('now'))",
+        )
+        .execute(&services.pool)
+        .await
+        .ok();
+        sqlx::query("DROP INDEX IF EXISTS idx_discovery_items_generation_recommendation")
+            .execute(&services.pool)
+            .await
+            .expect("index drop should succeed");
+        for statement in [
+            "ALTER TABLE discovery_items DROP COLUMN recommendation_score",
+            "ALTER TABLE discovery_items DROP COLUMN base_rank",
+        ] {
+            sqlx::query(statement)
+                .execute(&services.pool)
+                .await
+                .expect("column drop should succeed");
+        }
+        sqlx::query("DELETE FROM _sqlx_migrations WHERE version = 238")
+            .execute(&services.pool)
+            .await
+            .expect("ledger rewind should succeed");
+        let columns = discovery_item_column_names(&services.pool).await;
+        assert!(
+            !columns
+                .iter()
+                .any(|column| column == "recommendation_score")
+        );
+        drop(services);
+
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should re-migrate an existing database");
+        let columns = discovery_item_column_names(&services.pool).await;
+        assert!(
+            columns
+                .iter()
+                .any(|column| column == "recommendation_score")
+                && columns.iter().any(|column| column == "base_rank"),
+            "0238 must restore both columns on an existing database: {columns:?}"
+        );
+
+        let _ = std::fs::remove_file(db);
+    }
+
     fn discovery_prune_run(
         id: &str,
         kind: &str,
@@ -8366,6 +8590,8 @@ mod tests {
             relation_count: Some(0),
             source_subject_count: Some(0),
             rank_score: Some(0.1),
+            recommendation_score: None,
+            base_rank: None,
             matched_subject_keys: Vec::new(),
             matched_subject_titles: Vec::new(),
             matched_subject_count: 0,

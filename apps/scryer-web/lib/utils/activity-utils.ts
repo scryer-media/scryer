@@ -180,6 +180,10 @@ export function deriveQueueRowPresentation(
         ? t("queue.transfer.extracting")
         : queueItem.importTransferPhase === "COPYING"
         ? t("queue.transfer.copying")
+        : queueItem.importTransferPhase === "VERIFYING"
+          ? t("move.checkpointState.VERIFYING")
+        : queueItem.importTransferPhase === "WAITING"
+          ? t("move.checkpointState.PENDING")
         : queueItem.importTransferPhase === "FINALIZING"
           ? t("queue.transfer.finalizing")
           : displayStateKey === "POST_PROCESSING"

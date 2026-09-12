@@ -1277,12 +1277,17 @@ mod tests {
             .or_default()
             .insert("catalog_sort_key".to_string());
         columns.entry("indexers".to_string()).or_default().extend([
-            "indexer_proxy_config_id".to_string(),
+            "proxy_config_id".to_string(),
             "last_error_message".to_string(),
             "download_client_id".to_string(),
             // Seeding profile assignment (migrations 0163/0164).
             "seeding_profile_id".to_string(),
         ]);
+        // Proxy assignment for the second consumer family (migration 0218).
+        columns
+            .entry("download_clients".to_string())
+            .or_default()
+            .insert("proxy_config_id".to_string());
         columns
             .entry("pending_releases".to_string())
             .or_default()
@@ -1482,6 +1487,8 @@ mod tests {
             "download_clients",
             "subtitle_provider_configs",
             "rule_sets",
+            "rule_pack_installations",
+            "rule_pack_members",
             "post_processing_scripts",
             "post_processing_script_runs",
             "plugin_installations",

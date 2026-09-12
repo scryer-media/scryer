@@ -1,3 +1,5 @@
+use scryer_domain::RuleEvaluationPhase;
+
 /// A single rule template within a community rule pack.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RulePackTemplate {
@@ -5,9 +7,16 @@ pub struct RulePackTemplate {
     pub title: String,
     pub description: String,
     pub category: String,
+    #[serde(alias = "regoSource")]
     pub rego_source: String,
-    #[serde(default)]
+    #[serde(default, alias = "appliedFacets")]
     pub applied_facets: Vec<String>,
+    #[serde(default, alias = "evaluationPhase")]
+    pub evaluation_phase: RuleEvaluationPhase,
+    #[serde(default = "default_rule_enabled", alias = "defaultEnabled")]
+    pub default_enabled: bool,
+    #[serde(default, alias = "exclusiveGroup")]
+    pub exclusive_group: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize)]
 struct RulePackRule {
@@ -19,7 +28,41 @@ struct RulePackRule {
     rego_source: String,
     #[serde(default, alias = "appliedFacets")]
     applied_facets: Vec<String>,
+    #[serde(default, alias = "evaluationPhase")]
+    evaluation_phase: RuleEvaluationPhase,
+    #[serde(default = "default_rule_enabled", alias = "defaultEnabled")]
+    default_enabled: bool,
+    #[serde(default, alias = "exclusiveGroup")]
+    exclusive_group: Option<String>,
 }
+
+fn default_rule_enabled() -> bool {
+    false
+}
+
+#[cfg(test)]
+mod manifest_metadata_tests {
+    use super::*;
+
+    #[test]
+    fn legacy_manifest_rule_defaults_to_additional_and_disabled() {
+        let rule: RulePackRule = serde_json::from_str(
+            r#"{
+                "id": "legacy",
+                "title": "Legacy",
+                "description": "Legacy manifest entry",
+                "category": "test",
+                "regoSource": "package scryer.rules.legacy"
+            }"#,
+        )
+        .expect("legacy manifest rule should deserialize");
+
+        assert_eq!(rule.evaluation_phase, RuleEvaluationPhase::Additional);
+        assert!(!rule.default_enabled);
+        assert_eq!(rule.exclusive_group, None);
+    }
+}
+
 fn normalized_constraint(raw: Option<&str>) -> Option<String> {
     raw.map(str::trim)
         .filter(|constraint| !constraint.is_empty())
@@ -116,7 +159,17 @@ impl AppUseCase {
             .await?;
 
         let mut runtime_plugins = Vec::new();
+        let compatibility_blockers = self
+            .runtime
+            .plugins
+            .compatibility_blockers
+            .read()
+            .await
+            .clone();
         let mut pending_plugins = enabled.into_iter().filter_map(|(installation, payload)| {
+            if compatibility_blockers.contains_key(&installation.plugin_id) {
+                return None;
+            }
             if !matches!(
                 installation.source_kind,
                 PluginSourceKind::Downloaded
@@ -216,9 +269,10 @@ impl AppUseCase {
         let disabled_builtins: Vec<String> = all_installations
             .iter()
             .filter(|inst| {
-                inst.is_builtin
+                (inst.is_builtin
                     && !inst.is_enabled
-                    && !is_reserved_first_party_provider(&inst.provider_type)
+                    && !is_reserved_first_party_provider(&inst.provider_type))
+                    || compatibility_blockers.contains_key(&inst.plugin_id)
             })
             .map(|inst| inst.provider_type.clone())
             .collect();
@@ -346,7 +400,7 @@ impl AppUseCase {
                     rate_limit_seconds: provider.rate_limit_seconds_for_provider(&pt),
                     rate_limit_burst: None,
                     disabled_until: None,
-                    indexer_proxy_config_id: None,
+                    proxy_config_id: None,
                     download_client_id: None,
                     seeding_profile_id: None,
                     managed_parent_config_id: None,
@@ -389,6 +443,7 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// How many installed plugins have a newer catalog release available.
     pub async fn plugin_update_count(&self, actor: &User) -> AppResult<i64> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -398,6 +453,23 @@ impl AppUseCase {
             .await?
             .into_iter()
             .filter(|plugin| plugin.update_available)
+            .count() as i64)
+    }
+
+    /// How many installed plugins are blocked on this version of Scryer.
+    ///
+    /// Kept apart from [`Self::plugin_update_count`]: an update is optional
+    /// housekeeping, a blocked plugin is not running at all, and the navigation
+    /// badges show them with different urgency.
+    pub async fn plugin_blocked_count(&self, actor: &User) -> AppResult<i64> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+
+        Ok(self
+            .build_available_plugins()
+            .await?
+            .into_iter()
+            .filter(|plugin| plugin.blocked_reason.is_some())
             .count() as i64)
     }
 }

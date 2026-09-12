@@ -43,10 +43,12 @@ import { useConfigStepUp } from "@/lib/hooks/use-config-step-up";
 import { TranslateContext } from "@/lib/context/translate-context";
 import { GlobalStatusContext } from "@/lib/context/global-status-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
+import { useExperimentalFeaturesEnabled, useInstanceFeatures } from "@/lib/context/instance-features-context";
 import { RootHeader } from "@/components/root/root-header";
 import { buildRouteCommands } from "@/components/root/route-commands";
 import { JobRunProvider } from "@/components/root/job-run-provider";
 import { LibraryScanProgressProvider } from "@/components/root/library-scan-progress-provider";
+import { LocationMoveProgressProvider } from "@/components/root/location-move-progress-provider";
 import { ReactiveRefreshProvider } from "@/components/root/reactive-refresh-provider";
 import { RootSidebar } from "@/components/root/root-sidebar";
 import { ApplicationUpgradeAction } from "@/components/common/application-upgrade";
@@ -101,6 +103,7 @@ import {
   resolveAppRoute,
 } from "@/lib/utils/routing";
 import {
+  canAccessApiExplorer,
   canAccessDashboard,
   canAccessMediaSettingsSection,
   canAccessSettingsSection,
@@ -429,6 +432,8 @@ function readOverviewTargetFromLocationState(
 /**
  * Renders the main content area.
  */
+const ApiExplorerContainer = lazy(() => import("@/components/containers/api-explorer-container"));
+
 function MainContent({
   view,
   overviewTitleId,
@@ -448,6 +453,7 @@ function MainContent({
   logsSection,
   scryerVersion,
   pluginUpdateCount,
+  pluginBlockedCount,
   activitySection,
   wantedSection,
   handleOpenOverview,
@@ -482,6 +488,7 @@ function MainContent({
   logsSection: LogsSection;
   scryerVersion: string | null;
   pluginUpdateCount: number;
+  pluginBlockedCount: number;
   activitySection: ActivitySection;
   wantedSection: WantedSection;
   handleOpenOverview: (
@@ -502,6 +509,13 @@ function MainContent({
   canManageConfig: boolean;
   canManageLibrarySettings: boolean;
 }) {
+  const { apiExplorerEnabled } = useInstanceFeatures();
+  if (view === "api-explorer") {
+    if (!canAccessApiExplorer(canManageSystemSettings, apiExplorerEnabled)) {
+      return <div role="status" className="p-8 text-muted-foreground">API explorer is unavailable.</div>;
+    }
+    return <ApiExplorerContainer key={userId} />;
+  }
   if (view === "dashboard") {
     if (!canAccessDashboard(canManageSystemSettings)) {
       return <ViewLoadingFallback />;
@@ -629,6 +643,7 @@ function MainContent({
         uiLanguage={uiLanguage}
         onSelectLanguage={setLanguagePreferenceFromShell}
         pluginUpdateCount={pluginUpdateCount}
+        pluginBlockedCount={pluginBlockedCount}
       />
     );
   }
@@ -777,6 +792,9 @@ function AuthenticatedHomePage({
   serviceRestarting: boolean;
 }) {
   const isOnline = useOnlineStatus();
+  // The palette must not offer a page the sidebar is hiding, so the same
+  // instance-wide switch decides both.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const { canPrompt, isInstalled, isIosSafari, promptInstall } =
     useInstallPrompt();
 
@@ -1373,6 +1391,7 @@ function AuthenticatedHomePage({
     pendingMediaRequestCounts,
     manualImportRequiredCount,
     pluginUpdateCount,
+    pluginBlockedCount,
     scryerVersion,
   } = useNavigationBadges({
     serviceRestarting,
@@ -1399,9 +1418,16 @@ function AuthenticatedHomePage({
         t,
         user: authenticatedUser,
         activityImportCount: manualImportRequiredCount,
+        experimentalFeaturesEnabled,
         onNavigate: navigateTo,
       }),
-    [authenticatedUser, manualImportRequiredCount, navigateTo, t],
+    [
+      authenticatedUser,
+      experimentalFeaturesEnabled,
+      manualImportRequiredCount,
+      navigateTo,
+      t,
+    ],
   );
 
   useAutoBackupNotice({
@@ -1770,6 +1796,7 @@ function AuthenticatedHomePage({
             <Suspense fallback={<ViewLoadingFallback />}>
               <LibraryScanProgressProvider>
                 <JobRunProvider enabled={canSubscribeToJobEvents}>
+                  <LocationMoveProgressProvider>
                   <ReactiveRefreshProvider
                     enabled={canSubscribeToLibraryEvents}
                   >
@@ -1916,6 +1943,7 @@ function AuthenticatedHomePage({
                           pendingMediaRequestCounts={pendingMediaRequestCounts}
                           manualImportRequiredCount={manualImportRequiredCount}
                           pluginUpdateCount={pluginUpdateCount}
+                          pluginBlockedCount={pluginBlockedCount}
                           header={
                             <RootHeader
                               onOpenOverview={handleOpenOverview}
@@ -1989,6 +2017,7 @@ function AuthenticatedHomePage({
                                   logsSection={logsSection}
                                   scryerVersion={scryerVersion}
                                   pluginUpdateCount={pluginUpdateCount}
+                                  pluginBlockedCount={pluginBlockedCount}
                                   activitySection={activitySection}
                                   wantedSection={wantedSection}
                                   handleOpenOverview={handleOpenOverview}
@@ -2018,6 +2047,7 @@ function AuthenticatedHomePage({
                       </div>
                     </GlobalSearchProvider>
                   </ReactiveRefreshProvider>
+                  </LocationMoveProgressProvider>
                 </JobRunProvider>
               </LibraryScanProgressProvider>
             </Suspense>

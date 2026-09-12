@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useLocation } from "react-router";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import {
   persistOverviewScrollValue,
@@ -42,6 +43,7 @@ import {
   titleOverviewOpenButtonId,
   titleOverviewRowId,
   titleOverviewSearchButtonId,
+  titleOverviewSelectId,
 } from "@/lib/utils/dom-ids";
 import {
   bytesToReadable,
@@ -182,6 +184,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
   const scanLibraryDisabled = scanLibraryDisabledProp ?? false;
   const location = useLocation();
   const t = useTranslate();
+  const { isSearching } = useAutomaticSearch();
   const dateTimeFormat = useUiDateTimeFormat();
   const isMovieView = view === "movies";
   const overviewTargetView: ViewId = resolveOverviewTargetView(view);
@@ -638,7 +641,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
       interactiveSearchResultsByTitle[item.id] ?? [];
     const interactiveSearchLoading =
       interactiveSearchLoadingByTitle[item.id] === true;
-    const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true;
+    const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true || isSearching(item.id);
     const deleteLoading = isDeletingById[item.id] === true;
     const monitorToggleLoading = isTogglingMonitoredById?.[item.id] === true;
     const isSelected = selectedTitleId === item.id;
@@ -784,6 +787,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
         >
           <TableCell className="px-0 text-center align-middle">
             <Checkbox
+              id={titleOverviewSelectId(item.id)}
               checked={selectedTitleIds.has(item.id)}
               onCheckedChange={() => onToggleSelected(item.id)}
               aria-label={t("title.selectTitle", { name: item.name })}
@@ -1299,7 +1303,7 @@ export const CompactTitleTable = React.memo(function CompactTitleTable({
             initialScrollOffset={initialScrollOffset}
             estimateSize={estimateTitleRowSize}
             overscan={8}
-            rebuildKey={`${visibleColumnSignature}:${expandedInteractiveRowSignature}`}
+            rebuildKey={`${sortKey}:${sortDirection}:${visibleColumnSignature}:${expandedInteractiveRowSignature}`}
             selectedTitleId={selectedTitleId}
             selectedTitleScrollKey={selectedTitleScrollKey}
             catalogPagingEnabled={catalogPagingEnabled}

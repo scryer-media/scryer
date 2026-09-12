@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useLocation } from "react-router";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import {
   persistOverviewScrollValue,
@@ -42,6 +43,7 @@ import {
   titleOverviewOpenButtonId,
   titleOverviewRowId,
   titleOverviewSearchButtonId,
+  titleOverviewSelectId,
 } from "@/lib/utils/dom-ids";
 import {
   bytesToReadable,
@@ -179,6 +181,7 @@ export const TitleTable = React.memo(function TitleTable({
   const scanLibraryDisabled = scanLibraryDisabledProp ?? false;
   const location = useLocation();
   const t = useTranslate();
+  const { isSearching } = useAutomaticSearch();
   const dateTimeFormat = useUiDateTimeFormat();
   const isMovieView = view === "movies";
   const overviewTargetView: ViewId = resolveOverviewTargetView(view);
@@ -578,7 +581,7 @@ export const TitleTable = React.memo(function TitleTable({
       interactiveSearchResultsByTitle[item.id] ?? [];
     const interactiveSearchLoading =
       interactiveSearchLoadingByTitle[item.id] === true;
-    const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true;
+    const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true || isSearching(item.id);
     const deleteLoading = isDeletingById[item.id] === true;
     const monitorToggleLoading = isTogglingMonitoredById?.[item.id] === true;
     const posterThumbUrl = selectPosterVariantUrl(item.posterUrl, "w70");
@@ -616,15 +619,19 @@ export const TitleTable = React.memo(function TitleTable({
             selectionMode && "cursor-pointer",
           )}
         >
-          <TableCell className="px-0 text-center align-middle">
-            <Checkbox
-              checked={selectedTitleIds.has(item.id)}
-              onCheckedChange={() => onToggleSelected(item.id)}
-              aria-label={t("title.selectTitle", { name: item.name })}
-              disabled={bulkActionBusy}
-              size="table"
-              className="mx-auto"
-            />
+          <TableCell className="pl-3 pr-0 align-middle">
+            {/* Centred by the flex row rather than by mx-auto, which does
+                nothing to the inline-block button Radix renders. */}
+            <div className="flex items-center justify-center">
+              <Checkbox
+                id={titleOverviewSelectId(item.id)}
+                checked={selectedTitleIds.has(item.id)}
+                onCheckedChange={() => onToggleSelected(item.id)}
+                aria-label={t("title.selectTitle", { name: item.name })}
+                disabled={bulkActionBusy}
+                size="large"
+              />
+            </div>
           </TableCell>
           <TableCell className="align-middle overflow-hidden">
             <div className="flex min-w-0 items-center gap-2">
@@ -919,15 +926,16 @@ export const TitleTable = React.memo(function TitleTable({
   const titleTableHeader = (
     <TableHeader>
       <TableRow className={TITLE_TABLE_HEADER_ROW_CLASS}>
-        <TableHead className="w-12 bg-[var(--scry-surfD)] text-center">
-          <Checkbox
-            checked={selectAllState}
-            onCheckedChange={(checked) => onToggleSelectAll(checked === true)}
-            aria-label={t("title.selectAllTitles")}
-            disabled={bulkActionBusy}
-            size="table"
-            className="mx-auto"
-          />
+        <TableHead className="w-12 bg-[var(--scry-surfD)] pl-3 pr-0">
+          <div className="flex items-center justify-center">
+            <Checkbox
+              checked={selectAllState}
+              onCheckedChange={(checked) => onToggleSelectAll(checked === true)}
+              aria-label={t("title.selectAllTitles")}
+              disabled={bulkActionBusy}
+              size="table"
+            />
+          </div>
         </TableHead>
         {renderSortableHeader(
           "name",
@@ -1115,7 +1123,7 @@ export const TitleTable = React.memo(function TitleTable({
           initialScrollOffset={initialScrollOffset}
           estimateSize={estimateTitleRowSize}
           overscan={5}
-          rebuildKey={`${visibleColumnSignature}:${expandedInteractiveRowSignature}`}
+          rebuildKey={`${sortKey}:${sortDirection}:${visibleColumnSignature}:${expandedInteractiveRowSignature}`}
           selectedTitleId={selectedTitleId}
           selectedTitleScrollKey={selectedTitleScrollKey}
           catalogHasMoreTitles={catalogHasMoreTitles}

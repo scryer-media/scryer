@@ -30,10 +30,13 @@ pub(crate) fn build_discovery_library_context(
         .map(|subject| subject.canonical.clone())
         .collect::<Vec<_>>();
 
+    let medium_mix = DiscoveryLibraryMediumMix::from_titles(titles);
+
     DiscoveryLibraryContext {
         subjects,
         subject_provenance,
-        fingerprint: discovery_context_fingerprint(&defaults, &canonical_subjects),
+        medium_mix,
+        fingerprint: discovery_context_fingerprint(&defaults, medium_mix, &canonical_subjects),
     }
 }
 
@@ -53,6 +56,7 @@ impl DiscoveryLibraryContext {
             max_items: defaults.max_items as i32,
             include_owned: defaults.include_owned,
             include_unresolved: defaults.include_unresolved,
+            medium_mix: self.medium_mix.to_context_input(),
             context_fingerprint: Some(self.fingerprint.clone()),
         }
     }
@@ -88,6 +92,7 @@ impl DiscoveryLibraryContext {
             max_items: defaults.max_items as i32,
             include_owned: defaults.include_owned,
             include_unresolved: defaults.include_unresolved,
+            medium_mix: self.medium_mix.to_context_input(),
             context_fingerprint: Some(self.fingerprint.clone()),
             previous_context_fingerprint: Some(previous_context_fingerprint.to_string()),
         })
@@ -522,13 +527,19 @@ pub(super) fn fallback_discovery_subject_key(
     format!("local:{}", blake3::hash(&bytes).to_hex())
 }
 
+/// Schema version 2 adds the library's medium mix: the same counts SMG uses to
+/// exclude a medium are part of what identifies the run, so a library that
+/// gains (or loses) its first anime gets a fresh pool instead of reusing one
+/// built under the old mix.
 pub(super) fn discovery_context_fingerprint(
     defaults: &DiscoveryContextDefaults,
+    medium_mix: DiscoveryLibraryMediumMix,
     subjects: &[CanonicalSubject],
 ) -> String {
     let context = CanonicalContext {
-        schema_version: 1,
+        schema_version: 2,
         defaults,
+        medium_mix: medium_mix.to_context_input(),
         subjects,
     };
     let bytes = serde_json::to_vec(&context)
