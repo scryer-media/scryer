@@ -47,6 +47,8 @@ use serde_json::Value;
 use tracing::warn;
 use url::Url;
 
+use crate::jellyfin::JellyfinAuth;
+
 /// Per-request budget. Higher than the playback probe's five seconds: this is a
 /// paged library query, not a memory read, but it still sits inside a
 /// background job that must not hang for minutes.
@@ -96,12 +98,14 @@ impl HttpMediaServerSignalSource {
         }
     }
 
+    /// One authenticated Jellyfin read. Jellyfin is the only provider this
+    /// source reads from, so the request carries Jellyfin's credential header.
     async fn fetch_json(&self, url: Url, api_key: &str) -> AppResult<Value> {
         let response = self
             .client
             .get(url)
             .header("Accept", "application/json")
-            .header("X-Emby-Token", api_key)
+            .jellyfin_auth(api_key, None)
             .timeout(SIGNAL_FETCH_TIMEOUT)
             .send()
             .await

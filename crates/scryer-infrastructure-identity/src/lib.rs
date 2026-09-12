@@ -1,5 +1,6 @@
 mod emby;
 pub mod external_identity;
+mod jellyfin;
 /// Maintenance safety: live playback observation (RFC 137 §9.10, WP-G).
 pub mod media_server_playback;
 /// Provider adapters for media-server watch signals (RFC 137 §7.3, WP-M).

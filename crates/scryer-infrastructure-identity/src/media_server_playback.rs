@@ -32,6 +32,8 @@ use scryer_outbound_http::generic_reqwest_client;
 use serde_json::Value;
 use url::Url;
 
+use crate::jellyfin::JellyfinAuth;
+
 /// Per-connection budget for a session read.
 ///
 /// Deliberately far below [`scryer_outbound_http::STANDARD_HTTP_TIMEOUT`]: this
@@ -103,8 +105,11 @@ pub(crate) async fn probe_connection(
 
     match connection.provider {
         MediaServerProvider::Plex => probe_plex(client, &connection.base_url, api_key).await,
-        MediaServerProvider::Jellyfin | MediaServerProvider::Emby => {
-            probe_emby_family(client, &connection.base_url, api_key).await
+        MediaServerProvider::Jellyfin => {
+            probe_jellyfin(client, &connection.base_url, api_key).await
+        }
+        MediaServerProvider::Emby => {
+            probe_emby(client, &connection.id, &connection.base_url, api_key).await
         }
     }
 }
@@ -125,7 +130,8 @@ async fn probe_plex(client: &reqwest::Client, base_url: &str, token: &str) -> Pl
         return PlaybackProbeStatus::Unreachable("no Plex server selected".into());
     }
 
-    let body = match fetch_json(client, url, "X-Plex-Token", token).await {
+    let request = client.get(url).header("X-Plex-Token", token);
+    let body = match fetch_json(request).await {
         Ok(body) => body,
         Err(status) => return status,
     };
@@ -149,10 +155,9 @@ async fn probe_plex(client: &reqwest::Client, base_url: &str, token: &str) -> Pl
     }
 }
 
-/// Jellyfin and Emby: `GET /Sessions` with the stored API key. A session counts
-/// as active only when it carries a `NowPlayingItem`; idle clients stay
-/// connected and are listed regardless.
-async fn probe_emby_family(
+/// Jellyfin: `GET /Sessions` with the stored API key on Jellyfin's own
+/// credential header.
+async fn probe_jellyfin(
     client: &reqwest::Client,
     base_url: &str,
     api_key: &str,
@@ -161,11 +166,39 @@ async fn probe_emby_family(
         Ok(url) => url,
         Err(reason) => return PlaybackProbeStatus::Unreachable(reason),
     };
-    let body = match fetch_json(client, url, "X-Emby-Token", api_key).await {
-        Ok(body) => body,
-        Err(status) => return status,
-    };
+    let request = client.get(url).jellyfin_auth(api_key, None);
+    match fetch_json(request).await {
+        Ok(body) => sessions_status(&body),
+        Err(status) => status,
+    }
+}
 
+/// Emby: `GET /Sessions` with the stored API key on Emby's own credential
+/// headers. Emby and Jellyfin share no request path.
+async fn probe_emby(
+    client: &reqwest::Client,
+    connection_id: &str,
+    base_url: &str,
+    api_key: &str,
+) -> PlaybackProbeStatus {
+    let url = match session_url(base_url, "Sessions") {
+        Ok(url) => url,
+        Err(reason) => return PlaybackProbeStatus::Unreachable(reason),
+    };
+    let request = client.get(url).header("X-Emby-Token", api_key).header(
+        "X-Emby-Authorization",
+        crate::emby::client_authorization(connection_id, None),
+    );
+    match fetch_json(request).await {
+        Ok(body) => sessions_status(&body),
+        Err(status) => status,
+    }
+}
+
+/// A `/Sessions` body, as Jellyfin and Emby both shape it. A session counts
+/// as active only when it carries a `NowPlayingItem`; idle clients stay
+/// connected and are listed regardless.
+fn sessions_status(body: &Value) -> PlaybackProbeStatus {
     let Some(sessions) = body.as_array() else {
         return PlaybackProbeStatus::Unreachable("unreadable response".into());
     };
@@ -184,18 +217,12 @@ async fn probe_emby_family(
     }
 }
 
-/// Sends the session request and decodes its body, mapping every failure to an
-/// `Unreachable` status carrying a terse, credential-free reason.
-async fn fetch_json(
-    client: &reqwest::Client,
-    url: Url,
-    credential_header: &str,
-    credential: &str,
-) -> Result<Value, PlaybackProbeStatus> {
-    let response = client
-        .get(url)
+/// Sends a session request that already carries its credential and decodes
+/// its body, mapping every failure to an `Unreachable` status carrying a
+/// terse, credential-free reason.
+async fn fetch_json(request: reqwest::RequestBuilder) -> Result<Value, PlaybackProbeStatus> {
+    let response = request
         .header("Accept", "application/json")
-        .header(credential_header, credential)
         .timeout(PLAYBACK_PROBE_TIMEOUT)
         .send()
         .await
@@ -377,6 +404,87 @@ mod tests {
             .respond_with(response)
             .mount(server)
             .await;
+    }
+
+    /// Match one exact `Authorization` value; wiremock's `header` matcher
+    /// splits a comma-separated value into a list, so `MediaBrowser` never
+    /// compares equal through it.
+    fn media_browser_header(expected: String) -> impl Fn(&wiremock::Request) -> bool {
+        move |request: &wiremock::Request| {
+            request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value == expected)
+        }
+    }
+
+    #[tokio::test]
+    async fn jellyfin_sessions_are_read_with_the_media_browser_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Sessions"))
+            .and(media_browser_header(crate::jellyfin::authorization(
+                Some("api-key"),
+                None,
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"Id": "watching", "NowPlayingItem": {"Id": "item-1"}}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let status = probe_connection(
+            &generic_reqwest_client(),
+            &connection(
+                "jellyfin",
+                MediaServerProvider::Jellyfin,
+                &server.uri(),
+                Some("api-key"),
+            ),
+        )
+        .await;
+
+        assert_eq!(status, PlaybackProbeStatus::ActiveSessions(1));
+    }
+
+    #[tokio::test]
+    async fn emby_sessions_are_read_on_the_emby_credential_path_only() {
+        let server = MockServer::start().await;
+        let no_media_browser_header =
+            |request: &wiremock::Request| request.headers.get("authorization").is_none();
+        let emby_client_header = |request: &wiremock::Request| {
+            request
+                .headers
+                .get("x-emby-authorization")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value == crate::emby::client_authorization("emby", None))
+        };
+        Mock::given(method("GET"))
+            .and(path("/Sessions"))
+            .and(header("x-emby-token", "api-key"))
+            .and(emby_client_header)
+            .and(no_media_browser_header)
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([
+                {"Id": "watching", "NowPlayingItem": {"Id": "item-1"}}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let status = probe_connection(
+            &generic_reqwest_client(),
+            &connection(
+                "emby",
+                MediaServerProvider::Emby,
+                &server.uri(),
+                Some("api-key"),
+            ),
+        )
+        .await;
+
+        assert_eq!(status, PlaybackProbeStatus::ActiveSessions(1));
     }
 
     // ── Plex ────────────────────────────────────────────────────────────────

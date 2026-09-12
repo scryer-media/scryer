@@ -14,6 +14,7 @@ scryer-infrastructure-workflow = { path = "../scryer-infrastructure-workflow" }
 async-trait = { workspace = true }
 chrono = { workspace = true }
 futures-util = "0.3"
+percent-encoding = "2"
 quick-xml = { workspace = true }
 reqwest = { version = "0.13", default-features = false, features = ["json", "rustls-no-provider", "http2", "gzip", "brotli", "zstd", "deflate", "stream"] }
 serde = { workspace = true }
