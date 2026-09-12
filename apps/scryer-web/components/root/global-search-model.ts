@@ -250,11 +250,37 @@ export function buildCatalogLibraryMembers(
 }
 
 /** One row per title: the first library row stands for the rest. */
+/**
+ * The row that stands for a title held in several libraries. A copy that was
+ * just added to a second library has no artwork or metadata yet, so the card
+ * shows the copy with art, then the one metadata reached, then the oldest.
+ */
+export function representativeCatalogMember(
+  members: TitleRecord[],
+): TitleRecord {
+  const score = (member: TitleRecord): number =>
+    (member.posterUrl ? 2 : 0) + (member.metadataFetchedAt ? 1 : 0);
+  return members.reduce((best, member) => {
+    const gap = score(member) - score(best);
+    if (gap > 0) {
+      return member;
+    }
+    if (gap < 0) {
+      return best;
+    }
+    const memberCreated = member.createdAt ?? "";
+    const bestCreated = best.createdAt ?? "";
+    return memberCreated && (!bestCreated || memberCreated < bestCreated)
+      ? member
+      : best;
+  }, members[0]);
+}
+
 export function dedupeCatalogResultsByIdentity(
   titles: TitleRecord[],
 ): TitleRecord[] {
   return Object.values(buildCatalogLibraryMembers(titles)).map(
-    (members) => members[0],
+    representativeCatalogMember,
   );
 }
 
