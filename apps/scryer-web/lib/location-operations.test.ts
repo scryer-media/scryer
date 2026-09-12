@@ -46,6 +46,8 @@ import {
   mergeDestinationTitleId,
   mergePreviewsBySourceTitle,
   mergeRoleChangeLines,
+  mergeRoleChangeGroups,
+  mergeRoleGroupKey,
   mergeStatement,
   mergeSummaryPresentation,
   isInsufficientSpaceMessage,
@@ -1617,6 +1619,8 @@ test("every media-role change is named, and demotions are flagged (FR-070)", () 
         newRole: "ADDITIONAL",
         reason: "DESTINATION_PRIMARY_RETAINED",
         detail: "The destination already had a primary for S01E01.",
+        episodeLabel: "S01E01",
+        fileName: "Sample.Show.S01E01.mkv",
       },
       {
         fileId: "file-kept",
@@ -1655,7 +1659,112 @@ test("every media-role change is named, and demotions are flagged (FR-070)", () 
   // The movie line reads with nulls rather than empty strings.
   assert.equal(lines[2].sourceEpisodeId, null);
   assert.equal(lines[2].destinationEpisodeId, null);
+  // The names a person reads travel with the line; a payload without them
+  // (an older server) reads as null rather than undefined.
+  assert.equal(lines[0].episodeLabel, "S01E01");
+  assert.equal(lines[0].fileName, "Sample.Show.S01E01.mkv");
+  assert.equal(lines[1].episodeLabel, null);
+  assert.equal(lines[1].fileName, null);
   assert.deepEqual(mergeRoleChangeLines(mergePreview()), []);
+});
+
+test("role changes are grouped by their explanation, with every line kept", () => {
+  const lines = mergeRoleChangeLines(
+    mergePreview({
+      roleChanges: [
+        {
+          fileId: "file-1",
+          sourceEpisodeId: "src-1",
+          destinationEpisodeId: "dst-1",
+          previousRole: "PRIMARY",
+          newRole: "ADDITIONAL",
+          reason: "DESTINATION_PRIMARY_RETAINED",
+          detail: "S01E01 already has a primary.",
+          episodeLabel: "S01E01",
+          fileName: "Sample.Show.S01E01.mkv",
+        },
+        {
+          fileId: "file-2",
+          sourceEpisodeId: "src-2",
+          destinationEpisodeId: "dst-2",
+          previousRole: "ADDITIONAL",
+          newRole: "ADDITIONAL",
+          reason: "COLLAPSED_SOURCE_EPISODES",
+          detail: "Two source episodes collapse onto S01E02.",
+          episodeLabel: "S01E02",
+          fileName: "Sample.Show.S01E02.mkv",
+        },
+        {
+          fileId: "file-3",
+          sourceEpisodeId: "src-3",
+          destinationEpisodeId: "dst-3",
+          previousRole: "PRIMARY",
+          newRole: "ADDITIONAL",
+          reason: "DESTINATION_PRIMARY_RETAINED",
+          detail: "S01E03 already has a primary.",
+          episodeLabel: "S01E03",
+          fileName: "Sample.Show.S01E03.mkv",
+        },
+        // A movie's files hang off the title itself, so the same reason reads
+        // as its own sentence ("already has a primary file", not "for these
+        // episodes") and must not fold into the episode group.
+        {
+          fileId: "file-movie",
+          previousRole: "PRIMARY",
+          newRole: "ADDITIONAL",
+          reason: "DESTINATION_PRIMARY_RETAINED",
+          detail: "The destination already has a primary file.",
+          fileName: "Sample.Movie.mkv",
+        },
+      ],
+    }),
+  );
+
+  const groups = mergeRoleChangeGroups(lines);
+  // First-seen order, one group per (reason, title-or-episode) pair.
+  assert.deepEqual(
+    groups.map((group) => [
+      group.reason,
+      group.titleSlot,
+      group.demotion,
+      group.lines.map((line) => line.fileId),
+    ]),
+    [
+      ["DESTINATION_PRIMARY_RETAINED", false, true, ["file-1", "file-3"]],
+      ["COLLAPSED_SOURCE_EPISODES", false, false, ["file-2"]],
+      ["DESTINATION_PRIMARY_RETAINED", true, true, ["file-movie"]],
+    ],
+  );
+  // No line is lost in the grouping (FR-070).
+  assert.equal(
+    groups.reduce((count, group) => count + group.lines.length, 0),
+    lines.length,
+  );
+
+  // The sentence key follows the group: title-slot groups get their own
+  // wording, except a collapse, which only ever happens between episodes.
+  assert.equal(
+    mergeRoleGroupKey(groups[0]),
+    "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED",
+  );
+  assert.equal(
+    mergeRoleGroupKey(groups[1]),
+    "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES",
+  );
+  assert.equal(
+    mergeRoleGroupKey(groups[2]),
+    "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE",
+  );
+  assert.equal(
+    mergeRoleGroupKey({
+      reason: "COLLAPSED_SOURCE_EPISODES",
+      titleSlot: true,
+      demotion: false,
+      lines: [],
+    }),
+    "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES",
+  );
+  assert.deepEqual(mergeRoleChangeGroups([]), []);
 });
 
 test("a merge summary is one pass, and an empty one says so (FR-071)", () => {
@@ -1699,6 +1808,11 @@ test("a merge summary is one pass, and an empty one says so (FR-071)", () => {
   assert.equal(summary.historyRowsCarried, 40);
   assert.equal(summary.sourceRecordsDropped, 12);
   assert.equal(summary.roleChanges.length, 1);
+  assert.equal(summary.roleChangeGroups.length, 1);
+  assert.equal(
+    summary.roleChangeGroups[0].reason,
+    "SOURCE_PRIMARY_ALREADY_CLAIMED",
+  );
   // The demotion count is what the heading warns with; FR-070 forbids a
   // silent one, so it is counted rather than inferred by the renderer.
   assert.equal(summary.demotionCount, 1);

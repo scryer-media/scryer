@@ -2219,23 +2219,23 @@ const es: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "Esta fusión no puede ejecutarse: estos registros no se pueden trasladar.",
   "move.mergeCarried":
-    "El título superviviente asume {{files}} registro(s) de archivo multimedia y {{history}} fila(s) de historial.",
+    "{{files}} archivo(s) multimedia y {{history}} entradas de historial vienen con él.",
   "move.mergeDropped":
     "{{count}} otro(s) registro(s) del título fusionado no se conservan y se retiran con él.",
   "move.mergeRoleChangesHeading":
-    "Roles de los archivos ({{demotions}} archivo(s) dejan de ser principales)",
+    "{{demotions}} archivo(s) pasan a ser copias adicionales",
   "move.mergeRoleChangesHeadingPlain": "Roles de los archivos",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "principal",
-  "move.mergeRole.ADDITIONAL": "adicional",
-  "move.mergeRoleDemotion":
-    "Este archivo ya no es el principal de su episodio; se conserva junto al que sí lo es.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "El destino ya tenía un archivo principal para este episodio y un movimiento nunca degrada uno.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Otro archivo en movimiento ya reclamó el rol principal para ese episodio de destino.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Dos episodios de origen se fusionaron en un único episodio de destino.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}” ya tiene un archivo principal para estos episodios. Los archivos entrantes se conservan como copias adicionales y no se reemplaza nada de lo que ya existe.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}” ya tiene un archivo principal. El archivo entrante se conserva como copia adicional y no se reemplaza nada de lo que ya existe.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Otro archivo de este movimiento ya es el principal para estos episodios, así que estos se conservan como copias adicionales.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Otro archivo de este movimiento ya es el principal, así que este se conserva como copia adicional.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "Estos archivos figuran aquí bajo dos episodios que en el destino son uno solo. Allí cada uno figura una sola vez.",
+  "move.mergeRoleUnnamedFile": "archivo {{id}}",
   "move.operationTransferNote": "Estos títulos se están moviendo a otra biblioteca.",
   "move.modeHeading": "¿Cómo deben llegar los archivos?",
   "move.mode.MOVE_WITH_SCRYER": "Mover con Scryer",

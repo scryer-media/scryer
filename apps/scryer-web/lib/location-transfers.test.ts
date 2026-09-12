@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   acceptTransferSnapshot,
+  detailLines,
   splitTransferPath,
   transferArtworkRequest,
   transferOperationProgress,
@@ -198,4 +199,27 @@ test("leading directories are separated from intact filenames on every platform"
     assert.equal(parts.filename, "Show.S01E01.mkv");
     assert.equal(parts.directory + parts.filename, path);
   }
+});
+
+test("outcome detail is read one statement per line", () => {
+  assert.deepEqual(
+    detailLines(
+      '"Sample Show" was merged into the existing "Sample Show".\nThe old folder /a/b was kept because it still has files in it that were not part of this move.',
+    ),
+    [
+      '"Sample Show" was merged into the existing "Sample Show".',
+      "The old folder /a/b was kept because it still has files in it that were not part of this move.",
+    ],
+  );
+  // Rows written before the newline join used "; " between sentences.
+  assert.deepEqual(
+    detailLines(
+      'The destination\'s "tvshow.nfo" stays authoritative; the incoming one was preserved as "tvshow (from Anime).nfo".; "Sample Show" merges into the destination title',
+    ),
+    [
+      'The destination\'s "tvshow.nfo" stays authoritative; the incoming one was preserved as "tvshow (from Anime).nfo".',
+      '"Sample Show" merges into the destination title',
+    ],
+  );
+  assert.deepEqual(detailLines("  \n "), []);
 });

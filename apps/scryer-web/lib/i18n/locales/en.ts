@@ -4566,23 +4566,22 @@ const en: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "This merge cannot run: these records cannot be carried over.",
   "move.mergeCarried":
-    "The surviving title takes over {{files}} media file record(s) and {{history}} history row(s).",
+    "{{files}} media file(s) and {{history}} history entries come along.",
   "move.mergeDropped":
     "{{count}} other record(s) on this title (tags, requests, acquisition state) retire with it.",
-  "move.mergeRoleChangesHeading":
-    "Media file roles ({{demotions}} file(s) lose primary)",
-  "move.mergeRoleChangesHeadingPlain": "Media file roles",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "primary",
-  "move.mergeRole.ADDITIONAL": "additional",
-  "move.mergeRoleDemotion":
-    "This file is no longer the primary for its episode; it is kept alongside the one that is.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "The destination already had a primary for this episode, and a move never demotes one.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Another moving file already claimed primary for that destination episode.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Two source episodes collapsed onto one destination episode.",
+  "move.mergeRoleChangesHeading": "{{demotions}} file(s) become extra copies",
+  "move.mergeRoleChangesHeadingPlain": "File roles",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}” already has a primary file for these episodes. The incoming files are kept as extra copies, and nothing already there is replaced.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}” already has a primary file. The incoming file is kept as an extra copy, and nothing already there is replaced.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Another file in this move is already the primary for these episodes, so these are kept as extra copies.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Another file in this move is already the primary, so this one is kept as an extra copy.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "These files are listed under two episodes here that are one episode at the destination. Each is listed once there.",
+  "move.mergeRoleUnnamedFile": "file {{id}}",
   "move.operationTransferNote": "These titles are moving into another library.",
   "move.modeHeading": "How should the files get there?",
   "move.mode.MOVE_WITH_SCRYER": "Move with Scryer",

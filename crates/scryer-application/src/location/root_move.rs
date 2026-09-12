@@ -2360,6 +2360,8 @@ mod tests {
                 previous_role: MergedMediaRole::Primary,
                 new_role: MergedMediaRole::Additional,
                 reason: RoleChangeReason::DestinationPrimaryRetained,
+                file_name: Some("Sample.Show.S01E01.mkv".to_string()),
+                episode_label: Some("S01E01".to_string()),
             }],
             role_demotions: 1,
             ..MergePreviewSummary::default()
@@ -2425,7 +2427,11 @@ mod tests {
             plan_reasons::MERGE_ROLE_CHANGE,
         );
         assert_eq!(roles.len(), 1);
-        assert!(roles[0].contains("additional"));
+        assert!(
+            roles[0].contains("kept as an extra copy"),
+            "the demotion is stated the way a person would read it: {}",
+            roles[0]
+        );
 
         let execution = planned.execution.title("title-1").expect("title planned");
         assert!(execution.merges());

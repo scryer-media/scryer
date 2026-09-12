@@ -726,14 +726,17 @@ impl LocationOperationRunner<'_> {
             .run_title(operation, title, &paths, progress, plan, &mut phase)
             .await
         {
-            Ok(TitleRunOutcome::Finished(mut warnings)) => {
+            Ok(TitleRunOutcome::Finished {
+                notes,
+                mut warnings,
+            }) => {
                 warnings.extend(transfer_detail);
                 let state = if warnings.is_empty() {
                     TitleCheckpointState::Completed
                 } else {
                     TitleCheckpointState::CompletedWithWarnings
                 };
-                let detail = (!warnings.is_empty()).then(|| warnings.join("; "));
+                let detail = finished_title_detail(&notes, &warnings);
                 self.settle_title(operation, title, state, detail, progress, plan, None)
                     .await?;
                 if let Some(hub) = self.transfers {

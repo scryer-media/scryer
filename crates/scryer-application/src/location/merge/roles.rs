@@ -90,40 +90,57 @@ pub struct MediaRoleChange {
     pub previous_role: MergedMediaRole,
     pub new_role: MergedMediaRole,
     pub reason: RoleChangeReason,
+    /// The file's name on disk, filled by the planner from the catalog so the
+    /// change can be stated about a file a person recognises. `None` when the
+    /// row could not name it; the id stands in.
+    #[serde(default)]
+    pub file_name: Option<String>,
+    /// The destination episode as a person would say it (`S01E03`, `#12`).
+    /// `None` for a title-slot file or an episode without a usable number.
+    #[serde(default)]
+    pub episode_label: Option<String>,
 }
 
 impl MediaRoleChange {
     /// The sentence FR-070 asks the preview to show for this change. Phrased
     /// once, here, so the plan item, the GraphQL payload, and any log line
     /// cannot describe the same demotion three different ways.
+    ///
+    /// Written for the person reading the preview: the file by name, the
+    /// episode by number, and what happens to it, in one sentence.
     pub fn describe(&self) -> String {
-        let why = match self.reason {
-            RoleChangeReason::DestinationPrimaryRetained => {
-                "the destination already has a primary for that slot, and no destination primary is demoted by a move"
-            }
-            RoleChangeReason::SourcePrimaryAlreadyClaimed => {
-                "another source file already claimed primary for that destination episode"
-            }
-            RoleChangeReason::CollapsedSourceEpisodes => {
-                "two source episodes map onto that one destination episode, so their rows collapse into one"
-            }
+        let file = match self.file_name.as_deref() {
+            Some(name) => format!("\"{name}\""),
+            None => format!("file {}", self.file_id),
         };
-        match (
+        let episode = match (
+            self.episode_label.as_deref(),
             self.destination_episode_id.as_deref(),
-            self.source_episode_id.as_deref(),
         ) {
-            (Some(destination), Some(source)) => format!(
-                "file {} becomes {} for episode {destination} (was {} for source episode \
-                 {source}): {why}",
-                self.file_id,
-                self.new_role.as_str(),
-                self.previous_role.as_str(),
+            (Some(label), _) => label.to_string(),
+            (None, Some(id)) => format!("episode {id}"),
+            (None, None) => String::new(),
+        };
+        let demoted = self.previous_role == MergedMediaRole::Primary
+            && self.new_role != MergedMediaRole::Primary;
+        match self.reason {
+            RoleChangeReason::DestinationPrimaryRetained if episode.is_empty() => format!(
+                "The destination already has a primary file, so {file} is kept as an extra copy. Nothing already there is replaced."
             ),
-            _ => format!(
-                "file {} becomes {} for the merged title (was {}): {why}",
-                self.file_id,
-                self.new_role.as_str(),
-                self.previous_role.as_str(),
+            RoleChangeReason::DestinationPrimaryRetained => format!(
+                "The destination already has a primary file for {episode}, so {file} is kept as an extra copy. Nothing already there is replaced."
+            ),
+            RoleChangeReason::SourcePrimaryAlreadyClaimed if episode.is_empty() => format!(
+                "Another file in this move is already the primary, so {file} is kept as an extra copy."
+            ),
+            RoleChangeReason::SourcePrimaryAlreadyClaimed => format!(
+                "Another file in this move is already the primary for {episode}, so {file} is kept as an extra copy."
+            ),
+            RoleChangeReason::CollapsedSourceEpisodes if demoted => format!(
+                "{file} is listed under two episodes here that are one episode at the destination ({episode}). It is listed once there, as an extra copy."
+            ),
+            RoleChangeReason::CollapsedSourceEpisodes => format!(
+                "{file} is listed under two episodes here that are one episode at the destination ({episode}). It is listed once there."
             ),
         }
     }
@@ -221,6 +238,8 @@ pub fn resolve_media_roles(
                 previous_role: row.role,
                 new_role: plan.rows[existing].role,
                 reason: RoleChangeReason::CollapsedSourceEpisodes,
+                file_name: None,
+                episode_label: None,
             });
             continue;
         }
@@ -237,6 +256,8 @@ pub fn resolve_media_roles(
                 previous_role: MergedMediaRole::Primary,
                 new_role: MergedMediaRole::Additional,
                 reason: RoleChangeReason::DestinationPrimaryRetained,
+                file_name: None,
+                episode_label: None,
             });
             MergedMediaRole::Additional
         } else if claimed_primary.contains_key(&destination_episode_id) {
@@ -247,6 +268,8 @@ pub fn resolve_media_roles(
                 previous_role: MergedMediaRole::Primary,
                 new_role: MergedMediaRole::Additional,
                 reason: RoleChangeReason::SourcePrimaryAlreadyClaimed,
+                file_name: None,
+                episode_label: None,
             });
             MergedMediaRole::Additional
         } else {
@@ -305,6 +328,8 @@ fn resolve_title_slot_roles(
                 } else {
                     RoleChangeReason::SourcePrimaryAlreadyClaimed
                 },
+                file_name: None,
+                episode_label: None,
             });
             MergedMediaRole::Additional
         } else {

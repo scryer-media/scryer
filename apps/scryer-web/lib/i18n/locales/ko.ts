@@ -2116,24 +2116,22 @@ const ko: LocaleDictionary = {
   "move.mergeNoDetails": "이 병합에서 그 밖에 옮겨지는 항목은 없습니다.",
   "move.mergeBlockedHeading":
     "이 병합을 실행할 수 없습니다: 다음 레코드를 옮길 수 없습니다.",
-  "move.mergeCarried":
-    "남는 제목이 미디어 파일 레코드 {{files}}개와 기록 행 {{history}}개를 넘겨받습니다.",
+  "move.mergeCarried": "미디어 파일 {{files}}개와 기록 {{history}}개가 함께 옮겨집니다.",
   "move.mergeDropped":
     "병합되는 제목의 다른 레코드 {{count}}개는 넘겨받지 않고 제목과 함께 사라집니다.",
-  "move.mergeRoleChangesHeading":
-    "미디어 파일 역할 (파일 {{demotions}}개가 기본 역할을 잃음)",
-  "move.mergeRoleChangesHeadingPlain": "미디어 파일 역할",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "기본",
-  "move.mergeRole.ADDITIONAL": "추가",
-  "move.mergeRoleDemotion":
-    "이 파일은 더 이상 해당 에피소드의 기본 파일이 아니며, 기본 파일과 함께 보관됩니다.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "대상에 이미 이 에피소드의 기본 파일이 있으며, 이동은 기본 파일을 강등하지 않습니다.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "이동 중인 다른 파일이 해당 대상 에피소드의 기본 역할을 이미 차지했습니다.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "원본 에피소드 두 개가 대상 에피소드 하나로 합쳐졌습니다.",
+  "move.mergeRoleChangesHeading": "파일 {{demotions}}개가 추가 사본이 됩니다",
+  "move.mergeRoleChangesHeadingPlain": "파일 역할",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}”에는 이 에피소드들의 기본 파일이 이미 있습니다. 들어오는 파일은 추가 사본으로 보관되며, 기존 파일은 교체되지 않습니다.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}”에는 기본 파일이 이미 있습니다. 들어오는 파일은 추가 사본으로 보관되며, 기존 파일은 교체되지 않습니다.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "이 이동에 포함된 다른 파일이 이미 이 에피소드들의 기본 파일이므로, 이 파일들은 추가 사본으로 보관됩니다.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "이 이동에 포함된 다른 파일이 이미 기본 파일이므로, 이 파일은 추가 사본으로 보관됩니다.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "이 파일들은 여기서는 두 에피소드에 등록되어 있지만 대상에서는 하나의 에피소드입니다. 대상에서는 각 파일이 한 번만 등록됩니다.",
+  "move.mergeRoleUnnamedFile": "파일 {{id}}",
   "move.operationTransferNote": "이 타이틀들은 다른 라이브러리로 이동하고 있습니다.",
   "move.modeHeading": "파일을 어떻게 옮길까요?",
   "move.mode.MOVE_WITH_SCRYER": "Scryer로 이동",

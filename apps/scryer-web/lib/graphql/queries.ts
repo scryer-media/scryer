@@ -4812,6 +4812,8 @@ export const locationOperationPreviewQuery = `query LocationOperationPreview($in
         newRole
         reason
         detail
+        episodeLabel
+        fileName
       }
       historyRowsCarried
       sourceRecordsDropped

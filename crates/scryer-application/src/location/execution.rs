@@ -659,13 +659,13 @@ impl<'a> RootMoveReconciler<'a> {
         }
 
         execute_merge(merges, &plan).await?;
-        if plan.summary.source_records_dropped > 0 {
-            outcome.warnings.push(format!(
-                "\"{}\" merges into the destination title; {} record(s) recorded against it \
-                 (tags, requests, acquisition state, discovery provenance) retire with it",
-                planned.title_name, plan.summary.source_records_dropped
-            ));
-        }
+        // The merge is the plan's designed outcome, so it is stated, not warned
+        // about (FR-064): the user confirmed it in the preview.
+        outcome.notes.push(merge_note(
+            &planned.title_name,
+            plan.summary.destination_title_name.as_deref(),
+            plan.summary.source_records_dropped,
+        ));
         self.retire_merged_source(operation, planned, destination_title_id)
             .await;
         Ok(())
@@ -760,9 +760,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 destination_title_id,
                 "the merge for this title already committed; settling its checkpoint without re-planning"
             );
-            for warning in &planned.warnings {
-                outcome.warnings.push(warning.clone());
-            }
+            outcome.notes.extend(planned.warnings.iter().cloned());
             return Ok(outcome);
         }
 
@@ -778,7 +776,9 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 return Err(AppError::Validation("A file changed before the catalog update. Its source was preserved; retry to compare it again.".into()));
             }
             if let Some(warning) = &resolution.warning {
-                outcome.warnings.push(warning.clone());
+                // A transfer-time rename is FR-074/FR-075 doing its job, not a
+                // departure from the plan.
+                outcome.notes.push(warning.clone());
             }
         }
         for file in planned.files.iter().chain(
@@ -827,9 +827,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         if let Some(destination_title_id) = planned.merge_target_title_id.as_deref() {
             self.merge_title(operation, planned, destination_title_id, &mut outcome)
                 .await?;
-            for warning in &planned.warnings {
-                outcome.warnings.push(warning.clone());
-            }
+            outcome.notes.extend(planned.warnings.iter().cloned());
             return Ok(outcome);
         }
 
@@ -860,9 +858,11 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         }
 
         let _ = operation;
-        for warning in &planned.warnings {
-            outcome.warnings.push(warning.clone());
-        }
+        // What the preview said would happen — a companion kept under a new
+        // name, a hardlinked source, a same-named neighbour — happened. Those
+        // are the plan's own statements, confirmed by the user, so they are
+        // stated with the outcome rather than raised as warnings.
+        outcome.notes.extend(planned.warnings.iter().cloned());
         Ok(outcome)
     }
 
@@ -1005,7 +1005,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 .await?;
             if let SourceDisposal::RemovedRecycleUnavailable(reason) = disposal {
                 outcome.warnings.push(format!(
-                    "the copied source {} was removed rather than recycled: {reason}",
+                    "The old copy at {} was deleted outright instead of going to the recycle bin: {reason}",
                     file.source_path
                 ));
             }
@@ -1027,20 +1027,64 @@ impl TitleReconciler for RootMoveReconciler<'_> {
         // 2. Only *empty* source directories, deepest first (FR-031). A
         //    directory that still holds anything — unmanaged content, a file
         //    this operation never planned — is left exactly as it is.
+        let mut kept = Vec::new();
         for directory in &planned.prune_directories {
             let path = stored_path_to_path_buf(directory);
             match remove_directory_if_empty(&path).await {
                 DirectoryPrune::Removed | DirectoryPrune::AlreadyAbsent => {}
-                DirectoryPrune::NotEmpty => outcome.warnings.push(format!(
-                    "the source directory {directory} still holds content, so it was left in place"
-                )),
+                DirectoryPrune::NotEmpty => kept.push(directory.as_str()),
                 DirectoryPrune::Failed(error) => outcome.warnings.push(format!(
-                    "the source directory {directory} could not be removed: {error}"
+                    "The old folder {directory} could not be removed: {error}"
                 )),
             }
         }
+        if let Some(warning) = kept_folders_warning(&kept) {
+            outcome.warnings.push(warning);
+        }
 
         Ok(outcome)
+    }
+}
+
+/// The one line a merge leaves in the title's outcome.
+fn merge_note(
+    title_name: &str,
+    destination_title_name: Option<&str>,
+    source_records_dropped: i64,
+) -> String {
+    let destination = destination_title_name
+        .map(|name| format!("the existing \"{name}\""))
+        .unwrap_or_else(|| "the existing title".to_string());
+    let mut note = format!("\"{title_name}\" was merged into {destination}.");
+    if source_records_dropped > 0 {
+        let records = if source_records_dropped == 1 {
+            "1 record".to_string()
+        } else {
+            format!("{source_records_dropped} records")
+        };
+        note.push_str(&format!(
+            " {records} that only belonged to the duplicate entry (tags, requests, \
+             acquisition state, discovery history) were retired with it."
+        ));
+    }
+    note
+}
+
+/// One warning for every old folder cleanup left standing, rather than one per
+/// folder: a stray file deep in a season folder keeps every folder above it
+/// too, and the user wants to know what was kept, not to read the same
+/// sentence for each level.
+fn kept_folders_warning(kept: &[&str]) -> Option<String> {
+    match kept {
+        [] => None,
+        [folder] => Some(format!(
+            "The old folder {folder} was kept because it still has files in it that were not part of this move."
+        )),
+        folders => Some(format!(
+            "{} old folders were kept because they still have files in them that were not part of this move: {}",
+            folders.len(),
+            folders.join(", ")
+        )),
     }
 }
 

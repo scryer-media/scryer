@@ -1086,3 +1086,78 @@ async fn a_second_operation_still_holding_the_source_title_blocks_the_merge() {
         .expect("the read phase should succeed");
     assert!(!plan_merge(&snapshot).is_blocked());
 }
+
+/// The merge runs inside the operation that moved the files, *before* that
+/// operation's cleanup step. Cleanup drops a source copy only when it finds the
+/// row that verified it, so the merging operation's own verification rows must
+/// survive the merge — only other operations' rows retire with the title.
+#[tokio::test]
+async fn the_merging_operations_own_verification_rows_survive_the_merge() {
+    let (store, datastore) = test_store().await;
+    seed_two_season_series(&datastore).await;
+    for operation in ["op-current", "op-earlier"] {
+        run(
+            &datastore,
+            "INSERT INTO location_operations (id, operation_type, execution_mode, state,
+                                              plan_fingerprint, verification_depth, created_at,
+                                              updated_at)
+             VALUES ({}, 'cross_library_transfer', 'move_with_scryer', 'completed',
+                     'fingerprint', 'full', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+            vec![SqlArg::Text(operation.to_string())],
+        )
+        .await;
+        run(
+            &datastore,
+            "INSERT INTO location_operation_verifications
+                 (id, operation_id, title_id, source_path, destination_path,
+                  requested_depth, applied_depth, outcome, detail)
+             VALUES ({}, {}, {}, '/old/S1E01.mkv', '/new/S1E01.mkv',
+                     'full', 'full', 'verified', 'verified (full)')",
+            vec![
+                SqlArg::Text(format!("{operation}-ver")),
+                SqlArg::Text(operation.to_string()),
+                SqlArg::Text(SOURCE.to_string()),
+            ],
+        )
+        .await;
+    }
+
+    let snapshot = store
+        .load_merge_snapshot(SOURCE, DESTINATION, Some("op-current"))
+        .await
+        .expect("the read phase should succeed");
+    let plan = plan_merge(&snapshot);
+    assert_eq!(
+        plan.summary.source_records_dropped, 1,
+        "only the earlier operation's proof counts as a source record that retires"
+    );
+
+    store
+        .execute_title_merge(&plan)
+        .await
+        .expect("the merge should commit");
+
+    let surviving = text(
+        &datastore,
+        "SELECT operation_id AS value FROM location_operation_verifications
+          WHERE title_id = {} ORDER BY operation_id",
+        vec![SqlArg::Text(SOURCE.to_string())],
+    )
+    .await;
+    assert_eq!(
+        surviving.as_deref(),
+        Some("op-current"),
+        "the merging operation keeps the proofs its cleanup still has to read"
+    );
+    assert_eq!(
+        scalar(
+            &datastore,
+            "SELECT COUNT(*) AS row_count FROM location_operation_verifications
+              WHERE operation_id = 'op-earlier'",
+            vec![],
+        )
+        .await,
+        0,
+        "an earlier operation's proofs retire with the source title as before"
+    );
+}

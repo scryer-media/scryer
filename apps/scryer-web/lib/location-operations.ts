@@ -232,6 +232,10 @@ export type LocationMergeRoleChange = {
   newRole: LocationMergeMediaRole;
   reason: LocationMergeRoleChangeReason;
   detail: string;
+  /** The destination episode as a person says it (`S01E03`); null for a movie. */
+  episodeLabel?: string | null;
+  /** The file's name on disk; null when the catalog could not name it. */
+  fileName?: string | null;
 };
 
 export type LocationMergeBlockedRecord = {
@@ -837,11 +841,32 @@ export type MergeRoleChangeLine = {
   newRole: LocationMergeMediaRole;
   reason: LocationMergeRoleChangeReason;
   detail: string;
+  /** The destination episode as a person says it; null for a movie. */
+  episodeLabel: string | null;
+  /** The file's name on disk; null when the catalog could not name it. */
+  fileName: string | null;
   /**
    * True when this file stops being the primary for its slot. FR-070 forbids a
    * silent demotion, so this is the flag the row renders loudly on.
    */
   demotion: boolean;
+};
+
+/**
+ * Role changes that share one explanation, so the dialog says the reason once
+ * and lists the files under it instead of repeating a paragraph per file.
+ *
+ * A movie's file has no episode, and its sentence reads differently ("already
+ * has a primary file" rather than "for these episodes"), so title-slot changes
+ * group apart from episode changes with the same reason.
+ */
+export type MergeRoleChangeGroup = {
+  reason: LocationMergeRoleChangeReason;
+  /** True when these files hang off the title itself rather than an episode. */
+  titleSlot: boolean;
+  /** True when any file in the group stops being a primary. */
+  demotion: boolean;
+  lines: MergeRoleChangeLine[];
 };
 
 /**
@@ -859,8 +884,43 @@ export function mergeRoleChangeLines(
     newRole: change.newRole,
     reason: change.reason,
     detail: change.detail,
+    episodeLabel: change.episodeLabel ?? null,
+    fileName: change.fileName ?? null,
     demotion: change.previousRole === "PRIMARY" && change.newRole !== "PRIMARY",
   }));
+}
+
+/**
+ * The role changes grouped by why they happen, in first-seen order. Every line
+ * stays listed (FR-070); only the explanation is shared.
+ */
+export function mergeRoleChangeGroups(
+  lines: MergeRoleChangeLine[],
+): MergeRoleChangeGroup[] {
+  const groups: MergeRoleChangeGroup[] = [];
+  for (const line of lines) {
+    const titleSlot = line.destinationEpisodeId === null;
+    let group = groups.find(
+      (candidate) =>
+        candidate.reason === line.reason && candidate.titleSlot === titleSlot,
+    );
+    if (!group) {
+      group = { reason: line.reason, titleSlot, demotion: false, lines: [] };
+      groups.push(group);
+    }
+    group.lines.push(line);
+    group.demotion ||= line.demotion;
+  }
+  return groups;
+}
+
+/** Translation key for the sentence that explains one group of role changes. */
+export function mergeRoleGroupKey(group: MergeRoleChangeGroup): string {
+  const suffix =
+    group.titleSlot && group.reason !== "COLLAPSED_SOURCE_EPISODES"
+      ? "_TITLE"
+      : "";
+  return `move.mergeRoleGroup.${group.reason}${suffix}`;
 }
 
 /** Everything one merge summary renders, in one pass (FR-070, FR-071). */
@@ -871,6 +931,8 @@ export type MergeSummaryPresentation = {
   /** Media file records the surviving title takes over. */
   mediaFilesRepointed: number;
   roleChanges: MergeRoleChangeLine[];
+  /** The same changes, grouped by explanation for the dialog. */
+  roleChangeGroups: MergeRoleChangeGroup[];
   /** How many of those role changes take a file's primary away (FR-070). */
   demotionCount: number;
   /** History rows that follow the content onto the surviving title. */
@@ -911,6 +973,7 @@ export function mergeSummaryPresentation(
     blockedRecords,
     mediaFilesRepointed,
     roleChanges,
+    roleChangeGroups: mergeRoleChangeGroups(roleChanges),
     demotionCount: roleChanges.filter((change) => change.demotion).length,
     historyRowsCarried,
     sourceRecordsDropped,
@@ -923,17 +986,6 @@ export function mergeSummaryPresentation(
   };
 }
 
-/** Translation key for a media-file role in a merge. */
-export function mergeRoleLabelKey(value: LocationMergeMediaRole): string {
-  return `move.mergeRole.${value}`;
-}
-
-/** Translation key for why a media file's role changed (FR-070). */
-export function mergeRoleChangeReasonKey(
-  value: LocationMergeRoleChangeReason,
-): string {
-  return `move.mergeRoleReason.${value}`;
-}
 
 /**
  * Whether the previewed plan may be confirmed. The backend refuses a blocked

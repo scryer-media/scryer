@@ -138,3 +138,17 @@ export function splitTransferPath(path: string): {
     filename: path.slice(index + 1),
   };
 }
+
+/**
+ * A title's or operation's outcome detail, one statement per line.
+ *
+ * The runner writes the planned outcomes first, then the departures from the
+ * plan, separated by newlines; older rows joined them with "; ". Either way the
+ * reader gets one sentence per line rather than a paragraph of them.
+ */
+export function detailLines(detail: string): string[] {
+  return detail
+    .split(/\n|; (?=[A-Z"\u201c])/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}

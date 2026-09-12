@@ -5667,23 +5667,23 @@ const ru: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "Объединение невозможно: эти записи нельзя перенести.",
   "move.mergeCarried":
-    "Сохраняемое название получает {{files}} запись(ей) медиафайлов и {{history}} строк(и) истории.",
+    "Вместе с ним переходят медиафайлы ({{files}}) и записи истории ({{history}}).",
   "move.mergeDropped":
     "{{count}} прочая(-ие) запись(-и) объединяемого названия не переносятся и удаляются вместе с ним.",
   "move.mergeRoleChangesHeading":
-    "Роли медиафайлов (файлов, теряющих роль основного: {{demotions}})",
-  "move.mergeRoleChangesHeadingPlain": "Роли медиафайлов",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "основной",
-  "move.mergeRole.ADDITIONAL": "дополнительный",
-  "move.mergeRoleDemotion":
-    "Этот файл больше не основной для своей серии; он сохраняется рядом с основным.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "В библиотеке назначения уже был основной файл для этой серии, а перемещение никогда его не понижает.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Другой перемещаемый файл уже занял роль основного для этой серии назначения.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Две исходные серии свелись к одной серии назначения.",
+    "Файлов, которые станут дополнительными копиями: {{demotions}}",
+  "move.mergeRoleChangesHeadingPlain": "Роли файлов",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "У «{{title}}» уже есть основной файл для этих серий. Поступающие файлы сохраняются как дополнительные копии; ничего из имеющегося не заменяется.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "У «{{title}}» уже есть основной файл. Поступающий файл сохраняется как дополнительная копия; ничего из имеющегося не заменяется.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Другой файл из этого перемещения уже является основным для этих серий, поэтому эти сохраняются как дополнительные копии.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Другой файл из этого перемещения уже является основным, поэтому этот сохраняется как дополнительная копия.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "Эти файлы числятся здесь под двумя сериями, которые в месте назначения являются одной. Там каждый из них числится один раз.",
+  "move.mergeRoleUnnamedFile": "файл {{id}}",
   "move.operationTransferNote": "Эти тайтлы перемещаются в другую библиотеку.",
   "move.modeHeading": "Как файлы должны туда попасть?",
   "move.mode.MOVE_WITH_SCRYER": "Переместить через Scryer",

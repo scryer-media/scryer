@@ -655,6 +655,7 @@ impl crate::location::merge::engine::TitleMergeRepository for InMemoryTitleMerge
             .await?;
 
         Ok(crate::location::merge::engine::MergeCatalogSnapshot {
+            current_operation_id: current_operation_id.map(str::to_string),
             source_title_id: source_title_id.to_string(),
             destination_title_id: destination_title_id.to_string(),
             destination_title_name: Some(destination.name.clone()),
