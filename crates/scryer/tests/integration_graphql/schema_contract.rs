@@ -691,8 +691,14 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // packs add `trackedRulePacks`: query 161->163. Schema-2 maintenance
     // sequences add the `maintenanceActionStepDescriptors` catalog read:
     // query 163->164.
+    // Live transfer progress (0.20.0) adds four reads: the aggregate
+    // `locationTransferSummary`, the paged `locationTransferPage` and
+    // `locationTransferFiles`, and `locationTransferTitleDetail` for one
+    // title's exception. Failed-move recovery adds
+    // `locationOperationRetrySelection`, the prefilled Plan again selection.
+    // Query 164->169.
     assert_eq!(
-        query_field_count, 164,
+        query_field_count, 169,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -717,8 +723,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Title-aware rule-editor previews add `testRuleSet`; tracked rule packs
     // add install, update preview, update, settings, copy, and delete actions:
     // mutation 236->243.
+    // Failed-move recovery adds `abandonLocationOperation`, the way out of a
+    // stalled operation whose storage is not coming back: mutation 247->248.
     assert_eq!(
-        mutation_field_count, 247,
+        mutation_field_count, 248,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -770,7 +778,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // `LocationRootChange*`/`LocationRootConsolidation*` inputs, so
     // INPUT_OBJECT 193->191 and public types 722->720. Query fields drop by one
     // (150->149) with the second preview root; OBJECT and ENUM are unchanged.
-    assert_eq!(subscription_field_count, 14);
+    // Live transfer progress (0.20.0) adds three subscriptions that mirror the
+    // summary, page, and files reads so Activity can follow a transfer without
+    // polling: subscription 14->17.
+    assert_eq!(subscription_field_count, 17);
     // Indexer search (spec 0002): the query subject on the interactive-search
     // job and the unlinked grab add the types below on top of the proxies
     // census. Combined with the location-surface fold above, the totals are
@@ -816,8 +827,17 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // input objects, and two enums for step kind and search condition:
     // public types 824->836, OBJECT 444->451, INPUT_OBJECT 218->221, and
     // ENUM 150->152.
-    assert_eq!(public_types.len(), 836);
-    assert_eq!(kind_count("OBJECT"), 451);
+    // Live transfer progress adds the snapshot, title, and file payloads
+    // (`LocationTransferSnapshotPayload`, `LocationTransferTitlePayload`,
+    // `LocationTransferFilePayload`); conflict resolution during transfers
+    // adds the per-title `LocationTitleFoldersPayload` on the preview; and
+    // failed-move recovery adds `LocationRetrySelectionPayload` with its
+    // `LocationRetryTitlePayload` rows and `AbandonLocationOperationPayload`:
+    // OBJECT 451->458, public types 836->843. Reason codes and the third
+    // requestable mode are additive fields and enum values on types that
+    // already existed, so INPUT_OBJECT and ENUM counts are unchanged.
+    assert_eq!(public_types.len(), 843);
+    assert_eq!(kind_count("OBJECT"), 458);
     assert_eq!(kind_count("INPUT_OBJECT"), 221);
     assert_eq!(kind_count("ENUM"), 152);
     assert_eq!(kind_count("SCALAR"), 10);
@@ -1036,8 +1056,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(!public_type_names.contains(&"ExternalImportLibrarySettingDisposition"));
 }
 
-/// US3/FR-076: a client may ask for a managed move or for adoption, and may not
-/// ask for the catalog-only fast path. That is a schema-level guarantee, not a
+/// US3/FR-076: a client may ask for a managed move, for adoption of files that
+/// are already there, or for adoption of files the user moved, and may not ask
+/// for the catalog-only fast path. That is a schema-level guarantee, not a
 /// resolver check, so it is asserted against the published input enum.
 #[tokio::test]
 async fn graphql_introspection_location_mode_is_requestable_but_never_catalog_only() {
@@ -1075,8 +1096,12 @@ async fn graphql_introspection_location_mode_is_requestable_but_never_catalog_on
         .collect::<Vec<_>>();
     assert_eq!(
         requestable,
-        vec!["MOVE_WITH_SCRYER", "FILES_ALREADY_THERE"],
-        "only the two modes a caller may ask for: {body}"
+        vec![
+            "MOVE_WITH_SCRYER",
+            "FILES_ALREADY_THERE",
+            "USER_MOVED_FILES"
+        ],
+        "only the three modes a caller may ask for: {body}"
     );
 
     // The reported enum keeps the derived value the input enum refuses.

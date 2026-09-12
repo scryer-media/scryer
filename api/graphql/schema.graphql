@@ -9700,6 +9700,10 @@ enum LocationExecutionModeInput {
 	destination and adopts them where they lie.
 	"""
 	FILES_ALREADY_THERE
+	"""
+	The user moved the files themselves; Scryer trusts that move and
+	updates the catalog mappings only.
+	"""
 	USER_MOVED_FILES
 }
 
@@ -9715,6 +9719,10 @@ enum LocationExecutionModeValue {
 	The user already moved the files; Scryer verifies and adopts them.
 	"""
 	FILES_ALREADY_THERE
+	"""
+	The user moved the files themselves; Scryer trusts that move and
+	updates the catalog mappings only.
+	"""
 	USER_MOVED_FILES
 	"""
 	No filesystem work at all: fileless titles and folder-match correction.
@@ -10306,6 +10314,9 @@ input LocationOperationPreviewInput {
 A read-only preview of a location operation; nothing is changed.
 """
 type LocationOperationPreviewPayload {
+	"""
+	Source and destination folder per previewed title, in selection order.
+	"""
 	folders: [LocationTitleFoldersPayload!]!
 	"""
 	Fingerprint over the full plan, echoed back to confirm it.
@@ -11301,49 +11312,174 @@ enum LocationTitleCheckpointStateValue {
 	FAILED
 }
 
+"""
+Where one previewed title's folder is now and where the plan puts it.
+"""
 type LocationTitleFoldersPayload {
+	"""
+	Identity of the previewed title.
+	"""
 	titleId: ID!
+	"""
+	The folder the title occupies today, when it owns one.
+	"""
 	source: String
+	"""
+	The folder the plan moves or adopts the title into, when it has one.
+	"""
 	destination: String
 }
 
+"""
+One file's progress inside a location transfer, listed per title.
+"""
 type LocationTransferFilePayload {
+	"""
+	Machine-readable reason for a file that did not simply move: a conflict
+	resolution or a transfer failure.
+	"""
 	reasonCode: String
+	"""
+	Destination path the plan assigned before any conflict resolution
+	renamed it.
+	"""
 	originalDestinationPath: String!
+	"""
+	Bytes the current comparison has to read; the file size unless a
+	comparison is in flight.
+	"""
 	verificationTotalBytes: Long!
+	"""
+	Path the file is read from.
+	"""
 	sourcePath: String!
+	"""
+	Path the file lands at, after any conflict resolution.
+	"""
 	destinationPath: String!
+	"""
+	Size of the file in bytes.
+	"""
 	sizeBytes: Long!
+	"""
+	Lifecycle of this file: QUEUED, MOVING, VERIFYING, COMPARING,
+	WAITING_FOR_STORAGE, DONE, DUPLICATE, FAILED, BLOCKED, CANCELED, or
+	NOT_PROCESSED.
+	"""
 	state: String!
+	"""
+	Bytes copied so far.
+	"""
 	copyBytes: Long!
+	"""
+	Bytes read back and compared so far.
+	"""
 	verificationBytes: Long!
+	"""
+	Operator-facing explanation of an exception on this file, when there
+	is one.
+	"""
 	detail: String
 }
 
+"""
+A bounded view of a running or finished transfer: the operation, its
+aggregate progress, and one page of titles or files.
+"""
 type LocationTransferSnapshotPayload {
+	"""
+	Server generation the revision counts within; a restart starts a new
+	one.
+	"""
 	generation: Long!
+	"""
+	Monotonic change counter within the generation. Reads never advance
+	it; progress does.
+	"""
 	revision: Long!
+	"""
+	The operation the snapshot describes.
+	"""
 	operation: LocationOperationPayload!
+	"""
+	Overall progress in hundredths of a percent, 0 to 10000.
+	"""
 	progressBasisPoints: Int!
+	"""
+	Estimated seconds until completion, once enough progress exists to
+	estimate.
+	"""
 	etaSeconds: Long
+	"""
+	The page of titles requested; empty for a summary read.
+	"""
 	titles: [LocationTransferTitlePayload!]!
+	"""
+	The page of files requested for one title; empty otherwise.
+	"""
 	files: [LocationTransferFilePayload!]!
+	"""
+	Total number of rows the page is drawn from.
+	"""
 	totalCount: Long!
+	"""
+	True when rows beyond this page remain.
+	"""
 	hasMore: Boolean!
 }
 
+"""
+One title's live progress inside a location transfer, as Activity shows it.
+"""
 type LocationTransferTitlePayload {
+	"""
+	Identity of the title this row tracks.
+	"""
 	titleId: ID!
+	"""
+	Display name of the title.
+	"""
 	name: String!
+	"""
+	The title's checkpoint state at the time of the snapshot.
+	"""
 	state: LocationTitleCheckpointStateValue!
+	"""
+	Number of files the plan walks for this title.
+	"""
 	filesTotal: Long!
+	"""
+	Files verified at the destination so far.
+	"""
 	filesDone: Long!
+	"""
+	Bytes the title's files add up to.
+	"""
 	bytesTotal: Long!
+	"""
+	Bytes copied so far across the title's files.
+	"""
 	copyBytes: Long!
+	"""
+	Bytes read back and compared so far across the title's files.
+	"""
 	verificationBytes: Long!
+	"""
+	Files currently being copied.
+	"""
 	copying: Int!
+	"""
+	Files currently being verified.
+	"""
 	verifying: Int!
+	"""
+	Path of the file the runner is working on, when one is in flight.
+	"""
 	currentFile: String
+	"""
+	True when the title carries a detail worth reading; fetch it with
+	`locationTransferTitleDetail`.
+	"""
 	hasException: Boolean!
 }
 
@@ -20294,10 +20430,60 @@ type QueryRoot {
 		"""
 		input: LocationRootScopePreviewInput!
 	): LocationRootScopePreviewPayload!
-	locationTransferSummary(id: ID!): LocationTransferSnapshotPayload
-	locationTransferPage(id: ID!, offset: Int! = 0): LocationTransferSnapshotPayload
-	locationTransferFiles(id: ID!, titleId: ID!, offset: Int! = 0): LocationTransferSnapshotPayload
-	locationTransferTitleDetail(id: ID!, titleId: ID!): String
+	"""
+	Aggregate progress of one transfer with no title rows; poll this for
+	the operation header.
+	"""
+	locationTransferSummary(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!
+	): LocationTransferSnapshotPayload
+	"""
+	One page of up to 50 title rows of a transfer, exceptions first.
+	"""
+	locationTransferPage(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!,
+		"""
+		Zero-based index of the first title row to return.
+		"""
+		offset: Int! = 0
+	): LocationTransferSnapshotPayload
+	"""
+	One page of up to 50 file rows for one title of a transfer.
+	"""
+	locationTransferFiles(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!,
+		"""
+		Identity of the title whose files to page.
+		"""
+		titleId: ID!,
+		"""
+		Zero-based index of the first file row to return.
+		"""
+		offset: Int! = 0
+	): LocationTransferSnapshotPayload
+	"""
+	The operator-facing detail behind a title's exception, or null when it
+	has none.
+	"""
+	locationTransferTitleDetail(
+		"""
+		Location-operation identity.
+		"""
+		id: ID!,
+		"""
+		Identity of the title whose detail to read.
+		"""
+		titleId: ID!
+	): String
 	"""
 	Read one location operation with its per-title checkpoints.
 	"""

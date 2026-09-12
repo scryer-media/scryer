@@ -958,6 +958,16 @@ async fn graphql_transfer_snapshots_are_bounded_versioned_and_permission_scoped(
     )
     .await;
     assert_graphql_field_denied(&denied, "locationTransferSummary");
+    // A read never advances the revision: two identical reads version the same.
+    let again = gql(&ctx, query, json!({"id": operation_id})).await;
+    assert_no_errors(&again);
+    assert_eq!(
+        again["data"]["locationTransferSummary"]["revision"],
+        summary["revision"]
+    );
+    // A change to the operation does, and the next read carries it.
+    let canceled = gql(&ctx, CANCEL_MUTATION, json!({ "id": operation_id })).await;
+    assert_no_errors(&canceled);
     let next = gql(&ctx, query, json!({"id": operation_id})).await;
     assert_no_errors(&next);
     assert!(

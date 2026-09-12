@@ -11,46 +11,91 @@ use super::{Long, MediaFacetValue, VerificationDepthValue};
 use async_graphql::{Enum, ID, InputObject, SimpleObject};
 use chrono::{DateTime, Utc};
 
+/// One title's live progress inside a location transfer, as Activity shows it.
 #[derive(SimpleObject, Clone)]
 pub struct LocationTransferTitlePayload {
+    /// Identity of the title this row tracks.
     pub title_id: ID,
+    /// Display name of the title.
     pub name: String,
+    /// The title's checkpoint state at the time of the snapshot.
     pub state: LocationTitleCheckpointStateValue,
+    /// Number of files the plan walks for this title.
     pub files_total: Long,
+    /// Files verified at the destination so far.
     pub files_done: Long,
+    /// Bytes the title's files add up to.
     pub bytes_total: Long,
+    /// Bytes copied so far across the title's files.
     pub copy_bytes: Long,
+    /// Bytes read back and compared so far across the title's files.
     pub verification_bytes: Long,
+    /// Files currently being copied.
     pub copying: i32,
+    /// Files currently being verified.
     pub verifying: i32,
+    /// Path of the file the runner is working on, when one is in flight.
     pub current_file: Option<String>,
+    /// True when the title carries a detail worth reading; fetch it with
+    /// `locationTransferTitleDetail`.
     pub has_exception: bool,
 }
 
+/// One file's progress inside a location transfer, listed per title.
 #[derive(SimpleObject, Clone)]
 pub struct LocationTransferFilePayload {
+    /// Machine-readable reason for a file that did not simply move: a conflict
+    /// resolution or a transfer failure.
     pub reason_code: Option<String>,
+    /// Destination path the plan assigned before any conflict resolution
+    /// renamed it.
     pub original_destination_path: String,
+    /// Bytes the current comparison has to read; the file size unless a
+    /// comparison is in flight.
     pub verification_total_bytes: Long,
+    /// Path the file is read from.
     pub source_path: String,
+    /// Path the file lands at, after any conflict resolution.
     pub destination_path: String,
+    /// Size of the file in bytes.
     pub size_bytes: Long,
+    /// Lifecycle of this file: QUEUED, MOVING, VERIFYING, COMPARING,
+    /// WAITING_FOR_STORAGE, DONE, DUPLICATE, FAILED, BLOCKED, CANCELED, or
+    /// NOT_PROCESSED.
     pub state: String,
+    /// Bytes copied so far.
     pub copy_bytes: Long,
+    /// Bytes read back and compared so far.
     pub verification_bytes: Long,
+    /// Operator-facing explanation of an exception on this file, when there
+    /// is one.
     pub detail: Option<String>,
 }
 
+/// A bounded view of a running or finished transfer: the operation, its
+/// aggregate progress, and one page of titles or files.
 #[derive(SimpleObject, Clone)]
 pub struct LocationTransferSnapshotPayload {
+    /// Server generation the revision counts within; a restart starts a new
+    /// one.
     pub generation: Long,
+    /// Monotonic change counter within the generation. Reads never advance
+    /// it; progress does.
     pub revision: Long,
+    /// The operation the snapshot describes.
     pub operation: LocationOperationPayload,
+    /// Overall progress in hundredths of a percent, 0 to 10000.
     pub progress_basis_points: i32,
+    /// Estimated seconds until completion, once enough progress exists to
+    /// estimate.
     pub eta_seconds: Option<Long>,
+    /// The page of titles requested; empty for a summary read.
     pub titles: Vec<LocationTransferTitlePayload>,
+    /// The page of files requested for one title; empty otherwise.
     pub files: Vec<LocationTransferFilePayload>,
+    /// Total number of rows the page is drawn from.
     pub total_count: Long,
+    /// True when rows beyond this page remain.
     pub has_more: bool,
 }
 
@@ -86,6 +131,8 @@ pub enum LocationExecutionModeValue {
     MoveWithScryer,
     /// The user already moved the files; Scryer verifies and adopts them.
     FilesAlreadyThere,
+    /// The user moved the files themselves; Scryer trusts that move and
+    /// updates the catalog mappings only.
     UserMovedFiles,
     /// No filesystem work at all: fileless titles and folder-match correction.
     CatalogOnly,
@@ -106,6 +153,8 @@ pub enum LocationExecutionModeInput {
     /// The user already moved the files; Scryer accounts for them at the
     /// destination and adopts them where they lie.
     FilesAlreadyThere,
+    /// The user moved the files themselves; Scryer trusts that move and
+    /// updates the catalog mappings only.
     UserMovedFiles,
 }
 
@@ -498,6 +547,7 @@ pub struct LocationPlanConfirmationPayload {
 #[derive(SimpleObject, Clone)]
 /// A read-only preview of a location operation; nothing is changed.
 pub struct LocationOperationPreviewPayload {
+    /// Source and destination folder per previewed title, in selection order.
     pub folders: Vec<LocationTitleFoldersPayload>,
     /// Fingerprint over the full plan, echoed back to confirm it.
     pub plan_fingerprint: String,
@@ -536,10 +586,14 @@ pub struct LocationOperationPreviewPayload {
     pub merges: Vec<LocationMergePreviewPayload>,
 }
 
+/// Where one previewed title's folder is now and where the plan puts it.
 #[derive(SimpleObject, Clone)]
 pub struct LocationTitleFoldersPayload {
+    /// Identity of the previewed title.
     pub title_id: ID,
+    /// The folder the title occupies today, when it owns one.
     pub source: Option<String>,
+    /// The folder the plan moves or adopts the title into, when it has one.
     pub destination: Option<String>,
 }
 

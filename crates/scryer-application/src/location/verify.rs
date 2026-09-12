@@ -1428,12 +1428,14 @@ mod tests {
             !assessment.outcome.permits_source_removal(),
             "a mismatch must never unblock source removal (FR-044)"
         );
+        // The detail is the sentence the file table shows; the comparison
+        // itself is logged, not surfaced.
         assert!(
             assessment
                 .detail
                 .as_deref()
-                .is_some_and(|detail| detail.contains("read-back")),
-            "the detail should name the failing comparison: {:?}",
+                .is_some_and(|detail| detail.contains("did not match the source")),
+            "the detail should say the copy did not match: {:?}",
             assessment.detail
         );
         assert!(
@@ -1762,19 +1764,18 @@ mod tests {
         assert!(verified.permits_source_removal());
         let hashes = verified.hashes.expect("the source is hashed to prove it");
         assert_eq!(hashes.full_blake3, blake3::hash(&data).to_hex().to_string());
+        // A file proven in place is not an exception, so it carries no detail;
+        // the checkpoint names the path on its own.
         assert!(
-            verified
-                .detail
-                .as_deref()
-                .is_some_and(|detail| detail.contains("destination.bin")),
-            "the record says which file was proven in place: {:?}",
+            verified.detail.is_none(),
+            "an in-place proof has nothing to explain: {:?}",
             verified.detail
         );
     }
 
     /// The same window, with a file that is *not* this operation's finished
-    /// work: it is reported as a mismatch naming the path, never removed and
-    /// never assumed good (C4).
+    /// work: it is reported as a mismatch, never removed and never assumed
+    /// good (C4).
     #[tokio::test]
     async fn an_unrecorded_destination_that_does_not_match_is_a_mismatch() {
         let dir = tempfile::tempdir().unwrap();
@@ -1791,11 +1792,10 @@ mod tests {
         assert_eq!(verified.outcome, FileVerificationOutcome::Mismatch);
         assert!(!verified.permits_source_removal());
         assert!(
-            verified
-                .detail
-                .as_deref()
-                .is_some_and(|detail| detail.contains("destination.bin")),
-            "{:?}",
+            verified.detail.as_deref().is_some_and(|detail| {
+                detail.contains("different content") && detail.contains("preserved")
+            }),
+            "the detail says the destination differs and nothing was removed: {:?}",
             verified.detail
         );
         assert_eq!(
