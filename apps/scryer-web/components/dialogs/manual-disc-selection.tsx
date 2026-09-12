@@ -1,5 +1,6 @@
 import { useTranslate } from "@/lib/context/translate-context";
 import { DiscTitleDetails } from "@/components/common/media-analysis-details";
+import { discTitleLabel } from "@/lib/utils/disc-review";
 import type { ManualDiscInventory, ManualDiscSelection, ManualImportVideoFacts } from "@/lib/utils/manual-import-video-facts";
 
 type Props = {
@@ -36,16 +37,14 @@ export function ManualDiscSelectionControl({ disc, report, isMovie, episodes, va
             {titles.some((title) => title.report.status.toLowerCase() === "complete") && (
               <option value="__automatic__">{t("mediaInfo.discAutomaticChoice")} ({disc?.selectedTitleId ?? "?"})</option>
             )}
-            {titles.map((title) => <option key={title.id} value={title.id}>
-              {title.id} · {title.durationSeconds?.toFixed(1) ?? "?"} s · {title.report.status}
-            </option>)}
+            {titles.map((title) => <option key={title.id} value={title.id}>{discTitleLabel(title, t)}</option>)}
           </select>
         </label>
       ) : titles.map((title) => {
         const episodeId = value?.episodeMappings.find((mapping) => mapping.discTitleId === title.id)?.episodeId ?? "";
         return (
           <label key={title.id} className="flex flex-col gap-1">
-            <span>{title.id} · {title.durationSeconds?.toFixed(1) ?? "?"} s · {title.report.status}</span>
+            <span>{discTitleLabel(title, t)}</span>
             <select
               className="rounded border bg-background p-2"
               value={episodeId}
