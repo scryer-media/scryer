@@ -3,8 +3,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { ChevronDown } from "lucide-react";
 import { audioFormatPills, hdrFormatPills } from "@/lib/utils/media-format-pills";
-import { MediaAnalysisDetailsPopover } from "./media-analysis-details";
-import { hasDiscReview } from "@/lib/utils/disc-review";
 
 export type AudioStreamDetail = {
   metadata?: Pick<import("@/lib/types/media-analysis").MediaStreamMetadata, "channelLayout" | "disposition" | "programId">;
@@ -347,7 +345,6 @@ export function MediaInfoBadges({
         />
       ) : null}
       {isPendingScan ? <Badge tone="warning">{t("mediaFile.pendingScan")}</Badge> : null}
-      {file.analysis && hasDiscReview(file.analysis.disc, file.analysisAttempt) ? <MediaAnalysisDetailsPopover analysis={file.analysis} attempt={file.analysisAttempt} videoBitrateKbps={file.videoBitrateKbps} fileId={file.id} /> : null}
       {isScanFailed ? <Badge tone="negative">{t("mediaFile.scanFailed")}</Badge> : null}
       {requiresReview ? <Badge tone="warning">{t("mediaFile.reviewRequired")}</Badge> : null}
     </div>

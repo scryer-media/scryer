@@ -10,8 +10,8 @@ import {
 import { IconButton } from "@/components/ui/icon-button";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { ExternalSubtitleSection } from "@/components/common/external-subtitle-section";
-import { MediaAnalysisDetailsPopover } from "@/components/common/media-analysis-details";
-import { hasDiscReview } from "@/lib/utils/disc-review";
+import { DiscTitleButton } from "@/components/common/disc-title-dialog";
+import { hasDiscInventory } from "@/lib/utils/disc-review";
 import {
   MediaInfoBadges,
   SubtitleTracksPopover,
@@ -79,6 +79,7 @@ type MediaFilesOnDiskPanelProps<TFile extends MediaFileOnDisk> = {
   subtitleSearchIdPrefix?: string;
   deleteFileIdPrefix?: string;
   makePrimaryFileIdPrefix?: string;
+  discTitleIdPrefix?: string;
 };
 
 export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
@@ -102,6 +103,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
   subtitleSearchIdPrefix = "media-file-search-subtitles",
   deleteFileIdPrefix = "media-file-delete",
   makePrimaryFileIdPrefix = "media-file-make-primary",
+  discTitleIdPrefix = "media-file-disc-title",
 }: MediaFilesOnDiskPanelProps<TFile>) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
@@ -149,6 +151,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
             const isPrimaryFile = role === "primary";
             const isPromotingFile = primaryFileUpdatingId === file.id;
             const isDeletingFile = deletingFileIds?.has(file.id) ?? false;
+            const discAnalysis = file.analysis && hasDiscInventory(file.analysis.disc, file.analysisAttempt) ? file.analysis : null;
             const fileDate = formatMediaFileDate(file.createdAt, dateTimeFormat);
             const PathIcon = selectedTitlePresentation ? FileIcon : HardDrive;
             const unknownLabel = t("label.unknown");
@@ -297,7 +300,6 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             {badge.label}
                           </span>
                         ))}
-                        {file.analysis && hasDiscReview(file.analysis.disc, file.analysisAttempt) ? <MediaAnalysisDetailsPopover analysis={file.analysis} attempt={file.analysisAttempt} videoBitrateKbps={file.videoBitrateKbps} fileId={file.id} /> : null}
                         {selectedTitleSubtitleStreams.length > 0 ? (
                           <SubtitleTracksPopover
                             streams={selectedTitleSubtitleStreams}
@@ -339,7 +341,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                         {formatMediaFileSize(file.sizeBytes)}
                       </div>
                     </div>
-                    {(canSearchSubtitles || onMakePrimaryFile || onDeleteFile) ? (
+                    {(canSearchSubtitles || onMakePrimaryFile || onDeleteFile || discAnalysis) ? (
                       <div className="flex items-start gap-2 lg:justify-end">
                         <div className="flex flex-wrap items-center gap-2">
                           {canSearchSubtitles ? (
@@ -395,6 +397,19 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             </TextActionButton>
                           ) : null}
                         </div>
+                        {discAnalysis ? (
+                          <DiscTitleButton
+                            id={selectorId(discTitleIdPrefix, file.id)}
+                            className={selectedTitlePresentation ? "h-8 w-8" : undefined}
+                            file={{
+                              id: file.id,
+                              filePath: file.filePath,
+                              analysis: discAnalysis,
+                              analysisAttempt: file.analysisAttempt,
+                              videoBitrateKbps: file.videoBitrateKbps,
+                            }}
+                          />
+                        ) : null}
                         {onDeleteFile ? (
                           <IconButton
                             label={t("mediaFile.delete")}
