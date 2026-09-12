@@ -10,7 +10,8 @@
 - Jellyfin user lists load, so Jellyfin users can be added and given access to requests again.
 - Jellyfin account links and logins verify against the server again.
 - Jellyfin library scans authenticate again, so Scryer can see what is already in the library and stops treating owned titles as missing.
-- Jellyfin 10.x servers and Emby servers are unaffected: Scryer sends both the new and the previous credential on every request, so no server generation needs a different setting.
+- Jellyfin 10.x servers keep working: Scryer sends both the new and the previous credential on every Jellyfin request, so no Jellyfin generation needs a different setting.
+- Emby servers are untouched. Emby keeps its own credential path and request code, separate from Jellyfin, so this change sends nothing new to an Emby server.
 
 ## Upgrading
 

@@ -5,10 +5,12 @@ use reqwest::{Client, Response, StatusCode};
 use scryer_application::{
     AppError, AppResult, EmbyApiKeyExchange, EmbyApiKeyExchangeCleanup, EmbyAvatar,
     EmbyConnectAddressStatus, EmbyConnectIdentityVerification, EmbyConnectServer,
-    EmbyConnectUserType, EmbyServerIdentity, EmbyServerUser, VerifiedExternalIdentity,
+    EmbyConnectUserType, EmbyServerIdentity, EmbyServerUser, MediaServerCatalogItem,
+    MediaServerCatalogItemKind, VerifiedExternalIdentity,
 };
-use scryer_domain::ExternalAccountProvider;
+use scryer_domain::{ExternalAccountProvider, ExternalId};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use url::Url;
 
 const SCRYER_PRODUCT: &str = "Scryer";
@@ -19,6 +21,8 @@ const PAGE_LIMIT: usize = 100;
 const RECORD_LIMIT: usize = 10_000;
 const CONNECT_DISCOVERY_TIMEOUT: std::time::Duration = scryer_outbound_http::STANDARD_HTTP_TIMEOUT;
 const CONNECT_PROBE_CONCURRENCY: usize = 8;
+const CATALOG_PAGE_SIZE: usize = 500;
+const CATALOG_FIELDS: &str = "ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd";
 
 #[derive(Clone)]
 struct ConnectSession {
@@ -1515,6 +1519,172 @@ pub(super) async fn fetch_avatar(
     }))
 }
 
+/// Walk the Emby catalog with Emby's own credential path (`X-Emby-Token`
+/// plus the `Emby` client header). Jellyfin has its own scan; the two
+/// servers share no request code.
+pub(super) async fn scan_catalog(
+    client: &Client,
+    connection_id: &str,
+    base_url: &str,
+    api_key: &str,
+    recent_only: bool,
+) -> AppResult<Vec<MediaServerCatalogItem>> {
+    let base = normalized_candidate(base_url)?;
+    let api_key = api_key.trim();
+    let mut start = 0usize;
+    let mut catalog = Vec::new();
+    loop {
+        let mut url = endpoint(&base, "Items")?;
+        url.query_pairs_mut()
+            .append_pair("Recursive", "true")
+            .append_pair("IncludeItemTypes", "Movie,Series,Episode")
+            .append_pair("Fields", CATALOG_FIELDS)
+            .append_pair("StartIndex", &start.to_string())
+            .append_pair("Limit", &CATALOG_PAGE_SIZE.to_string());
+        if recent_only {
+            url.query_pairs_mut()
+                .append_pair("SortBy", "DateCreated,DateLastContentAdded")
+                .append_pair("SortOrder", "Descending");
+        }
+        let response = client
+            .get(url)
+            .header("Accept", "application/json")
+            .header("X-Emby-Token", api_key)
+            .header(
+                "X-Emby-Authorization",
+                client_authorization(connection_id, None),
+            )
+            .send()
+            .await
+            .map_err(|error| AppError::Repository(format!("Emby catalog scan failed: {error}")))?;
+        if !response.status().is_success() {
+            return Err(AppError::Repository(format!(
+                "Emby catalog scan failed with status {}",
+                response.status()
+            )));
+        }
+        let page = response.json::<Value>().await.map_err(|error| {
+            AppError::Repository(format!("invalid Emby catalog response: {error}"))
+        })?;
+        let items = page
+            .get("Items")
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let page_len = items.len();
+        catalog.extend(items.iter().filter_map(catalog_item));
+        start += page_len;
+        let total = page
+            .get("TotalRecordCount")
+            .and_then(Value::as_u64)
+            .unwrap_or(0) as usize;
+        if recent_only || page_len < CATALOG_PAGE_SIZE || (total > 0 && start >= total) {
+            return hydrate_parent_series(client, connection_id, &base, api_key, catalog).await;
+        }
+    }
+}
+
+async fn hydrate_parent_series(
+    client: &Client,
+    connection_id: &str,
+    base: &Url,
+    api_key: &str,
+    mut catalog: Vec<MediaServerCatalogItem>,
+) -> AppResult<Vec<MediaServerCatalogItem>> {
+    let mut known_series_ids = catalog
+        .iter()
+        .filter(|item| item.kind == MediaServerCatalogItemKind::Series)
+        .map(|item| item.provider_item_id.clone())
+        .collect::<HashSet<_>>();
+    let missing_series_ids = catalog
+        .iter()
+        .filter(|item| item.kind == MediaServerCatalogItemKind::Episode)
+        .filter_map(|item| item.series_provider_item_id.clone())
+        .filter(|series_id| known_series_ids.insert(series_id.clone()))
+        .collect::<Vec<_>>();
+
+    for series_id in missing_series_ids {
+        let mut url = endpoint(base, &format!("Items/{series_id}"))?;
+        url.query_pairs_mut().append_pair("Fields", CATALOG_FIELDS);
+        let response = client
+            .get(url)
+            .header("Accept", "application/json")
+            .header("X-Emby-Token", api_key)
+            .header(
+                "X-Emby-Authorization",
+                client_authorization(connection_id, None),
+            )
+            .send()
+            .await
+            .map_err(|error| {
+                AppError::Repository(format!("Emby parent-series lookup failed: {error}"))
+            })?;
+        if response.status() == StatusCode::NOT_FOUND {
+            continue;
+        }
+        if !response.status().is_success() {
+            return Err(AppError::Repository(format!(
+                "Emby parent-series lookup failed with status {}",
+                response.status()
+            )));
+        }
+        let value = response.json::<Value>().await.map_err(|error| {
+            AppError::Repository(format!("invalid Emby parent-series response: {error}"))
+        })?;
+        if let Some(series) = catalog_item(&value)
+            && series.kind == MediaServerCatalogItemKind::Series
+        {
+            catalog.push(series);
+        }
+    }
+    Ok(catalog)
+}
+
+fn catalog_item(value: &Value) -> Option<MediaServerCatalogItem> {
+    let kind = match value.get("Type")?.as_str()? {
+        "Movie" => MediaServerCatalogItemKind::Movie,
+        "Series" => MediaServerCatalogItemKind::Series,
+        "Episode" => MediaServerCatalogItemKind::Episode,
+        _ => return None,
+    };
+    Some(MediaServerCatalogItem {
+        kind,
+        provider_item_id: value.get("Id")?.as_str()?.trim().to_string(),
+        external_ids: provider_ids(value.get("ProviderIds")),
+        series_provider_item_id: value
+            .get("SeriesId")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        season_number: value
+            .get("ParentIndexNumber")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+        episode_number: value
+            .get("IndexNumber")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+        episode_number_end: value
+            .get("IndexNumberEnd")
+            .and_then(Value::as_i64)
+            .map(|value| value as i32),
+    })
+}
+
+fn provider_ids(value: Option<&Value>) -> Vec<ExternalId> {
+    let Some(Value::Object(values)) = value else {
+        return Vec::new();
+    };
+    values
+        .iter()
+        .filter_map(|(source, value)| {
+            value.as_str().map(|value| ExternalId {
+                source: source.clone(),
+                value: value.to_string(),
+            })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1530,6 +1700,63 @@ mod tests {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .expect("test HTTP client")
+    }
+
+    #[tokio::test]
+    async fn catalog_scan_uses_the_emby_credential_path_only() {
+        let server = MockServer::start().await;
+        let no_media_browser_header =
+            |request: &wiremock::Request| request.headers.get("authorization").is_none();
+        // wiremock's `header` matcher splits a comma-separated value into a
+        // list, so the `Emby` client header has to be compared whole.
+        let emby_client_header = |request: &wiremock::Request| {
+            request
+                .headers
+                .get("x-emby-authorization")
+                .and_then(|value| value.to_str().ok())
+                .is_some_and(|value| value == client_authorization("emby-main", None))
+        };
+        Mock::given(method("GET"))
+            .and(path("/Items"))
+            .and(query_param("StartIndex", "0"))
+            .and(header("X-Emby-Token", "api-key"))
+            .and(emby_client_header)
+            .and(no_media_browser_header)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "Items": [
+                    {"Type": "Movie", "Id": "movie-1", "ProviderIds": {"Tmdb": "1001"}},
+                    {"Type": "Episode", "Id": "episode-1", "SeriesId": "series-1",
+                     "ParentIndexNumber": 2, "IndexNumber": 3}
+                ],
+                "TotalRecordCount": 2
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Items/series-1"))
+            .and(header("X-Emby-Token", "api-key"))
+            .and(no_media_browser_header)
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "Type": "Series", "Id": "series-1", "ProviderIds": {"Tvdb": "2002"}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let catalog = scan_catalog(&test_client(), "emby-main", &server.uri(), "api-key", false)
+            .await
+            .expect("scan Emby catalog");
+
+        assert_eq!(catalog.len(), 3);
+        assert_eq!(catalog[0].kind, MediaServerCatalogItemKind::Movie);
+        assert_eq!(catalog[0].external_ids[0].source, "Tmdb");
+        assert_eq!(
+            catalog[1].series_provider_item_id.as_deref(),
+            Some("series-1")
+        );
+        assert_eq!(catalog[2].kind, MediaServerCatalogItemKind::Series);
+        assert_eq!(catalog[2].provider_item_id, "series-1");
     }
 
     async fn mount_public_info(server: &MockServer, server_id: &str) {

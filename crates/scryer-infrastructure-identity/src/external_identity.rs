@@ -16,13 +16,14 @@ use scryer_domain::{
     ExternalAccountProvider, ExternalId, MediaServerConnection, MediaServerProvider,
 };
 use scryer_outbound_http::{generic_reqwest_client, no_redirect_reqwest_client};
+
+use crate::jellyfin::{self, JellyfinAuth};
 use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
 const PLEX_BASE_URL: &str = "https://plex.tv";
 const SCRYER_PRODUCT: &str = "Scryer";
-const SCRYER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct HttpExternalIdentityVerifier {
     client: reqwest::Client,
@@ -75,7 +76,7 @@ impl HttpExternalIdentityVerifier {
             .client
             .get(keys_url.clone())
             .header("Accept", "application/json")
-            .emby_family_auth(admin_token, Some(device_id))
+            .jellyfin_auth(admin_token, Some(device_id))
             .send()
             .await
             .map_err(|error| {
@@ -284,7 +285,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .post(auth_url)
             .header(
                 "Authorization",
-                jellyfin_authorization_header(connection_id),
+                jellyfin::login_authorization(connection_id),
             )
             .header("Accept", "application/json")
             .json(&JellyfinAuthRequest { username, password })
@@ -399,7 +400,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .client
             .get(users_url)
             .header("Accept", "application/json")
-            .emby_family_auth(api_key.trim(), None)
+            .jellyfin_auth(api_key.trim(), None)
             .send()
             .await
             .map_err(|error| {
@@ -425,7 +426,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         password: &str,
     ) -> AppResult<String> {
         let base_url = jellyfin_base_url(base_url)?;
-        let device_id = media_server_device_id(connection_id);
+        let device_id = jellyfin::device_id(connection_id);
         let auth_url = base_url.join("Users/AuthenticateByName").map_err(|error| {
             AppError::Validation(format!("Jellyfin authentication URL is invalid: {error}"))
         })?;
@@ -434,7 +435,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .post(auth_url)
             .header(
                 "Authorization",
-                jellyfin_authorization_header(connection_id),
+                jellyfin::login_authorization(connection_id),
             )
             .header("Accept", "application/json")
             .json(&JellyfinAuthRequest { username, password })
@@ -499,7 +500,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .client
             .post(keys_url.clone())
             .header("Accept", "application/json")
-            .emby_family_auth(token, Some(&device_id))
+            .jellyfin_auth(token, Some(&device_id))
             .query(&[("app", SCRYER_PRODUCT)])
             .send()
             .await
@@ -536,7 +537,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .client
             .get(users_url)
             .header("Accept", "application/json")
-            .emby_family_auth(api_key.trim(), None)
+            .jellyfin_auth(api_key.trim(), None)
             .send()
             .await
             .map_err(|error| {
@@ -617,7 +618,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             no_redirect_reqwest_client()
                 .get(user_url)
                 .header("Accept", "application/json")
-                .emby_family_auth(api_key, Some(&media_server_device_id(connection_id)))
+                .jellyfin_auth(api_key, Some(&jellyfin::device_id(connection_id)))
                 .send(),
         )
         .await
@@ -1005,81 +1006,6 @@ fn jellyfin_user_avatar_url(
     Some(image_url.to_string())
 }
 
-/// The device identity Scryer presents to one media-server connection.
-///
-/// Stable per connection, so the session Jellyfin opens for a login is the
-/// same one the follow-up API-key calls are attributed to.
-fn media_server_device_id(connection_id: &str) -> String {
-    format!("SCRYER_{connection_id}")
-}
-
-/// Characters that survive a `MediaBrowser` parameter value unencoded: the
-/// URL-unreserved set. Everything else — quotes, commas, `+`, spaces — is
-/// percent-encoded, because the server unquotes each value and then runs it
-/// through `WebUtility.UrlDecode`.
-const AUTH_PARAMETER: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'_')
-    .remove(b'.')
-    .remove(b'~');
-
-fn auth_parameter(value: &str) -> String {
-    percent_encoding::utf8_percent_encode(value, AUTH_PARAMETER).to_string()
-}
-
-/// Build an `Authorization: MediaBrowser …` header value.
-///
-/// Jellyfin 12 gates every legacy credential channel it used to accept — the
-/// `X-Emby-Token`, `X-MediaBrowser-Token` and `X-Emby-Authorization` headers
-/// and the `api_key` query parameter — behind `EnableLegacyAuthorization`,
-/// which its own upgrade migration turns off (jellyfin/jellyfin#15559). This
-/// header is what remains. `Token` is its only required parameter.
-///
-/// `device_id` is omitted when the caller has no connection to bind to: an
-/// API key is not a device, and the server fills the field in from its own
-/// identity when a key arrives without one.
-fn media_browser_authorization(token: Option<&str>, device_id: Option<&str>) -> String {
-    let mut parameters = Vec::with_capacity(5);
-    if let Some(token) = token {
-        parameters.push(format!("Token=\"{}\"", auth_parameter(token)));
-    }
-    parameters.push(format!("Client=\"{}\"", auth_parameter(SCRYER_PRODUCT)));
-    parameters.push(format!("Device=\"{}\"", auth_parameter(SCRYER_PRODUCT)));
-    if let Some(device_id) = device_id {
-        parameters.push(format!("DeviceId=\"{}\"", auth_parameter(device_id)));
-    }
-    parameters.push(format!("Version=\"{}\"", auth_parameter(SCRYER_VERSION)));
-    format!("MediaBrowser {}", parameters.join(", "))
-}
-
-/// The unauthenticated header a Jellyfin login presents: it names the client
-/// and device, and carries no token because the login is what mints one.
-fn jellyfin_authorization_header(connection_id: &str) -> String {
-    media_browser_authorization(None, Some(&media_server_device_id(connection_id)))
-}
-
-/// Attach Scryer's credential to an Emby-family request.
-///
-/// Both channels go on every request, so one code path serves every supported
-/// server without first probing its version: Jellyfin 12 reads
-/// `Authorization` only, Jellyfin 10.x and Emby read either. Sending both is
-/// unambiguous rather than merely tolerated — the server reads the legacy
-/// header solely when `Authorization` carried no token, so the two can never
-/// disagree.
-trait EmbyFamilyAuth {
-    fn emby_family_auth(self, token: &str, device_id: Option<&str>) -> Self;
-}
-
-impl EmbyFamilyAuth for reqwest::RequestBuilder {
-    fn emby_family_auth(self, token: &str, device_id: Option<&str>) -> Self {
-        self.header(
-            "Authorization",
-            media_browser_authorization(Some(token), device_id),
-        )
-        .header("X-Emby-Token", token)
-    }
-}
-
 fn json_value_string(value: Option<&Value>) -> Option<String> {
     match value? {
         Value::String(value) => {
@@ -1329,8 +1255,19 @@ async fn scan_media_server_catalog(
             AppError::Validation("media server catalog scan requires an API key".into())
         })?;
     match connection.provider {
-        MediaServerProvider::Jellyfin | MediaServerProvider::Emby => {
-            scan_emby_catalog(&verifier.client, &connection.base_url, api_key, recent_only).await
+        MediaServerProvider::Jellyfin => {
+            jellyfin::scan_catalog(&verifier.client, &connection.base_url, api_key, recent_only)
+                .await
+        }
+        MediaServerProvider::Emby => {
+            super::emby::scan_catalog(
+                &verifier.client,
+                &connection.id,
+                &connection.base_url,
+                api_key,
+                recent_only,
+            )
+            .await
         }
         MediaServerProvider::Plex => {
             let machine_id = connection
@@ -1344,160 +1281,6 @@ async fn scan_media_server_catalog(
             scan_plex_catalog(verifier, machine_id, api_key, recent_only).await
         }
     }
-}
-
-async fn scan_emby_catalog(
-    client: &reqwest::Client,
-    base_url: &str,
-    api_key: &str,
-    recent_only: bool,
-) -> AppResult<Vec<MediaServerCatalogItem>> {
-    let base_url = media_server_url(base_url)?;
-    let mut start = 0usize;
-    let mut catalog = Vec::new();
-    const PAGE_SIZE: usize = 500;
-    loop {
-        let mut url = base_url.join("Items").map_err(|error| {
-            AppError::Repository(format!("invalid media server catalog URL: {error}"))
-        })?;
-        url.query_pairs_mut()
-            .append_pair("Recursive", "true")
-            .append_pair("IncludeItemTypes", "Movie,Series,Episode")
-            .append_pair(
-                "Fields",
-                "ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd",
-            )
-            .append_pair("StartIndex", &start.to_string())
-            .append_pair("Limit", &PAGE_SIZE.to_string());
-        if recent_only {
-            url.query_pairs_mut()
-                .append_pair("SortBy", "DateCreated,DateLastContentAdded")
-                .append_pair("SortOrder", "Descending");
-        }
-        let response = client
-            .get(url)
-            .header("Accept", "application/json")
-            .emby_family_auth(api_key, None)
-            .send()
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("media server catalog scan failed: {error}"))
-            })?;
-        if !response.status().is_success() {
-            return Err(AppError::Repository(format!(
-                "media server catalog scan failed with status {}",
-                response.status()
-            )));
-        }
-        let page = response.json::<Value>().await.map_err(|error| {
-            AppError::Repository(format!("invalid media server catalog response: {error}"))
-        })?;
-        let items = page
-            .get("Items")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let page_len = items.len();
-        catalog.extend(items.iter().filter_map(emby_catalog_item));
-        start += page_len;
-        let total = page
-            .get("TotalRecordCount")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as usize;
-        if recent_only || page_len < PAGE_SIZE || (total > 0 && start >= total) {
-            return hydrate_emby_parent_series(client, &base_url, api_key, catalog).await;
-        }
-    }
-}
-
-async fn hydrate_emby_parent_series(
-    client: &reqwest::Client,
-    base_url: &Url,
-    api_key: &str,
-    mut catalog: Vec<MediaServerCatalogItem>,
-) -> AppResult<Vec<MediaServerCatalogItem>> {
-    let mut known_series_ids = catalog
-        .iter()
-        .filter(|item| item.kind == MediaServerCatalogItemKind::Series)
-        .map(|item| item.provider_item_id.clone())
-        .collect::<HashSet<_>>();
-    let missing_series_ids = catalog
-        .iter()
-        .filter(|item| item.kind == MediaServerCatalogItemKind::Episode)
-        .filter_map(|item| item.series_provider_item_id.clone())
-        .filter(|series_id| known_series_ids.insert(series_id.clone()))
-        .collect::<Vec<_>>();
-
-    for series_id in missing_series_ids {
-        let mut url = base_url
-            .join(&format!("Items/{series_id}"))
-            .map_err(|error| {
-                AppError::Repository(format!("invalid media server catalog URL: {error}"))
-            })?;
-        url.query_pairs_mut().append_pair(
-            "Fields",
-            "ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd",
-        );
-        let response = client
-            .get(url)
-            .header("Accept", "application/json")
-            .emby_family_auth(api_key, None)
-            .send()
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("media server parent-series lookup failed: {error}"))
-            })?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            continue;
-        }
-        if !response.status().is_success() {
-            return Err(AppError::Repository(format!(
-                "media server parent-series lookup failed with status {}",
-                response.status()
-            )));
-        }
-        let value = response.json::<Value>().await.map_err(|error| {
-            AppError::Repository(format!(
-                "invalid media server parent-series response: {error}"
-            ))
-        })?;
-        if let Some(series) = emby_catalog_item(&value)
-            && series.kind == MediaServerCatalogItemKind::Series
-        {
-            catalog.push(series);
-        }
-    }
-    Ok(catalog)
-}
-
-fn emby_catalog_item(value: &Value) -> Option<MediaServerCatalogItem> {
-    let kind = match value.get("Type")?.as_str()? {
-        "Movie" => MediaServerCatalogItemKind::Movie,
-        "Series" => MediaServerCatalogItemKind::Series,
-        "Episode" => MediaServerCatalogItemKind::Episode,
-        _ => return None,
-    };
-    Some(MediaServerCatalogItem {
-        kind,
-        provider_item_id: value.get("Id")?.as_str()?.trim().to_string(),
-        external_ids: provider_ids(value.get("ProviderIds")),
-        series_provider_item_id: value
-            .get("SeriesId")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        season_number: value
-            .get("ParentIndexNumber")
-            .and_then(Value::as_i64)
-            .map(|value| value as i32),
-        episode_number: value
-            .get("IndexNumber")
-            .and_then(Value::as_i64)
-            .map(|value| value as i32),
-        episode_number_end: value
-            .get("IndexNumberEnd")
-            .and_then(Value::as_i64)
-            .map(|value| value as i32),
-    })
 }
 
 async fn scan_plex_catalog(
@@ -1781,34 +1564,6 @@ fn plex_external_id(value: &str) -> Option<ExternalId> {
         source: source.into(),
         value: external_id.into(),
     })
-}
-
-fn provider_ids(value: Option<&Value>) -> Vec<ExternalId> {
-    let Some(value) = value else {
-        return Vec::new();
-    };
-    match value {
-        Value::Object(values) => values
-            .iter()
-            .filter_map(|(source, value)| {
-                value.as_str().map(|value| ExternalId {
-                    source: source.clone(),
-                    value: value.to_string(),
-                })
-            })
-            .collect(),
-        Value::Array(values) => values
-            .iter()
-            .filter_map(|value| value.get("id").and_then(Value::as_str))
-            .filter_map(|value| {
-                value.split_once("://").map(|(source, id)| ExternalId {
-                    source: source.into(),
-                    value: id.into(),
-                })
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
 }
 
 fn media_server_url(value: &str) -> AppResult<Url> {
@@ -2244,50 +1999,6 @@ mod tests {
         assert_eq!(key_list_calls.load(Ordering::SeqCst), 2);
     }
 
-    #[test]
-    fn media_browser_authorization_pins_the_wire_format() {
-        assert_eq!(
-            media_browser_authorization(Some("api-key"), Some("SCRYER_jellyfin-main")),
-            format!(
-                "MediaBrowser Token=\"api-key\", Client=\"Scryer\", Device=\"Scryer\", \
-                 DeviceId=\"SCRYER_jellyfin-main\", Version=\"{SCRYER_VERSION}\""
-            )
-        );
-        // A bare API key is not a device, so the parameter is left off rather
-        // than filled with a placeholder.
-        assert_eq!(
-            media_browser_authorization(Some("api-key"), None),
-            format!(
-                "MediaBrowser Token=\"api-key\", Client=\"Scryer\", Device=\"Scryer\", \
-                 Version=\"{SCRYER_VERSION}\""
-            )
-        );
-        // A login has no token yet: it is the call that mints one.
-        assert_eq!(
-            jellyfin_authorization_header("jellyfin-main"),
-            format!(
-                "MediaBrowser Client=\"Scryer\", Device=\"Scryer\", \
-                 DeviceId=\"SCRYER_jellyfin-main\", Version=\"{SCRYER_VERSION}\""
-            )
-        );
-    }
-
-    #[test]
-    fn media_browser_authorization_encodes_values_that_would_break_the_parser() {
-        // The server unquotes each value and then URL-decodes it, so a quote
-        // or comma in a pasted key must not reach the wire as a delimiter,
-        // and a `+` must not come back out as a space.
-        let header = media_browser_authorization(Some("a\"b,c d+e"), Some("SCRYER_x\"y"));
-        assert!(
-            header.contains("Token=\"a%22b%2Cc%20d%2Be\""),
-            "token was not encoded: {header}"
-        );
-        assert!(
-            header.contains("DeviceId=\"SCRYER_x%22y\""),
-            "device id was not encoded: {header}"
-        );
-    }
-
     /// Match one exact `Authorization` value.
     ///
     /// wiremock's own `header` matcher reads a comma-separated value as a list
@@ -2311,7 +2022,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/Users"))
-            .and(authorization(media_browser_authorization(
+            .and(authorization(jellyfin::authorization(
                 Some("api-key"),
                 None,
             )))
@@ -2338,7 +2049,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/Users"))
-            .and(authorization(media_browser_authorization(
+            .and(authorization(jellyfin::authorization(
                 Some("api-key"),
                 None,
             )))
@@ -2359,10 +2070,10 @@ mod tests {
         let server = MockServer::start().await;
         // The key calls ride the session the login opened, so they present the
         // same DeviceId the login did.
-        let session_auth = media_browser_authorization(Some("admin-token"), Some("SCRYER_jf-12"));
+        let session_auth = jellyfin::authorization(Some("admin-token"), Some("SCRYER_jf-12"));
         Mock::given(method("POST"))
             .and(path("/Users/AuthenticateByName"))
-            .and(authorization(jellyfin_authorization_header("jf-12")))
+            .and(authorization(jellyfin::login_authorization("jf-12")))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "AccessToken": "admin-token",
                 "User": {
@@ -2403,7 +2114,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/Users/2c1b0a3d4e5f60718293a4b5c6d7e8f9"))
-            .and(authorization(media_browser_authorization(
+            .and(authorization(jellyfin::authorization(
                 Some("api-key"),
                 Some("SCRYER_jf-12"),
             )))
