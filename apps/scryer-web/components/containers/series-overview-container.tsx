@@ -78,6 +78,7 @@ import type {
 import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
 import { useJobRunToasts } from "@/components/root/job-run-provider";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
+import { mediaFileOwnerKeys } from "@/lib/utils/media-file-owners";
 import type { JobRun } from "@/lib/types/jobs";
 import type { DeleteEpisodeFilesPreview } from "@/lib/types/delete-preview";
 import {
@@ -1663,49 +1664,6 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     setMediaFileDeleteTypedConfirmation("");
   }, [mediaFileDeleteLoading]);
 
-  const handleConfirmDeleteMediaFile = React.useCallback(async () => {
-    if (!mediaFileToDelete || !mediaFileDeletePreview) return;
-    const deletedFileId = mediaFileToDelete.id;
-    setMediaFileDeleteLoading(true);
-    try {
-      const { error } = await client.mutation(deleteMediaFileMutation, {
-        input: {
-          fileId: deletedFileId,
-          deleteFromDisk: true,
-          previewFingerprint: mediaFileDeletePreview.fingerprint,
-          typedConfirmation: mediaFileDeleteTypedConfirmation.trim() || undefined,
-        },
-      }).toPromise();
-      if (error) throw error;
-      const removeDeletedFile = (
-        current: Record<string, EpisodeMediaFile[]>,
-      ): Record<string, EpisodeMediaFile[]> =>
-        Object.fromEntries(
-          Object.entries(current).map(([key, files]) => [
-            key,
-            files.filter((file) => file.id !== deletedFileId),
-          ]),
-        );
-      setMediaFilesByEpisode(removeDeletedFile);
-      setMediaFilesBySeriesMovieLink(removeDeletedFile);
-      await refreshTitleDetail();
-      setMediaFileToDelete(null);
-      setMediaFileDeleteTypedConfirmation("");
-    } catch (error: unknown) {
-      setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
-    } finally {
-      setMediaFileDeleteLoading(false);
-    }
-  }, [
-    client,
-    mediaFileDeletePreview,
-    mediaFileDeleteTypedConfirmation,
-    mediaFileToDelete,
-    refreshTitleDetail,
-    setGlobalStatus,
-    t,
-  ]);
-
   React.useEffect(() => {
     const unregisters = episodeFileDeletionUnregistersRef.current;
     return () => {
@@ -1717,7 +1675,11 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   }, []);
 
   const handleEpisodeFileDeletionTerminal = React.useCallback(
-    async (run: JobRun, targetedEpisodeIds: ReadonlySet<string>) => {
+    async (
+      run: JobRun,
+      targetedEpisodeIds: ReadonlySet<string>,
+      completedMessage?: string,
+    ) => {
       setPendingEpisodeFileDeletionEpisodeIds((current) => {
         const next = new Set(current);
         for (const episodeId of targetedEpisodeIds) {
@@ -1751,14 +1713,83 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
 
       setGlobalStatus(
         run.status === "COMPLETED"
-          ? t("status.episodeFilesDeleted", {
-              count: deletedFileIds?.size ?? targetedEpisodeIds.size,
-            })
+          ? (completedMessage ??
+              t("status.episodeFilesDeleted", {
+                count: deletedFileIds?.size ?? targetedEpisodeIds.size,
+              }))
           : (run.errorText ?? run.summaryText ?? t("status.apiError")),
       );
     },
     [refreshTitleDetail, setGlobalStatus, t],
   );
+
+  // Deleting one file accepts a background job exactly like deleting a whole
+  // episode's files does. The row's availability, its quality pill included,
+  // only changes once that job has run, so wait for the run to finish rather
+  // than refetching a title the job has not touched yet.
+  const handleConfirmDeleteMediaFile = React.useCallback(async () => {
+    if (!mediaFileToDelete || !mediaFileDeletePreview) return;
+    const deletedFileId = mediaFileToDelete.id;
+    const targetedEpisodeIds = mediaFileOwnerKeys(deletedFileId, [
+      mediaFilesByEpisode,
+      mediaFilesBySeriesMovieLink,
+    ]);
+    setMediaFileDeleteLoading(true);
+    try {
+      const { data, error } = await client.mutation<{
+        deleteMediaFile?: { jobRun?: unknown };
+      }>(deleteMediaFileMutation, {
+        input: {
+          fileId: deletedFileId,
+          deleteFromDisk: true,
+          previewFingerprint: mediaFileDeletePreview.fingerprint,
+          typedConfirmation: mediaFileDeleteTypedConfirmation.trim() || undefined,
+        },
+      }).toPromise();
+      if (error) throw error;
+      const run = normalizeJobRun(data?.deleteMediaFile?.jobRun);
+      if (!run) {
+        throw new Error(t("status.apiError"));
+      }
+
+      setPendingEpisodeFileDeletionEpisodeIds((current) => {
+        const next = new Set(current);
+        for (const episodeId of targetedEpisodeIds) {
+          next.add(episodeId);
+        }
+        return next;
+      });
+      const unregister = registerInteractiveJobRun(run, (terminalRun) => {
+        unregister();
+        episodeFileDeletionUnregistersRef.current.delete(unregister);
+        void handleEpisodeFileDeletionTerminal(
+          terminalRun,
+          targetedEpisodeIds,
+          t("status.mediaFileDeleted"),
+        );
+      });
+      episodeFileDeletionUnregistersRef.current.add(unregister);
+
+      setGlobalStatus(t("status.mediaFileDeleteQueued"));
+      setMediaFileToDelete(null);
+      setMediaFileDeleteTypedConfirmation("");
+    } catch (error: unknown) {
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")));
+    } finally {
+      setMediaFileDeleteLoading(false);
+    }
+  }, [
+    client,
+    handleEpisodeFileDeletionTerminal,
+    mediaFileDeletePreview,
+    mediaFileDeleteTypedConfirmation,
+    mediaFileToDelete,
+    mediaFilesByEpisode,
+    mediaFilesBySeriesMovieLink,
+    registerInteractiveJobRun,
+    setGlobalStatus,
+    t,
+  ]);
 
   const handleRequestDeleteEpisodeFiles = React.useCallback((episodeIds: string[]) => {
     if (episodeIds.length === 0) return;
