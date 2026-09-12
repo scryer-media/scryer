@@ -2301,6 +2301,10 @@ async fn series_full_scan_records_case_distinct_folder_as_ownership_conflict() {
     let owned_folder = tempdir.path().join("CASE SPLIT FIXTURE");
     let candidate_folder = tempdir.path().join("Case Split Fixture");
     std::fs::create_dir(&candidate_folder).expect("create case-distinct series folder");
+    // The owned folder has to be on disk for this to be a conflict rather
+    // than stale ownership. On a case-insensitive filesystem it aliases the
+    // candidate folder, which still reads as present.
+    let _ = std::fs::create_dir(&owned_folder);
     let episode_path = candidate_folder.join("Case Split Fixture - S01E01.mkv");
     std::fs::write(&episode_path, vec![0_u8; 128]).expect("write episode file");
 
@@ -2377,6 +2381,226 @@ async fn series_full_scan_records_case_distinct_folder_as_ownership_conflict() {
             .expect("list media files")
             .is_empty()
     );
+}
+
+#[tokio::test]
+async fn movie_full_scan_repoints_stale_folder_ownership_to_the_scanned_folder() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let previous_root = tempfile::tempdir().expect("previous root");
+    // The previous root still holds other movies, so the missing owned
+    // folder is a relocation rather than an unmounted drive.
+    std::fs::create_dir(previous_root.path().join("Remaining Feature (2020)"))
+        .expect("create remaining movie folder");
+    let stale_folder = previous_root.path().join("Relocated Feature (2024)");
+    let movie_dir = tempdir.path().join("Relocated Feature (2024)");
+    std::fs::create_dir(&movie_dir).expect("create relocated movie folder");
+    let movie_path = movie_dir.join("Relocated.Feature.2024.1080p.WEB-DL.mkv");
+    std::fs::write(&movie_path, vec![0_u8; 256]).expect("write movie file");
+
+    let (app, user, unmatched_items) = bootstrap_movie_scan_app(
+        tempdir.path(),
+        build_test_library_files(&[movie_path.as_path()]),
+        Arc::new(FixedBatchSearchMetadataGateway {
+            results: vec![MetadataSearchItem {
+                tvdb_id: "445566".to_string(),
+                smg_id: None,
+                primary_source: None,
+                external_ids: vec![],
+                name: "Relocated Feature".to_string(),
+                year: Some(2024),
+                auto_match_safe: true,
+                auto_match_signals: vec!["exact_title".into(), "exact_year".into()],
+            }],
+        }),
+    )
+    .await;
+    let title =
+        create_movie_title_with_folder(&app, &user, "Relocated Feature", stale_folder.as_path())
+            .await;
+
+    let summary = app
+        .scan_library(&user, MediaFacet::Movie)
+        .await
+        .expect("scan movie library");
+
+    assert_eq!(summary.unmatched, 0);
+    assert!(unmatched_items.items().await.is_empty());
+    let healed = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    assert_eq!(
+        healed.folder_path.as_deref(),
+        Some(movie_dir.to_string_lossy().as_ref())
+    );
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].file_path, movie_path.to_string_lossy());
+}
+
+#[tokio::test]
+async fn movie_full_scan_keeps_ownership_when_the_owned_root_is_unmounted() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    // Nothing exists under the previous root: the signature of a vanished
+    // mount, not of a relocation.
+    let stale_folder = tempdir
+        .path()
+        .join("unmounted-root")
+        .join("Unmounted Feature (2024)");
+    let movie_dir = tempdir.path().join("Unmounted Feature (2024)");
+    std::fs::create_dir(&movie_dir).expect("create movie folder");
+    let movie_path = movie_dir.join("Unmounted.Feature.2024.1080p.WEB-DL.mkv");
+    std::fs::write(&movie_path, vec![0_u8; 256]).expect("write movie file");
+
+    let (app, user, unmatched_items) = bootstrap_movie_scan_app(
+        tempdir.path(),
+        build_test_library_files(&[movie_path.as_path()]),
+        Arc::new(FixedBatchSearchMetadataGateway {
+            results: vec![MetadataSearchItem {
+                tvdb_id: "556677".to_string(),
+                smg_id: None,
+                primary_source: None,
+                external_ids: vec![],
+                name: "Unmounted Feature".to_string(),
+                year: Some(2024),
+                auto_match_safe: true,
+                auto_match_signals: vec!["exact_title".into(), "exact_year".into()],
+            }],
+        }),
+    )
+    .await;
+    let title =
+        create_movie_title_with_folder(&app, &user, "Unmounted Feature", stale_folder.as_path())
+            .await;
+    app.services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: movie_path.to_string_lossy().to_string(),
+            size_bytes: 256,
+            role: MediaFileRole::Primary,
+            ..Default::default()
+        })
+        .await
+        .expect("seed catalog row in the scanned folder");
+
+    let summary = app
+        .scan_library(&user, MediaFacet::Movie)
+        .await
+        .expect("scan movie library");
+
+    assert_eq!(summary.unmatched, 1);
+    let unmatched = unmatched_items.items().await;
+    assert_eq!(unmatched.len(), 1);
+    assert_eq!(
+        unmatched[0].reason_code,
+        crate::library_scan_unmatched::LIBRARY_SCAN_TITLE_ALREADY_OWNS_ANOTHER_FOLDER
+    );
+    assert_eq!(unmatched[0].title_id.as_ref(), Some(&title.id));
+    let unchanged = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    assert_eq!(
+        unchanged.folder_path.as_deref(),
+        Some(stale_folder.to_string_lossy().as_ref())
+    );
+    // The owned folder was never confirmed on disk, so nothing is unlinked.
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(files.len(), 1);
+    assert_eq!(files[0].file_path, movie_path.to_string_lossy());
+}
+
+#[tokio::test]
+async fn series_full_scan_repoints_stale_folder_ownership_to_the_scanned_folder() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let previous_root = tempfile::tempdir().expect("previous root");
+    std::fs::create_dir(previous_root.path().join("Remaining Serial"))
+        .expect("create remaining series folder");
+    let stale_folder = previous_root.path().join("Relocated Serial");
+    let candidate_folder = tempdir.path().join("Relocated Serial");
+    std::fs::create_dir(&candidate_folder).expect("create relocated series folder");
+    let episode_path = candidate_folder.join("Relocated Serial - S01E01.mkv");
+    std::fs::write(&episode_path, vec![0_u8; 128]).expect("write episode file");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "series.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+        Arc::new(EmptySearchMetadataGateway),
+    );
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile series root");
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Relocated Serial".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series title");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&title.id, stale_folder.to_string_lossy().as_ref())
+        .await
+        .expect("set stale series folder");
+
+    let summary = app
+        .scan_library(&user, MediaFacet::Series)
+        .await
+        .expect("scan series library");
+
+    assert_eq!(summary.unmatched, 0);
+    assert!(unmatched_items.items().await.is_empty());
+    let healed = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&title.id)
+        .await
+        .expect("load title")
+        .expect("title exists");
+    assert_eq!(
+        healed.folder_path.as_deref(),
+        Some(candidate_folder.to_string_lossy().as_ref())
+    );
+    assert!(episode_path.exists());
 }
 
 #[tokio::test]

@@ -110,13 +110,13 @@ async fn episodic_title_directory_present(title_dir: &Path) -> AppResult<bool> {
 /// deleted. Only a populated root makes a missing title directory a real
 /// deletion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum LibraryRootState {
+pub(crate) enum LibraryRootState {
     Missing,
     Empty,
     Populated,
 }
 
-async fn library_root_state(root: &Path) -> AppResult<LibraryRootState> {
+pub(crate) async fn library_root_state(root: &Path) -> AppResult<LibraryRootState> {
     match tokio::fs::metadata(root).await {
         Ok(metadata) if metadata.is_dir() => {}
         Ok(_) => return Ok(LibraryRootState::Missing),

@@ -89,6 +89,7 @@ use scan_title_files::{
 };
 use scan_title_finalize::finalize_movie_scan_file;
 pub(crate) use scan_title_finalize::finalize_title_scan_file;
+pub(crate) use scan_title_scan::{LibraryRootState, library_root_state};
 use scan_title_scan::{LibraryScanMediaAnalysisPolicy, LibraryScanMediaAnalysisPool};
 
 /// Destination for matched title work. Implemented by the media-analysis pool
