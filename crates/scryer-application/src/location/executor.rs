@@ -84,9 +84,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::location::classify::TitleLocationClass;
 use crate::location::model::{
-    FileVerificationRecord, LocationOperation, LocationOperationCounters, LocationOperationState,
-    LocationReasonCode, TitleCheckpoint, TitleCheckpointPlacement, TitleCheckpointState,
-    VerificationDepth,
+    FileVerificationRecord, KnownSourceContent, LocationOperation, LocationOperationCounters,
+    LocationOperationState, LocationReasonCode, TitleCheckpoint, TitleCheckpointPlacement,
+    TitleCheckpointState, VerificationDepth,
 };
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::verify::{CopyProgress, FileVerificationIdentity, VerifiedFile};
@@ -137,6 +137,9 @@ pub struct PlannedFile {
     pub source_path: PathBuf,
     pub destination_path: PathBuf,
     pub size_bytes: u64,
+    /// The catalog's attested full hash of the source, when the plan carries
+    /// one (see [`KnownSourceContent`]).
+    pub source_content: Option<KnownSourceContent>,
 }
 
 impl PlannedFile {
@@ -2766,6 +2769,7 @@ mod tests {
                     source_path: PathBuf::from(format!("/source/{title_id}/{index}.mkv")),
                     destination_path: PathBuf::from(format!("/destination/{title_id}/{index}.mkv")),
                     size_bytes: 100,
+                    source_content: None,
                 })
                 .collect(),
             outcomes: TitleOutcomeCounts::default(),

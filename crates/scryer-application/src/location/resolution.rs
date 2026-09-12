@@ -73,7 +73,9 @@ impl FileResolution {
 }
 
 use super::executor::{FileMoveRequest, TitleFileMover};
-use super::model::{AppliedVerificationDepth, FileVerificationOutcome, VerificationDepth};
+use super::model::{
+    AppliedVerificationDepth, FileVerificationOutcome, KnownSourceContent, VerificationDepth,
+};
 use super::verify::{CopyProgress, VerifiedFile, hash_existing_file_with_progress};
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult, LocationOperationRepository};
@@ -270,7 +272,13 @@ impl ConflictResolver {
                                 compared_before.saturating_add(total),
                             );
                         });
-                    let proof = compare_existing(source, &destination, &comparison).await?;
+                    let proof = compare_existing(
+                        source,
+                        &destination,
+                        &comparison,
+                        request.file.source_content.as_ref(),
+                    )
+                    .await?;
                     // Distinct occupied names are additional work, not retries.
                     compared_before = compared_before
                         .saturating_add(read.load(std::sync::atomic::Ordering::Relaxed));
@@ -441,6 +449,7 @@ pub async fn compare_existing(
     source: &Path,
     destination: &Path,
     progress: &CopyProgress,
+    known: Option<&KnownSourceContent>,
 ) -> AppResult<VerifiedFile> {
     let source_before = file_version(source).await?;
     let destination_before = file_version(destination).await?;
@@ -475,6 +484,38 @@ pub async fn compare_existing(
         || !sampled_proofs_agree(source, destination).await?
     {
         return Ok(different_content(source, destination));
+    }
+    // The source's bytes were already hashed end to end when the catalog
+    // recorded them; while its signature still matches, that hash stands in
+    // for a second read and only the destination is read.
+    if let Some(known) = known.filter(|known| known.matches(&source_metadata)) {
+        let total = destination_metadata.len();
+        progress.comparison(0, total);
+        let sink = progress.clone();
+        let destination_progress =
+            CopyProgress::none().with_transfer_sink(move |_, bytes| sink.comparison(bytes, total));
+        let destination_hashes =
+            hash_existing_file_with_progress(destination, destination_progress)
+                .await
+                .map_err(|error| file_error(destination, error))?;
+        if source_before != file_version(source).await?
+            || destination_before != file_version(destination).await?
+        {
+            return Err(AppError::Validation("A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.".into()));
+        }
+        let identical = destination_hashes.full_blake3 == known.full_blake3
+            && destination_hashes.size_bytes == known.size_bytes;
+        if !identical {
+            return Ok(different_content(source, destination));
+        }
+        return Ok(VerifiedFile {
+            source_path: source.to_path_buf(),
+            destination_path: destination.to_path_buf(),
+            hashes: Some(destination_hashes),
+            depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
+            outcome: FileVerificationOutcome::Verified,
+            detail: None,
+        });
     }
     let source_size = source_metadata.len();
     let total = source_size.saturating_add(destination_metadata.len());
@@ -538,8 +579,9 @@ fn different_content(source: &Path, destination: &Path) -> VerifiedFile {
         hashes: None,
         depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
         outcome: FileVerificationOutcome::Mismatch,
-        detail: Some(
-            "The destination contains different content. Both files were preserved.".into(),
-        ),
+        detail: Some(format!(
+            "{} contains different content. Both files were preserved.",
+            destination.display()
+        )),
     }
 }

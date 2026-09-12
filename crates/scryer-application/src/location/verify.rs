@@ -622,19 +622,20 @@ impl VerifiedCopier {
     /// the crash window between a promotion and the verification record that
     /// should have followed it.
     ///
-    /// The source is read once to recover the hashes the interrupted copy
-    /// streamed, then the destination is proven at `requested` exactly as a
-    /// fresh copy would be. A destination that does not prove comes back as a
-    /// [`FileVerificationOutcome::Mismatch`] — never a silent removal, never a
-    /// pass.
+    /// The destination is proven against the source's full hash: the one the
+    /// catalog already holds when `known` still describes the file on disk,
+    /// otherwise one recovered by reading the source once. A destination that
+    /// does not prove comes back as a [`FileVerificationOutcome::Mismatch`] —
+    /// never a silent removal, never a pass.
     pub async fn verify_existing_destination(
         &self,
         source: &Path,
         destination: &Path,
         requested: VerificationDepth,
+        known: Option<&super::model::KnownSourceContent>,
     ) -> AppResult<VerifiedFile> {
         let _ = requested;
-        super::resolution::compare_existing(source, destination, &self.progress).await
+        super::resolution::compare_existing(source, destination, &self.progress, known).await
     }
 
     /// Prove `destination` against the hashes streamed while it was written.
@@ -1754,7 +1755,7 @@ mod tests {
         std::fs::copy(&source, &destination).expect("stage the interrupted run's destination");
 
         let verified = VerifiedCopier::new()
-            .verify_existing_destination(&source, &destination, VerificationDepth::Full)
+            .verify_existing_destination(&source, &destination, VerificationDepth::Full, None)
             .await
             .expect("verify in place");
 
@@ -1784,7 +1785,7 @@ mod tests {
         std::fs::write(&destination, b"somebody else's file").unwrap();
 
         let verified = VerifiedCopier::new()
-            .verify_existing_destination(&source, &destination, VerificationDepth::Full)
+            .verify_existing_destination(&source, &destination, VerificationDepth::Full, None)
             .await
             .expect("verify in place");
 

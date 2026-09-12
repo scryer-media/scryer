@@ -439,7 +439,12 @@ impl TitleFileMover for RootMoveFileMover {
             self.copier
                 .clone()
                 .with_progress(request.progress.clone())
-                .verify_existing_destination(source, destination, request.depth)
+                .verify_existing_destination(
+                    source,
+                    destination,
+                    request.depth,
+                    request.file.source_content.as_ref(),
+                )
                 .await?
         } else {
             self.copier

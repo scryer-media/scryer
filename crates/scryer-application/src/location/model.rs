@@ -333,6 +333,62 @@ impl PersistedContentHashes {
     }
 }
 
+/// What the catalog already knows about a source file's bytes, carried on the
+/// plan so the transfer can prove an occupied destination without reading the
+/// source a second time.
+///
+/// The stored BLAKE3 was streamed the last time the file was written or hashed
+/// end to end (FR-041/046). It is trusted only while the file's signature —
+/// its size and the platform's mtime scheme, the same facts a scan uses to
+/// invalidate stored hashes — still matches on disk at comparison time. A file
+/// touched since is compared the slow way, both sides in full.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct KnownSourceContent {
+    /// Full-file BLAKE3 (hex) of the source as last recorded.
+    pub full_blake3: String,
+    pub size_bytes: u64,
+    /// The source signature the hash was recorded against (see
+    /// [`crate::file_source_signature`]).
+    pub signature_scheme: String,
+    pub signature_value: String,
+}
+
+impl KnownSourceContent {
+    /// Read the stored facts off a media file row. `None` unless the row holds
+    /// an attested full hash and a signature in this platform's scheme.
+    pub fn from_media_file(media_file: &crate::TitleMediaFile) -> Option<Self> {
+        let full_blake3 = crate::location::collisions::FullHash::from_persisted(
+            media_file.content_hashes.as_ref(),
+        )
+        .as_known()?
+        .to_string();
+        let scheme = media_file.source_signature_scheme.as_deref()?;
+        let value = media_file.source_signature_value.as_deref()?;
+        if scheme != crate::file_source_signature::MEDIA_FILE_SOURCE_SIGNATURE_SCHEME
+            || value.trim().is_empty()
+        {
+            return None;
+        }
+        Some(Self {
+            full_blake3,
+            size_bytes: u64::try_from(media_file.size_bytes).ok()?,
+            signature_scheme: scheme.to_string(),
+            signature_value: value.to_string(),
+        })
+    }
+
+    /// Whether the file on disk is still the one the stored hash describes.
+    pub fn matches(&self, metadata: &std::fs::Metadata) -> bool {
+        metadata.len() == self.size_bytes
+            && crate::file_source_signature::file_source_signature_from_metadata(metadata)
+                .ok()
+                .is_some_and(|signature| {
+                    signature.scheme == self.signature_scheme
+                        && signature.value == self.signature_value
+                })
+    }
+}
+
 /// Per-file verification record persisted for the operation (D5) and surfaced in
 /// Activity as "verified (full)" / "verified (quick)" (FR-043).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

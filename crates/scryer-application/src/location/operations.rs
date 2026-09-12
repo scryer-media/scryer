@@ -2515,6 +2515,7 @@ impl AppUseCase {
                     path,
                     size_bytes: media.size_bytes.max(0) as u64,
                     sampled_proof: None,
+                    source_content: super::model::KnownSourceContent::from_media_file(media),
                 });
             }
             return Ok(RootMoveTitleOutcome::settled(draft, downgraded_from));
@@ -3005,6 +3006,8 @@ pub(super) async fn collect_source_files(
                     path,
                     relative_path: relative,
                     size_bytes,
+                    source_content: tracked
+                        .and_then(super::model::KnownSourceContent::from_media_file),
                 });
             }
         }
@@ -3041,6 +3044,7 @@ pub(super) async fn collect_source_files(
                 path,
                 relative_path: None,
                 size_bytes: size_bytes.unwrap_or_else(|| media_file.size_bytes.max(0) as u64),
+                source_content: super::model::KnownSourceContent::from_media_file(media_file),
             });
         }
     }

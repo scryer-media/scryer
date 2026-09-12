@@ -65,7 +65,8 @@ use crate::location::hardlinks::{HardlinkFact, hardlink_warnings};
 use crate::location::identity::DestinationIdentityOutcome;
 use crate::location::merge::summary::MergePreviewSummary;
 use crate::location::model::{
-    LocationExecutionMode, LocationOperationType, TitleCheckpointPlacement, VerificationDepth,
+    KnownSourceContent, LocationExecutionMode, LocationOperationType, TitleCheckpointPlacement,
+    VerificationDepth,
 };
 use crate::location::preview::{
     FreeSpaceEstimate, LocationPlan, LocationPlanBuilder, LocationPlanHeader, PlanItem,
@@ -150,6 +151,11 @@ pub struct RootMoveFileExecution {
     /// Stored path of the destination file.
     pub destination_path: String,
     pub size_bytes: u64,
+    /// The catalog's attested full hash of the source, when it has one, so an
+    /// occupied destination is proven against it instead of a second read of
+    /// the source. Absent on plans written before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_content: Option<KnownSourceContent>,
 }
 
 impl RootMoveFileExecution {
@@ -279,6 +285,7 @@ impl RootMoveTitleExecution {
                 source_path: file.source(),
                 destination_path: file.destination(),
                 size_bytes: file.size_bytes,
+                source_content: file.source_content.clone(),
             })
             .collect();
         files.sort_by_key(|file| file.media_file_id.is_none());
@@ -441,6 +448,9 @@ pub struct SourceFile {
     /// the folder, in which case it is placed in the destination folder root.
     pub relative_path: Option<PathBuf>,
     pub size_bytes: u64,
+    /// The catalog's attested full hash and signature for a tracked media
+    /// file; `None` for companions and unhashed rows.
+    pub source_content: Option<KnownSourceContent>,
 }
 
 /// Everything the planner needs about one title. Assembled by
@@ -1025,6 +1035,7 @@ pub(super) fn plan_title(
             source_path: source_display,
             destination_path: destination_display,
             size_bytes: file.size_bytes,
+            source_content: file.source_content.clone(),
         });
     }
 
@@ -1227,6 +1238,7 @@ fn plan_adopted_title(
             source_path: adopted.source_path.clone(),
             destination_path: adopted.destination_path.clone(),
             size_bytes: adopted.size_bytes,
+            source_content: None,
         });
     }
 
@@ -1738,6 +1750,7 @@ mod tests {
             path: PathBuf::from(path),
             relative_path: relative.map(PathBuf::from),
             size_bytes: size,
+            source_content: None,
         }
     }
 
@@ -1992,6 +2005,7 @@ mod tests {
             path: PathBuf::from("/a/Some Movie/movie.mkv"),
             relative_path: Some(PathBuf::from("movie.mkv")),
             size_bytes: 1_000,
+            source_content: None,
         }
     }
 

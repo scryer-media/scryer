@@ -435,6 +435,7 @@ mod tests {
             source_path: source.to_string(),
             destination_path: destination.to_string(),
             size_bytes,
+            source_content: None,
         }
     }
 

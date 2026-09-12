@@ -18,6 +18,7 @@ fn title(source: &Path, destination: &Path, name: &str, size: u64) -> PlannedTit
             source_path: source.join(name),
             destination_path: destination.join(name),
             size_bytes: size,
+            source_content: None,
         }],
     }
 }
@@ -198,7 +199,7 @@ async fn a_size_difference_is_proven_different_without_reading_either_file() {
     std::fs::write(&source, b"incoming").unwrap();
     std::fs::write(&destination, b"original bytes").unwrap();
     let (progress, _, full_comparison) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress)
+    let proof = compare_existing(&source, &destination, &progress, None)
         .await
         .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
@@ -219,7 +220,7 @@ async fn a_differing_sample_is_proven_different_without_the_full_comparison() {
     std::fs::write(&source, b"incoming").unwrap();
     std::fs::write(&destination, b"original").unwrap();
     let (progress, _, full_comparison) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress)
+    let proof = compare_existing(&source, &destination, &progress, None)
         .await
         .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
@@ -237,7 +238,7 @@ async fn a_quick_identical_pair_earns_the_full_comparison_of_both_sides() {
     std::fs::write(&source, b"incoming").unwrap();
     std::fs::write(&destination, b"incoming").unwrap();
     let (progress, reads, full_comparison) = counting_progress();
-    let proof = compare_existing(&source, &destination, &progress)
+    let proof = compare_existing(&source, &destination, &progress, None)
         .await
         .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
@@ -252,6 +253,125 @@ async fn a_quick_identical_pair_earns_the_full_comparison_of_both_sides() {
         hashes.full_blake3,
         blake3::hash(b"incoming").to_hex().to_string()
     );
+    assert!(source.exists() && destination.exists());
+}
+
+/// The catalog's attested hash and signature for a file, as the plan carries
+/// them.
+fn known_content_of(path: &Path) -> KnownSourceContent {
+    let metadata = std::fs::metadata(path).unwrap();
+    let signature =
+        crate::file_source_signature::file_source_signature_from_metadata(&metadata).unwrap();
+    KnownSourceContent {
+        full_blake3: blake3::hash(&std::fs::read(path).unwrap())
+            .to_hex()
+            .to_string(),
+        size_bytes: metadata.len(),
+        signature_scheme: signature.scheme,
+        signature_value: signature.value,
+    }
+}
+
+/// The source's bytes were hashed end to end when the catalog recorded them.
+/// While its signature still matches, that hash stands in for a second read:
+/// only the destination is read, and the proof carries the full BLAKE3.
+#[tokio::test]
+async fn a_stored_source_hash_with_a_matching_signature_reads_only_the_destination() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("a");
+    let destination = temp.path().join("b");
+    std::fs::write(&source, b"incoming").unwrap();
+    std::fs::write(&destination, b"incoming").unwrap();
+    let known = known_content_of(&source);
+    let (progress, reads, full_comparison) = counting_progress();
+    let proof = compare_existing(&source, &destination, &progress, Some(&known))
+        .await
+        .unwrap();
+    assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
+    assert!(proof.permits_source_removal());
+    assert!(full_comparison.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::Relaxed),
+        8,
+        "only the destination is read"
+    );
+    let hashes = proof.hashes.expect("the destination's hashes");
+    assert_eq!(hashes.full_blake3, known.full_blake3);
+    assert!(proof.detail.is_none(), "{:?}", proof.detail);
+    assert!(source.exists() && destination.exists());
+}
+
+/// A source touched since the catalog hashed it is not the file the stored
+/// hash describes: the stored hash is set aside and both sides are read.
+#[tokio::test]
+async fn a_stored_source_hash_with_a_stale_signature_falls_back_to_reading_both_sides() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("a");
+    let destination = temp.path().join("b");
+    std::fs::write(&source, b"incoming").unwrap();
+    std::fs::write(&destination, b"incoming").unwrap();
+    let mut known = known_content_of(&source);
+    known.signature_value = format!("{}0", known.signature_value);
+    let (progress, reads, _) = counting_progress();
+    let proof = compare_existing(&source, &destination, &progress, Some(&known))
+        .await
+        .unwrap();
+    assert_eq!(proof.outcome, FileVerificationOutcome::Verified);
+    assert_eq!(
+        reads.load(std::sync::atomic::Ordering::Relaxed),
+        16,
+        "both sides are read in full"
+    );
+}
+
+/// A stored hash that no longer matches the bytes, with a signature that still
+/// does, calls an identical pair different: the file is renamed in rather than
+/// merged, and nothing is removed on the strength of a stale record.
+#[tokio::test]
+async fn a_stored_source_hash_that_disagrees_with_the_destination_is_a_mismatch() {
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("a");
+    let destination = temp.path().join("b");
+    std::fs::write(&source, b"incoming").unwrap();
+    std::fs::write(&destination, b"incoming").unwrap();
+    let mut known = known_content_of(&source);
+    known.full_blake3 = blake3::hash(b"something else").to_hex().to_string();
+    let (progress, reads, _) = counting_progress();
+    let proof = compare_existing(&source, &destination, &progress, Some(&known))
+        .await
+        .unwrap();
+    assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
+    assert!(!proof.permits_source_removal());
+    assert!(proof.hashes.is_none());
+    assert_eq!(reads.load(std::sync::atomic::Ordering::Relaxed), 8);
+    assert!(source.exists() && destination.exists());
+}
+
+/// The stored hash covers the whole source, so a destination that differs
+/// outside the sampled head and tail is still caught — after reading only the
+/// destination.
+#[tokio::test]
+async fn a_stored_source_hash_detects_differences_outside_the_quick_check_samples() {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    let temp = tempfile::tempdir().unwrap();
+    let source = temp.path().join("a");
+    let destination = temp.path().join("b");
+    let mut bytes = vec![17; 12_000_000];
+    std::fs::write(&source, &bytes).unwrap();
+    bytes[4_000_000] = 19;
+    std::fs::write(&destination, bytes).unwrap();
+    let known = known_content_of(&source);
+    let reads = Arc::new(AtomicU64::new(0));
+    let count = reads.clone();
+    let progress = CopyProgress::none().with_comparison_sink(move |bytes, total| {
+        assert_eq!(total, 12_000_000);
+        count.fetch_max(bytes, Ordering::Relaxed);
+    });
+    let proof = compare_existing(&source, &destination, &progress, Some(&known))
+        .await
+        .unwrap();
+    assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
+    assert_eq!(reads.load(Ordering::Relaxed), 12_000_000);
     assert!(source.exists() && destination.exists());
 }
 
@@ -274,7 +394,7 @@ async fn full_identity_detects_differences_outside_the_quick_check_samples_and_c
         assert_eq!(total, 24_000_000);
         count.fetch_max(bytes, Ordering::Relaxed);
     });
-    let proof = compare_existing(&source, &destination, &progress)
+    let proof = compare_existing(&source, &destination, &progress, None)
         .await
         .unwrap();
     assert_eq!(proof.outcome, FileVerificationOutcome::Mismatch);
@@ -346,6 +466,7 @@ async fn companions_and_nested_trickplay_follow_the_resolved_media_stem() {
             source_path: source,
             destination_path: temp.path().join("destination").join(name),
             size_bytes: 7,
+            source_content: None,
         });
     }
     resolve(&resolver, &title, 0).await.unwrap();
@@ -381,6 +502,7 @@ async fn a_companion_uses_the_longest_matching_media_stem() {
             source_path: source.join(name),
             destination_path: destination.join(name),
             size_bytes: 8,
+            source_content: None,
         });
     }
     std::fs::write(destination.join("episode.part1.mkv"), b"original").unwrap();

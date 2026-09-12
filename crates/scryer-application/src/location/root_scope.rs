@@ -2156,6 +2156,7 @@ mod plan_test_support {
             path: PathBuf::from(path),
             relative_path: None,
             size_bytes,
+            source_content: None,
         }
     }
 
@@ -2166,6 +2167,7 @@ mod plan_test_support {
             path: PathBuf::from(path),
             relative_path: None,
             size_bytes,
+            source_content: None,
         }
     }
 

@@ -2750,6 +2750,7 @@ mod name_collisions {
             path: path.to_path_buf(),
             relative_path: Some(path.file_name().unwrap().into()),
             size_bytes: std::fs::metadata(path).unwrap().len(),
+            source_content: None,
         }
     }
 
