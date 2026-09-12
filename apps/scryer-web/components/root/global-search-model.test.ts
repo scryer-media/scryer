@@ -12,6 +12,7 @@ import {
   catalogTitleIdentityKey,
   dedupeCatalogResultsByIdentity,
   metadataSearchItemFromCatalogTitle,
+  representativeCatalogMember,
   buildGlobalSearchTabs,
   buildMetadataSearchActionState,
   buildMetadataResultCounts,
@@ -503,6 +504,35 @@ function libraryTitle(
 function library(id: string, facet: Facet, isDefault = false): LibraryRecord {
   return { id, facet, name: `Library ${id}`, slug: id, isDefault, roots: [] };
 }
+
+test("a copy that was just added to a second library does not become the card's face", () => {
+  const settled = {
+    ...libraryTitle("t-main", "Sample Show", "ANIME", "anime-main", { tvdbId: "424536" }),
+    posterUrl: "/posters/sample.jpg",
+    metadataFetchedAt: "2026-01-01T00:00:00Z",
+    createdAt: "2025-12-01T00:00:00Z",
+  };
+  const fresh = {
+    ...libraryTitle("t-kids", "Sample Show", "ANIME", "anime-kids", { tvdbId: "424536" }),
+    createdAt: "2026-09-11T00:00:00Z",
+  };
+  // The new row can come back first from the search; the card still wears
+  // the settled copy's art.
+  assert.equal(representativeCatalogMember([fresh, settled]).id, "t-main");
+  assert.deepEqual(
+    dedupeCatalogResultsByIdentity([fresh, settled]).map((item) => item.id),
+    ["t-main"],
+  );
+  // With nothing to choose between them, the older copy stands for both.
+  const bare = { ...fresh, createdAt: "2026-09-12T00:00:00Z" };
+  const older = { ...libraryTitle("t-old", "Sample Show", "ANIME", "anime-old", { tvdbId: "424536" }), createdAt: "2026-09-10T00:00:00Z" };
+  assert.equal(representativeCatalogMember([bare, older]).id, "t-old");
+  // Both libraries are still listed for the View picker.
+  assert.deepEqual(
+    buildCatalogLibraryMembers([fresh, settled])[catalogTitleIdentityKey(settled)].map((m) => m.id),
+    ["t-kids", "t-main"],
+  );
+});
 
 test("a title held by several libraries is one In Library result", () => {
   const primary = libraryTitle("t-main", "Sample Show", "ANIME", "anime-main", {

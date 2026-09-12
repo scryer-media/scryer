@@ -13,6 +13,7 @@ import {
   Send,
 } from "lucide-react";
 import { IconButton } from "@/components/ui/icon-button";
+import { boxedActionButtonToneClass } from "@/lib/utils/action-button-styles";
 import {
   Popover,
   PopoverContent,
@@ -398,6 +399,7 @@ export function SearchCatalogResultCard({
             label={`${action.label}: ${titleName}`}
             tooltip={action.label}
             tooltipSide="top"
+            tone="accent"
             data-global-search-result-library-action={action.kind}
             onClick={action.onClick}
           >
@@ -421,7 +423,10 @@ export function SearchCatalogResultCard({
               aria-label={chooseLibraryLabel}
               title={chooseLibraryLabel}
               data-global-search-result-library-picker="true"
-              className="h-8 shrink-0 gap-1.5 px-2.5 text-[12.5px] font-semibold text-[var(--scry-body)]"
+              className={cn(
+                "h-8 shrink-0 gap-1.5 px-2.5 text-[12.5px] font-semibold",
+                boxedActionButtonToneClass.accent,
+              )}
             >
               <ArrowUpRight className="h-3.5 w-3.5" />
               <span>{viewLabel}</span>
@@ -439,6 +444,7 @@ export function SearchCatalogResultCard({
             label={viewTitleLabel}
             tooltip={viewLabel}
             tooltipSide="top"
+            tone="accent"
             onClick={viewSingle}
           >
             <ArrowUpRight className="h-4 w-4" />
