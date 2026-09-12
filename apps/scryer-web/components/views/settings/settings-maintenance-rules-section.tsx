@@ -13,6 +13,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -844,6 +845,12 @@ export function SettingsMaintenanceRulesSection({
                 <CardTitle className="text-base text-foreground">
                   {t("settings.maintenanceRules")}
                 </CardTitle>
+                <RegoAiPromptDialog
+                  id="settings-maintenance-rules-ai-prompt"
+                  ruleKind="maintenance"
+                  inputContract={maintenanceInputContract}
+                  outputContract={'Define match if { ... }. You may also add reasons contains "stable_reason" if { match }.'}
+                />
               </div>
               <div className="overflow-x-auto">
                 <Table className="min-w-[min(900px,100%)]">

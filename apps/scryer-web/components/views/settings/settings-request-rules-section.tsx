@@ -13,6 +13,7 @@ import {
   Users,
 } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -1226,6 +1227,12 @@ export function SettingsRequestRulesSection({
                 <CardTitle className="text-base text-foreground">
                   {t("settings.requestRules")}
                 </CardTitle>
+                <RegoAiPromptDialog
+                  id="settings-request-rules-ai-prompt"
+                  ruleKind="request decision"
+                  inputContract={requestInputContract}
+                  outputContract={'Define one or more supported decisions: approve if { ... }, deny if { ... }, manual if { ... }, or tags contains "stable_tag" if { ... }.'}
+                />
               </div>
               <div className="overflow-x-auto">
                 <Table>

@@ -1880,6 +1880,15 @@ const en: LocaleDictionary = {
   "settings.ruleLibraryCommunityEmpty":
     "No community rule packs available. Refresh the plugin registry to check for new packs.",
   "settings.arrImportAction": "Import Arr custom format",
+  "settings.ruleAiPrompt": "AI prompt",
+  "settings.ruleAiPromptTitle": "Create a rule with AI",
+  "settings.ruleAiPromptDescription":
+    "Describe the result you want, then copy the prompt into an AI assistant.",
+  "settings.ruleAiPromptOutcome": "Desired outcome",
+  "settings.ruleAiPromptOutcomePlaceholder":
+    "For example: Give 100 points to releases with Japanese audio.",
+  "settings.ruleAiPromptCopy": "Copy prompt",
+  "settings.ruleAiPromptCopied": "Copied",
   "settings.arrImportTitle": "Import Arr custom formats",
   "settings.arrImportDescription":
     "Paste a Sonarr or Radarr custom-format export to create a new Rego rule draft.",

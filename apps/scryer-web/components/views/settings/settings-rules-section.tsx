@@ -14,6 +14,7 @@ import { useClient } from "urql";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { FacetSelect, FacetTags } from "@/components/common/facet-select";
 import { InfoHelp } from "@/components/common/info-help";
+import { RegoAiPromptDialog } from "@/components/common/rego-ai-prompt-dialog";
 import { LOWERCASE_FACET_IDS } from "@/lib/facets/selection";
 import {
   RULE_TEMPLATES,
@@ -1017,16 +1018,24 @@ export function SettingsRulesSection({
           <CardTitle className="text-base text-foreground">
             {t("settings.rules")}
           </CardTitle>
-          <Button
-            id="settings-rules-arr-custom-format-import"
-            type="button"
-            variant="secondary"
-            onClick={() => setIsArrImportOpen(true)}
-            disabled={mutatingRuleSetId !== null}
-          >
-            <FileInput className="mr-2 h-4 w-4" />
-            {t("settings.arrImportAction")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <RegoAiPromptDialog
+              id="settings-rules-ai-prompt"
+              ruleKind="scoring"
+              inputContract={ruleInputContract}
+              outputContract={'Define one or more score entries, for example: score_entry["stable_identifier"] := 100 if { input.release != null }'}
+            />
+            <Button
+              id="settings-rules-arr-custom-format-import"
+              type="button"
+              variant="secondary"
+              onClick={() => setIsArrImportOpen(true)}
+              disabled={mutatingRuleSetId !== null}
+            >
+              <FileInput className="mr-2 h-4 w-4" />
+              {t("settings.arrImportAction")}
+            </Button>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <Table>
