@@ -1190,6 +1190,9 @@ const en: LocaleDictionary = {
   "search.view": "View",
   "search.viewAll": "View all",
   "search.add": "Add",
+  "search.addToAnotherLibrary": "Add to another library",
+  "search.requestForAnotherLibrary": "Request for another library",
+  "search.chooseLibraryToView": "Choose a library to view {{name}} in",
   "search.footerTip": "Can't find it? Try another term or check your indexers.",
   "search.searchTips": "Search tips",
   "search.tipTitles":

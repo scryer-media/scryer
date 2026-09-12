@@ -743,6 +743,9 @@ const it: LocaleDictionary = {
   "search.view": "Visualizza",
   "search.viewAll": "Vedi tutto",
   "search.add": "Aggiungi",
+  "search.addToAnotherLibrary": "Aggiungi a un'altra libreria",
+  "search.requestForAnotherLibrary": "Richiedi per un'altra libreria",
+  "search.chooseLibraryToView": "Scegli la libreria in cui vedere {{name}}",
   "search.footerTip":
     "Non lo trovi? Prova un altro termine o controlla gli indicizzatori.",
   "search.searchTips": "Suggerimenti di ricerca",
