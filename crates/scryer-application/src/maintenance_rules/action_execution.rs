@@ -2535,6 +2535,7 @@ impl AppUseCase {
         self.start_acquisition_search_job(
             actor,
             crate::AcquisitionSearchRequest {
+                automatic: false,
                 wanted_kind: if has_file {
                     WantedKind::CutoffUpgrade
                 } else {

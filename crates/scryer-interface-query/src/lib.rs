@@ -482,6 +482,7 @@ fn from_acquisition_search_job_view(
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
     Ok(AcquisitionSearchJobPayload {
+        job_run: None,
         id: view.id.into(),
         state,
         total: view.total,

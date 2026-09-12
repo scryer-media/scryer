@@ -117,7 +117,20 @@ impl WantedMutations {
     ) -> GqlResult<AcquisitionSearchJobPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        let automatic = input.intent == Some(AcquisitionSearchIntentValue::Automatic);
+        if automatic
+            && (input.wanted_kind.is_some()
+                || input.wanted_item_id.is_some()
+                || input.facet.is_some()
+                || input.library_ids.is_some())
+        {
+            return Err(to_gql_error(scryer_application::AppError::Validation(
+                "Automatic search selects a title and optional season, without Wanted filters"
+                    .into(),
+            )));
+        }
         let request = scryer_application::AcquisitionSearchRequest {
+            automatic,
             wanted_kind: input
                 .wanted_kind
                 .map(|kind| match kind {
@@ -138,17 +151,38 @@ impl WantedMutations {
             .start_acquisition_search_job(&actor, request)
             .await
             .map_err(to_gql_error)?;
-        // The run is freshly started; reflect its initial (running) snapshot.
+        let job_run = scryer_interface_media::mappers::from_job_run(run);
+        let progress = job_run.progress_json.as_ref().map(|value| &value.0);
+        let count = |key: &str| {
+            progress
+                .and_then(|value| value.get(key))
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0)
+                .min(i32::MAX as u64) as i32
+        };
+        let state = match progress
+            .and_then(|value| value.get("state"))
+            .and_then(|value| value.as_str())
+        {
+            Some("completed") => AcquisitionSearchJobStateValue::Completed,
+            Some("failed") => AcquisitionSearchJobStateValue::Failed,
+            Some("cancelled") => AcquisitionSearchJobStateValue::Cancelled,
+            _ => AcquisitionSearchJobStateValue::Running,
+        };
         Ok(AcquisitionSearchJobPayload {
-            id: run.id.into(),
-            state: AcquisitionSearchJobStateValue::Running,
-            total: 0,
-            processed: 0,
-            grabbed_count: 0,
-            failed_count: 0,
-            current_title: None,
-            started_at: run.started_at,
-            finished_at: run.completed_at,
+            id: job_run.id.clone(),
+            state,
+            total: count("total"),
+            processed: count("processed"),
+            grabbed_count: count("grabbedCount"),
+            failed_count: count("failedCount"),
+            current_title: progress
+                .and_then(|value| value.get("currentTitle"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
+            started_at: job_run.started_at,
+            finished_at: job_run.completed_at,
+            job_run: Some(job_run),
         })
     }
 

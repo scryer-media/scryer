@@ -1,5 +1,6 @@
 import * as React from "react";
 import { useLocation } from "react-router";
+import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import {
   ArrowDown,
   ArrowUp,
@@ -1165,6 +1166,7 @@ function TitleContextPanel({
   const [autoQueueLoadingTitleId, setAutoQueueLoadingTitleId] = React.useState<
     string | null
   >(null);
+  const { isSearching } = useAutomaticSearch();
   const [releaseSearchRequestId, setReleaseSearchRequestId] = React.useState(0);
   const [releaseSearchLoading, setReleaseSearchLoading] = React.useState(false);
   const [releaseSearchTitleId, setReleaseSearchTitleId] = React.useState<
@@ -1408,7 +1410,7 @@ function TitleContextPanel({
     studioOrNetworkLabel,
   ].filter((value): value is string => Boolean(value));
   const heroGenreLabels = titleGenreLabels(title).slice(0, 4);
-  const autoQueueLoading = autoQueueLoadingTitleId === title.id;
+  const autoQueueLoading = autoQueueLoadingTitleId === title.id || isSearching(title.id);
   const releaseSearchPanelId = `title-context-release-search-${title.id}`;
   const handleAutoQueue = async () => {
     setAutoQueueLoadingTitleId(title.id);

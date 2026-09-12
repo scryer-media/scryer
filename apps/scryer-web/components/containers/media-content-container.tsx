@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import { MediaContentView } from "@/components/views/media-content-view";
 import {
   AddToCatalogDialog,
@@ -16,7 +17,6 @@ import {
   deleteMediaFileMutation,
   deleteLibraryMutation,
   clearTitleReleaseBlocklistEntryMutation,
-  queueBestReleaseMutation,
   queueExistingMutation,
   queueReplacementMutation,
   scanLibraryMutation,
@@ -690,6 +690,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   } = searchState;
   const setGlobalStatus = useGlobalStatus();
   const t = useTranslate();
+  const { startAutomaticSearch } = useAutomaticSearch();
   const client = useClient();
   // Library and root moves are still being finished, so the bulk dialog only
   // becomes a move entry point when the instance has opted in.
@@ -3657,28 +3658,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const queueExisting = React.useCallback(
     async (title: TitleRecord) => {
       try {
-        const input = {
-          titleId: title.id,
-          scope: { title: true },
-        };
-        const payload = await retryWithReplaceOnConflict(
-          input,
-          async (nextInput) => {
-            const { data, error } = await client
-              .mutation(queueBestReleaseMutation, { input: nextInput })
-              .toPromise();
-            if (error) throw error;
-            return data?.queueBestRelease;
-          },
-          "A download is already in progress for this title.",
-          confirmReplaceConflict,
-        );
-        assertNoReplaceConflict(
-          payload,
-          "A download is already in progress for this title.",
-        );
-        const queuedMessage = t("status.queuedLatest", { name: title.name });
-        setGlobalStatus(queuedMessage);
+        await startAutomaticSearch(title.id);
       } catch (error) {
         setGlobalStatus(
           autoSearchOutcomeMessage(error, t, title.name) ??
@@ -3686,7 +3666,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         );
       }
     },
-    [client, confirmReplaceConflict, setGlobalStatus, t],
+    [startAutomaticSearch, setGlobalStatus, t],
   );
 
   const runInteractiveSearchForTitle = React.useCallback(

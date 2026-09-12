@@ -488,25 +488,36 @@ impl AppUseCase {
     /// Profile resolution is a four-level fallback (title tag, category
     /// override, global setting, built-in default) plus a name-equality retry;
     /// the two cutoff sweeps both need it and must not answer differently.
-    pub(crate) async fn monitored_titles_with_profiles(
+    pub(crate) async fn titles_with_profiles_for_search(
         &self,
         facet: Option<MediaFacet>,
         library_ids: &[String],
         title_id: Option<&str>,
+        respect_title_monitoring: bool,
     ) -> AppResult<Vec<(scryer_domain::Title, QualityProfile)>> {
         let titles = if let Some(title_id) = title_id {
-            self.services.catalog.titles.get_by_id(title_id).await?
-                .filter(|title| library_ids.contains(&title.library_id)
-                    && facet.as_ref().is_none_or(|facet| facet == &title.facet))
-                .into_iter().collect()
-        } else { self
-            .services
-            .catalog
-            .titles
-            .list_for_libraries(facet, library_ids, None)
-            .await? };
-        let monitored: Vec<scryer_domain::Title> =
-            titles.into_iter().filter(|title| title.monitored).collect();
+            self.services
+                .catalog
+                .titles
+                .get_by_id(title_id)
+                .await?
+                .filter(|title| {
+                    library_ids.contains(&title.library_id)
+                        && facet.as_ref().is_none_or(|facet| facet == &title.facet)
+                })
+                .into_iter()
+                .collect()
+        } else {
+            self.services
+                .catalog
+                .titles
+                .list_for_libraries(facet, library_ids, None)
+                .await?
+        };
+        let monitored: Vec<scryer_domain::Title> = titles
+            .into_iter()
+            .filter(|title| title.monitored || (!respect_title_monitoring && title_id.is_some()))
+            .collect();
         if monitored.is_empty() {
             return Ok(Vec::new());
         }
@@ -563,7 +574,8 @@ impl AppUseCase {
         facet: Option<MediaFacet>,
         library_filter: Option<Vec<String>>,
     ) -> AppResult<Vec<CutoffUnmetItem>> {
-        self.compute_cutoff_unmet_items_for_title(facet, library_filter, None).await
+        self.compute_cutoff_unmet_items_for_title(facet, library_filter, None)
+            .await
     }
 
     pub(crate) async fn compute_cutoff_unmet_items_for_title(
@@ -571,6 +583,17 @@ impl AppUseCase {
         facet: Option<MediaFacet>,
         library_filter: Option<Vec<String>>,
         title_id: Option<&str>,
+    ) -> AppResult<Vec<CutoffUnmetItem>> {
+        self.compute_cutoff_unmet_items_for_search(facet, library_filter, title_id, true)
+            .await
+    }
+
+    pub(crate) async fn compute_cutoff_unmet_items_for_search(
+        &self,
+        facet: Option<MediaFacet>,
+        library_filter: Option<Vec<String>>,
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
     ) -> AppResult<Vec<CutoffUnmetItem>> {
         let mut libraries = self.services.catalog.libraries.list(facet.clone()).await?;
         if let Some(filter) = library_filter {
@@ -590,7 +613,12 @@ impl AppUseCase {
             .map(|library| library.id.clone())
             .collect::<Vec<_>>();
         let monitored_titles = self
-            .monitored_titles_with_profiles(facet, &library_ids, title_id)
+            .titles_with_profiles_for_search(
+                facet,
+                &library_ids,
+                title_id,
+                respect_title_monitoring,
+            )
             .await?;
         if monitored_titles.is_empty() {
             return Ok(Vec::new());

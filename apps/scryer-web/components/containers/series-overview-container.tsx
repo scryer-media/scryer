@@ -1,5 +1,7 @@
 
 import * as React from "react";
+import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
+import { parseSearchSeason } from "@/lib/utils/automatic-search";
 import { facetById } from "@/lib/facets/registry";
 import {
   deleteEpisodeFilesPreviewQuery,
@@ -27,7 +29,6 @@ import {
   setPrimaryMovieFileMutation,
   setSeriesMovieMonitoredMutation,
   setTitleMonitoredMutation,
-  triggerAcquisitionSearchMutation,
   updateTitleMutation,
 } from "@/lib/graphql/mutations";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
@@ -406,6 +407,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const setGlobalStatus = useGlobalStatus();
   const { registerInteractiveJobRun } = useJobRunToasts();
   const t = useTranslate();
+  const { startAutomaticSearch, isSearching } = useAutomaticSearch();
   const client = useClient();
   const auth = useAuth();
   const { confirmReplaceConflict, replaceConflictDialog } =
@@ -1512,22 +1514,14 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
 
     setSearchMonitoredLoading(true);
     try {
-      // One interactive acquisition-search job for this title
-      // replaces the retired per-title trigger mutation.
-      const { error } = await client
-        .mutation(triggerAcquisitionSearchMutation, {
-          input: { titleId: title.id },
-        })
-        .toPromise();
-      if (error) throw error;
-      setGlobalStatus(t("wanted.searchJobStarted"));
+      await startAutomaticSearch(title.id);
     } catch (error: unknown) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
     } finally {
       setSearchMonitoredLoading(false);
     }
   }, [
-    client,
+    startAutomaticSearch,
     hasDownloadClients,
     setGlobalStatus,
     t,
@@ -2001,26 +1995,22 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const handleRunSeasonSearch = React.useCallback(
     async (collection: TitleCollection) => {
       if (!title) return;
-      const seasonNum = parseInt(collection.collectionIndex?.trim().replace(/\D+/g, "") || "0", 10);
-      if (!seasonNum) return;
+      const seasonNum = parseSearchSeason(collection.collectionIndex);
+      if (seasonNum === null) {
+        setGlobalStatus(t("wanted.searchInvalidSeason"));
+        return;
+      }
 
       setSeasonSearchLoadingByCollection((prev) => ({ ...prev, [collection.id]: true }));
       try {
-        // A season search is the interactive job scoped to one season.
-        const { error } = await client
-          .mutation(triggerAcquisitionSearchMutation, {
-            input: { titleId: title.id, seasonNumber: seasonNum },
-          })
-          .toPromise();
-        if (error) throw error;
-        setGlobalStatus(t("wanted.searchJobStarted"));
+        await startAutomaticSearch(title.id, seasonNum);
       } catch (error: unknown) {
         setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
       } finally {
         setSeasonSearchLoadingByCollection((prev) => ({ ...prev, [collection.id]: false }));
       }
     },
-    [client, setGlobalStatus, t, title],
+    [startAutomaticSearch, setGlobalStatus, t, title],
   );
 
   const handleQueueFromSeasonSearch = React.useCallback(
@@ -2136,11 +2126,15 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
         onOpenManualImport={handleOpenManualImport}
         initialEpisodeId={initialEpisodeId}
         seasonSearchResultsByCollection={seasonSearchResultsByCollection}
-        seasonSearchLoadingByCollection={seasonSearchLoadingByCollection}
+        seasonSearchLoadingByCollection={Object.fromEntries(collections.map((collection) => {
+          const season = parseSearchSeason(collection.collectionIndex);
+          return [collection.id, seasonSearchLoadingByCollection[collection.id] === true ||
+            (!!title && season !== null && isSearching(title.id, season))];
+        }))}
         onRunSeasonSearch={handleRunSeasonSearch}
         onQueueFromSeasonSearch={handleQueueFromSeasonSearch}
         monitoredUpdating={monitoredUpdating}
-        searchMonitoredLoading={searchMonitoredLoading}
+        searchMonitoredLoading={searchMonitoredLoading || (!!title && isSearching(title.id))}
         onRefreshAndScan={handleRefreshAndScan}
         refreshAndScanLoading={refreshAndScanLoading}
         onRequestDeleteTitle={handleRequestDeleteTitle}

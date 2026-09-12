@@ -799,7 +799,10 @@ impl GrabProposal {
 /// Returns `(committed, set_aside)` for the walk's summary line; a proposal
 /// whose submissions all failed is folded into `stats` as a failed work item,
 /// which is what an interactive job's terminal status reads.
-#[expect(clippy::too_many_arguments, reason = "arbitration uses the same explicit cycle inputs as the title walk")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "arbitration uses the same explicit cycle inputs as the title walk"
+)]
 async fn arbitrate_and_commit_title_grabs(
     app: &AppUseCase,
     title: &Title,
@@ -856,16 +859,9 @@ async fn arbitrate_and_commit_title_grabs(
         }
 
         let mut failures = GrabFailureTally::default();
-        let grabbed = commit_grab_proposal(
-            app,
-            title,
-            proposal,
-            cycle,
-            dl_snapshot,
-            now,
-            &mut failures,
-        )
-        .await;
+        let grabbed =
+            commit_grab_proposal(app, title, proposal, cycle, dl_snapshot, now, &mut failures)
+                .await;
         stats.record_grab_failures(failures);
         if !grabbed.is_empty() {
             committed += 1;
@@ -1033,7 +1029,10 @@ impl AcquisitionWalkIntent {
     /// `None` is the operator lane: the search client admits it through the
     /// interactive semaphore, skips the background corpus reuse, and the
     /// scheduler bypasses destination cooldown for it.
-    fn background_value(self, target: &crate::acquisition::targets::AcquisitionTarget) -> Option<f64> {
+    fn background_value(
+        self,
+        target: &crate::acquisition::targets::AcquisitionTarget,
+    ) -> Option<f64> {
         match self {
             Self::Interactive => None,
             Self::Background => Some(if target.is_hot {
@@ -1187,7 +1186,8 @@ fn sort_title_work_indices(
     targets: &[crate::acquisition::targets::AcquisitionTarget],
     indices: &mut [usize],
 ) {
-    indices.sort_by_key(|index| crate::acquisition::targets::scope_walk_order_key(&targets[*index]));
+    indices
+        .sort_by_key(|index| crate::acquisition::targets::scope_walk_order_key(&targets[*index]));
 }
 
 /// A target's season number, when it names a real season (0 is the specials /
@@ -1217,7 +1217,11 @@ fn build_background_acquisition_title_work(
     let mut indices_by_title = HashMap::<String, Vec<usize>>::new();
     for &target_index in selected_indices {
         if let Some(season) = season_filter
-            && packable_season_for_target(&targets[target_index]) != Some(season)
+            && targets[target_index]
+                .season_number
+                .as_deref()
+                .and_then(|value| value.trim().parse::<u32>().ok())
+                != Some(season)
         {
             continue;
         }
@@ -1743,6 +1747,13 @@ async fn commit_series_pack_proposal(
             restore_standby_releases(app, anchor, &preserved_standby).await;
             continue;
         };
+        if let Err(error) = app
+            .ensure_acquisition_scope_unpaused(&title.id, &candidate_scope)
+            .await
+        {
+            restore_standby_releases(app, anchor, &preserved_standby).await;
+            return Err(error);
+        }
         let outcome = try_saved_candidates(
             app,
             anchor,
@@ -1859,6 +1870,8 @@ async fn commit_season_pack_proposal(
             let download_id = scryer_domain::download_identity::DownloadId::new();
             let submission_scope =
                 collection_download_submission_scope_for_wanted_item(item, episode.as_ref());
+            app.ensure_acquisition_scope_unpaused(&title.id, &submission_scope)
+                .await?;
 
             let canonical_result = app
                 .submit_canonical_download(CanonicalDownloadSubmissionIntent {
@@ -2538,7 +2551,11 @@ where
 
         session.stats.stages += 1;
         on_stage(&work.kind, target);
-        if session.stats.stages.is_multiple_of(ACQUISITION_SLICE_YIELD_INTERVAL) {
+        if session
+            .stats
+            .stages
+            .is_multiple_of(ACQUISITION_SLICE_YIELD_INTERVAL)
+        {
             tokio::task::yield_now().await;
         }
     }
@@ -2669,17 +2686,56 @@ impl Drop for InteractiveWalkLease {
 /// instant. Holding the lock is what lets this walk use its own coordinator —
 /// two walks over one title would each hold their own claim set and could both
 /// commit a pack.
+#[cfg(test)]
 pub(crate) async fn run_interactive_title_acquisition_walk<F>(
     app: &AppUseCase,
     title_id: &str,
     season_filter: Option<u32>,
     scope_keys: Option<&HashSet<String>>,
     cancellation: tokio_util::sync::CancellationToken,
+    on_progress: F,
+) -> AppResult<TitleWalkStats>
+where
+    F: FnMut(AcquisitionWalkProgress),
+{
+    run_interactive_title_acquisition_walk_with_monitoring(
+        app,
+        title_id,
+        season_filter,
+        scope_keys,
+        true,
+        cancellation,
+        on_progress,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn run_interactive_title_acquisition_walk_with_monitoring<F>(
+    app: &AppUseCase,
+    title_id: &str,
+    season_filter: Option<u32>,
+    scope_keys: Option<&HashSet<String>>,
+    respect_title_monitoring: bool,
+    cancellation: tokio_util::sync::CancellationToken,
     mut on_progress: F,
 ) -> AppResult<TitleWalkStats>
 where
     F: FnMut(AcquisitionWalkProgress),
 {
+    if !respect_title_monitoring {
+        if app.location_owned_title_ids().await?.contains(title_id) {
+            return Err(AppError::Validation(
+                "This title is being moved. Search is available when the move finishes.".into(),
+            ));
+        }
+        let excluded = app.non_wanted_state_scope_keys().await?;
+        if scope_keys
+            .is_some_and(|keys| !keys.is_empty() && keys.iter().all(|key| excluded.contains(key)))
+        {
+            return Err(AppError::Validation("The matching episodes are paused or already downloading. Resume paused acquisition or wait for the download to finish.".into()));
+        }
+    }
     let title = app
         .services
         .catalog
@@ -2690,13 +2746,11 @@ where
 
     let now = Utc::now();
     let targets = app
-        .derive_acquisition_targets_for_title(&now, Some(title_id))
+        .derive_acquisition_targets_for_search(&now, Some(title_id), respect_title_monitoring)
         .await?
         .into_iter()
         .filter(|target| target.title_id == title_id)
-        .filter(|target| {
-            scope_keys.is_none_or(|keys| keys.contains(target.scope_key.as_str()))
-        })
+        .filter(|target| scope_keys.is_none_or(|keys| keys.contains(target.scope_key.as_str())))
         .collect::<Vec<_>>();
     if targets.is_empty() {
         return Ok(TitleWalkStats::default());
@@ -2765,6 +2819,23 @@ where
     };
     if cancellation.is_cancelled() {
         return Ok(TitleWalkStats::default());
+    }
+
+    // The title lock may have been held for an entire background search. Do
+    // not spend queries on a plan whose scopes were paused while we waited.
+    let excluded = app.non_wanted_state_scope_keys().await?;
+    if targets
+        .iter()
+        .all(|target| excluded.contains(&target.scope_key))
+    {
+        return Err(AppError::Validation(
+            "The matching episodes are paused or already downloading. Resume paused acquisition or wait for the download to finish.".into(),
+        ));
+    }
+    if app.location_owned_title_ids().await?.contains(title_id) {
+        return Err(AppError::Validation(
+            "This title is being moved. Search is available when the move finishes.".into(),
+        ));
     }
 
     // Resolved but not read by an interactive walk (see `AcquisitionWalkIntent`);
@@ -2896,6 +2967,12 @@ async fn process_single_target(
         }
     };
     let item = &mut item;
+    if item.status == AcquisitionScopeStatus::Paused {
+        return Err(AppError::Validation(
+            "Acquisition was paused while this search was waiting. Resume it before searching."
+                .into(),
+        ));
+    }
 
     // Item-aware gate: skip only when an active/recent submission blocks this
     // wanted item, not every sibling episode on the same title.
@@ -4395,6 +4472,8 @@ async fn commit_scope_grab(
         } else {
             direct_download_submission_scope_for_wanted_item(item, episode.as_ref())
         };
+        app.ensure_acquisition_scope_unpaused(&title.id, &submission_scope)
+            .await?;
 
         let canonical_result = app
             .submit_canonical_download(CanonicalDownloadSubmissionIntent {
@@ -5009,9 +5088,7 @@ pub async fn start_background_acquisition_poller(
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = outcome;
         })
         .await;
-        *sink
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        *sink.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     // Bounded re-arm for a scope whose every uncovered indexer was cooling
@@ -5743,7 +5820,8 @@ mod task_runner_tests {
             background_acquisition_episode_target("synthetic-title", 1, 1),
             background_acquisition_episode_target("synthetic-title", 2, 2),
         ];
-        let ready_titles = build_background_acquisition_title_work(&targets, &[0, 1, 2, 3, 4], None);
+        let ready_titles =
+            build_background_acquisition_title_work(&targets, &[0, 1, 2, 3, 4], None);
 
         let title_work = ready_titles.front().expect("title work");
         let scope_order = title_work
@@ -5810,8 +5888,7 @@ mod task_runner_tests {
             background_acquisition_episode_target("synthetic-title", 2, 2),
             background_acquisition_episode_target("synthetic-title", 2, 1),
         ];
-        let ready_titles =
-            build_background_acquisition_title_work(&targets, &[0, 1, 2], Some(2));
+        let ready_titles = build_background_acquisition_title_work(&targets, &[0, 1, 2], Some(2));
 
         let title_work = ready_titles.front().expect("title work");
         let kinds = title_work
@@ -5837,6 +5914,33 @@ mod task_runner_tests {
                 .collect::<Vec<_>>(),
             vec![2, 1],
             "only season 2 scopes, in episode order"
+        );
+    }
+
+    #[test]
+    fn specials_scoped_title_queue_keeps_episode_searches_without_pack_stages() {
+        let targets = vec![
+            background_acquisition_episode_target("synthetic-title", 1, 1),
+            background_acquisition_episode_target("synthetic-title", 0, 2),
+            background_acquisition_episode_target("synthetic-title", 0, 1),
+        ];
+        let ready_titles = build_background_acquisition_title_work(&targets, &[0, 1, 2], Some(0));
+        let title_work = ready_titles
+            .front()
+            .expect("specials must remain searchable");
+        assert!(
+            title_work
+                .ready
+                .iter()
+                .all(|work| matches!(work.kind, BackgroundAcquisitionWorkKind::Scope))
+        );
+        assert_eq!(
+            title_work
+                .ready
+                .iter()
+                .map(|work| work.target_index)
+                .collect::<Vec<_>>(),
+            vec![2, 1]
         );
     }
 
