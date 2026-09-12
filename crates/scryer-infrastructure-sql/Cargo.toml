@@ -12,8 +12,8 @@ serde = { workspace = true }
 sqlx = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 blake3 = "1"
-zstd = { version = "0.13", default-features = false, features = ["zdict_builder"] }
+zstd = { version = "0.14", default-features = false, features = ["zdict_builder"] }

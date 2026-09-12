@@ -32,10 +32,10 @@ tracing = { workspace = true }
 unicode-normalization = "0.1"
 url = "2"
 uuid = { workspace = true }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 zune-core = { version = "=0.5.3", optional = true }
 
 [dev-dependencies]
 scryer-infrastructure-datastore = { path = "../scryer-infrastructure-datastore" }
 tempfile = "3"
-zstd = { version = "0.13", default-features = false, features = ["zdict_builder"] }
+zstd = { version = "0.14", default-features = false, features = ["zdict_builder"] }
