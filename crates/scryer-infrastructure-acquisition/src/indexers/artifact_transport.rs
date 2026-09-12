@@ -552,6 +552,7 @@ impl IndexerArtifactTransport {
         )
         .await
         .map_err(|_| {
+            tally.note_result(IndexerRequestResult::NoResponse);
             AppError::DownloadSubmitUnavailable(
                 solver::solver_error_message(provider, solver::SolverErrorKind::Unreachable).into(),
             )
@@ -568,15 +569,31 @@ impl IndexerArtifactTransport {
         let body = read_body(response, SOLVER_RESPONSE_MAX_BYTES)
             .await
             .map_err(|_| {
+                tally.note_result(IndexerRequestResult::NoResponse);
                 AppError::DownloadSubmitUnavailable(
                     solver::solver_error_message(provider, solver::SolverErrorKind::Unreadable)
                         .into(),
                 )
             })?;
-        let solution = solver::parse_solver_solution(&body)
-            .map_err(|e| AppError::DownloadSubmitUnavailable(e.message(provider).into()))?;
+        let solution = solver::parse_solver_solution(&body).map_err(|e| {
+            tally.note_result(IndexerRequestResult::NoResponse);
+            AppError::DownloadSubmitUnavailable(e.message(provider).into())
+        })?;
         solver::SolvedSessionCache::shared().store_solution(&proxy.id, url, &solution);
         let solution_status = solution.status.unwrap_or(status.as_u16());
+        tally.note_response(&CapturedIndexerHttpResponse {
+            status: solution_status,
+            headers: Vec::new(),
+            body: solution
+                .response
+                .as_deref()
+                .unwrap_or_default()
+                .as_bytes()
+                .iter()
+                .take(64 * 1024)
+                .copied()
+                .collect(),
+        });
         if solution_status == 429
             || solver::solved_body_looks_rate_limited(
                 solution.response.as_deref().unwrap_or_default().as_bytes(),
@@ -753,9 +770,27 @@ impl IndexerArtifactTransport {
             )
             .await
             .map_err(|_| {
+                tally.note_result(IndexerRequestResult::NoResponse);
                 AppError::DownloadSubmitUnavailable("The download artifact fetch timed out.".into())
             })?
             .map_err(|error| map_artifact_outbound_error_via(name, tally, error, egress))?;
+            let mut captured = CapturedIndexerHttpResponse {
+                status: response.status().as_u16(),
+                headers: response
+                    .headers()
+                    .iter()
+                    .map(
+                        |(key, value)| scryer_application::CapturedIndexerHttpHeader {
+                            name: key.to_string(),
+                            value: value.as_bytes().to_vec(),
+                        },
+                    )
+                    .collect(),
+                body: Vec::new(),
+            };
+            if !response.status().is_success() {
+                tally.note_response(&captured);
+            }
             if response.status().is_redirection() {
                 if hops == 5 {
                     return Err(AppError::Validation(
@@ -817,10 +852,15 @@ impl IndexerArtifactTransport {
             let final_url = Some(response.url().to_string());
             let headers = selected_headers(&response);
             let bytes = read_body(response, ARTIFACT_MAX_BYTES).await.map_err(|_| {
+                tally.note_result(IndexerRequestResult::NoResponse);
                 AppError::DownloadSubmitUnavailable(
                     "Scryer could not read the download artifact.".into(),
                 )
             })?;
+            captured
+                .body
+                .extend_from_slice(&bytes[..bytes.len().min(64 * 1024)]);
+            tally.note_response(&captured);
             return Ok((bytes, headers, final_url));
         }
         Err(AppError::Validation(
@@ -1310,15 +1350,21 @@ fn parse_bencode_dict(
 }
 
 fn parse_bencode_string(bytes: &[u8], offset: usize) -> Result<(usize, usize, usize), ()> {
-    let colon = bytes[offset..]
+    let colon = bytes
+        .get(offset..)
+        .ok_or(())?
         .iter()
         .position(|b| *b == b':')
         .map(|p| offset + p)
         .ok_or(())?;
-    if colon == offset {
+    let length_token = &bytes[offset..colon];
+    if length_token.is_empty()
+        || !length_token.iter().all(u8::is_ascii_digit)
+        || (length_token.len() > 1 && length_token[0] == b'0')
+    {
         return Err(());
     }
-    let length = std::str::from_utf8(&bytes[offset..colon])
+    let length = std::str::from_utf8(length_token)
         .ok()
         .and_then(|v| v.parse::<usize>().ok())
         .ok_or(())?;
@@ -2003,8 +2049,10 @@ mod tests {
         assert!(error.to_string().contains("redirect looped"));
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn cross_origin_redirect_strips_session_headers() {
+        let recorder = ResultRecorder::default();
+        let _recording = metrics::set_default_local_recorder(&recorder);
         let target = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/final"))
@@ -2048,10 +2096,14 @@ mod tests {
             .expect("fetch succeeds");
         let target_request = target.received_requests().await.unwrap().pop().unwrap();
         assert!(target_request.headers.get("cookie").is_none());
+        drop(tally);
+        assert_request_outcomes(&recorder, &["http_302", "success"]);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn quota_response_with_assigned_solver_does_not_dispatch_solver() {
+        let recorder = ResultRecorder::default();
+        let _recording = metrics::set_default_local_recorder(&recorder);
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/grab"))
@@ -2125,6 +2177,8 @@ mod tests {
         ));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         assert_eq!(stats.sent.load(Ordering::SeqCst), 1);
+        drop(tally);
+        assert_request_outcomes(&recorder, &["newznab_request_limit_reached"]);
     }
 
     #[tokio::test]
@@ -2223,8 +2277,10 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn assigned_solver_uses_successful_direct_artifact_without_solver_post() {
+        let recorder = ResultRecorder::default();
+        let _recording = metrics::set_default_local_recorder(&recorder);
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/grab"))
@@ -2293,10 +2349,14 @@ mod tests {
         assert!(matches!(artifact, ResolvedDownloadArtifact::Nzb { .. }));
         assert_eq!(server.received_requests().await.unwrap().len(), 1);
         assert_eq!(stats.sent.load(Ordering::SeqCst), 1);
+        drop(tally);
+        assert_request_outcomes(&recorder, &["success"]);
     }
 
-    #[tokio::test]
+    #[tokio::test(flavor = "current_thread")]
     async fn solver_post_counts_as_an_indexer_request_alongside_direct_grabs() {
+        let recorder = ResultRecorder::default();
+        let _recording = metrics::set_default_local_recorder(&recorder);
         let server = MockServer::start().await;
         Mock::given(method("GET"))
             .and(path("/grab"))
@@ -2384,6 +2444,28 @@ mod tests {
             stats.sent.load(Ordering::SeqCst),
             3,
             "two direct grabs plus one solver-relayed grab each spend indexer quota"
+        );
+        drop(tally);
+        assert_request_outcomes(
+            &recorder,
+            &["http_server_error", "http_server_error", "success"],
+        );
+    }
+
+    fn assert_request_outcomes(recorder: &ResultRecorder, expected: &[&str]) {
+        let actual: Vec<_> = recorder
+            .0
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(label, count)| (label.clone(), count.load(Ordering::Relaxed)))
+            .collect();
+        assert_eq!(
+            actual,
+            expected
+                .iter()
+                .map(|label| (label.to_string(), 1))
+                .collect::<Vec<_>>()
         );
     }
 
@@ -2507,6 +2589,25 @@ mod tests {
         }
     }
 
+    #[test]
+    fn torrent_classification_rejects_noncanonical_string_lengths() {
+        for bytes in [
+            &b"d04:infode"[..],
+            b"d+4:infode",
+            b"d 4:infode",
+            b"d4:infod4:name04:testee",
+            b"d4:infod4:name00:ee",
+            b"d4:infod04:name4:testee",
+            b"d4:infod4:name999999999999999999999999999999:testee",
+            b"d4:infod4:name4:tes",
+        ] {
+            assert!(classify("fixture", None, None, bytes.to_vec(), None).is_err());
+        }
+        for bytes in [&b"d4:infod4:name0:ee"[..], b"d4:infod4:name4:testee"] {
+            assert!(torrent_hash(bytes).is_some());
+        }
+    }
+
     struct ResolvingIndexerClient {
         calls: std::sync::Mutex<Vec<String>>,
         artifact: Option<ResolvedDownloadArtifact>,
@@ -2604,7 +2705,7 @@ mod tests {
 
         assert_eq!(
             client.calls.lock().unwrap().as_slice(),
-            &[download_url.clone()]
+            std::slice::from_ref(&download_url)
         );
         assert!(matches!(
             response,
