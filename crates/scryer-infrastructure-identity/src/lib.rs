@@ -1,5 +1,6 @@
 mod emby;
 pub mod external_identity;
+mod jellyfin;
 pub mod oauth;
 pub mod users;
 

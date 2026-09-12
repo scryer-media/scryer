@@ -228,17 +228,24 @@ impl AppUseCase {
             .into_iter()
             .map(|title| (title.title_id.clone(), title))
             .collect::<HashMap<_, _>>();
-        let requested_facets = title_ids
+        // Roots are resolved per library, not per facet: a title in a
+        // non-default library lives under that library's roots, and checking
+        // it against the facet default's roots refuses every such delete.
+        let requested_libraries = title_ids
             .iter()
-            .filter_map(|title_id| titles_by_id.get(title_id).map(|title| title.facet.clone()))
+            .filter_map(|title_id| {
+                titles_by_id
+                    .get(title_id)
+                    .map(|title| (title.library_id.clone(), title.facet.clone()))
+            })
             .collect::<HashSet<_>>();
-        let mut root_folders_by_facet = HashMap::new();
-        for facet in requested_facets {
+        let mut root_folders_by_library = HashMap::new();
+        for (library_id, facet) in requested_libraries {
             let root_folders = self
-                .root_folders_for_facet(&facet)
+                .root_folders_for_library(&library_id, &facet)
                 .await
                 .map_err(|error| error.to_string());
-            root_folders_by_facet.insert(facet, root_folders);
+            root_folders_by_library.insert(library_id, root_folders);
         }
         let tracked_title_folders = titles_by_id
             .values()
@@ -247,7 +254,7 @@ impl AppUseCase {
             .collect::<Vec<_>>();
 
         let titles_by_id = Arc::new(titles_by_id);
-        let root_folders_by_facet = Arc::new(root_folders_by_facet);
+        let root_folders_by_library = Arc::new(root_folders_by_library);
         let tracked_title_folders = Arc::new(tracked_title_folders);
 
         for chunk in title_ids.chunks(BULK_DELETE_PREVIEW_CONCURRENCY) {
@@ -257,7 +264,7 @@ impl AppUseCase {
                 let actor = actor.clone();
                 let title_id = title_id.clone();
                 let titles_by_id = Arc::clone(&titles_by_id);
-                let root_folders_by_facet = Arc::clone(&root_folders_by_facet);
+                let root_folders_by_library = Arc::clone(&root_folders_by_library);
                 let tracked_title_folders = Arc::clone(&tracked_title_folders);
                 tasks.push(tokio::spawn(async move {
                     let result = app
@@ -265,7 +272,7 @@ impl AppUseCase {
                             &actor,
                             &title_id,
                             &titles_by_id,
-                            &root_folders_by_facet,
+                            &root_folders_by_library,
                             &tracked_title_folders,
                         )
                         .await;
@@ -294,7 +301,7 @@ impl AppUseCase {
         actor: &User,
         title_id: &str,
         titles_by_id: &HashMap<String, TitleDeletePreviewInfo>,
-        root_folders_by_facet: &HashMap<MediaFacet, Result<Vec<RootFolderEntry>, String>>,
+        root_folders_by_library: &HashMap<String, Result<Vec<RootFolderEntry>, String>>,
         tracked_title_folders: &[TrackedTitleFolder],
     ) -> AppResult<DeletePreview> {
         let title = titles_by_id
@@ -307,18 +314,18 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
-        let root_folders = match root_folders_by_facet.get(&title.facet) {
+        let root_folders = match root_folders_by_library.get(&title.library_id) {
             Some(Ok(root_folders)) => root_folders.clone(),
             Some(Err(error)) => {
                 return Err(AppError::Repository(format!(
-                    "failed to load {} root folders for delete preview: {error}",
-                    title.facet.as_str()
+                    "failed to load library {} root folders for delete preview: {error}",
+                    title.library_id
                 )));
             }
             None => {
                 return Err(AppError::Repository(format!(
-                    "missing {} root folders for delete preview",
-                    title.facet.as_str()
+                    "missing library {} root folders for delete preview",
+                    title.library_id
                 )));
             }
         };
@@ -760,7 +767,9 @@ impl AppUseCase {
             .get_by_id(title_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("title {}", title_id)))?;
-        let root_folders = self.root_folders_for_facet(&title.facet).await?;
+        let root_folders = self
+            .root_folders_for_library(&title.library_id, &title.facet)
+            .await?;
         let other_titles = self
             .services
             .catalog

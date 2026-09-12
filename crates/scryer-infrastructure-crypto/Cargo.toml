@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-crypto"
-version = "0.19.16"
+version = "0.19.17"
 edition.workspace = true
 publish = false
 

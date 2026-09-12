@@ -2161,3 +2161,70 @@ async fn catalog_admin_can_open_titles_in_library_created_after_grant_seeding() 
         other => panic!("expected unauthorized without a grant, got {other:?}"),
     }
 }
+
+#[tokio::test]
+async fn delete_preview_checks_the_title_folder_against_its_own_library_roots() {
+    let (app, user) = bootstrap();
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let library = app
+        .create_library(
+            &user,
+            MediaFacet::Anime,
+            "Anime Archive".to_string(),
+            vec![LibraryRootDraft {
+                path: tempdir.path().to_string_lossy().to_string(),
+                is_default: true,
+            }],
+            None,
+        )
+        .await
+        .expect("create a non-default anime library");
+    let title_dir = tempdir.path().join("Archived Serial");
+    std::fs::create_dir(&title_dir).expect("create title folder");
+    std::fs::write(
+        title_dir.join("Archived Serial - S01E01.mkv"),
+        vec![0_u8; 64],
+    )
+    .expect("write episode file");
+    let created = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Archived Serial".into(),
+                facet: MediaFacet::Anime,
+                monitored: false,
+                ..Default::default()
+            },
+            library.id.clone(),
+        )
+        .await
+        .expect("create title in the non-default library");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&created.title.id, title_dir.to_string_lossy().as_ref())
+        .await
+        .expect("set title folder");
+
+    // The folder sits under the title's own library root, not under the
+    // facet default library's root; the guard has to look at the former.
+    let preview = app
+        .preview_delete_title_files(&user, &created.title.id)
+        .await
+        .expect("preview a delete under the title's own library root");
+    assert_eq!(preview.media_count, 1);
+
+    let bulk = app
+        .preview_delete_titles_files(&user, std::slice::from_ref(&created.title.id))
+        .await
+        .expect("bulk preview");
+    assert_eq!(bulk.items.len(), 1);
+    assert_eq!(bulk.items[0].error, None);
+    assert_eq!(
+        bulk.items[0]
+            .preview
+            .as_ref()
+            .map(|preview| preview.media_count),
+        Some(1)
+    );
+}
