@@ -42,6 +42,7 @@ import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useActiveDownloadTitleIds } from "@/lib/hooks/use-active-download-title-ids";
+import { useDownloadQueue } from "@/lib/hooks/use-download-queue";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -67,6 +68,7 @@ import {
   type MediaFileOnDisk,
 } from "@/components/common/media-files-on-disk-panel";
 import { TitleFilesOnDiskRail } from "@/components/common/title-files-on-disk-rail";
+import { MovieOverviewDownloadList } from "@/components/common/download-queue-overview";
 import {
   MediaRenamePlanPanel,
   type MediaRenamePlan,
@@ -189,6 +191,10 @@ import { handleFixTitleMatchComplete } from "@/lib/fix-title-match";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 
 type Facet = "MOVIE" | "SERIES" | "ANIME";
+
+// Queue activity is supplemental context for a title overview. A temporary
+// queue read failure must not interrupt the rest of the catalog page.
+const ignoreTitleOverviewQueueError = () => {};
 
 function titleTableColumnLabel(
   key: TitleTableColumnKey,
@@ -1176,6 +1182,16 @@ function TitleContextPanel({
   const [fixMatchOpen, setFixMatchOpen] = React.useState(false);
   const releaseSearchOpen = title !== null && releaseSearchTitleId === title.id;
   const releaseSearchActionLoading = releaseSearchOpen && releaseSearchLoading;
+  const movieTitleId = title?.facet === "MOVIE" ? title.id : null;
+  const { queueItems: movieDownloadQueueItems } = useDownloadQueue({
+    enabled: movieTitleId !== null,
+    includeAllActivity: true,
+    includeHistoryOnly: false,
+    includeImportActivity: true,
+    titleId: movieTitleId,
+    activityFilter: "ALL",
+    onErrorStatus: ignoreTitleOverviewQueueError,
+  });
   // The action bar only carries mutations, so a viewer without manage rights
   // on this title's library gets no bar rather than a row of failing buttons.
   const canManageThisTitle =
@@ -1655,6 +1671,20 @@ function TitleContextPanel({
         ) : null}
 
         <div className="mt-3 space-y-3">
+          {movieDownloadQueueItems.length > 0 ? (
+            <Card>
+              <CardContent className="p-4">
+                <h2 className="text-base font-semibold text-card-foreground">
+                  {t("activity.activity")}
+                </h2>
+                <MovieOverviewDownloadList
+                  items={movieDownloadQueueItems}
+                  className="mt-3"
+                />
+              </CardContent>
+            </Card>
+          ) : null}
+
           <TitleFilesOnDiskRail
             action={
               <Button
