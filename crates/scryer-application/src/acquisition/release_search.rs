@@ -177,6 +177,8 @@ pub(crate) enum ReleaseAutoDecisionCode {
     TitleMismatch,
     EpisodeMismatch,
     EpisodeNotMonitored,
+    AcquisitionPaused,
+    AcquisitionStateUnavailable,
     CategoryMismatch,
     AmbiguousIdentity,
     QualityBlocked,
@@ -211,6 +213,8 @@ impl ReleaseAutoDecisionCode {
             "title_mismatch" => Some(Self::TitleMismatch),
             "episode_mismatch" => Some(Self::EpisodeMismatch),
             "episode_not_monitored" => Some(Self::EpisodeNotMonitored),
+            "acquisition_paused" => Some(Self::AcquisitionPaused),
+            "acquisition_state_unavailable" => Some(Self::AcquisitionStateUnavailable),
             // Deliberately the same string the pre-submission gate records on
             // failed attempts, so both category vetoes read alike.
             "category_mismatch" => Some(Self::CategoryMismatch),
@@ -245,6 +249,8 @@ impl ReleaseAutoDecisionCode {
             Self::TitleMismatch => "title_mismatch",
             Self::EpisodeMismatch => "episode_mismatch",
             Self::EpisodeNotMonitored => "episode_not_monitored",
+            Self::AcquisitionPaused => "acquisition_paused",
+            Self::AcquisitionStateUnavailable => "acquisition_state_unavailable",
             Self::CategoryMismatch => "category_mismatch",
             Self::AmbiguousIdentity => "ambiguous_identity",
             Self::QualityBlocked => "quality_blocked",
@@ -279,6 +285,10 @@ impl ReleaseAutoDecisionCode {
             // not match" and "one of these episodes is unmonitored" call for
             // different operator actions.
             Self::EpisodeNotMonitored => "release covers an episode this library is not monitoring",
+            Self::AcquisitionPaused => "acquisition is paused for content covered by this release",
+            Self::AcquisitionStateUnavailable => {
+                "acquisition state could not be checked; try again"
+            }
             Self::CategoryMismatch => "indexer category contradicts the target title",
             Self::AmbiguousIdentity => {
                 "canonical title is ambiguous and no disambiguator was present"
@@ -2075,6 +2085,61 @@ impl AppUseCase {
         search_title
     }
 
+    async fn paused_acquisition_scopes(&self, title_id: &str) -> AppResult<Vec<SubmissionScope>> {
+        Ok(self
+            .services
+            .workflow
+            .acquisition_scope_states
+            .list_acquisition_scope_states(crate::AcquisitionScopeStatesQuery {
+                title_id: Some(title_id.to_string()),
+                statuses: vec![crate::AcquisitionScopeStatus::Paused.as_str().to_string()],
+                limit: i64::MAX,
+                ..Default::default()
+            })
+            .await?
+            .into_iter()
+            .map(|row| {
+                SubmissionScope::from_persisted(
+                    title_id,
+                    row.episode_id,
+                    row.collection_id,
+                    row.series_movie_link_id,
+                    None,
+                )
+            })
+            .collect())
+    }
+
+    pub(crate) async fn ensure_acquisition_scope_unpaused(
+        &self,
+        title_id: &str,
+        scope: &SubmissionScope,
+    ) -> AppResult<()> {
+        let paused = self.paused_acquisition_scopes(title_id).await?;
+        if paused.is_empty() {
+            return Ok(());
+        }
+        let episodes = self
+            .services
+            .catalog
+            .shows
+            .list_episodes_for_title(title_id)
+            .await?;
+        if paused.iter().any(|paused_scope| {
+            crate::catalog_workflow::submission_scopes_overlap(
+                title_id,
+                paused_scope,
+                scope,
+                &episodes,
+            )
+        }) {
+            return Err(AppError::Validation(
+                "Acquisition is paused for content covered by this release. Resume it before searching.".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) async fn evaluate_search_results_for_subject(
         &self,
         title: &Title,
@@ -2291,7 +2356,39 @@ impl AppUseCase {
             unmonitored_episode_ids: &unmonitored_episode_ids,
         };
 
+        // Preserve discovery results, but refuse automatic admission of a pack
+        // or batch that includes a paused sibling outside the selected targets.
+        let paused_scopes = self.paused_acquisition_scopes(&title.id).await;
+        if let Err(error) = &paused_scopes {
+            tracing::warn!(title_id = title.id, %error, "automatic admission could not read acquisition pauses");
+        }
         for candidate in &mut results {
+            if paused_scopes.is_err() {
+                annotate_auto_decision(
+                    candidate,
+                    ReleaseAutoDecisionCode::AcquisitionStateUnavailable,
+                );
+                continue;
+            }
+            let scope = candidate
+                .coverage_scope
+                .as_ref()
+                .unwrap_or(&subject.submission_scope);
+            let paused = match &paused_scopes {
+                Ok(scopes) => scopes.iter().any(|paused_scope| {
+                    crate::catalog_workflow::submission_scopes_overlap(
+                        &title.id,
+                        paused_scope,
+                        scope,
+                        &catalog_episodes,
+                    )
+                }),
+                Err(_) => unreachable!("failed state read was handled above"),
+            };
+            if paused {
+                annotate_auto_decision(candidate, ReleaseAutoDecisionCode::AcquisitionPaused);
+                continue;
+            }
             if candidate.auto_decision_code.as_deref().is_some_and(|code| {
                 code == ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str()
                     || code == ReleaseAutoDecisionCode::AnimeNumberingAmbiguous.as_str()

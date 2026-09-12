@@ -307,11 +307,21 @@ impl AppUseCase {
         now: &DateTime<Utc>,
         title_id: Option<&str>,
     ) -> AppResult<Vec<AcquisitionTarget>> {
+        self.derive_missing_targets_for_search(now, title_id, true)
+            .await
+    }
+
+    async fn derive_missing_targets_for_search(
+        &self,
+        now: &DateTime<Utc>,
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
         let candidates = self
             .services
             .library
             .media_files
-            .list_missing_scope_candidates_for_title(title_id)
+            .list_missing_scope_candidates_for_search(title_id, respect_title_monitoring)
             .await?;
         let mut targets = Vec::new();
 
@@ -487,12 +497,13 @@ impl AppUseCase {
     /// Cutoff-upgrade targets across every library (§D1): scopes whose primary
     /// file sits strictly below the effective profile cutoff. Always cold — the
     /// file already plays, so upgrades drain at scheduler leisure.
-    async fn derive_cutoff_targets_for_title(
+    async fn derive_cutoff_targets_for_search(
         &self,
         title_id: Option<&str>,
+        respect_title_monitoring: bool,
     ) -> AppResult<Vec<AcquisitionTarget>> {
         let items = self
-            .compute_cutoff_unmet_items_for_title(None, None, title_id)
+            .compute_cutoff_unmet_items_for_search(None, None, title_id, respect_title_monitoring)
             .await?;
         let mut targets: Vec<AcquisitionTarget> = items
             .into_iter()
@@ -538,7 +549,10 @@ impl AppUseCase {
             .iter()
             .map(|target| target.scope_key.clone())
             .collect();
-        for target in self.derive_format_cutoff_targets(title_id).await? {
+        for target in self
+            .derive_format_cutoff_targets(title_id, respect_title_monitoring)
+            .await?
+        {
             if seen.insert(target.scope_key.clone()) {
                 targets.push(target);
             }
@@ -559,6 +573,7 @@ impl AppUseCase {
     async fn derive_format_cutoff_targets(
         &self,
         title_id: Option<&str>,
+        respect_title_monitoring: bool,
     ) -> AppResult<Vec<AcquisitionTarget>> {
         /// How many scopes are re-scored per batch. Each page is one media-file
         /// query plus one scoring context per distinct title on it.
@@ -567,7 +582,7 @@ impl AppUseCase {
         let libraries = self.services.catalog.libraries.list(None).await?;
         let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
         let titles = self
-            .monitored_titles_with_profiles(None, &library_ids, title_id)
+            .titles_with_profiles_for_search(None, &library_ids, title_id, respect_title_monitoring)
             .await?;
         let scored: Vec<(scryer_domain::Title, i32)> = titles
             .into_iter()
@@ -681,8 +696,37 @@ impl AppUseCase {
         now: &DateTime<Utc>,
         title_id: Option<&str>,
     ) -> AppResult<Vec<AcquisitionTarget>> {
-        let mut targets = self.derive_missing_targets_for_title(now, title_id).await?;
-        targets.extend(self.derive_cutoff_targets_for_title(title_id).await?);
+        self.derive_acquisition_targets_for_search(now, title_id, true)
+            .await
+    }
+
+    pub(crate) async fn derive_acquisition_candidates_for_search(
+        &self,
+        now: &DateTime<Utc>,
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
+        let mut targets = self
+            .derive_missing_targets_for_search(now, title_id, respect_title_monitoring)
+            .await?;
+        targets.extend(
+            self.derive_cutoff_targets_for_search(title_id, respect_title_monitoring)
+                .await?,
+        );
+        let mut seen = HashSet::new();
+        targets.retain(|target| seen.insert(target.scope_key.clone()));
+        Ok(targets)
+    }
+
+    pub(crate) async fn derive_acquisition_targets_for_search(
+        &self,
+        now: &DateTime<Utc>,
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
+    ) -> AppResult<Vec<AcquisitionTarget>> {
+        let mut targets = self
+            .derive_acquisition_candidates_for_search(now, title_id, respect_title_monitoring)
+            .await?;
         let locked_titles = self.location_owned_title_ids().await?;
         targets.retain(|target| !locked_titles.contains(&target.title_id));
 

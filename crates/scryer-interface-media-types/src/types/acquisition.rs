@@ -778,9 +778,19 @@ pub struct QueueBestReleaseInput {
     pub replace_in_progress: Option<bool>,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Explicit search behavior; omission preserves the existing Wanted selection.
+pub enum AcquisitionSearchIntentValue {
+    /// Explicit title or season search for missing content and permitted upgrades.
+    Automatic,
+}
+
 #[derive(InputObject)]
-/// Scope filters for a background acquisition search.
+/// Scope filters for an acquisition search. Omitted intent preserves Wanted behavior.
 pub struct TriggerAcquisitionSearchInput {
+    /// Optional explicit title/season search intent.
+    pub intent: Option<AcquisitionSearchIntentValue>,
     /// Wanted category to search, defaulting to missing items.
     pub wanted_kind: Option<WantedKindValue>,
     /// Optional facet restriction.
@@ -1509,6 +1519,8 @@ pub enum AcquisitionSearchJobStateValue {
 #[derive(SimpleObject, Clone)]
 /// Progress snapshot for a background acquisition search.
 pub struct AcquisitionSearchJobPayload {
+    /// Accepted job snapshot for shared live tracking; absent in legacy query projections.
+    pub job_run: Option<super::JobRunPayload>,
     /// Acquisition-search job ID.
     pub id: ID,
     /// Current job lifecycle state.

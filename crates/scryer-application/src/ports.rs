@@ -6082,6 +6082,16 @@ pub trait MediaFileRepository: Send + Sync {
         Ok(candidates)
     }
 
+    /// Explicit title searches may override title monitoring without changing it.
+    /// Episode and series-movie monitoring still apply.
+    async fn list_missing_scope_candidates_for_search(
+        &self,
+        title_id: Option<&str>,
+        _respect_title_monitoring: bool,
+    ) -> AppResult<MissingScopeCandidates> {
+        self.list_missing_scope_candidates_for_title(title_id).await
+    }
+
     async fn list_title_episode_progress_summaries(
         &self,
         title_ids: &[String],

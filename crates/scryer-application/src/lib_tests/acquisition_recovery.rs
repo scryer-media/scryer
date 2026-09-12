@@ -12111,6 +12111,370 @@ async fn a_cancelled_interactive_walk_stops_between_stages() {
 /// staged walk. A row-anchored request and a facet-wide sweep keep the flat
 /// per-scope `queue_best_release` path they have always had.
 #[tokio::test]
+async fn automatic_search_of_unmonitored_title_reaches_the_walk_without_changing_monitoring() {
+    let (app, title, indexer_client) = seed_recent_failed_season_pack_fixture().await;
+    app.services
+        .catalog
+        .titles
+        .update_monitored(&title.id, false)
+        .await
+        .unwrap();
+    let request = AcquisitionSearchRequest {
+        automatic: true,
+        title_id: Some(title.id.clone()),
+        ..Default::default()
+    };
+    let scopes = app
+        .resolve_acquisition_search_scopes(&test_admin_user(), &request)
+        .await
+        .unwrap();
+    assert!(!scopes.is_empty());
+    let crate::acquisition::wanted_views::AcquisitionSearchPlan::TitleWalk {
+        scope_keys: keys, ..
+    } = app.acquisition_search_plan(&request, scopes).await.unwrap()
+    else {
+        panic!("expected a title walk")
+    };
+    let stats =
+        crate::acquisition::workflow::run_interactive_title_acquisition_walk_with_monitoring(
+            &app,
+            &title.id,
+            None,
+            Some(&keys),
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            |_| {},
+        )
+        .await
+        .unwrap();
+    assert!(stats.stages > 0);
+    assert!(!indexer_client.searches.lock().await.is_empty());
+    assert!(
+        !app.services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .monitored
+    );
+}
+
+#[tokio::test]
+async fn automatic_search_validates_catalog_seasons_and_accepts_specials() {
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let app = app.with_test_overrides(|services| {
+        services.with_job_runs(Arc::new(RecordingJobRunRepo::default()))
+    });
+    let mut specials = app
+        .services
+        .catalog
+        .shows
+        .list_collections_for_title(&title.id)
+        .await
+        .unwrap()
+        .into_iter()
+        .next()
+        .unwrap();
+    specials.id = "automatic-search-specials".into();
+    specials.collection_index = "0".into();
+    specials.monitored = false;
+    app.services
+        .catalog
+        .shows
+        .create_collection(specials)
+        .await
+        .unwrap();
+    for season in [0, 7] {
+        app.resolve_acquisition_search_scopes(
+            &test_admin_user(),
+            &AcquisitionSearchRequest {
+                automatic: true,
+                title_id: Some(title.id.clone()),
+                season_number: Some(season),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a catalog season, including zero, is valid");
+    }
+    for season in [-1, 9876] {
+        assert!(
+            app.resolve_acquisition_search_scopes(
+                &test_admin_user(),
+                &AcquisitionSearchRequest {
+                    automatic: true,
+                    title_id: Some(title.id.clone()),
+                    season_number: Some(season),
+                    ..Default::default()
+                }
+            )
+            .await
+            .is_err()
+        );
+    }
+    let actor = test_admin_user();
+    let started = app
+        .start_acquisition_search_job(
+            &actor,
+            AcquisitionSearchRequest {
+                automatic: true,
+                title_id: Some(title.id.clone()),
+                season_number: Some(0),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let accepted: serde_json::Value =
+        serde_json::from_str(started.progress_json.as_deref().unwrap()).unwrap();
+    assert_eq!(accepted["search"]["intent"], "AUTOMATIC");
+    assert_eq!(accepted["search"]["seasonNumber"], 0);
+    let final_view = await_acquisition_search_job(&app, &actor, &started.id).await;
+    assert_eq!(final_view.state, "completed");
+    assert_eq!(final_view.total, 0);
+    let stored = app
+        .services
+        .events
+        .job_runs
+        .get_job_run(&started.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let finished: serde_json::Value =
+        serde_json::from_str(stored.progress_json.as_deref().unwrap()).unwrap();
+    assert_eq!(finished["outcome"], "no_eligible_work");
+    assert_eq!(finished["search"], accepted["search"]);
+}
+
+#[tokio::test]
+async fn automatic_search_preserves_pauses_and_single_job_admission() {
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let candidates = app
+        .services
+        .library
+        .media_files
+        .list_missing_scope_candidates()
+        .await
+        .unwrap();
+    let app = app.with_test_overrides(|services| {
+        services.with_media_files(Arc::new(MockMediaFileRepo {
+            missing_scope_candidates_override: Some(candidates),
+            ..Default::default()
+        }))
+    });
+    let actor = test_admin_user();
+    let request = AcquisitionSearchRequest {
+        automatic: true,
+        title_id: Some(title.id.clone()),
+        ..Default::default()
+    };
+    let lock = app
+        .runtime
+        .jobs
+        .acquisition_search_lock
+        .clone()
+        .lock_owned()
+        .await;
+    let error = app
+        .start_acquisition_search_job(&actor, request.clone())
+        .await
+        .unwrap_err();
+    assert!(error.to_string().contains("Another search is running"));
+    drop(lock);
+    let scopes = app
+        .resolve_acquisition_search_scopes(&actor, &request)
+        .await
+        .unwrap();
+    let crate::acquisition::wanted_views::AcquisitionSearchPlan::TitleWalk { scope_keys, .. } =
+        app.acquisition_search_plan(&request, scopes).await.unwrap()
+    else {
+        panic!("expected walk")
+    };
+    for key in scope_keys {
+        app.pause_wanted_item(&actor, &key).await.unwrap();
+    }
+    let result = app
+        .resolve_acquisition_search_scopes(&actor, &request)
+        .await;
+    assert!(matches!(result, Err(AppError::Validation(message)) if message.contains("paused")));
+    assert!(
+        app.start_acquisition_search_job(
+            &actor,
+            AcquisitionSearchRequest {
+                automatic: true,
+                ..Default::default()
+            }
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn automatic_search_rechecks_pauses_after_waiting_for_the_title() {
+    let (app, title, indexer) = seed_recent_failed_season_pack_fixture().await;
+    let keys: HashSet<_> = app
+        .derive_acquisition_targets_for_title(&Utc::now(), Some(&title.id))
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|target| target.scope_key)
+        .collect();
+    let held = app
+        .runtime
+        .acquisition
+        .title_walk_locks
+        .acquire(&title.id)
+        .await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let task_app = app.clone();
+    let title_id = title.id.clone();
+    let task_keys = keys.clone();
+    let walk = tokio::spawn(async move {
+        crate::acquisition::workflow::run_interactive_title_acquisition_walk_with_monitoring(
+            &task_app,
+            &title_id,
+            None,
+            Some(&task_keys),
+            false,
+            tokio_util::sync::CancellationToken::new(),
+            move |progress| {
+                let _ = tx.send(progress.stage_label);
+            },
+        )
+        .await
+    });
+    loop {
+        let label = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        if label.contains("waiting for") {
+            break;
+        }
+    }
+    for key in keys {
+        app.pause_wanted_item(&test_admin_user(), &key)
+            .await
+            .unwrap();
+    }
+    drop(held);
+    let result = walk.await.unwrap();
+    assert!(matches!(result, Err(AppError::Validation(message)) if message.contains("paused")));
+    assert!(
+        indexer.searches.lock().await.is_empty(),
+        "a paused wait must not dispatch searches"
+    );
+}
+
+#[tokio::test]
+async fn automatic_search_refuses_pack_coverage_of_a_paused_sibling_without_hiding_results() {
+    let (app, title, _) = seed_recent_failed_season_pack_fixture().await;
+    let episodes = app
+        .services
+        .catalog
+        .shows
+        .list_episodes_for_title(&title.id)
+        .await
+        .unwrap();
+    let mut subject = app
+        .resolve_release_search_subject_for_episode(&title, "7", "23")
+        .await
+        .unwrap();
+    let results = app
+        .search_and_evaluate_subject(
+            &title,
+            &subject,
+            &test_admin_user().id,
+            SearchMode::Auto,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !results.is_empty(),
+        "fixture supplies a discoverable release"
+    );
+    app.pause_wanted_item(&test_admin_user(), &format!("episode:{}", episodes[0].id))
+        .await
+        .unwrap();
+    let scopes = [
+        SubmissionScope::EpisodeSet {
+            episode_ids: episodes.iter().map(|episode| episode.id.clone()).collect(),
+        },
+        SubmissionScope::Collection {
+            collection_id: episodes[0].collection_id.clone().unwrap(),
+        },
+    ];
+    for scope in scopes {
+        subject.submission_scope = scope.clone();
+        let mut candidates = results.clone();
+        for candidate in &mut candidates {
+            candidate.coverage_scope = Some(scope.clone());
+        }
+        let evaluated = app
+            .evaluate_search_results_for_subject(&title, &subject, candidates, false)
+            .await;
+        assert_eq!(evaluated.len(), results.len(), "discovery remains visible");
+        assert!(
+            evaluated
+                .iter()
+                .all(|candidate| candidate.auto_decision_code.as_deref()
+                    == Some("acquisition_paused"))
+        );
+        assert!(
+            app.ensure_acquisition_scope_unpaused(&title.id, &scope)
+                .await
+                .is_err(),
+            "submission rechecks actual coverage"
+        );
+    }
+    app.ensure_acquisition_scope_unpaused(
+        &title.id,
+        &SubmissionScope::Episode {
+            episode_id: episodes[1].id.clone(),
+        },
+    )
+    .await
+    .unwrap();
+    let unpaused_subject = app
+        .resolve_release_search_subject_for_episode(
+            &title,
+            "7",
+            episodes[1].episode_number.as_deref().unwrap(),
+        )
+        .await
+        .unwrap();
+    let unpaused_results = app
+        .search_and_evaluate_subject(
+            &title,
+            &unpaused_subject,
+            &test_admin_user().id,
+            SearchMode::Auto,
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        unpaused_results
+            .iter()
+            .any(|candidate| candidate.auto_eligible == Some(true)),
+        "a paused sibling must not block a disjoint episode: {unpaused_results:?}"
+    );
+    assert!(
+        app.services
+            .workflow
+            .download_submissions
+            .list_for_title(&title.id)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
 async fn only_a_title_scoped_episodic_request_becomes_a_staged_walk() {
     use crate::acquisition::wanted_views::AcquisitionSearchPlan;
 

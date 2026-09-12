@@ -18,9 +18,23 @@ type AbandonLocationOperationPayload {
 }
 
 """
+Explicit search behavior; omission preserves the existing Wanted selection.
+"""
+enum AcquisitionSearchIntentValue {
+	"""
+	Explicit title or season search for missing content and permitted upgrades.
+	"""
+	AUTOMATIC
+}
+
+"""
 Progress snapshot for a background acquisition search.
 """
 type AcquisitionSearchJobPayload {
+	"""
+	Accepted job snapshot for shared live tracking; absent in legacy query projections.
+	"""
+	jobRun: JobRunPayload
 	"""
 	Acquisition-search job ID.
 	"""
@@ -27145,9 +27159,13 @@ input TrackedRulePackPriorityInput {
 }
 
 """
-Scope filters for a background acquisition search.
+Scope filters for an acquisition search. Omitted intent preserves Wanted behavior.
 """
 input TriggerAcquisitionSearchInput {
+	"""
+	Optional explicit title/season search intent.
+	"""
+	intent: AcquisitionSearchIntentValue
 	"""
 	Wanted category to search, defaulting to missing items.
 	"""

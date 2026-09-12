@@ -201,6 +201,12 @@ export function preferJobRunSnapshot(
   if (isTerminalJobRunStatus(existing.status) && !isTerminalJobRunStatus(incoming.status)) {
     return existing;
   }
+  if (existing.id === incoming.id && existing.jobKey === "ACQUISITION_SEARCH" &&
+      !isTerminalJobRunStatus(incoming.status)) {
+    const previous = isRecord(existing.progressJson) ? normalizeNumber(existing.progressJson.revision) : 0;
+    const next = isRecord(incoming.progressJson) ? normalizeNumber(incoming.progressJson.revision) : 0;
+    if (previous > next) return existing;
+  }
   if (
     existing.completedAt &&
     incoming.completedAt &&

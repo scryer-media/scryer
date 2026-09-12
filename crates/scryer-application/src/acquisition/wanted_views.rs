@@ -342,7 +342,7 @@ impl AppUseCase {
     /// Scope keys whose state row is paused or grabbed — excluded from the active
     /// derived view. One list query, keyed by the same scope identity the cursor
     /// uses.
-    async fn non_wanted_state_scope_keys(&self) -> AppResult<HashSet<String>> {
+    pub(crate) async fn non_wanted_state_scope_keys(&self) -> AppResult<HashSet<String>> {
         let mut excluded = HashSet::new();
         let items = self
             .services
@@ -798,6 +798,8 @@ impl AcquisitionSearchPlan {
 /// single scope.
 #[derive(Clone, Debug, Default)]
 pub struct AcquisitionSearchRequest {
+    /// Explicit title/season search: missing and upgrades, overriding title monitoring.
+    pub automatic: bool,
     pub wanted_kind: WantedKind,
     pub facet: Option<MediaFacet>,
     pub library_ids: Vec<String>,
@@ -852,10 +854,11 @@ pub struct AcquisitionSearchJobView {
 /// search, not a failure: the typed `NoAutoEligibleRelease` expresses the same
 /// outcome the old `Validation("no auto-eligible release found")` did.
 pub(crate) fn scope_search_error_is_failure(error: &AppError) -> bool {
-    !matches!(
-        error,
-        AppError::Validation(_) | AppError::NoAutoEligibleRelease { .. }
-    )
+    match error {
+        AppError::NoAutoEligibleRelease { .. } => false,
+        AppError::Validation(message) if message == "no auto-eligible release found" => false,
+        _ => true,
+    }
 }
 /// The job's terminal status. It completes when no scope failed; it fails when
 /// nothing was grabbed and either every scope failed or a scope could not submit
@@ -880,6 +883,37 @@ fn acquisition_search_job_status(
         JobRunStatus::Warning
     }
 }
+fn progress_with_search_context(
+    progress: &AcquisitionSearchProgress,
+    previous: Option<&str>,
+) -> Option<String> {
+    let mut value = serde_json::to_value(progress).ok()?;
+    let previous = previous.and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok());
+    value["revision"] = serde_json::json!(
+        previous
+            .as_ref()
+            .and_then(|value| value["revision"].as_u64())
+            .unwrap_or(0)
+            .saturating_add(1)
+    );
+    if let Some(search) = previous.and_then(|value| value.get("search").cloned()) {
+        value["search"] = search;
+    }
+    serde_json::to_string(&value).ok()
+}
+
+fn summary_with_search_progress(previous: Option<&str>, progress: &serde_json::Value) -> String {
+    let mut summary = previous
+        .and_then(|json| {
+            serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(json).ok()
+        })
+        .unwrap_or_default();
+    if let Some(fields) = progress.as_object() {
+        summary.extend(fields.clone());
+    }
+    serde_json::Value::Object(summary).to_string()
+}
+
 fn acquisition_search_state_for_status(status: JobRunStatus, cancelled: bool) -> &'static str {
     if cancelled {
         return "cancelled";
@@ -896,6 +930,56 @@ fn acquisition_search_state_for_status(status: JobRunStatus, cancelled: bool) ->
 mod acquisition_search_state_tests {
     use super::*;
     #[test]
+    fn completion_preserves_maintenance_request_metadata() {
+        let original = serde_json::json!({
+            "schema_version": 1,
+            "maintenance_action_request": {"wanted_kind": "missing", "title_id": "title"},
+        });
+        let progress = serde_json::json!({"outcome": "no_eligible_work", "processed": 0});
+        let summary: serde_json::Value = serde_json::from_str(&summary_with_search_progress(
+            Some(&original.to_string()),
+            &progress,
+        ))
+        .unwrap();
+        assert_eq!(
+            summary["maintenance_action_request"],
+            original["maintenance_action_request"]
+        );
+        assert_eq!(summary["schema_version"], 1);
+        assert_eq!(summary["outcome"], "no_eligible_work");
+    }
+
+    #[test]
+    fn search_context_survives_progress_updates_and_legacy_progress_is_readable() {
+        let progress = AcquisitionSearchProgress {
+            state: "running".into(),
+            total: 2,
+            processed: 1,
+            grabbed_count: 0,
+            failed_count: 0,
+            current_title: None,
+        };
+        let old = serde_json::json!({"search": {"titleId": "t", "seasonNumber": 0, "intent": "AUTOMATIC"}, "revision": 4});
+        let next = progress_with_search_context(&progress, Some(&old.to_string())).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&next).unwrap();
+        assert_eq!(value["search"], old["search"]);
+        assert_eq!(value["revision"], 5);
+        assert_eq!(
+            serde_json::from_str::<AcquisitionSearchProgress>(&next)
+                .unwrap()
+                .processed,
+            1
+        );
+        let legacy = serde_json::to_string(&progress).unwrap();
+        assert_eq!(
+            serde_json::from_str::<AcquisitionSearchProgress>(&legacy)
+                .unwrap()
+                .total,
+            2
+        );
+    }
+
+    #[test]
     fn a_search_that_finds_nothing_grabbable_is_not_a_failed_scope() {
         assert!(!scope_search_error_is_failure(&AppError::Validation(
             "no auto-eligible release found".into()
@@ -909,6 +993,12 @@ mod acquisition_search_state_tests {
         assert!(scope_search_error_is_failure(&AppError::Repository(
             "indexer exploded".into()
         )));
+        assert!(
+            scope_search_error_is_failure(&AppError::Validation(
+                "title is locked by a move".into()
+            )),
+            "a blocked scope is not a successful empty search"
+        );
         assert!(scope_search_error_is_failure(
             &AppError::download_submit_unavailable("mapped download client is globally disabled")
         ));
@@ -977,6 +1067,17 @@ impl AppUseCase {
         actor: &User,
         request: AcquisitionSearchRequest,
     ) -> AppResult<JobRun> {
+        if request.automatic
+            && (request
+                .title_id
+                .as_deref()
+                .is_none_or(|id| id.trim().is_empty())
+                || request.wanted_item_id.is_some())
+        {
+            return Err(AppError::Validation(
+                "Automatic search requires a title and cannot select a Wanted item".into(),
+            ));
+        }
         let search_guard = self
             .runtime
             .jobs
@@ -984,7 +1085,7 @@ impl AppUseCase {
             .clone()
             .try_lock_owned()
             .map_err(|_| {
-                AppError::Validation("an acquisition search job is already running".into())
+                AppError::Validation("Another search is running. Wait for it to finish or cancel it before starting this search.".into())
             })?;
         if self
             .runtime
@@ -994,7 +1095,7 @@ impl AppUseCase {
             .await
         {
             return Err(AppError::Validation(
-                "an acquisition search job is already running".into(),
+                "Another search is running. Wait for it to finish or cancel it before starting this search.".into(),
             ));
         }
 
@@ -1033,6 +1134,15 @@ impl AppUseCase {
             created_at: now,
             updated_at: now,
         };
+        let mut progress: serde_json::Value =
+            serde_json::from_str(run.progress_json.as_deref().unwrap_or("{}"))
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        progress["search"] = serde_json::json!({
+            "titleId": request.title_id,
+            "seasonNumber": request.season_number,
+            "intent": if request.automatic { "AUTOMATIC" } else { "WANTED" },
+        });
+        run.progress_json = Some(progress.to_string());
         run = self.services.events.job_runs.create_job_run(&run).await?;
         let run_payload = JobRun::from_record(&run, None);
         self.runtime
@@ -1385,6 +1495,91 @@ impl AppUseCase {
         actor: &User,
         request: &AcquisitionSearchRequest,
     ) -> AppResult<Vec<AcquisitionSearchScope>> {
+        if request.automatic {
+            let title_id = request
+                .title_id
+                .as_deref()
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| AppError::Validation("Automatic search requires a title".into()))?;
+            let title = self
+                .services
+                .catalog
+                .titles
+                .get_by_id(title_id)
+                .await?
+                .ok_or_else(|| AppError::NotFound("The selected title no longer exists".into()))?;
+            self.require_library_permission(
+                actor,
+                &title.library_id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await?;
+            if self.location_owned_title_ids().await?.contains(title_id) {
+                return Err(AppError::Validation(
+                    "This title is being moved. Search is available when the move finishes.".into(),
+                ));
+            }
+            if let Some(season) = request.season_number {
+                let collections = self
+                    .services
+                    .catalog
+                    .shows
+                    .list_collections_for_title(title_id)
+                    .await?;
+                if season < 0
+                    || !collections.iter().any(|collection| {
+                        collection.collection_index.trim().parse::<i32>().ok() == Some(season)
+                    })
+                {
+                    return Err(AppError::Validation("The selected season no longer matches this title. Refresh the title and try again.".into()));
+                }
+            }
+            let targets = self
+                .derive_acquisition_candidates_for_search(
+                    &chrono::Utc::now(),
+                    Some(title_id),
+                    false,
+                )
+                .await?;
+            let excluded = self.non_wanted_state_scope_keys().await?;
+            let mut skipped = 0;
+            let scopes: Vec<_> = targets
+                .into_iter()
+                .filter(|target| {
+                    request.season_number.is_none_or(|season| {
+                        target
+                            .season_number
+                            .as_deref()
+                            .and_then(|value| value.parse::<i32>().ok())
+                            == Some(season)
+                    })
+                })
+                .filter(|target| {
+                    if excluded.contains(&target.scope_key) {
+                        skipped += 1;
+                        false
+                    } else {
+                        true
+                    }
+                })
+                .map(|target| AcquisitionSearchScope {
+                    label: title.name.clone(),
+                    title_id: target.title_id.clone(),
+                    scope: SubmissionScope::from_persisted(
+                        &target.title_id,
+                        target.episode_id,
+                        target.collection_id,
+                        target.series_movie_link_id,
+                        None,
+                    ),
+                    scope_key: target.scope_key,
+                })
+                .collect();
+            if scopes.is_empty() && skipped > 0 {
+                return Err(AppError::Validation("The matching episodes are paused or already downloading. Resume paused acquisition or wait for the download to finish.".into()));
+            }
+            return Ok(scopes);
+        }
         if let Some(identifier) = request
             .wanted_item_id
             .as_deref()
@@ -1787,18 +1982,25 @@ impl AppUseCase {
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<
             crate::acquisition_workflow::AcquisitionWalkProgress,
         >();
-        let walk = crate::acquisition_workflow::run_interactive_title_acquisition_walk(
-            self,
-            title_id,
-            season_number,
-            Some(scope_keys),
-            cancellation.clone(),
-            move |progress| {
-                // A closed receiver only means the job stopped reading progress;
-                // the walk itself carries on.
-                let _ = progress_tx.send(progress);
-            },
-        );
+        let automatic = run
+            .progress_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+            .is_some_and(|value| value["search"]["intent"] == "AUTOMATIC");
+        let walk =
+            crate::acquisition_workflow::run_interactive_title_acquisition_walk_with_monitoring(
+                self,
+                title_id,
+                season_number,
+                Some(scope_keys),
+                !automatic,
+                cancellation.clone(),
+                move |progress| {
+                    // A closed receiver only means the job stopped reading progress;
+                    // the walk itself carries on.
+                    let _ = progress_tx.send(progress);
+                },
+            );
         tokio::pin!(walk);
 
         let mut total = scope_keys.len();
@@ -1849,6 +2051,9 @@ impl AppUseCase {
             Err(error) => {
                 let is_failure = scope_search_error_is_failure(&error);
                 if is_failure {
+                    if let AppError::Validation(message) = &error {
+                        run.error_text = Some(message.clone());
+                    }
                     tracing::warn!(
                         title_id,
                         error = %error,
@@ -1874,7 +2079,7 @@ impl AppUseCase {
         run: &mut JobRunRecord,
         progress: AcquisitionSearchProgress,
     ) -> AppResult<()> {
-        run.progress_json = serde_json::to_string(&progress).ok();
+        run.progress_json = progress_with_search_context(&progress, run.progress_json.as_deref());
         run.updated_at = chrono::Utc::now();
         let updated = self.services.events.job_runs.update_job_run(run).await?;
         *run = updated.clone();
@@ -1908,22 +2113,52 @@ impl AppUseCase {
         let state = acquisition_search_state_for_status(status, cancelled);
         let completed_at = chrono::Utc::now();
         run.status = status;
-        run.progress_json = serde_json::to_string(&AcquisitionSearchProgress {
-            state: state.to_string(),
-            total,
-            processed,
-            grabbed_count: grabbed,
-            failed_count: failed,
-            current_title: None,
-        })
-        .ok();
+        run.progress_json = progress_with_search_context(
+            &AcquisitionSearchProgress {
+                state: state.to_string(),
+                total,
+                processed,
+                grabbed_count: grabbed,
+                failed_count: failed,
+                current_title: None,
+            },
+            run.progress_json.as_deref(),
+        );
+        if let Some(mut progress) = run
+            .progress_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        {
+            progress["outcome"] = serde_json::json!(if cancelled {
+                "cancelled"
+            } else if failed > 0 {
+                "failed"
+            } else if grabbed > 0 {
+                "downloads_submitted"
+            } else if processed == 0 {
+                "no_eligible_work"
+            } else {
+                "no_acceptable_releases"
+            });
+            run.summary_json = Some(summary_with_search_progress(
+                run.summary_json.as_deref(),
+                &progress,
+            ));
+            run.progress_json = Some(progress.to_string());
+        }
         run.summary_text = Some(if cancelled {
             format!("Acquisition search cancelled after {processed} scope(s); grabbed {grabbed}")
+        } else if processed == 0 && failed == 0 {
+            "No monitored items need downloading or upgrading.".to_string()
+        } else if grabbed == 0 && failed == 0 {
+            "Search completed; no acceptable releases found.".to_string()
         } else {
             format!("Searched {processed} scope(s); grabbed {grabbed}, failed {failed}")
         });
-        run.error_text =
-            (status == JobRunStatus::Failed).then(|| "all acquisition searches failed".to_string());
+        if status == JobRunStatus::Failed && run.error_text.is_none() {
+            run.error_text =
+                Some("The search could not finish. Check Activity for details.".to_string());
+        }
         run.completed_at = Some(completed_at);
         run.updated_at = completed_at;
 

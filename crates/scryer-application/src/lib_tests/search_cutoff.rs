@@ -1,6 +1,94 @@
 use super::*;
 
 #[tokio::test]
+async fn automatic_search_includes_permitted_upgrades_for_an_unmonitored_complete_title() {
+    for (upgrades_allowed, quality, score_cutoff, expected) in [
+        (true, "720P", None, 1),
+        (false, "720P", None, 0),
+        (true, "1080P", None, 0),
+        (true, "1080P", Some(1_000_000), 1),
+        (true, "720P", Some(1_000_000), 1),
+    ] {
+        let settings = Arc::new(StoredSettingsRepo::default());
+        settings
+            .set_value(
+                SETTINGS_SCOPE_SYSTEM,
+                QUALITY_PROFILE_ID_KEY,
+                r#""automatic-cutoff""#,
+            )
+            .await;
+        let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+        let mut profile = cutoff_projection_test_profile("automatic-cutoff", "1080P");
+        profile.criteria.allow_upgrades = upgrades_allowed;
+        profile.criteria.cutoff_score = score_cutoff;
+        quality_profiles.set_profiles(vec![profile]).await;
+        let media_files = Arc::new(MockMediaFileRepo::default());
+        let (app, user, _) =
+            bootstrap_with_cutoff_projection_state(settings, quality_profiles, media_files.clone());
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Automatic Cutoff".into(),
+                    facet: MediaFacet::Movie,
+                    monitored: false,
+                    year: Some(2024),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: format!("/fixture/Automatic.Cutoff.2024.{quality}.WEB-DL-GRP.mkv"),
+                quality_label: Some(quality.into()),
+                role: MediaFileRole::Primary,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        let automatic = AcquisitionSearchRequest {
+            automatic: true,
+            title_id: Some(title.id.clone()),
+            ..Default::default()
+        };
+        let scopes = app
+            .resolve_acquisition_search_scopes(&user, &automatic)
+            .await
+            .unwrap();
+        assert_eq!(
+            scopes.len(),
+            expected,
+            "quality={quality}, upgrades={upgrades_allowed}, score cutoff={score_cutoff:?}"
+        );
+        assert!(
+            app.resolve_acquisition_search_scopes(
+                &user,
+                &AcquisitionSearchRequest {
+                    title_id: Some(title.id.clone()),
+                    ..Default::default()
+                }
+            )
+            .await
+            .unwrap()
+            .is_empty(),
+            "legacy missing-only behavior is preserved"
+        );
+        assert!(
+            !app.services
+                .catalog
+                .titles
+                .get_by_id(&title.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+    }
+}
+
+#[tokio::test]
 async fn list_cutoff_unmet_titles_normalizes_lowercase_cutoff_tier() {
     let settings = Arc::new(StoredSettingsRepo::default());
     settings

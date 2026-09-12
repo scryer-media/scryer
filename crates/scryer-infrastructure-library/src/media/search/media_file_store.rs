@@ -749,7 +749,21 @@ impl MediaFileRepository for MediaFileStore {
         &self,
         title_id: Option<&str>,
     ) -> AppResult<MissingScopeCandidates> {
+        self.list_missing_scope_candidates_for_search(title_id, true)
+            .await
+    }
+
+    async fn list_missing_scope_candidates_for_search(
+        &self,
+        title_id: Option<&str>,
+        respect_title_monitoring: bool,
+    ) -> AppResult<MissingScopeCandidates> {
         let dialect = dialect_for_datastore(&self.datastore);
+        let title_monitoring = if respect_title_monitoring || title_id.is_none() {
+            bool_column_is_true(dialect, "t.monitored")
+        } else {
+            "1 = 1".to_string()
+        };
         let live_file = format!(
             "{} AND mf.scan_status <> 'review_required'",
             live_media_file_predicate(dialect, "mf")
@@ -764,17 +778,16 @@ impl MediaFileRepository for MediaFileStore {
             .map(|id| SqlArg::Text(id.to_string()))
             .collect();
 
-        // Monitored episodes (inside monitored collections of monitored titles)
-        // with no live primary file. Episodes outside a collection are not
-        // acquisition units, matching collection-driven monitoring.
+        // Episode monitoring is authoritative; a season does not veto an
+        // individually monitored episode. Keep the collection ownership join.
         let episode_sql = format!(
             "SELECT e.id AS episode_id, e.title_id, t.library_id, t.facet,
                     e.collection_id, e.season_number, e.episode_number, e.air_date,
                     t.created_at AS title_created_at
                FROM episodes e
               INNER JOIN titles t ON t.id = e.title_id
-              INNER JOIN collections c ON c.id = e.collection_id
-              WHERE {} AND {} AND {}
+              INNER JOIN collections c ON c.id = e.collection_id AND c.title_id = t.id
+              WHERE {} AND {}
                 {title_filter}
                 AND t.deleted_at IS NULL
                 AND NOT EXISTS (
@@ -785,9 +798,8 @@ impl MediaFileRepository for MediaFileStore {
                        AND {live_file}
                 )
               ORDER BY e.id",
-            bool_column_is_true(dialect, "t.monitored"),
+            title_monitoring,
             bool_column_is_true(dialect, "e.monitored"),
-            bool_column_is_true(dialect, "c.monitored"),
         );
         let episodes = SqlRuntime::fetch_all(self.datastore.read_exec(), &episode_sql, &args)
             .await?
@@ -823,7 +835,7 @@ impl MediaFileRepository for MediaFileStore {
                        AND {live_file}
                 )
               ORDER BY t.id",
-            bool_column_is_true(dialect, "t.monitored"),
+            title_monitoring,
         );
         let titles = SqlRuntime::fetch_all(self.datastore.read_exec(), &title_sql, &args)
             .await?
@@ -863,7 +875,7 @@ impl MediaFileRepository for MediaFileStore {
                 )
               ORDER BY sml.id",
             bool_column_is_true(dialect, "sml.monitored"),
-            bool_column_is_true(dialect, "t.monitored"),
+            title_monitoring,
             bool_column_is_true(dialect, "sml.metadata_active"),
             bool_column_is_true(dialect, "sml.monitoring_override"),
         );
@@ -3704,6 +3716,68 @@ mod tests {
                 .iter()
                 .all(|item| item.title_id == title.id)
         );
+        shows
+            .set_collections_monitored(std::slice::from_ref(&collection.id), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            media_files
+                .list_missing_scope_candidates_for_title(Some(&title.id))
+                .await
+                .unwrap()
+                .episodes
+                .len(),
+            1,
+            "an unmonitored season must not veto its monitored episode"
+        );
+        titles.update_monitored(&title.id, false).await.unwrap();
+        assert!(
+            media_files
+                .list_missing_scope_candidates_for_title(Some(&title.id))
+                .await
+                .unwrap()
+                .episodes
+                .is_empty(),
+            "background acquisition still respects title monitoring"
+        );
+        let explicit = media_files
+            .list_missing_scope_candidates_for_search(Some(&title.id), false)
+            .await
+            .unwrap();
+        assert_eq!(
+            explicit.episodes.len(),
+            1,
+            "explicit search overrides only title monitoring"
+        );
+        assert_eq!(explicit.series_movie_links.len(), 1);
+        assert!(
+            !titles
+                .get_by_id(&title.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored,
+            "a search must not alter persisted monitoring"
+        );
+        shows
+            .set_episodes_monitored(std::slice::from_ref(&episode.id), false)
+            .await
+            .unwrap();
+        assert!(
+            media_files
+                .list_missing_scope_candidates_for_search(Some(&title.id), false)
+                .await
+                .unwrap()
+                .episodes
+                .is_empty(),
+            "explicit title search still respects episode monitoring"
+        );
+        shows
+            .set_episodes_monitored(std::slice::from_ref(&episode.id), true)
+            .await
+            .unwrap();
+        titles.update_monitored(&title.id, true).await.unwrap();
+
         let absent = media_files
             .list_missing_scope_candidates_for_title(Some("absent-title"))
             .await

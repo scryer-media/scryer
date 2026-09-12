@@ -1784,6 +1784,10 @@ export const setPrimaryMovieFileMutation = `mutation SetPrimaryMovieFile($input:
 // per-item trigger mutations; progress is polled via acquisitionSearchJobQuery.
 export const triggerAcquisitionSearchMutation = `mutation TriggerAcquisitionSearch($input: TriggerAcquisitionSearchInput!) {
   triggerAcquisitionSearch(input: $input) {
+    jobRun {
+      id jobKey displayName category section status triggerSource
+      startedAt completedAt summaryJson summaryText errorText progressJson
+    }
     id
     state
     total

@@ -234,6 +234,8 @@ pub(super) struct MockMediaFileRepo {
     /// mock-backed store still yields targets for `run_background_acquisition_cycle_once`.
     /// Left `None` for stores that manage their own media files directly.
     pub(super) missing_scope_source: Option<Arc<super::TrackingAcquisitionScopeStateRepo>>,
+    /// Catalog candidates independent of workflow status, as returned by SQL.
+    pub(super) missing_scope_candidates_override: Option<MissingScopeCandidates>,
     /// The catalog the seeded scopes belong to — used to resolve each scope's
     /// real facet (movie/series/anime) for the derived target, since the thinned
     /// state row does not carry it.
@@ -421,6 +423,9 @@ impl MediaFileRepository for MockMediaFileRepo {
     }
 
     async fn list_missing_scope_candidates(&self) -> AppResult<MissingScopeCandidates> {
+        if let Some(candidates) = &self.missing_scope_candidates_override {
+            return Ok(candidates.clone());
+        }
         // Without a real library store, derive the missing-scope
         // sweep from the seeded acquisition-state rows so the convergence cursor
         // sees each monitored, fileless `wanted` scope as a target. Synthetic

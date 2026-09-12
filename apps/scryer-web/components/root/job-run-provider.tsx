@@ -3,6 +3,7 @@ import { useClient } from "urql";
 
 import { toast } from "@/components/ui/sonner";
 import { useTranslate } from "@/lib/context/translate-context";
+import { acquisitionProgress, automaticSearchOutcomeKey, shouldRestoreAutomaticSearch } from "@/lib/utils/automatic-search";
 import {
   activeJobRunsQuery,
   jobRunsQuery,
@@ -120,6 +121,8 @@ export function JobRunProvider({
   const client = useClient();
   const t = useTranslate();
   const [runsById, setRunsById] = React.useState<Record<string, JobRun>>({});
+  // A terminal event can arrive and leave the visible list before its start response.
+  const terminalSnapshotsRef = React.useRef(new Map<string, JobRun>());
   const dismissTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const reconcileTimersRef = React.useRef<Record<string, ReturnType<typeof setTimeout>[]>>({});
   const reconcileIntervalsRef = React.useRef<Record<string, ReturnType<typeof setInterval>>>({});
@@ -129,9 +132,17 @@ export function JobRunProvider({
   >({});
 
   const upsertRun = React.useCallback((run: JobRun) => {
+    const accepted = preferJobRunSnapshot(terminalSnapshotsRef.current.get(run.id), run);
+    if (isTerminalJobRunStatus(accepted.status)) {
+      terminalSnapshotsRef.current.set(run.id, accepted);
+      if (terminalSnapshotsRef.current.size > 100) {
+        const oldest = terminalSnapshotsRef.current.keys().next().value;
+        if (oldest) terminalSnapshotsRef.current.delete(oldest);
+      }
+    }
     setRunsById((current) => ({
       ...current,
-      [run.id]: preferJobRunSnapshot(current[run.id], run),
+      [run.id]: preferJobRunSnapshot(current[run.id], accepted),
     }));
   }, []);
 
@@ -207,7 +218,8 @@ export function JobRunProvider({
   );
 
   const registerInteractiveJobRun = React.useCallback(
-    (run: JobRun, onTerminal?: (run: JobRun) => void) => {
+    (snapshot: JobRun, onTerminal?: (run: JobRun) => void) => {
+      const run = preferJobRunSnapshot(terminalSnapshotsRef.current.get(snapshot.id), snapshot);
       interactiveRunIdsRef.current.add(run.id);
       rememberApplicationUpgradeRun(run);
       upsertRun(run);
@@ -254,19 +266,19 @@ export function JobRunProvider({
         .map(normalizeJobRun)
         .filter((run): run is JobRun => run !== null);
 
-      setRunsById((current) => {
-        const next = { ...current };
-        for (const run of normalizedRuns) {
-          next[run.id] = preferJobRunSnapshot(next[run.id], run);
+      for (const run of normalizedRuns) {
+        if (shouldRestoreAutomaticSearch(run)) {
+          registerInteractiveJobRun(run);
+        } else {
+          upsertRun(run);
         }
-        return next;
-      });
+      }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [client, enabled]);
+  }, [client, enabled, registerInteractiveJobRun, upsertRun]);
 
   React.useEffect(() => {
     if (!enabled) {
@@ -375,7 +387,19 @@ export function JobRunProvider({
           : t("jobs.runSummaryRunning"));
       const upgradeToast = applicationUpgradeToastDetails(run, t);
       const title = upgradeToast?.title ?? run.displayName;
-      const description = upgradeToast?.description ?? defaultDescription;
+      const outcomeKey = automaticSearchOutcomeKey(run);
+      const searchProgress = acquisitionProgress(run);
+      const description = run.errorText ?? (outcomeKey ? t(outcomeKey, {
+        processed: Number(searchProgress.processed ?? 0),
+        grabbed: Number(searchProgress.grabbedCount ?? 0),
+        failed: Number(searchProgress.failedCount ?? 0),
+      }) : run.jobKey === "ACQUISITION_SEARCH" && !isTerminalJobRunStatus(run.status)
+        ? t("wanted.searchJobProgress", {
+          processed: Number(searchProgress.processed ?? 0),
+          total: Number(searchProgress.total ?? 0),
+          title: typeof searchProgress.currentTitle === "string" ? searchProgress.currentTitle : "",
+        })
+        : upgradeToast?.description ?? defaultDescription);
 
       if (run.status === "FAILED") {
         toast.error(title, {

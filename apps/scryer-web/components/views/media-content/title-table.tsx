@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useLocation } from "react-router";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useAutomaticSearch } from "@/lib/hooks/use-automatic-search";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import {
   persistOverviewScrollValue,
@@ -180,6 +181,7 @@ export const TitleTable = React.memo(function TitleTable({
   const scanLibraryDisabled = scanLibraryDisabledProp ?? false;
   const location = useLocation();
   const t = useTranslate();
+  const { isSearching } = useAutomaticSearch();
   const dateTimeFormat = useUiDateTimeFormat();
   const isMovieView = view === "movies";
   const overviewTargetView: ViewId = resolveOverviewTargetView(view);
@@ -579,7 +581,7 @@ export const TitleTable = React.memo(function TitleTable({
       interactiveSearchResultsByTitle[item.id] ?? [];
     const interactiveSearchLoading =
       interactiveSearchLoadingByTitle[item.id] === true;
-    const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true;
+    const autoQueueLoading = autoQueueLoadingByTitle[item.id] === true || isSearching(item.id);
     const deleteLoading = isDeletingById[item.id] === true;
     const monitorToggleLoading = isTogglingMonitoredById?.[item.id] === true;
     const posterThumbUrl = selectPosterVariantUrl(item.posterUrl, "w70");

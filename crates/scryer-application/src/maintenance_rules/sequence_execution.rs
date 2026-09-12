@@ -1610,6 +1610,7 @@ impl AppUseCase {
         );
         self.checkpoint_sequence_step(run).await?;
         let request = AcquisitionSearchRequest {
+            automatic: false,
             wanted_kind,
             facet: None,
             library_ids: Vec::new(),
