@@ -1,5 +1,5 @@
 {
-  "source_revision": "31a2716d03a3f554a5a2a6bd76456109d900af05",
+  "source_revision": "cfc3e01d5f79baf41374c75e0afface8c464c699",
   "score_envelope": [
     {
       "score_set": "anime-radarr",
@@ -2628,9 +2628,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 10,
+      "emitted_rule_count": 9,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:db2eef88d6fcd75a"
+      "emitted_rule_digest": "fnv1a64:bf82602d3509985c"
     },
     {
       "app": "radarr",
@@ -5126,9 +5126,9 @@
       "detection_owner": "existing_native",
       "effect_binding": "persona_score",
       "reason": "reviewed_release_group_tier",
-      "emitted_rule_count": 9,
+      "emitted_rule_count": 8,
       "emitted_fact_codes": [],
-      "emitted_rule_digest": "fnv1a64:b77edeb7835bcddc"
+      "emitted_rule_digest": "fnv1a64:6fecd15d2fb1f769"
     },
     {
       "app": "sonarr",
@@ -9661,6 +9661,26 @@
       "cf_name": "126811",
       "spec_name": "126811",
       "implementation": "ReleaseGroupSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/126811.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "126811",
+      "trash_id": "9681750c690210f0936faed781bb7f06",
+      "cf_name": "126811",
+      "spec_name": "Internal",
+      "implementation": "IndexerFlagSpecification",
+      "reason": "unsupported_unreviewed_stem",
+      "source_path": "docs/json/radarr/cf/126811.json"
+    },
+    {
+      "app": "radarr",
+      "stem": "126811",
+      "trash_id": "9681750c690210f0936faed781bb7f06",
+      "cf_name": "126811",
+      "spec_name": "Not ATMO5/ATM05 Collab",
+      "implementation": "ReleaseTitleSpecification",
       "reason": "unsupported_unreviewed_stem",
       "source_path": "docs/json/radarr/cf/126811.json"
     },

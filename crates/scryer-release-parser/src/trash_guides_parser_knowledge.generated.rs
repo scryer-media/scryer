@@ -2,7 +2,7 @@
 // Do not edit by hand.
 
 #[allow(dead_code)]
-pub const TRASH_GUIDES_SOURCE_REVISION: &str = "31a2716d03a3f554a5a2a6bd76456109d900af05";
+pub const TRASH_GUIDES_SOURCE_REVISION: &str = "cfc3e01d5f79baf41374c75e0afface8c464c699";
 
 pub static SERVICE_ALIAS_RULES: &[ServiceAliasRule] = &[
     ServiceAliasRule {
