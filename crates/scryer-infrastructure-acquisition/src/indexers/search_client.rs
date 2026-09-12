@@ -5844,6 +5844,48 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
     }
 
     let generic_query_only = text_dispatch_mode.is_generic_only();
+    // Community-numbered text queries must not carry the official coordinates.
+    // ID strategies above still refer to the official metadata identity.
+    let terminal_coordinates = query.split_whitespace().last().and_then(|token| {
+        let token = token
+            .trim_matches(|ch: char| !ch.is_ascii_alphanumeric())
+            .to_ascii_uppercase();
+        let rest = token.strip_prefix('S')?;
+        let (season, episode) = rest
+            .split_once('E')
+            .map_or((rest, None), |(s, e)| (s, Some(e)));
+        if season.is_empty() || !season.bytes().all(|b| b.is_ascii_digit()) {
+            return None;
+        }
+        let season = season.parse::<u32>().ok()?;
+        let episode = match episode {
+            Some(episode) if !episode.is_empty() && episode.bytes().all(|b| b.is_ascii_digit()) => {
+                Some(episode.parse::<u32>().ok()?)
+            }
+            Some(_) => return None,
+            None => None,
+        };
+        Some((Some(season), episode, None))
+    });
+    // A dashed anime episode can be cour-relative or absolute. Keep it in
+    // the text query without adding coordinates from a different numbering.
+    let dashed_anime_episode = query_facet == "anime"
+        && query.rsplit_once(" - ").is_some_and(|(title, number)| {
+            let number = number.trim();
+            !title.trim().is_empty()
+                && !number.is_empty()
+                && number.bytes().all(|byte| byte.is_ascii_digit())
+        });
+    let (season, episode, absolute_episode) = if dashed_anime_episode {
+        (None, None, None)
+    } else {
+        terminal_coordinates
+            .filter(|_| matches!(query_facet, "series" | "anime"))
+            .filter(|(query_season, query_episode, _)| {
+                (*query_season, *query_episode) != (season, episode)
+            })
+            .unwrap_or((season, episode, absolute_episode))
+    };
     let text_season = text_strategy_season(caps, text_dispatch_mode, season);
     let text_episode = text_strategy_episode(caps, text_dispatch_mode, episode);
     let text_absolute_episode =
@@ -11438,6 +11480,97 @@ mod tests {
             "Lantern.Tide.Hidden.Current.2001.1080p.BluRay"
         );
         assert_eq!(response.results[1].title, "Lantern.Tide.2001.1080p.BluRay");
+    }
+
+    #[test]
+    fn community_text_strategies_use_their_own_coordinates() {
+        let caps = IndexerProviderCapabilities {
+            supported_ids: HashMap::from([("anime".into(), vec!["anidb_id".into()])]),
+            season_param: Some("s".into()),
+            episode_param: Some("ep".into()),
+            query_param: Some("q".into()),
+            search_inputs: vec![
+                IndexerSearchInputCapability::TitleQuery,
+                IndexerSearchInputCapability::Season,
+                IndexerSearchInputCapability::Episode,
+                IndexerSearchInputCapability::AbsoluteEpisode,
+            ],
+            ..Default::default()
+        };
+        let ids = HashMap::from([("anidb_id".to_string(), "18886".to_string())]);
+        for (query, expected_season, expected_episode) in [
+            ("Lantern Verge S04E20", Some(4), Some(20)),
+            ("Lantern Verge (s04e20)", Some(4), Some(20)),
+            ("Lantern Verge S04", Some(4), None),
+            ("Glass Meridian - 20", None, None),
+            ("Lantern Verge - 56", None, None),
+            ("Lantern Verge S01E56", Some(1), Some(56)),
+            ("Lantern Verge", Some(1), Some(56)),
+            ("Lantern Verge 1984", Some(1), Some(56)),
+            ("Lantern Verge - OVA", Some(1), Some(56)),
+        ] {
+            for mode in [TextDispatchMode::FacetScoped, TextDispatchMode::GenericOnly] {
+                for is_alias_query in [false, true] {
+                    let strategies = build_strategies(&StrategyParams {
+                        query,
+                        query_facet: "anime",
+                        id_facet: "anime",
+                        ids: &ids,
+                        season: Some(1),
+                        episode: Some(56),
+                        absolute_episode: Some(56),
+                        caps: &caps,
+                        id_dispatch_mode: IdDispatchMode::Aggregate,
+                        text_dispatch_mode: mode,
+                        is_alias_query,
+                        facet_omitted: false,
+                    });
+                    let text = strategies
+                        .iter()
+                        .find(|s| s.label.starts_with("freetext"))
+                        .unwrap();
+                    assert_eq!(text.request_query, query);
+                    assert_eq!(
+                        text.season,
+                        if mode.is_generic_only() {
+                            None
+                        } else {
+                            expected_season
+                        }
+                    );
+                    assert_eq!(
+                        text.episode,
+                        if mode.is_generic_only() {
+                            None
+                        } else {
+                            expected_episode
+                        }
+                    );
+                    assert_eq!(
+                        text.absolute_episode,
+                        if !mode.is_generic_only()
+                            && (expected_season, expected_episode) == (Some(1), Some(56))
+                        {
+                            Some(56)
+                        } else {
+                            None
+                        }
+                    );
+                    if !is_alias_query {
+                        let ids = strategies.iter().find(|s| s.label == "ids_sxex").unwrap();
+                        assert_eq!((ids.season, ids.episode), (Some(1), Some(56)));
+                        assert_eq!(
+                            strategies
+                                .iter()
+                                .find(|s| s.label == "ids_abs")
+                                .unwrap()
+                                .absolute_episode,
+                            Some(56)
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

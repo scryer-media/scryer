@@ -112,7 +112,7 @@ pub async fn upsert_indexer_quota(
     Ok(())
 }
 
-/// Read every persisted quota row.
+/// Read persisted quota rows belonging to indexers that still exist.
 ///
 /// The in-memory tracker starts empty on each restart while the persisted
 /// counter keeps accumulating for the rest of the UTC day, so without this the
@@ -134,7 +134,8 @@ pub async fn load_indexer_quotas(
                 api_max,
                 grab_current,
                 grab_max
-         FROM indexer_api_quotas",
+         FROM indexer_api_quotas
+         WHERE EXISTS (SELECT 1 FROM indexers WHERE indexers.id = indexer_api_quotas.indexer_id)",
         &[],
     )
     .await?;
@@ -208,7 +209,81 @@ mod tests {
         .await
         .expect("quota table should be created");
         let datastore = StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(())));
+        seed_indexers(&datastore).await;
         (pool, datastore)
+    }
+
+    async fn seed_indexers(datastore: &StoreDatastore) {
+        SqlRuntime::execute_write(
+            datastore,
+            "create_test_indexers",
+            "CREATE TEMP TABLE indexers (id TEXT PRIMARY KEY NOT NULL)",
+            vec![],
+        )
+        .await
+        .unwrap();
+        SqlRuntime::execute_write(
+            datastore,
+            "seed_test_indexers",
+            "INSERT INTO indexers (id) VALUES ('idx-1'), ('idx-delayed'), ('idx-deleted')",
+            vec![],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn assert_deleted_indexer_quotas_are_not_hydrated(datastore: &StoreDatastore) {
+        upsert_indexer_quota(
+            datastore,
+            "idx-deleted",
+            Some(3),
+            Some(10),
+            None,
+            None,
+            sent_today(3),
+        )
+        .await
+        .unwrap();
+        assert!(
+            load_indexer_quotas(datastore)
+                .await
+                .unwrap()
+                .iter()
+                .any(|row| row.indexer_id == "idx-deleted")
+        );
+        SqlRuntime::execute_write(
+            datastore,
+            "delete_test_indexer",
+            "DELETE FROM indexers WHERE id = 'idx-deleted'",
+            vec![],
+        )
+        .await
+        .unwrap();
+        // A late flush may recreate a quota row after configuration deletion.
+        upsert_indexer_quota(
+            datastore,
+            "idx-deleted",
+            None,
+            None,
+            None,
+            None,
+            sent_today(1),
+        )
+        .await
+        .unwrap();
+        assert!(
+            !load_indexer_quotas(datastore)
+                .await
+                .unwrap()
+                .iter()
+                .any(|row| row.indexer_id == "idx-deleted")
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_does_not_hydrate_deleted_indexer_quotas() {
+        let (_pool, datastore) = sqlite_datastore().await;
+        assert_deleted_indexer_quotas_are_not_hydrated(&datastore).await;
     }
 
     #[tokio::test]
@@ -495,6 +570,8 @@ mod tests {
         .await
         .expect("temp quota table should be created");
         let datastore = StoreDatastore::Postgres { pool: pool.clone() };
+        seed_indexers(&datastore).await;
+        assert_deleted_indexer_quotas_are_not_hydrated(&datastore).await;
 
         upsert_indexer_quota(
             &datastore,
