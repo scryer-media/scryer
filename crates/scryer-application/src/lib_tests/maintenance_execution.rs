@@ -1371,8 +1371,10 @@ async fn the_policy_delete_itself_refuses_a_title_a_location_operation_owns() {
         .delete_title_by_policy(&fixture.user, &title.id, "unused", &authorization)
         .await
         .expect_err("an owned title must be refused before any fingerprint check");
+    // The refusal is the busy signal the scheduler retries on, not a
+    // validation failure of the request itself.
     assert!(
-        matches!(&error, AppError::Validation(message) if message.contains("location operation owns")),
+        matches!(&error, AppError::LocationOperationBusy(message) if message.contains("location operation owns")),
         "{error:?}"
     );
     assert!(

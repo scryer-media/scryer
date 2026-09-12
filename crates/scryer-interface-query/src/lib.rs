@@ -1701,10 +1701,12 @@ impl CatalogQueries {
         Ok(from_root_scope_preview(&preview))
     }
 
+    /// Aggregate progress of one transfer with no title rows; poll this for
+    /// the operation header.
     async fn location_transfer_summary(
         &self,
         ctx: &Context<'_>,
-        id: ID,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
     ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferSnapshotPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -1715,11 +1717,16 @@ impl CatalogQueries {
             .map(scryer_interface_media::mappers::from_location_transfer))
     }
 
+    /// One page of up to 50 title rows of a transfer, exceptions first.
     async fn location_transfer_page(
         &self,
         ctx: &Context<'_>,
-        id: ID,
-        #[graphql(default = 0)] offset: i32,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+        #[graphql(
+            default = 0,
+            desc = "Zero-based index of the first title row to return."
+        )]
+        offset: i32,
     ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferSnapshotPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -1730,12 +1737,17 @@ impl CatalogQueries {
             .map(scryer_interface_media::mappers::from_location_transfer))
     }
 
+    /// One page of up to 50 file rows for one title of a transfer.
     async fn location_transfer_files(
         &self,
         ctx: &Context<'_>,
-        id: ID,
-        title_id: ID,
-        #[graphql(default = 0)] offset: i32,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+        #[graphql(desc = "Identity of the title whose files to page.")] title_id: ID,
+        #[graphql(
+            default = 0,
+            desc = "Zero-based index of the first file row to return."
+        )]
+        offset: i32,
     ) -> GqlResult<Option<scryer_interface_media::types::LocationTransferSnapshotPayload>> {
         app_from_ctx(ctx)?
             .location_transfer_files_snapshot(
@@ -1749,11 +1761,13 @@ impl CatalogQueries {
             .map(|snapshot| snapshot.map(scryer_interface_media::mappers::from_location_transfer))
     }
 
+    /// The operator-facing detail behind a title's exception, or null when it
+    /// has none.
     async fn location_transfer_title_detail(
         &self,
         ctx: &Context<'_>,
-        id: ID,
-        title_id: ID,
+        #[graphql(desc = "Location-operation identity.")] id: ID,
+        #[graphql(desc = "Identity of the title whose detail to read.")] title_id: ID,
     ) -> GqlResult<Option<String>> {
         app_from_ctx(ctx)?
             .location_transfer_title_detail(&actor_from_ctx(ctx)?, id.as_str(), title_id.as_str())
