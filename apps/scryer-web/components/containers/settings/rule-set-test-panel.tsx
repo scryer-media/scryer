@@ -21,6 +21,7 @@ import type { TitleRecord } from "@/lib/types/titles";
 import { titleIsEpisodic } from "@/lib/utils/grab-dialog";
 import {
   canTestRuleSet,
+  buildRuleSetTestInput,
   formatSignedScore,
   RuleSetTestRequestController,
   ruleSetTestFingerprint,
@@ -149,12 +150,14 @@ export function RuleSetTestPanel({
   copySourceRuleSetId,
   open,
   onOpenChange,
+  testRuleSetId = null,
 }: {
-  draft: RuleSetDraft;
+  draft: RuleSetDraft | null;
   editRuleSetId: string | null;
   copySourceRuleSetId: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  testRuleSetId?: string | null;
 }) {
   const client = useClient();
   const t = useTranslate();
@@ -182,11 +185,13 @@ export function RuleSetTestPanel({
     sizeGib,
   };
   const episodic = titleIsEpisodic(selectedTitle);
+  const savedRuleSetMode = testRuleSetId !== null;
   const fingerprint = ruleSetTestFingerprint(
     draft,
     selection,
     editRuleSetId,
     copySourceRuleSetId,
+    testRuleSetId,
   );
   const stale = result !== null && resultFingerprint !== fingerprint;
   const canTest = canTestRuleSet(selection, episodic) && !testing;
@@ -277,19 +282,18 @@ export function RuleSetTestPanel({
     setTesting(true);
     setError(null);
     try {
+      const input = buildRuleSetTestInput({
+        draft,
+        editRuleSetId,
+        copySourceRuleSetId,
+        testRuleSetId,
+        titleId: selectedTitle.id,
+        episodeId: episodic ? episodeId || undefined : undefined,
+        releaseName: releaseName.trim(),
+        sizeBytes: size.value,
+      });
       const { data, error: mutationError } = await client
-        .mutation(testRuleSetMutation, {
-          input: {
-            draft,
-            editRuleSetId: editRuleSetId || undefined,
-            copySourceRuleSetId: copySourceRuleSetId || undefined,
-            copyDisablesSource: Boolean(copySourceRuleSetId),
-            titleId: selectedTitle.id,
-            episodeId: episodic ? episodeId || undefined : undefined,
-            releaseName: releaseName.trim(),
-            sizeBytes: size.value,
-          },
-        })
+        .mutation(testRuleSetMutation, { input })
         .toPromise();
       if (mutationError) throw mutationError;
       if (
@@ -339,8 +343,9 @@ export function RuleSetTestPanel({
     >
       <CollapsibleContent className="px-3 py-3">
         <p className="mb-3 text-xs text-muted-foreground">
-          Scoring preview only. This does not save this draft, admit a download,
-          or create history.
+          Scoring preview only. This does not save{" "}
+          {savedRuleSetMode ? "this rule" : "this draft"}, admit a download, or
+          create history.
         </p>
         <div className="space-y-3">
           <div>
@@ -514,7 +519,11 @@ export function RuleSetTestPanel({
                               {entry.ruleSetName === "TRaSH Guides source video"
                                 ? "Source & video codec"
                                 : entry.ruleSetName || "Unnamed rule"}
-                              {entry.isDraft ? " (this rule)" : ""}
+                              {entry.isDraft ||
+                              (savedRuleSetMode &&
+                                entry.ruleSetId === testRuleSetId)
+                                ? " (this rule)"
+                                : ""}
                               {entry.messages?.length
                                 ? ` — ${entry.messages.join("; ")}`
                                 : ""}

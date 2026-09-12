@@ -217,12 +217,26 @@ pub struct CatalogV3RulePackEntry {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CatalogV3RulePackRelease {
     pub version: String,
+    /// Discovery mirror of the signed manifest's customization policy.
+    #[serde(
+        default = "default_rule_pack_customizable",
+        skip_serializing_if = "is_rule_pack_customizable"
+    )]
+    pub customizable: bool,
     #[serde(default)]
     pub min_scryer_version: Option<String>,
     pub rule_pack_digests: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rule_pack_bytes: Option<u64>,
     pub artifacts: Vec<CatalogV3DistributionArtifact>,
+}
+
+const fn default_rule_pack_customizable() -> bool {
+    true
+}
+
+const fn is_rule_pack_customizable(value: &bool) -> bool {
+    *value
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

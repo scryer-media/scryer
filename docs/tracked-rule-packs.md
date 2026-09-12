@@ -7,10 +7,20 @@ Installing a pack does not disable those older copies.
 
 Installed packs show their version, update status, and rules. Enablement and
 priority remain local settings. Pack names, descriptions, source, and facets are
-maintained by the pack. Use **Copy to customize** to edit an individual rule:
+maintained by the pack. Customizable packs offer **Copy to customize**:
 saving creates a custom rule and disables its original so both do not score.
+Packs such as SeaDex can disable customization. Their rules have no source
+viewer, editor, or copy action; enablement, priority, and updates remain
+available. **Test scoring** tests an installed rule against a selected library
+title and release name without copying, saving, or exposing its source.
 Uninstalling a pack removes its owned rules while preserving custom copies and
 history.
+
+Pack authors set `"customizable": false` in the pack manifest to disable
+customization for all of its rules. Omission defaults to `true` for existing
+packs. The catalog carries the setting for each release, and installation or
+update persists it locally so it applies offline. Existing independent custom
+copies remain independent; a later pack update does not remove them.
 
 **Check for updates** previews added, changed, and removed template IDs before
 applying an update. Existing rules keep their local identities, enablement, and

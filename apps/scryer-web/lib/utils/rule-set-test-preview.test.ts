@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   canTestRuleSet,
+  buildRuleSetTestInput,
   RuleSetTestRequestController,
   ruleSetTestFingerprint,
   sizeBytesFromGib,
@@ -30,9 +31,36 @@ test("preview requires a title, release name, and an episode for episodic titles
 
 test("preview becomes stale for either draft or input changes", () => {
   const selection = { titleId: "title", episodeId: null, releaseName: "release", sizeGib: "" };
-  const baseline = ruleSetTestFingerprint(draft, selection, null, null);
-  assert.notEqual(baseline, ruleSetTestFingerprint({ ...draft, enabled: false }, selection, null, null));
-  assert.notEqual(baseline, ruleSetTestFingerprint(draft, { ...selection, sizeGib: "2" }, null, null));
+  const baseline = ruleSetTestFingerprint(draft, selection, null, null, null);
+  assert.notEqual(baseline, ruleSetTestFingerprint({ ...draft, enabled: false }, selection, null, null, null));
+  assert.notEqual(baseline, ruleSetTestFingerprint(draft, { ...selection, sizeGib: "2" }, null, null, null));
+});
+
+test("saved previews are distinct from draft previews and retain the selected rule identity", () => {
+  const selection = { titleId: "title", episodeId: null, releaseName: "release", sizeGib: "" };
+  const saved = ruleSetTestFingerprint(null, selection, null, null, "installed-rule");
+  assert.notEqual(saved, ruleSetTestFingerprint(draft, selection, null, null, null));
+  assert.notEqual(saved, ruleSetTestFingerprint(null, selection, null, null, "other-rule"));
+});
+
+test("saved preview requests contain only the installed rule identity and selection", () => {
+  const input = buildRuleSetTestInput({
+    draft,
+    editRuleSetId: "edit-rule",
+    copySourceRuleSetId: "copy-source",
+    testRuleSetId: "installed-rule",
+    titleId: "title",
+    episodeId: "episode",
+    releaseName: "release",
+    sizeBytes: 42,
+  });
+  assert.deepEqual(input, {
+    testRuleSetId: "installed-rule",
+    titleId: "title",
+    episodeId: "episode",
+    releaseName: "release",
+    sizeBytes: 42,
+  });
 });
 
 test("delayed preview response is discarded after committed inputs change", async () => {

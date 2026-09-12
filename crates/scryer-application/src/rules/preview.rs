@@ -19,7 +19,8 @@ pub struct RuleSetTestDraft {
 /// A release and editor state to evaluate without storing either.
 #[derive(Clone, Debug)]
 pub struct RuleSetTestRequest {
-    pub draft: RuleSetTestDraft,
+    pub draft: Option<RuleSetTestDraft>,
+    pub test_rule_set_id: Option<String>,
     pub edit_rule_set_id: Option<String>,
     pub copy_source_rule_set_id: Option<String>,
     pub copy_disables_source: bool,
@@ -27,6 +28,15 @@ pub struct RuleSetTestRequest {
     pub episode_id: Option<String>,
     pub release_name: String,
     pub size_bytes: Option<i64>,
+}
+
+#[derive(Clone, Debug)]
+struct SavedRulePreviewMetadata {
+    id: String,
+    name: String,
+    is_managed: bool,
+    enabled: bool,
+    applied_facets: Vec<MediaFacet>,
 }
 
 #[derive(Clone, Debug)]
@@ -154,6 +164,21 @@ impl AppUseCase {
             ));
         }
 
+        if request.test_rule_set_id.is_some()
+            && (request.draft.is_some()
+                || request.edit_rule_set_id.is_some()
+                || request.copy_source_rule_set_id.is_some()
+                || request.copy_disables_source)
+        {
+            return Err(AppError::Validation(
+                "testing a saved rule cannot include a draft, edit, or copy context".into(),
+            ));
+        }
+        if request.test_rule_set_id.is_none() && request.draft.is_none() {
+            return Err(AppError::Validation(
+                "a preview requires either a draft or a saved rule set".into(),
+            ));
+        }
         if request.edit_rule_set_id.is_some() && request.copy_source_rule_set_id.is_some() {
             return Err(AppError::Validation(
                 "a preview cannot edit and copy a rule at the same time".into(),
@@ -164,16 +189,32 @@ impl AppUseCase {
                 "copy_disables_source requires a copy source rule set".into(),
             ));
         }
-        let draft_id = request
-            .edit_rule_set_id
-            .clone()
-            .unwrap_or_else(|| Id::new_rego_safe().0);
-
         // Take one consistent policy snapshot while mutations are excluded.
         // Compilation happens after this scope, so a slow/large preview never
         // holds the mutation lock or replaces the production engine.
-        let (rule_sets, plugin_policies, draft_phase, draft_exclusive_group, draft_tags) = {
+        let (
+            rule_sets,
+            plugin_policies,
+            draft_phase,
+            draft_exclusive_group,
+            draft_tags,
+            draft,
+            draft_id,
+            saved_rule_test,
+            saved_rule_result,
+        ) = {
             let _mutation = self.services.customization.rule_mutation_lock.lock().await;
+            let saved_rule = match request.test_rule_set_id.as_deref() {
+                Some(id) => Some(self.require_preview_source_rule(id).await?),
+                None => None,
+            };
+            let saved_rule_result = saved_rule.as_ref().map(|rule| SavedRulePreviewMetadata {
+                id: rule.id.clone(),
+                name: rule.name.clone(),
+                is_managed: rule.is_managed,
+                enabled: rule.enabled,
+                applied_facets: rule.applied_facets.clone(),
+            });
             let edit_source = match request.edit_rule_set_id.as_deref() {
                 Some(id) => Some(self.require_preview_source_rule(id).await?),
                 None => None,
@@ -216,8 +257,13 @@ impl AppUseCase {
                     .customization
                     .rule_sets
                     .find_rule_pack_installation_by_rule_set_id(&source.id)
-                    .await?
-                    .is_some();
+                    .await?;
+                if tracked.as_ref().is_some_and(|pack| !pack.customizable) {
+                    return Err(AppError::Validation(
+                        "rules from this pack cannot be copied".into(),
+                    ));
+                }
+                let tracked = tracked.is_some();
                 if tracked && !request.copy_disables_source {
                     return Err(AppError::Validation(
                         "copying a tracked rule requires disabling its source".into(),
@@ -244,12 +290,38 @@ impl AppUseCase {
                 .available()
                 .map(|provider| provider.scoring_policies())
                 .unwrap_or_default();
+            let (draft, draft_id, saved_rule_test) = match saved_rule {
+                Some(rule) => (
+                    RuleSetTestDraft {
+                        name: rule.name,
+                        description: rule.description,
+                        rego_source: rule.rego_source,
+                        enabled: rule.enabled,
+                        priority: rule.priority,
+                        applied_facets: rule.applied_facets,
+                    },
+                    rule.id,
+                    true,
+                ),
+                None => (
+                    request.draft.clone().expect("validated preview draft"),
+                    request
+                        .edit_rule_set_id
+                        .clone()
+                        .unwrap_or_else(|| Id::new_rego_safe().0),
+                    false,
+                ),
+            };
             (
                 enabled,
                 plugin_policies,
                 draft_phase,
                 draft_exclusive_group,
                 draft_tags,
+                draft,
+                draft_id,
+                saved_rule_test,
+                saved_rule_result,
             )
         };
 
@@ -271,7 +343,7 @@ impl AppUseCase {
             .await;
         let compute_title = title.clone();
         let compute_episode = episode.clone();
-        let compute_draft = request.draft.clone();
+        let compute_draft = draft.clone();
         let compute_draft_id = draft_id.clone();
         let compute_release_name = request.release_name.clone();
         let compute_size_bytes = request.size_bytes;
@@ -301,23 +373,27 @@ impl AppUseCase {
             }
             let now = Utc::now();
             let mut rule_sets = rule_sets;
-            rule_sets.push(RuleSet {
-                id: compute_draft_id.clone(),
-                name: compute_draft.name.clone(),
-                description: compute_draft.description.clone(),
-                rego_source: rewritten_source,
-                enabled: compute_draft.enabled,
-                priority: compute_draft.priority,
-                evaluation_phase: draft_phase,
-                exclusive_group: draft_exclusive_group,
-                disabled_reason: None,
-                applied_facets: compute_draft.applied_facets.clone(),
-                created_at: now,
-                updated_at: now,
-                is_managed: false,
-                managed_key: None,
-                managed_tag_filter: draft_tags,
-            });
+            // A saved rule already sits in the enabled snapshot under its own
+            // identity; only a draft needs to be appended for evaluation.
+            if !saved_rule_test {
+                rule_sets.push(RuleSet {
+                    id: compute_draft_id.clone(),
+                    name: compute_draft.name.clone(),
+                    description: compute_draft.description.clone(),
+                    rego_source: rewritten_source,
+                    enabled: compute_draft.enabled,
+                    priority: compute_draft.priority,
+                    evaluation_phase: draft_phase,
+                    exclusive_group: draft_exclusive_group,
+                    disabled_reason: None,
+                    applied_facets: compute_draft.applied_facets.clone(),
+                    created_at: now,
+                    updated_at: now,
+                    is_managed: false,
+                    managed_key: None,
+                    managed_tag_filter: draft_tags,
+                });
+            }
             let engine = AppUseCase::build_user_rules_engine_for_purpose(
                 rule_sets, plugin_policies, super::metrics::Purpose::Preview,
             )?;
@@ -385,13 +461,17 @@ impl AppUseCase {
                 rule_set_id: None,
             });
         }
-        let rule_sets = preview_rule_sets(
+        let mut rule_sets = preview_rule_sets(
             &preview.scored.announced_decision.scoring_log,
             &preview.rule_errors,
             &draft_id,
+            !saved_rule_test,
         );
+        if let Some(rule) = saved_rule_result {
+            ensure_saved_rule_result(&mut rule_sets, &rule, title.facet.as_str());
+        }
         let draft_contribution = preview_draft_contribution(
-            &request.draft,
+            &draft,
             &draft_id,
             title.facet.as_str(),
             &preview.scored.announced_decision.scoring_log,
@@ -498,6 +578,7 @@ fn preview_rule_sets(
     entries: &[crate::quality_profile::ScoringEntry],
     errors: &[scryer_rules::RuleEvalError],
     draft_id: &str,
+    is_draft: bool,
 ) -> Vec<RuleSetTestRuleSetResult> {
     use std::collections::BTreeMap;
     let mut results = BTreeMap::<String, RuleSetTestRuleSetResult>::new();
@@ -525,7 +606,7 @@ fn preview_rule_sets(
                 score: 0,
                 matched: false,
                 blocked: false,
-                is_draft: id == draft_id,
+                is_draft: is_draft && id == draft_id,
                 messages: Vec::new(),
                 entries: Vec::new(),
             });
@@ -556,13 +637,52 @@ fn preview_rule_sets(
                     score: 0,
                     matched: false,
                     blocked: false,
-                    is_draft: error.rule_set_id == draft_id,
+                    is_draft: is_draft && error.rule_set_id == draft_id,
                     messages: Vec::new(),
                     entries: Vec::new(),
                 });
         result.messages.push(error.message.clone());
     }
     results.into_values().collect()
+}
+
+fn ensure_saved_rule_result(
+    results: &mut Vec<RuleSetTestRuleSetResult>,
+    rule: &SavedRulePreviewMetadata,
+    facet: &str,
+) {
+    if results
+        .iter()
+        .any(|result| result.rule_set_id.as_deref() == Some(&rule.id))
+    {
+        return;
+    }
+    let applies = rule.applied_facets.is_empty()
+        || rule
+            .applied_facets
+            .iter()
+            .any(|rule_facet| rule_facet.as_str() == facet);
+    let mut messages = Vec::new();
+    if !rule.enabled {
+        messages.push("rule is disabled".to_string());
+    }
+    if !applies {
+        messages.push(format!("rule does not apply to {facet}"));
+    }
+    if messages.is_empty() {
+        messages.push("rule did not match this release".to_string());
+    }
+    results.push(RuleSetTestRuleSetResult {
+        rule_set_id: Some(rule.id.clone()),
+        rule_set_name: rule.name.clone(),
+        origin: if rule.is_managed { "system" } else { "user" }.into(),
+        score: 0,
+        matched: false,
+        blocked: false,
+        is_draft: false,
+        messages,
+        entries: Vec::new(),
+    });
 }
 
 fn preview_draft_contribution(

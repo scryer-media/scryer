@@ -382,6 +382,11 @@ impl AppUseCase {
             .ok_or_else(|| {
                 AppError::Validation("rule set is not tracked by a rule pack".to_string())
             })?;
+        if !installation.customizable {
+            return Err(AppError::Validation(
+                "rules from this pack cannot be copied".to_string(),
+            ));
+        }
         let original = self
             .services
             .customization
@@ -584,6 +589,7 @@ impl AppUseCase {
         next.name = pack.registry.name.clone();
         next.version = pack.registry.version.clone();
         next.digest = pack.registry.digest.clone();
+        next.customizable = pack.registry.customizable;
         next.revision += 1;
         next.last_updated = Utc::now();
         next.last_error = None;
@@ -636,6 +642,7 @@ fn new_installation(pack: &VerifiedRulePack) -> RulePackInstallation {
         name: pack.registry.name.clone(),
         version: pack.registry.version.clone(),
         digest: pack.registry.digest.clone(),
+        customizable: pack.registry.customizable,
         auto_update: false,
         revision: 1,
         last_updated: Utc::now(),

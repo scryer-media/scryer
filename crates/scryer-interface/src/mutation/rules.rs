@@ -20,6 +20,7 @@ fn from_tracked_rule_pack(
         name: installation.name,
         version: installation.version,
         digest: installation.digest,
+        customizable: installation.customizable,
         revision: installation.revision.into(),
         auto_update: installation.auto_update,
         available_version,
@@ -269,14 +270,17 @@ impl RulesMutations {
         let actor =
             require_config_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
         let request = scryer_application::RuleSetTestRequest {
-            draft: scryer_application::RuleSetTestDraft {
-                name: input.draft.name,
-                description: input.draft.description,
-                rego_source: input.draft.rego_source,
-                enabled: input.draft.enabled,
-                priority: input.draft.priority,
-                applied_facets: parse_facets(Some(input.draft.applied_facets)),
-            },
+            draft: input
+                .draft
+                .map(|draft| scryer_application::RuleSetTestDraft {
+                    name: draft.name,
+                    description: draft.description,
+                    rego_source: draft.rego_source,
+                    enabled: draft.enabled,
+                    priority: draft.priority,
+                    applied_facets: parse_facets(Some(draft.applied_facets)),
+                }),
+            test_rule_set_id: input.test_rule_set_id.map(String::from),
             edit_rule_set_id: input.edit_rule_set_id.map(String::from),
             copy_source_rule_set_id: input.copy_source_rule_set_id.map(String::from),
             copy_disables_source: input.copy_disables_source,
