@@ -755,6 +755,9 @@ const fr: LocaleDictionary = {
   "search.view": "Voir",
   "search.viewAll": "Tout voir",
   "search.add": "Ajouter",
+  "search.addToAnotherLibrary": "Ajouter à une autre bibliothèque",
+  "search.requestForAnotherLibrary": "Demander pour une autre bibliothèque",
+  "search.chooseLibraryToView": "Choisir la bibliothèque dans laquelle afficher {{name}}",
   "search.footerTip":
     "Introuvable ? Essayez un autre terme ou vérifiez vos indexeurs.",
   "search.searchTips": "Conseils de recherche",
@@ -2221,23 +2224,23 @@ const fr: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "Cette fusion ne peut pas s'exécuter : ces enregistrements ne peuvent pas être reportés.",
   "move.mergeCarried":
-    "Le titre conservé reprend {{files}} enregistrement(s) de fichier multimédia et {{history}} ligne(s) d'historique.",
+    "{{files}} fichier(s) multimédia et {{history}} entrées d'historique l'accompagnent.",
   "move.mergeDropped":
     "{{count}} autre(s) enregistrement(s) du titre fusionné ne sont pas repris et disparaissent avec lui.",
   "move.mergeRoleChangesHeading":
-    "Rôles des fichiers ({{demotions}} fichier(s) perdent le rôle principal)",
+    "{{demotions}} fichier(s) deviennent des copies supplémentaires",
   "move.mergeRoleChangesHeadingPlain": "Rôles des fichiers",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "principal",
-  "move.mergeRole.ADDITIONAL": "supplémentaire",
-  "move.mergeRoleDemotion":
-    "Ce fichier n'est plus le fichier principal de son épisode ; il est conservé à côté de celui qui l'est.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "La destination avait déjà un fichier principal pour cet épisode, et un déplacement n'en rétrograde jamais un.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Un autre fichier déplacé a déjà pris le rôle principal pour cet épisode de destination.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Deux épisodes source ont été regroupés sur un seul épisode de destination.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "« {{title}} » a déjà un fichier principal pour ces épisodes. Les fichiers entrants sont conservés comme copies supplémentaires ; rien de ce qui existe n'est remplacé.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "« {{title}} » a déjà un fichier principal. Le fichier entrant est conservé comme copie supplémentaire ; rien de ce qui existe n'est remplacé.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Un autre fichier de ce déplacement est déjà le principal pour ces épisodes, ceux-ci sont donc conservés comme copies supplémentaires.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Un autre fichier de ce déplacement est déjà le principal, celui-ci est donc conservé comme copie supplémentaire.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "Ces fichiers figurent ici sous deux épisodes qui n'en font qu'un à la destination. Chacun n'y figure qu'une fois.",
+  "move.mergeRoleUnnamedFile": "fichier {{id}}",
   "move.operationTransferNote": "Ces titres sont déplacés vers une autre bibliothèque.",
   "move.modeHeading": "Comment les fichiers doivent-ils arriver ?",
   "move.mode.MOVE_WITH_SCRYER": "Déplacer avec Scryer",
@@ -2338,7 +2341,7 @@ const fr: LocaleDictionary = {
   "move.planKind.MOVE": "Déplacements",
   "move.planKind.RENAME": "Renommages",
   "move.planKind.MERGE": "Fusions",
-  "move.planKind.DEDUP": "Doublons recyclés",
+  "move.planKind.DEDUP": "Fusion possible de fichiers identiques",
   "move.planKind.CATALOG_CHANGE": "Modifications du catalogue",
   "move.planKind.ROLE_CHANGE": "Changements de rôle",
   "move.planKind.NO_OP": "Sans effet",
@@ -2371,6 +2374,14 @@ const fr: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Consolidation de racines",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Transfert entre bibliothèques",
   "move.operationType.ADOPTION": "Adoption",
+  "move.toastPreparing": "Préparation…",
+  "move.toastTransferred": "Transféré",
+  "move.toastTitlesProgress": "{{current}} / {{total}} titres",
+  "move.toastDoneSubtitle": "Déplacement terminé · {{count}} titres",
+  "move.toastWarningsSubtitle": "Terminé avec avertissements · {{count}} titres",
+  "move.toastWarningsChip": "Certains titres sont à vérifier dans Activité.",
+  "move.toastFailedSubtitle": "Déplacement échoué",
+  "move.toastCanceledSubtitle": "Déplacement annulé",
   "move.startedHeading": "Le déplacement a démarré. Suivez-le dans Activité.",
   "move.viewInActivity": "Voir dans Activité",
   "rootChange.rowAction": "Changer la racine",
@@ -2412,7 +2423,7 @@ const fr: LocaleDictionary = {
   "rootChange.group.mergingWithDestinationTitles": "Fusion",
   "rootChange.group.folderNameCollisions": "Nom de dossier pris",
   "rootChange.group.mediaCollisions": "Nom de média pris",
-  "rootChange.group.dedupEligibleFiles": "Déjà identiques",
+  "rootChange.group.dedupEligibleFiles": "Peut-être identiques",
   "rootChange.group.companionCollisions": "Nom de fichier associé pris",
   "rootChange.group.untrackedSourceEntries": "Non suivis à la source",
   "rootChange.renamedFoldersHeading": "Dossiers qui changent de nom",

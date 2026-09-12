@@ -2,7 +2,9 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { ChevronDown } from "lucide-react";
+import { audioFormatPills, hdrFormatPills } from "@/lib/utils/media-format-pills";
 import { MediaAnalysisDetailsPopover } from "./media-analysis-details";
+import { hasDiscReview } from "@/lib/utils/disc-review";
 
 export type AudioStreamDetail = {
   metadata?: Pick<import("@/lib/types/media-analysis").MediaStreamMetadata, "channelLayout" | "disposition" | "programId">;
@@ -302,7 +304,9 @@ export function MediaInfoBadges({
 
   const sourceType = file.sourceType ? resolveSourceType(file.sourceType) : null;
   const hasContainer = containerFormat != null;
-  const hasVideo = !!(resolution || videoCodec || file.videoHdrFormat);
+  const hdrPills = hdrFormatPills(file);
+  const audioPills = audioFormatPills(file);
+  const hasVideo = !!(resolution || videoCodec || hdrPills.length > 0);
   const hasRelease = !!(sourceType || file.edition);
   const audioStreams: AudioStreamDetail[] = file.analysis?.streams.length
     ? file.analysis.streams.filter((stream) => stream.kind === "AUDIO").map((stream) => ({
@@ -317,16 +321,17 @@ export function MediaInfoBadges({
   const isScanFailed = file.scanStatus === "scan_failed";
   const requiresReview = file.scanStatus === "review_required";
 
-  if (!file.analysis && !hasContainer && !hasVideo && !hasRelease && !hasAudioStreams && !hasSubtitles && !isPendingScan && !isScanFailed && !requiresReview) return null;
+  if (!file.analysis && !hasContainer && !hasVideo && !hasRelease && !hasAudioStreams && audioPills.length === 0 && !hasSubtitles && !isPendingScan && !isScanFailed && !requiresReview) return null;
 
   return (
     <div className="flex flex-wrap items-center gap-1">
       {containerFormat ? <Badge tone="info">{containerFormat}</Badge> : null}
       {resolution ? <Badge tone="info">{resolution}</Badge> : null}
       {videoCodec ? <Badge tone="info">{videoCodec}</Badge> : null}
-      {file.videoHdrFormat ? <Badge tone="info">{file.videoHdrFormat}</Badge> : null}
+      {hdrPills.map((pill) => <Badge key={pill} tone="info">{pill}</Badge>)}
       {sourceType ? <Badge tone="info">{sourceType}</Badge> : null}
       {file.edition ? <Badge tone="info">{file.edition}</Badge> : null}
+      {audioPills.map((pill) => <Badge key={pill} tone="info">{pill}</Badge>)}
       {hasAudioStreams ? <AudioTracksPopover streams={audioStreams} /> : null}
       {hasSubtitles ? (
         <SubtitleTracksPopover
@@ -342,7 +347,7 @@ export function MediaInfoBadges({
         />
       ) : null}
       {isPendingScan ? <Badge tone="warning">{t("mediaFile.pendingScan")}</Badge> : null}
-      {file.analysis ? <MediaAnalysisDetailsPopover analysis={file.analysis} attempt={file.analysisAttempt} videoBitrateKbps={file.videoBitrateKbps} fileId={file.id} /> : null}
+      {file.analysis && hasDiscReview(file.analysis.disc, file.analysisAttempt) ? <MediaAnalysisDetailsPopover analysis={file.analysis} attempt={file.analysisAttempt} videoBitrateKbps={file.videoBitrateKbps} fileId={file.id} /> : null}
       {isScanFailed ? <Badge tone="negative">{t("mediaFile.scanFailed")}</Badge> : null}
       {requiresReview ? <Badge tone="warning">{t("mediaFile.reviewRequired")}</Badge> : null}
     </div>

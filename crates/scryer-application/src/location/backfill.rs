@@ -554,19 +554,6 @@ enum BackfillOutcome {
 /// (see [`crate::location::verify`]'s measurements), and having it persisted
 /// means a later move can compare a destination read-back against a stored
 /// value instead of re-reading the source.
-pub(super) async fn hash_file_throttled(
-    path: PathBuf,
-    chunk_pause: Duration,
-) -> AppResult<crate::location::model::StreamedContentHashes> {
-    hash_file_cancellable(
-        path,
-        chunk_pause,
-        tokio_util::sync::CancellationToken::new(),
-        None,
-    )
-    .await
-}
-
 async fn hash_file_cancellable(
     path: PathBuf,
     chunk_pause: Duration,

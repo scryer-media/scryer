@@ -52,6 +52,7 @@ mod tests {
                 source_path: format!("/source/{index}.mkv"),
                 destination_path: format!("/destination/{index}.mkv"),
                 size_bytes: 100,
+                source_content: None,
             })
             .collect();
         let plan = RootMoveExecutionPlan {
@@ -71,7 +72,6 @@ mod tests {
                 same_volume: None,
                 files,
                 deduplicated_sources: vec!["/source/duplicate.srt".into()],
-                deduplicated_media_file_ids: vec![],
                 renamed_destinations: vec![],
                 prune_directories: vec![],
                 warnings: vec![],
@@ -242,6 +242,7 @@ impl crate::AppUseCase {
                                         destination_path: String::new(),
                                         size_bytes: 0,
                                         media_file_id: None,
+                                        source_content: None,
                                     },
                                 ));
                                 (title.title_id, files)

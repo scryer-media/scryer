@@ -2734,192 +2734,131 @@ async fn a_vanished_source_folder_blocks_the_title_instead_of_failing_the_previe
     );
 }
 
-// ── Name collisions in the preview: what gets read, and what is trusted ──────
+// ── Name collisions in the preview: the quick check, and what it reads ───────
 
 mod name_collisions {
-    use super::*;
-
-    use crate::file_source_signature::file_source_signature_from_metadata;
-    use crate::lib_tests::full_hash_backfill::seed_row;
-    use crate::location::collisions::{ContentFacts, DestinationItem, FullHash};
-    use crate::location::model::PersistedContentHashes;
-    use crate::location::operations::prove_name_collisions;
+    use crate::location::collisions::DestinationItem;
+    use crate::location::operations::quick_check_name_collisions;
     use crate::location::root_move::SourceFile;
     use crate::stored_paths::path_to_stored_string;
-    use std::collections::BTreeMap;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
-    /// A scanned row whose stored size and signature describe `path` as it is
-    /// now, carrying `hash` as its attested full BLAKE3.
-    fn current_row(id: &str, path: &Path, hash: &str) -> TitleMediaFile {
-        let mut row = seed_row(id, path, "title-1");
-        let signature = file_source_signature_from_metadata(&std::fs::metadata(path).unwrap())
-            .expect("signature");
-        row.source_signature_scheme = Some(signature.scheme);
-        row.source_signature_value = Some(signature.value);
-        row.content_hashes = Some(PersistedContentHashes {
-            full_blake3: hash.to_string(),
-            move_crc: None,
-            crc_algorithm: None,
-            hash_computed_at: Some(chrono::Utc::now()),
-        });
-        row
-    }
-
-    fn source_file(row: &TitleMediaFile, path: &Path) -> SourceFile {
+    fn source_file(id: &str, path: &Path) -> SourceFile {
         SourceFile {
-            media_file_id: Some(row.id.clone()),
-            full_blake3: FullHash::from_persisted(row.content_hashes.as_ref()),
+            media_file_id: Some(id.to_string()),
+            sampled_proof: None,
             path: path.to_path_buf(),
             relative_path: Some(path.file_name().unwrap().into()),
             size_bytes: std::fs::metadata(path).unwrap().len(),
+            source_content: None,
         }
     }
 
-    fn destination_entry(row: &TitleMediaFile, path: &Path) -> DestinationItem {
+    fn destination_entry(path: &Path) -> DestinationItem {
         let size = std::fs::metadata(path).unwrap().len();
         DestinationItem::companion(path.file_name().unwrap().to_string_lossy(), size)
-            .with_content(
-                ContentFacts::new(size)
-                    .with_full_hash(FullHash::from_persisted(row.content_hashes.as_ref())),
-            )
             .with_path(path_to_stored_string(path))
     }
 
-    async fn prove(
-        files: &mut [SourceFile],
-        entries: &mut [DestinationItem],
-        source_row: &TitleMediaFile,
-        destination_row: &TitleMediaFile,
-    ) {
-        let source_rows: BTreeMap<&str, &TitleMediaFile> =
-            BTreeMap::from([(source_row.id.as_str(), source_row)]);
-        let destination_rows: BTreeMap<String, TitleMediaFile> =
-            BTreeMap::from([(destination_row.file_path.clone(), destination_row.clone())]);
-        prove_name_collisions(files, entries, &source_rows, &destination_rows).await;
+    fn sample_of(bytes: &[u8]) -> String {
+        blake3::hash(bytes).to_hex().to_string()
     }
 
-    #[tokio::test]
-    async fn persisted_hashes_are_trusted_while_the_stored_signature_still_matches() {
-        let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("src").join("episode.mkv");
-        let destination = dir.path().join("dst").join("episode.mkv");
+    fn pair(dir: &Path, source_bytes: &[u8], destination_bytes: &[u8]) -> (PathBuf, PathBuf) {
+        let source = dir.join("src").join("episode.mkv");
+        let destination = dir.join("dst").join("episode.mkv");
         std::fs::create_dir_all(source.parent().unwrap()).unwrap();
         std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
-        std::fs::write(&source, b"same bytes").unwrap();
-        std::fs::write(&destination, b"same bytes").unwrap();
-        // Hashes no read could produce: if either side is re-hashed, the test
-        // sees the real digest instead.
-        let source_row = current_row("mf-src", &source, "aaaa");
-        let destination_row = current_row("mf-dst", &destination, "bbbb");
-        let mut files = vec![source_file(&source_row, &source)];
-        let mut entries = vec![destination_entry(&destination_row, &destination)];
-
-        prove(&mut files, &mut entries, &source_row, &destination_row).await;
-
-        assert_eq!(files[0].full_blake3, FullHash::known("aaaa"));
-        assert_eq!(entries[0].content.full_blake3, FullHash::known("bbbb"));
+        std::fs::write(&source, source_bytes).unwrap();
+        std::fs::write(&destination, destination_bytes).unwrap();
+        (source, destination)
     }
 
+    /// FR-073: a same-sized pair under one name is sampled on both sides, and
+    /// identical content yields the same proof — the planner's "may merge".
     #[tokio::test]
-    async fn a_file_whose_signature_moved_on_is_re_read_when_small_and_left_unproven_when_large() {
+    async fn a_same_sized_pair_is_sampled_on_both_sides() {
         let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("src").join("episode.mkv");
-        let destination = dir.path().join("dst").join("episode.mkv");
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
-        std::fs::write(&source, b"fresh bytes").unwrap();
-        std::fs::write(&destination, b"fresh bytes").unwrap();
-        let source_row = current_row("mf-src", &source, "aaaa");
-        // The catalog remembers a different size for the destination: its
-        // hash describes bytes that are gone (FR-046).
-        let mut destination_row = current_row("mf-dst", &destination, "bbbb");
-        destination_row.size_bytes += 1;
-        let mut files = vec![source_file(&source_row, &source)];
-        let mut entries = vec![destination_entry(&destination_row, &destination)];
+        let (source, destination) = pair(dir.path(), b"same bytes", b"same bytes");
+        let mut files = vec![source_file("mf-src", &source)];
+        let mut entries = vec![destination_entry(&destination)];
 
-        prove(&mut files, &mut entries, &source_row, &destination_row).await;
+        quick_check_name_collisions(&mut files, &mut entries).await;
 
-        let real = blake3::hash(b"fresh bytes").to_hex().to_string();
-        assert_eq!(files[0].full_blake3, FullHash::known("aaaa"));
-        assert_eq!(entries[0].content.full_blake3, FullHash::known(real));
-
-        // Past the preview's read limit the stale side stays unproven: the
-        // preview never hashes a large file to render a screen (D4).
-        let large = dir.path().join("dst").join("large.mkv");
-        let large_source = dir.path().join("src").join("large.mkv");
-        for path in [&large, &large_source] {
-            let file = std::fs::File::create(path).unwrap();
-            file.set_len(10_000_001).unwrap();
-        }
-        let large_source_row = current_row("mf-large-src", &large_source, "cccc");
-        let mut large_row = current_row("mf-large", &large, "dddd");
-        large_row.source_signature_value = Some("moved-on".to_string());
-        let mut files = vec![source_file(&large_source_row, &large_source)];
-        let mut entries = vec![destination_entry(&large_row, &large)];
-
-        prove(&mut files, &mut entries, &large_source_row, &large_row).await;
-
-        assert_eq!(files[0].full_blake3, FullHash::known("cccc"));
-        assert_eq!(entries[0].content.full_blake3, FullHash::Stale);
+        let proof = sample_of(b"same bytes");
+        assert_eq!(files[0].sampled_proof.as_deref(), Some(proof.as_str()));
+        assert_eq!(
+            entries[0].content.sampled_proof.as_deref(),
+            Some(proof.as_str())
+        );
     }
 
+    /// Same size, different bytes: both sides are sampled and the proofs
+    /// disagree, which is all the planner needs to rule the pair different.
     #[tokio::test]
-    async fn a_row_without_a_stored_signature_proves_nothing_even_at_the_same_size() {
+    async fn a_same_sized_pair_with_different_bytes_yields_different_proofs() {
         let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("src").join("episode.mkv");
-        let destination = dir.path().join("dst").join("episode.mkv");
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
-        std::fs::write(&source, b"same length").unwrap();
-        std::fs::write(&destination, b"SAME LENGTH").unwrap();
-        // A row scanned before signatures shipped: right size, no signature.
-        // The scan's invalidation rule keeps its hash; the preview may not use
-        // it as proof, because the bytes could have been rewritten in place.
-        let mut source_row = current_row("mf-src", &source, "aaaa");
-        source_row.source_signature_scheme = None;
-        source_row.source_signature_value = None;
-        let destination_row = current_row("mf-dst", &destination, "bbbb");
-        let mut files = vec![source_file(&source_row, &source)];
-        let mut entries = vec![destination_entry(&destination_row, &destination)];
+        let (source, destination) = pair(dir.path(), b"same length", b"SAME LENGTH");
+        let mut files = vec![source_file("mf-src", &source)];
+        let mut entries = vec![destination_entry(&destination)];
 
-        prove(&mut files, &mut entries, &source_row, &destination_row).await;
+        quick_check_name_collisions(&mut files, &mut entries).await;
 
-        let real = blake3::hash(b"same length").to_hex().to_string();
-        assert_eq!(files[0].full_blake3, FullHash::known(real));
-        assert_eq!(entries[0].content.full_blake3, FullHash::known("bbbb"));
+        assert_eq!(
+            files[0].sampled_proof.as_deref(),
+            Some(sample_of(b"same length").as_str())
+        );
+        assert_eq!(
+            entries[0].content.sampled_proof.as_deref(),
+            Some(sample_of(b"SAME LENGTH").as_str())
+        );
+        assert_ne!(files[0].sampled_proof, entries[0].content.sampled_proof);
     }
 
+    /// A size difference already rules the pair out, so neither side is read;
+    /// the destination's size is refreshed from disk so the planner compares
+    /// what is there now rather than what the listing said.
     #[tokio::test]
-    async fn a_large_file_on_either_side_leaves_the_small_side_unread_too() {
+    async fn a_size_difference_leaves_both_sides_unsampled() {
         let dir = tempfile::tempdir().unwrap();
-        let source = dir.path().join("src").join("episode.mkv");
-        let destination = dir.path().join("dst").join("episode.mkv");
-        std::fs::create_dir_all(source.parent().unwrap()).unwrap();
-        std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
-        std::fs::write(&source, b"small").unwrap();
-        std::fs::File::create(&destination)
-            .unwrap()
-            .set_len(10_000_001)
-            .unwrap();
-        // Neither side carries a current hash. The small source could be read
-        // for nothing: a size mismatch already rules the pair out, and a proof
-        // of one side alone is no proof.
-        let mut source_row = current_row("mf-src", &source, "aaaa");
-        source_row.source_signature_value = Some("moved-on".to_string());
-        let mut destination_row = current_row("mf-dst", &destination, "bbbb");
-        destination_row.source_signature_value = Some("moved-on".to_string());
-        let mut files = vec![source_file(&source_row, &source)];
-        let mut entries = vec![destination_entry(&destination_row, &destination)];
+        let (source, destination) = pair(dir.path(), b"small", b"a longer file");
+        let mut files = vec![source_file("mf-src", &source)];
+        let mut entries = vec![destination_entry(&destination)];
+        entries[0].content.size_bytes = 5;
 
-        prove(&mut files, &mut entries, &source_row, &destination_row).await;
+        quick_check_name_collisions(&mut files, &mut entries).await;
 
-        assert_eq!(files[0].full_blake3, FullHash::Stale);
-        assert_eq!(entries[0].content.full_blake3, FullHash::Stale);
+        assert_eq!(files[0].sampled_proof, None);
+        assert_eq!(entries[0].content.sampled_proof, None);
+        assert_eq!(
+            entries[0].content.size_bytes, 13,
+            "the size comes from a fresh stat"
+        );
     }
 
+    /// A source with no destination entry under its name has nothing to
+    /// compare against and is not read.
     #[tokio::test]
-    async fn two_source_files_folding_to_one_destination_name_share_its_evidence() {
+    async fn a_file_without_a_colliding_name_is_not_sampled() {
+        let dir = tempfile::tempdir().unwrap();
+        let (source, destination) = pair(dir.path(), b"bytes", b"bytes");
+        let other = destination.with_file_name("other.mkv");
+        std::fs::rename(&destination, &other).unwrap();
+        let mut files = vec![source_file("mf-src", &source)];
+        let mut entries = vec![destination_entry(&other)];
+
+        quick_check_name_collisions(&mut files, &mut entries).await;
+
+        assert_eq!(files[0].sampled_proof, None);
+        assert_eq!(entries[0].content.sampled_proof, None);
+    }
+
+    /// Two source files that land on one destination name (the shape a
+    /// case-sensitive volume produces under a case-insensitive rule): the
+    /// destination is sampled once, and the second file neither resets that
+    /// proof nor is sampled itself when its size rules it out.
+    #[tokio::test]
+    async fn two_source_files_folding_to_one_destination_name_share_its_sample() {
         let dir = tempfile::tempdir().unwrap();
         let small = dir.path().join("src").join("a").join("episode.mkv");
         let large = dir.path().join("src").join("b").join("episode.mkv");
@@ -2929,37 +2868,22 @@ mod name_collisions {
         }
         std::fs::write(&small, b"bytes").unwrap();
         std::fs::write(&destination, b"bytes").unwrap();
-        std::fs::File::create(&large)
-            .unwrap()
-            .set_len(10_000_001)
-            .unwrap();
-        let mut small_row = current_row("mf-small", &small, "aaaa");
-        small_row.source_signature_value = Some("moved-on".to_string());
-        let large_row = current_row("mf-large", &large, "cccc");
-        let mut destination_row = current_row("mf-dst", &destination, "bbbb");
-        destination_row.source_signature_value = Some("moved-on".to_string());
-        // Two source files that land on one destination name (the shape a
-        // case-sensitive volume produces under a case-insensitive rule).
+        std::fs::write(&large, b"rather more bytes").unwrap();
         let mut files = vec![
-            source_file(&small_row, &small),
-            source_file(&large_row, &large),
+            source_file("mf-small", &small),
+            source_file("mf-large", &large),
         ];
-        let mut entries = vec![destination_entry(&destination_row, &destination)];
-        let source_rows: BTreeMap<&str, &TitleMediaFile> = BTreeMap::from([
-            (small_row.id.as_str(), &small_row),
-            (large_row.id.as_str(), &large_row),
-        ]);
-        let destination_rows: BTreeMap<String, TitleMediaFile> =
-            BTreeMap::from([(destination_row.file_path.clone(), destination_row.clone())]);
+        let mut entries = vec![destination_entry(&destination)];
 
-        prove_name_collisions(&mut files, &mut entries, &source_rows, &destination_rows).await;
+        quick_check_name_collisions(&mut files, &mut entries).await;
 
-        // The small pair was read and proven; the large second file must not
-        // reset the destination's evidence on its way through.
-        let real = blake3::hash(b"bytes").to_hex().to_string();
-        assert_eq!(files[0].full_blake3, FullHash::known(real.clone()));
-        assert_eq!(entries[0].content.full_blake3, FullHash::known(real));
-        assert_eq!(files[1].full_blake3, FullHash::known("cccc"));
+        let proof = sample_of(b"bytes");
+        assert_eq!(files[0].sampled_proof.as_deref(), Some(proof.as_str()));
+        assert_eq!(
+            entries[0].content.sampled_proof.as_deref(),
+            Some(proof.as_str())
+        );
+        assert_eq!(files[1].sampled_proof, None);
     }
 
     // Inode identity is a unix notion; `same_regular_file` has no Windows arm,
@@ -2974,16 +2898,14 @@ mod name_collisions {
         std::fs::create_dir_all(destination.parent().unwrap()).unwrap();
         std::fs::write(&source, b"one inode").unwrap();
         std::fs::hard_link(&source, &destination).unwrap();
-        let source_row = current_row("mf-src", &source, "aaaa");
-        let destination_row = current_row("mf-dst", &destination, "aaaa");
-        let mut files = vec![source_file(&source_row, &source)];
-        let mut entries = vec![destination_entry(&destination_row, &destination)];
+        let mut files = vec![source_file("mf-src", &source)];
+        let mut entries = vec![destination_entry(&destination)];
 
-        prove(&mut files, &mut entries, &source_row, &destination_row).await;
+        quick_check_name_collisions(&mut files, &mut entries).await;
 
-        // Matching persisted hashes would read as a proven duplicate and
-        // recycle the source, which here is the destination's only inode.
-        assert_eq!(files[0].full_blake3, FullHash::Absent);
-        assert_eq!(entries[0].content.full_blake3, FullHash::Absent);
+        // Matching samples would read as "may merge" and invite the transfer
+        // to drop the source, which here is the destination's only inode.
+        assert_eq!(files[0].sampled_proof, None);
+        assert_eq!(entries[0].content.sampled_proof, None);
     }
 }

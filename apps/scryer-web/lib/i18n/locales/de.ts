@@ -745,6 +745,9 @@ const de: LocaleDictionary = {
   "search.view": "Ansehen",
   "search.viewAll": "Alle anzeigen",
   "search.add": "Hinzufügen",
+  "search.addToAnotherLibrary": "Zu einer weiteren Bibliothek hinzufügen",
+  "search.requestForAnotherLibrary": "Für eine weitere Bibliothek anfragen",
+  "search.chooseLibraryToView": "Bibliothek wählen, in der {{name}} angezeigt wird",
   "search.footerTip":
     "Nicht gefunden? Versuche einen anderen Begriff oder prüfe deine Indexer.",
   "search.searchTips": "Suchtipps",
@@ -2194,23 +2197,23 @@ const de: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "Diese Zusammenführung kann nicht laufen: Diese Datensätze lassen sich nicht übertragen.",
   "move.mergeCarried":
-    "Der verbleibende Titel übernimmt {{files}} Mediendatei-Eintrag/-Einträge und {{history}} Verlaufszeile(n).",
+    "{{files}} Mediendatei(en) und {{history}} Verlaufseinträge kommen mit.",
   "move.mergeDropped":
     "{{count}} weitere(r) Eintrag/Einträge des zusammengeführten Titels werden nicht übernommen und verfallen mit ihm.",
   "move.mergeRoleChangesHeading":
-    "Rollen der Mediendateien ({{demotions}} Datei(en) verlieren die Hauptrolle)",
-  "move.mergeRoleChangesHeadingPlain": "Rollen der Mediendateien",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "Hauptdatei",
-  "move.mergeRole.ADDITIONAL": "zusätzlich",
-  "move.mergeRoleDemotion":
-    "Diese Datei ist nicht mehr die Hauptdatei ihrer Episode; sie wird neben der Hauptdatei behalten.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "Das Ziel hatte bereits eine Hauptdatei für diese Episode, und ein Verschieben stuft nie eine herab.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Eine andere verschobene Datei hat die Hauptrolle für diese Zielepisode bereits belegt.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Zwei Quellepisoden wurden auf eine Zielepisode zusammengelegt.",
+    "{{demotions}} Datei(en) werden zu zusätzlichen Kopien",
+  "move.mergeRoleChangesHeadingPlain": "Dateirollen",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "„{{title}}“ hat für diese Episoden bereits eine Hauptdatei. Die ankommenden Dateien werden als zusätzliche Kopien behalten; nichts Vorhandenes wird ersetzt.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "„{{title}}“ hat bereits eine Hauptdatei. Die ankommende Datei wird als zusätzliche Kopie behalten; nichts Vorhandenes wird ersetzt.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Eine andere Datei dieser Verschiebung ist für diese Episoden bereits die Hauptdatei, daher werden diese als zusätzliche Kopien behalten.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Eine andere Datei dieser Verschiebung ist bereits die Hauptdatei, daher wird diese als zusätzliche Kopie behalten.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "Diese Dateien sind hier unter zwei Episoden eingetragen, die am Ziel eine Episode sind. Dort wird jede nur einmal geführt.",
+  "move.mergeRoleUnnamedFile": "Datei {{id}}",
   "move.operationTransferNote": "Diese Titel werden in eine andere Bibliothek verschoben.",
   "move.modeHeading": "Wie sollen die Dateien dorthin gelangen?",
   "move.mode.MOVE_WITH_SCRYER": "Mit Scryer verschieben",
@@ -2311,7 +2314,7 @@ const de: LocaleDictionary = {
   "move.planKind.MOVE": "Verschiebungen",
   "move.planKind.RENAME": "Umbenennungen",
   "move.planKind.MERGE": "Zusammenführungen",
-  "move.planKind.DEDUP": "Recycelte Duplikate",
+  "move.planKind.DEDUP": "Mögliche Zusammenführung identischer Dateien",
   "move.planKind.CATALOG_CHANGE": "Katalogänderungen",
   "move.planKind.ROLE_CHANGE": "Rollenänderungen",
   "move.planKind.NO_OP": "Ohne Änderung",
@@ -2344,6 +2347,14 @@ const de: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Stammverzeichnis-Zusammenführung",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Bibliotheksübergreifende Übertragung",
   "move.operationType.ADOPTION": "Übernahme",
+  "move.toastPreparing": "Wird vorbereitet…",
+  "move.toastTransferred": "Übertragen",
+  "move.toastTitlesProgress": "{{current}} / {{total}} Titel",
+  "move.toastDoneSubtitle": "Verschieben abgeschlossen · {{count}} Titel",
+  "move.toastWarningsSubtitle": "Mit Warnungen abgeschlossen · {{count}} Titel",
+  "move.toastWarningsChip": "Einige Titel sollten in Aktivität geprüft werden.",
+  "move.toastFailedSubtitle": "Verschieben fehlgeschlagen",
+  "move.toastCanceledSubtitle": "Verschieben abgebrochen",
   "move.startedHeading": "Das Verschieben wurde gestartet. Verfolge es unter Aktivität.",
   "move.viewInActivity": "In Aktivität ansehen",
   "rootChange.rowAction": "Stammordner ändern",
@@ -2385,7 +2396,7 @@ const de: LocaleDictionary = {
   "rootChange.group.mergingWithDestinationTitles": "Zusammenführung",
   "rootChange.group.folderNameCollisions": "Ordnername belegt",
   "rootChange.group.mediaCollisions": "Mediendateiname belegt",
-  "rootChange.group.dedupEligibleFiles": "Bereits identisch",
+  "rootChange.group.dedupEligibleFiles": "Möglicherweise identisch",
   "rootChange.group.companionCollisions": "Begleitdateiname belegt",
   "rootChange.group.untrackedSourceEntries": "Unverfolgt in der Quelle",
   "rootChange.renamedFoldersHeading": "Ordner, deren Name sich ändert",

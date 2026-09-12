@@ -127,14 +127,30 @@ pub(crate) fn parse_ts_source(
     let mut caption_services = Vec::new();
 
     if profile != AnalysisProfile::ContentProbe {
-        enrich_tracks_from_probe(
+        // Stream probing only fills in detail for tracks the program map already
+        // described. An exhausted budget leaves that detail unknown; it must not
+        // discard the tracks themselves.
+        if let Err(error) = enrich_tracks_from_probe(
             &mut file,
             &es_entries,
             &mut tracks,
             layout,
             &mut report,
             &mut caption_services,
-        )?;
+        ) {
+            if !crate::source::MediaSource::exhausted(file.get_ref()) {
+                return Err(error);
+            }
+            report.status = scryer_media_types::ProbeStatus::Incomplete;
+            report.budget_exhausted = true;
+            report.warnings.push(scryer_media_types::ProbeWarning {
+                code: "ts_probe_read_budget".into(),
+                message:
+                    "Stream probing stopped when the media byte or I/O-operation budget was exhausted"
+                        .into(),
+                ..Default::default()
+            });
+        }
     }
     let selected_video = tracks.iter().find(|track| track.kind == TrackKind::Video);
     let selected_program = selected_video.and_then(|track| track.metadata.program_id);
@@ -2372,6 +2388,48 @@ fn read_full<T: Read>(reader: &mut T, buf: &mut [u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn budget_exhausted_during_stream_probing_keeps_the_program_map_tracks() {
+        // The program map names the tracks; stream probing only details them. The
+        // window where the budget dies in between moves with any change in I/O
+        // accounting, so look for it instead of pinning a limit.
+        let fixture = include_bytes!("../tests/media/h264_aac.ts").as_slice();
+        let analysis = (8_u64..128)
+            .filter_map(|limit| {
+                let mut source = std::io::Cursor::new(fixture);
+                let analysis = crate::analyze_source_with_limits(
+                    &mut source,
+                    "ts",
+                    crate::AnalyzeOptions::default(),
+                    64 * 1024 * 1024,
+                    limit,
+                )
+                .unwrap_or_else(|error| panic!("io limit {limit} failed the analysis: {error}"));
+                analysis
+                    .details
+                    .report
+                    .warnings
+                    .iter()
+                    .any(|warning| warning.code == "ts_probe_read_budget")
+                    .then_some(analysis)
+            })
+            .next()
+            .expect("some io limit must exhaust the budget inside stream probing");
+        assert_eq!(analysis.video_codec.as_deref(), Some("h264"));
+        assert!(
+            !analysis.details.programs.is_empty(),
+            "the program map survives the probing gap"
+        );
+        // Duration comes from a timestamp scan that runs after probing, so it can
+        // stay unknown here. What matters is that the tracks are still described:
+        // the analyzer then reports this file as inconclusive rather than invalid.
+        assert!(analysis.details.report.budget_exhausted);
+        assert_eq!(
+            analysis.details.report.status,
+            scryer_media_types::ProbeStatus::Incomplete
+        );
+    }
 
     #[test]
     fn delayed_program_map_uses_buffered_source_reads() {

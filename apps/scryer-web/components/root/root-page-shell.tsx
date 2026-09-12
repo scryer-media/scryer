@@ -48,6 +48,7 @@ import { RootHeader } from "@/components/root/root-header";
 import { buildRouteCommands } from "@/components/root/route-commands";
 import { JobRunProvider } from "@/components/root/job-run-provider";
 import { LibraryScanProgressProvider } from "@/components/root/library-scan-progress-provider";
+import { LocationMoveProgressProvider } from "@/components/root/location-move-progress-provider";
 import { ReactiveRefreshProvider } from "@/components/root/reactive-refresh-provider";
 import { RootSidebar } from "@/components/root/root-sidebar";
 import { ApplicationUpgradeAction } from "@/components/common/application-upgrade";
@@ -1795,6 +1796,7 @@ function AuthenticatedHomePage({
             <Suspense fallback={<ViewLoadingFallback />}>
               <LibraryScanProgressProvider>
                 <JobRunProvider enabled={canSubscribeToJobEvents}>
+                  <LocationMoveProgressProvider>
                   <ReactiveRefreshProvider
                     enabled={canSubscribeToLibraryEvents}
                   >
@@ -2045,6 +2047,7 @@ function AuthenticatedHomePage({
                       </div>
                     </GlobalSearchProvider>
                   </ReactiveRefreshProvider>
+                  </LocationMoveProgressProvider>
                 </JobRunProvider>
               </LibraryScanProgressProvider>
             </Suspense>

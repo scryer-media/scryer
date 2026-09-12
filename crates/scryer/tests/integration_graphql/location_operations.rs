@@ -98,6 +98,8 @@ const PREVIEW_QUERY: &str = r#"
             newRole
             reason
             detail
+            episodeLabel
+            fileName
           }
           roleDemotions
           historyRowsCarried
@@ -385,9 +387,9 @@ fn planned_collision_title(
                 "/destination/{title_name}/{title_name} (from Movies 4K).mkv"
             ),
             size_bytes: 4_096,
+            source_content: None,
         }],
         deduplicated_sources: vec![format!("/source/{title_name}/{title_name}.nfo")],
-        deduplicated_media_file_ids: Vec::new(),
         renamed_destinations: vec![format!(
             "/destination/{title_name}/{title_name} (from Movies 4K).mkv"
         )],

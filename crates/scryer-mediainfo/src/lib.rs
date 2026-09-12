@@ -228,9 +228,21 @@ pub fn analyze_source(
     extension: &str,
     options: AnalyzeOptions,
 ) -> Result<MediaAnalysis, MediaInfoError> {
+    analyze_source_with_limits(input, extension, options, 64 * 1024 * 1024, 1024)
+}
+
+/// Analyze with explicit budgets, so exhaustion can be exercised without
+/// movie-sized fixtures. Callers outside tests use [`analyze_source`].
+pub(crate) fn analyze_source_with_limits(
+    input: &mut dyn source::MediaSource,
+    extension: &str,
+    options: AnalyzeOptions,
+    byte_budget: u64,
+    io_limit: u64,
+) -> Result<MediaAnalysis, MediaInfoError> {
     let started = std::time::Instant::now();
     let ext = extension.to_ascii_lowercase();
-    let mut source = source::BoundedSource::new(input, 64 * 1024 * 1024).with_io_limit(1024);
+    let mut source = source::BoundedSource::new(input, byte_budget).with_io_limit(io_limit);
     source.seek(std::io::SeekFrom::Start(0))?;
     let mut header = [0_u8; 564];
     let size = source.read(&mut header)?;
@@ -256,6 +268,9 @@ pub fn analyze_source(
         None => return Err(MediaInfoError::UnsupportedFormat(ext)),
     };
 
+    // Parsers stop enriching once the budget is gone, so a bounded failure here
+    // means exhaustion struck before any track was parsed and there is nothing
+    // to keep.
     let mut analysis = match raw {
         Ok(raw) => build_analysis(raw),
         Err(_) if source.exhausted => MediaAnalysis::default(),

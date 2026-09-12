@@ -656,6 +656,10 @@ mod tests {
     }
 
     async fn create_quota_table(pool: &SqlitePool) {
+        sqlx::query("CREATE TABLE indexers (id TEXT PRIMARY KEY NOT NULL)")
+            .execute(pool)
+            .await
+            .expect("indexer table should be created");
         sqlx::query(
             "CREATE TABLE indexer_api_quotas (
                 indexer_id TEXT PRIMARY KEY NOT NULL,
@@ -672,6 +676,14 @@ mod tests {
         .execute(pool)
         .await
         .expect("quota table should be created");
+    }
+
+    async fn seed_indexer(pool: &SqlitePool, id: &str) {
+        sqlx::query("INSERT INTO indexers (id) VALUES (?)")
+            .bind(id)
+            .execute(pool)
+            .await
+            .expect("seed retained indexer");
     }
 
     #[tokio::test]
@@ -912,16 +924,24 @@ mod tests {
             "INSERT INTO indexer_api_quotas
                 (indexer_id, api_current, api_max, queries_today, last_reset_at)
              VALUES ('idx-today', 5, 500, 123, datetime('now')),
-                    ('idx-stale', 9, 900, 456, datetime('now', '-3 days'))",
+                    ('idx-stale', 9, 900, 456, datetime('now', '-3 days')),
+                    ('idx-deleted', 3, 300, 100, datetime('now'))",
         )
         .execute(&pool)
         .await
         .expect("seed quota rows");
+        seed_indexer(&pool, "idx-today").await;
+        seed_indexer(&pool, "idx-stale").await;
 
         let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
         tracker.hydrate().await;
 
         let stats = tracker.all_stats();
+        assert_eq!(
+            stats.len(),
+            2,
+            "orphan quota rows must not create ghost indexers"
+        );
         let today = stats
             .iter()
             .find(|stats| stats.indexer_id == "idx-today")
@@ -973,6 +993,7 @@ mod tests {
                 assert_eq!(tracker.pending_quota_updates.lock().unwrap().len(), 1);
                 create_quota_table(&pool).await;
             }
+            seed_indexer(&pool, "idx-midnight").await;
             tracker.record_api_request_sent_on("idx-midnight", "Midnight Indexer", today);
             assert_eq!(tracker.pending_quota_updates.lock().unwrap().len(), 2);
             assert_eq!(tracker.all_stats()[0].api_requests_today, 1);
@@ -1023,6 +1044,7 @@ mod tests {
         assert_eq!(tracker.pending_quota_updates.lock().unwrap().len(), 2);
 
         create_quota_table(&pool).await;
+        seed_indexer(&pool, "idx-order").await;
         tracker
             .drain_pending_quota_updates()
             .await
@@ -1044,6 +1066,7 @@ mod tests {
             .await
             .expect("in-memory sqlite should open");
         create_quota_table(&pool).await;
+        seed_indexer(&pool, "idx-drain").await;
         let tracker = tracker_with_gate(&pool, Arc::new(tokio::sync::Mutex::new(())));
         let mut workers = Vec::new();
         for _ in 0..24 {

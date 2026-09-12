@@ -12,7 +12,9 @@ import {
 } from "lucide-react";
 import { useClient } from "urql";
 import { AddNewButton } from "@/components/common/add-new-button";
+import { FacetSelect, FacetTags } from "@/components/common/facet-select";
 import { InfoHelp } from "@/components/common/info-help";
+import { LOWERCASE_FACET_IDS } from "@/lib/facets/selection";
 import {
   RULE_TEMPLATES,
   RULE_TEMPLATE_CATEGORIES,
@@ -103,12 +105,6 @@ type SettingsRulesSectionProps = {
 const ArrCustomFormatImportDialog = React.lazy(
   () => import("@/components/views/settings/arr-custom-format-import-dialog"),
 );
-
-const FACET_OPTIONS = [
-  { value: "movie", label: "Movie" },
-  { value: "series", label: "Series" },
-  { value: "anime", label: "Anime" },
-];
 
 type RefField = { field: string; type: string; descKey: string };
 
@@ -649,25 +645,6 @@ function TrashLocalePacksCard({
   );
 }
 
-function FacetBadges({ facets }: { facets: string[] }) {
-  if (facets.length === 0) {
-    return (
-      <Badge tone="info" className="capitalize">
-        Global
-      </Badge>
-    );
-  }
-  return (
-    <div className="flex gap-1">
-      {facets.map((f) => (
-        <Badge key={f} tone="neutral" className="capitalize">
-          {f}
-        </Badge>
-      ))}
-    </div>
-  );
-}
-
 type CommunityPack = {
   id: string;
   name: string;
@@ -1087,7 +1064,7 @@ export function SettingsRulesSection({
                     {record.description || "—"}
                   </TableCell>
                   <TableCell>
-                    <FacetBadges facets={record.appliedFacets} />
+                    <FacetTags values={record.appliedFacets} emptyLabel="Global" />
                   </TableCell>
                   <TableCell className="text-center">
                     <RenderBooleanIcon
@@ -1265,33 +1242,17 @@ export function SettingsRulesSection({
                   <p className="mb-2 text-xs text-muted-foreground">
                     {t("settings.ruleAppliedFacetsHelp")}
                   </p>
-                  <div className="flex items-center gap-4">
-                    {FACET_OPTIONS.map((opt) => (
-                      <label
-                        key={opt.value}
-                        className="flex items-center gap-2"
-                      >
-                        <Checkbox
-                          id={selectorId("settings-rule-facet", opt.value)}
-                          checked={ruleSetDraft.appliedFacets.includes(
-                            opt.value,
-                          )}
-                          onCheckedChange={(value) => {
-                            setRuleSetDraft((prev) => {
-                              const next =
-                                value === true
-                                  ? [...prev.appliedFacets, opt.value]
-                                  : prev.appliedFacets.filter(
-                                      (f) => f !== opt.value,
-                                    );
-                              return { ...prev, appliedFacets: next };
-                            });
-                          }}
-                        />
-                        <span className="text-sm">{opt.label}</span>
-                      </label>
-                    ))}
-                  </div>
+                  <FacetSelect
+                    idPrefix="settings-rule-facet"
+                    values={LOWERCASE_FACET_IDS}
+                    selected={ruleSetDraft.appliedFacets}
+                    onChange={(next) => {
+                      setRuleSetDraft((prev) => ({
+                        ...prev,
+                        appliedFacets: next,
+                      }));
+                    }}
+                  />
                 </div>
 
                 {validationResult ? (

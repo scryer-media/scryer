@@ -224,29 +224,6 @@ fn write_file(path: &Path, contents: &[u8]) {
     std::fs::write(path, contents).expect("write fixture");
 }
 
-#[tokio::test]
-async fn legacy_duplicates_remain_when_recycling_is_unavailable() {
-    let temp = tempfile::tempdir().unwrap();
-    let mut plan = single_title_plan(
-        &temp.path().join("a"),
-        &temp.path().join("b"),
-        "movie.mkv",
-        8,
-    );
-    let title = &mut plan.titles[0];
-    let source = title.files[0].source();
-    write_file(&source, b"incoming");
-    title
-        .deduplicated_sources
-        .push(path_to_stored_string(&source));
-    let disposal = RecycleBinSourceRecycler::new(BTreeMap::new())
-        .recycle_source("operation", title, &source, None, 8)
-        .await
-        .unwrap();
-    assert_eq!(disposal, SourceDisposal::PreservedRecycleUnavailable);
-    assert_eq!(std::fs::read(source).unwrap(), b"incoming");
-}
-
 /// One title, one media file, moving from `<root>/a/Movie` to
 /// `<root>/b/Movie`.
 fn single_title_plan(
@@ -277,9 +254,9 @@ fn single_title_plan(
                 source_path: path_to_stored_string(source_folder.join(file_name)),
                 destination_path: path_to_stored_string(destination_folder.join(file_name)),
                 size_bytes,
+                source_content: None,
             }],
             deduplicated_sources: Vec::new(),
-            deduplicated_media_file_ids: Vec::new(),
             renamed_destinations: Vec::new(),
             prune_directories: vec![path_to_stored_string(&source_folder)],
             warnings: Vec::new(),
@@ -347,7 +324,7 @@ async fn valid_hardlink_performs_zero_content_reads_even_after_unjournaled_resta
     );
     let file = &plan.titles[0].files[0];
     write_file(&file.source(), b"hello world");
-    std::fs::set_permissions(file.source(), std::fs::Permissions::from_mode(0)).unwrap();
+    std::fs::set_permissions(file.source(), std::fs::Permissions::from_mode(0o000)).unwrap();
     let copier = VerifiedCopier::with_read_back_opener(Arc::new(|_| {
         panic!("hardlink attempted a verification read")
     }));
@@ -515,85 +492,161 @@ async fn no_copy_cleanup_preserves_source_if_survivor_was_replaced() {
     assert_eq!(std::fs::read(file.source()).unwrap(), b"hello world");
 }
 
+/// The plan and mover for a title whose one media file already exists,
+/// byte for byte, at its destination: the transfer's quick check cannot tell
+/// the pair apart, the full comparison proves them identical, and the resolver
+/// records the `Identical` disposition the reconciler and cleanup act on.
+fn identical_pair_fixture(
+    temp: &tempfile::TempDir,
+    store: &Arc<InMemoryLocationOperationStore>,
+) -> (RootMoveExecutionPlan, RootMoveFileMover) {
+    let plan = single_title_plan(
+        &temp.path().join("a"),
+        &temp.path().join("b"),
+        "film.mkv",
+        4,
+    );
+    let file = &plan.titles[0].files[0];
+    write_file(&file.source(), b"same");
+    write_file(&file.destination(), b"same");
+    let resolver = crate::location::resolution::ConflictResolver::new(
+        store.clone(),
+        BTreeMap::from([("title-1".to_string(), "Movies".to_string())]),
+    );
+    let mover = RootMoveFileMover::without_permissions().with_resolver(Arc::new(resolver));
+    (plan, mover)
+}
+
+/// FR-073: a source the transfer proved byte-identical to the destination's
+/// copy is redundant, so cleanup drops it outright — no recycle bin, no
+/// warning — and the destination copy is the survivor the catalog row now
+/// names. Running cleanup again finds nothing left to do.
 #[tokio::test]
-async fn changed_duplicate_copies_keep_the_source_and_catalog_intact() {
+async fn an_identical_source_is_dropped_outright_once_the_transfer_proves_it() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(InMemoryLocationOperationStore::new());
+    let (plan, mover) = identical_pair_fixture(&temp, &store);
+    let file = plan.titles[0].files[0].clone();
+    let operation = queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    store.insert_operation(operation.clone());
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
+        .run("op-1", &plan.to_work_plan())
+        .await
+        .expect("run");
+
+    assert_eq!(
+        outcome.state,
+        LocationOperationState::Completed,
+        "dropping a proven-identical copy is not a warning: {:?}",
+        outcome.warnings
+    );
+    assert_eq!(outcome.counters.dedups, 1);
+    let rows = store.file_resolutions("op-1", "title-1").await.unwrap();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(
+        rows[0].disposition,
+        crate::location::resolution::ResolutionDisposition::Identical
+    );
+    assert!(!file.source().exists(), "the redundant source copy is gone");
+    assert_eq!(std::fs::read(file.destination()).unwrap(), b"same");
+    assert!(
+        recycler.recycled().is_empty(),
+        "an identical copy is dropped, not recycled"
+    );
+    assert!(
+        catalog
+            .writes()
+            .iter()
+            .any(|write| write == &format!("media:mf-1={}", file.destination_path)),
+        "the catalog row names the surviving destination copy: {:?}",
+        catalog.writes()
+    );
+    reconciler
+        .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+        .await
+        .expect("cleanup remains idempotent");
+    assert_eq!(std::fs::read(file.destination()).unwrap(), b"same");
+}
+
+/// C4: the identity proof authorizes dropping the source only while both
+/// files are still the files that were compared. Whichever side changes (or
+/// disappears) after the proof, the catalog is left alone and the source stays.
+#[tokio::test]
+async fn changed_identical_copies_keep_the_source_and_catalog_intact() {
     for changed_copy in ["source", "destination", "missing"] {
         let temp = tempfile::tempdir().unwrap();
-        let mut plan = single_title_plan(
-            &temp.path().join("a"),
-            &temp.path().join("b"),
-            "film.mkv",
-            4,
-        );
-        let file = plan.titles[0].files.remove(0);
-        write_file(&file.source(), b"same");
-        write_file(&file.destination(), b"same");
-        plan.titles[0]
-            .deduplicated_sources
-            .push(file.source_path.clone());
-        plan.titles[0]
-            .deduplicated_media_file_ids
-            .push("mf-1".into());
-        plan.deduplication_destinations.insert(
-            file.source_path.clone(),
-            crate::location::root_move::DeduplicationSurvivor {
-                destination_path: file.destination_path.clone(),
-                source_media_file_id: file.media_file_id.clone(),
-            },
-        );
-        let store = InMemoryLocationOperationStore::new();
-        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
-        let recycler = RecordingRecycler::default();
-        let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+        let store = Arc::new(InMemoryLocationOperationStore::new());
+        let (plan, mover) = identical_pair_fixture(&temp, &store);
+        let file = plan.titles[0].files[0].clone();
         let operation = queued_operation(
-            "dedup",
+            "op-1",
             LocationOperationType::RootMove,
             LocationExecutionMode::MoveWithScryer,
             VerificationDepth::Full,
         );
-        let title = plan.titles[0].to_planned_title();
-        reconciler
-            .revalidate_duplicate(&file.source_path)
+        store.insert_operation(operation.clone());
+        let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+        let recycler = RecordingRecycler::default();
+        let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+        let work = plan.to_work_plan();
+        let verified = mover
+            .move_file(FileMoveRequest {
+                operation_id: "op-1",
+                title: &work.titles[0],
+                file: &work.titles[0].files[0],
+                depth: VerificationDepth::Full,
+                progress: &crate::location::verify::CopyProgress::none(),
+            })
             .await
             .expect("initially identical");
+        assert!(verified.permits_source_removal() && verified.hashes.is_some());
+        store
+            .record_location_file_verification(&crate::location::model::FileVerificationRecord {
+                operation_id: "op-1".into(),
+                title_id: "title-1".into(),
+                media_file_id: Some("mf-1".into()),
+                source_path: file.source_path.clone(),
+                destination_path: file.destination_path.clone(),
+                hashes: verified.hashes.clone(),
+                depth: verified.depth,
+                outcome: verified.outcome,
+                detail: None,
+                verified_at: chrono::Utc::now(),
+            })
+            .await
+            .unwrap();
+
+        // Different lengths, so the recorded file versions cannot agree.
         match changed_copy {
-            "source" => write_file(&file.source(), b"diff"),
-            "destination" => write_file(&file.destination(), b"diff"),
+            "source" => write_file(&file.source(), b"changed"),
+            "destination" => write_file(&file.destination(), b"changed"),
             _ => std::fs::remove_file(file.destination()).unwrap(),
         }
+        let title = plan.titles[0].to_planned_title();
         reconciler
             .reconcile_title(&operation, &title)
             .await
             .expect_err("stale before catalog writes");
-        assert!(catalog.writes().is_empty());
+        assert!(catalog.writes().is_empty(), "{changed_copy}");
         reconciler
             .clean_up_title(&operation, &title)
             .await
             .expect_err("stale before source disposal");
-        assert!(file.source().exists());
-        assert!(recycler.recycled.lock().unwrap().is_empty());
-        write_file(&file.source(), b"same");
-        write_file(&file.destination(), b"same");
-        reconciler
-            .reconcile_title(&operation, &title)
-            .await
-            .expect("matching copies reconcile");
+        assert!(file.source().exists(), "{changed_copy}: the source stays");
         assert!(
-            catalog
-                .writes()
-                .iter()
-                .any(|write| write == "delete-media:mf-1")
+            recycler.recycled().is_empty(),
+            "{changed_copy}: nothing was recycled"
         );
-        reconciler
-            .clean_up_title(&operation, &title)
-            .await
-            .expect("matching source is recycled");
-        reconciler
-            .clean_up_title(&operation, &title)
-            .await
-            .expect("cleanup remains idempotent");
-        assert!(!file.source().exists());
-        assert_eq!(std::fs::read(file.destination()).unwrap(), b"same");
     }
 }
 
@@ -1355,7 +1408,6 @@ async fn catalog_only_titles_complete_without_touching_the_filesystem() {
             same_volume: None,
             files: Vec::new(),
             deduplicated_sources: Vec::new(),
-            deduplicated_media_file_ids: Vec::new(),
             renamed_destinations: Vec::new(),
             prune_directories: Vec::new(),
             warnings: Vec::new(),
@@ -1436,11 +1488,11 @@ async fn cleanup_leaves_a_non_empty_source_directory_alone() {
     assert!(source_root.join("Movie").exists());
     assert!(source_root.join("Movie").join("notes.txt").exists());
     assert!(
-        outcome
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("still holds content")),
-        "the user is told why the directory survived: {:?}",
+        outcome.warnings.iter().any(|warning| {
+            warning.contains("was kept because it still has files in it")
+                && warning.contains("Movie")
+        }),
+        "the user is told, in plain words, which folder survived and why: {:?}",
         outcome.warnings
     );
 }

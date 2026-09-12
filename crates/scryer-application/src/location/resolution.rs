@@ -73,7 +73,9 @@ impl FileResolution {
 }
 
 use super::executor::{FileMoveRequest, TitleFileMover};
-use super::model::{AppliedVerificationDepth, FileVerificationOutcome, VerificationDepth};
+use super::model::{
+    AppliedVerificationDepth, FileVerificationOutcome, KnownSourceContent, VerificationDepth,
+};
 use super::verify::{CopyProgress, VerifiedFile, hash_existing_file_with_progress};
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::{AppError, AppResult, LocationOperationRepository};
@@ -89,7 +91,8 @@ type MediaResultSender = tokio::sync::watch::Sender<Option<Result<PathBuf, Strin
 
 pub struct ConflictResolver {
     pub store: Arc<dyn LocationOperationRepository>,
-    pub contexts: BTreeMap<String, (String, bool)>,
+    /// Each title's source-library label, for the FR-074 suffix.
+    pub contexts: BTreeMap<String, String>,
     claims: Mutex<BTreeMap<PathBuf, Arc<tokio::sync::Mutex<()>>>>,
     media_results: Mutex<BTreeMap<(String, String, PathBuf), MediaResultSender>>,
 }
@@ -97,7 +100,7 @@ pub struct ConflictResolver {
 impl ConflictResolver {
     pub fn new(
         store: Arc<dyn LocationOperationRepository>,
-        contexts: BTreeMap<String, (String, bool)>,
+        contexts: BTreeMap<String, String>,
     ) -> Self {
         Self {
             store,
@@ -214,11 +217,11 @@ impl ConflictResolver {
             .await?
             .into_iter()
             .find(|row| row.source_path == path_to_stored_string(source));
-        let (label, recycle) = self
+        let label = self
             .contexts
             .get(&request.title.title_id)
             .cloned()
-            .unwrap_or(("source".into(), false));
+            .unwrap_or_else(|| "source".into());
         let mut destination = match saved.as_ref() {
             Some(row) => stored_path_to_path_buf(&row.destination_path),
             None => self
@@ -269,7 +272,13 @@ impl ConflictResolver {
                                 compared_before.saturating_add(total),
                             );
                         });
-                    let proof = compare_existing(source, &destination, &comparison).await?;
+                    let proof = compare_existing(
+                        source,
+                        &destination,
+                        &comparison,
+                        request.file.source_content.as_ref(),
+                    )
+                    .await?;
                     // Distinct occupied names are additional work, not retries.
                     compared_before = compared_before
                         .saturating_add(read.load(std::sync::atomic::Ordering::Relaxed));
@@ -280,9 +289,13 @@ impl ConflictResolver {
             };
             let preserved = destination != *original;
             if let Some(proof) = existing.as_ref() {
-                let identical = proof.permits_source_removal();
-                let hardlink = identical && proof.hashes.is_none();
-                if !identical || (!hardlink && !recycle && !preserved) {
+                // Different content moves on to the next candidate name; a
+                // proven-identical file merges into the copy that is already
+                // there, whichever name it sits under (FR-073). The source is
+                // then redundant and is dropped at cleanup, recycle bin or
+                // not: a copy proven byte-identical while both exist is not
+                // user data that can be lost (C4).
+                if !proof.permits_source_removal() {
                     let name = if number == 1 {
                         base.clone()
                     } else {
@@ -292,17 +305,19 @@ impl ConflictResolver {
                     number = number.saturating_add(1);
                     continue;
                 }
-                record.disposition = if hardlink {
+                record.disposition = if proof.hashes.is_none() {
                     ResolutionDisposition::Hardlink
-                } else if preserved {
-                    ResolutionDisposition::Preserved
                 } else {
                     ResolutionDisposition::Identical
                 };
             } else if preserved {
                 record.disposition = ResolutionDisposition::Preserved;
             }
-            if preserved {
+            if record.disposition == ResolutionDisposition::Identical {
+                // The designed outcome of a may-merge item, not a warning: the
+                // counters and the asset listing name the dropped copy.
+                record.reason_code = Some("identical_merged".into());
+            } else if preserved {
                 record.reason_code = Some("incoming_preserved".into());
                 record.warning = Some(format!(
                     "Incoming {} was preserved as {} to keep both versions.",
@@ -361,43 +376,6 @@ impl ConflictResolver {
             return Ok(verified);
         }
     }
-}
-
-/// Files this size or smaller may be hashed end to end for a preview; anything
-/// larger is left unproven rather than read, because a preview is an
-/// interactive screen (D4).
-pub(super) const PREVIEW_FULL_HASH_LIMIT_BYTES: u64 = 10_000_000;
-
-/// Never read more than the preview threshold, even if a file grows mid-read.
-pub async fn preview_hash(path: &Path) -> AppResult<Option<String>> {
-    let path = path.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        use std::io::Read;
-        let mut file = std::fs::File::open(&path).map_err(|error| file_error(&path, error))?;
-        let before = file.metadata().map_err(|error| file_error(&path, error))?;
-        if before.len() > PREVIEW_FULL_HASH_LIMIT_BYTES {
-            return Ok(None);
-        }
-        let mut remaining = before.len();
-        let mut hash = blake3::Hasher::new();
-        let mut buffer = [0u8; 64 * 1024];
-        while remaining > 0 {
-            let wanted = remaining.min(buffer.len() as u64) as usize;
-            let read = file
-                .read(&mut buffer[..wanted])
-                .map_err(|error| file_error(&path, error))?;
-            if read == 0 {
-                return Ok(None);
-            }
-            hash.update(&buffer[..read]);
-            remaining -= read as u64;
-        }
-        let after = file.metadata().map_err(|error| file_error(&path, error))?;
-        Ok(super::backfill::same_file_version(&before, &after)
-            .then(|| hash.finalize().to_hex().to_string()))
-    })
-    .await
-    .map_err(|error| AppError::Repository(error.to_string()))?
 }
 
 fn companion_suffix(companion: &Path, media: &Path) -> Option<String> {
@@ -471,6 +449,7 @@ pub async fn compare_existing(
     source: &Path,
     destination: &Path,
     progress: &CopyProgress,
+    known: Option<&KnownSourceContent>,
 ) -> AppResult<VerifiedFile> {
     let source_before = file_version(source).await?;
     let destination_before = file_version(destination).await?;
@@ -497,6 +476,47 @@ pub async fn compare_existing(
             VerificationDepth::Full,
         ));
     }
+    // The quick check first (FR-073): a size difference or a differing
+    // head/tail sample proves different content without reading either file
+    // end to end, and the transfer copies straight away. Only a pair the quick
+    // check cannot tell apart earns the full comparison.
+    if source_metadata.len() != destination_metadata.len()
+        || !sampled_proofs_agree(source, destination).await?
+    {
+        return Ok(different_content(source, destination));
+    }
+    // The source's bytes were already hashed end to end when the catalog
+    // recorded them; while its signature still matches, that hash stands in
+    // for a second read and only the destination is read.
+    if let Some(known) = known.filter(|known| known.matches(&source_metadata)) {
+        let total = destination_metadata.len();
+        progress.comparison(0, total);
+        let sink = progress.clone();
+        let destination_progress =
+            CopyProgress::none().with_transfer_sink(move |_, bytes| sink.comparison(bytes, total));
+        let destination_hashes =
+            hash_existing_file_with_progress(destination, destination_progress)
+                .await
+                .map_err(|error| file_error(destination, error))?;
+        if source_before != file_version(source).await?
+            || destination_before != file_version(destination).await?
+        {
+            return Err(AppError::Validation("A file changed while it was being compared. The source was preserved; try again when the files are no longer changing.".into()));
+        }
+        let identical = destination_hashes.full_blake3 == known.full_blake3
+            && destination_hashes.size_bytes == known.size_bytes;
+        if !identical {
+            return Ok(different_content(source, destination));
+        }
+        return Ok(VerifiedFile {
+            source_path: source.to_path_buf(),
+            destination_path: destination.to_path_buf(),
+            hashes: Some(destination_hashes),
+            depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
+            outcome: FileVerificationOutcome::Verified,
+            detail: None,
+        });
+    }
     let source_size = source_metadata.len();
     let total = source_size.saturating_add(destination_metadata.len());
     progress.comparison(0, total);
@@ -520,18 +540,48 @@ pub async fn compare_existing(
     }
     let identical = source_hashes.full_blake3 == destination_hashes.full_blake3
         && source_hashes.size_bytes == destination_hashes.size_bytes;
+    if !identical {
+        return Ok(different_content(source, destination));
+    }
     Ok(VerifiedFile {
         source_path: source.to_path_buf(),
         destination_path: destination.to_path_buf(),
         hashes: Some(source_hashes),
         depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
-        outcome: if identical {
-            FileVerificationOutcome::Verified
-        } else {
-            FileVerificationOutcome::Mismatch
-        },
-        detail: (!identical).then(|| {
-            "The destination contains different content. Both files were preserved.".into()
-        }),
+        outcome: FileVerificationOutcome::Verified,
+        detail: None,
     })
+}
+
+/// Whether the sampled head/tail proofs of two same-sized files agree. A
+/// disagreement is proof of different bytes; agreement only means the full
+/// comparison has to decide.
+async fn sampled_proofs_agree(source: &Path, destination: &Path) -> AppResult<bool> {
+    let (source, destination) = (source.to_path_buf(), destination.to_path_buf());
+    tokio::task::spawn_blocking(move || {
+        let left = crate::fs_integrity::import_content_proof(&source)
+            .map_err(|error| file_error(&source, error))?;
+        let right = crate::fs_integrity::import_content_proof(&destination)
+            .map_err(|error| file_error(&destination, error))?;
+        Ok(left.size_bytes == right.size_bytes && left.sample_blake3 == right.sample_blake3)
+    })
+    .await
+    .map_err(|error| AppError::Repository(error.to_string()))?
+}
+
+/// The comparison's answer for a pair proven different: no source hashes are
+/// claimed, because nothing was verified against anything — the resolver moves
+/// on to the next candidate name and the transfer copies the file.
+fn different_content(source: &Path, destination: &Path) -> VerifiedFile {
+    VerifiedFile {
+        source_path: source.to_path_buf(),
+        destination_path: destination.to_path_buf(),
+        hashes: None,
+        depth: AppliedVerificationDepth::exact(VerificationDepth::Full),
+        outcome: FileVerificationOutcome::Mismatch,
+        detail: Some(format!(
+            "{} contains different content. Both files were preserved.",
+            destination.display()
+        )),
+    }
 }

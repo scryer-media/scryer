@@ -46,18 +46,101 @@ use tokio::sync::{Mutex, Notify};
 fn canonical_genre_tags(labels: &[&str]) -> Vec<CanonicalMediaTag> {
     labels
         .iter()
-        .map(|label| CanonicalMediaTag {
-            key: format!(
-                "canonical:genre:{}",
-                label.to_ascii_lowercase().replace(' ', "-")
-            ),
-            category: "genre".to_string(),
-            name: (*label).to_string(),
-            confidence: Some(1.0),
-            sources: Vec::new(),
-            source_tag_keys: Vec::new(),
-            is_adult: false,
-            is_spoiler: false,
+        .map(|label| {
+            let slug = label.to_ascii_lowercase().replace(' ', "-");
+            CanonicalMediaTag {
+                key: format!("canonical:genre:{slug}"),
+                category: "genre".to_string(),
+                name: (*label).to_string(),
+                // The shape SMG produces from a provider's own genre list, which
+                // is what the genre corroboration gate requires: a lone
+                // community tag key would (correctly) earn no rail.
+                confidence: Some(1.0),
+                sources: vec!["genre".to_string()],
+                source_tag_keys: vec![format!("genre:{slug}")],
+                is_adult: false,
+                is_spoiler: false,
+            }
+        })
+        .collect()
+}
+
+/// Rail-quality floors mean a three-title library earns no reason rails at all,
+/// and a two-item rail is dropped rather than padded out of the evidence-less
+/// tail. These fixtures are about RBAC and group ordering rather than about the
+/// floors, so they top the library up past the full-ladder tier and give each
+/// label enough pool items to clear the minimum rail size.
+fn rail_floor_padding_titles(library_id: &str, count: usize) -> Vec<Title> {
+    (0..count)
+        .map(|index| {
+            let mut title = test_title(
+                &format!("pad-title-{index}"),
+                &format!("Pad Title {index}"),
+                MediaFacet::Movie,
+                Vec::new(),
+            );
+            title.library_id = library_id.to_string();
+            title.canonical_tags = canonical_genre_tags(&["Drama", "Sci-Fi"]);
+            title
+                .canonical_tags
+                .extend(canonical_theme_tags(&["Isekai"]));
+            title
+        })
+        .collect()
+}
+
+fn rail_floor_padding_subjects(
+    run_id: &str,
+    library_id: &str,
+    count: usize,
+) -> Vec<DiscoverySubmittedSubjectRecord> {
+    (0..count)
+        .map(|index| DiscoverySubmittedSubjectRecord {
+            run_id: run_id.to_string(),
+            subject_key: format!("tmdb:movie:7{index:04}"),
+            title_id: Some(format!("pad-title-{index}")),
+            library_id: Some(library_id.to_string()),
+            library_facet: Some("movie".to_string()),
+            title_kind: Some("movie".to_string()),
+            display_title: Some(format!("Pad Title {index}")),
+            external_ids_json: serde_json::json!([{"source": "tmdb", "value": format!("7{index:04}")}])
+                .to_string(),
+            raw_subject_json: serde_json::json!({"tmdbId": format!("7{index:04}")}).to_string(),
+        })
+        .collect()
+}
+
+fn rail_floor_padding_items(
+    run_id: &str,
+    prefix: &str,
+    genres: &[&str],
+    themes: &[&str],
+    count: usize,
+) -> Vec<DiscoveryItemRecord> {
+    (0..count)
+        .map(|index| {
+            let mut item = discovery_item_record(
+                run_id,
+                run_id,
+                None,
+                &format!("tmdb:movie:8{prefix}{index}"),
+                &format!("Pad {prefix} {index}"),
+                "movie",
+                // Above the evidence-less band so the padding is admitted on
+                // edge evidence, which is what a real rail item has.
+                20.0,
+                genres,
+                &[],
+                false,
+                true,
+            );
+            item.facet_terms.extend(
+                themes
+                    .iter()
+                    .map(|theme| format!("canonical:theme:{}", theme.to_ascii_lowercase())),
+            );
+            item.matched_subject_keys = vec!["tmdb:movie:603".to_string()];
+            item
         })
         .collect()
 }
@@ -281,6 +364,11 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         .lock()
         .await
         .extend([owned_drama_sci_fi, owned_drama, owned_sci_fi]);
+    titles
+        .store
+        .lock()
+        .await
+        .extend(rail_floor_padding_titles(&visible_movie_library_id, 60));
 
     *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
         last_success_generation_id: Some("context-run".to_string()),
@@ -344,6 +432,15 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
             raw_subject_json: serde_json::json!({"tmdbId": 999}).to_string(),
         },
     ]);
+    discovery
+        .submitted_subjects
+        .lock()
+        .await
+        .extend(rail_floor_padding_subjects(
+            "context-run",
+            &visible_movie_library_id,
+            60,
+        ));
     let mut private_recommendation = discovery_item_record(
         "context-run",
         "context-run",
@@ -646,6 +743,22 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
             true,
         ),
     ]);
+    let mut rail_padding = rail_floor_padding_items("context-run", "isekai", &[], &["Isekai"], 10);
+    rail_padding.extend(rail_floor_padding_items(
+        "context-run",
+        "drama",
+        &["Drama"],
+        &[],
+        10,
+    ));
+    rail_padding.extend(rail_floor_padding_items(
+        "context-run",
+        "scifi",
+        &["Sci-Fi"],
+        &[],
+        10,
+    ));
+    discovery.items.lock().await.extend(rail_padding);
     discovery.facets.lock().await.push(DiscoveryFacetRecord {
         run_id: "context-run".to_string(),
         facet_name: "genre".to_string(),
@@ -720,7 +833,9 @@ async fn discovery_home_and_items_use_local_rows_and_library_view_rbac() {
         .iter()
         .find(|facet| facet.facet_name == "genre" && facet.facet_value == "Drama")
         .expect("canonical drama facet should be present");
-    assert_eq!(drama_facet.local_count, Some(3));
+    // Three original Drama items plus the ten that pad the Drama rail past the
+    // minimum rail size.
+    assert_eq!(drama_facet.local_count, Some(13));
     assert_eq!(drama_facet.smg_count, None);
     assert!(
         viewer_home
@@ -4052,6 +4167,104 @@ async fn discovery_sync_daily_snapshot_takes_precedence_and_clears_pending_chang
 }
 
 #[tokio::test]
+async fn discovery_sync_library_growth_resnapshots_ahead_of_the_daily_cadence() {
+    // A fresh install imports for hours after its first snapshot. Waiting for
+    // the daily gate means a day of rails built for a library that no longer
+    // exists.
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let now = Utc.timestamp_opt(10_000, 0).unwrap();
+    app.runtime.environment.set_fixed_now_for_tests(Some(now));
+
+    let mut run = discovery_run_record("generation-1", now, "complete");
+    run.subject_count = 1;
+    discovery
+        .upsert_discovery_sync_run(&run)
+        .await
+        .expect("previous snapshot run should seed");
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-1".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-1".to_string()),
+        last_context_snapshot_completed_at: Some(now - chrono::Duration::hours(1)),
+        next_context_snapshot_eligible_at: Some(now + chrono::Duration::days(1)),
+        next_incremental_reload_eligible_at: Some(now + chrono::Duration::hours(4)),
+        updated_at: now,
+        ..DiscoverySyncStateRecord::default()
+    });
+
+    {
+        let mut store = titles.store.lock().await;
+        for index in 0..6 {
+            store.push(test_title(
+                &format!("title-{index}"),
+                &format!("The Example Movie {index}"),
+                MediaFacet::Movie,
+                vec![("tmdb_movie", &format!("60{index}"))],
+            ));
+        }
+    }
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should run");
+
+    assert_eq!(
+        gateway.submitted_inputs.lock().await.len(),
+        1,
+        "a library that grew from one subject to six must re-snapshot"
+    );
+}
+
+#[tokio::test]
+async fn discovery_sync_minor_library_growth_waits_for_the_daily_cadence() {
+    let gateway = Arc::new(SnapshotMetadataGateway::default());
+    let (app, _admin, titles) = bootstrap_with_metadata_gateway_and_titles(gateway.clone());
+    let discovery = Arc::new(RecordingDiscoveryRepository::default());
+    let app = app.with_test_overrides(|builder| builder.with_discovery_store(discovery.clone()));
+    let now = Utc.timestamp_opt(10_000, 0).unwrap();
+    app.runtime.environment.set_fixed_now_for_tests(Some(now));
+
+    let mut run = discovery_run_record("generation-1", now, "complete");
+    run.subject_count = 10;
+    discovery
+        .upsert_discovery_sync_run(&run)
+        .await
+        .expect("previous snapshot run should seed");
+    *discovery.state.lock().await = Some(DiscoverySyncStateRecord {
+        last_success_generation_id: Some("generation-1".to_string()),
+        last_subject_fingerprint: Some("fingerprint-generation-1".to_string()),
+        last_context_snapshot_completed_at: Some(now - chrono::Duration::hours(1)),
+        next_context_snapshot_eligible_at: Some(now + chrono::Duration::days(1)),
+        next_incremental_reload_eligible_at: Some(now + chrono::Duration::hours(4)),
+        updated_at: now,
+        ..DiscoverySyncStateRecord::default()
+    });
+
+    {
+        let mut store = titles.store.lock().await;
+        for index in 0..11 {
+            store.push(test_title(
+                &format!("title-{index}"),
+                &format!("The Example Movie {index}"),
+                MediaFacet::Movie,
+                vec![("tmdb_movie", &format!("6{index:02}"))],
+            ));
+        }
+    }
+
+    app.run_scheduled_job_now(JobKey::DiscoverySync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("discovery sync should run");
+
+    assert!(
+        gateway.submitted_inputs.lock().await.is_empty(),
+        "one new title out of ten is not a different library"
+    );
+}
+
+#[tokio::test]
 async fn discovery_sync_public_feed_runs_while_scan_and_context_backoff_are_active_and_filters_collection_section()
  {
     let gateway = Arc::new(SnapshotMetadataGateway::default());
@@ -6636,6 +6849,8 @@ fn discovery_item_record(
         relation_count: Some(relation_subtypes.len() as i32),
         source_subject_count: Some(1),
         rank_score: Some(rank_score),
+        recommendation_score: Some(rank_score),
+        base_rank: Some(0.0),
         matched_subject_keys: Vec::new(),
         matched_subject_titles: Vec::new(),
         matched_subject_count: 0,
@@ -6842,6 +7057,8 @@ fn test_discovery_title() -> DiscoveryTitle {
         relation_count: 0,
         source_subject_count: 1,
         rank_score: 0.8,
+        recommendation_score: Some(0.8),
+        base_rank: Some(0.0),
         best_source: "popular".to_string(),
         matched_subject_keys: vec!["tmdb:movie:603".to_string()],
         matched_subject_titles: vec!["The Example Movie".to_string()],

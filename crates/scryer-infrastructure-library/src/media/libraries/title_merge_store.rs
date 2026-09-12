@@ -79,6 +79,12 @@ const DROPPED_TITLE_TABLES: &[(&str, &str)] = &[
     ("library_scan_unmatched_items", "title_id"),
 ];
 
+/// The one dropped table whose rows belong to an *operation* rather than to
+/// the title. The operation performing the merge still needs its own rows
+/// there — its cleanup step reads them to decide which verified sources it may
+/// drop — so they are neither counted nor deleted as source records.
+const OPERATION_VERIFICATIONS_TABLE: &str = "location_operation_verifications";
+
 /// Maintenance action evidence belongs to a candidate. Delete its leaf rows
 /// before the candidate so the preview and outcome both account for every
 /// retired audit row, instead of hiding them behind the candidate cascade.
@@ -127,7 +133,16 @@ impl TitleMergeRepository for TitleMergeStore {
 
         let mut dropped_record_count = 0i64;
         for (table, column) in DROPPED_TITLE_TABLES {
-            dropped_record_count += count_rows(exec(), table, column, source_title_id).await?;
+            dropped_record_count += if *table == OPERATION_VERIFICATIONS_TABLE {
+                count_verifications_of_other_operations(
+                    exec(),
+                    source_title_id,
+                    current_operation_id,
+                )
+                .await?
+            } else {
+                count_rows(exec(), table, column, source_title_id).await?
+            };
         }
         dropped_record_count +=
             count_rows(exec(), "lifecycle_candidates", "title_id", source_title_id).await?;
@@ -136,6 +151,7 @@ impl TitleMergeRepository for TitleMergeStore {
         }
 
         Ok(MergeCatalogSnapshot {
+            current_operation_id: current_operation_id.map(str::to_string),
             source_title_id: source_title_id.to_string(),
             destination_title_id: destination_title_id.to_string(),
             destination_title_name,
@@ -155,6 +171,7 @@ impl TitleMergeRepository for TitleMergeStore {
                 .await?
                 .iter()
                 .any(|file| file.role == MergedMediaRole::Primary),
+            source_media_file_names: load_media_file_names(exec(), source_title_id).await?,
             source_file_link_ids: load_file_link_ids(exec(), source_title_id).await?,
             history_episode_ids,
             history_collection_ids,
@@ -214,7 +231,13 @@ impl TitleMergeRepository for TitleMergeStore {
                     ],
                 )
                 .await?;
-                purge_title_dependent_records(tx, &map, &mut outcome).await?;
+                purge_title_dependent_records(
+                    tx,
+                    &map,
+                    plan.current_operation_id.as_deref(),
+                    &mut outcome,
+                )
+                .await?;
                 retire_source_title(tx, &map, &mut outcome).await?;
                 Ok(outcome)
             })
@@ -384,6 +407,35 @@ async fn load_title_slot_files(
         .collect()
 }
 
+/// The name on disk of every source media file, keyed by id, so the FR-070
+/// preview can say which file a role change is about.
+async fn load_media_file_names(
+    exec: SqlExec<'_, '_>,
+    title_id: &str,
+) -> AppResult<std::collections::BTreeMap<String, String>> {
+    let rows = SqlRuntime::fetch_all(
+        exec,
+        "SELECT id, file_path FROM media_files WHERE title_id = {} ORDER BY id",
+        &[SqlArg::Text(title_id.to_string())],
+    )
+    .await?;
+    let mut names = std::collections::BTreeMap::new();
+    for row in &rows {
+        let id = row.text("id")?;
+        let Some(path) = row.opt_text("file_path")? else {
+            continue;
+        };
+        if let Some(name) = std::path::Path::new(&path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| !name.is_empty())
+        {
+            names.insert(id, name.to_string());
+        }
+    }
+    Ok(names)
+}
+
 /// The source series-movie links a source media file is attached to. Only these
 /// have to map: a link nothing points at retires with the title.
 async fn load_file_link_ids(
@@ -464,6 +516,31 @@ fn decode_payload(row: &SqlRow) -> AppResult<Option<Value>> {
                 row.text("event_id").unwrap_or_default()
             ))
         })
+}
+
+/// Verification rows recorded against the source title by operations other
+/// than the one performing the merge — the only ones a merge retires.
+async fn count_verifications_of_other_operations(
+    exec: SqlExec<'_, '_>,
+    title_id: &str,
+    current_operation_id: Option<&str>,
+) -> AppResult<i64> {
+    let row = SqlRuntime::fetch_optional(
+        exec,
+        &format!(
+            "SELECT COUNT(*) AS row_count FROM {OPERATION_VERIFICATIONS_TABLE}
+              WHERE title_id = {{}} AND operation_id <> {{}}"
+        ),
+        &[
+            SqlArg::Text(title_id.to_string()),
+            SqlArg::Text(current_operation_id.unwrap_or("").to_string()),
+        ],
+    )
+    .await?
+    .ok_or_else(|| {
+        AppError::Repository(format!("missing count for {OPERATION_VERIFICATIONS_TABLE}"))
+    })?;
+    row.i64("row_count")
 }
 
 async fn count_rows(
@@ -847,15 +924,29 @@ fn remap_payload_ids(payload: &mut Value, map: &MergeIdentityMap) -> bool {
 async fn purge_title_dependent_records(
     tx: &mut SqlTx<'_>,
     map: &MergeIdentityMap,
+    current_operation_id: Option<&str>,
     outcome: &mut MergeOutcome,
 ) -> AppResult<()> {
     for (table, column) in DROPPED_TITLE_TABLES {
-        let removed = tx
-            .execute(
+        let removed = if *table == OPERATION_VERIFICATIONS_TABLE {
+            // The merging operation's own proofs stay: its cleanup step, which
+            // runs after this transaction, drops a source copy only when it
+            // finds the row that verified it.
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE {column} = {{}} AND operation_id <> {{}}"),
+                &[
+                    SqlArg::Text(map.source_title_id.clone()),
+                    SqlArg::Text(current_operation_id.unwrap_or("").to_string()),
+                ],
+            )
+            .await?
+        } else {
+            tx.execute(
                 &format!("DELETE FROM {table} WHERE {column} = {{}}"),
                 &[SqlArg::Text(map.source_title_id.clone())],
             )
-            .await?;
+            .await?
+        };
         record(outcome, &format!("retire:{table}"), removed);
     }
     for table in DROPPED_CANDIDATE_CHILD_TABLES {

@@ -6452,6 +6452,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-util",
+ "percent-encoding",
  "quick-xml",
  "reqwest",
  "scryer-application",
@@ -6880,7 +6881,7 @@ dependencies = [
 
 [[package]]
 name = "scryer-plugin-sdk"
-version = "3.10.0"
+version = "3.11.0"
 dependencies = [
  "base64 0.22.1",
  "postcard",

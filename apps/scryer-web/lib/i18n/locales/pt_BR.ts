@@ -748,6 +748,9 @@ const pt_BR: LocaleDictionary = {
   "search.view": "Ver",
   "search.viewAll": "Ver tudo",
   "search.add": "Adicionar",
+  "search.addToAnotherLibrary": "Adicionar a outra biblioteca",
+  "search.requestForAnotherLibrary": "Solicitar para outra biblioteca",
+  "search.chooseLibraryToView": "Escolha a biblioteca em que ver {{name}}",
   "search.footerTip":
     "Não encontrou? Tente outro termo ou verifique seus indexadores.",
   "search.searchTips": "Dicas de busca",
@@ -2202,23 +2205,23 @@ const pt_BR: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "Esta mesclagem não pode ser executada: estes registros não podem ser levados.",
   "move.mergeCarried":
-    "O título remanescente assume {{files}} registro(s) de arquivo de mídia e {{history}} linha(s) de histórico.",
+    "{{files}} arquivo(s) de mídia e {{history}} entradas de histórico vão junto.",
   "move.mergeDropped":
     "{{count}} outro(s) registro(s) do título mesclado não são transferidos e são retirados com ele.",
   "move.mergeRoleChangesHeading":
-    "Funções dos arquivos ({{demotions}} arquivo(s) deixam de ser principais)",
+    "{{demotions}} arquivo(s) passam a ser cópias adicionais",
   "move.mergeRoleChangesHeadingPlain": "Funções dos arquivos",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "principal",
-  "move.mergeRole.ADDITIONAL": "adicional",
-  "move.mergeRoleDemotion":
-    "Este arquivo não é mais o principal do episódio; ele é mantido ao lado do que é.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "O destino já tinha um arquivo principal para este episódio, e uma movimentação nunca rebaixa um.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Outro arquivo em movimento já assumiu a função principal para esse episódio de destino.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Dois episódios de origem foram reunidos em um único episódio de destino.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}” já tem um arquivo principal para esses episódios. Os arquivos que chegam são mantidos como cópias adicionais, e nada que já existe é substituído.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}” já tem um arquivo principal. O arquivo que chega é mantido como cópia adicional, e nada que já existe é substituído.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Outro arquivo desta movimentação já é o principal para esses episódios, então estes são mantidos como cópias adicionais.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Outro arquivo desta movimentação já é o principal, então este é mantido como cópia adicional.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "Estes arquivos aparecem aqui em dois episódios que no destino são um só. Lá, cada um aparece uma única vez.",
+  "move.mergeRoleUnnamedFile": "arquivo {{id}}",
   "move.operationTransferNote": "Estes títulos estão indo para outra biblioteca.",
   "move.modeHeading": "Como os arquivos devem chegar lá?",
   "move.mode.MOVE_WITH_SCRYER": "Mover com o Scryer",
@@ -2319,7 +2322,7 @@ const pt_BR: LocaleDictionary = {
   "move.planKind.MOVE": "Movimentações",
   "move.planKind.RENAME": "Renomeações",
   "move.planKind.MERGE": "Mesclagens",
-  "move.planKind.DEDUP": "Duplicados reciclados",
+  "move.planKind.DEDUP": "Possível mesclagem de arquivos idênticos",
   "move.planKind.CATALOG_CHANGE": "Alterações de catálogo",
   "move.planKind.ROLE_CHANGE": "Mudanças de papel",
   "move.planKind.NO_OP": "Sem alterações",
@@ -2352,6 +2355,14 @@ const pt_BR: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Consolidação de raízes",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Transferência entre bibliotecas",
   "move.operationType.ADOPTION": "Adoção",
+  "move.toastPreparing": "Preparando…",
+  "move.toastTransferred": "Transferido",
+  "move.toastTitlesProgress": "{{current}} / {{total}} títulos",
+  "move.toastDoneSubtitle": "Movimentação concluída · {{count}} títulos",
+  "move.toastWarningsSubtitle": "Concluído com avisos · {{count}} títulos",
+  "move.toastWarningsChip": "Alguns títulos precisam de revisão em Atividade.",
+  "move.toastFailedSubtitle": "Movimentação falhou",
+  "move.toastCanceledSubtitle": "Movimentação cancelada",
   "move.startedHeading": "A movimentação começou. Acompanhe em Atividade.",
   "move.viewInActivity": "Ver em Atividade",
   "rootChange.rowAction": "Alterar raiz",
@@ -2393,7 +2404,7 @@ const pt_BR: LocaleDictionary = {
   "rootChange.group.mergingWithDestinationTitles": "Mesclando",
   "rootChange.group.folderNameCollisions": "Nome de pasta ocupado",
   "rootChange.group.mediaCollisions": "Nome de mídia ocupado",
-  "rootChange.group.dedupEligibleFiles": "Já idênticos",
+  "rootChange.group.dedupEligibleFiles": "Possivelmente idênticos",
   "rootChange.group.companionCollisions": "Nome de arquivo acompanhante ocupado",
   "rootChange.group.untrackedSourceEntries": "Sem rastreio na origem",
   "rootChange.renamedFoldersHeading": "Pastas que mudam de nome",

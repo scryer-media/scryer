@@ -709,6 +709,9 @@ const zh_CN: LocaleDictionary = {
   "search.view": "查看",
   "search.viewAll": "查看全部",
   "search.add": "添加",
+  "search.addToAnotherLibrary": "添加到另一个媒体库",
+  "search.requestForAnotherLibrary": "为另一个媒体库请求",
+  "search.chooseLibraryToView": "选择在哪个媒体库中查看 {{name}}",
   "search.footerTip": "找不到？试试其他关键词或检查你的索引器。",
   "search.searchTips": "搜索提示",
   "search.tipTitles": "按电影、剧集、动漫标题、目录、设置项或操作名称搜索。",
@@ -2041,24 +2044,22 @@ const zh_CN: LocaleDictionary = {
   "move.mergeSummaryHeading": "这次合并会做什么",
   "move.mergeNoDetails": "这次合并不会带走其他内容。",
   "move.mergeBlockedHeading": "此合并无法执行：以下记录无法迁移。",
-  "move.mergeCarried":
-    "保留的标题将接管 {{files}} 条媒体文件记录和 {{history}} 条历史记录。",
+  "move.mergeCarried": "{{files}} 个媒体文件和 {{history}} 条历史记录会一并带过去。",
   "move.mergeDropped":
     "被合并标题的其他 {{count}} 条记录不会被接管，将随其一并退役。",
-  "move.mergeRoleChangesHeading":
-    "媒体文件角色（{{demotions}} 个文件不再是主文件）",
-  "move.mergeRoleChangesHeadingPlain": "媒体文件角色",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "主文件",
-  "move.mergeRole.ADDITIONAL": "附加",
-  "move.mergeRoleDemotion":
-    "此文件不再是该剧集的主文件，将与主文件一并保留。",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "目标已有该剧集的主文件，移动操作绝不会降级主文件。",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "另一个移动中的文件已占用该目标剧集的主文件角色。",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "两个源剧集合并到了同一个目标剧集。",
+  "move.mergeRoleChangesHeading": "{{demotions}} 个文件将成为附加副本",
+  "move.mergeRoleChangesHeadingPlain": "文件角色",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}”已有这些剧集的主文件。传入的文件将作为附加副本保留，已有的文件不会被替换。",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}”已有主文件。传入的文件将作为附加副本保留，已有的文件不会被替换。",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "本次移动中的另一个文件已是这些剧集的主文件，因此这些文件将作为附加副本保留。",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "本次移动中的另一个文件已是主文件，因此该文件将作为附加副本保留。",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "这些文件在此处登记在两个剧集下，而在目标处它们是同一剧集。在那里每个文件只登记一次。",
+  "move.mergeRoleUnnamedFile": "文件 {{id}}",
   "move.operationTransferNote": "这些标题正在移动到其他库。",
   "move.modeHeading": "文件应如何到达那里？",
   "move.mode.MOVE_WITH_SCRYER": "由 Scryer 移动",
@@ -2159,7 +2160,7 @@ const zh_CN: LocaleDictionary = {
   "move.planKind.MOVE": "移动",
   "move.planKind.RENAME": "重命名",
   "move.planKind.MERGE": "合并",
-  "move.planKind.DEDUP": "回收的重复文件",
+  "move.planKind.DEDUP": "可能与相同文件合并",
   "move.planKind.CATALOG_CHANGE": "目录变更",
   "move.planKind.ROLE_CHANGE": "角色变更",
   "move.planKind.NO_OP": "无变化",
@@ -2192,6 +2193,14 @@ const zh_CN: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "根目录合并",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "跨库转移",
   "move.operationType.ADOPTION": "接管",
+  "move.toastPreparing": "正在准备…",
+  "move.toastTransferred": "已传输",
+  "move.toastTitlesProgress": "{{current}} / {{total}} 个标题",
+  "move.toastDoneSubtitle": "移动完成 · {{count}} 个标题",
+  "move.toastWarningsSubtitle": "已完成（有警告）· {{count}} 个标题",
+  "move.toastWarningsChip": "部分标题需要在活动中查看。",
+  "move.toastFailedSubtitle": "移动失败",
+  "move.toastCanceledSubtitle": "移动已取消",
   "move.startedHeading": "移动已开始。可在“活动”中跟踪进度。",
   "move.viewInActivity": "在活动中查看",
   "rootChange.rowAction": "更改根目录",
@@ -2233,7 +2242,7 @@ const zh_CN: LocaleDictionary = {
   "rootChange.group.mergingWithDestinationTitles": "合并",
   "rootChange.group.folderNameCollisions": "文件夹名已被占用",
   "rootChange.group.mediaCollisions": "媒体文件名已被占用",
-  "rootChange.group.dedupEligibleFiles": "已完全相同",
+  "rootChange.group.dedupEligibleFiles": "可能相同",
   "rootChange.group.companionCollisions": "附属文件名已被占用",
   "rootChange.group.untrackedSourceEntries": "源端未跟踪项",
   "rootChange.renamedFoldersHeading": "会改名的文件夹",

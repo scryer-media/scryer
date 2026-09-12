@@ -728,6 +728,9 @@ const ko: LocaleDictionary = {
   "search.view": "보기",
   "search.viewAll": "모두 보기",
   "search.add": "추가",
+  "search.addToAnotherLibrary": "다른 라이브러리에 추가",
+  "search.requestForAnotherLibrary": "다른 라이브러리에 요청",
+  "search.chooseLibraryToView": "{{name}}을(를) 볼 라이브러리 선택",
   "search.footerTip":
     "찾을 수 없나요? 다른 검색어를 시도하거나 인덱서를 확인하세요.",
   "search.searchTips": "검색 팁",
@@ -2116,24 +2119,22 @@ const ko: LocaleDictionary = {
   "move.mergeNoDetails": "이 병합에서 그 밖에 옮겨지는 항목은 없습니다.",
   "move.mergeBlockedHeading":
     "이 병합을 실행할 수 없습니다: 다음 레코드를 옮길 수 없습니다.",
-  "move.mergeCarried":
-    "남는 제목이 미디어 파일 레코드 {{files}}개와 기록 행 {{history}}개를 넘겨받습니다.",
+  "move.mergeCarried": "미디어 파일 {{files}}개와 기록 {{history}}개가 함께 옮겨집니다.",
   "move.mergeDropped":
     "병합되는 제목의 다른 레코드 {{count}}개는 넘겨받지 않고 제목과 함께 사라집니다.",
-  "move.mergeRoleChangesHeading":
-    "미디어 파일 역할 (파일 {{demotions}}개가 기본 역할을 잃음)",
-  "move.mergeRoleChangesHeadingPlain": "미디어 파일 역할",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "기본",
-  "move.mergeRole.ADDITIONAL": "추가",
-  "move.mergeRoleDemotion":
-    "이 파일은 더 이상 해당 에피소드의 기본 파일이 아니며, 기본 파일과 함께 보관됩니다.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "대상에 이미 이 에피소드의 기본 파일이 있으며, 이동은 기본 파일을 강등하지 않습니다.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "이동 중인 다른 파일이 해당 대상 에피소드의 기본 역할을 이미 차지했습니다.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "원본 에피소드 두 개가 대상 에피소드 하나로 합쳐졌습니다.",
+  "move.mergeRoleChangesHeading": "파일 {{demotions}}개가 추가 사본이 됩니다",
+  "move.mergeRoleChangesHeadingPlain": "파일 역할",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}”에는 이 에피소드들의 기본 파일이 이미 있습니다. 들어오는 파일은 추가 사본으로 보관되며, 기존 파일은 교체되지 않습니다.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}”에는 기본 파일이 이미 있습니다. 들어오는 파일은 추가 사본으로 보관되며, 기존 파일은 교체되지 않습니다.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "이 이동에 포함된 다른 파일이 이미 이 에피소드들의 기본 파일이므로, 이 파일들은 추가 사본으로 보관됩니다.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "이 이동에 포함된 다른 파일이 이미 기본 파일이므로, 이 파일은 추가 사본으로 보관됩니다.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "이 파일들은 여기서는 두 에피소드에 등록되어 있지만 대상에서는 하나의 에피소드입니다. 대상에서는 각 파일이 한 번만 등록됩니다.",
+  "move.mergeRoleUnnamedFile": "파일 {{id}}",
   "move.operationTransferNote": "이 타이틀들은 다른 라이브러리로 이동하고 있습니다.",
   "move.modeHeading": "파일을 어떻게 옮길까요?",
   "move.mode.MOVE_WITH_SCRYER": "Scryer로 이동",
@@ -2234,7 +2235,7 @@ const ko: LocaleDictionary = {
   "move.planKind.MOVE": "이동",
   "move.planKind.RENAME": "이름 변경",
   "move.planKind.MERGE": "병합",
-  "move.planKind.DEDUP": "중복 파일 휴지통 처리",
+  "move.planKind.DEDUP": "동일 파일과 병합될 수 있음",
   "move.planKind.CATALOG_CHANGE": "카탈로그 변경",
   "move.planKind.ROLE_CHANGE": "역할 변경",
   "move.planKind.NO_OP": "변경 없음",
@@ -2267,6 +2268,14 @@ const ko: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "루트 통합",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "라이브러리 간 전송",
   "move.operationType.ADOPTION": "인수",
+  "move.toastPreparing": "준비 중…",
+  "move.toastTransferred": "전송됨",
+  "move.toastTitlesProgress": "{{current}} / {{total}}개 타이틀",
+  "move.toastDoneSubtitle": "이동 완료 · {{count}}개 타이틀",
+  "move.toastWarningsSubtitle": "경고와 함께 완료됨 · {{count}}개 타이틀",
+  "move.toastWarningsChip": "일부 타이틀은 활동에서 확인이 필요합니다.",
+  "move.toastFailedSubtitle": "이동 실패",
+  "move.toastCanceledSubtitle": "이동 취소됨",
   "move.startedHeading": "이동을 시작했습니다. 활동에서 진행 상황을 확인하세요.",
   "move.viewInActivity": "활동에서 보기",
   "rootChange.rowAction": "루트 변경",
@@ -2308,7 +2317,7 @@ const ko: LocaleDictionary = {
   "rootChange.group.mergingWithDestinationTitles": "병합",
   "rootChange.group.folderNameCollisions": "폴더 이름 사용 중",
   "rootChange.group.mediaCollisions": "미디어 이름 사용 중",
-  "rootChange.group.dedupEligibleFiles": "이미 동일",
+  "rootChange.group.dedupEligibleFiles": "동일할 수 있음",
   "rootChange.group.companionCollisions": "보조 파일 이름 사용 중",
   "rootChange.group.untrackedSourceEntries": "원본의 미추적 항목",
   "rootChange.renamedFoldersHeading": "이름이 바뀌는 폴더",

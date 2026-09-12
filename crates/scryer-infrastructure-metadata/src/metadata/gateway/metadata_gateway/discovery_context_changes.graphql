@@ -124,6 +124,8 @@ fragment DiscoveryContextChangesTitleFields on DiscoveryContextChangesTitle {
   relation_count
   source_subject_count
   rank_score
+  recommendation_score
+  base_rank
   best_source
   matched_subject_keys
   matched_subject_titles

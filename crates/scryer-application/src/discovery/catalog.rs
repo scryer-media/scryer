@@ -325,11 +325,28 @@ pub(super) fn catalog_personalized_groups(
     groups: &mut Vec<CatalogDiscoveryGroup>,
     items: &[DiscoveryItemRecord],
     library_profile: &DiscoveryLibraryAffinityProfile,
+    settings: DiscoveryRailCompositionSettings,
     limit: usize,
     max_groups: usize,
     emitted_item_keys: &mut HashSet<String>,
 ) {
     let personalized_group_start = groups.len();
+
+    // The zero rule is a law about personalized surfaces, not about the home
+    // page: a library that owns no anime must not be shown anime here either.
+    // Applied once, up front, so every group below - including the collection
+    // and fallback groups - inherits it.
+    let gated_items = items
+        .iter()
+        .filter(|item| {
+            !settings.medium_affinity_gate
+                || library_profile
+                    .medium_mix
+                    .admits(discovery_item_medium(item))
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    let items = gated_items.as_slice();
 
     // Same specificity ladder and same anime/animation boundary as the home
     // composer (`personalized_section_results`): theme/tag groups claim titles
@@ -345,7 +362,12 @@ pub(super) fn catalog_personalized_groups(
             .iter()
             .filter(|item| {
                 item.matched_subject_count > 0
-                    && discovery_item_matches_affinity_label(item, &label, "theme")
+                    && discovery_item_matches_affinity_label(
+                        item,
+                        &label,
+                        "theme",
+                        settings.genre_rail_corroboration,
+                    )
                     && affinity_label_keeps_item_across_anime_boundary(item, &label)
             })
             .cloned()
@@ -377,7 +399,12 @@ pub(super) fn catalog_personalized_groups(
             .iter()
             .filter(|item| {
                 item.matched_subject_count > 0
-                    && discovery_item_matches_affinity_label(item, &label, "genre")
+                    && discovery_item_matches_affinity_label(
+                        item,
+                        &label,
+                        "genre",
+                        settings.genre_rail_corroboration,
+                    )
                     && affinity_label_keeps_item_across_anime_boundary(item, &label)
             })
             .cloned()
@@ -504,14 +531,78 @@ pub(super) fn discovery_item_matches_affinity_label(
     item: &DiscoveryItemRecord,
     label: &str,
     canonical_kind: &str,
+    require_corroboration: bool,
 ) -> bool {
     let label_key = normalize_discovery_affinity_key(label);
     if label_key.is_empty() {
         return false;
     }
-    discovery_item_canonical_facet_labels(item, canonical_kind)
+    let matches_facet = discovery_item_canonical_facet_labels(item, canonical_kind)
         .into_iter()
-        .any(|candidate| affinity_value_matches_label(&candidate, &label_key))
+        .any(|candidate| affinity_value_matches_label(&candidate, &label_key));
+    if !matches_facet {
+        return false;
+    }
+    if !require_corroboration || canonical_kind != "genre" {
+        return true;
+    }
+    // The facet term carries no provenance, so corroboration is read off the
+    // canonical tag the pool loader hydrates alongside it. An item whose genre
+    // tags were not hydrated cannot prove corroboration and does not get the
+    // benefit of the doubt: that is the whole point of the gate.
+    item.canonical_tags
+        .iter()
+        .filter(|tag| tag.category.eq_ignore_ascii_case("genre"))
+        .filter(|tag| normalize_discovery_affinity_key(&tag.name) == label_key)
+        .any(canonical_genre_tag_is_corroborated)
+}
+
+/// A canonical genre is load-bearing only when the metadata gateway is actually
+/// confident about it and something other than a single free-text tag says so.
+///
+/// SMG assigns 0.95 to a provider's own genre list, caps name-alias matches at
+/// 0.9 and phrase-sequence guesses at 0.85, so
+/// [`DISCOVERY_CORROBORATED_GENRE_MIN_CONFIDENCE`] draws the line just under the
+/// alias cap and excludes the guesses. Above that line a genre still needs
+/// corroboration: either two independent sources agreed, or one provider listed
+/// it as a genre rather than as a community tag. A lone `anilist:tag:<hash>` is
+/// how "Crime" ends up on a high-school romance, and it is exactly what this
+/// rejects.
+pub(super) fn canonical_genre_tag_is_corroborated(tag: &CanonicalMediaTag) -> bool {
+    if tag
+        .confidence
+        .filter(|confidence| confidence.is_finite())
+        .is_none_or(|confidence| confidence < DISCOVERY_CORROBORATED_GENRE_MIN_CONFIDENCE)
+    {
+        return false;
+    }
+    distinct_canonical_tag_source_count(tag) >= DISCOVERY_CORROBORATED_GENRE_MIN_SOURCES
+        || tag
+            .source_tag_keys
+            .iter()
+            .any(|key| canonical_tag_source_key_is_provider_genre(key))
+}
+
+fn distinct_canonical_tag_source_count(tag: &CanonicalMediaTag) -> usize {
+    tag.sources
+        .iter()
+        .map(|source| source.trim().to_ascii_lowercase())
+        .filter(|source| !source.is_empty())
+        .collect::<HashSet<_>>()
+        .len()
+}
+
+/// Provider genre keys come in two shapes: a raw provider genre list flattens to
+/// `genre:<slug>`, and a provider's own genre-typed source tag to
+/// `<provider>:genre:<slug>`. Community tag keys (`anilist:tag:<hash>`,
+/// `mal:tag:<slug>`) match neither, which is the distinction the gate needs.
+fn canonical_tag_source_key_is_provider_genre(key: &str) -> bool {
+    let key = key.trim().to_ascii_lowercase();
+    let mut segments = key.split(':').filter(|segment| !segment.is_empty());
+    matches!(
+        (segments.next(), segments.next()),
+        (Some("genre"), Some(_)) | (Some(_), Some("genre"))
+    )
 }
 
 pub(super) fn affinity_value_matches_label(value: &str, label_key: &str) -> bool {
@@ -565,10 +656,33 @@ pub(super) fn canonical_tag_labels(tags: &[CanonicalMediaTag], category: &str) -
         .collect()
 }
 
+/// The owned-title half of the corroboration gate. The same rule has to run
+/// here and in [`discovery_item_matches_affinity_label`]: a library profile
+/// built from uncorroborated genres would name a rail the pool matcher then
+/// refuses to fill.
+pub(super) fn corroborated_canonical_genre_labels(
+    tags: &[CanonicalMediaTag],
+    require_corroboration: bool,
+) -> Vec<String> {
+    tags.iter()
+        .filter(|tag| tag.category.eq_ignore_ascii_case("genre"))
+        .filter(|tag| !require_corroboration || canonical_genre_tag_is_corroborated(tag))
+        .map(|tag| tag.name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+/// Ranked labels the library actually supports.
+///
+/// `min_carriers` is the evidence floor: a label carried by fewer owned titles
+/// than that is skipped and the next-ranked label considered, rather than
+/// promoted into a rail the library never earned. Three crime titles out of ten
+/// is not a crime library.
 pub(super) fn top_owned_title_labels<'a, F, I>(
     titles: &'a [Title],
     labels_for_title: F,
     limit: usize,
+    min_carriers: usize,
 ) -> Vec<String>
 where
     F: Fn(&'a Title) -> I,
@@ -598,9 +712,51 @@ where
     counts.sort_by(|left, right| right.1.cmp(&left.1).then_with(|| left.0.cmp(&right.0)));
     counts
         .into_iter()
+        .filter(|(_, carriers)| *carriers >= min_carriers.max(1))
         .take(limit)
         .map(|(label, _)| label)
         .collect()
+}
+
+/// How many owned titles must carry a label before it may name a rail:
+/// [`DISCOVERY_RAIL_LABEL_SUPPORT_MIN_CARRIERS`] titles, or
+/// [`DISCOVERY_RAIL_LABEL_SUPPORT_SHARE`] of the library, whichever is larger.
+/// The share term is what stops a large library's long tail from earning rails.
+pub(super) fn discovery_rail_label_support_floor(owned_title_count: usize) -> usize {
+    let share_floor = (owned_title_count as f64 * DISCOVERY_RAIL_LABEL_SUPPORT_SHARE).ceil();
+    let share_floor = if share_floor.is_finite() && share_floor > 0.0 {
+        share_floor as usize
+    } else {
+        0
+    };
+    share_floor.max(DISCOVERY_RAIL_LABEL_SUPPORT_MIN_CARRIERS)
+}
+
+/// Whether the library has grown enough since its last snapshot run that the
+/// rails built from that run are describing a library the user no longer has.
+///
+/// A fresh install rebuilds its library over hours, not days: the first
+/// snapshot lands on a handful of titles and the normal cadence would then
+/// leave the user staring at rails built for that handful. Growth past the
+/// label-support floor means a label can now exist (or lose) its evidence, and
+/// growth of [`DISCOVERY_LIBRARY_GROWTH_RESNAPSHOT_SHARE`] means the mix,
+/// the floors and the proportional caps have all moved under the rails.
+pub(crate) fn discovery_library_growth_warrants_snapshot(
+    previous_subject_count: usize,
+    current_subject_count: usize,
+) -> bool {
+    let Some(growth) = current_subject_count
+        .checked_sub(previous_subject_count)
+        .filter(|growth| *growth > 0)
+    else {
+        return false;
+    };
+    if growth >= discovery_rail_label_support_floor(current_subject_count) {
+        return true;
+    }
+    previous_subject_count > 0
+        && growth as f64
+            >= previous_subject_count as f64 * DISCOVERY_LIBRARY_GROWTH_RESNAPSHOT_SHARE
 }
 
 pub(super) fn display_discovery_affinity_label(value: &str) -> String {
@@ -764,44 +920,6 @@ pub(super) fn section_result(
     }
     let total_count = items.len() as i64;
     let items = items.into_iter().take(limit).collect();
-    Some(DiscoverySectionResult {
-        section_id,
-        section_type,
-        title,
-        surface,
-        total_count,
-        items,
-    })
-}
-
-pub(super) fn section_result_excluding_emitted(
-    section_id: String,
-    section_type: String,
-    title: String,
-    surface: String,
-    items: Vec<DiscoveryItemRecord>,
-    limit: usize,
-    emitted_item_keys: &mut HashSet<String>,
-) -> Option<DiscoverySectionResult> {
-    let mut available = Vec::new();
-    for item in items {
-        let key = discovery_item_identity_key(&item).to_string();
-        if emitted_item_keys.contains(&key) {
-            continue;
-        }
-        available.push((key, item));
-    }
-    if available.is_empty() {
-        return None;
-    }
-
-    let total_count = available.len() as i64;
-    let mut items = Vec::new();
-    for (key, item) in available.into_iter().take(limit) {
-        emitted_item_keys.insert(key);
-        items.push(item);
-    }
-
     Some(DiscoverySectionResult {
         section_id,
         section_type,

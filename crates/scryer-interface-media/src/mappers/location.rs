@@ -146,7 +146,11 @@ pub fn from_location_transfer(
             .titles
             .into_iter()
             .map(|row| LocationTransferTitlePayload {
-                has_exception: row.detail.is_some()
+                // A completed title's detail holds the plan's own statements
+                // (the merge it promised, a companion kept under a new name),
+                // not an exception; a detail on any other state is one.
+                has_exception: (row.detail.is_some()
+                    && row.state != TitleCheckpointState::Completed)
                     || matches!(
                         row.state,
                         TitleCheckpointState::Failed
@@ -514,6 +518,8 @@ fn from_merge_summary(summary: &MergePreviewSummary) -> LocationMergePreviewPayl
                 // Phrased by the application, not here: the plan item and this
                 // payload have to say the same thing about the same demotion.
                 detail: change.describe(),
+                episode_label: change.episode_label.clone(),
+                file_name: change.file_name.clone(),
             })
             .collect(),
         role_demotions: Long(summary.role_demotions),

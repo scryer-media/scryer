@@ -24,6 +24,8 @@ const INTERACTIVE_JOB_RECONCILE_LIMIT = 25;
 const APPLICATION_UPGRADE_RUN_STORAGE_KEY = "scryer:application-upgrade-run";
 
 type JobRunToastContextValue = {
+  /** Every run the stream and the active-runs load have surfaced, newest state each. */
+  runs: JobRun[];
   registerInteractiveJobRun: (
     run: JobRun,
     onTerminal?: (run: JobRun) => void,
@@ -441,9 +443,12 @@ export function JobRunProvider({
     [],
   );
 
+  const runs = React.useMemo(() => Object.values(runsById), [runsById]);
+
   const contextValue = React.useMemo<JobRunToastContextValue>(() => ({
+    runs,
     registerInteractiveJobRun,
-  }), [registerInteractiveJobRun]);
+  }), [registerInteractiveJobRun, runs]);
 
   return (
     <JobRunToastContext.Provider value={contextValue}>

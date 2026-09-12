@@ -80,6 +80,21 @@ impl EpisodeIdentityFacts {
         })
     }
 
+    /// The episode as a person would say it: `S01E03`, or `#12` for an
+    /// absolute-numbered catalog. `None` when neither number is usable, so a
+    /// caller falls back to the id rather than printing a half-label.
+    pub fn label(&self) -> Option<String> {
+        match (
+            parse_number(self.season_number.as_deref()),
+            parse_number(self.episode_number.as_deref()),
+        ) {
+            (Some(season), Some(episode)) => Some(format!("S{season:02}E{episode:02}")),
+            _ => {
+                parse_number(self.absolute_number.as_deref()).map(|absolute| format!("#{absolute}"))
+            }
+        }
+    }
+
     /// The fallback key for absolute-numbered (anime) catalogs.
     pub fn absolute_key(&self) -> Option<EpisodeIdentityKey> {
         let absolute = parse_number(self.absolute_number.as_deref())?;

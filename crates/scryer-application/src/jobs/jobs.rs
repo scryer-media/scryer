@@ -1,10 +1,10 @@
 use super::*;
 use crate::discovery::{
     DiscoveryContextDefaults, DiscoveryLibraryContext, build_discovery_library_context,
-    coalesce_pending_context_change, incremental_item_records,
-    pending_context_change_from_domain_event, pending_context_changes_need_snapshot_reconciliation,
-    public_feed_item_records, public_feed_section_records, snapshot_facet_records,
-    snapshot_item_records,
+    coalesce_pending_context_change, discovery_library_growth_warrants_snapshot,
+    incremental_item_records, pending_context_change_from_domain_event,
+    pending_context_changes_need_snapshot_reconciliation, public_feed_item_records,
+    public_feed_section_records, snapshot_facet_records, snapshot_item_records,
 };
 use crate::domain_events::{DomainEventActor, new_job_run_domain_event};
 use crate::event_views::replay_library_scan_state;
@@ -99,6 +99,13 @@ fn is_background_library_refresh_job(job_key: JobKey) -> bool {
         JobKey::BackgroundLibraryRefreshMovies
             | JobKey::BackgroundLibraryRefreshSeries
             | JobKey::BackgroundLibraryRefreshAnime
+    )
+}
+
+fn is_library_scan_job(job_key: JobKey) -> bool {
+    matches!(
+        job_key,
+        JobKey::LibraryScanMovies | JobKey::LibraryScanSeries | JobKey::LibraryScanAnime
     )
 }
 
@@ -1164,9 +1171,11 @@ impl AppUseCase {
         } else {
             None
         };
-        if is_background_library_refresh_job(job_key) {
+        // A facet's scheduled scan and refresh are one run per library, so a
+        // second library of the facet is scanned rather than skipped.
+        if is_background_library_refresh_job(job_key) || is_library_scan_job(job_key) {
             return self
-                .run_scheduled_background_library_refresh_jobs_now(job_key, trigger_source)
+                .run_scheduled_library_jobs_now(job_key, trigger_source)
                 .await;
         }
 
@@ -1240,16 +1249,18 @@ impl AppUseCase {
             })
     }
 
-    async fn run_scheduled_background_library_refresh_jobs_now(
+    /// Run a facet-scoped library job once per library of that facet, each
+    /// as its own run carrying the library id, one after another.
+    async fn run_scheduled_library_jobs_now(
         &self,
         job_key: JobKey,
         trigger_source: JobTriggerSource,
     ) -> AppResult<()> {
-        let facet = job_key_library_facet(job_key).expect("background refresh facet");
+        let facet = job_key_library_facet(job_key).expect("library job facet");
         let libraries = self.services.catalog.libraries.list(Some(facet)).await?;
         if libraries.is_empty() {
             return Err(AppError::Validation(format!(
-                "{} has no libraries to refresh",
+                "{} has no libraries",
                 job_key.display_name()
             )));
         }
@@ -1539,15 +1550,24 @@ impl AppUseCase {
         let actor = actor.unwrap_or_else(User::system_execution_actor);
         match job_key {
             JobKey::LibraryScanMovies | JobKey::LibraryScanSeries | JobKey::LibraryScanAnime => {
-                let facet = job_key_library_facet(job_key).expect("library scan facet");
-                let summary = self
-                    .scan_library_with_tracking(
+                let summary = if let Some(library_id) = job_run_library_id(run) {
+                    self.scan_library_by_id_with_tracking(
+                        &actor,
+                        library_id,
+                        Some(run_id.to_string()),
+                        LibraryScanMode::Full,
+                    )
+                    .await?
+                } else {
+                    let facet = job_key_library_facet(job_key).expect("library scan facet");
+                    self.scan_library_with_tracking(
                         &actor,
                         facet,
                         Some(run_id.to_string()),
                         LibraryScanMode::Full,
                     )
-                    .await?;
+                    .await?
+                };
                 Ok(JobExecutionOutcome::from_library_scan(&summary))
             }
             JobKey::BackgroundLibraryRefreshMovies
@@ -2080,6 +2100,27 @@ impl AppUseCase {
             && pending_changes_are_quiet
             && incremental_changes_need_snapshot_reconciliation;
 
+        // A fresh install rebuilds its library over hours: the first snapshot
+        // lands on whatever had been imported by then, and the normal cadence
+        // would leave the user looking at rails built for a library they no
+        // longer have. Growth past the label-support floor, or by a quarter,
+        // buys a new snapshot instead of a day of waiting.
+        let last_snapshot_subject_count = match state.last_success_generation_id.as_deref() {
+            Some(run_id) => self
+                .services
+                .library
+                .discovery
+                .get_discovery_sync_run(run_id)
+                .await?
+                .map(|run| run.subject_count.max(0) as usize),
+            None => None,
+        };
+        let library_growth_snapshot_due = personalized_discovery_enabled
+            && subject_context_changed
+            && last_snapshot_subject_count.is_some_and(|previous| {
+                discovery_library_growth_warrants_snapshot(previous, library_context.subjects.len())
+            });
+
         let active_scan_count = self.active_library_scan_run_count().await?;
         let scans_active = active_scan_count > 0;
         let snapshot_backoff_ready = state.backoff_until.is_none_or(|until| now >= until);
@@ -2170,7 +2211,8 @@ impl AppUseCase {
                 && (state
                     .next_context_snapshot_eligible_at
                     .is_some_and(|gate| now >= gate)
-                    || full_snapshot_reconciliation_due)
+                    || full_snapshot_reconciliation_due
+                    || library_growth_snapshot_due)
                 && state.last_success_generation_id.is_some()
         };
 

@@ -80,30 +80,13 @@ pub async fn stage_or_buffer_nzb_response(
             }
             Err(_) => body_failed = true,
         });
-        let first = tokio::select! {
-            _ = cancellation.cancelled() => return cancellation_error(),
-            next = stream.next() => next,
-        };
-        let Some(first) = first else {
-            return Err(AppError::Repository(
-                "nzb download response body was empty".into(),
-            ));
-        };
-        let first = first.map_err(|error| {
-            AppError::Repository(format!("nzb download body read failed: {error}"))
-        })?;
-        if first.len() > MAX_NZB_BYTES as usize {
-            return Err(AppError::Repository(format!(
-                "download artifact payload exceeded {} bytes",
-                MAX_NZB_BYTES
-            )));
-        }
+        let first = read_artifact_prefix(&mut stream, cancellation).await?;
         if first
             .iter()
             .find(|byte| !byte.is_ascii_whitespace())
-            .is_some_and(|byte| matches!(*byte, b'd' | b'm'))
+            .is_some_and(|byte| matches!(*byte, b'd' | b'm' | b'M'))
         {
-            let mut bytes = first.to_vec();
+            let mut bytes = first;
             while let Some(chunk) = tokio::select! {
                 _ = cancellation.cancelled() => return cancellation_error(),
                 next = stream.next() => next,
@@ -121,7 +104,8 @@ pub async fn stage_or_buffer_nzb_response(
             }
             return Ok(BufferedOrStagedNzb::Buffered(bytes));
         }
-        let stream = futures_util::stream::iter(vec![Ok::<_, reqwest::Error>(first)]).chain(stream);
+        let stream = futures_util::stream::iter(vec![Ok::<_, reqwest::Error>(first)])
+            .chain(stream.map(|chunk| chunk.map(|bytes| bytes.to_vec())));
         Ok(BufferedOrStagedNzb::Staged(
             stage_nzb_from_stream(
                 stream,
@@ -146,6 +130,44 @@ pub async fn stage_or_buffer_nzb_response(
         }
     }
     result
+}
+
+/// Wait for the first non-whitespace byte without depending on HTTP chunk boundaries.
+async fn read_artifact_prefix<S, B, E>(
+    stream: &mut S,
+    cancellation: &CancellationToken,
+) -> AppResult<Vec<u8>>
+where
+    S: Stream<Item = Result<B, E>> + Unpin,
+    B: AsRef<[u8]>,
+    E: std::fmt::Display,
+{
+    let mut prefix = Vec::new();
+    while let Some(chunk) = tokio::select! {
+        _ = cancellation.cancelled() => return cancellation_error(),
+        next = stream.next() => next,
+    } {
+        let chunk = chunk.map_err(|error| {
+            AppError::Repository(format!("nzb download body read failed: {error}"))
+        })?;
+        let chunk = chunk.as_ref();
+        if prefix.len().saturating_add(chunk.len()) > MAX_NZB_BYTES as usize {
+            return Err(AppError::Repository(format!(
+                "download artifact payload exceeded {} bytes",
+                MAX_NZB_BYTES
+            )));
+        }
+        prefix.extend_from_slice(chunk);
+        if chunk.iter().any(|byte| !byte.is_ascii_whitespace()) {
+            return Ok(prefix);
+        }
+    }
+    if prefix.is_empty() {
+        return Err(AppError::Repository(
+            "nzb download response body was empty".into(),
+        ));
+    }
+    Ok(prefix)
 }
 
 pub async fn stage_nzb_from_bytes(
@@ -628,10 +650,65 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn artifact_prefix_preserves_fragmented_whitespace_and_magnets() {
+        for marker in ["magnet:", "MAGNET:", "MaGnEt:"] {
+            let body =
+                format!(" \r\n\t{marker}?xt=urn:btih:0123456789012345678901234567890123456789");
+            for split in 0..body.len() {
+                let mut chunks = stream::iter(vec![
+                    Ok::<_, std::io::Error>(&body.as_bytes()[..split]),
+                    Ok(&body.as_bytes()[split..]),
+                ]);
+                let mut bytes = super::read_artifact_prefix(&mut chunks, &CancellationToken::new())
+                    .await
+                    .unwrap();
+                assert!(
+                    bytes
+                        .iter()
+                        .find(|b| !b.is_ascii_whitespace())
+                        .unwrap()
+                        .eq_ignore_ascii_case(&b'm')
+                );
+                while let Some(chunk) = chunks.next().await {
+                    bytes.extend_from_slice(chunk.unwrap());
+                }
+                let artifact = crate::indexers::artifact_transport::classify(
+                    "fixture", None, None, bytes, None,
+                )
+                .unwrap();
+                assert!(matches!(
+                    artifact,
+                    scryer_application::ResolvedDownloadArtifact::Magnet { .. }
+                ));
+            }
+        }
+        let mut oversized = stream::iter(vec![Ok::<_, std::io::Error>(vec![
+            b' ';
+            super::MAX_NZB_BYTES
+                as usize
+                + 1
+        ])]);
+        assert!(
+            super::read_artifact_prefix(&mut oversized, &CancellationToken::new())
+                .await
+                .is_err()
+        );
+        let cancellation = CancellationToken::new();
+        cancellation.cancel();
+        let mut stalled = stream::pending::<Result<Vec<u8>, std::io::Error>>();
+        assert!(
+            super::read_artifact_prefix(&mut stalled, &cancellation)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
     async fn generic_http_artifacts_preserve_torrents_and_body_magnets() {
         for body in [
             b"d4:infod4:name4:testee".to_vec(),
             b"magnet:?xt=urn:btih:0123456789012345678901234567890123456789".to_vec(),
+            b" \r\nMAGNET:?xt=urn:btih:0123456789012345678901234567890123456789".to_vec(),
         ] {
             let server = wiremock::MockServer::start().await;
             wiremock::Mock::given(wiremock::matchers::method("GET"))

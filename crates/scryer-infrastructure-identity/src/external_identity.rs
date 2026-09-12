@@ -16,13 +16,14 @@ use scryer_domain::{
     ExternalAccountProvider, ExternalId, MediaServerConnection, MediaServerProvider,
 };
 use scryer_outbound_http::{generic_reqwest_client, no_redirect_reqwest_client};
+
+use crate::jellyfin::{self, JellyfinAuth};
 use serde::Deserialize;
 use serde_json::Value;
 use url::Url;
 
 const PLEX_BASE_URL: &str = "https://plex.tv";
 const SCRYER_PRODUCT: &str = "Scryer";
-const SCRYER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub struct HttpExternalIdentityVerifier {
     client: reqwest::Client,
@@ -68,13 +69,14 @@ impl HttpExternalIdentityVerifier {
         &self,
         keys_url: &Url,
         admin_token: &str,
+        device_id: &str,
         app_name: &str,
     ) -> AppResult<Option<String>> {
         let response = self
             .client
             .get(keys_url.clone())
             .header("Accept", "application/json")
-            .header("X-Emby-Token", admin_token)
+            .jellyfin_auth(admin_token, Some(device_id))
             .send()
             .await
             .map_err(|error| {
@@ -291,7 +293,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .post(auth_url)
             .header(
                 "Authorization",
-                jellyfin_authorization_header(connection_id),
+                jellyfin::login_authorization(connection_id),
             )
             .header("Accept", "application/json")
             .json(&JellyfinAuthRequest { username, password })
@@ -406,7 +408,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .client
             .get(users_url)
             .header("Accept", "application/json")
-            .header("X-Emby-Token", api_key.trim())
+            .jellyfin_auth(api_key.trim(), None)
             .send()
             .await
             .map_err(|error| {
@@ -432,6 +434,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         password: &str,
     ) -> AppResult<String> {
         let base_url = jellyfin_base_url(base_url)?;
+        let device_id = jellyfin::device_id(connection_id);
         let auth_url = base_url.join("Users/AuthenticateByName").map_err(|error| {
             AppError::Validation(format!("Jellyfin authentication URL is invalid: {error}"))
         })?;
@@ -440,7 +443,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .post(auth_url)
             .header(
                 "Authorization",
-                jellyfin_authorization_header(connection_id),
+                jellyfin::login_authorization(connection_id),
             )
             .header("Accept", "application/json")
             .json(&JellyfinAuthRequest { username, password })
@@ -495,7 +498,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             AppError::Validation(format!("Jellyfin API key URL is invalid: {error}"))
         })?;
         if let Some(existing) = self
-            .find_jellyfin_api_key(&keys_url, token, SCRYER_PRODUCT)
+            .find_jellyfin_api_key(&keys_url, token, &device_id, SCRYER_PRODUCT)
             .await?
         {
             return Ok(existing);
@@ -505,7 +508,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .client
             .post(keys_url.clone())
             .header("Accept", "application/json")
-            .header("X-Emby-Token", token)
+            .jellyfin_auth(token, Some(&device_id))
             .query(&[("app", SCRYER_PRODUCT)])
             .send()
             .await
@@ -519,7 +522,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             )));
         }
 
-        self.find_jellyfin_api_key(&keys_url, token, SCRYER_PRODUCT)
+        self.find_jellyfin_api_key(&keys_url, token, &device_id, SCRYER_PRODUCT)
             .await?
             .ok_or_else(|| {
                 AppError::Repository(
@@ -542,7 +545,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .client
             .get(users_url)
             .header("Accept", "application/json")
-            .header("X-Emby-Token", api_key.trim())
+            .jellyfin_auth(api_key.trim(), None)
             .send()
             .await
             .map_err(|error| {
@@ -623,7 +626,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             no_redirect_reqwest_client()
                 .get(user_url)
                 .header("Accept", "application/json")
-                .header("X-Emby-Token", api_key)
+                .jellyfin_auth(api_key, Some(&jellyfin::device_id(connection_id)))
                 .send(),
         )
         .await
@@ -1011,13 +1014,6 @@ fn jellyfin_user_avatar_url(
     Some(image_url.to_string())
 }
 
-fn jellyfin_authorization_header(connection_id: &str) -> String {
-    let device_id = format!("SCRYER_{}", connection_id.replace('"', ""));
-    format!(
-        "MediaBrowser Client=\"{SCRYER_PRODUCT}\", Device=\"{SCRYER_PRODUCT}\", DeviceId=\"{device_id}\", Version=\"{SCRYER_VERSION}\""
-    )
-}
-
 fn json_value_string(value: Option<&Value>) -> Option<String> {
     match value? {
         Value::String(value) => {
@@ -1260,7 +1256,7 @@ fn plex_resources_include_machine(resources_xml: &str, machine_id: &str) -> AppR
 ///
 /// | Provider | Call |
 /// |---|---|
-/// | Jellyfin / Emby | `POST /Library/Media/Updated` with one `MediaUpdateInfo` per path — the same notification the servers' own filesystem watchers raise. |
+/// | Jellyfin / Emby | `POST /Library/Media/Updated` with one `MediaUpdateInfo` per path — the same notification the servers' own filesystem watchers raise. Each server is called through its own module with its own credential header. |
 /// | Plex | `GET /library/sections/{key}/refresh?path=…`, Plex's partial scan, against the section whose configured location contains the path. |
 ///
 /// A Plex path that falls outside every section is skipped rather than widened
@@ -1288,8 +1284,18 @@ async fn refresh_media_server_paths(
         .ok_or_else(|| AppError::Validation("media server refresh requires an API key".into()))?;
 
     match connection.provider {
-        MediaServerProvider::Jellyfin | MediaServerProvider::Emby => {
-            refresh_emby_paths(&verifier.client, &connection.base_url, api_key, &paths).await
+        MediaServerProvider::Jellyfin => {
+            jellyfin::refresh_paths(&verifier.client, &connection.base_url, api_key, &paths).await
+        }
+        MediaServerProvider::Emby => {
+            super::emby::refresh_paths(
+                &verifier.client,
+                &connection.id,
+                &connection.base_url,
+                api_key,
+                &paths,
+            )
+            .await
         }
         MediaServerProvider::Plex => {
             let machine_id = connection
@@ -1303,41 +1309,6 @@ async fn refresh_media_server_paths(
             refresh_plex_paths(verifier, machine_id, api_key, &paths).await
         }
     }
-}
-
-/// Jellyfin and Emby both accept the library-update notification their own
-/// watchers post, so one request carries every changed folder.
-async fn refresh_emby_paths(
-    client: &reqwest::Client,
-    base_url: &str,
-    api_key: &str,
-    paths: &[&str],
-) -> AppResult<()> {
-    let base_url = media_server_url(base_url)?;
-    let url = base_url.join("Library/Media/Updated").map_err(|error| {
-        AppError::Repository(format!("invalid media server refresh URL: {error}"))
-    })?;
-    let body = serde_json::json!({
-        "Updates": paths
-            .iter()
-            .map(|path| serde_json::json!({ "Path": path, "UpdateType": "Modified" }))
-            .collect::<Vec<_>>(),
-    });
-    let response = client
-        .post(url)
-        .header("Accept", "application/json")
-        .header("X-Emby-Token", api_key)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|error| AppError::Repository(format!("media server refresh failed: {error}")))?;
-    if !response.status().is_success() {
-        return Err(AppError::Repository(format!(
-            "media server refresh failed with status {}",
-            response.status()
-        )));
-    }
-    Ok(())
 }
 
 /// Plex has no "these paths changed" endpoint, but it does have a per-section
@@ -1478,8 +1449,19 @@ async fn scan_media_server_catalog(
             AppError::Validation("media server catalog scan requires an API key".into())
         })?;
     match connection.provider {
-        MediaServerProvider::Jellyfin | MediaServerProvider::Emby => {
-            scan_emby_catalog(&verifier.client, &connection.base_url, api_key, recent_only).await
+        MediaServerProvider::Jellyfin => {
+            jellyfin::scan_catalog(&verifier.client, &connection.base_url, api_key, recent_only)
+                .await
+        }
+        MediaServerProvider::Emby => {
+            super::emby::scan_catalog(
+                &verifier.client,
+                &connection.id,
+                &connection.base_url,
+                api_key,
+                recent_only,
+            )
+            .await
         }
         MediaServerProvider::Plex => {
             let machine_id = connection
@@ -1493,171 +1475,6 @@ async fn scan_media_server_catalog(
             scan_plex_catalog(verifier, machine_id, api_key, recent_only).await
         }
     }
-}
-
-async fn scan_emby_catalog(
-    client: &reqwest::Client,
-    base_url: &str,
-    api_key: &str,
-    recent_only: bool,
-) -> AppResult<Vec<MediaServerCatalogItem>> {
-    let base_url = media_server_url(base_url)?;
-    let mut start = 0usize;
-    let mut catalog = Vec::new();
-    const PAGE_SIZE: usize = 500;
-    loop {
-        let mut url = base_url.join("Items").map_err(|error| {
-            AppError::Repository(format!("invalid media server catalog URL: {error}"))
-        })?;
-        url.query_pairs_mut()
-            .append_pair("Recursive", "true")
-            .append_pair("IncludeItemTypes", "Movie,Series,Episode")
-            .append_pair(
-                "Fields",
-                "ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd",
-            )
-            .append_pair("StartIndex", &start.to_string())
-            .append_pair("Limit", &PAGE_SIZE.to_string());
-        if recent_only {
-            url.query_pairs_mut()
-                .append_pair("SortBy", "DateCreated,DateLastContentAdded")
-                .append_pair("SortOrder", "Descending");
-        }
-        let response = client
-            .get(url)
-            .header("Accept", "application/json")
-            .header("X-Emby-Token", api_key)
-            .send()
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("media server catalog scan failed: {error}"))
-            })?;
-        if !response.status().is_success() {
-            return Err(AppError::Repository(format!(
-                "media server catalog scan failed with status {}",
-                response.status()
-            )));
-        }
-        let page = response.json::<Value>().await.map_err(|error| {
-            AppError::Repository(format!("invalid media server catalog response: {error}"))
-        })?;
-        let items = page
-            .get("Items")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-        let page_len = items.len();
-        catalog.extend(items.iter().filter_map(emby_catalog_item));
-        start += page_len;
-        let total = page
-            .get("TotalRecordCount")
-            .and_then(Value::as_u64)
-            .unwrap_or(0) as usize;
-        if recent_only || page_len < PAGE_SIZE || (total > 0 && start >= total) {
-            return hydrate_emby_parent_series(client, &base_url, api_key, catalog).await;
-        }
-    }
-}
-
-async fn hydrate_emby_parent_series(
-    client: &reqwest::Client,
-    base_url: &Url,
-    api_key: &str,
-    mut catalog: Vec<MediaServerCatalogItem>,
-) -> AppResult<Vec<MediaServerCatalogItem>> {
-    let mut known_series_ids = catalog
-        .iter()
-        .filter(|item| item.kind == MediaServerCatalogItemKind::Series)
-        .map(|item| item.provider_item_id.clone())
-        .collect::<HashSet<_>>();
-    let missing_series_ids = catalog
-        .iter()
-        .filter(|item| item.kind == MediaServerCatalogItemKind::Episode)
-        .filter_map(|item| item.series_provider_item_id.clone())
-        .filter(|series_id| known_series_ids.insert(series_id.clone()))
-        .collect::<Vec<_>>();
-
-    for series_id in missing_series_ids {
-        // Jellyfin 10.11 resolves a user before serving `GET /Items/{id}` and answers an
-        // API-key caller with 400 "Guid can't be empty". `GET /Items?Ids=` is the list
-        // endpoint the scan above already uses; it explicitly supports API keys without a
-        // user, so the parent series is fetched through it instead.
-        let mut url = base_url.join("Items").map_err(|error| {
-            AppError::Repository(format!("invalid media server catalog URL: {error}"))
-        })?;
-        url.query_pairs_mut()
-            .append_pair("Ids", &series_id)
-            .append_pair(
-                "Fields",
-                "ProviderIds,SeriesId,ParentIndexNumber,IndexNumber,IndexNumberEnd",
-            );
-        let response = client
-            .get(url)
-            .header("Accept", "application/json")
-            .header("X-Emby-Token", api_key)
-            .send()
-            .await
-            .map_err(|error| {
-                AppError::Repository(format!("media server parent-series lookup failed: {error}"))
-            })?;
-        if response.status() == reqwest::StatusCode::NOT_FOUND {
-            continue;
-        }
-        if !response.status().is_success() {
-            return Err(AppError::Repository(format!(
-                "media server parent-series lookup failed with status {}",
-                response.status()
-            )));
-        }
-        let page = response.json::<Value>().await.map_err(|error| {
-            AppError::Repository(format!(
-                "invalid media server parent-series response: {error}"
-            ))
-        })?;
-        // A series that no longer exists yields an empty page rather than a 404.
-        let Some(series) = page
-            .get("Items")
-            .and_then(Value::as_array)
-            .and_then(|items| items.first())
-            .and_then(emby_catalog_item)
-        else {
-            continue;
-        };
-        if series.kind == MediaServerCatalogItemKind::Series {
-            catalog.push(series);
-        }
-    }
-    Ok(catalog)
-}
-
-fn emby_catalog_item(value: &Value) -> Option<MediaServerCatalogItem> {
-    let kind = match value.get("Type")?.as_str()? {
-        "Movie" => MediaServerCatalogItemKind::Movie,
-        "Series" => MediaServerCatalogItemKind::Series,
-        "Episode" => MediaServerCatalogItemKind::Episode,
-        _ => return None,
-    };
-    Some(MediaServerCatalogItem {
-        kind,
-        provider_item_id: value.get("Id")?.as_str()?.trim().to_string(),
-        external_ids: provider_ids(value.get("ProviderIds")),
-        series_provider_item_id: value
-            .get("SeriesId")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        season_number: value
-            .get("ParentIndexNumber")
-            .and_then(Value::as_i64)
-            .map(|value| value as i32),
-        episode_number: value
-            .get("IndexNumber")
-            .and_then(Value::as_i64)
-            .map(|value| value as i32),
-        episode_number_end: value
-            .get("IndexNumberEnd")
-            .and_then(Value::as_i64)
-            .map(|value| value as i32),
-    })
 }
 
 async fn scan_plex_catalog(
@@ -1921,34 +1738,6 @@ fn plex_external_id(value: &str) -> Option<ExternalId> {
     })
 }
 
-fn provider_ids(value: Option<&Value>) -> Vec<ExternalId> {
-    let Some(value) = value else {
-        return Vec::new();
-    };
-    match value {
-        Value::Object(values) => values
-            .iter()
-            .filter_map(|(source, value)| {
-                value.as_str().map(|value| ExternalId {
-                    source: source.clone(),
-                    value: value.to_string(),
-                })
-            })
-            .collect(),
-        Value::Array(values) => values
-            .iter()
-            .filter_map(|value| value.get("id").and_then(Value::as_str))
-            .filter_map(|value| {
-                value.split_once("://").map(|(source, id)| ExternalId {
-                    source: source.into(),
-                    value: id.into(),
-                })
-            })
-            .collect(),
-        _ => Vec::new(),
-    }
-}
-
 fn media_server_url(value: &str) -> AppResult<Url> {
     let mut url = Url::parse(value.trim())
         .map_err(|error| AppError::Repository(format!("invalid media server URL: {error}")))?;
@@ -2071,56 +1860,6 @@ mod tests {
         );
     }
 
-    /// FR-088 on the Emby/Jellyfin side: one library-update notification
-    /// carrying exactly the folders that changed, and nothing that would start a
-    /// full library scan.
-    #[tokio::test]
-    async fn emby_refresh_posts_the_changed_paths_as_a_library_update() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/Library/Media/Updated"))
-            .and(header("X-Emby-Token", "api-key"))
-            .and(wiremock::matchers::body_json(json!({
-                "Updates": [
-                    { "Path": "/data/tv/Some Show", "UpdateType": "Modified" },
-                    { "Path": "/data/tv/Other Show", "UpdateType": "Modified" },
-                ]
-            })))
-            .respond_with(ResponseTemplate::new(204))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        refresh_emby_paths(
-            &generic_reqwest_client(),
-            &server.uri(),
-            "api-key",
-            &["/data/tv/Some Show", "/data/tv/Other Show"],
-        )
-        .await
-        .expect("refresh");
-    }
-
-    #[tokio::test]
-    async fn emby_refresh_surfaces_a_rejected_notification() {
-        let server = MockServer::start().await;
-        Mock::given(method("POST"))
-            .and(path("/Library/Media/Updated"))
-            .respond_with(ResponseTemplate::new(401))
-            .mount(&server)
-            .await;
-
-        let error = refresh_emby_paths(
-            &generic_reqwest_client(),
-            &server.uri(),
-            "api-key",
-            &["/data/tv/Some Show"],
-        )
-        .await
-        .expect_err("a rejected notification is not a success");
-        assert!(error.to_string().contains("401"), "{error}");
-    }
-
     #[test]
     fn plex_sections_are_matched_by_their_configured_locations() {
         let sections = json!({
@@ -2236,57 +1975,6 @@ mod tests {
             entries.last().and_then(|item| item.get("ratingKey")),
             Some(&json!("500"))
         );
-    }
-
-    #[tokio::test]
-    async fn jellyfin_catalog_resolves_parent_series_through_items_list() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/Items"))
-            .and(query_param("Recursive", "true"))
-            .and(header("X-Emby-Token", "token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "Items": [{
-                    "Id": "episode-1",
-                    "Type": "Episode",
-                    "SeriesId": "series-1",
-                    "ParentIndexNumber": 1,
-                    "IndexNumber": 2,
-                    "ProviderIds": {}
-                }],
-                "TotalRecordCount": 1
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-        // Jellyfin 10.11 rejects `GET /Items/{id}` from an API-key caller with 400, so the
-        // parent series must come back through the list endpoint's `Ids=` filter.
-        Mock::given(method("GET"))
-            .and(path("/Items"))
-            .and(query_param("Ids", "series-1"))
-            .and(header("X-Emby-Token", "token"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "Items": [{
-                    "Id": "series-1",
-                    "Type": "Series",
-                    "ProviderIds": { "Tvdb": "999" }
-                }],
-                "TotalRecordCount": 1
-            })))
-            .expect(1)
-            .mount(&server)
-            .await;
-
-        let catalog = scan_emby_catalog(&generic_reqwest_client(), &server.uri(), "token", false)
-            .await
-            .expect("scan Jellyfin catalog");
-
-        assert_eq!(catalog.len(), 2);
-        let series = catalog
-            .iter()
-            .find(|item| item.kind == MediaServerCatalogItemKind::Series)
-            .expect("parent series hydrated");
-        assert_eq!(series.provider_item_id, "series-1");
     }
 
     #[tokio::test]
@@ -2543,6 +2231,147 @@ mod tests {
 
         assert_eq!(api_key, "generated-token");
         assert_eq!(key_list_calls.load(Ordering::SeqCst), 2);
+    }
+
+    /// Match one exact `Authorization` value.
+    ///
+    /// wiremock's own `header` matcher reads a comma-separated value as a list
+    /// of values, so a `MediaBrowser` header never compares equal through it.
+    fn authorization(expected: String) -> impl Fn(&wiremock::Request) -> bool {
+        move |request: &wiremock::Request| {
+            request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                == Some(expected.as_str())
+        }
+    }
+
+    /// Jellyfin 12 reads no legacy credential channel, so these mocks match on
+    /// `Authorization` alone. The sibling tests that match on `x-emby-token`
+    /// alone are the Jellyfin 10.x/Emby oracle; together they hold Scryer to
+    /// serving both server generations from one request.
+    #[tokio::test]
+    async fn jellyfin_12_user_listing_authorizes_without_the_legacy_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .and(authorization(jellyfin::authorization(
+                Some("api-key"),
+                None,
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "Id": "jf-user",
+                "Name": "Jelly User"
+            }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let verifier = HttpExternalIdentityVerifier::new();
+
+        let users = verifier
+            .list_jellyfin_users(&server.uri(), "api-key", None)
+            .await
+            .expect("list jellyfin users on a server that ignores X-Emby-Token");
+
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].username, "Jelly User");
+    }
+
+    #[tokio::test]
+    async fn jellyfin_12_api_key_test_authorizes_without_the_legacy_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .and(authorization(jellyfin::authorization(
+                Some("api-key"),
+                None,
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let verifier = HttpExternalIdentityVerifier::new();
+
+        verifier
+            .test_jellyfin_api_key(&server.uri(), "api-key")
+            .await
+            .expect("validate an api key on a server that ignores X-Emby-Token");
+    }
+
+    #[tokio::test]
+    async fn jellyfin_12_admin_exchange_authorizes_without_the_legacy_header() {
+        let server = MockServer::start().await;
+        // The key calls ride the session the login opened, so they present the
+        // same DeviceId the login did.
+        let session_auth = jellyfin::authorization(Some("admin-token"), Some("SCRYER_jf-12"));
+        Mock::given(method("POST"))
+            .and(path("/Users/AuthenticateByName"))
+            .and(authorization(jellyfin::login_authorization("jf-12")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "AccessToken": "admin-token",
+                "User": {
+                    "Id": "admin-user",
+                    "Name": "Admin User",
+                    "Policy": { "IsAdministrator": true }
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Auth/Keys"))
+            .and(authorization(session_auth))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{
+                    "AppName": "Scryer",
+                    "AccessToken": "generated-token",
+                    "DateCreated": "2026-09-11T00:00:00.0000000Z"
+                }],
+                "TotalRecordCount": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let verifier = HttpExternalIdentityVerifier::new();
+
+        let api_key = verifier
+            .exchange_jellyfin_admin_api_key("jf-12", &server.uri(), "admin", "secret")
+            .await
+            .expect("exchange admin credentials on a server that ignores X-Emby-Token");
+
+        assert_eq!(api_key, "generated-token");
+    }
+
+    #[tokio::test]
+    async fn jellyfin_12_user_verification_authorizes_without_the_legacy_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users/2c1b0a3d4e5f60718293a4b5c6d7e8f9"))
+            .and(authorization(jellyfin::authorization(
+                Some("api-key"),
+                Some("SCRYER_jf-12"),
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Id": "2c1b0a3d4e5f60718293a4b5c6d7e8f9",
+                "Name": "Jelly User"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let verifier = HttpExternalIdentityVerifier::new();
+
+        let identity = verifier
+            .verify_jellyfin_user_with_api_key(
+                "jf-12",
+                &server.uri(),
+                "api-key",
+                "2c1b0a3d4e5f60718293a4b5c6d7e8f9",
+            )
+            .await
+            .expect("verify a user on a server that ignores X-Emby-Token");
+
+        assert_eq!(identity.username, "Jelly User");
     }
 
     #[tokio::test]

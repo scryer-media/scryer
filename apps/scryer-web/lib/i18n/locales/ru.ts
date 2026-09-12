@@ -1131,6 +1131,9 @@ const ru: LocaleDictionary = {
     "search.viewAll.series": "Показать все сериалы",
     "search.viewAll.anime": "Показать всё аниме",
     "search.add": "Добавить",
+    "search.addToAnotherLibrary": "Добавить в другую библиотеку",
+    "search.requestForAnotherLibrary": "Запросить для другой библиотеки",
+    "search.chooseLibraryToView": "Выберите библиотеку, в которой открыть {{name}}",
     "search.footerTip": "Не удалось найти нужный результат? Попробуйте другой запрос или проверьте настройки индексаторов.",
     "search.searchTips": "Советы по поиску",
     "search.tipTitles":
@@ -5667,23 +5670,23 @@ const ru: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "Объединение невозможно: эти записи нельзя перенести.",
   "move.mergeCarried":
-    "Сохраняемое название получает {{files}} запись(ей) медиафайлов и {{history}} строк(и) истории.",
+    "Вместе с ним переходят медиафайлы ({{files}}) и записи истории ({{history}}).",
   "move.mergeDropped":
     "{{count}} прочая(-ие) запись(-и) объединяемого названия не переносятся и удаляются вместе с ним.",
   "move.mergeRoleChangesHeading":
-    "Роли медиафайлов (файлов, теряющих роль основного: {{demotions}})",
-  "move.mergeRoleChangesHeadingPlain": "Роли медиафайлов",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "основной",
-  "move.mergeRole.ADDITIONAL": "дополнительный",
-  "move.mergeRoleDemotion":
-    "Этот файл больше не основной для своей серии; он сохраняется рядом с основным.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "В библиотеке назначения уже был основной файл для этой серии, а перемещение никогда его не понижает.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Другой перемещаемый файл уже занял роль основного для этой серии назначения.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Две исходные серии свелись к одной серии назначения.",
+    "Файлов, которые станут дополнительными копиями: {{demotions}}",
+  "move.mergeRoleChangesHeadingPlain": "Роли файлов",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "У «{{title}}» уже есть основной файл для этих серий. Поступающие файлы сохраняются как дополнительные копии; ничего из имеющегося не заменяется.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "У «{{title}}» уже есть основной файл. Поступающий файл сохраняется как дополнительная копия; ничего из имеющегося не заменяется.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Другой файл из этого перемещения уже является основным для этих серий, поэтому эти сохраняются как дополнительные копии.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Другой файл из этого перемещения уже является основным, поэтому этот сохраняется как дополнительная копия.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "Эти файлы числятся здесь под двумя сериями, которые в месте назначения являются одной. Там каждый из них числится один раз.",
+  "move.mergeRoleUnnamedFile": "файл {{id}}",
   "move.operationTransferNote": "Эти тайтлы перемещаются в другую библиотеку.",
   "move.modeHeading": "Как файлы должны туда попасть?",
   "move.mode.MOVE_WITH_SCRYER": "Переместить через Scryer",
@@ -5784,7 +5787,7 @@ const ru: LocaleDictionary = {
   "move.planKind.MOVE": "Перемещения",
   "move.planKind.RENAME": "Переименования",
   "move.planKind.MERGE": "Слияния",
-  "move.planKind.DEDUP": "Дубликаты в корзину",
+  "move.planKind.DEDUP": "Возможно слияние с идентичными файлами",
   "move.planKind.CATALOG_CHANGE": "Изменения каталога",
   "move.planKind.ROLE_CHANGE": "Изменения роли",
   "move.planKind.NO_OP": "Без изменений",
@@ -5817,6 +5820,14 @@ const ru: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Объединение корневых каталогов",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Перенос между библиотеками",
   "move.operationType.ADOPTION": "Принятие",
+  "move.toastPreparing": "Подготовка…",
+  "move.toastTransferred": "Передано",
+  "move.toastTitlesProgress": "{{current}} / {{total}} тайтлов",
+  "move.toastDoneSubtitle": "Перемещение завершено · {{count}} тайтлов",
+  "move.toastWarningsSubtitle": "Завершено с предупреждениями · {{count}} тайтлов",
+  "move.toastWarningsChip": "Некоторые тайтлы требуют проверки в разделе «Активность».",
+  "move.toastFailedSubtitle": "Перемещение не удалось",
+  "move.toastCanceledSubtitle": "Перемещение отменено",
   "move.startedHeading": "Перемещение началось. Следите за ним в разделе «Активность».",
   "move.viewInActivity": "Открыть в разделе «Активность»",
   "rootChange.rowAction": "Изменить корень",
@@ -5858,7 +5869,7 @@ const ru: LocaleDictionary = {
   "rootChange.group.mergingWithDestinationTitles": "Слияние",
   "rootChange.group.folderNameCollisions": "Имя папки занято",
   "rootChange.group.mediaCollisions": "Имя медиафайла занято",
-  "rootChange.group.dedupEligibleFiles": "Уже идентичны",
+  "rootChange.group.dedupEligibleFiles": "Возможно идентичны",
   "rootChange.group.companionCollisions": "Имя сопутствующего файла занято",
   "rootChange.group.untrackedSourceEntries": "Не отслеживается в источнике",
   "rootChange.renamedFoldersHeading": "Папки, которые меняют имя",

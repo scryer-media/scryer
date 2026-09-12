@@ -84,9 +84,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::location::classify::TitleLocationClass;
 use crate::location::model::{
-    FileVerificationRecord, LocationOperation, LocationOperationCounters, LocationOperationState,
-    LocationReasonCode, TitleCheckpoint, TitleCheckpointPlacement, TitleCheckpointState,
-    VerificationDepth,
+    FileVerificationRecord, KnownSourceContent, LocationOperation, LocationOperationCounters,
+    LocationOperationState, LocationReasonCode, TitleCheckpoint, TitleCheckpointPlacement,
+    TitleCheckpointState, VerificationDepth,
 };
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::verify::{CopyProgress, FileVerificationIdentity, VerifiedFile};
@@ -137,6 +137,9 @@ pub struct PlannedFile {
     pub source_path: PathBuf,
     pub destination_path: PathBuf,
     pub size_bytes: u64,
+    /// The catalog's attested full hash of the source, when the plan carries
+    /// one (see [`KnownSourceContent`]).
+    pub source_content: Option<KnownSourceContent>,
 }
 
 impl PlannedFile {
@@ -353,11 +356,23 @@ impl TitleAdmissionCheck for AlwaysAdmit {
 }
 
 /// What a title's catalog or cleanup step wants the user to see.
+///
+/// Two lanes, because they mean different things to the person reading the
+/// outcome. A *note* states something the confirmed plan said would happen and
+/// that then happened: the title merged into an existing one, a companion file
+/// was kept under a new name, an old folder was pruned. A *warning* is a
+/// departure from that plan — a source that could not be recycled, a folder
+/// that could not be removed, a verification that fell back to the quick
+/// floor. Only warnings turn a completed title (and the operation) into
+/// "completed with warnings"; notes ride along in the detail of a plain
+/// success.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct TitleStepOutcome {
-    /// Warnings that make the title — and the operation — finish with warnings
-    /// rather than silently (C3): preserve-instead-of-recycle, collision
-    /// renames, hardlink notes.
+    /// Planned outcomes worth stating. They never change the title's state.
+    pub notes: Vec<String>,
+    /// Departures from the plan that make the title — and the operation —
+    /// finish with warnings rather than silently (C3): preserve-instead-of-
+    /// recycle, folders left standing, quick-floor fallbacks.
     pub warnings: Vec<String>,
 }
 
@@ -369,8 +384,33 @@ impl TitleStepOutcome {
     pub fn warned(warning: impl Into<String>) -> Self {
         Self {
             warnings: vec![warning.into()],
+            ..Self::default()
         }
     }
+
+    pub fn noted(note: impl Into<String>) -> Self {
+        Self {
+            notes: vec![note.into()],
+            ..Self::default()
+        }
+    }
+
+    /// Fold another step's outcome into this one, lane by lane.
+    pub fn extend(&mut self, other: TitleStepOutcome) {
+        self.notes.extend(other.notes);
+        self.warnings.extend(other.warnings);
+    }
+}
+
+/// The checkpoint detail for a finished title: what the plan said would happen
+/// first, then anything that departed from it — one line each.
+pub(super) fn finished_title_detail(notes: &[String], warnings: &[String]) -> Option<String> {
+    let lines: Vec<&str> = notes
+        .iter()
+        .chain(warnings.iter())
+        .map(String::as_str)
+        .collect();
+    (!lines.is_empty()).then(|| lines.join("\n"))
 }
 
 /// The workflow's catalog and cleanup work for one title.
@@ -957,13 +997,13 @@ impl<'a> LocationOperationRunner<'a> {
                 )
                 .await
             {
-                Ok(TitleRunOutcome::Finished(warnings)) => {
+                Ok(TitleRunOutcome::Finished { notes, warnings }) => {
                     let state = if warnings.is_empty() {
                         TitleCheckpointState::Completed
                     } else {
                         TitleCheckpointState::CompletedWithWarnings
                     };
-                    let detail = (!warnings.is_empty()).then(|| warnings.join("; "));
+                    let detail = finished_title_detail(&notes, &warnings);
                     self.settle_title(&operation, title, state, detail, &mut progress, plan, None)
                         .await?;
                     progress.warnings.extend(warnings);
@@ -1066,7 +1106,7 @@ impl<'a> LocationOperationRunner<'a> {
         } else {
             LocationOperationState::CompletedWithWarnings
         };
-        let detail = (!progress.warnings.is_empty()).then(|| progress.warnings.join("; "));
+        let detail = (!progress.warnings.is_empty()).then(|| progress.warnings.join("\n"));
         self.finish(&operation, plan, &progress, final_state, None, detail, None)
             .await
     }
@@ -1081,7 +1121,7 @@ impl<'a> LocationOperationRunner<'a> {
         plan: &OperationWorkPlan,
         phase: &mut TitleRunPhase,
     ) -> AppResult<TitleRunOutcome> {
-        let mut warnings = Vec::new();
+        let mut outcome = TitleStepOutcome::clean();
         *phase = TitleRunPhase::Moving;
 
         self.write_title_checkpoint(
@@ -1140,7 +1180,7 @@ impl<'a> LocationOperationRunner<'a> {
             if verified.depth.fell_back {
                 progress.verification_fallbacks += 1;
                 if let Some(detail) = verified.detail.clone() {
-                    warnings.push(detail);
+                    outcome.warnings.push(detail);
                 }
             }
 
@@ -1264,12 +1304,7 @@ impl<'a> LocationOperationRunner<'a> {
         )
         .await?;
         *phase = TitleRunPhase::Reconciling;
-        warnings.extend(
-            self.reconciler
-                .reconcile_title(operation, title)
-                .await?
-                .warnings,
-        );
+        outcome.extend(self.reconciler.reconcile_title(operation, title).await?);
 
         // The catalog write committed: from here a failure, the checkpoint
         // write included, is a cleanup left undone rather than a half-flipped
@@ -1294,14 +1329,12 @@ impl<'a> LocationOperationRunner<'a> {
             None,
         )
         .await?;
-        warnings.extend(
-            self.reconciler
-                .clean_up_title(operation, title)
-                .await?
-                .warnings,
-        );
+        outcome.extend(self.reconciler.clean_up_title(operation, title).await?);
 
-        Ok(TitleRunOutcome::Finished(warnings))
+        Ok(TitleRunOutcome::Finished {
+            notes: outcome.notes,
+            warnings: outcome.warnings,
+        })
     }
 
     /// Move one file, retrying the transient failures and pulsing progress
@@ -1496,6 +1529,20 @@ impl<'a> LocationOperationRunner<'a> {
                 .record(operation, title, state, detail.as_deref())
                 .await?;
         }
+        if matches!(
+            state,
+            TitleCheckpointState::Completed | TitleCheckpointState::CompletedWithWarnings
+        ) {
+            // The transfer, not the plan, decides which files merged with an
+            // identical copy or landed under another name (FR-073/FR-074), so
+            // a title's outcome counts come from its recorded resolutions —
+            // the same rows a resumed run reads for titles settled earlier.
+            let resolutions = self
+                .store
+                .file_resolutions(&operation.id, &title.title_id)
+                .await?;
+            progress.record_resolved_outcomes(&title.title_id, &resolutions);
+        }
         progress.settle(title, state);
         self.write_title_checkpoint(operation, title, state, detail, progress, reason_code)
             .await?;
@@ -1680,8 +1727,13 @@ impl<'a> LocationOperationRunner<'a> {
 
 /// How one title's run ended, as far as the loop that drives titles cares.
 enum TitleRunOutcome {
-    /// The title did everything the plan asked, with these warnings.
-    Finished(Vec<String>),
+    /// The title did everything the plan asked. `notes` are the planned
+    /// outcomes worth stating; `warnings` are the departures from the plan,
+    /// and only they make the title finish "with warnings".
+    Finished {
+        notes: Vec<String>,
+        warnings: Vec<String>,
+    },
     /// A cancel arrived between two of the title's files. The title is left
     /// unsettled on purpose.
     Canceled,
@@ -2634,6 +2686,7 @@ mod tests {
         reconciled: Mutex<Vec<String>>,
         cleaned: Mutex<Vec<String>>,
         warnings: BTreeMap<String, String>,
+        notes: BTreeMap<String, String>,
     }
 
     #[async_trait]
@@ -2647,10 +2700,14 @@ mod tests {
                 .lock()
                 .expect("lock")
                 .push(title.title_id.clone());
-            Ok(match self.warnings.get(&title.title_id) {
-                Some(warning) => TitleStepOutcome::warned(warning.clone()),
-                None => TitleStepOutcome::clean(),
-            })
+            let mut outcome = TitleStepOutcome::clean();
+            outcome
+                .notes
+                .extend(self.notes.get(&title.title_id).cloned());
+            outcome
+                .warnings
+                .extend(self.warnings.get(&title.title_id).cloned());
+            Ok(outcome)
         }
 
         async fn clean_up_title(
@@ -2712,6 +2769,7 @@ mod tests {
                     source_path: PathBuf::from(format!("/source/{title_id}/{index}.mkv")),
                     destination_path: PathBuf::from(format!("/destination/{title_id}/{index}.mkv")),
                     size_bytes: 100,
+                    source_content: None,
                 })
                 .collect(),
             outcomes: TitleOutcomeCounts::default(),
@@ -3921,6 +3979,82 @@ mod tests {
         );
         assert_eq!(outcome.counters.merges, 1);
         assert_eq!(outcome.counters.renames, 2);
+    }
+
+    /// A planned outcome that happened — the merge the preview promised, a
+    /// companion kept under a new name — is stated in the checkpoint detail
+    /// but leaves the title, and the operation, a plain success.
+    #[tokio::test]
+    async fn a_noted_title_completes_cleanly_and_still_states_the_note() {
+        let store = FakeStore::with_operation(operation());
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler {
+            notes: [(
+                "title-1".to_string(),
+                "\"Sample Show\" was merged into the existing \"Sample Show\".".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..RecordingReconciler::default()
+        };
+        let plan = two_title_plan();
+
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .run("op-1", &plan)
+            .await
+            .expect("the run should finish");
+
+        assert_eq!(outcome.state, LocationOperationState::Completed);
+        assert!(outcome.warnings.is_empty(), "{:?}", outcome.warnings);
+        let checkpoint = store
+            .checkpoint("op-1", "title-1")
+            .expect("the noted title should have a checkpoint");
+        assert_eq!(checkpoint.state, TitleCheckpointState::Completed);
+        assert_eq!(
+            checkpoint.detail.as_deref(),
+            Some("\"Sample Show\" was merged into the existing \"Sample Show\"."),
+        );
+    }
+
+    /// A title with both lanes states the planned outcome first, then the
+    /// departure, one per line — and the departure is what sets the state.
+    #[tokio::test]
+    async fn notes_precede_warnings_in_the_checkpoint_detail_one_per_line() {
+        let store = FakeStore::with_operation(operation());
+        let mover = FakeMover::default();
+        let admission = ScriptedAdmission::new(&[]);
+        let reconciler = RecordingReconciler {
+            notes: [("title-1".to_string(), "planned thing happened".to_string())]
+                .into_iter()
+                .collect(),
+            warnings: [(
+                "title-1".to_string(),
+                "unplanned thing happened".to_string(),
+            )]
+            .into_iter()
+            .collect(),
+            ..RecordingReconciler::default()
+        };
+        let plan = two_title_plan();
+
+        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+            .run("op-1", &plan)
+            .await
+            .expect("the run should finish");
+
+        assert_eq!(outcome.state, LocationOperationState::CompletedWithWarnings);
+        assert_eq!(
+            outcome.warnings,
+            vec!["unplanned thing happened".to_string()]
+        );
+        let checkpoint = store
+            .checkpoint("op-1", "title-1")
+            .expect("the title should have a checkpoint");
+        assert_eq!(
+            checkpoint.detail.as_deref(),
+            Some("planned thing happened\nunplanned thing happened"),
+        );
     }
 
     #[tokio::test]

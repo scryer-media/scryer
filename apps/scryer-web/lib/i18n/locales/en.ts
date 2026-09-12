@@ -1190,6 +1190,9 @@ const en: LocaleDictionary = {
   "search.view": "View",
   "search.viewAll": "View all",
   "search.add": "Add",
+  "search.addToAnotherLibrary": "Add to another library",
+  "search.requestForAnotherLibrary": "Request for another library",
+  "search.chooseLibraryToView": "Choose a library to view {{name}} in",
   "search.footerTip": "Can't find it? Try another term or check your indexers.",
   "search.searchTips": "Search tips",
   "search.tipTitles":
@@ -2660,6 +2663,8 @@ const en: LocaleDictionary = {
   "status.blocklistEntryCleared": "Blocked release removed",
   "status.episodeFilesDeleteQueued": "Queued deletion of {{count}} episode files",
   "status.episodeFilesDeleted": "Deleted {{count}} episode files",
+  "status.mediaFileDeleteQueued": "Queued deletion of the media file",
+  "status.mediaFileDeleted": "Deleted the media file",
   "status.queuedLatest": "Queued latest release for {{name}}",
   "status.nothingFound": "No results found.",
   "status.searchingTvdb": 'Searching TVDB metadata for "{{query}}".',
@@ -4566,23 +4571,22 @@ const en: LocaleDictionary = {
   "move.mergeBlockedHeading":
     "This merge cannot run: these records cannot be carried over.",
   "move.mergeCarried":
-    "The surviving title takes over {{files}} media file record(s) and {{history}} history row(s).",
+    "{{files}} media file(s) and {{history}} history entries come along.",
   "move.mergeDropped":
     "{{count}} other record(s) on this title (tags, requests, acquisition state) retire with it.",
-  "move.mergeRoleChangesHeading":
-    "Media file roles ({{demotions}} file(s) lose primary)",
-  "move.mergeRoleChangesHeadingPlain": "Media file roles",
-  "move.mergeRoleChangeLine": "{{previous}} → {{next}}",
-  "move.mergeRole.PRIMARY": "primary",
-  "move.mergeRole.ADDITIONAL": "additional",
-  "move.mergeRoleDemotion":
-    "This file is no longer the primary for its episode; it is kept alongside the one that is.",
-  "move.mergeRoleReason.DESTINATION_PRIMARY_RETAINED":
-    "The destination already had a primary for this episode, and a move never demotes one.",
-  "move.mergeRoleReason.SOURCE_PRIMARY_ALREADY_CLAIMED":
-    "Another moving file already claimed primary for that destination episode.",
-  "move.mergeRoleReason.COLLAPSED_SOURCE_EPISODES":
-    "Two source episodes collapsed onto one destination episode.",
+  "move.mergeRoleChangesHeading": "{{demotions}} file(s) become extra copies",
+  "move.mergeRoleChangesHeadingPlain": "File roles",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED":
+    "“{{title}}” already has a primary file for these episodes. The incoming files are kept as extra copies, and nothing already there is replaced.",
+  "move.mergeRoleGroup.DESTINATION_PRIMARY_RETAINED_TITLE":
+    "“{{title}}” already has a primary file. The incoming file is kept as an extra copy, and nothing already there is replaced.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED":
+    "Another file in this move is already the primary for these episodes, so these are kept as extra copies.",
+  "move.mergeRoleGroup.SOURCE_PRIMARY_ALREADY_CLAIMED_TITLE":
+    "Another file in this move is already the primary, so this one is kept as an extra copy.",
+  "move.mergeRoleGroup.COLLAPSED_SOURCE_EPISODES":
+    "These files are listed under two episodes here that are one episode at the destination. Each is listed once there.",
+  "move.mergeRoleUnnamedFile": "file {{id}}",
   "move.operationTransferNote": "These titles are moving into another library.",
   "move.modeHeading": "How should the files get there?",
   "move.mode.MOVE_WITH_SCRYER": "Move with Scryer",
@@ -4770,7 +4774,7 @@ const en: LocaleDictionary = {
   "move.planKind.MOVE": "Moves",
   "move.planKind.RENAME": "Renames",
   "move.planKind.MERGE": "Merges",
-  "move.planKind.DEDUP": "Duplicates recycled",
+  "move.planKind.DEDUP": "May merge with identical files",
   "move.planKind.CATALOG_CHANGE": "Catalog changes",
   "move.planKind.ROLE_CHANGE": "Role changes",
   "move.planKind.NO_OP": "No-ops",
@@ -4804,6 +4808,14 @@ const en: LocaleDictionary = {
   "move.operationType.ROOT_CONSOLIDATION": "Root consolidation",
   "move.operationType.CROSS_LIBRARY_TRANSFER": "Cross-library transfer",
   "move.operationType.ADOPTION": "Adoption",
+  "move.toastPreparing": "Preparing…",
+  "move.toastTransferred": "Transferred",
+  "move.toastTitlesProgress": "{{current}} / {{total}} titles",
+  "move.toastDoneSubtitle": "Move complete · {{count}} titles",
+  "move.toastWarningsSubtitle": "Completed with warnings · {{count}} titles",
+  "move.toastWarningsChip": "Some titles need a look in Activity.",
+  "move.toastFailedSubtitle": "Move failed",
+  "move.toastCanceledSubtitle": "Move canceled",
   "move.startedHeading": "The move started. Follow it in Activity.",
   "move.viewInActivity": "View in Activity",
   "rootChange.rowAction": "Change root",
@@ -4845,7 +4857,7 @@ const en: LocaleDictionary = {
   "rootChange.group.mergingWithDestinationTitles": "Merging",
   "rootChange.group.folderNameCollisions": "Folder name taken",
   "rootChange.group.mediaCollisions": "Media name taken",
-  "rootChange.group.dedupEligibleFiles": "Already identical",
+  "rootChange.group.dedupEligibleFiles": "May be identical",
   "rootChange.group.companionCollisions": "Companion name taken",
   "rootChange.group.untrackedSourceEntries": "Untracked at the source",
   "rootChange.renamedFoldersHeading": "Folders that change name",

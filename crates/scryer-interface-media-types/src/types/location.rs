@@ -694,6 +694,13 @@ pub struct LocationMergeRoleChangePayload {
     pub reason: LocationMergeRoleChangeReasonValue,
     /// The sentence the preview shows for this change.
     pub detail: String,
+    /// The destination episode as a person would say it (`S01E03`, or `#12` for
+    /// an absolute-numbered catalog). Null for a movie, or when the episode
+    /// carries no usable number.
+    pub episode_label: Option<String>,
+    /// The file's name on disk, without its folder. Null when the catalog row
+    /// could not name it.
+    pub file_name: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
