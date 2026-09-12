@@ -6,6 +6,7 @@
 
 ## Included fixes
 
+- Deleting a title together with its files works for titles in any library. The delete guard compared the title folder against the root folders of the facet's default library only, so a title in a second library of the same kind (a separate Anime or Movies library with its own root) was always refused with "outside the configured root folders". The guard now checks the roots of the library the title belongs to.
 - Connecting a Jellyfin media server works with either an admin login or a pasted API key. The admin login path can once again read and create Scryer's API key on the server.
 - Jellyfin user lists load, so Jellyfin users can be added and given access to requests again.
 - Jellyfin account links and logins verify against the server again.
