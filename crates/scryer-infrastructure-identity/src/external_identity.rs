@@ -68,13 +68,14 @@ impl HttpExternalIdentityVerifier {
         &self,
         keys_url: &Url,
         admin_token: &str,
+        device_id: &str,
         app_name: &str,
     ) -> AppResult<Option<String>> {
         let response = self
             .client
             .get(keys_url.clone())
             .header("Accept", "application/json")
-            .header("X-Emby-Token", admin_token)
+            .emby_family_auth(admin_token, Some(device_id))
             .send()
             .await
             .map_err(|error| {
@@ -398,7 +399,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .client
             .get(users_url)
             .header("Accept", "application/json")
-            .header("X-Emby-Token", api_key.trim())
+            .emby_family_auth(api_key.trim(), None)
             .send()
             .await
             .map_err(|error| {
@@ -424,6 +425,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
         password: &str,
     ) -> AppResult<String> {
         let base_url = jellyfin_base_url(base_url)?;
+        let device_id = media_server_device_id(connection_id);
         let auth_url = base_url.join("Users/AuthenticateByName").map_err(|error| {
             AppError::Validation(format!("Jellyfin authentication URL is invalid: {error}"))
         })?;
@@ -487,7 +489,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             AppError::Validation(format!("Jellyfin API key URL is invalid: {error}"))
         })?;
         if let Some(existing) = self
-            .find_jellyfin_api_key(&keys_url, token, SCRYER_PRODUCT)
+            .find_jellyfin_api_key(&keys_url, token, &device_id, SCRYER_PRODUCT)
             .await?
         {
             return Ok(existing);
@@ -497,7 +499,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .client
             .post(keys_url.clone())
             .header("Accept", "application/json")
-            .header("X-Emby-Token", token)
+            .emby_family_auth(token, Some(&device_id))
             .query(&[("app", SCRYER_PRODUCT)])
             .send()
             .await
@@ -511,7 +513,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             )));
         }
 
-        self.find_jellyfin_api_key(&keys_url, token, SCRYER_PRODUCT)
+        self.find_jellyfin_api_key(&keys_url, token, &device_id, SCRYER_PRODUCT)
             .await?
             .ok_or_else(|| {
                 AppError::Repository(
@@ -534,7 +536,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             .client
             .get(users_url)
             .header("Accept", "application/json")
-            .header("X-Emby-Token", api_key.trim())
+            .emby_family_auth(api_key.trim(), None)
             .send()
             .await
             .map_err(|error| {
@@ -615,7 +617,7 @@ impl ExternalIdentityVerifier for HttpExternalIdentityVerifier {
             no_redirect_reqwest_client()
                 .get(user_url)
                 .header("Accept", "application/json")
-                .header("X-Emby-Token", api_key)
+                .emby_family_auth(api_key, Some(&media_server_device_id(connection_id)))
                 .send(),
         )
         .await
@@ -1003,11 +1005,79 @@ fn jellyfin_user_avatar_url(
     Some(image_url.to_string())
 }
 
+/// The device identity Scryer presents to one media-server connection.
+///
+/// Stable per connection, so the session Jellyfin opens for a login is the
+/// same one the follow-up API-key calls are attributed to.
+fn media_server_device_id(connection_id: &str) -> String {
+    format!("SCRYER_{connection_id}")
+}
+
+/// Characters that survive a `MediaBrowser` parameter value unencoded: the
+/// URL-unreserved set. Everything else — quotes, commas, `+`, spaces — is
+/// percent-encoded, because the server unquotes each value and then runs it
+/// through `WebUtility.UrlDecode`.
+const AUTH_PARAMETER: &percent_encoding::AsciiSet = &percent_encoding::NON_ALPHANUMERIC
+    .remove(b'-')
+    .remove(b'_')
+    .remove(b'.')
+    .remove(b'~');
+
+fn auth_parameter(value: &str) -> String {
+    percent_encoding::utf8_percent_encode(value, AUTH_PARAMETER).to_string()
+}
+
+/// Build an `Authorization: MediaBrowser …` header value.
+///
+/// Jellyfin 12 gates every legacy credential channel it used to accept — the
+/// `X-Emby-Token`, `X-MediaBrowser-Token` and `X-Emby-Authorization` headers
+/// and the `api_key` query parameter — behind `EnableLegacyAuthorization`,
+/// which its own upgrade migration turns off (jellyfin/jellyfin#15559). This
+/// header is what remains. `Token` is its only required parameter.
+///
+/// `device_id` is omitted when the caller has no connection to bind to: an
+/// API key is not a device, and the server fills the field in from its own
+/// identity when a key arrives without one.
+fn media_browser_authorization(token: Option<&str>, device_id: Option<&str>) -> String {
+    let mut parameters = Vec::with_capacity(5);
+    if let Some(token) = token {
+        parameters.push(format!("Token=\"{}\"", auth_parameter(token)));
+    }
+    parameters.push(format!("Client=\"{}\"", auth_parameter(SCRYER_PRODUCT)));
+    parameters.push(format!("Device=\"{}\"", auth_parameter(SCRYER_PRODUCT)));
+    if let Some(device_id) = device_id {
+        parameters.push(format!("DeviceId=\"{}\"", auth_parameter(device_id)));
+    }
+    parameters.push(format!("Version=\"{}\"", auth_parameter(SCRYER_VERSION)));
+    format!("MediaBrowser {}", parameters.join(", "))
+}
+
+/// The unauthenticated header a Jellyfin login presents: it names the client
+/// and device, and carries no token because the login is what mints one.
 fn jellyfin_authorization_header(connection_id: &str) -> String {
-    let device_id = format!("SCRYER_{}", connection_id.replace('"', ""));
-    format!(
-        "MediaBrowser Client=\"{SCRYER_PRODUCT}\", Device=\"{SCRYER_PRODUCT}\", DeviceId=\"{device_id}\", Version=\"{SCRYER_VERSION}\""
-    )
+    media_browser_authorization(None, Some(&media_server_device_id(connection_id)))
+}
+
+/// Attach Scryer's credential to an Emby-family request.
+///
+/// Both channels go on every request, so one code path serves every supported
+/// server without first probing its version: Jellyfin 12 reads
+/// `Authorization` only, Jellyfin 10.x and Emby read either. Sending both is
+/// unambiguous rather than merely tolerated — the server reads the legacy
+/// header solely when `Authorization` carried no token, so the two can never
+/// disagree.
+trait EmbyFamilyAuth {
+    fn emby_family_auth(self, token: &str, device_id: Option<&str>) -> Self;
+}
+
+impl EmbyFamilyAuth for reqwest::RequestBuilder {
+    fn emby_family_auth(self, token: &str, device_id: Option<&str>) -> Self {
+        self.header(
+            "Authorization",
+            media_browser_authorization(Some(token), device_id),
+        )
+        .header("X-Emby-Token", token)
+    }
 }
 
 fn json_value_string(value: Option<&Value>) -> Option<String> {
@@ -1307,7 +1377,7 @@ async fn scan_emby_catalog(
         let response = client
             .get(url)
             .header("Accept", "application/json")
-            .header("X-Emby-Token", api_key)
+            .emby_family_auth(api_key, None)
             .send()
             .await
             .map_err(|error| {
@@ -1371,7 +1441,7 @@ async fn hydrate_emby_parent_series(
         let response = client
             .get(url)
             .header("Accept", "application/json")
-            .header("X-Emby-Token", api_key)
+            .emby_family_auth(api_key, None)
             .send()
             .await
             .map_err(|error| {
@@ -2172,6 +2242,191 @@ mod tests {
 
         assert_eq!(api_key, "generated-token");
         assert_eq!(key_list_calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn media_browser_authorization_pins_the_wire_format() {
+        assert_eq!(
+            media_browser_authorization(Some("api-key"), Some("SCRYER_jellyfin-main")),
+            format!(
+                "MediaBrowser Token=\"api-key\", Client=\"Scryer\", Device=\"Scryer\", \
+                 DeviceId=\"SCRYER_jellyfin-main\", Version=\"{SCRYER_VERSION}\""
+            )
+        );
+        // A bare API key is not a device, so the parameter is left off rather
+        // than filled with a placeholder.
+        assert_eq!(
+            media_browser_authorization(Some("api-key"), None),
+            format!(
+                "MediaBrowser Token=\"api-key\", Client=\"Scryer\", Device=\"Scryer\", \
+                 Version=\"{SCRYER_VERSION}\""
+            )
+        );
+        // A login has no token yet: it is the call that mints one.
+        assert_eq!(
+            jellyfin_authorization_header("jellyfin-main"),
+            format!(
+                "MediaBrowser Client=\"Scryer\", Device=\"Scryer\", \
+                 DeviceId=\"SCRYER_jellyfin-main\", Version=\"{SCRYER_VERSION}\""
+            )
+        );
+    }
+
+    #[test]
+    fn media_browser_authorization_encodes_values_that_would_break_the_parser() {
+        // The server unquotes each value and then URL-decodes it, so a quote
+        // or comma in a pasted key must not reach the wire as a delimiter,
+        // and a `+` must not come back out as a space.
+        let header = media_browser_authorization(Some("a\"b,c d+e"), Some("SCRYER_x\"y"));
+        assert!(
+            header.contains("Token=\"a%22b%2Cc%20d%2Be\""),
+            "token was not encoded: {header}"
+        );
+        assert!(
+            header.contains("DeviceId=\"SCRYER_x%22y\""),
+            "device id was not encoded: {header}"
+        );
+    }
+
+    /// Match one exact `Authorization` value.
+    ///
+    /// wiremock's own `header` matcher reads a comma-separated value as a list
+    /// of values, so a `MediaBrowser` header never compares equal through it.
+    fn authorization(expected: String) -> impl Fn(&wiremock::Request) -> bool {
+        move |request: &wiremock::Request| {
+            request
+                .headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                == Some(expected.as_str())
+        }
+    }
+
+    /// Jellyfin 12 reads no legacy credential channel, so these mocks match on
+    /// `Authorization` alone. The sibling tests that match on `x-emby-token`
+    /// alone are the Jellyfin 10.x/Emby oracle; together they hold Scryer to
+    /// serving both server generations from one request.
+    #[tokio::test]
+    async fn jellyfin_12_user_listing_authorizes_without_the_legacy_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .and(authorization(media_browser_authorization(
+                Some("api-key"),
+                None,
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+                "Id": "jf-user",
+                "Name": "Jelly User"
+            }])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let verifier = HttpExternalIdentityVerifier::new();
+
+        let users = verifier
+            .list_jellyfin_users(&server.uri(), "api-key", None)
+            .await
+            .expect("list jellyfin users on a server that ignores X-Emby-Token");
+
+        assert_eq!(users.len(), 1);
+        assert_eq!(users[0].username, "Jelly User");
+    }
+
+    #[tokio::test]
+    async fn jellyfin_12_api_key_test_authorizes_without_the_legacy_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users"))
+            .and(authorization(media_browser_authorization(
+                Some("api-key"),
+                None,
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let verifier = HttpExternalIdentityVerifier::new();
+
+        verifier
+            .test_jellyfin_api_key(&server.uri(), "api-key")
+            .await
+            .expect("validate an api key on a server that ignores X-Emby-Token");
+    }
+
+    #[tokio::test]
+    async fn jellyfin_12_admin_exchange_authorizes_without_the_legacy_header() {
+        let server = MockServer::start().await;
+        // The key calls ride the session the login opened, so they present the
+        // same DeviceId the login did.
+        let session_auth = media_browser_authorization(Some("admin-token"), Some("SCRYER_jf-12"));
+        Mock::given(method("POST"))
+            .and(path("/Users/AuthenticateByName"))
+            .and(authorization(jellyfin_authorization_header("jf-12")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "AccessToken": "admin-token",
+                "User": {
+                    "Id": "admin-user",
+                    "Name": "Admin User",
+                    "Policy": { "IsAdministrator": true }
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/Auth/Keys"))
+            .and(authorization(session_auth))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Items": [{
+                    "AppName": "Scryer",
+                    "AccessToken": "generated-token",
+                    "DateCreated": "2026-09-11T00:00:00.0000000Z"
+                }],
+                "TotalRecordCount": 1
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let verifier = HttpExternalIdentityVerifier::new();
+
+        let api_key = verifier
+            .exchange_jellyfin_admin_api_key("jf-12", &server.uri(), "admin", "secret")
+            .await
+            .expect("exchange admin credentials on a server that ignores X-Emby-Token");
+
+        assert_eq!(api_key, "generated-token");
+    }
+
+    #[tokio::test]
+    async fn jellyfin_12_user_verification_authorizes_without_the_legacy_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/Users/2c1b0a3d4e5f60718293a4b5c6d7e8f9"))
+            .and(authorization(media_browser_authorization(
+                Some("api-key"),
+                Some("SCRYER_jf-12"),
+            )))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "Id": "2c1b0a3d4e5f60718293a4b5c6d7e8f9",
+                "Name": "Jelly User"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let verifier = HttpExternalIdentityVerifier::new();
+
+        let identity = verifier
+            .verify_jellyfin_user_with_api_key(
+                "jf-12",
+                &server.uri(),
+                "api-key",
+                "2c1b0a3d4e5f60718293a4b5c6d7e8f9",
+            )
+            .await
+            .expect("verify a user on a server that ignores X-Emby-Token");
+
+        assert_eq!(identity.username, "Jelly User");
     }
 
     #[tokio::test]

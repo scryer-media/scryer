@@ -5821,6 +5821,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures-util",
+ "percent-encoding",
  "quick-xml",
  "reqwest",
  "scryer-application",
