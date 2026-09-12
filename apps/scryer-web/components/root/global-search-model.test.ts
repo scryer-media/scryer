@@ -4,9 +4,14 @@ import test from "node:test";
 import type { Translate } from "@/components/root/types";
 import type { RouteCommandItem } from "@/components/common/route-command-types";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
-import type { Facet, TitleRecord } from "@/lib/types";
+import type { Facet, LibraryRecord, TitleRecord } from "@/lib/types";
 import {
+  buildCatalogLibraryMembers,
+  buildCatalogResultPresentation,
   buildCatalogSearchSections,
+  catalogTitleIdentityKey,
+  dedupeCatalogResultsByIdentity,
+  metadataSearchItemFromCatalogTitle,
   buildGlobalSearchTabs,
   buildMetadataSearchActionState,
   buildMetadataResultCounts,
@@ -474,5 +479,235 @@ test("buildMetadataSearchActionState preserves add, request, cataloged, and unav
       t,
     }).disabled,
     true,
+  );
+});
+
+function libraryTitle(
+  id: string,
+  name: string,
+  facet: Facet,
+  libraryId: string,
+  identity: { smgId?: string; tvdbId?: string } = {},
+): TitleRecord {
+  return {
+    ...title(id, name, facet),
+    libraryId,
+    libraryName: `Library ${libraryId}`,
+    externalIds: [
+      ...(identity.smgId ? [{ source: "smg", value: identity.smgId }] : []),
+      ...(identity.tvdbId ? [{ source: "TVDB", value: identity.tvdbId }] : []),
+    ],
+  };
+}
+
+function library(id: string, facet: Facet, isDefault = false): LibraryRecord {
+  return { id, facet, name: `Library ${id}`, slug: id, isDefault, roots: [] };
+}
+
+test("a title held by several libraries is one In Library result", () => {
+  const primary = libraryTitle("t-main", "Sample Show", "ANIME", "anime-main", {
+    tvdbId: "424536",
+  });
+  const secondary = libraryTitle("t-kids", "Sample Show", "ANIME", "anime-kids", {
+    tvdbId: "424536",
+  });
+  // The same show catalogued as a series is its own result: series libraries
+  // are offered under the series section, not the anime one.
+  const asSeries = libraryTitle("t-series", "Sample Show", "SERIES", "series-main", {
+    tvdbId: "424536",
+  });
+  const loner = libraryTitle("t-alone", "Sample Loner", "ANIME", "anime-main");
+
+  assert.equal(catalogTitleIdentityKey(primary), catalogTitleIdentityKey(secondary));
+  assert.notEqual(catalogTitleIdentityKey(primary), catalogTitleIdentityKey(asSeries));
+  // Without any metadata id the row can only stand for itself.
+  assert.equal(catalogTitleIdentityKey(loner), "ANIME|title:t-alone");
+  // An SMG id wins over the TVDB id, matching how the metadata lookup keys.
+  assert.equal(
+    catalogTitleIdentityKey(
+      libraryTitle("t-movie", "Sample Film", "MOVIE", "movies", {
+        smgId: "77",
+        tvdbId: "1",
+      }),
+    ),
+    "MOVIE|smg:77",
+  );
+
+  const members = buildCatalogLibraryMembers([primary, secondary, asSeries, loner, secondary]);
+  assert.deepEqual(
+    members[catalogTitleIdentityKey(primary)]?.map((member) => member.id),
+    ["t-main", "t-kids"],
+  );
+  assert.deepEqual(
+    dedupeCatalogResultsByIdentity([primary, secondary, asSeries, loner]).map(
+      (entry) => entry.id,
+    ),
+    ["t-main", "t-series", "t-alone"],
+  );
+  const sections = buildCatalogSearchSections([primary, secondary, asSeries, loner], "");
+  assert.deepEqual(
+    sections.ANIME.map((entry) => entry.id),
+    ["t-main", "t-alone"],
+  );
+  assert.deepEqual(
+    sections.SERIES.map((entry) => entry.id),
+    ["t-series"],
+  );
+});
+
+test("an In Library card offers the libraries that do not hold the title yet", () => {
+  const main = library("anime-main", "ANIME", true);
+  const kids = library("anime-kids", "ANIME");
+  const archive = library("anime-archive", "ANIME");
+  const held = libraryTitle("t-main", "Sample Show", "ANIME", "anime-main", {
+    tvdbId: "424536",
+  });
+  const alsoHeld = libraryTitle("t-kids", "Sample Show", "ANIME", "anime-kids", {
+    tvdbId: "424536",
+  });
+  const libraryMembers = buildCatalogLibraryMembers([held, alsoHeld]);
+
+  // A manager adds; the library it already sits in is never offered.
+  const manager = buildCatalogResultPresentation({
+    title: held,
+    libraryMembers,
+    manageableLibraries: [main, kids, archive],
+    requestableLibraries: [],
+    canAdd: true,
+  });
+  assert.deepEqual(
+    manager.members.map((member) => member.id),
+    ["t-main", "t-kids"],
+  );
+  assert.deepEqual(
+    manager.addableLibraries.map((entry) => entry.id),
+    ["anime-archive"],
+  );
+  assert.equal(manager.action, "add");
+
+  // Adding waits for the add configuration; requesting does not need it.
+  const managerBeforeConfig = buildCatalogResultPresentation({
+    title: held,
+    libraryMembers,
+    manageableLibraries: [main, kids, archive],
+    requestableLibraries: [archive],
+    canAdd: false,
+  });
+  assert.equal(managerBeforeConfig.action, "request");
+  assert.deepEqual(
+    managerBeforeConfig.requestableLibraries.map((entry) => entry.id),
+    ["anime-archive"],
+  );
+
+  // A requester only ever requests, and only for a library without it.
+  const requester = buildCatalogResultPresentation({
+    title: held,
+    libraryMembers,
+    manageableLibraries: [],
+    requestableLibraries: [main, archive],
+    canAdd: false,
+  });
+  assert.equal(requester.action, "request");
+  assert.deepEqual(
+    requester.requestableLibraries.map((entry) => entry.id),
+    ["anime-archive"],
+  );
+
+  // Every library already has it: nothing to add or request, only a choice
+  // of where to view it.
+  const everywhere = buildCatalogResultPresentation({
+    title: held,
+    libraryMembers,
+    manageableLibraries: [main, kids],
+    requestableLibraries: [main, kids],
+    canAdd: true,
+  });
+  assert.equal(everywhere.action, null);
+  assert.equal(everywhere.members.length, 2);
+
+  // A single-library setup keeps today's behaviour: the title is in the only
+  // library, so the card just views it.
+  const single = buildCatalogResultPresentation({
+    title: held,
+    libraryMembers: buildCatalogLibraryMembers([held]),
+    manageableLibraries: [main],
+    requestableLibraries: [main],
+    canAdd: true,
+  });
+  assert.equal(single.action, null);
+  assert.deepEqual(
+    single.members.map((member) => member.id),
+    ["t-main"],
+  );
+
+  // A row the members map has never seen still stands for itself.
+  const unknown = buildCatalogResultPresentation({
+    title: held,
+    libraryMembers: {},
+    manageableLibraries: [main, kids],
+    requestableLibraries: [],
+    canAdd: true,
+  });
+  assert.deepEqual(
+    unknown.members.map((member) => member.id),
+    ["t-main"],
+  );
+  assert.deepEqual(
+    unknown.addableLibraries.map((entry) => entry.id),
+    ["anime-kids"],
+  );
+});
+
+test("a catalog row becomes the search item the add and request dialogs take", () => {
+  const row: TitleRecord = {
+    ...libraryTitle("t-main", "Sample Show", "ANIME", "anime-main", {
+      smgId: "9001",
+      tvdbId: "424536",
+    }),
+    year: 2019,
+    slug: "sample-show",
+    sortTitle: "sample show",
+    contentStatus: "Continuing",
+    overview: "Synthetic overview.",
+    posterUrl: "https://example.invalid/poster.jpg",
+    runtimeMinutes: 24,
+    language: "jpn",
+  };
+  row.externalIds = [
+    ...(row.externalIds ?? []),
+    { source: "tmdb", value: "555" },
+    { source: "imdb", value: "tt0000001" },
+  ];
+
+  const item = metadataSearchItemFromCatalogTitle(row);
+  assert.ok(item);
+  assert.equal(item.tvdbId, "424536");
+  assert.equal(item.smgId, 9001);
+  assert.equal(item.tmdbId, 555);
+  assert.equal(item.imdbId, "tt0000001");
+  assert.equal(item.name, "Sample Show");
+  assert.equal(item.year, 2019);
+  assert.equal(item.status, "Continuing");
+  assert.equal(item.overview, "Synthetic overview.");
+  assert.equal(item.posterUrl, "https://example.invalid/poster.jpg");
+  assert.equal(item.runtimeMinutes, 24);
+  assert.equal(item.language, "jpn");
+  assert.equal(item.sortTitle, "sample show");
+  assert.equal(item.slug, "sample-show");
+  assert.equal(item.externalIds?.length, 4);
+
+  // A movie known only to SMG still carries an identity the dialogs accept.
+  const movie = metadataSearchItemFromCatalogTitle(
+    libraryTitle("t-movie", "Sample Film", "MOVIE", "movies", { smgId: "77" }),
+  );
+  assert.equal(movie?.tvdbId, "");
+  assert.equal(movie?.smgId, 77);
+
+  // Without any metadata id there is nothing to add or request from.
+  assert.equal(
+    metadataSearchItemFromCatalogTitle(
+      libraryTitle("t-alone", "Sample Loner", "ANIME", "anime-main"),
+    ),
+    null,
   );
 });

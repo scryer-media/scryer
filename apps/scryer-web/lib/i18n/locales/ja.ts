@@ -736,6 +736,9 @@ const ja: LocaleDictionary = {
   "search.view": "表示",
   "search.viewAll": "すべて表示",
   "search.add": "追加",
+  "search.addToAnotherLibrary": "別のライブラリに追加",
+  "search.requestForAnotherLibrary": "別のライブラリにリクエスト",
+  "search.chooseLibraryToView": "{{name}} を表示するライブラリを選択",
   "search.footerTip":
     "見つかりませんか？別の語句を試すか、インデクサーを確認してください。",
   "search.searchTips": "検索のヒント",

@@ -752,6 +752,9 @@ const es: LocaleDictionary = {
   "search.view": "Ver",
   "search.viewAll": "Ver todo",
   "search.add": "Añadir",
+  "search.addToAnotherLibrary": "Añadir a otra biblioteca",
+  "search.requestForAnotherLibrary": "Solicitar para otra biblioteca",
+  "search.chooseLibraryToView": "Elige la biblioteca en la que ver {{name}}",
   "search.footerTip":
     "¿No lo encuentras? Prueba otro término o revisa tus indexadores.",
   "search.searchTips": "Consejos de búsqueda",

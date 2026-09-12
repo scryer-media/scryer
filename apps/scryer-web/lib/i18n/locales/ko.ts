@@ -728,6 +728,9 @@ const ko: LocaleDictionary = {
   "search.view": "보기",
   "search.viewAll": "모두 보기",
   "search.add": "추가",
+  "search.addToAnotherLibrary": "다른 라이브러리에 추가",
+  "search.requestForAnotherLibrary": "다른 라이브러리에 요청",
+  "search.chooseLibraryToView": "{{name}}을(를) 볼 라이브러리 선택",
   "search.footerTip":
     "찾을 수 없나요? 다른 검색어를 시도하거나 인덱서를 확인하세요.",
   "search.searchTips": "검색 팁",

@@ -748,6 +748,9 @@ const pt_BR: LocaleDictionary = {
   "search.view": "Ver",
   "search.viewAll": "Ver tudo",
   "search.add": "Adicionar",
+  "search.addToAnotherLibrary": "Adicionar a outra biblioteca",
+  "search.requestForAnotherLibrary": "Solicitar para outra biblioteca",
+  "search.chooseLibraryToView": "Escolha a biblioteca em que ver {{name}}",
   "search.footerTip":
     "Não encontrou? Tente outro termo ou verifique seus indexadores.",
   "search.searchTips": "Dicas de busca",

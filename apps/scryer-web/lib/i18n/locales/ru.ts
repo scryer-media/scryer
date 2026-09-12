@@ -1131,6 +1131,9 @@ const ru: LocaleDictionary = {
     "search.viewAll.series": "Показать все сериалы",
     "search.viewAll.anime": "Показать всё аниме",
     "search.add": "Добавить",
+    "search.addToAnotherLibrary": "Добавить в другую библиотеку",
+    "search.requestForAnotherLibrary": "Запросить для другой библиотеки",
+    "search.chooseLibraryToView": "Выберите библиотеку, в которой открыть {{name}}",
     "search.footerTip": "Не удалось найти нужный результат? Попробуйте другой запрос или проверьте настройки индексаторов.",
     "search.searchTips": "Советы по поиску",
     "search.tipTitles":

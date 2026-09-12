@@ -2,17 +2,28 @@ import * as React from "react";
 import type { LucideIcon } from "lucide-react";
 import {
   ArrowRight,
+  ArrowUpRight,
   Eye,
+  EyeOff,
   Info,
   Loader2,
+  Plus,
   Search,
   SearchX,
+  Send,
 } from "lucide-react";
+import { IconButton } from "@/components/ui/icon-button";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+} from "@/components/ui/select";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { TitleCard } from "@/components/title-card";
 import { cn } from "@/lib/utils";
@@ -212,22 +223,40 @@ export function SearchRouteCommandButton({
   );
 }
 
-type SearchCatalogResultButtonProps = {
-  ariaLabel: string;
+/** One library that holds the title, and the row to open there. */
+export type SearchCatalogResultLibrary = {
+  titleId: string;
+  libraryId: string;
+  libraryName: string;
+};
+
+/** The one library action a card offers besides viewing. */
+export type SearchCatalogResultAction = {
+  kind: "add" | "request";
+  label: string;
+  onClick: () => void;
+};
+
+type SearchCatalogResultCardProps = {
+  action: SearchCatalogResultAction | null;
+  /** Accessible name of the library picker shown when several libraries hold the title. */
+  chooseLibraryLabel: string;
   createdAt?: string | null;
   emptyLabel: string;
   externalIds?: SearchResultExternalId[] | null;
   facet: Facet;
   facetLabel: string;
   id?: string;
+  /** The libraries holding the title, in result order. Never empty. */
+  libraries: SearchCatalogResultLibrary[];
   metadataFetchedAt?: string | null;
+  monitored: boolean;
   monitoredLabel: string;
-  onClick: () => void;
   onKeyDown: React.KeyboardEventHandler<HTMLButtonElement>;
+  onView: (library: SearchCatalogResultLibrary) => void;
   posterAlt: string;
   posterUrl?: string | null;
   resultAttribute: SearchResultDataAttribute;
-  secondaryParts: Array<string | null | undefined>;
   surface: SearchSurface;
   titleId: string;
   titleName: string;
@@ -235,32 +264,40 @@ type SearchCatalogResultButtonProps = {
   year?: string | number | null;
 };
 
-export function SearchCatalogResultButton({
-  ariaLabel,
+/**
+ * An "In Library" result. The poster and name open the title; when several
+ * libraries hold it, they open a picker instead, because there is no single
+ * page to go to. To the right sit the actions: add or request it for a library
+ * that does not have it yet (only when one exists), then view.
+ */
+export function SearchCatalogResultCard({
+  action,
+  chooseLibraryLabel,
   createdAt,
   emptyLabel,
   externalIds,
   facet,
   facetLabel,
   id,
+  libraries,
   metadataFetchedAt,
+  monitored,
   monitoredLabel,
-  onClick,
   onKeyDown,
+  onView,
   posterAlt,
   posterUrl,
   resultAttribute,
-  secondaryParts,
   surface,
   titleId,
   titleName,
   viewLabel,
   year,
-}: SearchCatalogResultButtonProps) {
+}: SearchCatalogResultCardProps) {
   const isDesktop = surface === "desktop";
-  const visibleSecondaryParts = secondaryParts.filter(
-    (part): part is string => Boolean(part),
-  );
+  const [pickerOpen, setPickerOpen] = React.useState(false);
+  const viewTitleLabel = `${viewLabel}: ${titleName}`;
+  const multipleLibraries = libraries.length > 1;
   const identityAttributes = searchResultIdentityAttributes({
     externalIds,
     facet,
@@ -269,78 +306,146 @@ export function SearchCatalogResultButton({
     titleName,
     year,
   });
+  const viewSingle = () => {
+    const only = libraries[0];
+    if (only) {
+      onView(only);
+    }
+  };
+  const handlePrimaryClick = () => {
+    if (multipleLibraries) {
+      setPickerOpen(true);
+      return;
+    }
+    viewSingle();
+  };
+  const handlePick = (pickedTitleId: string) => {
+    const picked = libraries.find((library) => library.titleId === pickedTitleId);
+    if (picked) {
+      onView(picked);
+    }
+  };
+  const MonitorIcon = monitored ? Eye : EyeOff;
 
   return (
-    <button
-      id={id}
-      type="button"
-      onClick={onClick}
-      {...searchResultAttribute(resultAttribute)}
-      {...identityAttributes}
-      onKeyDown={onKeyDown}
+    <div
+      data-global-search-result-card="catalog"
       className={cn(
-        "group flex w-full items-center gap-[13px] rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-surfA)] p-2.5 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25",
+        "group flex w-full items-center gap-2 rounded-[12px] border border-[var(--scry-border)] bg-[var(--scry-surfA)] p-2.5 transition",
         isDesktop
           ? "hover:border-[var(--scry-bhover)] hover:bg-[var(--scry-hover)]"
-          : "flex-wrap shadow-[0_8px_20px_rgba(0,0,0,0.20)] active:bg-[var(--scry-hover)] sm:flex-nowrap",
+          : "shadow-[0_8px_20px_rgba(0,0,0,0.20)]",
       )}
-      aria-label={ariaLabel}
-      title={ariaLabel}
     >
-      <div className="relative h-16 w-11 flex-none overflow-hidden rounded-[7px] border border-[var(--scry-border2)] bg-muted">
-        <TitlePosterSlot
-          src={posterUrl}
-          metadataFetchedAt={metadataFetchedAt}
-          createdAt={createdAt}
-          alt={posterAlt}
-          className="h-full w-full object-cover"
-          placeholderClassName="flex h-full w-full items-center justify-center text-[10px] text-muted-foreground"
-          emptyLabel={emptyLabel}
-          loading="lazy"
-        />
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/70 to-transparent" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-semibold text-[var(--scry-ink2)]">
-          {titleName}
-        </p>
-        <p
-          className={cn(
-            "mt-0.5 truncate text-[var(--scry-muted)]",
-            isDesktop ? "text-[11.5px]" : "text-xs",
-          )}
-        >
-          {monitoredLabel}
-          {visibleSecondaryParts.length > 0 ? (
-            <>
-              {" \u00b7 "}
-              {visibleSecondaryParts.join(" \u00b7 ")}
-            </>
-          ) : null}
-        </p>
-        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
-          <span
-            className={cn(
-              "truncate rounded-md bg-[rgba(var(--scry-accent-rgb),0.16)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--scry-accent-text)]",
-              isDesktop ? "max-w-[9rem]" : "max-w-[8rem]",
-            )}
-          >
-            {facetLabel}
-          </span>
-        </div>
-      </div>
-      <span
-        className={cn(
-          "h-[34px] shrink-0 items-center gap-1.5 rounded-[9px] border border-[var(--scry-bhover2)] bg-[var(--scry-soft3)] text-[12.5px] font-semibold text-[var(--scry-body)]",
-          isDesktop
-            ? "hidden px-3.5 transition group-hover:border-primary/40 group-hover:text-[var(--scry-ink2)] sm:inline-flex"
-            : "inline-flex w-full justify-center px-3 sm:w-auto sm:justify-start",
-        )}
+      <button
+        id={id}
+        type="button"
+        onClick={handlePrimaryClick}
+        {...searchResultAttribute(resultAttribute)}
+        {...identityAttributes}
+        onKeyDown={onKeyDown}
+        className="flex min-w-0 flex-1 items-center gap-[13px] rounded-[9px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/25"
+        aria-label={viewTitleLabel}
+        title={viewTitleLabel}
       >
-        <Eye className="h-3.5 w-3.5" />
-        {viewLabel}
-      </span>
-    </button>
+        <div className="relative h-16 w-11 flex-none overflow-hidden rounded-[7px] border border-[var(--scry-border2)] bg-muted">
+          <TitlePosterSlot
+            src={posterUrl}
+            metadataFetchedAt={metadataFetchedAt}
+            createdAt={createdAt}
+            alt={posterAlt}
+            className="h-full w-full object-cover"
+            placeholderClassName="flex h-full w-full items-center justify-center text-[10px] text-muted-foreground"
+            emptyLabel={emptyLabel}
+            loading="lazy"
+          />
+          <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/70 to-transparent" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold text-[var(--scry-ink2)]">
+            <span className="truncate">{titleName}</span>
+            <span
+              role="img"
+              aria-label={monitoredLabel}
+              title={monitoredLabel}
+              className="inline-flex shrink-0"
+            >
+              <MonitorIcon
+                className={cn(
+                  "h-3.5 w-3.5",
+                  monitored
+                    ? "text-[var(--scry-accent-text)]"
+                    : "text-[var(--scry-muted)]",
+                )}
+              />
+            </span>
+          </p>
+          <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
+            <span
+              className={cn(
+                "truncate rounded-md bg-[rgba(var(--scry-accent-rgb),0.16)] px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-[var(--scry-accent-text)]",
+                isDesktop ? "max-w-[9rem]" : "max-w-[8rem]",
+              )}
+            >
+              {facetLabel}
+            </span>
+          </div>
+        </div>
+      </button>
+      <div className="flex shrink-0 items-center gap-1.5">
+        {action ? (
+          <IconButton
+            label={`${action.label}: ${titleName}`}
+            tooltip={action.label}
+            tooltipSide="top"
+            data-global-search-result-library-action={action.kind}
+            onClick={action.onClick}
+          >
+            {action.kind === "add" ? (
+              <Plus className="h-4 w-4" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+          </IconButton>
+        ) : null}
+        {multipleLibraries ? (
+          <Select
+            open={pickerOpen}
+            onOpenChange={setPickerOpen}
+            value=""
+            onValueChange={handlePick}
+          >
+            <SelectTrigger
+              size="sm"
+              chrome="toolbar"
+              aria-label={chooseLibraryLabel}
+              title={chooseLibraryLabel}
+              data-global-search-result-library-picker="true"
+              className="h-8 shrink-0 gap-1.5 px-2.5 text-[12.5px] font-semibold text-[var(--scry-body)]"
+            >
+              <ArrowUpRight className="h-3.5 w-3.5" />
+              <span>{viewLabel}</span>
+            </SelectTrigger>
+            <SelectContent position="popper" align="end" className="min-w-[12rem]">
+              {libraries.map((library) => (
+                <SelectItem key={library.titleId} value={library.titleId}>
+                  {library.libraryName}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <IconButton
+            label={viewTitleLabel}
+            tooltip={viewLabel}
+            tooltipSide="top"
+            onClick={viewSingle}
+          >
+            <ArrowUpRight className="h-4 w-4" />
+          </IconButton>
+        )}
+      </div>
+    </div>
   );
 }
 
