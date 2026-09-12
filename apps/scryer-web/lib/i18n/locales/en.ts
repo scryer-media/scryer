@@ -2663,6 +2663,8 @@ const en: LocaleDictionary = {
   "status.blocklistEntryCleared": "Blocked release removed",
   "status.episodeFilesDeleteQueued": "Queued deletion of {{count}} episode files",
   "status.episodeFilesDeleted": "Deleted {{count}} episode files",
+  "status.mediaFileDeleteQueued": "Queued deletion of the media file",
+  "status.mediaFileDeleted": "Deleted the media file",
   "status.queuedLatest": "Queued latest release for {{name}}",
   "status.nothingFound": "No results found.",
   "status.searchingTvdb": 'Searching TVDB metadata for "{{query}}".',
