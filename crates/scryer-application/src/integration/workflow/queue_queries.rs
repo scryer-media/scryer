@@ -1021,6 +1021,7 @@ impl AppUseCase {
         Ok(crate::ports::DownloadClientSnapshotOutcome {
             items: self.filter_ineligible_download_queue_items(items).await,
             authoritative_client_ids: snapshot.authoritative_client_ids,
+            failed_client_ids: snapshot.failed_client_ids,
             any_client_read_succeeded: snapshot.any_client_read_succeeded,
         })
     }

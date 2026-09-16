@@ -243,70 +243,76 @@ impl AppUseCase {
             return Ok(Vec::new());
         }
 
-        let settings = self.load_quality_profile_settings().await?;
-        let profile_names = settings
-            .profiles
-            .iter()
-            .map(|profile| (profile.id.to_ascii_lowercase(), profile.name.clone()))
-            .collect::<HashMap<_, _>>();
-        let facet_profile_ids = settings
-            .category_selections
-            .into_iter()
-            .map(|selection| (selection.facet, selection.effective_profile_id))
-            .collect::<HashMap<_, _>>();
         let library_ids = titles
             .iter()
             .map(|title| title.library_id.clone())
             .collect::<HashSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
-        let library_profile_ids = self
+        let profile_names = self.title_catalog_profile_names(&library_ids).await?;
+
+        Ok(titles
+            .into_iter()
+            .filter_map(|title| {
+                let quality_tier = profile_names.name_for(&title)?.to_string();
+                Some(crate::TitleQualitySummary {
+                    title_id: title.id,
+                    quality_tier,
+                })
+            })
+            .collect())
+    }
+
+    /// Every profile name a title in `library_ids` can resolve to, by scope.
+    pub(crate) async fn title_catalog_profile_names(
+        &self,
+        library_ids: &[String],
+    ) -> AppResult<crate::TitleCatalogProfileNames> {
+        let settings = self.load_quality_profile_settings().await?;
+        let by_profile_id = settings
+            .profiles
+            .iter()
+            .map(|profile| (profile.id.to_ascii_lowercase(), profile.name.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let name_for_id = |profile_id: &str| {
+            normalize_optional_string(Some(profile_id.to_string()))
+                .and_then(|profile_id| by_profile_id.get(&profile_id.to_ascii_lowercase()))
+                .cloned()
+        };
+        let by_facet = settings
+            .category_selections
+            .iter()
+            .filter_map(|selection| {
+                name_for_id(&selection.effective_profile_id)
+                    .map(|name| (selection.facet.as_str().to_string(), name))
+            })
+            .collect::<BTreeMap<_, _>>();
+        let by_library_id = self
             .services
             .config
             .settings
             .list_setting_json_explicit_for_scope_ids(
                 SETTINGS_SCOPE_SYSTEM,
                 QUALITY_PROFILE_ID_KEY,
-                &library_ids,
+                library_ids,
             )
             .await?
             .into_iter()
             .filter_map(|(library_id, raw_value)| {
                 serde_json::from_str::<String>(&raw_value)
                     .ok()
-                    .and_then(|profile_id| normalize_optional_string(Some(profile_id)))
-                    .filter(|profile_id| profile_names.contains_key(&profile_id.to_ascii_lowercase()))
-                    .map(|profile_id| (library_id, profile_id.to_ascii_lowercase()))
+                    .and_then(|profile_id| name_for_id(&profile_id))
+                    .map(|name| (library_id, name))
             })
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
+        let global = name_for_id(&settings.global_profile_id);
 
-        Ok(titles
-            .into_iter()
-            .filter_map(|title| {
-                let title_profile_id = title
-                    .tags
-                    .iter()
-                    .find_map(|tag| tag.strip_prefix("scryer:quality-profile:"))
-                    .map(str::trim)
-                    .filter(|profile_id| !profile_id.is_empty())
-                    .map(str::to_ascii_lowercase)
-                    .filter(|profile_id| profile_names.contains_key(profile_id));
-                let profile_id = title_profile_id
-                    .or_else(|| library_profile_ids.get(&title.library_id).cloned())
-                    .or_else(|| {
-                        facet_profile_ids
-                            .get(&title.facet)
-                            .map(|profile_id| profile_id.to_ascii_lowercase())
-                    })
-                    .unwrap_or_else(|| settings.global_profile_id.to_ascii_lowercase());
-                profile_names.get(&profile_id).cloned().map(|quality_tier| {
-                    crate::TitleQualitySummary {
-                        title_id: title.id,
-                        quality_tier,
-                    }
-                })
-            })
-            .collect())
+        Ok(crate::TitleCatalogProfileNames {
+            by_profile_id,
+            by_library_id,
+            by_facet,
+            global,
+        })
     }
 }
 impl AppUseCase {

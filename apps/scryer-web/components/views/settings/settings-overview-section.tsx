@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertTriangle, ChevronDown, Loader2, Rocket, ShieldPlus, Trash2, Upload } from "lucide-react";
+import { AlertTriangle, ChevronDown, Rocket, ShieldPlus, Trash2, Upload } from "lucide-react";
 import { Link } from "react-router";
 import { InfoHelp } from "@/components/common/info-help";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
@@ -29,6 +29,7 @@ import type {
   UiDateTimeFormat,
   VerificationDepth,
 } from "@/lib/types/settings";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type SettingsOverviewSectionProps = {
   availableLanguages: LanguageOption[];
@@ -207,7 +208,7 @@ export function SettingsOverviewSection({
 
         {generalLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingMark className="h-4 w-4" />
             {t("label.loading")}
           </div>
         ) : (
@@ -290,7 +291,7 @@ export function SettingsOverviewSection({
 
         {generalLoading ? (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingMark className="h-4 w-4" />
             {t("label.loading")}
           </div>
         ) : (
@@ -371,7 +372,7 @@ export function SettingsOverviewSection({
                     disabled={imageCacheClearing}
                   >
                     {imageCacheClearing ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <LoadingMark className="h-4 w-4" />
                     ) : (
                       <Trash2 className="h-4 w-4" />
                     )}
@@ -500,7 +501,7 @@ export function SettingsOverviewSection({
                 >
                   {trustedCertUploading ? (
                     <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <LoadingMark className="mr-2 h-4 w-4" />
                       {t("label.loading")}
                     </>
                   ) : (

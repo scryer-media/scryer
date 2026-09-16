@@ -25,7 +25,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Check, Loader2, Palette } from "lucide-react";
+import { Check, Palette } from "lucide-react";
 import { lazy, Suspense, useEffect, useState, type FormEvent } from "react";
 import { useTheme } from "next-themes";
 import { TotpQrCode } from "@/components/common/totp-qr-code";
@@ -51,6 +51,7 @@ import {
   isDarkTheme,
 } from "@/lib/theme";
 import { canSubmitJellyfinLink as canSubmitJellyfinLinkDraft } from "@/lib/utils/external-account-link-gate";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const TOTP_CODE_LENGTH = 6;
 
@@ -414,7 +415,7 @@ export function SettingsProfileSection({
                   style={{ backgroundColor: preset.value }}
                 >
                   {savingThis ? (
-                    <Loader2 className="absolute inset-0 m-auto h-3.5 w-3.5 animate-spin text-white" />
+                    <LoadingMark className="absolute inset-0 m-auto h-3.5 w-3.5 text-white" />
                   ) : selected ? (
                     <Check className="absolute inset-0 m-auto h-4 w-4 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]" />
                   ) : null}
@@ -455,7 +456,7 @@ export function SettingsProfileSection({
                   <Suspense
                     fallback={
                       <div className="flex h-64 items-center justify-center">
-                        <Loader2 className="h-5 w-5 animate-spin text-[var(--scry-muted3)]" />
+                        <LoadingMark className="h-5 w-5 text-[var(--scry-muted3)]" />
                       </div>
                     }
                   >
@@ -486,7 +487,7 @@ export function SettingsProfileSection({
           </div>
           <div className="flex items-center gap-2">
             {savingSponsorPreference ? (
-              <Loader2 className="h-4 w-4 animate-spin text-[var(--scry-muted3)]" />
+              <LoadingMark className="h-4 w-4 text-[var(--scry-muted3)]" />
             ) : null}
             <SettingsToggleSwitch
               id="settings-profile-hide-sponsor-button"
@@ -557,7 +558,7 @@ export function SettingsProfileSection({
                 className="w-fit"
               >
                 {saving ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-2 h-4 w-4" />
                 ) : null}
                 {t("profile.changePassword")}
               </Button>
@@ -588,7 +589,7 @@ export function SettingsProfileSection({
                 className="w-fit"
               >
                 {addingPasskey ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-2 h-4 w-4" />
                 ) : null}
                 {addingPasskey
                   ? t("profile.passkeyAdding")
@@ -598,7 +599,7 @@ export function SettingsProfileSection({
 
             {loadingPasskeys ? (
               <div className="flex items-center gap-2 text-sm text-[var(--scry-muted3)]">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
                 <span>{t("label.loading")}</span>
               </div>
             ) : passkeys.length > 0 ? (
@@ -630,7 +631,7 @@ export function SettingsProfileSection({
                       className="w-fit"
                     >
                       {deletingPasskeyId === passkey.id ? (
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        <LoadingMark className="mr-2 h-4 w-4" />
                       ) : null}
                       {t("label.delete")}
                     </Button>
@@ -653,7 +654,7 @@ export function SettingsProfileSection({
 
         {loadingTotp ? (
           <div className="flex items-center gap-2 text-sm text-[var(--scry-muted3)]">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingMark className="h-4 w-4" />
             <span>{t("label.loading")}</span>
           </div>
         ) : totpStatus?.enabled ? (
@@ -712,7 +713,7 @@ export function SettingsProfileSection({
                 onClick={() => openTotpActionDialog("regenerateRecoveryCodes")}
               >
                 {totpBusy ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-2 h-4 w-4" />
                 ) : null}
                 {t("profile.totpRegenerateRecoveryCodes")}
               </Button>
@@ -724,7 +725,7 @@ export function SettingsProfileSection({
                 onClick={() => openTotpActionDialog("disable")}
               >
                 {totpBusy ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-2 h-4 w-4" />
                 ) : null}
                 {t("profile.totpDisable")}
               </Button>
@@ -833,7 +834,7 @@ export function SettingsProfileSection({
                 className="w-fit"
               >
                 {totpBusy ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-2 h-4 w-4" />
                 ) : null}
                 {t("profile.totpVerifyAndEnable")}
               </Button>
@@ -848,7 +849,7 @@ export function SettingsProfileSection({
             className="w-fit"
           >
             {totpBusy ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <LoadingMark className="mr-2 h-4 w-4" />
             ) : null}
             {t("profile.totpStartEnrollment")}
           </Button>
@@ -866,7 +867,7 @@ export function SettingsProfileSection({
 
         {loadingOauthApps ? (
           <div className="flex items-center gap-2 text-sm text-[var(--scry-muted3)]">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingMark className="h-4 w-4" />
             <span>{t("label.loading")}</span>
           </div>
         ) : oauthApps.length === 0 ? (
@@ -918,7 +919,7 @@ export function SettingsProfileSection({
                   className="w-fit"
                 >
                   {revokingOauthGrantId === app.grantId ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <LoadingMark className="mr-2 h-4 w-4" />
                   ) : null}
                   Revoke
                 </Button>
@@ -938,7 +939,7 @@ export function SettingsProfileSection({
           <div className="flex flex-wrap items-center gap-2">
             {loadingLinkOptions ? (
               <div className="flex items-center gap-2 text-sm text-[var(--scry-muted3)]">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
                 <span>{t("label.loading")}</span>
               </div>
             ) : null}
@@ -1080,7 +1081,7 @@ export function SettingsProfileSection({
                 className="w-fit"
               >
                 {linkAccountBusy ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-2 h-4 w-4" />
                 ) : null}
                 {t("profile.linkAccountSubmit")}
               </Button>
@@ -1186,7 +1187,7 @@ export function SettingsProfileSection({
                 type="submit"
                 disabled={linkAccountBusy || !linkAccountConnectionId || !linkAccountUsername.trim()}
               >
-                {linkAccountBusy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                {linkAccountBusy ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
                 {t("profile.linkAccountSubmit")}
               </Button>
               <Button
@@ -1262,7 +1263,7 @@ export function SettingsProfileSection({
                 className="w-fit"
               >
                 {linkAccountBusy ? (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-2 h-4 w-4" />
                 ) : null}
                 {t("profile.signInWithPlexToLink")}
               </Button>
@@ -1281,7 +1282,7 @@ export function SettingsProfileSection({
 
         {loadingLinkedAccounts ? (
           <div className="flex items-center gap-2 text-sm text-[var(--scry-muted3)]">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingMark className="h-4 w-4" />
             <span>{t("label.loading")}</span>
           </div>
         ) : visibleLinkedAccounts.length === 0 ? (
@@ -1330,7 +1331,7 @@ export function SettingsProfileSection({
                   className="w-fit"
                 >
                   {unlinkingAccountId === account.id ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <LoadingMark className="mr-2 h-4 w-4" />
                   ) : null}
                   {t("profile.unlinkAccount")}
                 </Button>

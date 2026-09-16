@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertTriangle, Loader2, X } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 import { useClient } from "urql";
 import { Button } from "@/components/ui/button";
 import {
@@ -24,6 +24,7 @@ import {
 import {
   HistoryEventIcon,
 } from "./history-event-icon";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const PAGE_SIZE = 50;
 
@@ -253,7 +254,7 @@ export function TitleHistoryModal({
           ) : null}
           {loading && events.length === 0 ? (
             <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingMark className="h-4 w-4" />
               <span>{t("label.loading")}</span>
             </div>
           ) : error && events.length === 0 ? null : (
@@ -275,7 +276,7 @@ export function TitleHistoryModal({
                     onClick={loadMore}
                   >
                     {loading ? (
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      <LoadingMark className="mr-2 h-4 w-4" />
                     ) : null}
                     {t("history.loadMore")}
                   </Button>

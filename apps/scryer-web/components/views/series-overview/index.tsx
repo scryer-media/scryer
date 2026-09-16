@@ -1,5 +1,5 @@
 import * as React from "react";
-import { FileInput, FolderOpen, Loader2, Trash2, X } from "lucide-react";
+import { FileInput, FolderOpen, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -85,6 +85,7 @@ import {
   collectActiveDownloadEpisodeIds,
   coveredEpisodeIdsForQueueItem,
 } from "@/lib/utils/episode-download-activity";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const EPISODE_QUEUE_PRECEDENCE: Record<string, number> = {
   downloading: 0,
@@ -1355,7 +1356,7 @@ function SeriesOverviewViewImpl({
           {hydrating ? (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/75 backdrop-blur-sm">
               <div className="flex items-center gap-3 rounded-full border border-border bg-card/95 px-4 py-2 text-sm font-medium text-foreground shadow-lg">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
                 <span>{t("title.fetchingData")}</span>
               </div>
             </div>
@@ -1420,7 +1421,7 @@ function SeriesOverviewViewImpl({
                         onClick={() => onClearReleaseBlocklistEntry(entry.id)}
                       >
                         {clearingReleaseBlocklistEntryId === entry.id ? (
-                          <Loader2 className="size-3.5 animate-spin" />
+                          <LoadingMark className="size-3.5" />
                         ) : null}
                         <span>{t("label.clear")}</span>
                       </Button>

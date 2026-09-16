@@ -833,3 +833,111 @@ async fn prompt_title_hydration_worker_yields_to_active_scan_facet() {
 
     stop_title_hydration_worker(token, handle).await;
 }
+
+/// A brand-new title can be hydrated from two lanes at once — a library scan's
+/// bulk pass and an interactive one. Both must leave the title hydrated: the
+/// loser of the persist race used to read back a row whose `metadata_fetched_at`
+/// the other writer had already overwritten and report "metadata could not be
+/// persisted" for a title that was hydrated.
+#[tokio::test]
+async fn concurrent_hydrations_of_one_title_both_leave_it_hydrated() {
+    let tvdb_id = 901_030;
+    let gateway = Arc::new(MovieTitleResolutionGateway {
+        hydration_movies: HashMap::from([(
+            tvdb_id,
+            hydration_test_movie(tvdb_id, "Concurrent Hydration"),
+        )]),
+        ..Default::default()
+    });
+    let (app, user, _) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let created = app
+        .add_title_with_outcome(
+            &user,
+            hydration_test_title("Concurrent Placeholder", tvdb_id),
+        )
+        .await
+        .expect("title should be created")
+        .title;
+    let target = || crate::catalog_workflow::HydrationTarget {
+        title: created.clone(),
+        requested_tvdb_id: None,
+        requested_movie_ref: None,
+        sync_wanted_after_completion: false,
+        source: crate::catalog_workflow::HydrationSource::Interactive,
+    };
+
+    let scan_lane = app.clone();
+    let interactive_lane = app.clone();
+    let (scan, interactive) = tokio::join!(
+        scan_lane.hydrate_titles_bulk(vec![target()]),
+        interactive_lane.hydrate_titles_bulk(vec![target()]),
+    );
+    for outcome in [
+        scan.expect("scan hydration should not fail the batch"),
+        interactive.expect("interactive hydration should not fail the batch"),
+    ] {
+        assert!(
+            !outcome.failed_titles.contains_key(&created.id),
+            "neither lane may report a persistence failure: {:?}",
+            outcome.failed_titles
+        );
+        assert!(outcome.hydrated_titles.contains_key(&created.id));
+    }
+
+    let hydrated = app
+        .get_title(&user, &created.id)
+        .await
+        .expect("title should load")
+        .expect("title should exist");
+    assert!(hydrated.metadata_fetched_at.is_some());
+    assert_eq!(hydrated.name, "Concurrent Hydration");
+}
+
+/// The lane that waited applies its result to the row as it stands, not to the
+/// pre-hydration struct it queued, so a late second pass cannot roll the title
+/// back to its unhydrated state.
+#[tokio::test]
+async fn a_stale_hydration_target_does_not_unhydrate_the_title() {
+    let tvdb_id = 901_031;
+    let gateway = Arc::new(MovieTitleResolutionGateway {
+        hydration_movies: HashMap::from([(
+            tvdb_id,
+            hydration_test_movie(tvdb_id, "Stale Target Hydration"),
+        )]),
+        ..Default::default()
+    });
+    let (app, user, _) = bootstrap_with_metadata_gateway_and_titles(gateway);
+    let created = app
+        .add_title_with_outcome(
+            &user,
+            hydration_test_title("Stale Target Placeholder", tvdb_id),
+        )
+        .await
+        .expect("title should be created")
+        .title;
+    let target = || crate::catalog_workflow::HydrationTarget {
+        // Deliberately the pre-hydration struct for both passes.
+        title: created.clone(),
+        requested_tvdb_id: None,
+        requested_movie_ref: None,
+        sync_wanted_after_completion: false,
+        source: crate::catalog_workflow::HydrationSource::Interactive,
+    };
+
+    app.hydrate_titles_bulk(vec![target()])
+        .await
+        .expect("first hydration should succeed");
+    let outcome = app
+        .hydrate_titles_bulk(vec![target()])
+        .await
+        .expect("second hydration should succeed");
+    assert!(!outcome.failed_titles.contains_key(&created.id));
+
+    let hydrated = app
+        .get_title(&user, &created.id)
+        .await
+        .expect("title should load")
+        .expect("title should exist");
+    assert!(hydrated.metadata_fetched_at.is_some());
+    assert_eq!(hydrated.name, "Stale Target Hydration");
+}

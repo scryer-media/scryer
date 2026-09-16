@@ -1,6 +1,6 @@
 [package]
 name = "scryer-plugins"
-version = "0.20.0"
+version = "0.20.1"
 edition.workspace = true
 
 [dependencies]
@@ -28,7 +28,7 @@ rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", 
 rustls-native-certs = "0.8"
 url = "2"
 uuid = { workspace = true }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 tempfile = "3"
 libc = "0.2"
 blake3 = "1"

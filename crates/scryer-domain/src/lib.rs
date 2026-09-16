@@ -878,23 +878,162 @@ pub struct TitleTagDefinition {
     pub updated_at: DateTime<Utc>,
 }
 
-/// How the community (AniDB/AniList/MAL, and therefore release groups) numbers
-/// an anime series, expressed against the TVDB official order the catalog uses.
+/// Where a stored numbering bridge came from, which is also what decides how
+/// much a reading through it is worth against the catalog's literal one.
 ///
-/// TVDB frequently carries one long season where the community carries a season
-/// per cour, so a release named `S04E20` means community season 4 episode 20,
-/// which is a different (season, episode) in the catalog. This is the mapping
-/// table that lets the two be translated into one another; SMG builds it from
-/// the AniBridge dataset and Scryer stores it verbatim per title.
+/// `AnimeCommunity` is the AniBridge dataset SMG derives for anime. The two
+/// TVDB variants are built by Scryer itself from the alternate/DVD episode
+/// orders TVDB publishes for any series, and they are corroborated before they
+/// are allowed to move an import (see the acquisition numbering resolver).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NumberingBridgeSource {
+    /// AniDB/AniList/MAL community numbering, supplied by SMG.
+    #[default]
+    AnimeCommunity,
+    /// TVDB's `alternate` episode order.
+    TvdbAlternate,
+    /// TVDB's `dvd` episode order.
+    TvdbDvd,
+}
+
+impl NumberingBridgeSource {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AnimeCommunity => "anime_community",
+            Self::TvdbAlternate => "tvdb_alternate",
+            Self::TvdbDvd => "tvdb_dvd",
+        }
+    }
+
+    /// Parse a stored value. Anything unrecognised reads back as the
+    /// pre-0240 default so an older or corrupted row keeps anime behaviour.
+    #[must_use]
+    pub fn from_str_or_default(value: &str) -> Self {
+        match value.trim() {
+            "tvdb_alternate" => Self::TvdbAlternate,
+            "tvdb_dvd" => Self::TvdbDvd,
+            _ => Self::AnimeCommunity,
+        }
+    }
+
+    /// Whether this bridge describes a TVDB alternate order rather than the
+    /// anime community layout.
+    #[must_use]
+    pub fn is_tvdb_alternate_order(self) -> bool {
+        matches!(self, Self::TvdbAlternate | Self::TvdbDvd)
+    }
+}
+
+/// Which numbering an operator has pinned a title's releases to.
+///
+/// Stored as the reserved `scryer:release-numbering:` entry in `Title::tags`,
+/// alongside the other per-title structured settings. `Auto` (the absence of
+/// the tag) leaves the decision to hydration and to the corroboration rules.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ReleaseNumbering {
+    /// Build a bridge when TVDB publishes a differing alternate order, and
+    /// require corroboration before a reading through it moves an import.
+    #[default]
+    Auto,
+    /// Never bridge: read every release in the catalog's official numbering.
+    Official,
+    /// Trust TVDB's `alternate` order for this title's releases.
+    Alternate,
+    /// Trust TVDB's `dvd` order for this title's releases.
+    Dvd,
+}
+
+/// Reserved `Title::tags` entry carrying [`ReleaseNumbering`], alongside the
+/// other structured per-title settings (`scryer:filler-policy:` and friends).
+pub const RELEASE_NUMBERING_TAG_PREFIX: &str = "scryer:release-numbering:";
+
+impl ReleaseNumbering {
+    /// The setting a title's tag bag carries; `Auto` when it carries none.
+    #[must_use]
+    pub fn from_title_tags(tags: &[String]) -> Self {
+        tags.iter()
+            .find_map(|tag| tag.strip_prefix(RELEASE_NUMBERING_TAG_PREFIX))
+            .map_or(Self::Auto, Self::from_str_or_default)
+    }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Official => "official",
+            Self::Alternate => "alternate",
+            Self::Dvd => "dvd",
+        }
+    }
+
+    /// Parse a stored tag value; anything unrecognised is `Auto`.
+    #[must_use]
+    pub fn from_str_or_default(value: &str) -> Self {
+        match value.trim().to_ascii_lowercase().as_str() {
+            "official" => Self::Official,
+            "alternate" => Self::Alternate,
+            "dvd" => Self::Dvd,
+            _ => Self::Auto,
+        }
+    }
+
+    /// The TVDB `season_type` this setting pins, when it pins one.
+    #[must_use]
+    pub fn forced_season_type(self) -> Option<&'static str> {
+        match self {
+            Self::Alternate => Some("alternate"),
+            Self::Dvd => Some("dvd"),
+            Self::Auto | Self::Official => None,
+        }
+    }
+
+    /// Whether a stored bridge from `source` may be read under this setting.
+    /// `auto` reads whichever bridge hydration stored, `official` reads none,
+    /// and a pinned order reads only the TVDB order it names.
+    #[must_use]
+    pub fn admits_bridge_source(self, source: NumberingBridgeSource) -> bool {
+        match self {
+            Self::Auto => true,
+            Self::Official => false,
+            Self::Alternate => source == NumberingBridgeSource::TvdbAlternate,
+            Self::Dvd => source == NumberingBridgeSource::TvdbDvd,
+        }
+    }
+}
+
+/// How an alternate numbering of a series relates to the TVDB official order
+/// the catalog uses.
+///
+/// Named for the anime case it was built for — TVDB frequently carries one long
+/// season where the community (AniDB/AniList/MAL, and therefore the release
+/// groups) carries a season per cour, so a release named `S04E20` means
+/// community season 4 episode 20, which is a different (season, episode) in the
+/// catalog. Since 0240 the same table also carries the alternate and DVD orders
+/// TVDB publishes for ordinary series, distinguished by [`Self::source`]; the
+/// anime-only identifiers and titles on each season are simply absent there.
+/// The type keeps its name because renaming it would ripple through six crates
+/// for no behavioural gain; [`NumberingBridge`] is the neutral alias.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AnimeNumberingBridge {
-    /// AniBridge dataset `generated_on` the bridge was built from.
+    /// AniBridge dataset `generated_on` the bridge was built from, or the TVDB
+    /// order's `season_type` name when Scryer built it from an episode order.
     pub generated_on: String,
     /// TVDB alternate-order `season_type` whose season boundaries coincide with
     /// the bridge (`"dvd"`, `"alternate"`, …); `None` when nothing corroborates it.
     pub corroborating_order: Option<String>,
+    /// Which dataset this bridge was derived from. Serde-defaulted so rows
+    /// stored before 0240 deserialize unchanged as anime community bridges.
+    #[serde(default)]
+    pub source: NumberingBridgeSource,
     pub seasons: Vec<AnimeCommunitySeason>,
 }
+
+/// Neutral name for [`AnimeNumberingBridge`], which no longer only describes
+/// anime. Prefer it in new code.
+pub type NumberingBridge = AnimeNumberingBridge;
 
 impl AnimeNumberingBridge {
     /// A bridge with no seasons carries no numbering to translate through, so
@@ -982,6 +1121,166 @@ impl AnimeCommunitySeason {
             return Some(community_episode);
         }
         None
+    }
+}
+
+/// One TVDB episode order (`official`, `alternate`, `dvd`, …) as SMG serves it.
+///
+/// Scryer reads these only to derive a numbering bridge; nothing else in the
+/// catalog is built from them, so only the fields the bridge builder and the
+/// corroboration rules need are carried.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EpisodeOrderSet {
+    /// TVDB `season_type`, lowercased by SMG (`"official"`, `"alternate"`, …).
+    pub season_type: String,
+    pub entries: Vec<EpisodeOrderEntry>,
+}
+
+/// One episode as a given TVDB order numbers it. `tvdb_id` is the episode's
+/// stable identity and is what joins the orders to each other.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EpisodeOrderEntry {
+    pub tvdb_id: i64,
+    pub season_number: Option<i32>,
+    pub episode_number: Option<i32>,
+    pub absolute_number: Option<i32>,
+    pub name: String,
+}
+
+/// Build a numbering bridge from two TVDB episode orders of the same series.
+///
+/// `official` is the order the catalog itself follows; `alternate` is the one
+/// release groups number by. The two are joined on `tvdb_id` — the only thing
+/// they reliably share — and the result is grouped by alternate season and
+/// compressed into runs of consecutive episodes that keep a constant offset,
+/// which is exactly the shape [`AnimeCommunitySeasonRange`] stores.
+///
+/// Returns `None` when there is nothing to translate: an empty alternate order,
+/// no episode present in both orders, or an alternate order that numbers every
+/// shared episode exactly as the official one does.
+#[must_use]
+pub fn numbering_bridge_from_episode_orders(
+    official: &[EpisodeOrderEntry],
+    alternate: &[EpisodeOrderEntry],
+    source: NumberingBridgeSource,
+) -> Option<AnimeNumberingBridge> {
+    if official.is_empty() || alternate.is_empty() {
+        return None;
+    }
+    let mut official_by_tvdb_id = std::collections::HashMap::new();
+    for entry in official {
+        let (Some(season), Some(episode)) = (entry.season_number, entry.episode_number) else {
+            continue;
+        };
+        if season < 0 || episode <= 0 {
+            continue;
+        }
+        // A duplicated id in one order makes its numbering unusable rather
+        // than merely partial: there is no way to say which row is meant.
+        if official_by_tvdb_id
+            .insert(entry.tvdb_id, (season, episode))
+            .is_some()
+        {
+            return None;
+        }
+    }
+    if official_by_tvdb_id.is_empty() {
+        return None;
+    }
+
+    // alternate season -> (alternate episode, official season, official episode)
+    let mut by_alternate_season: std::collections::BTreeMap<i32, Vec<(i32, i32, i32)>> =
+        std::collections::BTreeMap::new();
+    let mut seen_alternate = std::collections::HashSet::new();
+    let mut identical = true;
+    let mut mapped = 0usize;
+    for entry in alternate {
+        let (Some(season), Some(episode)) = (entry.season_number, entry.episode_number) else {
+            continue;
+        };
+        if season <= 0 || episode <= 0 {
+            continue;
+        }
+        let Some(&(official_season, official_episode)) = official_by_tvdb_id.get(&entry.tvdb_id)
+        else {
+            continue;
+        };
+        if !seen_alternate.insert((season, episode)) {
+            return None;
+        }
+        if (season, episode) != (official_season, official_episode) {
+            identical = false;
+        }
+        mapped = mapped.saturating_add(1);
+        by_alternate_season.entry(season).or_default().push((
+            episode,
+            official_season,
+            official_episode,
+        ));
+    }
+    if mapped == 0 || identical {
+        return None;
+    }
+
+    let mut seasons = Vec::new();
+    for (index, mut rows) in by_alternate_season {
+        rows.sort_unstable();
+        let mut ranges: Vec<AnimeCommunitySeasonRange> = Vec::new();
+        for (alternate_episode, official_season, official_episode) in rows.iter().copied() {
+            if let Some(last) = ranges.last_mut()
+                && last.tvdb_season == official_season
+                && last.community_episode_end == Some(alternate_episode - 1)
+                && last.tvdb_episode_end == Some(official_episode - 1)
+            {
+                last.community_episode_end = Some(alternate_episode);
+                last.tvdb_episode_end = Some(official_episode);
+                continue;
+            }
+            ranges.push(AnimeCommunitySeasonRange {
+                community_episode_start: alternate_episode,
+                community_episode_end: Some(alternate_episode),
+                tvdb_season: official_season,
+                tvdb_episode_start: official_episode,
+                tvdb_episode_end: Some(official_episode),
+            });
+        }
+        // `episode_count` is only meaningful when this alternate season is a
+        // closed run starting at 1; the whole-pack projection reads it as
+        // "episodes 1..=count all map", and a gapped season does not.
+        let episode_count = rows
+            .iter()
+            .enumerate()
+            .all(|(offset, (episode, _, _))| i32::try_from(offset + 1) == Ok(*episode))
+            .then(|| i32::try_from(rows.len()).ok())
+            .flatten();
+        seasons.push(AnimeCommunitySeason {
+            index,
+            anidb_id: None,
+            anilist_id: None,
+            mal_id: None,
+            titles: Vec::new(),
+            ranges,
+            absolute_start: None,
+            episode_count,
+        });
+    }
+    if seasons.is_empty() {
+        return None;
+    }
+
+    let season_type = source_season_type(source);
+    Some(AnimeNumberingBridge {
+        generated_on: season_type.to_string(),
+        corroborating_order: Some(season_type.to_string()),
+        source,
+        seasons,
+    })
+}
+
+fn source_season_type(source: NumberingBridgeSource) -> &'static str {
+    match source {
+        NumberingBridgeSource::TvdbDvd => "dvd",
+        NumberingBridgeSource::TvdbAlternate | NumberingBridgeSource::AnimeCommunity => "alternate",
     }
 }
 

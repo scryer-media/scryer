@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   Edit,
   KeyRound,
-  Loader2,
   Plus,
   Power,
   PowerOff,
@@ -53,6 +52,7 @@ import { selectorId } from "@/lib/utils/dom-ids";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import type { LocalPathStyle } from "@/lib/utils/local-path-style";
 import { buildViewPath } from "@/lib/utils/routing";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type SettingsMediaServersSectionProps = {
   connections: MediaServerConnection[];
@@ -359,7 +359,7 @@ export function SettingsMediaServersSection({
                         disabled={testingConnectionId === connection.id}
                       >
                         {testingConnectionId === connection.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <LoadingMark className="h-4 w-4" />
                         ) : (
                           <ShieldCheck className="h-4 w-4" />
                         )}
@@ -393,7 +393,7 @@ export function SettingsMediaServersSection({
                         disabled={mutatingConnectionId === connection.id}
                       >
                         {mutatingConnectionId === connection.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <LoadingMark className="h-4 w-4" />
                         ) : (
                           <Trash2 className="h-4 w-4" />
                         )}
@@ -556,7 +556,7 @@ export function SettingsMediaServersSection({
                         disabled={plexDiscoveryBusy}
                       >
                         {plexDiscoveryBusy ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <LoadingMark className="h-4 w-4" />
                         ) : (
                           <Server className="h-4 w-4" />
                         )}

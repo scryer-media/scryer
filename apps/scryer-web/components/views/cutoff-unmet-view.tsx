@@ -22,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Loader2, Search, Zap } from "lucide-react";
+import { Search, Zap } from "lucide-react";
 import { Link } from "react-router";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
@@ -35,6 +35,7 @@ import type {
   Release,
 } from "@/lib/types";
 import type { ViewId } from "@/components/root/types";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type CutoffUnmetItem = {
   titleId: string;
@@ -205,7 +206,7 @@ function ActionButtons({
         onClick={() => void triggerAutoSearch(item)}
       >
         {autoSearching ? (
-          <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+          <LoadingMark className="mr-1 h-4 w-4" />
         ) : (
           <Zap className="mr-1 h-4 w-4" />
         )}
@@ -218,7 +219,7 @@ function ActionButtons({
         onClick={() => void triggerInteractiveSearch(item)}
       >
         {interactiveSearching ? (
-          <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+          <LoadingMark className="mr-1 h-4 w-4" />
         ) : (
           <Search className="mr-1 h-4 w-4" />
         )}

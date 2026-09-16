@@ -34,14 +34,11 @@ const BACKGROUND_QUOTA_PRESSURE_REMAINING_FRACTION: f64 = 0.35;
 /// still admits. The convergence lane values (hot 1.0 / cold 0.25) straddle it,
 /// so pressure sheds cold work first and keeps hot work converging.
 const BACKGROUND_QUOTA_PRESSURE_VALUE_THRESHOLD: f64 = 0.5;
-const DEFAULT_RSS_TARGET_INTERVAL: Duration = Duration::from_secs(15 * 60);
-/// Shortens (or lengthens) the healthy-quota RSS cadence. Automatic upgrades
-/// ride RSS, so a test harness that cannot wait a quarter of an hour between
-/// polls has no other way to exercise them.
-const RSS_TARGET_INTERVAL_ENV: &str = "SCRYER_RSS_TARGET_INTERVAL_SECS";
-/// A floor, not a suggestion: a typo like `0` would turn the cadence gate off
-/// entirely and let the scheduler hot-loop an indexer.
-const MINIMUM_RSS_TARGET_INTERVAL: Duration = Duration::from_secs(5);
+/// The RSS cadence knob is resolved once, in `scryer-application`, beside the
+/// RSS lane it governs and beside the sync worker whose tick it also drives.
+/// The scheduler honours that one value rather than parsing the env a second
+/// time and risking two answers in one process.
+pub(crate) use scryer_application::rss_target_interval;
 const LOW_QUOTA_RSS_TARGET_INTERVAL: Duration = Duration::from_secs(60 * 60);
 const QUOTA_OBSERVATION_STALE_AFTER: Duration = Duration::from_secs(24 * 60 * 60);
 const EXHAUSTED_QUOTA_PROBE_AFTER: Duration = Duration::from_secs(6 * 60 * 60);
@@ -1266,34 +1263,6 @@ fn account_quota_under_pressure(
         .is_some_and(|remaining| remaining < BACKGROUND_QUOTA_PRESSURE_REMAINING_FRACTION)
 }
 
-/// The healthy-quota RSS cadence for this process.
-///
-/// Read once: the scheduler consults it on every feedback tick and every
-/// freshness evaluation, and a cadence that could change under a running
-/// install would make deferral decisions unreproducible.
-static RSS_TARGET_INTERVAL: std::sync::LazyLock<Duration> = std::sync::LazyLock::new(|| {
-    parse_rss_target_interval(std::env::var(RSS_TARGET_INTERVAL_ENV).ok().as_deref())
-});
-
-/// The configured healthy-quota RSS target interval.
-pub(crate) fn rss_target_interval() -> Duration {
-    *RSS_TARGET_INTERVAL
-}
-
-/// Absent, blank, unparseable, and zero all fall back to the shipped default;
-/// anything shorter than [`MINIMUM_RSS_TARGET_INTERVAL`] is clamped up to it.
-fn parse_rss_target_interval(raw: Option<&str>) -> Duration {
-    let Some(seconds) = raw
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|seconds| *seconds > 0)
-    else {
-        return DEFAULT_RSS_TARGET_INTERVAL;
-    };
-    Duration::from_secs(seconds).max(MINIMUM_RSS_TARGET_INTERVAL)
-}
-
 fn rss_target_interval_for_quota(api_remaining: Option<f64>, quota_exhausted: bool) -> Duration {
     rss_target_interval_for_quota_with_default(
         rss_target_interval(),
@@ -1510,6 +1479,13 @@ fn api_remaining_fraction(entry: &SchedulerStateEntry) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // The cadence knob itself now lives in `scryer-application`; these
+    // assertions stay here because they pin the contract this scheduler's
+    // deferral arithmetic is written against.
+    use scryer_application::{
+        DEFAULT_RSS_TARGET_INTERVAL, MINIMUM_RSS_TARGET_INTERVAL, RSS_TARGET_INTERVAL_ENV,
+        parse_rss_target_interval,
+    };
     use scryer_application::{
         EstimatedCost, ExpectedValueHint, RssFreshnessContext, SchedulerCandidateId,
         SchedulerOperation, SchedulerPluginKind,

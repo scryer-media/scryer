@@ -1276,6 +1276,10 @@ impl SettingsQueries {
             .into_iter()
             .map(|(provider_type, _, fields, _)| (provider_type, fields))
             .collect::<std::collections::HashMap<_, _>>();
+        let statuses = app
+            .list_download_client_statuses(&actor)
+            .await
+            .map_err(to_gql_error)?;
         Ok(configs
             .into_iter()
             .map(|config| {
@@ -1283,7 +1287,8 @@ impl SettingsQueries {
                     .get(config.client_type.as_str())
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
-                from_download_client_config_with_fields(config, fields)
+                let status = statuses.get(config.id.as_str());
+                from_download_client_config_with_fields(config, fields, status)
             })
             .collect())
     }

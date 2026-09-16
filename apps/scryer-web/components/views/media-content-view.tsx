@@ -14,7 +14,6 @@ import {
   FolderPen,
   LayoutGrid,
   LayoutList,
-  Loader2,
   PanelLeftOpen,
   PanelRightOpen,
   Pencil,
@@ -190,6 +189,7 @@ import { localizedTitleStatus } from "./overview-localization";
 import { SeriesOverviewContainer } from "@/components/containers/series-overview-container";
 import { handleFixTitleMatchComplete } from "@/lib/fix-title-match";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type Facet = "MOVIE" | "SERIES" | "ANIME";
 
@@ -212,6 +212,8 @@ function titleTableColumnLabel(
       return t("title.table.monitored");
     case "quality":
       return t("title.table.qualityTier");
+    case "profile":
+      return t("title.table.profile");
     case "episodes":
       return t("title.table.episodes");
     case "year":
@@ -893,10 +895,7 @@ function TitleContextReleaseSearchPanel({
             data-search-state={loading ? "searching" : "done"}
           >
             {loading && indexerProgress !== null ? (
-              <Loader2
-                className="h-3 w-3 shrink-0 animate-spin"
-                aria-label={t("label.searching")}
-              />
+              <LoadingMark className="h-3 w-3 shrink-0" label={t("label.searching")} />
             ) : null}
             <span className="truncate">{releaseSearchDescription}</span>
           </p>
@@ -969,7 +968,7 @@ function TitleContextReleaseSearchPanel({
               disabled={loading || disabled}
             >
               {loading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <LoadingMark className="h-3.5 w-3.5" />
               ) : (
                 <Search className="h-3.5 w-3.5" />
               )}
@@ -985,7 +984,7 @@ function TitleContextReleaseSearchPanel({
       >
         {loading && (results === null || results.length === 0) ? (
           <div className="flex items-center gap-2 rounded-[10px] border border-[var(--scry-border2)] bg-[var(--scry-soft)] px-3 py-2 text-[12px] text-[var(--scry-muted2)]">
-            <Loader2 className="h-4 w-4 animate-spin text-[var(--scry-accent)]" />
+            <LoadingMark className="h-4 w-4 text-[var(--scry-accent)]" />
             {t("title.searchingReleases")}
           </div>
         ) : searchFailed ? (
@@ -1711,7 +1710,7 @@ function TitleContextPanel({
                 disabled={renamePreviewing || renameApplying}
               >
                 {renamePreviewing ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <LoadingMark className="h-4 w-4" />
                 ) : (
                   <Eye className="h-4 w-4" />
                 )}
@@ -1758,6 +1757,7 @@ function TitleContextPanel({
               subtitleSearchIdPrefix={`title-context-file-search-subtitles-${title.id}`}
               deleteFileIdPrefix={`title-context-file-delete-${title.id}`}
               makePrimaryFileIdPrefix={`title-context-file-make-primary-${title.id}`}
+              mediaInfoIdPrefix={`title-context-file-info-${title.id}`}
               presentation="selected-title"
             />
           </TitleFilesOnDiskRail>
@@ -1856,7 +1856,7 @@ function TitleContextPanel({
                                 }}
                               >
                                 {clearingBlocklistEntryId === entry.id ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  <LoadingMark className="h-3.5 w-3.5" />
                                 ) : (
                                   <Trash2 className="h-3.5 w-3.5" />
                                 )}
@@ -2526,6 +2526,7 @@ export function MediaContentView({
             "library",
             "monitored",
             "quality",
+            "profile",
             "episodes",
             "year",
             "runtime",

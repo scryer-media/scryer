@@ -758,9 +758,32 @@ async fn graphql_titles_use_server_pagination_and_sort() {
         title_catalog_sort_names(&ctx, "MONITORED", "DESC").await,
         vec!["Alpha Series", "Middle Anime", "Zeta Movie"]
     );
+    // Quality ranks each title's media file, lowest resolution first.
+    for (title_id, quality) in [
+        (&alpha_id, "2160p"),
+        (&middle_id, "480p"),
+        (&zeta_id, "1080p"),
+    ] {
+        sqlx::query("UPDATE media_files SET quality_id = ? WHERE title_id = ?")
+            .bind(quality)
+            .bind(title_id)
+            .execute(ctx.db.pool())
+            .await
+            .expect("catalog sort fixture should set media quality");
+    }
     assert_eq!(
         title_catalog_sort_names(&ctx, "QUALITY", "ASC").await,
+        vec!["Middle Anime", "Zeta Movie", "Alpha Series"]
+    );
+    // Profile orders by the name of each title's effective profile.
+    seed_title_quality_profiles(&ctx, &["alpha", "beta", "gamma"]).await;
+    assert_eq!(
+        title_catalog_sort_names(&ctx, "PROFILE", "ASC").await,
         vec!["Alpha Series", "Zeta Movie", "Middle Anime"]
+    );
+    assert_eq!(
+        title_catalog_sort_names(&ctx, "PROFILE", "DESC").await,
+        vec!["Middle Anime", "Zeta Movie", "Alpha Series"]
     );
     assert_eq!(
         title_catalog_sort_names(&ctx, "STATUS", "ASC").await,

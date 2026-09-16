@@ -642,6 +642,7 @@ const SERIES_SIDE_PANEL_TITLE_FIELDS = `
     inheritsUseSeasonFolders
     fillerPolicy
     recapPolicy
+    releaseNumbering
     effectiveFillerPolicy
     effectiveRecapPolicy
     createdAt
@@ -1343,6 +1344,7 @@ export const TITLE_LIST_FIELDS = `
 export type TitleCatalogTitleProjection = {
   library?: boolean;
   quality?: boolean;
+  profile?: boolean;
   size?: boolean;
   episodes?: boolean;
   runtime?: boolean;
@@ -1399,8 +1401,11 @@ function titleCatalogListFields(
   }
   if (projection.quality) {
     fields.push(`
-    qualityTier
     currentQualityTier`);
+  }
+  if (projection.profile) {
+    fields.push(`
+    qualityTier`);
   }
   if (projection.size) {
     fields.push(`
@@ -3993,6 +3998,7 @@ export const rulePackTemplatesQuery = `query RulePackTemplates($packId: String!)
     description
     category
     appliedFacets
+    defaultEnabled
   }
 }`;
 

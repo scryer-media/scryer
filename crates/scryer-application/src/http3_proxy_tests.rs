@@ -1,4 +1,4 @@
-//! Local CONNECT peer using fixture-only certificates from proxy-tunnels v0.1.0.
+//! Local CONNECT peer using fixture-only certificates from proxy-tunnels v0.1.1.
 use super::*;
 use bytes::{Buf, Bytes};
 use std::sync::atomic::{AtomicUsize, Ordering};

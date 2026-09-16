@@ -19,6 +19,9 @@ pub struct HydrationResult {
     /// Community season layout for an anime series; `None` for every other
     /// facet and for anime SMG has no bridge for.
     pub anime_numbering_bridge: Option<scryer_domain::AnimeNumberingBridge>,
+    /// TVDB's published episode orders, when this hydration asked for them.
+    /// Empty for movies and for bulk hydration, which cannot request them.
+    pub episode_orders: Vec<scryer_domain::EpisodeOrderSet>,
     pub movie_metadata: std::collections::HashMap<i64, MovieMetadata>,
     pub more_like_this: Vec<DiscoveryTitle>,
     /// The series-level facts [`TitleMetadataUpdate`] does not carry (genres, content ratings,
@@ -202,6 +205,7 @@ pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> Hydrat
         anime_mappings: vec![],
         anime_movies: vec![],
         anime_numbering_bridge: None,
+        episode_orders: Vec::new(),
         movie_metadata: std::collections::HashMap::new(),
         more_like_this: vec![],
         raw_series: None,
@@ -296,6 +300,7 @@ pub fn series_to_hydration_result(series: SeriesMetadata, language: &str) -> Hyd
         anime_mappings: series.anime_mappings,
         anime_movies: series.anime_movies,
         anime_numbering_bridge: series.anime_numbering_bridge,
+        episode_orders: series.episode_orders,
         movie_metadata: std::collections::HashMap::new(),
         more_like_this: vec![],
         raw_series: Some(raw_series),

@@ -246,6 +246,8 @@ test("title catalog projection requests only visible or sorted optional fields",
   assert.equal(movieProjection.ratings, true);
   assert.equal(movieProjection.popularity, true);
   assert.equal(movieProjection.episodes, false);
+  assert.equal(movieProjection.quality, false);
+  assert.equal(movieProjection.profile, false);
 
   const seriesProjection = titleCatalogProjectionForTable({
     facet: "series",
@@ -262,6 +264,34 @@ test("title catalog projection requests only visible or sorted optional fields",
   assert.equal(seriesProjection.episodes, true);
   assert.equal(seriesProjection.popularity, false);
   assert.equal(seriesProjection.movieMedia, false);
+});
+
+test("title catalog projection splits media quality from the quality profile", () => {
+  const movieProjection = titleCatalogProjectionForTable({
+    facet: "movie",
+    visibleColumns: { quality: true },
+    sort: { key: "profile", direction: "asc" },
+  });
+  assert.equal(movieProjection.quality, true);
+  assert.equal(movieProjection.profile, true);
+
+  // Series and anime have no media Quality column, only Profile.
+  const seriesProjection = titleCatalogProjectionForTable({
+    facet: "series",
+    visibleColumns: { quality: true, profile: true },
+    sort: { key: "name", direction: "asc" },
+  });
+  assert.equal(seriesProjection.quality, false);
+  assert.equal(seriesProjection.profile, true);
+
+  assert.deepEqual(
+    titleCatalogSortInput({ key: "profile", direction: "asc" }),
+    { key: "PROFILE", direction: "ASC" },
+  );
+  assert.deepEqual(
+    titleCatalogSortInput({ key: "quality", direction: "asc" }),
+    { key: "QUALITY", direction: "ASC" },
+  );
 });
 
 test("title catalog projection ignores ratings unsupported by active facet", () => {

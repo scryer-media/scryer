@@ -3,7 +3,6 @@ import { useClient, useQuery } from "urql";
 import {
   ChevronDown,
   ChevronRight,
-  Loader2,
   TriangleAlert,
   X,
 } from "lucide-react";
@@ -68,6 +67,7 @@ import {
 } from "@/lib/location-transfers";
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type Props = { operationId: string; onDismiss?: () => void };
 export function LocationOperationPanel(props: Props) {
@@ -265,7 +265,7 @@ function OperationPanel({ operationId, onDismiss }: Props) {
     return (
       <Card id="location-operation-panel">
         <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-          {!summary.error && <Loader2 className="h-4 w-4 animate-spin" />}
+          {!summary.error && <LoadingMark className="h-4 w-4" />}
           {t(
             summary.error === "missing"
               ? "move.operationMissing"

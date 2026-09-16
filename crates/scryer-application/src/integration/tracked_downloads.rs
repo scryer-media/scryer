@@ -524,14 +524,34 @@ impl TrackedDownloadService {
 
     #[cfg(test)]
     pub(crate) fn insert_for_tests(&mut self, tracked: TrackedDownload) -> DownloadId {
-        self.restore_cleanup_download(tracked)
+        let download_id = tracked.download_id;
+        self.restore_cleanup_download(tracked);
+        download_id
     }
 
-    pub(crate) fn restore_cleanup_download(&mut self, tracked: TrackedDownload) -> DownloadId {
+    /// Re-seat a tracked download the durable cleanup tick rebuilt, and return
+    /// the id the cleanup outcome must be applied to.
+    ///
+    /// The rebuilt entry carries the short `"{client_id}:{item_id}"` id, while a
+    /// live entry the poller created for the same canonical download carries the
+    /// long `"download:{client_id}:{client_type}:{download_id}"` one. The cache
+    /// is keyed by `DownloadId`, so inserting unconditionally replaced the live
+    /// entry with the short-id rebuild. The next poll's `seen_ids` is built from
+    /// the poller id, the authoritative-client prune has no grace window, and a
+    /// torrent still held for seeding was therefore dropped from the queue,
+    /// ignored, and re-adopted a moment later as a foreign observation.
+    ///
+    /// So a live entry is never clobbered: it keeps its id, its client item and
+    /// its runtime flags, and the caller is handed *its* id. Only an empty slot
+    /// — restart recovery, where the tick is the one rebuilding the world —
+    /// takes the rebuilt entry.
+    pub(crate) fn restore_cleanup_download(&mut self, tracked: TrackedDownload) -> String {
         let download_id = tracked.download_id;
         self.last_seen_at.insert(download_id, Utc::now());
-        self.cache.insert(download_id, tracked);
-        download_id
+        match self.cache.entry(download_id) {
+            std::collections::hash_map::Entry::Occupied(live) => live.get().id.clone(),
+            std::collections::hash_map::Entry::Vacant(slot) => slot.insert(tracked).id.clone(),
+        }
     }
 
     pub fn find_mut(&mut self, id: &str) -> Option<&mut TrackedDownload> {
@@ -736,15 +756,15 @@ impl TrackedDownloadService {
         unavailable_sources
     }
 
-    /// Mark downloads no longer visible in non-excluded clients as untrackable.
-    /// How long a download may stay missing from pruning snapshots before it is
-    /// actually pruned.
+    /// How long a job may stay missing from a *partial* snapshot before it is
+    /// pruned.
     ///
-    /// Must OUTLAST the router's maximum feedback backoff (120s): while a
-    /// client is backing off, its reads are skipped and its items are absent
-    /// from every snapshot, so any smaller grace re-creates the erase-on-blip
-    /// bug this exists to fix. The cost of the debounce is that a download
-    /// removed in the client's own UI lingers in Activity for up to this long.
+    /// Only bridged `AuthoritativeForClient` scopes debounce. A bridge pushes
+    /// what it knows when it knows it, so one scoped update is not proof that
+    /// the client stopped listing a job. A full authoritative listing is
+    /// proof — its clients answered both reads, and a client in feedback
+    /// backoff is not in `authoritative_client_ids` at all — so it prunes on
+    /// the first tick, the way Sonarr's `UpdateTrackable` does.
     pub(crate) const SNAPSHOT_ABSENCE_PRUNE_GRACE_SECS: i64 = 150;
 
     pub fn update_trackable_excluding_client_types(
@@ -760,15 +780,16 @@ impl TrackedDownloadService {
     }
 
     /// Mark jobs absent only when their client completed both sides of the
-    /// snapshot read. A non-authoritative client is treated as seen so a
-    /// previous absence debounce cannot mature during an outage.
+    /// snapshot read. A non-authoritative client is treated as seen, so an
+    /// outage never erases a queue; a client that did answer is believed at
+    /// once, because a complete listing that omits a job is the client saying
+    /// the job is gone.
     pub fn update_trackable_excluding_client_types_for_authoritative_clients(
         &mut self,
         seen_ids: &HashSet<String>,
         excluded_client_types: &[&str],
         authoritative_client_ids: Option<&HashSet<String>>,
     ) -> Vec<ClientJobLocator> {
-        let now = Utc::now();
         let mut unavailable_sources = Vec::new();
         for td in self.cache.values_mut() {
             if tracked_client_type_is_excluded(&td.client_type, excluded_client_types) {
@@ -788,7 +809,8 @@ impl TrackedDownloadService {
                 td.snapshot_missing_since = None;
                 continue;
             }
-            if td.is_trackable && snapshot_absence_exceeds_grace(td, now) {
+            if td.is_trackable {
+                td.snapshot_missing_since = None;
                 td.is_trackable = false;
                 unavailable_sources.push(ClientJobLocator::new(
                     Some(&td.client_id),
@@ -5360,7 +5382,7 @@ mod tests {
     }
 
     #[test]
-    fn global_snapshot_pruning_reports_queue_resident_state_after_grace() {
+    fn global_snapshot_pruning_reports_queue_resident_state_at_once() {
         let mut tracker = TrackedDownloadService::new();
         let queue_resident = build_tracked_download("queue-resident");
         let queue_resident_id = queue_resident.id.clone();
@@ -5368,8 +5390,8 @@ mod tests {
             .cache
             .insert(queue_resident.download_id, queue_resident);
 
-        tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
-        expire_snapshot_absence(&mut tracker, &queue_resident_id);
+        // A full listing that omits the job is the client saying it is gone,
+        // so the very first pass prunes — Sonarr's `UpdateTrackable`.
         let unavailable_sources =
             tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
 
@@ -5489,13 +5511,8 @@ mod tests {
         tracker.cache.insert(weaver.download_id, weaver);
         tracker.cache.insert(nzb.download_id, nzb);
 
-        // First absence only STAMPS (absence debounce); prune happens once the
-        // absence outlives the grace window.
-        tracker.update_trackable_excluding_client_types(&HashSet::new(), &["weaver"]);
-        assert!(tracker.find(&weaver_id).is_some_and(|td| td.is_trackable));
-        assert!(tracker.find(&nzb_id).is_some_and(|td| td.is_trackable));
-
-        expire_snapshot_absence(&mut tracker, &nzb_id);
+        // An excluded client type is never visited by the global pass, however
+        // many listings omit it; the nzbget row prunes on the first one.
         tracker.update_trackable_excluding_client_types(&HashSet::new(), &["weaver"]);
         assert!(tracker.find(&weaver_id).is_some_and(|td| td.is_trackable));
         if let Some(td) = tracker.find(&nzb_id) {
@@ -5503,14 +5520,13 @@ mod tests {
         }
 
         tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
-        expire_snapshot_absence(&mut tracker, &weaver_id);
-        tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
         if let Some(td) = tracker.find(&weaver_id) {
             assert!(!td.is_trackable);
         }
     }
 
-    /// Backdate a tracked download's absence stamp past the prune grace window.
+    /// Backdate a tracked download's absence stamp past the prune grace window
+    /// that scoped (bridged) snapshots still honour.
     fn expire_snapshot_absence(tracker: &mut TrackedDownloadService, id: &str) {
         if let Some(td) = tracker.find_mut(id) {
             td.snapshot_missing_since = Some(
@@ -5523,23 +5539,81 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_absence_debounce_survives_transient_client_blackouts() {
+    fn client_blackouts_never_prune_because_a_skipped_client_is_not_authoritative() {
         // The router degrades per client: a feedback timeout starts an
-        // exponential backoff during which that client's reads are silently
-        // skipped, so its items are absent from otherwise-successful
-        // snapshots. Pruning on first absence erased live downloads during
-        // such blackouts — anything that completed inside one was never
-        // imported. Absence must persist beyond the grace window to prune,
-        // and one sighting must fully reset the clock.
+        // exponential backoff during which that client's reads are skipped, so
+        // its items are absent from otherwise-successful snapshots. Pruning on
+        // first absence erased live downloads during such blackouts — anything
+        // that completed inside one was never imported. What makes immediate
+        // pruning safe is authority, not a timer: a client that was skipped or
+        // failed never reaches `authoritative_client_ids`, so its rows are
+        // treated as seen for as long as the outage lasts.
         let mut tracker = TrackedDownloadService::new();
         let td = build_tracked_download("blip-item");
         let id = td.id.clone();
         tracker.cache.insert(td.download_id, td);
 
-        // Several consecutive absent snapshots inside the grace window: the
-        // item survives every one of them.
+        let no_authoritative_clients = HashSet::new();
         for _ in 0..3 {
-            tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
+            let unavailable = tracker
+                .update_trackable_excluding_client_types_for_authoritative_clients(
+                    &HashSet::new(),
+                    &[],
+                    Some(&no_authoritative_clients),
+                );
+            assert!(unavailable.is_empty(), "an outage must report nothing");
+            assert!(tracker.find(&id).is_some_and(|t| t.is_trackable));
+            assert!(
+                tracker
+                    .find(&id)
+                    .is_some_and(|t| t.snapshot_missing_since.is_none()),
+                "a client nobody could read has not said the job is gone"
+            );
+        }
+
+        // The client answers again and still does not list the job: that is
+        // the client saying it is gone, and it prunes on that first listing.
+        let authoritative = HashSet::from(["client-1".to_string()]);
+        let unavailable = tracker
+            .update_trackable_excluding_client_types_for_authoritative_clients(
+                &HashSet::new(),
+                &[],
+                Some(&authoritative),
+            );
+        assert_eq!(
+            unavailable,
+            vec![ClientJobLocator::new(
+                Some("client-1"),
+                "nzbget",
+                "blip-item"
+            )]
+        );
+        if let Some(t) = tracker.find(&id) {
+            assert!(!t.is_trackable);
+        }
+    }
+
+    #[test]
+    fn a_bridged_scope_still_debounces_absence_and_a_sighting_resets_the_clock() {
+        // A bridge pushes what it knows when it knows it, so one scoped update
+        // that omits a job is not proof the client stopped listing it. Scoped
+        // prunes keep the grace window a full authoritative listing no longer
+        // needs.
+        let mut tracker = TrackedDownloadService::new();
+        let td = build_tracked_download("bridged-item");
+        let id = td.id.clone();
+        tracker.cache.insert(td.download_id, td);
+        let scope = TrackedDownloadSnapshotScope::AuthoritativeForClient {
+            client_id: Some("client-1".to_string()),
+            client_type: "nzbget".to_string(),
+        };
+
+        for _ in 0..3 {
+            assert!(
+                tracker
+                    .update_trackable_for_scope(&HashSet::new(), &scope)
+                    .is_empty()
+            );
             assert!(tracker.find(&id).is_some_and(|t| t.is_trackable));
         }
         assert!(
@@ -5549,10 +5623,8 @@ mod tests {
             "absence must be stamped"
         );
 
-        // A sighting clears the stamp entirely.
-        let mut seen = HashSet::new();
-        seen.insert(id.clone());
-        tracker.update_trackable_excluding_client_types(&seen, &[]);
+        let seen = HashSet::from([id.clone()]);
+        tracker.update_trackable_for_scope(&seen, &scope);
         assert!(
             tracker
                 .find(&id)
@@ -5560,13 +5632,16 @@ mod tests {
             "a sighting must reset the absence clock"
         );
 
-        // Absence that outlives the grace window prunes.
-        tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
+        tracker.update_trackable_for_scope(&HashSet::new(), &scope);
         expire_snapshot_absence(&mut tracker, &id);
-        tracker.update_trackable_excluding_client_types(&HashSet::new(), &[]);
-        if let Some(t) = tracker.find(&id) {
-            assert!(!t.is_trackable);
-        }
+        assert_eq!(
+            tracker.update_trackable_for_scope(&HashSet::new(), &scope),
+            vec![ClientJobLocator::new(
+                Some("client-1"),
+                "nzbget",
+                "bridged-item"
+            )]
+        );
     }
 
     #[test]
@@ -6603,5 +6678,161 @@ mod tests {
             .expect("restart should re-track the download");
         assert_eq!(recovered.download_id, canonical_download_id);
         assert_eq!(recovered.state, TrackedDownloadState::Ignored);
+    }
+
+    /// A poller-shaped torrent item: the observed download id is the info hash,
+    /// so `tracked_download_id_for_item` yields the long `download:…` form.
+    fn build_seeding_torrent_item() -> DownloadQueueItem {
+        let mut item = build_client_item();
+        item.client_type = "qbittorrent".to_string();
+        item.client_name = "qBittorrent".to_string();
+        item.title_name = "Example Synthetic Series".to_string();
+        item.download_client_item_id = "5b4ba67100000000".to_string();
+        item.download_id = Some("5b4ba67100000000".to_string());
+        item
+    }
+
+    /// Regression: the durable cleanup tick must not re-key a live entry.
+    ///
+    /// The tick rebuilds the tracked download with the short
+    /// `"{client_id}:{item_id}"` id while the poller's live entry carries the
+    /// long `download:…` one. The cache is keyed by canonical `DownloadId`, so
+    /// restoring the rebuild used to replace the live entry; the next poll's
+    /// `seen_ids` holds the poller id, the authoritative-client prune has no
+    /// grace window, and a torrent held for seeding was dropped from the queue
+    /// and ignored a second after the hold was logged.
+    #[tokio::test]
+    async fn cleanup_restore_keeps_the_live_entry_so_a_seeding_hold_survives_the_next_poll() {
+        let download_submissions = Arc::new(TestDownloadSubmissionRepo::default());
+        let imports = Arc::new(TestImportRepo::default());
+        let app = build_app(download_submissions, imports);
+        let mut tracker = TrackedDownloadService::new();
+
+        let item = build_seeding_torrent_item();
+        let poller_id = tracked_download_id_for_item(&item);
+        let short_id = tracked_download_id(
+            Some(item.client_id.as_str()),
+            &item.client_type,
+            &item.download_client_item_id,
+        );
+        assert_ne!(poller_id, short_id, "the two id shapes must differ");
+
+        tracker.track(&app, item.clone()).await;
+        let download_id = tracker.find(&poller_id).expect("live entry").download_id;
+        tracker.find_mut(&poller_id).expect("live entry").state =
+            TrackedDownloadState::ImportedSeeding;
+
+        // The cleanup tick's rebuild, shaped exactly as `run_claimed_download_cleanup`
+        // used to shape it, down to the short id.
+        let mut rebuilt = TrackedDownloadService::build_new_tracked_download(
+            &app,
+            download_id,
+            short_id.clone(),
+            item,
+        )
+        .await;
+        rebuilt.state = TrackedDownloadState::ImportedSeeding;
+        let effective_id = tracker.restore_cleanup_download(rebuilt);
+
+        // The caller settles the cleanup outcome against the live entry's id.
+        assert_eq!(effective_id, poller_id);
+
+        let unavailable = tracker
+            .update_trackable_excluding_client_types_for_authoritative_clients(
+                &HashSet::from([poller_id.clone()]),
+                &[],
+                Some(&HashSet::from(["client-1".to_string()])),
+            );
+        assert!(
+            unavailable.is_empty(),
+            "a torrent the client still lists must keep its binding"
+        );
+        assert_eq!(tracker.get_all().len(), 1, "the rebuild must not duplicate");
+        assert!(tracker.find(&short_id).is_none());
+        let live = tracker.find(&poller_id).expect("live entry");
+        assert!(live.is_trackable);
+        assert_eq!(live.state, TrackedDownloadState::ImportedSeeding);
+    }
+
+    /// Restart recovery: the tick rebuilds into an empty cache, and the entry it
+    /// leaves behind must be the one the first poll afterwards names in its
+    /// `seen_ids` — otherwise the same prune drops it for the same reason.
+    #[tokio::test]
+    async fn restart_recovery_restore_keeps_the_poller_id_and_survives_the_first_poll() {
+        let download_submissions = Arc::new(TestDownloadSubmissionRepo::default());
+        let imports = Arc::new(TestImportRepo::default());
+        let app = build_app(download_submissions, imports);
+        let item = build_seeding_torrent_item();
+        let poller_id = tracked_download_id_for_item(&item);
+
+        // The canonical identity this client job resolves to, so the rebuild and
+        // the poll after the restart address the same cache slot.
+        let mut before_restart = TrackedDownloadService::new();
+        before_restart.track(&app, item.clone()).await;
+        let download_id = before_restart
+            .find(&poller_id)
+            .expect("live entry")
+            .download_id;
+
+        // Restart: the cache is empty and the cleanup tick rebuilds the entry,
+        // deriving its id with the poller's own function from the poller's own
+        // observed item, exactly as `run_claimed_download_cleanup` now does.
+        let mut tracker = TrackedDownloadService::new();
+        let mut rebuilt = TrackedDownloadService::build_new_tracked_download(
+            &app,
+            download_id,
+            tracked_download_id_for_item(&item),
+            item.clone(),
+        )
+        .await;
+        rebuilt.state = TrackedDownloadState::ImportedSeeding;
+
+        // Empty cache: the rebuilt entry is inserted, and its own id comes back.
+        let effective_id = tracker.restore_cleanup_download(rebuilt);
+        assert_eq!(effective_id, poller_id);
+        assert_eq!(tracker.get_all().len(), 1);
+        assert_eq!(
+            tracker.find(&poller_id).expect("restored entry").id,
+            poller_id
+        );
+
+        tracker.track(&app, item.clone()).await;
+        assert_eq!(tracker.get_all().len(), 1, "the poll must not duplicate");
+
+        let unavailable = tracker
+            .update_trackable_excluding_client_types_for_authoritative_clients(
+                &HashSet::from([poller_id.clone()]),
+                &[],
+                Some(&HashSet::from(["client-1".to_string()])),
+            );
+        assert!(unavailable.is_empty());
+        let restored = tracker.find(&poller_id).expect("restored entry");
+        assert_eq!(restored.id, poller_id);
+        assert!(restored.is_trackable);
+
+        // Why the derivation matters: the short id the rebuild used to carry is
+        // not what the poll names, and this prune has no grace window.
+        let short_id = tracked_download_id(
+            Some(item.client_id.as_str()),
+            &item.client_type,
+            &item.download_client_item_id,
+        );
+        let mut short_id_tracker = TrackedDownloadService::new();
+        let mut short_id_rebuild =
+            TrackedDownloadService::build_new_tracked_download(&app, download_id, short_id, item)
+                .await;
+        short_id_rebuild.state = TrackedDownloadState::ImportedSeeding;
+        short_id_tracker.restore_cleanup_download(short_id_rebuild);
+        assert_eq!(
+            short_id_tracker
+                .update_trackable_excluding_client_types_for_authoritative_clients(
+                    &HashSet::from([poller_id]),
+                    &[],
+                    Some(&HashSet::from(["client-1".to_string()])),
+                )
+                .len(),
+            1,
+            "a short-id rebuild is not named by the poll and is pruned on the first tick"
+        );
     }
 }

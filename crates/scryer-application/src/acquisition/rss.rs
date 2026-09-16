@@ -25,6 +25,69 @@ use tracing::{debug, warn};
 
 const RSS_SYNC_MAX_GUIDS: usize = 2000;
 
+/// The shipped healthy-quota RSS cadence.
+pub const DEFAULT_RSS_TARGET_INTERVAL: std::time::Duration =
+    std::time::Duration::from_secs(15 * 60);
+/// Shortens (or lengthens) the healthy-quota RSS cadence. Automatic upgrades
+/// ride RSS, so a test harness that cannot wait a quarter of an hour between
+/// polls has no other way to exercise them.
+pub const RSS_TARGET_INTERVAL_ENV: &str = "SCRYER_RSS_TARGET_INTERVAL_SECS";
+/// A floor, not a suggestion: a typo like `0` would turn the cadence gate off
+/// entirely and let the scheduler hot-loop an indexer.
+pub const MINIMUM_RSS_TARGET_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
+/// How often the sync worker wakes when the cadence is the shipped default.
+///
+/// The worker only *considers* RSS on a tick; whether a given indexer is due is
+/// the scheduler's decision. A minute is therefore the resolution of the whole
+/// RSS lane, and no cadence shorter than a minute can take effect unless the
+/// worker wakes at least that often — which is why a shortened cadence pulls
+/// this down with it.
+const DEFAULT_RSS_SYNC_TICK: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// The healthy-quota RSS cadence for this process.
+///
+/// Read once: the scheduler consults it on every feedback tick and every
+/// freshness evaluation, and a cadence that could change under a running
+/// install would make deferral decisions unreproducible.
+static RSS_TARGET_INTERVAL: std::sync::LazyLock<std::time::Duration> =
+    std::sync::LazyLock::new(|| {
+        parse_rss_target_interval(std::env::var(RSS_TARGET_INTERVAL_ENV).ok().as_deref())
+    });
+
+/// The configured healthy-quota RSS target interval.
+pub fn rss_target_interval() -> std::time::Duration {
+    *RSS_TARGET_INTERVAL
+}
+
+/// Absent, blank, unparseable, and zero all fall back to the shipped default;
+/// anything shorter than [`MINIMUM_RSS_TARGET_INTERVAL`] is clamped up to it.
+pub fn parse_rss_target_interval(raw: Option<&str>) -> std::time::Duration {
+    let Some(seconds) = raw
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .and_then(|value| value.parse::<u64>().ok())
+        .filter(|seconds| *seconds > 0)
+    else {
+        return DEFAULT_RSS_TARGET_INTERVAL;
+    };
+    std::time::Duration::from_secs(seconds).max(MINIMUM_RSS_TARGET_INTERVAL)
+}
+
+/// How often the acquisition worker wakes to consider RSS.
+pub fn rss_sync_tick_period() -> std::time::Duration {
+    rss_sync_tick_period_for(rss_target_interval())
+}
+
+/// The tick never slows below the shipped minute — a cadence *longer* than a
+/// minute is the scheduler's business, not the worker's — and never outpaces
+/// [`MINIMUM_RSS_TARGET_INTERVAL`], so the same floor that stops the scheduler
+/// hot-looping an indexer also stops the worker spinning.
+fn rss_sync_tick_period_for(target_interval: std::time::Duration) -> std::time::Duration {
+    target_interval
+        .min(DEFAULT_RSS_SYNC_TICK)
+        .max(MINIMUM_RSS_TARGET_INTERVAL)
+}
+
 fn normalized_rss_published_at(release: &IndexerSearchResult) -> Option<String> {
     release
         .published_at
@@ -1428,19 +1491,17 @@ impl AppUseCase {
             .filter(|collection| collection.monitored)
             .map(|collection| collection.id.clone())
             .collect::<HashSet<_>>();
-        // Community-numbered anime has to be translated before it is routed:
-        // a feed item named `S04E20` belongs to the episode the bridge says it
-        // is, not to the season-4 slot the catalog does not have.
-        let anime_numbering_bridge = if title.facet == MediaFacet::Anime {
-            self.services
-                .catalog
-                .shows
-                .get_anime_numbering_bridge(&title.id)
-                .await
-                .unwrap_or_default()
-        } else {
-            None
-        };
+        // A bridged title has to be translated before it is routed: a feed
+        // item named `S04E20` belongs to the episode the bridge says it is, not
+        // to the season-4 slot the catalog does not have. Loaded once per
+        // title; `None` for every title with no stored bridge.
+        let anime_numbering_bridge = self
+            .services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(&title.id)
+            .await
+            .unwrap_or_default();
 
         // Route single-episode postings per episode; keep pack items (absolute
         // ranges and season packs) whole so each pack is evaluated once.
@@ -2972,6 +3033,55 @@ mod tests {
     use super::*;
     use scryer_domain::{MediaFacet, Title};
 
+    #[test]
+    fn the_sync_worker_keeps_its_minute_tick_without_an_override() {
+        assert_eq!(
+            std::env::var(RSS_TARGET_INTERVAL_ENV).ok().as_deref(),
+            None,
+            "this test asserts the unset default; the suite must not set the override"
+        );
+        assert_eq!(rss_sync_tick_period(), DEFAULT_RSS_SYNC_TICK);
+        assert_eq!(
+            rss_sync_tick_period_for(DEFAULT_RSS_TARGET_INTERVAL),
+            DEFAULT_RSS_SYNC_TICK
+        );
+    }
+
+    #[test]
+    fn a_cadence_longer_than_a_minute_never_slows_the_worker_down() {
+        assert_eq!(
+            rss_sync_tick_period_for(std::time::Duration::from_secs(3600)),
+            DEFAULT_RSS_SYNC_TICK,
+            "how often an indexer is due is the scheduler's decision, not the worker's"
+        );
+    }
+
+    #[test]
+    fn a_cadence_shorter_than_a_minute_pulls_the_worker_tick_down_with_it() {
+        assert_eq!(
+            rss_sync_tick_period_for(std::time::Duration::from_secs(5)),
+            std::time::Duration::from_secs(5),
+            "a cadence the worker never wakes to honour is not a cadence"
+        );
+        assert_eq!(
+            rss_sync_tick_period_for(std::time::Duration::from_secs(30)),
+            std::time::Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn the_worker_tick_keeps_the_cadence_floor() {
+        assert_eq!(
+            rss_sync_tick_period_for(std::time::Duration::from_secs(1)),
+            MINIMUM_RSS_TARGET_INTERVAL,
+            "the floor that stops the scheduler hot-looping must stop the worker spinning too"
+        );
+        assert_eq!(
+            rss_sync_tick_period_for(std::time::Duration::ZERO),
+            MINIMUM_RSS_TARGET_INTERVAL
+        );
+    }
+
     #[tokio::test]
     async fn recoverable_scores_agree_in_search_rss_and_pending_reevaluation() {
         let (app, user) = crate::lib_tests::bootstrap();
@@ -3609,6 +3719,7 @@ mod tests {
         title.facet = MediaFacet::Anime;
         title.metadata_language = Some("eng".into());
         let bridge = scryer_domain::AnimeNumberingBridge {
+            source: Default::default(),
             generated_on: "2026-01-01".into(),
             corroborating_order: None,
             seasons: vec![scryer_domain::AnimeCommunitySeason {

@@ -10,6 +10,9 @@ pub mod canonical_download_identity;
 pub mod event_storage;
 pub mod hook_ids;
 pub mod known_bad;
+#[cfg(test)]
+#[path = "migration_progress_tests.rs"]
+mod migration_progress_tests;
 pub mod notification_targets;
 pub mod post_0_16_6_prerelease;
 pub mod post_processing_output;
@@ -37,6 +40,8 @@ use sqlx::Row;
 use sqlx::SqlitePool;
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 const EMBEDDED_MIGRATION_CATALOG: &[u8] =
@@ -58,6 +63,45 @@ struct MigrationLedgerRow {
 #[derive(Clone, Debug, Default)]
 pub struct MigrationHookContext {
     pub encryption_key: Option<EncryptionKey>,
+    pub progress: MigrationProgress,
+}
+
+/// How far a migration run has got: how many migrations it will apply and how
+/// many have finished. Clones share the same counts, so startup can hand one
+/// clone to the migration run and read another from the upgrade screen.
+#[derive(Clone, Debug, Default)]
+pub struct MigrationProgress {
+    counts: Arc<MigrationProgressCounts>,
+}
+
+#[derive(Debug, Default)]
+struct MigrationProgressCounts {
+    total: AtomicUsize,
+    completed: AtomicUsize,
+}
+
+impl MigrationProgress {
+    /// `(completed, total)` once a run has counted the migrations it will
+    /// apply; `None` before that, or when there was nothing to apply.
+    pub fn snapshot(&self) -> Option<(usize, usize)> {
+        let total = self.counts.total.load(Ordering::Relaxed);
+        if total == 0 {
+            return None;
+        }
+        let completed = self.counts.completed.load(Ordering::Relaxed);
+        Some((completed.min(total), total))
+    }
+
+    /// Starts a run that will apply `total` migrations.
+    pub fn begin(&self, total: usize) {
+        self.counts.completed.store(0, Ordering::Relaxed);
+        self.counts.total.store(total, Ordering::Relaxed);
+    }
+
+    /// Records one more migration applied.
+    pub fn complete_one(&self) {
+        self.counts.completed.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 pub fn list_embedded_migrations() -> AppResult<Vec<EmbeddedMigrationDescriptor>> {
@@ -636,14 +680,20 @@ async fn apply_version_range(
         .map(|row| row.version)
         .collect();
 
-    for migration in catalog.migrations.iter().filter(|migration| {
-        migration.version >= start_version && migration.version <= target_version
-    }) {
-        if applied_versions.contains(&migration.version) {
-            continue;
-        }
+    let pending: Vec<&CompiledMigration> = catalog
+        .migrations
+        .iter()
+        .filter(|migration| {
+            migration.version >= start_version
+                && migration.version <= target_version
+                && !applied_versions.contains(&migration.version)
+        })
+        .collect();
 
+    hook_context.progress.begin(pending.len());
+    for migration in pending {
         apply_single_migration(pool, migration, payload_bytes, install_kind, hook_context).await?;
+        hook_context.progress.complete_one();
     }
 
     Ok(())

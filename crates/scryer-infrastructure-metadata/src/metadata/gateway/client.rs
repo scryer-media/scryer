@@ -25,7 +25,7 @@ use scryer_application::{
 };
 use scryer_domain::{
     AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, CanonicalMediaTag,
-    ExternalId,
+    EpisodeOrderEntry, EpisodeOrderSet, ExternalId,
 };
 use scryer_outbound_http::{
     OutboundHttpClient, OutboundHttpError, OutboundRequestError, RateLimitRegistry, RequestPolicy,
@@ -2477,6 +2477,7 @@ fn series_metadata_from_item(s: SeriesItem) -> SeriesMetadata {
             })
             .collect(),
         anime_numbering_bridge: anime_numbering_bridge_from_gateway(s.anime_numbering_bridge),
+        episode_orders: episode_orders_from_gateway(s.episode_orders),
         ratings: rating_summary_from_gateway(s.rating, s.rating_sources, s.external_ratings),
         credits: credits_from_gateway(s.credits),
         genres: genres_from_gateway(s.genres),
@@ -3309,6 +3310,62 @@ mod tests {
         assert!(series.mdblist.is_none());
         assert!(series.awards.is_empty());
         assert_eq!(series.first_aired, "2023-04-05");
+    }
+
+    #[test]
+    fn series_mapper_reads_tvdb_episode_orders() {
+        let payload = merge_json(
+            minimal_series_item_fields(),
+            json!({
+                "episode_orders": [
+                    {
+                        "season_type": "Official",
+                        "entries": [
+                            { "tvdb_id": 9001, "season_number": 1, "episode_number": 24, "absolute_number": 24, "name": "Lantern Pass" },
+                            { "tvdb_id": 9002, "season_number": 1, "episode_number": 25, "absolute_number": 25, "name": "Salt Marsh Relay" }
+                        ]
+                    },
+                    {
+                        "season_type": "alternate",
+                        "entries": [
+                            { "tvdb_id": 9001, "season_number": 1, "episode_number": 25, "absolute_number": null, "name": "Lantern Pass" },
+                            { "tvdb_id": 9002, "season_number": 1, "episode_number": 26, "absolute_number": null, "name": "Salt Marsh Relay" }
+                        ]
+                    },
+                    { "season_type": "dvd", "entries": [] }
+                ]
+            }),
+        );
+        let item: SeriesItem = serde_json::from_value(payload).expect("series item should decode");
+
+        let series = series_metadata_from_item(item);
+
+        let season_types = series
+            .episode_orders
+            .iter()
+            .map(|order| order.season_type.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(season_types, vec!["official", "alternate"]);
+        let alternate = series
+            .episode_orders
+            .iter()
+            .find(|order| order.season_type == "alternate")
+            .expect("alternate order should survive the mapper");
+        assert_eq!(alternate.entries.len(), 2);
+        assert_eq!(alternate.entries[0].tvdb_id, 9001);
+        assert_eq!(alternate.entries[0].episode_number, Some(25));
+        assert_eq!(alternate.entries[0].absolute_number, None);
+        assert_eq!(alternate.entries[1].name, "Salt Marsh Relay");
+    }
+
+    #[test]
+    fn series_mapper_defaults_episode_orders_when_smg_omits_them() {
+        let item: SeriesItem = serde_json::from_value(minimal_series_item_fields())
+            .expect("series item should decode");
+
+        let series = series_metadata_from_item(item);
+
+        assert!(series.episode_orders.is_empty());
     }
 
     #[tokio::test]
@@ -6102,6 +6159,62 @@ struct SeriesItem {
     /// for a series with no qualifying community numbering.
     #[serde(default)]
     anime_numbering_bridge: Option<AnimeNumberingBridgeItem>,
+    /// TVDB's published episode orders (`official`, `alternate`, `dvd`, …).
+    /// Only present when the caller asked for them, and absent entirely on an
+    /// SMG that predates the field; `metadataBulk` has no argument for them at
+    /// all, so bulk hydration never carries orders.
+    #[serde(default)]
+    episode_orders: Vec<EpisodeOrderSetItem>,
+}
+
+#[derive(Deserialize)]
+struct EpisodeOrderSetItem {
+    #[serde(default)]
+    season_type: String,
+    #[serde(default)]
+    entries: Vec<EpisodeOrderEntryItem>,
+}
+
+#[derive(Deserialize)]
+struct EpisodeOrderEntryItem {
+    #[serde(default)]
+    tvdb_id: i64,
+    #[serde(default)]
+    season_number: Option<i32>,
+    #[serde(default)]
+    episode_number: Option<i32>,
+    #[serde(default)]
+    absolute_number: Option<i32>,
+    #[serde(default)]
+    name: String,
+}
+
+/// The gateway's episode orders as the domain reads them. Orders with no
+/// usable entries are dropped: the bridge builder has nothing to join through.
+fn episode_orders_from_gateway(items: Vec<EpisodeOrderSetItem>) -> Vec<EpisodeOrderSet> {
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let season_type = item.season_type.trim().to_ascii_lowercase();
+            if season_type.is_empty() || item.entries.is_empty() {
+                return None;
+            }
+            Some(EpisodeOrderSet {
+                season_type,
+                entries: item
+                    .entries
+                    .into_iter()
+                    .map(|entry| EpisodeOrderEntry {
+                        tvdb_id: entry.tvdb_id,
+                        season_number: entry.season_number,
+                        episode_number: entry.episode_number,
+                        absolute_number: entry.absolute_number,
+                        name: entry.name,
+                    })
+                    .collect(),
+            })
+        })
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -6156,6 +6269,7 @@ fn anime_numbering_bridge_from_gateway(
         corroborating_order: item
             .corroborating_order
             .filter(|value| !value.trim().is_empty()),
+        source: scryer_domain::NumberingBridgeSource::AnimeCommunity,
         seasons: item
             .seasons
             .into_iter()
@@ -6541,6 +6655,9 @@ impl MetadataGateway for MetadataGatewayClient {
         let variables = json!({
             "id": tvdb_id.to_string(),
             "includeEpisodes": true,
+            // Episode orders are what a release-numbering bridge is built from,
+            // and single-series hydration is the only caller that builds one.
+            "includeEpisodeOrders": true,
             "language": language,
         });
 

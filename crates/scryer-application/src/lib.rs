@@ -28,6 +28,7 @@ pub use download_identity::{
     accepted_download_submission_identity, download_id_from_info_hash,
     download_submission_identity_is_empty, normalize_torrent_info_hash, observed_download_identity,
 };
+pub mod escalation_backoff;
 mod events;
 pub mod external_import;
 pub mod file_source_signature;
@@ -517,35 +518,49 @@ pub use null_repositories::{
 // ── Maintenance safety probes (RFC 137 §9.10, WP-G) ─────────────────────────
 pub use null_repositories::NullMediaServerPlaybackProbe;
 // ── Media-server watch signals (RFC 137 §7.3, WP-M) ─────────────────────────
+/// The RSS cadence knob lives beside the RSS lane it governs, but the upstream
+/// scheduler in the acquisition infrastructure crate has to honour the very same
+/// value — so it is resolved once, here, rather than parsed on both sides.
+pub use acquisition::rss::{
+    DEFAULT_RSS_TARGET_INTERVAL, MINIMUM_RSS_TARGET_INTERVAL, RSS_TARGET_INTERVAL_ENV,
+    parse_rss_target_interval, rss_sync_tick_period, rss_target_interval,
+};
+/// Per-client failure record and its repository port.
+///
+/// The struct is re-exported under a distinct name because
+/// `contracts::DownloadClientStatus` (the live health-probe result) already
+/// owns `DownloadClientStatus` at the crate root.
+pub use escalation_backoff::DownloadClientStatus as DownloadClientBackoffStatus;
 pub use null_repositories::{NullMediaServerSignalRepository, NullMediaServerSignalSource};
 pub use ports::{
     AcquisitionScopeStateRepository, AcquisitionStateRepository, ArchiveExtractorClient,
     ArchiveExtractorPluginProvider, BlocklistRepository, BuiltinDownloadClientConnectionTester,
     DatastoreInfo, DomainEventRepository, DownloadClient, DownloadClientConfigRepository,
     DownloadClientFeedbackScope, DownloadClientListing, DownloadClientPluginProvider,
-    DownloadClientSnapshotOutcome, DownloadQueueCommandRepository, DownloadRegistryRepository,
-    DownloadSubmissionRepository, EmbyApiKeyExchange, EmbyApiKeyExchangeCleanup, EmbyAvatar,
-    EmbyConnectAddressStatus, EmbyConnectIdentityVerification, EmbyConnectServer,
-    EmbyConnectUserType, EmbyServerIdentity, EmbyServerUser, ExternalIdentityVerifier,
-    ExternalImportMonitorSnapshotRepository, ExternalImportSetupInstanceApiKeyDraft,
-    ExternalImportSetupSecretDraft, ExternalImportSetupSecretDraftInput,
-    ExternalImportSetupSecretDraftRepository, ExternalImportSetupSecretDraftSaveResult,
-    ExternalImportSetupSecretDraftStatus, ExternalImportSetupSecretInstanceKind,
-    ExternalImportSetupSecretOverrideDraft, ExternalPluginWasm, FileImporter,
-    HousekeepingMediaFileRootRow, HousekeepingRepository, IdentityTrackedStateTarget,
-    ImageProxyCacheControl, ImageProxyCacheEntryRecord, ImageProxyCacheUsage, ImageProxyKind,
-    ImageProxyRegistration, ImageProxyRepository, ImageProxySourceRecord, ImportArtifactRepository,
-    ImportFileExecutionContext, ImportFilePermissions, ImportFileTransferProgress,
-    ImportFileTransferProgressSender, ImportRepository, IndexerAccountingContext,
-    IndexerArtifactResolver, IndexerCapsSnapshotRefresher, IndexerClient, IndexerConfigRepository,
-    IndexerDispatchGate, IndexerManagementClient, IndexerPluginProvider,
-    IndexerSearchCandidateWrite, IndexerSearchLearningContext, IndexerSearchLearningKey,
-    IndexerSearchLearningRecord, IndexerSearchLearningRepository, IndexerSearchRunWrite,
-    IndexerStatsTracker, IndexerSystemBackoff, JellyfinServerUser, JobRunRepository,
-    LibraryProbeRepository, LibraryRepository, LibraryScanUnmatchedItemRepository,
-    LifecycleActionRunRepository, LifecycleClaimRepository, LocationOperationProgress,
-    LocationOperationRepository, LocationOwnershipClaim, LocationOwnershipOutcome,
-    LogicalBackupExporter, MaintenanceActionJobReceiptClaim, MaintenanceActionJobReceiptTransition,
+    DownloadClientSnapshotOutcome, DownloadClientStatusRepository, DownloadQueueCommandRepository,
+    DownloadRegistryRepository, DownloadSubmissionRepository, EmbyApiKeyExchange,
+    EmbyApiKeyExchangeCleanup, EmbyAvatar, EmbyConnectAddressStatus,
+    EmbyConnectIdentityVerification, EmbyConnectServer, EmbyConnectUserType, EmbyServerIdentity,
+    EmbyServerUser, ExternalIdentityVerifier, ExternalImportMonitorSnapshotRepository,
+    ExternalImportSetupInstanceApiKeyDraft, ExternalImportSetupSecretDraft,
+    ExternalImportSetupSecretDraftInput, ExternalImportSetupSecretDraftRepository,
+    ExternalImportSetupSecretDraftSaveResult, ExternalImportSetupSecretDraftStatus,
+    ExternalImportSetupSecretInstanceKind, ExternalImportSetupSecretOverrideDraft,
+    ExternalPluginWasm, FileImporter, HousekeepingMediaFileRootRow, HousekeepingRepository,
+    IdentityTrackedStateTarget, ImageProxyCacheControl, ImageProxyCacheEntryRecord,
+    ImageProxyCacheUsage, ImageProxyKind, ImageProxyRegistration, ImageProxyRepository,
+    ImageProxySourceRecord, ImportArtifactRepository, ImportFileExecutionContext,
+    ImportFilePermissions, ImportFileTransferProgress, ImportFileTransferProgressSender,
+    ImportRepository, IndexerAccountingContext, IndexerArtifactResolver,
+    IndexerCapsSnapshotRefresher, IndexerClient, IndexerConfigRepository, IndexerDispatchGate,
+    IndexerManagementClient, IndexerPluginProvider, IndexerSearchCandidateWrite,
+    IndexerSearchLearningContext, IndexerSearchLearningKey, IndexerSearchLearningRecord,
+    IndexerSearchLearningRepository, IndexerSearchRunWrite, IndexerStatsTracker,
+    IndexerSystemBackoff, JellyfinServerUser, JobRunRepository, LibraryProbeRepository,
+    LibraryRepository, LibraryScanUnmatchedItemRepository, LifecycleActionRunRepository,
+    LifecycleClaimRepository, LocationOperationProgress, LocationOperationRepository,
+    LocationOwnershipClaim, LocationOwnershipOutcome, LogicalBackupExporter,
+    MaintenanceActionJobReceiptClaim, MaintenanceActionJobReceiptTransition,
     MaintenanceActionStepCandidateKey, MaintenanceActionStepClaim, MaintenanceActionStepRepository,
     MaintenanceCandidateQuery, MaintenanceCandidateRepository, MaintenanceEvaluationRepository,
     MaintenanceEvaluationRunRepository, MaintenanceExclusionRepository,
@@ -694,21 +709,21 @@ pub use types::{
     ReleaseDownloadFailureSignature, ResolvePendingImportResult, RuntimePathStyle,
     ScopedExternalId, SortDirection, SystemHealth, TitleAcquisitionDiagnostics, TitleAward,
     TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogFilterCounts,
-    TitleCatalogFilterOptions, TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey,
-    TitleCatalogTagFilterOption, TitleCredit, TitleEpisodeProgressSummary, TitleExternalRating,
-    TitleImageBlob, TitleImageKind, TitleImageSourceResult, TitleImageSyncTask,
-    TitleImageVariantRecord, TitleImageVariantSpec, TitleMediaFile, TitleMediaSizeSummary,
-    TitleMetadataUpdate, TitleMovieMediaSummary, TitleQualitySummary, TitleRatingSummary,
-    TitleReleaseBlocklistEntry, TitleTagDefinitionSummary, TitleTagDefinitionUpdate,
-    TitleTagMembershipCounts, TitleTagRewriteCounts, TotpCredentialRecord,
-    TotpEnrollmentChallengeRecord, TotpEnrollmentComplete, TotpEnrollmentStart,
-    TotpFailedAttemptRecord, TotpRecoveryCodeRecord, TotpStatus, UiDateTimeFormat,
-    UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet, UiSettingsUpdate, UiSidebarMode,
-    UiTableColumnSetting, UiTableViewMode, UiTheme, UpdateRecycleBinSettings,
-    UpdateVerificationSettings, UserAuthFactorStatus, UserLoginSnapshot, VerificationSettings,
-    VerifiedLocalCredentials, WantedKind, WantedStatusCount, WebauthnChallengePurpose,
-    WebauthnChallengeRecord, WebauthnChallengeStart, WebauthnChallengeType,
-    WebauthnCredentialRecord,
+    TitleCatalogFilterOptions, TitleCatalogProfileNames, TitleCatalogResult, TitleCatalogSort,
+    TitleCatalogSortKey, TitleCatalogTagFilterOption, TitleCredit, TitleEpisodeProgressSummary,
+    TitleExternalRating, TitleImageBlob, TitleImageKind, TitleImageSourceResult,
+    TitleImageSyncTask, TitleImageVariantRecord, TitleImageVariantSpec, TitleMediaFile,
+    TitleMediaSizeSummary, TitleMetadataUpdate, TitleMovieMediaSummary, TitleQualitySummary,
+    TitleRatingSummary, TitleReleaseBlocklistEntry, TitleTagDefinitionSummary,
+    TitleTagDefinitionUpdate, TitleTagMembershipCounts, TitleTagRewriteCounts,
+    TotpCredentialRecord, TotpEnrollmentChallengeRecord, TotpEnrollmentComplete,
+    TotpEnrollmentStart, TotpFailedAttemptRecord, TotpRecoveryCodeRecord, TotpStatus,
+    UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings, UiSettingsFacet,
+    UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
+    UpdateRecycleBinSettings, UpdateVerificationSettings, UserAuthFactorStatus, UserLoginSnapshot,
+    VerificationSettings, VerifiedLocalCredentials, WantedKind, WantedStatusCount,
+    WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeStart,
+    WebauthnChallengeType, WebauthnCredentialRecord,
 };
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,
@@ -1011,8 +1026,9 @@ impl AppError {
     }
 
     /// The typed retryable download-submission failures: the submitter was
-    /// unavailable, or every prioritized client was tried and failed. Text is
-    /// never consulted — renaming, prefixing, or wrapping a message cannot
+    /// unavailable, an earlier download on the scope is awaiting lifecycle
+    /// reconciliation, or every prioritized client was tried and failed. Text
+    /// is never consulted — renaming, prefixing, or wrapping a message cannot
     /// change scheduling.
     pub fn is_retryable_download_submit_failure(&self) -> bool {
         matches!(

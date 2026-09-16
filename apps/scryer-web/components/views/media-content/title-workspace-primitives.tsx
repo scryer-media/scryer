@@ -1,10 +1,11 @@
 import * as React from "react";
-import { Check, Loader2, X } from "lucide-react";
+import { Check, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { ActionTooltip } from "@/components/ui/tooltip";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export function TitleWorkspaceHero({
   backgroundUrl,
@@ -129,7 +130,7 @@ export function TitleWorkspaceActionButton({
       onClick={onClick}
     >
       {loading ? (
-        <Loader2 className="size-6 animate-spin" />
+        <LoadingMark className="size-6" />
       ) : (
         <Icon className="size-6" />
       )}

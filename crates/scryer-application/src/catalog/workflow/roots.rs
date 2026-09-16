@@ -34,6 +34,31 @@ pub(crate) fn library_path_is_under_root(path: &str, root: &str) -> bool {
 
     normalized_path == normalized_root || normalized_path.starts_with(&descendant_prefix)
 }
+/// The folder a title records as its own, when it records one.
+fn title_owned_folder_path(title: &scryer_domain::Title) -> Option<String> {
+    title
+        .folder_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
+/// The id of `library`'s configured root that contains `path`, most specific
+/// first. `None` when `path` is under none of them.
+pub(crate) fn library_root_id_containing_path(library: &Library, path: &str) -> Option<String> {
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
+    library
+        .roots
+        .iter()
+        .filter(|root| library_path_is_under_root(path, &root.path))
+        .max_by_key(|root| normalize_library_root_path(&root.path).len())
+        .map(|root| root.id.clone())
+}
+
 pub(crate) fn library_root_paths_overlap(left: &str, right: &str) -> bool {
     library_path_is_under_root(left, right) || library_path_is_under_root(right, left)
 }
@@ -158,6 +183,155 @@ impl AppUseCase {
                 })?,
         };
         Ok(root.id.clone())
+    }
+
+    /// The configured root of `library_id` that contains `path`.
+    ///
+    /// This is the same path-containment rule the 0.19 backfill migration used
+    /// to assign root ids, and it is the invariant the library scan and the
+    /// renamer maintain: a title's root id names the root its files are
+    /// actually under. The most specific (longest) matching root wins, so
+    /// nested roots resolve to the inner one. `None` means the path lies under
+    /// no configured root of that library.
+    pub(crate) async fn library_root_folder_id_containing_path(
+        &self,
+        library_id: &str,
+        path: &str,
+    ) -> AppResult<Option<String>> {
+        let path = path.trim();
+        if path.is_empty() {
+            return Ok(None);
+        }
+        let Some(library) = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(library_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        Ok(library_root_id_containing_path(&library, path))
+    }
+
+    /// The library a scan pipeline run walks, loaded once so the per-title root
+    /// heal (#224) can take its equal-root early return without a query.
+    /// A missing library is not an error here: the heal simply falls back to
+    /// loading per title.
+    pub(crate) async fn library_by_id_for_scan_root_heal(
+        &self,
+        library_id: &str,
+    ) -> AppResult<Option<Library>> {
+        self.services.catalog.libraries.get_by_id(library_id).await
+    }
+
+    /// Point `title` at the configured root that actually contains
+    /// `folder_path`, returning whether the stored root id changed.
+    ///
+    /// The heal is evidence-based rather than a user reassignment — the files
+    /// *are* under that root — so it writes the same field a completed root
+    /// move writes (`update_metadata`'s `root_folder_id`) instead of moving
+    /// anything. A title an in-flight location operation owns is left alone:
+    /// that operation's plan was built against the root id as it stands.
+    pub(crate) async fn heal_title_root_folder_id_for_folder(
+        &self,
+        entry: &'static crate::location::ownership_guard::GuardedEntry,
+        title: &mut scryer_domain::Title,
+        folder_path: &str,
+    ) -> AppResult<bool> {
+        let Some(library) = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&title.library_id)
+            .await?
+        else {
+            return Ok(false);
+        };
+        self.heal_title_root_folder_id_in_library(entry, &library, title, folder_path)
+            .await
+    }
+
+    /// [`Self::heal_title_root_folder_id_for_folder`] against a library the
+    /// caller already holds.
+    ///
+    /// The library scan heals every title it touches, so it loads the library
+    /// once per pipeline run and calls this: a title whose root id is already
+    /// correct — the overwhelming majority — then costs no query at all.
+    pub(crate) async fn heal_title_root_folder_id_in_library(
+        &self,
+        entry: &'static crate::location::ownership_guard::GuardedEntry,
+        library: &Library,
+        title: &mut scryer_domain::Title,
+        folder_path: &str,
+    ) -> AppResult<bool> {
+        let Some(root_folder_id) = library_root_id_containing_path(library, folder_path) else {
+            tracing::debug!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                "title folder lies under no configured root of its library; leaving its root id alone"
+            );
+            return Ok(false);
+        };
+        if root_folder_id == title.root_folder_id {
+            return Ok(false);
+        }
+        if let Some(denied) = self
+            .location_ownership_denial_for_title(entry, &title.id)
+            .await?
+        {
+            tracing::info!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                reason = %denied.message(),
+                "skipping title root-folder heal while a location operation owns the title"
+            );
+            return Ok(false);
+        }
+        self.services
+            .catalog
+            .titles
+            .update_metadata(&title.id, None, None, None, Some(root_folder_id.clone()))
+            .await?;
+        tracing::info!(
+            title_id = %title.id,
+            folder_path = %folder_path,
+            previous_root_folder_id = %title.root_folder_id,
+            root_folder_id = %root_folder_id,
+            "healed title root folder id to the configured root containing its folder"
+        );
+        title.root_folder_id = root_folder_id;
+        Ok(true)
+    }
+
+    /// [`Self::heal_title_root_folder_id_for_folder`] against the folder the
+    /// title already records as its own. A title with no folder has no
+    /// evidence to heal from.
+    pub(crate) async fn heal_title_root_folder_id_for_owned_folder(
+        &self,
+        entry: &'static crate::location::ownership_guard::GuardedEntry,
+        title: &mut scryer_domain::Title,
+    ) -> AppResult<bool> {
+        let Some(folder_path) = title_owned_folder_path(title) else {
+            return Ok(false);
+        };
+        self.heal_title_root_folder_id_for_folder(entry, title, &folder_path)
+            .await
+    }
+
+    /// [`Self::heal_title_root_folder_id_for_owned_folder`] against a library
+    /// the caller already holds.
+    pub(crate) async fn heal_title_root_folder_id_for_owned_folder_in_library(
+        &self,
+        entry: &'static crate::location::ownership_guard::GuardedEntry,
+        library: &Library,
+        title: &mut scryer_domain::Title,
+    ) -> AppResult<bool> {
+        let Some(folder_path) = title_owned_folder_path(title) else {
+            return Ok(false);
+        };
+        self.heal_title_root_folder_id_in_library(entry, library, title, &folder_path)
+            .await
     }
 
     pub(crate) async fn title_root_folder_path_override(

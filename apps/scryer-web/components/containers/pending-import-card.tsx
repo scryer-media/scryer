@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronDown, Loader2, Search } from "lucide-react";
+import { ChevronDown, Search } from "lucide-react";
 import { Link } from "react-router";
 
 import { TitlePoster } from "@/components/title-poster";
@@ -14,6 +14,7 @@ import type {
   PendingImportBindingPreview,
   PendingImportItem,
 } from "@/lib/types";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type MetadataSearchResult = {
   tvdbId: string;
@@ -202,7 +203,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
               <>
                 {bindingLoading ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <LoadingMark className="h-4 w-4" />
                     {t("pendingImports.loadingEpisodeBindings")}
                   </div>
                 ) : null}
@@ -383,7 +384,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                         disabled={isBusy || selectedEpisodeIds.length === 0}
                         onClick={() => void onBind()}
                       >
-                        {isResolving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                        {isResolving ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
                         {t("pendingImports.bindSelectedEpisodes")}
                       </Button>
                     </div>
@@ -448,7 +449,7 @@ export const PendingImportCard = React.memo(function PendingImportCard({
                     className="flex items-center gap-2 text-sm text-muted-foreground"
                     data-ui="pending-import-search-pending"
                   >
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <LoadingMark className="h-4 w-4" />
                     {t("pendingImports.searching")}
                   </div>
                 ) : null}

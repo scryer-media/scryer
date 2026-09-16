@@ -1530,7 +1530,7 @@ async fn get_anime_numbering_bridge_query(
 ) -> AppResult<Option<AnimeNumberingBridge>> {
     let row = SqlRuntime::fetch_optional(
         SqlExec::Target(target),
-        "SELECT generated_on, corroborating_order, seasons_json \
+        "SELECT generated_on, corroborating_order, source, seasons_json \
          FROM title_anime_numbering_bridges WHERE title_id = {}",
         &[SqlArg::Text(title_id.to_string())],
     )
@@ -1561,6 +1561,13 @@ async fn get_anime_numbering_bridge_query(
         corroborating_order: row
             .opt_text("corroborating_order")?
             .filter(|value| !value.trim().is_empty()),
+        // An unreadable or unknown source reads back as the pre-0240 meaning,
+        // which keeps a stale row on exactly today's anime behaviour.
+        source: row
+            .opt_text("source")?
+            .as_deref()
+            .map(scryer_domain::NumberingBridgeSource::from_str_or_default)
+            .unwrap_or_default(),
         seasons,
     }))
 }
@@ -1583,12 +1590,13 @@ async fn replace_anime_numbering_bridge_tx(
     })?;
     tx.execute(
         "INSERT INTO title_anime_numbering_bridges \
-         (title_id, generated_on, corroborating_order, seasons_json, updated_at) \
-         VALUES ({}, {}, {}, {}, {})",
+         (title_id, generated_on, corroborating_order, source, seasons_json, updated_at) \
+         VALUES ({}, {}, {}, {}, {}, {})",
         &[
             SqlArg::Text(title_id.to_string()),
             SqlArg::Text(bridge.generated_on.clone()),
             SqlArg::OptText(bridge.corroborating_order.clone()),
+            SqlArg::Text(bridge.source.as_str().to_string()),
             SqlArg::Text(seasons_json),
             SqlArg::Timestamp(Utc::now()),
         ],
@@ -2296,6 +2304,107 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![3]
         );
+    }
+
+    /// The bridge table as migrations 0209 + 0240 leave it.
+    async fn numbering_bridge_pool() -> sqlx::SqlitePool {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open SQLite pool");
+        sqlx::query(
+            "CREATE TABLE title_anime_numbering_bridges ( \
+                 title_id TEXT PRIMARY KEY, \
+                 generated_on TEXT NOT NULL, \
+                 corroborating_order TEXT, \
+                 seasons_json TEXT NOT NULL DEFAULT '[]', \
+                 updated_at TEXT NOT NULL, \
+                 source TEXT NOT NULL DEFAULT 'anime_community')",
+        )
+        .execute(&pool)
+        .await
+        .expect("create bridge table");
+        pool
+    }
+
+    fn alternate_bridge_fixture() -> scryer_domain::AnimeNumberingBridge {
+        scryer_domain::AnimeNumberingBridge {
+            generated_on: "alternate".to_string(),
+            corroborating_order: Some("alternate".to_string()),
+            source: scryer_domain::NumberingBridgeSource::TvdbAlternate,
+            seasons: vec![scryer_domain::AnimeCommunitySeason {
+                index: 1,
+                anidb_id: None,
+                anilist_id: None,
+                mal_id: None,
+                titles: Vec::new(),
+                ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                    community_episode_start: 25,
+                    community_episode_end: Some(29),
+                    tvdb_season: 1,
+                    tvdb_episode_start: 24,
+                    tvdb_episode_end: Some(28),
+                }],
+                absolute_start: None,
+                episode_count: None,
+            }],
+        }
+    }
+
+    #[tokio::test]
+    async fn a_numbering_bridge_round_trips_its_source() {
+        let pool = numbering_bridge_pool().await;
+        let stored = alternate_bridge_fixture();
+        let mut tx = super::SqlTx::Sqlite(pool.begin().await.expect("begin"));
+        super::replace_anime_numbering_bridge_tx(&mut tx, "title-1", Some(&stored))
+            .await
+            .expect("write bridge");
+        let super::SqlTx::Sqlite(tx) = tx else {
+            unreachable!("sqlite transaction")
+        };
+        tx.commit().await.expect("commit");
+
+        let read = super::get_anime_numbering_bridge_query(SqlTarget::Sqlite(&pool), "title-1")
+            .await
+            .expect("read bridge")
+            .expect("bridge present");
+        assert_eq!(read, stored);
+        assert!(read.source.is_tvdb_alternate_order());
+    }
+
+    /// A row written before 0240 carries the column default, and has to read
+    /// back as the anime community bridge it was.
+    #[tokio::test]
+    async fn a_pre_0240_row_reads_back_as_an_anime_community_bridge() {
+        let pool = numbering_bridge_pool().await;
+        sqlx::query(
+            "INSERT INTO title_anime_numbering_bridges \
+             (title_id, generated_on, corroborating_order, seasons_json, updated_at) \
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind("title-legacy")
+        .bind("2026-08-30")
+        .bind("dvd")
+        .bind(
+            r#"[{"index":1,"titles":["Cour One"],"ranges":[{"community_episode_start":1,"community_episode_end":14,"tvdb_season":1,"tvdb_episode_start":1,"tvdb_episode_end":14}]}]"#,
+        )
+        .bind("2026-08-30T00:00:00Z")
+        .execute(&pool)
+        .await
+        .expect("insert legacy row");
+
+        let read =
+            super::get_anime_numbering_bridge_query(SqlTarget::Sqlite(&pool), "title-legacy")
+                .await
+                .expect("read bridge")
+                .expect("bridge present");
+        assert_eq!(
+            read.source,
+            scryer_domain::NumberingBridgeSource::AnimeCommunity
+        );
+        assert_eq!(read.seasons.len(), 1);
+        assert_eq!(read.seasons[0].titles, vec!["Cour One".to_string()]);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Check, ChevronRight, Loader2, Search, X } from "lucide-react";
+import { Check, ChevronRight, Search, X } from "lucide-react";
 import { DownloadClientConfigField } from "@/components/common/download-client-config-field";
 import { PluginVisualLabel } from "@/components/common/plugin-visual";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ import {
   splitAdvancedConfigFields,
 } from "@/lib/utils/provider-config-fields";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 interface ProviderOption {
   value: string;
@@ -256,7 +257,7 @@ export function SetupIndexerView({
             disabled={!canTest || testing || saving}
           >
             {testing ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <LoadingMark className="mr-2 h-4 w-4" />
             ) : null}
             {t("label.testConnection")}
           </Button>

@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { Search, ArrowDownToLine, Loader2, Hash, CircleAlert } from "lucide-react";
+import { Search, ArrowDownToLine, Hash, CircleAlert } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -39,6 +39,7 @@ import type {
 } from "@/lib/types/subtitles";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type Props = {
   open: boolean;
@@ -337,7 +338,7 @@ export function SubtitleSearchModal({
                 disabled={searching || !language.trim() || !canSearchSubtitles}
               >
                 {searching ? (
-                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-1 h-4 w-4" />
                 ) : (
                   <Search className="mr-1 h-4 w-4" />
                 )}
@@ -476,7 +477,7 @@ export function SubtitleSearchModal({
                           onClick={() => void handleDownload(r)}
                         >
                           {downloadingId === r.providerFileId ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <LoadingMark className="h-4 w-4" />
                           ) : (
                             <ArrowDownToLine className="h-4 w-4" />
                           )}

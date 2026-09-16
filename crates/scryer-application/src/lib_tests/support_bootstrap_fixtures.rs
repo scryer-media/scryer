@@ -12,7 +12,7 @@ use scryer_runtime_info::BinaryLane;
 use tokio::sync::Mutex;
 
 #[derive(Default)]
-struct FixtureDownloadRegistry {
+pub(super) struct FixtureDownloadRegistry {
     rows: Mutex<HashMap<ClientJobLocator, scryer_domain::download_identity::DownloadId>>,
 }
 

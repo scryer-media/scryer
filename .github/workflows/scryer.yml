@@ -1367,7 +1367,7 @@ jobs:
   macos-build:
     name: macos-${{ matrix.arch }}-${{ matrix.variant }}
     runs-on: ${{ github.event_name == 'pull_request' && matrix.runner || matrix.release_runner }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     needs: [changes, web, builtins-provenance, release-trust]
     if: always()
     strategy:
@@ -1691,7 +1691,7 @@ jobs:
   windows-build:
     name: windows-${{ matrix.arch }}
     runs-on: ${{ github.event_name == 'pull_request' && matrix.runner || matrix.release_runner }}
-    timeout-minutes: 90
+    timeout-minutes: 120
     needs: [changes, web, builtins-provenance, release-trust]
     if: always()
     strategy:

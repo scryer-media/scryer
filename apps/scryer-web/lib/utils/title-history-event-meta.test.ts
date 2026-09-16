@@ -5,6 +5,7 @@ import {
   getTitleHistoryEventLabel,
   getTitleHistoryEventMeta,
   TITLE_HISTORY_FILTERS,
+  WANTED_HISTORY_FILTERS,
 } from "../../components/common/title-history-event-meta.ts";
 import de from "../i18n/locales/de.ts";
 import en from "../i18n/locales/en.ts";
@@ -28,6 +29,23 @@ test("download ignored is a first-class history event, not the unknown fallback"
   assert.ok(
     (TITLE_HISTORY_FILTERS as readonly string[]).includes("download_ignored"),
     "the filter chip has to exist, or the fixed store filter is unreachable",
+  );
+});
+
+test("Activity History lists ignored downloads by default", () => {
+  // The Activity History page sends this set as its event-type filter whenever
+  // no chip is active, so an event missing from it is invisible there even
+  // though the product recorded it. An ignored download is the only durable
+  // trace of a job that left the queue without importing.
+  assert.ok(
+    (WANTED_HISTORY_FILTERS as readonly string[]).includes("download_ignored"),
+    "download_ignored must be in the default Activity History query",
+  );
+  assert.ok(
+    (WANTED_HISTORY_FILTERS as readonly string[]).every(event =>
+      (TITLE_HISTORY_FILTERS as readonly string[]).includes(event),
+    ),
+    "every wanted-history filter must also be a known title-history event",
   );
 });
 

@@ -12,7 +12,6 @@ import {
   CheckCheck,
   FolderSymlink,
   Library,
-  Loader2,
   Plus,
   RotateCw,
   Trash2,
@@ -47,6 +46,7 @@ import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import { TextActionButton } from "@/components/ui/text-action-button";
 import { selectorToken } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 interface SetupImportLibrariesViewProps {
   wizard: UseExternalImportSetupReturn;
@@ -438,11 +438,7 @@ export default function SetupImportLibrariesView({
                 fontSize: 12,
               }}
             >
-              <Loader2
-                size={16}
-                style={{ flex: "none" }}
-                className="animate-spin"
-              />
+              <LoadingMark className="size-4" />
               {t("setup.previewLoading")}
             </div>
           ) : roots.length > 0 && trayRoots.length === 0 ? (
@@ -566,6 +562,12 @@ export default function SetupImportLibrariesView({
                 {editing ? (
                   <input
                     autoFocus
+                    autoComplete="off"
+                    data-1p-ignore="true"
+                    data-lpignore="true"
+                    data-bwignore="true"
+                    data-form-type="other"
+                    data-protonpass-ignore="true"
                     value={editLibVal}
                     onChange={(e) => setEditLibVal(e.target.value)}
                     onFocus={(e) => e.target.select()}

@@ -912,11 +912,17 @@ pub(crate) async fn run_claimed_download_cleanup(
         {
             return Err(AppError::Validation("cleanup locator is reused or identity is ambiguous".into()));
         }
+        // Derived with the poller's own function, from the poller's own input.
+        // A rebuilt entry that lands in an empty cache after a restart is the
+        // entry the next poll will find by canonical id, and the prune that
+        // follows checks ids, not canonical ids. Deriving the id any other way
+        // (the short `"{client_id}:{item_id}"` form this used to build) left a
+        // restored entry unnamed by that poll's `seen_ids`, and the
+        // authoritative-client prune has no grace window: a torrent still held
+        // for seeding was dropped from the queue and ignored.
+        let tracked_id = crate::tracked_downloads::tracked_download_id_for_item(&item);
         let mut tracked = crate::tracked_downloads::TrackedDownloadService::build_new_tracked_download(
-            app, record.download_id,
-            crate::tracked_downloads::tracked_download_id(
-                Some(&record.client_id), &record.client_type, &record.item_id,
-            ), item,
+            app, record.download_id, tracked_id, item,
         ).await;
         tracked.title_id = record.title_id.clone();
         tracked.facet = record.facet.clone();

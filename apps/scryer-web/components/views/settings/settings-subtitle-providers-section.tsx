@@ -2,7 +2,6 @@ import * as React from "react";
 import {
   CircleAlert,
   Edit,
-  Loader2,
   Plus,
   PlugZap,
   Power,
@@ -43,6 +42,7 @@ import type {
 } from "@/lib/types";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type Props = {
   editingProviderId: string | null;
@@ -619,7 +619,7 @@ export function SettingsSubtitleProvidersSection({
                   : t("settings.subtitleProviderCreate")}
               </h2>
               {mutatingProviderId ? (
-                <Loader2 className={`h-4 w-4 animate-spin ${PROVIDER_MUTED_TEXT_CLASS}`} />
+                <LoadingMark className="h-4 w-4" />
               ) : null}
             </div>
 
@@ -767,7 +767,7 @@ export function SettingsSubtitleProvidersSection({
                 disabled={isTestingConnection || !normalizedProviderType}
               >
                 {isTestingConnection ? (
-                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-1 h-4 w-4" />
                 ) : null}
                 {t("label.testConnection")}
               </Button>

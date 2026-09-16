@@ -281,6 +281,10 @@ pub(super) async fn run_library_scan_pipeline(
             library_id: library_id.to_string(),
             library_path: library_path.to_string(),
             session_id: session_id.to_string(),
+            library: app
+                .library_by_id_for_scan_root_heal(library_id)
+                .await
+                .unwrap_or(None),
             metadata_language: app.metadata_language().await,
             kind,
         },
@@ -830,6 +834,7 @@ pub(super) async fn run_library_scan_pipeline(
                 }
             }
             reconcile_library_scan_unmatched_items(app, facet, library_path, &seen_paths).await?;
+            reconcile_title_scan_unmatched_items(app, facet, library_id, library_path).await?;
             coordinator.publish_progress().await;
         }
 
@@ -2377,6 +2382,9 @@ struct ScanMatchWorkerContext {
     library_id: String,
     library_path: String,
     session_id: String,
+    /// Loaded once per pipeline run so the per-title root heal (#224) costs no
+    /// query when a title's root id is already correct.
+    library: Option<scryer_domain::Library>,
     metadata_language: String,
     kind: LibraryScanPipelineKind,
 }
@@ -2742,6 +2750,7 @@ async fn intake_candidate(
     let unresolved = match candidate {
         ScanPipelineCandidate::Movie(movie) => process_movie_full_scan_candidate(
             &ctx.app,
+            ctx.library.as_ref(),
             &ctx.actor,
             &ctx.facet,
             &ctx.library_id,
@@ -2762,6 +2771,7 @@ async fn intake_candidate(
         .map(|candidate| candidate.map(|c| ScanPipelineCandidate::Movie(Box::new(c)))),
         ScanPipelineCandidate::Series(series) => process_series_full_scan_candidate(
             &ctx.app,
+            ctx.library.as_ref(),
             &ctx.actor,
             &ctx.facet,
             &ctx.library_id,
@@ -2971,6 +2981,7 @@ async fn resolve_ready_candidate_burst(
             ScanPipelineCandidate::Movie(movie) => {
                 process_resolved_movie_full_scan_candidate(
                     &ctx.app,
+                    ctx.library.as_ref(),
                     &ctx.actor,
                     &ctx.facet,
                     &ctx.library_id,
@@ -2994,6 +3005,7 @@ async fn resolve_ready_candidate_burst(
             ScanPipelineCandidate::Series(series) => {
                 process_resolved_series_full_scan_candidate(
                     &ctx.app,
+                    ctx.library.as_ref(),
                     &ctx.actor,
                     &ctx.facet,
                     &ctx.library_id,

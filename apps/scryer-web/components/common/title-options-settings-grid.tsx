@@ -6,6 +6,7 @@ import {
   FolderInput,
   Folders,
   Languages,
+  ListOrdered,
   Popcorn,
   RotateCcw,
   SlidersVertical,
@@ -52,6 +53,8 @@ export type InlineTitleSettingsTitle = {
   inheritsRequiredAudioLanguages?: boolean;
   fillerPolicy?: string | null;
   recapPolicy?: string | null;
+  /** Which episode numbering this title's releases are read in. */
+  releaseNumbering?: string | null;
   effectiveFillerPolicy?: string | null;
   effectiveRecapPolicy?: string | null;
 };
@@ -161,6 +164,7 @@ export function TitleOptionsSettingsGrid({
     title.effectiveMetadataLanguage?.trim() || title.metadataLanguage?.trim() || "eng";
   const currentFillerPolicy = title.fillerPolicy?.trim() || INHERIT_VALUE;
   const currentRecapPolicy = title.recapPolicy?.trim() || INHERIT_VALUE;
+  const currentReleaseNumbering = title.releaseNumbering?.trim() || "AUTO";
   const sortedRootFolders = React.useMemo(
     () =>
       [...rootFolders].sort((left, right) => {
@@ -234,6 +238,18 @@ export function TitleOptionsSettingsGrid({
     title.effectiveFillerPolicy === "SKIP_FILLER"
       ? t("settings.fillerPolicySkipFiller")
       : t("settings.fillerPolicyDownloadAll");
+  const releaseNumberingLabel = (value: string) => {
+    switch (value) {
+      case "OFFICIAL":
+        return t("settings.releaseNumberingOfficial");
+      case "ALTERNATE":
+        return t("settings.releaseNumberingAlternate");
+      case "DVD":
+        return t("settings.releaseNumberingDvd");
+      default:
+        return t("settings.releaseNumberingAuto");
+    }
+  };
   const effectiveRecapPolicy =
     title.effectiveRecapPolicy === "SKIP_RECAP"
       ? t("settings.recapPolicySkipRecap")
@@ -416,6 +432,35 @@ export function TitleOptionsSettingsGrid({
               </SelectContent>
             </Select>
           </SettingsRow>
+
+          {title.facet === "MOVIE" ? null : (
+            <SettingsRow
+              icon={ListOrdered}
+              label={t("settings.releaseNumberingLabel")}
+              effective={releaseNumberingLabel(currentReleaseNumbering)}
+            >
+              <Select
+                value={currentReleaseNumbering}
+                onValueChange={(value) =>
+                  void saveTitleOptions({ releaseNumbering: value })
+                }
+                disabled={saving}
+              >
+                <SelectTrigger
+                  id={`${idPrefix}-release-numbering`}
+                  className="ml-auto h-9 w-[70%]"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="AUTO">{t("settings.releaseNumberingAuto")}</SelectItem>
+                  <SelectItem value="OFFICIAL">{t("settings.releaseNumberingOfficial")}</SelectItem>
+                  <SelectItem value="ALTERNATE">{t("settings.releaseNumberingAlternate")}</SelectItem>
+                  <SelectItem value="DVD">{t("settings.releaseNumberingDvd")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsRow>
+          )}
 
           {title.facet === "ANIME" ? (
             <>

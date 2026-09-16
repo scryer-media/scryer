@@ -2185,9 +2185,12 @@ async fn graphql_manual_import_schema_exposes_candidate_only_contract() {
     assert_eq!(field_names("queueInput"), ["selectionId", "files"]);
     assert_eq!(
         field_names("mappingInput"),
+        // `episodeId` is deprecated in favour of `episodeIds` (a file can hold
+        // more than one episode) and introspection hides deprecated input
+        // fields by default; it is still accepted.
         [
             "candidateId",
-            "episodeId",
+            "episodeIds",
             "seriesMovieLinkId",
             "discSelection"
         ]
@@ -2206,6 +2209,7 @@ async fn graphql_manual_import_schema_exposes_candidate_only_contract() {
     assert!(field_names("selectionPayload").contains(&"archiveExtractionNeeded"));
     let file_fields = field_names("filePayload");
     assert!(file_fields.contains(&"candidateId"));
+    assert!(file_fields.contains(&"suggestedEpisodeIds"));
     assert!(!file_fields.contains(&"filePath"));
 
     let missing_client = schema_exec(

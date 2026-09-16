@@ -742,14 +742,13 @@ mod windows {
                 .join("ScryerMedia")
                 .join("Scryer")
                 .join("logs");
-            if std::fs::create_dir_all(&log_dir).is_ok() {
-                if let Ok(mut log) = std::fs::OpenOptions::new()
+            if std::fs::create_dir_all(&log_dir).is_ok()
+                && let Ok(mut log) = std::fs::OpenOptions::new()
                     .create(true)
                     .append(true)
                     .open(log_dir.join("tray.log"))
-                {
-                    let _ = writeln!(log, "{title}: {message}");
-                }
+            {
+                let _ = writeln!(log, "{title}: {message}");
             }
         }
         let title = wide(title);

@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { toast } from "sonner";
 import { useClient } from "urql";
 
 import {
   browsePathQuery,
+  librariesQuery,
   qualityProfilesInitQuery,
   setupStatusQuery,
   setupWizardProviderTypesInitQuery,
 } from "@/lib/graphql/queries";
 import {
   saveQualityProfileSettingsMutation,
-  updateLibraryPathsMutation,
+  updateLibraryMutation,
   completeSetupMutation,
 } from "@/lib/graphql/mutations";
 import { buildDownloadClientTypeOptions } from "@/lib/utils/download-clients";
@@ -21,11 +22,23 @@ import {
   type SetupIndexerProviderOption,
 } from "@/lib/hooks/use-indexer-setup";
 import { usePluginManagement } from "@/lib/hooks/use-plugin-management";
+import { useSetupRulePacks } from "@/lib/hooks/use-setup-rule-packs";
 import { localPathStyleFromRuntimeValue } from "@/lib/utils/local-path-style";
 import {
+  addSetupRoot,
+  bootstrapSetupMediaRoots,
+  plannedSetupRootSaves,
+  removeSetupRoot,
+  replaceSetupRoot,
   runAdvisorySetupMediaPathSave,
-  type InvalidSetupMediaPathFields,
+  SETUP_MEDIA_PATH_LABEL_KEYS,
+  setDefaultSetupRoot,
+  setupMediaLibraries,
+  setupMediaRootsFromLibraries,
+  type SetupMediaLibraries,
   type SetupMediaPathField,
+  type SetupMediaRoots,
+  type SetupRoot,
 } from "@/lib/utils/setup-media-paths";
 import {
   qualityProfileSettingsToEntries,
@@ -39,6 +52,7 @@ import type {
 import type { ProviderTypeInfo } from "@/lib/types";
 
 import ScryerLogo from "@/components/scryer-logo";
+import { cn } from "@/lib/utils";
 import { SetupProgressBar } from "./setup-progress-bar";
 import { SetupWelcomeView } from "./setup-welcome-view";
 import { SetupPersonaView } from "./setup-persona-view";
@@ -49,6 +63,7 @@ import { SetupSummaryView } from "./setup-summary-view";
 import SetupImportWizard from "./setup-import-wizard";
 import { SetupPluginsView } from "./setup-plugins-view";
 import { SetupRestoreView } from "./setup-restore-view";
+import { SetupIntroMark, setupIntroFlies } from "./setup-intro";
 
 const FALLBACK_PROVIDER_OPTIONS: SetupIndexerProviderOption[] = [];
 
@@ -102,6 +117,19 @@ export function SetupWizardContainer({
         : "fresh";
   const currentStep = parseInt(searchParams.get("step") || "0", 10);
   const [canRestoreSetup, setCanRestoreSetup] = useState(false);
+
+  // The welcome plays once, when setup first opens — not when it is reopened
+  // from Settings, and not on moving between steps.
+  const [intro, setIntro] = useState<"waiting" | "playing" | null>(() =>
+    !isReentry && setupIntroFlies() ? "waiting" : null,
+  );
+  const [introFlightDelayMs, setIntroFlightDelayMs] = useState(0);
+  const headerLogoRef = useRef<HTMLDivElement>(null);
+  const startIntro = useCallback((flightDelayMs: number) => {
+    setIntroFlightDelayMs(flightDelayMs);
+    setIntro("playing");
+  }, []);
+  const finishIntro = useCallback(() => setIntro(null), []);
   const [restoreAvailabilityChecked, setRestoreAvailabilityChecked] =
     useState(false);
 
@@ -181,15 +209,47 @@ export function SetupWizardContainer({
   const [personaSaving, setPersonaSaving] = useState(false);
 
   // ── Step 2 (fresh): Media Paths ─────────────────────────────────────
-  const [moviesPath, setMoviesPath] = useState("/data/movies");
-  const [seriesPath, setSeriesPath] = useState("/data/series");
-  const [animePath, setAnimePath] = useState("/data/anime");
+  const [mediaRoots, setMediaRoots] = useState<SetupMediaRoots>(
+    bootstrapSetupMediaRoots,
+  );
   const [mediaPathsSaving, setMediaPathsSaving] = useState(false);
   const [mediaPathsError, setMediaPathsError] = useState<string | null>(null);
-  const [invalidMediaPathFields, setInvalidMediaPathFields] =
-    useState<InvalidSetupMediaPathFields>({});
+  const [invalidMediaPaths, setInvalidMediaPaths] = useState<string[]>([]);
   const [mediaPathValidationUnavailable, setMediaPathValidationUnavailable] =
     useState(false);
+  // Each facet's default library as saved, so a re-run shows every root it
+  // already has and saves only the libraries that were changed.
+  const mediaLibraries = useRef<Promise<SetupMediaLibraries> | null>(null);
+  const mediaRootsEdited = useRef(false);
+
+  const loadMediaLibraries = useCallback(() => {
+    mediaLibraries.current ??= client
+      .query(librariesQuery, {}, { requestPolicy: "network-only" })
+      .toPromise()
+      .then(({ data, error }) => {
+        if (error) throw error;
+        return setupMediaLibraries(data?.libraries ?? []);
+      })
+      .catch((error: unknown) => {
+        mediaLibraries.current = null;
+        throw error;
+      });
+    return mediaLibraries.current;
+  }, [client]);
+
+  useEffect(() => {
+    if (wizardPath !== "fresh") return;
+    let cancelled = false;
+    loadMediaLibraries()
+      .then((libraries) => {
+        if (cancelled || mediaRootsEdited.current) return;
+        setMediaRoots(setupMediaRootsFromLibraries(libraries));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [loadMediaLibraries, wizardPath]);
 
   // ── Step 4 (fresh): Download Client ─────────────────────────────────
   const {
@@ -290,6 +350,11 @@ export function SetupWizardContainer({
     installPlugin,
     uninstallPlugin,
   } = usePluginManagement({ client, t, refreshProviderOptions });
+  const { rulePacks, rulePacksLoading, setRulePackEnabled } = useSetupRulePacks({
+    client,
+    active: wizardPath === "fresh" && currentStep === 3,
+    t,
+  });
 
   // ── Step labels per path ────────────────────────────────────────────
   const stepLabels =
@@ -384,64 +449,22 @@ export function SetupWizardContainer({
   );
 
   // ── Media paths save ────────────────────────────────────────────────
-  const clearInvalidMediaPathField = useCallback(
-    (field: SetupMediaPathField) => {
+  const editMediaRoots = useCallback(
+    (field: SetupMediaPathField, edit: (roots: SetupRoot[]) => SetupRoot[]) => {
+      mediaRootsEdited.current = true;
       setMediaPathValidationUnavailable(false);
-      setInvalidMediaPathFields((current) => {
-        if (current[field] !== true) {
-          return current;
-        }
-        const next = { ...current };
-        delete next[field];
-        return next;
-      });
+      setMediaRoots((current) => ({ ...current, [field]: edit(current[field]) }));
     },
     [],
-  );
-
-  const handleMoviesPathChange = useCallback(
-    (value: string) => {
-      setMoviesPath(value);
-      clearInvalidMediaPathField("movies");
-    },
-    [clearInvalidMediaPathField],
-  );
-
-  const handleSeriesPathChange = useCallback(
-    (value: string) => {
-      setSeriesPath(value);
-      clearInvalidMediaPathField("series");
-    },
-    [clearInvalidMediaPathField],
-  );
-
-  const handleAnimePathChange = useCallback(
-    (value: string) => {
-      setAnimePath(value);
-      clearInvalidMediaPathField("anime");
-    },
-    [clearInvalidMediaPathField],
   );
 
   const saveMediaPaths = useCallback(async () => {
     setMediaPathsSaving(true);
     setMediaPathsError(null);
+    let savingField: SetupMediaPathField | null = null;
     try {
-      const trimmedMovies = moviesPath.trim();
-      const trimmedSeries = seriesPath.trim();
-      const trimmedAnime = animePath.trim();
-      if (!trimmedMovies && !trimmedSeries && !trimmedAnime) {
-        setInvalidMediaPathFields({});
-        setMediaPathValidationUnavailable(false);
-        goToStep(3);
-        return;
-      }
       await runAdvisorySetupMediaPathSave({
-        input: {
-          moviePath: trimmedMovies,
-          seriesPath: trimmedSeries,
-          animePath: trimmedAnime.length > 0 ? trimmedAnime : null,
-        },
+        roots: mediaRoots,
         validatePath: async (path) => {
           const { error } = await client
             .query(
@@ -452,18 +475,30 @@ export function SetupWizardContainer({
             .toPromise();
           return error;
         },
-        onValidation: ({ invalidPathFields, unavailable }) => {
-          setInvalidMediaPathFields(invalidPathFields);
+        onValidation: ({ invalidPaths, unavailable }) => {
+          setInvalidMediaPaths(invalidPaths);
           setMediaPathValidationUnavailable(unavailable);
         },
-        savePaths: async (input) => {
-          const { error } = await client
-            .mutation(updateLibraryPathsMutation, { input })
-            .toPromise();
-          if (error) throw error;
+        save: async () => {
+          const libraries = await loadMediaLibraries();
+          for (const save of plannedSetupRootSaves(mediaRoots, libraries)) {
+            savingField = save.field;
+            const { data, error } = await client
+              .mutation(updateLibraryMutation, {
+                input: { libraryId: save.libraryId, roots: save.roots },
+              })
+              .toPromise();
+            if (error) throw error;
+            // Saved, so going back and pressing Next again changes nothing.
+            libraries[save.field] =
+              setupMediaLibraries(data?.updateLibrary ? [data.updateLibrary] : [])[
+                save.field
+              ] ?? { id: save.libraryId, roots: save.roots };
+          }
+          savingField = null;
         },
-        onSaved: ({ invalidPathFields, unavailable }) => {
-          if (Object.values(invalidPathFields).some(Boolean)) {
+        onSaved: ({ invalidPaths, unavailable }) => {
+          if (invalidPaths.length > 0) {
             toast.warning(t("setup.mediaPathsNotReachableWarning"));
           } else if (unavailable) {
             toast.warning(t("setup.mediaPathsVerificationUnavailable"));
@@ -472,18 +507,16 @@ export function SetupWizardContainer({
         },
       });
     } catch (err) {
-      setMediaPathsError(err instanceof Error ? err.message : "Failed to save");
+      const message = err instanceof Error ? err.message : "Failed to save";
+      setMediaPathsError(
+        savingField
+          ? `${t(SETUP_MEDIA_PATH_LABEL_KEYS[savingField])}: ${message}`
+          : message,
+      );
     } finally {
       setMediaPathsSaving(false);
     }
-  }, [
-    animePath,
-    client,
-    goToStep,
-    moviesPath,
-    seriesPath,
-    t,
-  ]);
+  }, [client, goToStep, loadMediaLibraries, mediaRoots, t]);
 
   // ── Complete setup ──────────────────────────────────────────────────
   const navigateAfterSetup = useCallback(() => {
@@ -536,16 +569,33 @@ export function SetupWizardContainer({
 
   return (
     <div
-      className={`mx-auto flex min-h-screen w-full flex-col items-center justify-center px-4 py-10 ${shellMaxWidth}`}
+      className={cn(
+        "mx-auto flex min-h-screen w-full flex-col items-center justify-center px-4 py-10",
+        shellMaxWidth,
+        intro && "setup-intro",
+        intro === "playing" && "setup-intro-playing",
+      )}
+      style={
+        intro === "playing"
+          ? ({ "--setup-intro-flight-delay": `${introFlightDelayMs}ms` } as React.CSSProperties)
+          : undefined
+      }
     >
-      <div className="mb-8 flex items-center gap-2.5">
-        {wizardPath !== "import" ? <ScryerLogo className="h-20 w-20" /> : null}
-        {currentStep > 0 ? (
-          <span className="font-[var(--font-space-grotesk)] text-lg font-bold tracking-tight text-[var(--scry-ink2)]">
-            Scryer
-          </span>
-        ) : null}
-      </div>
+      {wizardPath !== "import" ? (
+        <div className="setup-intro-header mb-8 flex items-center">
+          <div ref={headerLogoRef} className="setup-intro-logo">
+            <ScryerLogo className="h-20 w-20" />
+          </div>
+        </div>
+      ) : null}
+      {intro ? (
+        <SetupIntroMark
+          targetRef={headerLogoRef}
+          ready={restoreAvailabilityChecked}
+          onStart={startIntro}
+          onDone={finishIntro}
+        />
+      ) : null}
 
       {currentStep > 0 && (
         <div className="mb-8 w-full">
@@ -591,18 +641,25 @@ export function SetupWizardContainer({
       {currentStep === 2 && wizardPath === "fresh" && (
         <SetupMediaPathsView
           t={t}
-          moviesPath={moviesPath}
-          seriesPath={seriesPath}
-          animePath={animePath}
-          onMoviesPathChange={handleMoviesPathChange}
-          onSeriesPathChange={handleSeriesPathChange}
-          onAnimePathChange={handleAnimePathChange}
+          roots={mediaRoots}
+          onAddRoot={(field, path) =>
+            editMediaRoots(field, (roots) => addSetupRoot(roots, path))
+          }
+          onReplaceRoot={(field, index, path) =>
+            editMediaRoots(field, (roots) => replaceSetupRoot(roots, index, path))
+          }
+          onRemoveRoot={(field, index) =>
+            editMediaRoots(field, (roots) => removeSetupRoot(roots, index))
+          }
+          onSetDefaultRoot={(field, index) =>
+            editMediaRoots(field, (roots) => setDefaultSetupRoot(roots, index))
+          }
           onNext={saveMediaPaths}
           onBack={() => goToStep(1)}
           onSkip={() => goToStep(3)}
           saving={mediaPathsSaving}
           error={mediaPathsError}
-          invalidPathFields={invalidMediaPathFields}
+          invalidPaths={invalidMediaPaths}
           validationUnavailable={mediaPathValidationUnavailable}
         />
       )}
@@ -617,9 +674,14 @@ export function SetupWizardContainer({
           pluginProgress={pluginProgress}
           pluginErrors={pluginErrors}
           error={pluginsError}
+          rulePacks={rulePacks}
+          rulePacksLoading={rulePacksLoading}
           onRefreshRegistry={refreshPluginsRegistry}
           onInstallPlugin={installPlugin}
           onUninstallPlugin={uninstallPlugin}
+          onSetRulePackEnabled={(packId, enabled) =>
+            void setRulePackEnabled(packId, enabled)
+          }
           onNext={() => goToStep(4)}
           onBack={() => goToStep(2)}
         />
@@ -671,9 +733,9 @@ export function SetupWizardContainer({
         <SetupSummaryView
           t={t}
           facetPrefs={facetPrefs}
-          moviesPaths={[moviesPath]}
-          seriesPaths={[seriesPath]}
-          animePaths={animePath ? [animePath] : []}
+          moviesPaths={mediaRoots.movies.map((root) => root.path)}
+          seriesPaths={mediaRoots.series.map((root) => root.path)}
+          animePaths={mediaRoots.anime.map((root) => root.path)}
           downloadClientName={dcDraft.name || dcDraft.clientType}
           indexerName={idxName || idxProviderType}
           onFinish={finishSetup}

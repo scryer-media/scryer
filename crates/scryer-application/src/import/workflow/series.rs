@@ -2235,9 +2235,6 @@ pub(crate) async fn resolve_target_episodes_with_numbering(
 
     let literal = || resolve_target_episodes(app, title, ep_meta, season_str);
 
-    if title.facet != scryer_domain::MediaFacet::Anime {
-        return (literal().await, NumberingResolution::Unchanged);
-    }
     let bridge = match app
         .services
         .catalog

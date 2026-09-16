@@ -1,7 +1,7 @@
 import * as React from "react";
 import { useClient } from "urql";
 import { useNavigate } from "react-router";
-import { CircleCheck, Loader2 } from "lucide-react";
+import { CircleCheck } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -13,6 +13,7 @@ import {
   refusalMessageKey,
   refusalNeedsFreshPreview,
 } from "@/lib/location-operations";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 /**
  * The confirm half of every location dialog, in one place.
@@ -290,7 +291,7 @@ export function LocationDialogPrimaryButton({
       onClick={onClick}
       disabled={disabled}
     >
-      {busy ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+      {busy ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
       {label}
     </Button>
   );

@@ -3,7 +3,6 @@ import {
   CircleAlert,
   CircleOff,
   Link2,
-  Loader2,
   Pause,
   Play,
   Trash2,
@@ -29,6 +28,7 @@ import {
   type TranslateFn,
 } from "@/lib/utils/activity-utils";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type QueueRowItemProps = {
   queueItem: DownloadQueueItem;
@@ -224,7 +224,7 @@ export const QueueRowItem = memo(function QueueRowItem({
             }}
           >
             {isManualImportPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingMark className="h-4 w-4" />
             ) : (
               <ArrowDownToLine className="h-4 w-4" />
             )}

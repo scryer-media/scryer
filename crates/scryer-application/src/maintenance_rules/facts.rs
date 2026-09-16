@@ -205,9 +205,23 @@ pub struct MaintenanceWatchContext {
     /// signal-sync connection. A requester outside this set is a participant
     /// Scryer cannot observe.
     pub linked_user_ids: HashSet<String>,
+    /// The enabled signal-sync connections this run observes.
+    ///
+    /// The gate and the roster are both built from exactly these connections, so
+    /// the facts have to be too: a row left behind by a since-disabled
+    /// connection would otherwise fold into the watcher set the gate never
+    /// waited for, and the two halves of the watch picture would disagree about
+    /// which servers count.
+    pub enabled_connection_ids: HashSet<String>,
 }
 
 impl MaintenanceWatchContext {
+    /// Whether a signal row written by `connection_id` is part of this run's
+    /// watch picture.
+    fn observes(&self, connection_id: &str) -> bool {
+        self.enabled_connection_ids.contains(connection_id)
+    }
+
     /// The gate answer, or `None` when watch facts may be reported.
     fn unavailable_reason(&self) -> Option<&'static str> {
         match self.freshness {
@@ -677,10 +691,15 @@ fn watch_observations(
         return WatchObservations::all_unknown(reason);
     }
 
+    // Before anything is read off a row: only the connections this run actually
+    // observes count. A disabled connection is dropped from the roster and from
+    // the freshness gate, so its leftover rows are not evidence of anything
+    // this run swept.
     let played: Vec<&UserMediaSignal> = watch
         .signals
         .unwrap_or_default()
         .iter()
+        .filter(|signal| watch.context.observes(&signal.connection_id))
         .filter(|signal| signal.played)
         .collect();
 
@@ -1052,6 +1071,7 @@ fn scoped_watch_observations(
             .signals
             .unwrap_or_default()
             .iter()
+            .filter(|signal| watch.context.observes(&signal.connection_id))
             .filter(|signal| signal.scryer_episode_id.as_deref() == Some(&episode.id))
             .cloned()
             .collect();
@@ -1246,17 +1266,30 @@ mod tests {
         "watched_by_all_requesters",
     ];
 
+    /// The one connection the fixtures' signals are written by.
+    const ENABLED_CONNECTION: &str = "connection-1";
+
     fn fresh_context(linked: &[&str]) -> MaintenanceWatchContext {
         MaintenanceWatchContext {
             freshness: WatchSignalFreshness::Fresh,
             linked_user_ids: linked.iter().map(|id| (*id).to_string()).collect(),
+            enabled_connection_ids: [ENABLED_CONNECTION.to_string()].into_iter().collect(),
         }
     }
 
     fn signal(scryer_user_id: Option<&str>, played: bool, watched_at: &str) -> UserMediaSignal {
+        signal_from(ENABLED_CONNECTION, scryer_user_id, played, watched_at)
+    }
+
+    fn signal_from(
+        connection_id: &str,
+        scryer_user_id: Option<&str>,
+        played: bool,
+        watched_at: &str,
+    ) -> UserMediaSignal {
         UserMediaSignal {
             id: scryer_domain::Id::new().0,
-            connection_id: "connection-1".to_string(),
+            connection_id: connection_id.to_string(),
             provider: scryer_domain::MediaServerProvider::Jellyfin,
             external_user_id: "jf-user".to_string(),
             scryer_user_id: scryer_user_id.map(str::to_string),
@@ -1536,6 +1569,44 @@ mod tests {
         assert_eq!(
             doc["facts"]["last_watched_at"], "2024-06-01T00:00:00+00:00",
             "the newest play is the one a rule ages against"
+        );
+    }
+
+    /// The roster and the gate both drop a disabled connection, so its rows
+    /// must not keep answering for it: a play left behind by a server the
+    /// operator turned off would otherwise hold a title a "delete if nobody
+    /// watched it" rule has already stopped observing.
+    #[test]
+    fn a_row_from_a_connection_this_run_does_not_observe_is_not_a_watcher() {
+        let doc = watch_document(
+            &title(Some("user-1")),
+            None,
+            &usernames(&[]),
+            &fresh_context(&[]),
+            Some(&[
+                signal_from(
+                    "connection-retired",
+                    Some("viewer-two"),
+                    true,
+                    "2024-05-01T00:00:00Z",
+                ),
+                signal_from("connection-retired", None, true, "2024-05-02T00:00:00Z"),
+            ]),
+        );
+
+        assert_eq!(
+            doc["facts"]["watched_by_user_ids"],
+            serde_json::json!([]),
+            "a disabled connection's leftover play is not part of this run's watch picture"
+        );
+        assert_eq!(
+            doc["observations"]["last_watched_at"]["reason"], "never_watched",
+            "and it carries no watch time either"
+        );
+        assert!(
+            doc["facts"].get("watched_by_user_ids").is_some(),
+            "the unnamed watcher on a connection this run does not observe does not \
+             make the watcher set unknown"
         );
     }
 
@@ -2008,6 +2079,38 @@ mod tests {
         subject.id = "title-1".into();
         subject.label = "Title 1".into();
         subject
+    }
+
+    /// The per-episode pass reads the signal rows a second time, so it has to
+    /// apply the same roster as the title pass: a play a since-disabled
+    /// connection left behind for an episode is not this run's evidence, and
+    /// with nothing else on record the episode's history is missing, not
+    /// complete.
+    #[test]
+    fn a_retired_connections_episode_play_does_not_complete_a_season() {
+        let subject = scoped_season(&[Some("2024-01-01")]);
+        let context = fresh_context(&["alice"]);
+        let mut retired = episode_signal(0, Some("alice"), true);
+        retired.connection_id = "connection-retired".to_string();
+
+        let observed = scoped_watch_observations(
+            Utc::now(),
+            &subject,
+            Some(&["alice".to_string()]),
+            MaintenanceTitleWatch {
+                context: &context,
+                signals: Some(&[retired]),
+            },
+        );
+        assert!(
+            matches!(
+                observed.watched_by_user_ids,
+                Observation::Unknown { ref reason, .. }
+                    if reason == unknown_reason::EPISODE_WATCH_HISTORY_MISSING
+            ),
+            "a disabled connection's row is not evidence for this run: {:?}",
+            observed.watched_by_user_ids
+        );
     }
 
     #[test]

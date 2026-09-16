@@ -33,6 +33,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible";
 import { IconButton } from "@/components/ui/icon-button";
+import { TextActionButton } from "@/components/ui/text-action-button";
 import { cn } from "@/lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -1025,16 +1026,15 @@ export function SettingsRulesSection({
               inputContract={ruleInputContract}
               outputContract={'Define one or more score entries, for example: score_entry["stable_identifier"] := 100 if { input.release != null }'}
             />
-            <Button
+            <TextActionButton
               id="settings-rules-arr-custom-format-import"
-              type="button"
-              variant="secondary"
+              tone="accentBright"
+              size="default"
               onClick={() => setIsArrImportOpen(true)}
               disabled={mutatingRuleSetId !== null}
-            >
-              <FileInput className="mr-2 h-4 w-4" />
-              {t("settings.arrImportAction")}
-            </Button>
+              leadingIcon={<FileInput className="h-4 w-4" />}
+              label={t("settings.arrImportAction")}
+            />
           </div>
         </div>
         <div className="overflow-x-auto">

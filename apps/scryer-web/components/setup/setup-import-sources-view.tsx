@@ -1,4 +1,4 @@
-import { AlertCircle, ExternalLink, Loader2, Merge } from "lucide-react";
+import { AlertCircle, ExternalLink, Merge } from "lucide-react";
 
 import { ImportInstancePill } from "@/components/setup/import/import-instance-pill";
 import { Badge } from "@/components/ui/badge";
@@ -15,6 +15,7 @@ import type {
 } from "@/lib/types/external-import";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 interface SetupImportSourcesViewProps {
   wizard: UseExternalImportSetupReturn;
@@ -144,7 +145,7 @@ export default function SetupImportSourcesView({
         id="setup-import-sources-loading"
         className="flex items-center justify-center gap-2 py-10 text-center text-sm text-muted-foreground"
       >
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <LoadingMark className="h-4 w-4" />
         {t("setup.sourcesLoading")}
       </p>
     );
@@ -157,7 +158,7 @@ export default function SetupImportSourcesView({
           data-slot="prowlarr-discovery-loading"
           className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm text-muted-foreground"
         >
-          <Loader2 className="h-4 w-4 animate-spin" />
+          <LoadingMark className="h-4 w-4" />
           Discovering Prowlarr indexers…
         </div>
       ) : null}

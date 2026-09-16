@@ -322,3 +322,69 @@ async fn library_scan_unmatched_upsert_preserves_ignored_status_for_scan_refresh
 
     let _ = std::fs::remove_file(db);
 }
+
+#[tokio::test]
+async fn library_scan_unmatched_items_delete_for_title_keeps_other_rows() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_scan_unmatched_title_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("db should initialize");
+    let library_scan_unmatched = library_scan_unmatched_store(&services);
+
+    let row = |id: &str, title_id: Option<&str>| LibraryScanUnmatchedItem {
+        id: format!("library_scan_unmatched:{id}"),
+        library_id: scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+        facet: MediaFacet::Series,
+        status: PendingImportStatus::Pending,
+        title_id: title_id.map(str::to_string),
+        scan_session_id: "session-1".to_string(),
+        scan_root: "/library/Show".to_string(),
+        item_path: format!("/library/Show/{id}.avi"),
+        display_name: id.to_string(),
+        query: id.to_string(),
+        year_hint: None,
+        reason_code: "episode_identity_missing".to_string(),
+        error_message: None,
+        search_attempts: Vec::new(),
+        size_bytes: None,
+        created_at: "2026-04-07T00:00:00Z".to_string(),
+        updated_at: "2026-04-07T00:00:00Z".to_string(),
+    };
+    for item in [
+        row("first", Some("title-gone")),
+        row("second", Some("title-gone")),
+        row("kept", Some("title-kept")),
+        row("unbound", None),
+    ] {
+        library_scan_unmatched
+            .upsert_library_scan_unmatched_item(&item)
+            .await
+            .expect("insert unmatched item");
+    }
+
+    let removed = library_scan_unmatched
+        .delete_for_title("title-gone")
+        .await
+        .expect("delete rows for title");
+    assert_eq!(removed, 2);
+
+    let mut remaining = library_scan_unmatched
+        .list_library_scan_unmatched_items(Some(MediaFacet::Series), None, None, 10, 0)
+        .await
+        .expect("list remaining rows")
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    remaining.sort();
+    assert_eq!(
+        remaining,
+        vec![
+            "library_scan_unmatched:kept".to_string(),
+            "library_scan_unmatched:unbound".to_string(),
+        ]
+    );
+    let _ = std::fs::remove_file(db);
+}

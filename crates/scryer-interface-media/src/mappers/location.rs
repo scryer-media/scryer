@@ -88,29 +88,6 @@ pub fn transfer_message(detail: &str) -> String {
     }
 }
 
-#[cfg(test)]
-mod message_tests {
-    use super::transfer_message;
-
-    #[test]
-    fn legacy_diagnostics_are_not_user_facing_transfer_copy() {
-        for diagnostic in [
-            "destination crc64_nvme is 0xe8b4b63689ee0365",
-            "BLAKE3 did not match",
-            "CRC read-back failed",
-        ] {
-            let message = transfer_message(diagnostic);
-            assert!(!message.to_ascii_lowercase().contains("crc"));
-            assert!(!message.to_ascii_lowercase().contains("blake3"));
-            assert!(!message.contains("0x"));
-            assert!(message.contains("source was preserved"));
-        }
-        let warning =
-            "Incoming season.nfo was preserved as season (from Anime).nfo to keep both versions.";
-        assert_eq!(transfer_message(warning), warning);
-    }
-}
-
 pub fn from_location_transfer(
     snapshot: scryer_application::location::live::TransferSnapshot,
 ) -> crate::types::LocationTransferSnapshotPayload {
@@ -964,5 +941,28 @@ pub fn from_resumed_location_operation(
         id: ID::from(operation_id.to_string()),
         resumed,
         detail,
+    }
+}
+
+#[cfg(test)]
+mod message_tests {
+    use super::transfer_message;
+
+    #[test]
+    fn legacy_diagnostics_are_not_user_facing_transfer_copy() {
+        for diagnostic in [
+            "destination crc64_nvme is 0xe8b4b63689ee0365",
+            "BLAKE3 did not match",
+            "CRC read-back failed",
+        ] {
+            let message = transfer_message(diagnostic);
+            assert!(!message.to_ascii_lowercase().contains("crc"));
+            assert!(!message.to_ascii_lowercase().contains("blake3"));
+            assert!(!message.contains("0x"));
+            assert!(message.contains("source was preserved"));
+        }
+        let warning =
+            "Incoming season.nfo was preserved as season (from Anime).nfo to keep both versions.";
+        assert_eq!(transfer_message(warning), warning);
     }
 }

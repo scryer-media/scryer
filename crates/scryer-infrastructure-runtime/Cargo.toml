@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-runtime"
-version = "0.20.0"
+version = "0.20.1"
 edition.workspace = true
 publish = false
 
@@ -41,4 +41,4 @@ scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 tempfile = "3"
 tracing-subscriber = { workspace = true }
 wiremock = { workspace = true }
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }

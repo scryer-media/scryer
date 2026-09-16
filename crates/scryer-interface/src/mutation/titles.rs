@@ -80,6 +80,7 @@ fn resolved_title_options(
         inter_season_movies,
         filler_policy,
         recap_policy,
+        release_numbering,
         monitor_selection,
     } = options;
 
@@ -91,6 +92,18 @@ fn resolved_title_options(
     if *facet == MediaFacet::Movie && use_season_folders.is_some() {
         return Err(validation_error(
             "useSeasonFolders is only valid for series and anime titles",
+        ));
+    }
+
+    // A movie has no episodes, so there is no numbering to pin.
+    let release_numbering = match release_numbering {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(value) => Some(Some(value.as_app_str().to_string())),
+    };
+    if *facet == MediaFacet::Movie && release_numbering.is_some() {
+        return Err(validation_error(
+            "releaseNumbering is only valid for series and anime titles",
         ));
     }
 
@@ -175,6 +188,7 @@ fn resolved_title_options(
             MaybeUndefined::Null => Some(None),
             MaybeUndefined::Value(value) => Some(Some(value.as_app_str().to_string())),
         },
+        release_numbering,
         monitor_selection,
     })
 }

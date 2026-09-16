@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SearchResultBuckets } from "@/components/common/release-search-results";
@@ -22,6 +22,7 @@ import { blocklistEntryMatchesEpisode } from "./helpers";
 import { EpisodeDetailsPanel } from "./episode-details-panel";
 import { EpisodeBlocklistPanel } from "./episode-blocklist-panel";
 import { EMPTY_BLOCKLIST_ENTRIES } from "./season-section-utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type EpisodePanelContentProps = {
   activeTab: EpisodePanelTab;
@@ -185,10 +186,7 @@ export const EpisodePanelContent = React.memo(function EpisodePanelContent({
                     data-search-state={searchPresentation.showProgress ? "searching" : "done"}
                   >
                     {searchPresentation.showProgress ? (
-                      <Loader2
-                        className="h-3 w-3 shrink-0 animate-spin"
-                        aria-label={t("label.searching")}
-                      />
+                      <LoadingMark className="h-3 w-3 shrink-0" label={t("label.searching")} />
                     ) : null}
                     <span className="truncate">{searchDescription}</span>
                   </p>
@@ -240,7 +238,7 @@ export const EpisodePanelContent = React.memo(function EpisodePanelContent({
           )}
           {searchBlocked ? null : searchPresentation.showInitialLoader ? (
             <div className="flex flex-col items-center justify-center gap-4 py-16">
-              <Loader2 className="h-10 w-10 animate-spin text-[var(--scry-accent-text)]" />
+              <LoadingMark className="h-10 w-10 text-[var(--scry-accent-text)]" />
               <p className="text-lg text-muted-foreground">{t("label.searching")}</p>
             </div>
           ) : !searchPresentation.showResults ? (

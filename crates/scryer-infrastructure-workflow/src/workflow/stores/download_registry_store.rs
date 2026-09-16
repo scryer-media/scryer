@@ -151,77 +151,20 @@ impl DownloadRegistryRepository for DownloadRegistryStore {
              FROM download_client_bindings
              WHERE ended_at IS NULL
                AND native_item_id IS NOT NULL
-               AND COALESCE(client_config_id, '') = {}
                AND LOWER(TRIM(COALESCE(client_type_snapshot, ''))) = {}
                AND native_item_id = {}
+               AND COALESCE(client_config_id, '') = {}
              ORDER BY created_at, download_id
              LIMIT 1",
             &[
-                SqlArg::Text(locator.client_id.clone().unwrap_or_default()),
                 SqlArg::Text(locator.client_type.clone()),
                 SqlArg::Text(locator.item_id.clone()),
+                SqlArg::Text(locator.client_id.clone().unwrap_or_default()),
             ],
         )
         .await?
         .map(binding_from_row)
         .transpose()
-    }
-
-    async fn list_active_bindings_for_client_before(
-        &self,
-        client_config_id: &str,
-        client_type: &str,
-        observed_before: DateTime<Utc>,
-        limit: usize,
-    ) -> AppResult<Vec<DownloadClientBindingRecord>> {
-        if limit == 0 {
-            return Ok(Vec::new());
-        }
-
-        SqlRuntime::fetch_all(
-            self.datastore.read_exec(),
-            "SELECT download_id, client_config_id, client_type_snapshot, client_name_snapshot,
-                    native_item_id, created_at, last_seen_at, ended_at
-             FROM download_client_bindings
-             WHERE ended_at IS NULL
-               AND native_item_id IS NOT NULL
-               AND client_config_id = {}
-               AND LOWER(TRIM(COALESCE(client_type_snapshot, ''))) = {}
-               AND created_at <= {}
-               AND (last_seen_at IS NULL OR last_seen_at <= {})
-             ORDER BY created_at, download_id
-             LIMIT {}",
-            &[
-                SqlArg::Text(client_config_id.to_string()),
-                SqlArg::Text(client_type.trim().to_ascii_lowercase()),
-                SqlArg::Timestamp(observed_before),
-                SqlArg::Timestamp(observed_before),
-                SqlArg::I64(limit as i64),
-            ],
-        )
-        .await?
-        .into_iter()
-        .map(binding_from_row)
-        .collect()
-    }
-
-    async fn list_active_binding_clients(&self) -> AppResult<Vec<(String, String)>> {
-        SqlRuntime::fetch_all(
-            self.datastore.read_exec(),
-            "SELECT DISTINCT client_config_id,
-                    LOWER(TRIM(COALESCE(client_type_snapshot, ''))) AS client_type
-             FROM download_client_bindings
-             WHERE ended_at IS NULL
-               AND native_item_id IS NOT NULL
-               AND client_config_id IS NOT NULL
-               AND client_config_id <> ''
-             ORDER BY client_config_id, client_type",
-            &[],
-        )
-        .await?
-        .into_iter()
-        .map(|row| Ok((row.text("client_config_id")?, row.text("client_type")?)))
-        .collect()
     }
 
     async fn end_binding(&self, id: &DownloadId) -> AppResult<()> {
@@ -346,6 +289,21 @@ async fn resolve_observation_tx(
         });
     }
 
+    // A tokenless observation of a native item Scryer has already finished
+    // with is the same item still sitting in the client, not a new download.
+    // The ended binding is the durable record of that decision (a queue or
+    // history delete, an import, a failure), the way Sonarr's latest
+    // download-history row for the client's native id makes later polls skip
+    // an Ignored, Imported or Failed item instead of re-tracking it. Minting a
+    // foreign identity here would give one locator two canonical downloads —
+    // the poll whose listing predates a history delete resolves after the
+    // binding ended and used to do exactly that. A genuine re-grab is
+    // unaffected: its submission binding is resolved by the arms above before
+    // this check is reached.
+    if ended_binding_exists_by_locator_tx(tx, &observation.locator).await? {
+        return Ok(ObservationResolution::BindingAlreadyEnded);
+    }
+
     let download_id = DownloadId::new();
     create_foreign_observation_tx(tx, download_id, observation).await?;
     Ok(ObservationResolution::Resolved {
@@ -426,6 +384,35 @@ async fn active_observation_binding_by_locator_tx(
         })
     })
     .transpose()
+}
+
+/// Whether any ended binding names this locator's configured client and
+/// native item. Compared the way `active_observation_binding_by_locator_tx`
+/// compares them, so the two lookups agree on which bindings belong to a
+/// locator.
+async fn ended_binding_exists_by_locator_tx(
+    tx: &mut SqlTx<'_>,
+    locator: &ClientJobLocator,
+) -> AppResult<bool> {
+    Ok(SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT download_id
+         FROM download_client_bindings
+         WHERE ended_at IS NOT NULL
+           AND native_item_id IS NOT NULL
+           AND COALESCE(client_config_id, '') = {}
+           AND LOWER(TRIM(COALESCE(client_type_snapshot, ''))) = {}
+           AND native_item_id = {}
+         ORDER BY ended_at DESC, download_id
+         LIMIT 1",
+        &[
+            SqlArg::Text(locator.client_id.clone().unwrap_or_default()),
+            SqlArg::Text(locator.client_type.clone()),
+            SqlArg::Text(locator.item_id.clone()),
+        ],
+    )
+    .await?
+    .is_some())
 }
 
 async fn binding_for_download_tx(
@@ -875,7 +862,8 @@ mod tests {
              );
              CREATE TABLE download_clients (
                  id TEXT PRIMARY KEY,
-                 name TEXT NOT NULL
+                 name TEXT NOT NULL,
+                 client_type TEXT NOT NULL DEFAULT ''
              )",
         )
         .execute(&pool)
@@ -957,15 +945,27 @@ mod tests {
     }
 
     async fn insert_download_client(store: &DownloadRegistryStore, id: &str, name: &str) {
+        insert_download_client_of_type(store, id, name, "qbittorrent").await;
+    }
+
+    async fn insert_download_client_of_type(
+        store: &DownloadRegistryStore,
+        id: &str,
+        name: &str,
+        client_type: &str,
+    ) {
         SqlRuntime::execute(
             store.datastore.read_exec(),
-            "INSERT INTO download_clients (id, name) VALUES ({}, {})",
-            &[SqlArg::Text(id.to_string()), SqlArg::Text(name.to_string())],
+            "INSERT INTO download_clients (id, name, client_type) VALUES ({}, {}, {})",
+            &[
+                SqlArg::Text(id.to_string()),
+                SqlArg::Text(name.to_string()),
+                SqlArg::Text(client_type.to_string()),
+            ],
         )
         .await
         .expect("download client should insert");
     }
-
     async fn insert_ambiguous_submission(
         store: &DownloadRegistryStore,
         id: &str,
@@ -1655,6 +1655,95 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn no_token_with_matching_ended_binding_skips_without_writes() {
+        let store = store().await;
+        let id = DownloadId::parse(FIRST_ID).unwrap();
+        insert_download(&store, FIRST_ID, "scryer_submission", None).await;
+        insert_binding(&store, FIRST_ID, Some("client-1"), Some("job-1"), None).await;
+        store.end_binding(&id).await.unwrap();
+        let before = raw_identity_snapshot(&store, FIRST_ID).await;
+
+        assert_eq!(
+            store
+                .resolve_observation(&observation(
+                    "job-1",
+                    None,
+                    Some("release"),
+                    "2026-08-24T13:00:00Z",
+                ))
+                .await
+                .unwrap(),
+            ObservationResolution::BindingAlreadyEnded
+        );
+        assert_eq!(raw_identity_snapshot(&store, FIRST_ID).await, before);
+        assert!(
+            store
+                .find_active_binding_by_locator(&ClientJobLocator::new(
+                    Some("client-1"),
+                    "qBittorrent",
+                    "job-1",
+                ))
+                .await
+                .unwrap()
+                .is_none(),
+            "a skipped observation must not mint a second canonical download"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_token_with_an_ended_binding_still_attaches_a_newer_submission() {
+        let store = store().await;
+        let ended = DownloadId::parse(FIRST_ID).unwrap();
+        let regrab = DownloadId::parse(SECOND_ID).unwrap();
+        insert_download(&store, FIRST_ID, "scryer_submission", None).await;
+        insert_binding(&store, FIRST_ID, Some("client-1"), Some("job-1"), None).await;
+        store.end_binding(&ended).await.unwrap();
+        insert_download(&store, SECOND_ID, "scryer_submission", None).await;
+        insert_binding(&store, SECOND_ID, Some("client-1"), None, None).await;
+        insert_ambiguous_submission(&store, SECOND_ID, "Paper Lantern").await;
+
+        assert_eq!(
+            store
+                .resolve_observation(&observation(
+                    "job-1",
+                    None,
+                    Some("paper lantern"),
+                    "2026-08-24T13:00:00Z",
+                ))
+                .await
+                .unwrap(),
+            ObservationResolution::Resolved {
+                download_id: regrab,
+                newly_foreign: false,
+                attached: true,
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn no_token_ignores_an_ended_binding_of_another_client() {
+        let store = store().await;
+        let id = DownloadId::parse(FIRST_ID).unwrap();
+        insert_download(&store, FIRST_ID, "scryer_submission", None).await;
+        insert_binding(&store, FIRST_ID, Some("client-2"), Some("job-1"), None).await;
+        store.end_binding(&id).await.unwrap();
+
+        let ObservationResolution::Resolved { newly_foreign, .. } = store
+            .resolve_observation(&observation(
+                "job-1",
+                None,
+                Some("release"),
+                "2026-08-24T13:00:00Z",
+            ))
+            .await
+            .unwrap()
+        else {
+            panic!("another client's ended binding must not block adoption");
+        };
+        assert!(newly_foreign);
+    }
+
+    #[tokio::test]
     async fn no_token_and_no_ambiguous_candidate_creates_a_foreign_download() {
         let store = store().await;
 
@@ -2056,7 +2145,6 @@ mod tests {
             None
         );
     }
-
     /// Mirrors the canonical postgres DDL from migrations 0179/0180 — including
     /// the active-locator partial unique index that concurrent first
     /// observations race on.
@@ -2093,7 +2181,8 @@ mod tests {
          )",
         "CREATE TABLE download_clients (
              id TEXT PRIMARY KEY,
-             name TEXT NOT NULL
+             name TEXT NOT NULL,
+             client_type TEXT NOT NULL DEFAULT ''
          )",
     ];
 

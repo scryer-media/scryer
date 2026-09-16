@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { Eye, Loader2 } from "lucide-react";
+import { Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-card";
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
@@ -14,6 +14,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleDetail } from "@/components/containers/series-overview-container";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
 import type { LibraryRecord, LibraryRootRecord } from "@/lib/types/titles";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type MediaRenamePlanItem = {
   collectionId: string | null;
@@ -217,7 +218,7 @@ export function TitleSettingsPanel({
                   disabled={renamePreviewing || renameApplying}
                 >
                   {renamePreviewing ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <LoadingMark className="h-4 w-4" />
                   ) : (
                     <Eye className="h-4 w-4" />
                   )}

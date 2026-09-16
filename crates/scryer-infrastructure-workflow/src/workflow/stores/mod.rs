@@ -1,6 +1,7 @@
 pub mod acquisition_store;
 mod core;
 pub mod domain_event_store;
+pub mod download_client_status_store;
 pub mod download_queue_command_store;
 pub mod download_registry_store;
 pub mod download_submission_store;
@@ -12,6 +13,7 @@ pub mod workflow_operation_store;
 
 pub use acquisition_store::AcquisitionStore;
 pub use domain_event_store::DomainEventStore;
+pub use download_client_status_store::DownloadClientStatusStore;
 pub use download_queue_command_store::DownloadQueueCommandStore;
 pub use download_registry_store::DownloadRegistryStore;
 pub use download_submission_store::DownloadSubmissionStore;

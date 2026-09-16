@@ -2557,6 +2557,35 @@ pub struct NullDownloadSubmissionRepository;
 #[derive(Default)]
 pub struct NullDownloadRegistryRepository;
 
+/// No status is ever recorded, so every client reads as healthy and nothing is
+/// ever routed around — the same answer an assembly with no status table would
+/// give.
+#[derive(Default)]
+pub struct NullDownloadClientStatusRepository;
+
+#[async_trait]
+impl crate::ports::DownloadClientStatusRepository for NullDownloadClientStatusRepository {
+    async fn list(
+        &self,
+    ) -> AppResult<std::collections::HashMap<String, crate::escalation_backoff::DownloadClientStatus>>
+    {
+        Ok(std::collections::HashMap::new())
+    }
+    async fn record_failure(
+        &self,
+        _: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<crate::escalation_backoff::DownloadClientStatus> {
+        Ok(crate::escalation_backoff::DownloadClientStatus::default().after_failure(now))
+    }
+    async fn record_success(&self, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+    async fn clear(&self, _: &str) -> AppResult<()> {
+        Ok(())
+    }
+}
+
 #[derive(Default)]
 pub struct NullAcquisitionStateRepository;
 
@@ -3073,6 +3102,10 @@ impl LibraryScanUnmatchedItemRepository for NullLibraryScanUnmatchedItemReposito
     }
 
     async fn delete_for_library(&self, _library_id: &str) -> AppResult<u32> {
+        Ok(0)
+    }
+
+    async fn delete_for_title(&self, _title_id: &str) -> AppResult<u32> {
         Ok(0)
     }
 

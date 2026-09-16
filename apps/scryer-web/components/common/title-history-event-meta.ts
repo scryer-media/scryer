@@ -38,6 +38,7 @@ export const WANTED_HISTORY_FILTERS = [
   "grabbed",
   "download_failed",
   "blocklisted",
+  "download_ignored",
   "imported",
   "import_failed",
   "import_skipped",

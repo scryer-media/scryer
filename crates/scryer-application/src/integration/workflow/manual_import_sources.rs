@@ -279,7 +279,8 @@ impl AppUseCase {
                     })?;
                 Ok(crate::ManualImportFileMapping {
                     file_path: candidate.canonical_path.clone(),
-                    episode_id: mapping.episode_id,
+                    episode_id: None,
+                    episode_ids: mapping.episode_ids,
                     series_movie_link_id: mapping.series_movie_link_id,
                     disc_selection: mapping.disc_selection,
                 })

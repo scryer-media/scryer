@@ -2051,12 +2051,20 @@ impl AppUseCase {
             );
         }
         connections.retain(|connection| connection.enabled);
+        // The roster the *facts* answer from, too: a signal row written by a
+        // connection that is no longer enabled is not part of this run's watch
+        // picture, and the gate below already drops those connections.
+        let enabled_connection_ids: HashSet<String> = connections
+            .iter()
+            .map(|connection| connection.id.clone())
+            .collect();
         if connections.is_empty() {
             return Ok(MaintenanceWatchContext {
                 freshness: WatchSignalFreshness::Unavailable(
                     unknown_reason::NO_MEDIA_SERVER_CONNECTION,
                 ),
                 linked_user_ids: HashSet::new(),
+                enabled_connection_ids: HashSet::new(),
             });
         }
 
@@ -2077,10 +2085,19 @@ impl AppUseCase {
                     unknown_reason::SIGNAL_SYNC_INCOMPLETE,
                 ),
                 linked_user_ids: HashSet::new(),
+                enabled_connection_ids: enabled_connection_ids.clone(),
             });
         }
+        // The stored `enabled` is the connection's state *as of that sweep*, so
+        // a state row that says disabled describes a picture built while the
+        // connection was off. A re-enabled connection therefore has no usable
+        // success timestamp until its first post-re-enable sweep lands: taking
+        // the pre-disable one would report a watch picture up to
+        // `WATCH_SIGNAL_FRESHNESS_HOURS` older than the gate believes, and
+        // those facts gate destructive maintenance actions.
         let states: HashMap<String, DateTime<Utc>> = sync_states
             .into_iter()
+            .filter(|state| state.enabled)
             .filter_map(|state| Some((state.connection_id, state.last_success_at?)))
             .collect();
 
@@ -2095,6 +2112,7 @@ impl AppUseCase {
                     unknown_reason::SIGNAL_SYNC_NEVER_SUCCEEDED,
                 ),
                 linked_user_ids: HashSet::new(),
+                enabled_connection_ids: enabled_connection_ids.clone(),
             });
         }
         let oldest_allowed = Utc::now() - Duration::hours(WATCH_SIGNAL_FRESHNESS_HOURS);
@@ -2106,6 +2124,7 @@ impl AppUseCase {
             return Ok(MaintenanceWatchContext {
                 freshness: WatchSignalFreshness::Unavailable(unknown_reason::SIGNALS_STALE),
                 linked_user_ids: HashSet::new(),
+                enabled_connection_ids: enabled_connection_ids.clone(),
             });
         }
 
@@ -2137,12 +2156,14 @@ impl AppUseCase {
                     unknown_reason::NO_LINKED_PARTICIPANTS,
                 ),
                 linked_user_ids,
+                enabled_connection_ids,
             });
         }
 
         Ok(MaintenanceWatchContext {
             freshness: WatchSignalFreshness::Fresh,
             linked_user_ids,
+            enabled_connection_ids,
         })
     }
 

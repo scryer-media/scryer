@@ -1,6 +1,6 @@
-import { Loader2 } from "lucide-react";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export function sanitizeTotpCode(value: string): string {
   return sanitizeDigits(value).slice(0, 6);
@@ -85,7 +85,7 @@ export function TotpCodeForm({
         disabled={submitDisabled}
         className="flex h-10 w-full items-center justify-center gap-2 rounded-[9px] bg-primary px-4 text-sm font-semibold text-primary-foreground shadow-none transition-colors hover:bg-primary/90 disabled:opacity-50"
       >
-        {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+        {busy ? <LoadingMark className="h-4 w-4" /> : null}
         {busy && busyLabel ? busyLabel : submitLabel}
       </button>
       {onCancel && cancelLabel ? (

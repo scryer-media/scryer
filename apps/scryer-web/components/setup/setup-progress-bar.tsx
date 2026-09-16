@@ -12,7 +12,7 @@ export function SetupProgressBar({
   onStepClick,
 }: SetupProgressBarProps) {
   return (
-    <div className="flex items-center justify-center gap-2">
+    <div className="flex flex-wrap items-center justify-center gap-x-1 gap-y-2 sm:flex-nowrap sm:gap-x-2">
       {stepLabels.map((label, index) => {
         const isComplete = index < currentStep;
         const isCurrent = index === currentStep;
@@ -36,8 +36,11 @@ export function SetupProgressBar({
             >
               {isComplete ? <Check className="h-3.5 w-3.5" /> : index + 1}
             </div>
+            {/* On phones only the current step is named, so the bar fits. */}
             <span
-              className={`text-xs ${
+              className={`whitespace-nowrap text-xs ${
+                isCurrent ? "" : "sr-only sm:not-sr-only"
+              } ${
                 isCurrent
                   ? "font-semibold text-[var(--scry-ink2)]"
                   : isComplete
@@ -51,10 +54,10 @@ export function SetupProgressBar({
         );
 
         return (
-          <div key={label} className="flex items-center gap-2">
+          <div key={label} className="flex items-center gap-1 sm:gap-2">
             {index > 0 && (
               <div
-                className="h-px w-8 rounded-full"
+                className="h-px w-3 rounded-full sm:w-6"
                 style={{
                   background: isComplete
                     ? "var(--scry-accent)"

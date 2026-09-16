@@ -24,6 +24,7 @@ import { facetById } from "@/lib/facets/registry";
 import type { Facet } from "@/lib/types/titles";
 import type { LibraryScanPhaseProgress, LibraryScanProgress } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type FacetConfig = {
   Icon: LucideIcon;
@@ -288,11 +289,15 @@ function ScanPhaseBar({
   return (
     <div className="mb-[11px] last:mb-0">
       <div className="mb-1.5 flex items-center gap-2">
-        <Icon
-          className={cn("h-3.5 w-3.5 shrink-0", spin && "animate-spin")}
-          style={{ color: iconColor }}
-          aria-hidden="true"
-        />
+        {spin ? (
+          <LoadingMark className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <Icon
+            className="h-3.5 w-3.5 shrink-0"
+            style={{ color: iconColor }}
+            aria-hidden="true"
+          />
+        )}
         <span className="text-xs font-semibold" style={{ color: labelColor }}>
           {label}
         </span>
@@ -866,11 +871,7 @@ export function LibraryScanToast({
                     {etaCountdown}
                   </span>
                 ) : null}
-                <LoaderCircle
-                  className="h-4 w-4 animate-spin"
-                  style={{ color: facet.base }}
-                  aria-hidden="true"
-                />
+                <LoadingMark className="h-4 w-4" />
               </>
             ) : badge ? (
               <span

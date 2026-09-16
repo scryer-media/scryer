@@ -969,3 +969,185 @@ mod config_field_conditions {
         assert!(config_field_is_required(&field, none));
     }
 }
+
+// ── numbering bridge from TVDB episode orders ─────────────────────────────
+
+fn order_entry(tvdb_id: i64, season: i32, episode: i32, name: &str) -> EpisodeOrderEntry {
+    EpisodeOrderEntry {
+        tvdb_id,
+        season_number: Some(season),
+        episode_number: Some(episode),
+        absolute_number: None,
+        name: name.to_string(),
+    }
+}
+
+/// Synthetic series: official season 1 runs E24..E27 as four separate
+/// episodes; the alternate order splits the same run differently, so the
+/// offset between the two changes partway through the season.
+fn non_constant_offset_orders() -> (Vec<EpisodeOrderEntry>, Vec<EpisodeOrderEntry>) {
+    let official = vec![
+        order_entry(9001, 1, 24, "Lantern Pass"),
+        order_entry(9002, 1, 25, "Salt Marsh Relay"),
+        order_entry(9003, 1, 26, "Quarry Signal"),
+        order_entry(9004, 1, 27, "Tin Roof Choir"),
+    ];
+    let alternate = vec![
+        order_entry(9001, 1, 24, "Lantern Pass"),
+        order_entry(9002, 1, 25, "Salt Marsh Relay"),
+        order_entry(9003, 1, 27, "Quarry Signal"),
+        order_entry(9004, 1, 28, "Tin Roof Choir"),
+    ];
+    (official, alternate)
+}
+
+#[test]
+fn episode_orders_compress_into_runs_across_a_non_constant_offset() {
+    let (official, alternate) = non_constant_offset_orders();
+    let bridge = numbering_bridge_from_episode_orders(
+        &official,
+        &alternate,
+        NumberingBridgeSource::TvdbAlternate,
+    )
+    .expect("bridge");
+
+    assert_eq!(bridge.source, NumberingBridgeSource::TvdbAlternate);
+    assert_eq!(bridge.corroborating_order.as_deref(), Some("alternate"));
+    assert_eq!(bridge.seasons.len(), 1);
+    let season = &bridge.seasons[0];
+    assert_eq!(season.index, 1);
+    assert!(season.titles.is_empty());
+    // The offset changes at alternate E27, so the run has to break there.
+    assert_eq!(
+        season.ranges,
+        vec![
+            AnimeCommunitySeasonRange {
+                community_episode_start: 24,
+                community_episode_end: Some(25),
+                tvdb_season: 1,
+                tvdb_episode_start: 24,
+                tvdb_episode_end: Some(25),
+            },
+            AnimeCommunitySeasonRange {
+                community_episode_start: 27,
+                community_episode_end: Some(28),
+                tvdb_season: 1,
+                tvdb_episode_start: 26,
+                tvdb_episode_end: Some(27),
+            },
+        ]
+    );
+    // Not a closed 1..=N run, so no episode count is claimed.
+    assert_eq!(season.episode_count, None);
+    assert_eq!(season.tvdb_for_community_episode(27), Some((1, 26)));
+    assert_eq!(season.tvdb_for_community_episode(28), Some((1, 27)));
+    assert_eq!(season.community_for_tvdb_episode(1, 26), Some(27));
+}
+
+#[test]
+fn episode_orders_split_a_season_boundary_into_its_own_bridge_season() {
+    let official = vec![
+        order_entry(7001, 1, 11, "Pier Lights"),
+        order_entry(7002, 1, 12, "Cold Kiln"),
+        order_entry(7003, 2, 1, "Verge Season"),
+        order_entry(7004, 2, 2, "Paper Ferry"),
+    ];
+    // The alternate order keeps all four in one season of its own.
+    let alternate = vec![
+        order_entry(7001, 1, 1, "Pier Lights"),
+        order_entry(7002, 1, 2, "Cold Kiln"),
+        order_entry(7003, 1, 3, "Verge Season"),
+        order_entry(7004, 1, 4, "Paper Ferry"),
+    ];
+    let bridge =
+        numbering_bridge_from_episode_orders(&official, &alternate, NumberingBridgeSource::TvdbDvd)
+            .expect("bridge");
+
+    assert_eq!(bridge.source, NumberingBridgeSource::TvdbDvd);
+    assert_eq!(bridge.corroborating_order.as_deref(), Some("dvd"));
+    let season = &bridge.seasons[0];
+    // A run cannot span two official seasons, so the boundary breaks it.
+    assert_eq!(season.ranges.len(), 2);
+    assert_eq!(season.ranges[0].tvdb_season, 1);
+    assert_eq!(season.ranges[1].tvdb_season, 2);
+    assert_eq!(season.episode_count, Some(4));
+    assert_eq!(season.tvdb_for_community_episode(3), Some((2, 1)));
+}
+
+#[test]
+fn an_alternate_order_identical_to_the_official_one_builds_no_bridge() {
+    let (official, _) = non_constant_offset_orders();
+    assert!(
+        numbering_bridge_from_episode_orders(
+            &official,
+            &official,
+            NumberingBridgeSource::TvdbAlternate,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn an_empty_or_disjoint_alternate_order_builds_no_bridge() {
+    let (official, alternate) = non_constant_offset_orders();
+    assert!(
+        numbering_bridge_from_episode_orders(&official, &[], NumberingBridgeSource::TvdbAlternate,)
+            .is_none()
+    );
+    assert!(
+        numbering_bridge_from_episode_orders(&[], &alternate, NumberingBridgeSource::TvdbDvd)
+            .is_none()
+    );
+    // No shared tvdb ids: nothing to translate through.
+    let disjoint = vec![order_entry(5001, 1, 1, "Unrelated")];
+    assert!(
+        numbering_bridge_from_episode_orders(
+            &official,
+            &disjoint,
+            NumberingBridgeSource::TvdbAlternate,
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn a_bridge_stored_before_the_source_column_reads_back_as_anime_community() {
+    let stored = r#"{"generated_on":"2026-01-01","corroborating_order":null,"seasons":[]}"#;
+    let bridge: AnimeNumberingBridge = serde_json::from_str(stored).expect("deserialize");
+    assert_eq!(bridge.source, NumberingBridgeSource::AnimeCommunity);
+    assert!(!bridge.source.is_tvdb_alternate_order());
+}
+
+#[test]
+fn release_numbering_parses_stored_tag_values() {
+    assert_eq!(
+        ReleaseNumbering::from_str_or_default("dvd"),
+        ReleaseNumbering::Dvd
+    );
+    assert_eq!(
+        ReleaseNumbering::from_str_or_default(" Alternate "),
+        ReleaseNumbering::Alternate
+    );
+    assert_eq!(
+        ReleaseNumbering::from_str_or_default("nonsense"),
+        ReleaseNumbering::Auto
+    );
+    assert_eq!(ReleaseNumbering::Official.forced_season_type(), None);
+    assert_eq!(ReleaseNumbering::Dvd.forced_season_type(), Some("dvd"));
+    assert_eq!(ReleaseNumbering::Alternate.as_str(), "alternate");
+}
+
+#[test]
+fn release_numbering_admits_only_the_bridge_its_setting_names() {
+    use NumberingBridgeSource::{AnimeCommunity, TvdbAlternate, TvdbDvd};
+    for source in [AnimeCommunity, TvdbAlternate, TvdbDvd] {
+        assert!(ReleaseNumbering::Auto.admits_bridge_source(source));
+        assert!(!ReleaseNumbering::Official.admits_bridge_source(source));
+    }
+    assert!(ReleaseNumbering::Alternate.admits_bridge_source(TvdbAlternate));
+    assert!(!ReleaseNumbering::Alternate.admits_bridge_source(TvdbDvd));
+    assert!(!ReleaseNumbering::Alternate.admits_bridge_source(AnimeCommunity));
+    assert!(ReleaseNumbering::Dvd.admits_bridge_source(TvdbDvd));
+    assert!(!ReleaseNumbering::Dvd.admits_bridge_source(TvdbAlternate));
+    assert!(!ReleaseNumbering::Dvd.admits_bridge_source(AnimeCommunity));
+}

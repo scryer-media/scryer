@@ -8,7 +8,12 @@ import type { Translate } from "@/components/root/types";
 import type { SettingsProxiesSectionProps } from "@/components/views/settings/settings-proxies-section";
 import { PROXY_INITIAL_DRAFT } from "../types/proxies.ts";
 
-test("SSH editor requires a key and never offers password or key removal controls", async () => {
+async function withProxySection(
+  run: (
+    props: SettingsProxiesSectionProps,
+    render: () => string,
+  ) => void,
+) {
   const server = await createServer({
     root: fileURLToPath(new URL("../..", import.meta.url)),
     server: { middlewareMode: true },
@@ -55,6 +60,14 @@ test("SSH editor requires a key and never offers password or key removal control
       createElement(TranslateContext.Provider, { value: (key) => key },
         createElement(Component, props)),
     );
+    run(props, render);
+  } finally {
+    await server.close();
+  }
+}
+
+test("SSH editor requires a key and never offers password or key removal controls", async () => {
+  await withProxySection((props, render) => {
     const fresh = render();
     assert.doesNotMatch(fresh, /id="settings-indexer-proxy-password"/);
     assert.match(fresh, /<textarea[^>]*id="settings-indexer-proxy-private-key"[^>]*required=""/);
@@ -74,7 +87,23 @@ test("SSH editor requires a key and never offers password or key removal control
 
     props.proxyDraft.providerType = "http";
     assert.match(render(), /id="settings-indexer-proxy-password"/);
-  } finally {
-    await server.close();
-  }
+  });
+});
+
+test("proxy editor offers cancel while creating, editing, and importing a WireGuard config", async () => {
+  await withProxySection((props, render) => {
+    const creating = render();
+    assert.match(creating, /id="settings-indexer-proxy-save"/);
+    assert.match(creating, /id="settings-indexer-proxy-cancel"/);
+
+    props.editingProxyId = "proxy-1";
+    assert.match(render(), /id="settings-indexer-proxy-cancel"/);
+
+    props.editingProxyId = null;
+    props.proxyDraft.providerType = "wireguard";
+    const importing = render();
+    assert.match(importing, /id="settings-indexer-proxy-import-config"/);
+    assert.doesNotMatch(importing, /id="settings-indexer-proxy-save"/);
+    assert.match(importing, /id="settings-indexer-proxy-cancel"/);
+  });
 });

@@ -933,7 +933,7 @@ impl TitleReconciler for RootMoveReconciler<'_> {
             let Some(record) = verified.get(&file.destination_path) else {
                 continue;
             };
-            if resolution.is_some_and(|row| {
+            if let Some(row) = resolution.filter(|row| {
                 row.disposition == super::resolution::ResolutionDisposition::Identical
             }) {
                 // The transfer proved this source byte-identical to the
@@ -942,6 +942,19 @@ impl TitleReconciler for RootMoveReconciler<'_> {
                 // content the library already holds, not user data that can be
                 // lost, so it is dropped outright rather than recycled
                 // (FR-073) — the destination copy is the survivor.
+                //
+                // "The destination copy is the survivor" is the whole
+                // justification, so it is proven rather than assumed: the file
+                // versions checked above are the fast negative, and the bytes
+                // still have to hash to the identity the transfer recorded
+                // before this source is dropped without a recycle bin behind
+                // it.
+                if !row.proof_supports_disposal().await? {
+                    return Err(AppError::Validation(
+                        "The destination copy no longer holds the content this move proved identical to the source. The source was preserved; retry to compare the files again."
+                            .into(),
+                    ));
+                }
                 let source = stored_path_to_path_buf(&file.source_path);
                 match tokio::fs::remove_file(&source).await {
                     Ok(()) => tracing::info!(

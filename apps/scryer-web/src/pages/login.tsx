@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router";
 import { useTheme } from "next-themes";
-import { Fingerprint, KeyRound, Loader2 } from "lucide-react";
+import { Fingerprint, KeyRound } from "lucide-react";
 import { TotpQrCode } from "@/components/common/totp-qr-code";
 import { useAuth, type AuthUser } from "@/lib/hooks/use-auth";
 import { useLanguage } from "@/lib/hooks/use-language";
@@ -39,6 +39,7 @@ import {
 import { authenticateWithPlexPin } from "@/lib/utils/plex-oauth";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type LoginMethod = "password" | "jellyfin" | "emby" | null;
 
@@ -892,7 +893,7 @@ export default function LoginPage() {
   if (authLoading) {
     return (
       <div className={AUTH_PAGE_CLASS}>
-        <Loader2 className="h-6 w-6 animate-spin text-[var(--scry-accent-ring)]" />
+        <LoadingMark className="h-6 w-6 text-[var(--scry-accent-ring)]" />
       </div>
     );
   }
@@ -958,7 +959,7 @@ export default function LoginPage() {
                 disabled={verificationPasskeyBusy}
                 className={AUTH_PRIMARY_BUTTON_CLASS}
               >
-                {verificationPasskeyBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
+                {verificationPasskeyBusy ? <LoadingMark className="h-4 w-4" /> : <Fingerprint className="h-4 w-4" aria-hidden="true" />}
                 {verificationPasskeyBusy ? "Waiting for passkey" : "Try passkey again"}
               </button>
               {loginVerification.hasTotp ? (
@@ -1071,7 +1072,7 @@ export default function LoginPage() {
                   disabled={jellyfinMfaBusy || jellyfinMfaEnrollmentCode.length !== 6}
                   className={AUTH_PRIMARY_BUTTON_CLASS}
                 >
-                  {jellyfinMfaBusy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {jellyfinMfaBusy ? <LoadingMark className="h-4 w-4" /> : null}
                   {t("profile.totpVerifyAndEnable")}
                 </button>
               </div>
@@ -1098,7 +1099,7 @@ export default function LoginPage() {
                   className={AUTH_PRIMARY_BUTTON_CLASS}
                 >
                   {loginEnrollmentPasskeyBusy ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <LoadingMark className="h-4 w-4" />
                   ) : (
                     <Fingerprint className="h-4 w-4" aria-hidden="true" />
                   )}
@@ -1188,7 +1189,7 @@ export default function LoginPage() {
               disabled={submitting}
               className={AUTH_PRIMARY_BUTTON_CLASS}
             >
-              {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {submitting ? <LoadingMark className="h-4 w-4" /> : null}
               {submitting ? "Saving password" : "Save new password"}
             </button>
           </form>
@@ -1316,7 +1317,7 @@ export default function LoginPage() {
                       disabled={anySubmitting}
                       className={AUTH_PRIMARY_BUTTON_CLASS}
                     >
-                      {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      {submitting ? <LoadingMark className="h-4 w-4" /> : null}
                       {submitting ? t("auth.signingIn") : t("auth.signIn")}
                     </button>
                 </form>
@@ -1333,7 +1334,7 @@ export default function LoginPage() {
               className={AUTH_SECONDARY_BUTTON_CLASS}
             >
               {passkeySubmitting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
               ) : (
                 <Fingerprint className="h-4 w-4" aria-hidden="true" />
               )}
@@ -1430,7 +1431,7 @@ export default function LoginPage() {
                     className={AUTH_PRIMARY_BUTTON_CLASS}
                   >
                     {jellyfinSubmitting ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <LoadingMark className="h-4 w-4" />
                     ) : null}
                     {jellyfinSubmitting ? t("auth.signingIn") : t("auth.signIn")}
                   </button>
@@ -1543,7 +1544,7 @@ export default function LoginPage() {
                     disabled={anySubmitting || !embyConnectionId || !embyUsername || !embyPassword}
                     className={AUTH_PRIMARY_BUTTON_CLASS}
                   >
-                    {embySubmitting ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    {embySubmitting ? <LoadingMark className="h-4 w-4" /> : null}
                     {embySubmitting ? t("auth.signingIn") : t("auth.signIn")}
                   </button>
                 </form>
@@ -1580,7 +1581,7 @@ export default function LoginPage() {
                 title={plexSubmitting ? t("auth.plexPinFlowPending") : undefined}
               >
                 {plexSubmitting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <LoadingMark className="h-4 w-4" />
                 ) : (
                   <img
                     src="/auth-providers/plex.svg"

@@ -1,6 +1,6 @@
 import { useState, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
-import { ArrowUpCircle, Download, ExternalLink, Loader2, Power, PowerOff, RefreshCw, Trash2, Upload } from "lucide-react";
+import { ArrowUpCircle, Download, ExternalLink, Power, PowerOff, RefreshCw, Trash2, Upload } from "lucide-react";
 import { PluginLogo } from "@/components/common/plugin-visual";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Badge } from "@/components/ui/badge";
@@ -28,6 +28,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const PLUGIN_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
@@ -587,7 +588,7 @@ function PluginTable({
                           }
                         >
                           {isUpgrading ? (
-                            <Loader2 className="h-4 w-4 animate-spin" />
+                            <LoadingMark className="h-4 w-4" />
                           ) : (
                             <ArrowUpCircle className="h-4 w-4" />
                           )}
@@ -629,7 +630,7 @@ function PluginTable({
                         label={t("settings.pluginInstall")}
                       >
                         {isBusy ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <LoadingMark className="h-4 w-4" />
                         ) : (
                           <Download className="h-4 w-4" />
                         )}
@@ -724,7 +725,7 @@ export function SettingsPluginsSection({
         size="sm"
         disabled={upgradingAll || remoteActionsBlocked.upgrade || upgradeCount === 0}
         onClick={onUpgradeAllPlugins}
-        leadingIcon={<ArrowUpCircle className={`h-4 w-4 ${upgradingAll ? "animate-spin" : ""}`} />}
+        leadingIcon={upgradingAll ? <LoadingMark className="h-4 w-4" /> : <ArrowUpCircle className="h-4 w-4" />}
       >
         {upgradingAll ? t("settings.pluginsUpdatingAll") : t("settings.pluginsUpdateAll")}
         {upgradeCount > 0 ? (
@@ -753,7 +754,7 @@ export function SettingsPluginsSection({
         disabled={refreshing}
         onClick={onRefreshRegistry}
       >
-        <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+        {refreshing ? <LoadingMark className="mr-2 h-4 w-4" /> : <RefreshCw className="mr-2 h-4 w-4" />}
         {refreshing ? t("label.refreshing") : t("settings.pluginsRefresh")}
       </Button>
     </div>
@@ -794,7 +795,7 @@ export function SettingsPluginsSection({
           </div>
           <div className="flex items-center gap-2">
             {autoUpdateSaving ? (
-              <Loader2 className={`h-4 w-4 animate-spin ${PLUGIN_MUTED_TEXT_CLASS}`} />
+              <LoadingMark className="h-4 w-4" />
             ) : null}
             <SettingsToggleSwitch
               id="settings-plugins-auto-update-toggle"
@@ -810,7 +811,7 @@ export function SettingsPluginsSection({
       {initialLoading ? (
         <div className={`${PLUGIN_PANEL_CLASS} flex min-h-48 items-center justify-center`}>
           <div className={`flex items-center gap-3 text-sm ${PLUGIN_MUTED_TEXT_CLASS}`}>
-            <Loader2 className="h-5 w-5 animate-spin" />
+            <LoadingMark className="h-5 w-5" />
             <span>{t("label.loading")}</span>
           </div>
         </div>

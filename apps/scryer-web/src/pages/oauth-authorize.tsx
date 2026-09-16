@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { CheckCircle2, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { CheckCircle2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   authRuntimeStateQuery,
@@ -19,6 +19,7 @@ import {
   takePendingOAuthDecision,
   type OAuthAuthorizationRequest,
 } from "@/lib/utils/oauth-authorization-request";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const OAUTH_PAGE_CLASS =
   "flex min-h-screen items-center justify-center bg-fixed p-4 text-[var(--scry-body)] [background-image:var(--scry-shell-bg)] sm:p-6";
@@ -302,7 +303,7 @@ export default function OAuthAuthorizePage() {
             id={selectorId("oauth-authorize-completing")}
             className="flex items-center justify-center gap-2 py-3 text-sm text-[var(--scry-muted)]"
           >
-            <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+            <LoadingMark className="h-5 w-5" />
             Completing authorization…
           </div>
         </div>
@@ -315,7 +316,7 @@ export default function OAuthAuthorizePage() {
       <main className={OAUTH_PAGE_CLASS}>
         <div className={OAUTH_COMPACT_PANEL_CLASS}>
           <div className="flex items-center justify-center py-3">
-            <Loader2 className="h-5 w-5 animate-spin text-[var(--scry-muted)]" aria-label="Preparing authorization" />
+            <LoadingMark className="h-5 w-5" label="Preparing authorization" />
           </div>
         </div>
       </main>
@@ -371,7 +372,7 @@ export default function OAuthAuthorizePage() {
             className={OAUTH_PRIMARY_BUTTON_CLASS}
             onClick={() => decide(true)}
           >
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            {busy ? <LoadingMark className="h-4 w-4" /> : null}
             {authlessAuthorization ? "Authorize as Anonymous" : "Authorize"}
           </Button>
           {actorValidationRetryAvailable ? (

@@ -4,7 +4,6 @@ import {
   ChevronUp,
   Download,
   FileWarning,
-  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -32,6 +31,7 @@ import {
   isSensitiveIndexerErrorHeader,
   presentIndexerErrorBody,
 } from "@/lib/utils/indexer-error-response";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 function humanizeEnum(value: string): string {
   return value
@@ -329,7 +329,7 @@ export function IndexerErrorTable({
                     <TableCell colSpan={columnCount} className="bg-card/30 p-4">
                       {detailLoading[item.id] ? (
                         <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <LoadingMark className="h-4 w-4" />
                           {t("indexerErrors.loadingResponse")}
                         </div>
                       ) : detailErrors[item.id] ? (

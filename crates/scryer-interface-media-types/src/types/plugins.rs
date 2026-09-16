@@ -96,6 +96,8 @@ pub struct RulePackTemplatePayload {
     pub rego_source: String,
     /// Facets to which the template applies.
     pub applied_facets: Vec<String>,
+    /// Whether the pack recommends enabling the template.
+    pub default_enabled: bool,
 }
 
 #[derive(SimpleObject, Clone)]

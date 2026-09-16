@@ -7,22 +7,28 @@ mod persistence_tests;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+#[cfg(unix)]
+use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use common::TestContext;
+#[cfg(unix)]
+use scryer_application::DownloadClientConfigRepository;
 use scryer_application::testing::AppUseCaseTestExt;
 use scryer_application::{
-    AcquisitionScopeStateRepository, BlocklistRepository, ClientJobLocator,
-    DownloadClientConfigRepository, DownloadSubmission, DownloadSubmissionPurpose,
-    DownloadSubmissionRepository, ImportArtifactRepository, ImportRepository, LibraryRepository,
-    LibraryRootDraft, MediaFileRepository, ReleaseAttemptRepository, SaveQualityProfileSettings,
-    ShowRepository, SubmissionScope, TitleRepository, import_completed_download,
+    AcquisitionScopeStateRepository, BlocklistRepository, ClientJobLocator, DownloadSubmission,
+    DownloadSubmissionPurpose, DownloadSubmissionRepository, ImportArtifactRepository,
+    ImportRepository, LibraryRepository, LibraryRootDraft, MediaFileRepository,
+    ReleaseAttemptRepository, SaveQualityProfileSettings, ShowRepository, SubmissionScope,
+    TitleRepository, import_completed_download,
 };
 use scryer_domain::{
-    Collection, CompletedDownload, DownloadClientConfig, DownloadClientStatus, Episode, Id,
-    ImportDecision, ImportSkipReason, MediaFacet, Title,
+    Collection, CompletedDownload, Episode, Id, ImportDecision, ImportSkipReason, MediaFacet, Title,
 };
+#[cfg(unix)]
+use scryer_domain::{DownloadClientConfig, DownloadClientStatus};
+#[cfg(unix)]
 use scryer_infrastructure_acquisition::downloads::config_store::DownloadClientConfigStore;
 use scryer_infrastructure_sql::types::SettingDefinitionSeed;
 use scryer_infrastructure_workflow::workflow::{
@@ -1633,12 +1639,14 @@ async fn manual_import_series_pack_maps_each_file_within_the_bound_title() {
                 disc_selection: None,
                 file_path: source_file_1.to_string_lossy().to_string(),
                 episode_id: Some(episode_1.id.clone()),
+                episode_ids: Vec::new(),
                 series_movie_link_id: None,
             },
             scryer_application::ManualImportFileMapping {
                 disc_selection: None,
                 file_path: source_file_2.to_string_lossy().to_string(),
                 episode_id: Some(episode_2.id.clone()),
+                episode_ids: Vec::new(),
                 series_movie_link_id: None,
             },
         ],
@@ -1713,6 +1721,7 @@ async fn manual_import_multi_episode_filename_keeps_the_explicit_single_episode_
             disc_selection: None,
             file_path: source_file.to_string_lossy().to_string(),
             episode_id: Some(episode_1.id.clone()),
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
         }],
         Some(source_dir.path().to_path_buf()),
@@ -1801,12 +1810,14 @@ async fn manual_import_rejects_a_mixed_title_pack_before_moving_any_file() {
                 disc_selection: None,
                 file_path: source_file_1.to_string_lossy().to_string(),
                 episode_id: Some(bound_episode.id),
+                episode_ids: Vec::new(),
                 series_movie_link_id: None,
             },
             scryer_application::ManualImportFileMapping {
                 disc_selection: None,
                 file_path: source_file_2.to_string_lossy().to_string(),
                 episode_id: Some(foreign_episode.id),
+                episode_ids: Vec::new(),
                 series_movie_link_id: None,
             },
         ],
@@ -1829,6 +1840,7 @@ async fn manual_import_rejects_a_mixed_title_pack_before_moving_any_file() {
             disc_selection: None,
             file_path: source_file_1.to_string_lossy().to_string(),
             episode_id: None,
+            episode_ids: Vec::new(),
             series_movie_link_id: Some(foreign_series_movie.id),
         }],
         Some(source_dir.path().to_path_buf()),
@@ -1890,6 +1902,7 @@ async fn manual_import_series_persists_media_analysis_and_acquisition_score() {
             disc_selection: None,
             file_path: source_file.to_string_lossy().to_string(),
             episode_id: Some(episode.id.clone()),
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
         }],
         Some(source_dir.path().to_path_buf()),
@@ -1964,6 +1977,7 @@ async fn manual_import_series_reuses_existing_title_folder_path_even_when_templa
             disc_selection: None,
             file_path: source_file.to_string_lossy().to_string(),
             episode_id: Some(episode.id.clone()),
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
         }],
         Some(source_dir.path().to_path_buf()),
@@ -2058,6 +2072,7 @@ async fn manual_import_series_rejects_when_incumbent_covers_broader_episode_set(
             disc_selection: None,
             file_path: source_file.to_string_lossy().to_string(),
             episode_id: Some(episode1.id.clone()),
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
         }],
         Some(source_dir.path().to_path_buf()),
@@ -2271,6 +2286,7 @@ fn movie_manual_mapping(path: &Path) -> scryer_application::ManualImportFileMapp
         disc_selection: None,
         file_path: path.to_string_lossy().to_string(),
         episode_id: None,
+        episode_ids: Vec::new(),
         series_movie_link_id: None,
     }
 }
@@ -3145,12 +3161,14 @@ async fn manual_import_never_asks_srrdb_for_a_filename() {
                 disc_selection: None,
                 file_path: source_file_1.to_string_lossy().to_string(),
                 episode_id: Some(episode_1.id.clone()),
+                episode_ids: Vec::new(),
                 series_movie_link_id: None,
             },
             scryer_application::ManualImportFileMapping {
                 disc_selection: None,
                 file_path: source_file_2.to_string_lossy().to_string(),
                 episode_id: Some(episode_2.id.clone()),
+                episode_ids: Vec::new(),
                 series_movie_link_id: None,
             },
         ],

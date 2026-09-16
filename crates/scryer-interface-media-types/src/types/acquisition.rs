@@ -630,6 +630,12 @@ pub struct DownloadClientConfigPayload {
     pub last_error: Option<String>,
     /// UTC time the client was last observed, or null before the first observation.
     pub last_seen_at: Option<DateTime<Utc>>,
+    /// UTC time this client's failure backoff expires, or null when the client
+    /// is not backed off. Grabs skip a client until this time passes.
+    pub disabled_until: Option<DateTime<Utc>>,
+    /// Which rung of the failure backoff ladder the client is on: 0 when it is
+    /// healthy, rising to 5 for a client that has been failing for an hour.
+    pub escalation_level: i32,
     /// Proxy carrying this client's traffic, or null when none is assigned.
     /// Any proxy kind may be assigned. A challenge solver has no effect on a
     /// native client, whose requests are not made by a plugin guest.
@@ -1434,6 +1440,8 @@ pub struct ManualImportFilePreviewPayload {
     pub parsed_episodes: Vec<i32>,
     /// Suggested episode ID, or null when no single suggestion is available.
     pub suggested_episode_id: Option<ID>,
+    /// Every suggested episode ID for this file, in parsed order; empty means no suggestion. A multi-episode file suggests more than one.
+    pub suggested_episode_ids: Vec<ID>,
     /// Label for the suggested episode, or null when no suggestion exists.
     pub suggested_episode_label: Option<String>,
     /// Suggested series-movie link, or null when this is not a grabbed series movie.
@@ -1459,7 +1467,13 @@ pub struct ManualImportCandidateMappingInput {
     /// Candidate ID from the persisted manual-import selection.
     pub candidate_id: ID,
     /// Episode target ID for an episodic import; null for a series-movie or movie import.
+    #[graphql(
+        deprecation = "Use episodeIds, which also covers a file that holds more than one episode."
+    )]
     pub episode_id: Option<ID>,
+    /// Episode target IDs for an episodic import; empty for a series-movie or movie import. Merged with the deprecated episodeId.
+    #[graphql(default)]
+    pub episode_ids: Vec<ID>,
     /// Series-movie link ID for a series-movie import; null for an episode or movie import.
     pub series_movie_link_id: Option<ID>,
     /// Explicit playback title and episode mappings for one intact ISO image.

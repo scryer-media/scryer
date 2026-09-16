@@ -40,8 +40,8 @@ pub(crate) enum PendingGrabOutcome {
 }
 
 /// A submission refused without burning its release, reduced to what failure
-/// accounting reads (the error itself is not `Clone`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// accounting and refusal logging read (the error itself is not `Clone`).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RefusedSubmission {
     /// The refusal was a retryable download-submission failure: the download
     /// client was unavailable, as a mapped client that is globally disabled is.
@@ -807,6 +807,31 @@ impl AppUseCase {
         Ok(true)
     }
 
+    /// Whether this release's route names one specific download client.
+    ///
+    /// A pinned route is an indexer-to-client mapping: the operator said *this*
+    /// indexer's grabs go to *that* client, so there is no fallback to pick and
+    /// no blind double-submit to protect against — an unreadable queue cannot
+    /// hide a second client that already has the release. Sonarr treats a fresh
+    /// search grab the same way (`DownloadService` only block-filters when it is
+    /// re-processing pending releases), and letting the grab reach the router
+    /// turns an invisible "keeping release pending" into a recorded attempt the
+    /// operator can read.
+    pub(crate) async fn release_route_is_pinned(&self, indexer_id: Option<&str>) -> bool {
+        let Some(indexer_id) = indexer_id.map(str::trim).filter(|value| !value.is_empty()) else {
+            return false;
+        };
+        self.services
+            .integrations
+            .indexer_configs
+            .get_by_id(indexer_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|config| config.download_client_id)
+            .is_some_and(|client_id| !client_id.trim().is_empty())
+    }
+
     /// Attempt to grab a single pending release.
     pub(crate) async fn try_grab_pending_release(
         &self,
@@ -851,7 +876,13 @@ impl AppUseCase {
         // that's currently downloading (e.g. grabbed via background search
         // while this pending release was waiting).
         let dl_snapshot = super::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
-        if dl_snapshot.is_active(&pr.release_title) {
+        // An unreadable queue makes `is_active` answer "possibly" for every
+        // release. That blind "yes" must not burn a pinned release: the pinned
+        // client is the only place the release could be, and the router will
+        // find out by asking it.
+        let route_pinned = dl_snapshot.queue_listing_failed()
+            && self.release_route_is_pinned(pr.indexer_id.as_deref()).await;
+        if !route_pinned && dl_snapshot.is_active(&pr.release_title) {
             info!(
                 release = pr.release_title.as_str(),
                 "pending release: skipping, already active in download client"
@@ -933,21 +964,18 @@ impl AppUseCase {
             &pr.release_title,
             &pending_parse_context,
         );
-        // A parked anime release is very often the reason it was parked: it was
-        // numbered per cour, matched nothing, and sat here. Translate it into
-        // the catalog's numbering before coverage and the numbering veto read
-        // it, exactly as the search and RSS lanes do. Inert for every title
-        // without a stored bridge.
-        let pending_numbering_bridge = if title.facet == MediaFacet::Anime {
-            self.services
-                .catalog
-                .shows
-                .get_anime_numbering_bridge(&title.id)
-                .await
-                .unwrap_or_default()
-        } else {
-            None
-        };
+        // A parked release is very often parked for exactly this reason: it was
+        // numbered by an order the catalog does not follow, matched nothing,
+        // and sat here. Translate it into the catalog's numbering before
+        // coverage and the numbering veto read it, exactly as the search and
+        // RSS lanes do. Inert for every title without a stored bridge.
+        let pending_numbering_bridge = self
+            .services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(&title.id)
+            .await
+            .unwrap_or_default();
         let pending_numbering = crate::anime_numbering::translate_release_numbering(
             pending_numbering_bridge.as_ref(),
             &title,
@@ -1540,13 +1568,6 @@ impl AppUseCase {
                 })
             }
             Err(err) => {
-                warn!(
-                    title = title.name.as_str(),
-                    release = pr.release_title.as_str(),
-                    error = %err,
-                    "pending release: download submission failed"
-                );
-
                 // An ambiguous submit (the request may have been accepted but
                 // the response was lost) is deferred exactly like an
                 // unavailable client. A gone source is similarly never a
@@ -1554,6 +1575,26 @@ impl AppUseCase {
                 let defer = is_download_submit_unavailable_error(&err)
                     || err.is_download_submit_ambiguous();
                 let source_gone = err.is_download_source_gone();
+
+                // Only the branch that actually burns the release warns. A
+                // deferral is a retry the lane schedules for itself, and a gone
+                // source logs its own line below, so neither is a failure worth
+                // waking an operator for.
+                if defer {
+                    info!(
+                        title = title.name.as_str(),
+                        release = pr.release_title.as_str(),
+                        error = %err,
+                        "pending release: download submission deferred"
+                    );
+                } else if !source_gone {
+                    warn!(
+                        title = title.name.as_str(),
+                        release = pr.release_title.as_str(),
+                        error = %err,
+                        "pending release: download submission failed"
+                    );
+                }
 
                 let _ = self
                     .services

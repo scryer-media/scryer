@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from "react";
 import { useClient } from "urql";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { File, Folder, FolderOpen, ChevronRight, ArrowUp, Loader2 } from "lucide-react";
+import { File, Folder, FolderOpen, ChevronRight, ArrowUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -17,6 +17,7 @@ import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { browsePathQuery } from "@/lib/graphql/queries";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 interface DirectoryEntry {
   name: string;
@@ -248,7 +249,7 @@ export function FolderBrowserDialog({
             {loading ? (
               <div className="flex h-full items-center justify-center">
                 <div className="flex items-center gap-3 rounded-[12px] border border-[var(--scry-border2)] bg-[var(--scry-inset)] px-4 py-3 text-sm text-[var(--scry-muted3)]">
-                  <Loader2 className="h-5 w-5 animate-spin text-[var(--scry-accent-text)]" />
+                  <LoadingMark className="h-5 w-5 text-[var(--scry-accent-text)]" />
                   {t("folderBrowser.loading")}
                 </div>
               </div>

@@ -1971,258 +1971,6 @@ async fn queue_existing_title_download_ignores_stale_matching_submission() {
 }
 
 #[tokio::test]
-async fn queue_existing_title_download_requires_the_relevant_client_to_be_authoritative() {
-    let download_client = Arc::new(StubDownloadClient::default());
-    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
-    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
-    let (app, user) = bootstrap_with_cleanup_tracking(
-        download_client.clone(),
-        download_submissions.clone(),
-        pending_releases,
-    );
-    let title = app
-        .add_title(
-            &user,
-            NewTitle {
-                name: "Partial Snapshot".into(),
-                facet: MediaFacet::Movie,
-                monitored: true,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create title");
-    download_submissions
-        .record_submission(DownloadSubmission {
-            download_id: scryer_domain::download_identity::DownloadId::new(),
-            title_id: title.id.clone(),
-            purpose: crate::DownloadSubmissionPurpose::Standard,
-            facet: "movie".to_string(),
-            download_client_id: Some("primary".to_string()),
-            download_client_type: "nzbget".to_string(),
-            download_client_item_id: "missing-primary-job".to_string(),
-            source_hint: None,
-            source_provider_id: None,
-            source_provider_name: None,
-            source_kind: Some(DownloadSourceKind::NzbUrl),
-            source_title: Some("First.Release.2026.1080p".to_string()),
-            info_hash: None,
-            release_size_bytes: None,
-            request_signature: None,
-            scope: SubmissionScope::Title,
-        })
-        .await
-        .expect("record prior submission");
-    download_client
-        .set_snapshot_authoritative_client_ids(["secondary".to_string()])
-        .await;
-
-    let error = app
-        .queue_existing_title_download(
-            &user,
-            &title.id,
-            QueuedReleaseSelection {
-                source_hint: Some("https://example.invalid/second.nzb".to_string()),
-                source_kind: Some(DownloadSourceKind::NzbUrl),
-                source_title: Some("Second.Release.2026.1080p".to_string()),
-                ..Default::default()
-            },
-            SubmissionScope::Title,
-            SubmissionConflictPolicy::Abort,
-        )
-        .await
-        .expect_err("another client's successful snapshot cannot prove absence");
-    assert!(matches!(error, AppError::DownloadSubmitUnavailable(_)));
-    assert!(
-        download_client
-            .submitted_release_titles
-            .lock()
-            .await
-            .is_empty()
-    );
-
-    download_client
-        .set_snapshot_authoritative_client_ids(["primary".to_string()])
-        .await;
-    *download_client.observation_error.lock().await = Some("connection lost after snapshot".into());
-    let error = app
-        .queue_existing_title_download(
-            &user,
-            &title.id,
-            QueuedReleaseSelection {
-                source_hint: Some("https://example.invalid/second.nzb".to_string()),
-                source_kind: Some(DownloadSourceKind::NzbUrl),
-                source_title: Some("Second.Release.2026.1080p".to_string()),
-                ..Default::default()
-            },
-            SubmissionScope::Title,
-            SubmissionConflictPolicy::Abort,
-        )
-        .await
-        .expect_err("fresh admission must fail closed after a healthy snapshot");
-    assert!(matches!(error, AppError::DownloadSubmitUnavailable(_)));
-    assert!(
-        download_client
-            .submitted_release_titles
-            .lock()
-            .await
-            .is_empty()
-    );
-    let prior = download_submissions.store.lock().await[0].clone();
-    download_submissions
-        .record_identity_tracked_state(
-            &DownloadSubmissionIdentity::default(),
-            Some(&ClientJobLocator::from_submission(&prior)),
-            "imported",
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    download_submissions
-        .pending_cleanup
-        .lock()
-        .await
-        .insert(prior.download_id);
-    let error = app
-        .queue_existing_title_download(
-            &user,
-            &title.id,
-            QueuedReleaseSelection {
-                source_hint: Some("https://example.invalid/second.nzb".to_string()),
-                source_kind: Some(DownloadSourceKind::NzbUrl),
-                source_title: Some("Second.Release.2026.1080p".to_string()),
-                ..Default::default()
-            },
-            SubmissionScope::Title,
-            SubmissionConflictPolicy::Abort,
-        )
-        .await
-        .expect_err("an imported download awaiting cleanup must still defer during an outage");
-    assert!(matches!(error, AppError::DownloadSubmitUnavailable(_)));
-    assert!(
-        download_client
-            .submitted_release_titles
-            .lock()
-            .await
-            .is_empty()
-    );
-    *download_client.observation_error.lock().await = None;
-    app.queue_existing_title_download(
-        &user,
-        &title.id,
-        QueuedReleaseSelection {
-            source_hint: Some("https://example.invalid/second.nzb".to_string()),
-            source_kind: Some(DownloadSourceKind::NzbUrl),
-            source_title: Some("Second.Release.2026.1080p".to_string()),
-            ..Default::default()
-        },
-        SubmissionScope::Title,
-        SubmissionConflictPolicy::Abort,
-    )
-    .await
-    .expect("authoritative absence should permit the new submission");
-    assert_eq!(
-        download_client.submitted_release_titles.lock().await.len(),
-        1
-    );
-}
-
-#[tokio::test]
-async fn queue_existing_title_download_requires_authority_to_trust_a_terminal_item() {
-    let download_client = Arc::new(StubDownloadClient::default());
-    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
-    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
-    let (app, user) = bootstrap_with_cleanup_tracking(
-        download_client.clone(),
-        download_submissions.clone(),
-        pending_releases,
-    );
-    let title = app
-        .add_title(
-            &user,
-            NewTitle {
-                name: "Partial Terminal Snapshot".into(),
-                facet: MediaFacet::Movie,
-                monitored: true,
-                ..Default::default()
-            },
-        )
-        .await
-        .expect("create title");
-    download_submissions
-        .record_submission(DownloadSubmission {
-            download_id: scryer_domain::download_identity::DownloadId::new(),
-            title_id: title.id.clone(),
-            purpose: crate::DownloadSubmissionPurpose::Standard,
-            facet: "movie".to_string(),
-            download_client_id: Some("primary".to_string()),
-            download_client_type: "nzbget".to_string(),
-            download_client_item_id: "failed-primary-job".to_string(),
-            source_hint: None,
-            source_provider_id: None,
-            source_provider_name: None,
-            source_kind: Some(DownloadSourceKind::NzbUrl),
-            source_title: Some("Failed.Release.2026.1080p".to_string()),
-            info_hash: None,
-            release_size_bytes: None,
-            request_signature: None,
-            scope: SubmissionScope::Title,
-        })
-        .await
-        .expect("record prior submission");
-    let mut failed_item =
-        queue_history_fixture_item("failed-primary-job", DownloadQueueState::Failed, 0);
-    failed_item.client_id = "primary".to_string();
-    download_client.history_items.lock().await.push(failed_item);
-
-    let selection = QueuedReleaseSelection {
-        source_hint: Some("https://example.invalid/replacement.nzb".to_string()),
-        source_kind: Some(DownloadSourceKind::NzbUrl),
-        source_title: Some("Replacement.Release.2026.1080p".to_string()),
-        ..Default::default()
-    };
-    download_client
-        .set_snapshot_authoritative_client_ids(["secondary".to_string()])
-        .await;
-    let error = app
-        .queue_existing_title_download(
-            &user,
-            &title.id,
-            selection.clone(),
-            SubmissionScope::Title,
-            SubmissionConflictPolicy::Abort,
-        )
-        .await
-        .expect_err("a terminal item from a partial client snapshot is not authoritative");
-    assert!(matches!(error, AppError::DownloadSubmitUnavailable(_)));
-    assert!(
-        download_client
-            .submitted_release_titles
-            .lock()
-            .await
-            .is_empty()
-    );
-
-    download_client
-        .set_snapshot_authoritative_client_ids(["primary".to_string()])
-        .await;
-    app.queue_existing_title_download(
-        &user,
-        &title.id,
-        selection,
-        SubmissionScope::Title,
-        SubmissionConflictPolicy::Abort,
-    )
-    .await
-    .expect("an authoritative terminal item permits a replacement submission");
-    assert_eq!(
-        download_client.submitted_release_titles.lock().await.len(),
-        1
-    );
-}
-
-#[tokio::test]
 async fn queue_existing_title_download_blocks_a_durable_unbound_submission() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
@@ -5696,6 +5444,7 @@ async fn wanted_item_subject_evidence_carries_the_anime_bridge_cour_names() {
         .expect("create anime title");
 
     let bridge = scryer_domain::AnimeNumberingBridge {
+        source: Default::default(),
         generated_on: "2026-01-01".into(),
         corroborating_order: None,
         seasons: vec![scryer_domain::AnimeCommunitySeason {
@@ -5760,5 +5509,251 @@ async fn wanted_item_subject_evidence_carries_the_anime_bridge_cour_names() {
             &subject.title_evidence
         ),
         "the walk must recognise a release named after a bridge cour"
+    );
+}
+
+/// Sonarr's `QueueSpecification` reads the live queue and nothing else: a
+/// submission the client no longer lists cannot block a new grab, and a client
+/// that is answering needs no separate authority proof.
+#[tokio::test]
+async fn a_submission_the_client_no_longer_lists_does_not_block_a_new_grab() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let app =
+        base_app.with_test_overrides(|services| services.with_download_registry(registry.clone()));
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Fixture Vanished Claim".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    let prior_download_id = scryer_domain::download_identity::DownloadId::new();
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: prior_download_id,
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some("primary".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "missing-primary-job".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            source_title: Some("Fixture.First.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+        })
+        .await
+        .expect("record prior submission");
+    registry
+        .bind(
+            ClientJobLocator::new(Some("primary"), "nzbget", "missing-primary-job"),
+            prior_download_id,
+        )
+        .await;
+    // Another client's read succeeded; this one's did not. The binding is still
+    // live. Before the convergence that was "unavailable"; now the listing is
+    // the only fact, and no client is in backoff.
+    download_client
+        .set_snapshot_authoritative_client_ids(["secondary".to_string()])
+        .await;
+
+    app.queue_existing_title_download(
+        &user,
+        &title.id,
+        QueuedReleaseSelection {
+            source_hint: Some("https://example.invalid/second.nzb".to_string()),
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            source_title: Some("Fixture.Second.2026.1080p.WEB-DL".to_string()),
+            ..Default::default()
+        },
+        SubmissionScope::Title,
+        SubmissionConflictPolicy::Abort,
+    )
+    .await
+    .expect("a job no client lists cannot hold the scope");
+    assert_eq!(
+        download_client.submitted_release_titles.lock().await.len(),
+        1,
+        "no binding may block a grab"
+    );
+}
+
+/// The one case where silence is not evidence: while the client that ran the
+/// submission is in failure backoff, its listing proves nothing, so the
+/// acquisition fails closed and names the client.
+#[tokio::test]
+async fn a_submission_on_a_blocked_client_fails_closed_until_the_client_returns() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (base_app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let disabled_until = Utc::now() + chrono::Duration::minutes(15);
+    let status = Arc::new(
+        super::downloads::RecordingDownloadClientStatusRepo::with_blocked_client(
+            "primary",
+            disabled_until,
+        ),
+    );
+    let app = base_app
+        .with_test_overrides(|services| services.with_download_client_status(status.clone()));
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Fixture Blocked Client".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some("primary".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "unlisted-primary-job".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            source_title: Some("Fixture.Held.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+        })
+        .await
+        .expect("record prior submission");
+
+    let error = app
+        .queue_existing_title_download(
+            &user,
+            &title.id,
+            QueuedReleaseSelection {
+                source_hint: Some("https://example.invalid/second.nzb".to_string()),
+                source_kind: Some(DownloadSourceKind::NzbUrl),
+                source_title: Some("Fixture.Replacement.2026.1080p.WEB-DL".to_string()),
+                ..Default::default()
+            },
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect_err("a blocked client's silence is not evidence");
+    match error {
+        AppError::DownloadSubmitUnavailable(message) => {
+            assert!(
+                message.contains("primary") && message.contains("failure backoff"),
+                "the refusal names the blocked client: {message}"
+            );
+        }
+        other => panic!("unexpected error: {other}"),
+    }
+    assert!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty()
+    );
+}
+
+/// A client-reported terminal row is replaced on sight: the client answered,
+/// and only a backoff window could make that answer untrustworthy.
+#[tokio::test]
+async fn a_failed_queue_row_is_replaced_without_asking_for_snapshot_authority() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let (app, user) = bootstrap_with_cleanup_tracking(
+        download_client.clone(),
+        download_submissions.clone(),
+        pending_releases,
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Fixture Terminal Row".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    download_submissions
+        .record_submission(DownloadSubmission {
+            download_id: scryer_domain::download_identity::DownloadId::new(),
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".to_string(),
+            download_client_id: Some("primary".to_string()),
+            download_client_type: "nzbget".to_string(),
+            download_client_item_id: "failed-primary-job".to_string(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            source_title: Some("Fixture.Failed.2026.1080p.WEB-DL".to_string()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+        })
+        .await
+        .expect("record prior submission");
+    let mut failed_item =
+        queue_history_fixture_item("failed-primary-job", DownloadQueueState::Failed, 0);
+    failed_item.client_id = "primary".to_string();
+    download_client.history_items.lock().await.push(failed_item);
+    download_client
+        .set_snapshot_authoritative_client_ids(["secondary".to_string()])
+        .await;
+
+    app.queue_existing_title_download(
+        &user,
+        &title.id,
+        QueuedReleaseSelection {
+            source_hint: Some("https://example.invalid/replacement.nzb".to_string()),
+            source_kind: Some(DownloadSourceKind::NzbUrl),
+            source_title: Some("Fixture.Replacement.2026.1080p.WEB-DL".to_string()),
+            ..Default::default()
+        },
+        SubmissionScope::Title,
+        SubmissionConflictPolicy::Abort,
+    )
+    .await
+    .expect("a terminal row never blocks a replacement");
+    assert_eq!(
+        download_client.submitted_release_titles.lock().await.len(),
+        1
     );
 }

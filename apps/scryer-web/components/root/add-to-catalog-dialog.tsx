@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Loader2, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter } from "@/components/ui/dialog";
 import {
@@ -36,6 +36,7 @@ import {
   inheritedCatalogQualityProfileLabel,
   INHERIT_CATALOG_QUALITY_PROFILE_VALUE,
 } from "@/lib/utils/catalog-add-quality-profile";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type AddToCatalogDialogProps = {
   open: boolean;
@@ -485,7 +486,7 @@ export function AddToCatalogDialog({
             id="add-to-catalog-config-loading"
             className="flex items-center gap-2 rounded-md border border-dashed border-border/80 bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
           >
-            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+            <LoadingMark className="h-4 w-4 text-primary" />
             <span>{t("label.loading")}</span>
           </div>
         ) : null}
@@ -514,7 +515,7 @@ export function AddToCatalogDialog({
             className="h-12 gap-2 bg-primary px-8 text-primary-foreground hover:bg-primary/90"
           >
             {isSubmitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingMark className="h-4 w-4" />
             ) : (
               <Plus className="h-5 w-5" />
             )}

@@ -203,46 +203,6 @@ pub fn from_quality_profile_decision(
     }
 }
 
-#[cfg(test)]
-mod stereo_tests {
-    use super::*;
-
-    #[test]
-    fn stereo_api_mapping_and_nullable_schema() {
-        let parsed =
-            scryer_application::parse_release_metadata("Title.2020.1080p.BluRay.3D.HSBS.x264");
-        let payload = from_parsed_release(parsed);
-        let stereo = payload.stereoscopy.unwrap();
-        assert_eq!(stereo.presentation, StereoPresentationValue::ThreeD);
-        assert_eq!(stereo.layout, Some(StereoLayoutValue::SideBySide));
-        assert_eq!(stereo.sampling, Some(StereoSamplingValue::Half));
-        assert_eq!(stereo.encoding, None);
-        assert!(
-            from_parsed_release(ParsedReleaseMetadata::default())
-                .stereoscopy
-                .is_none()
-        );
-
-        struct Query;
-        #[async_graphql::Object]
-        impl Query {
-            async fn parsed(&self) -> ParsedReleasePayload {
-                from_parsed_release(ParsedReleaseMetadata::default())
-            }
-        }
-        let schema = async_graphql::Schema::build(
-            Query,
-            async_graphql::EmptyMutation,
-            async_graphql::EmptySubscription,
-        )
-        .finish()
-        .sdl();
-        assert!(schema.contains("stereoscopy: ParsedStereoscopyPayload\n"));
-        assert!(schema.contains("layout: StereoLayoutValue\n"));
-        assert!(schema.contains("presentation: StereoPresentationValue!"));
-    }
-}
-
 pub fn from_parsed_release(result: ParsedReleaseMetadata) -> ParsedReleasePayload {
     ParsedReleasePayload {
         raw_title: result.raw_title,
@@ -676,4 +636,44 @@ pub fn from_title_acquisition_diagnostics(
             "title acquisition latest_wanted_search_at",
         ),
     })
+}
+
+#[cfg(test)]
+mod stereo_tests {
+    use super::*;
+
+    #[test]
+    fn stereo_api_mapping_and_nullable_schema() {
+        let parsed =
+            scryer_application::parse_release_metadata("Title.2020.1080p.BluRay.3D.HSBS.x264");
+        let payload = from_parsed_release(parsed);
+        let stereo = payload.stereoscopy.unwrap();
+        assert_eq!(stereo.presentation, StereoPresentationValue::ThreeD);
+        assert_eq!(stereo.layout, Some(StereoLayoutValue::SideBySide));
+        assert_eq!(stereo.sampling, Some(StereoSamplingValue::Half));
+        assert_eq!(stereo.encoding, None);
+        assert!(
+            from_parsed_release(ParsedReleaseMetadata::default())
+                .stereoscopy
+                .is_none()
+        );
+
+        struct Query;
+        #[async_graphql::Object]
+        impl Query {
+            async fn parsed(&self) -> ParsedReleasePayload {
+                from_parsed_release(ParsedReleaseMetadata::default())
+            }
+        }
+        let schema = async_graphql::Schema::build(
+            Query,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .finish()
+        .sdl();
+        assert!(schema.contains("stereoscopy: ParsedStereoscopyPayload\n"));
+        assert!(schema.contains("layout: StereoLayoutValue\n"));
+        assert!(schema.contains("presentation: StereoPresentationValue!"));
+    }
 }

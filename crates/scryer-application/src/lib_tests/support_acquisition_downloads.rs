@@ -1810,6 +1810,9 @@ pub(super) struct StubDownloadClient {
     pub(super) observation_script:
         Arc<Mutex<std::collections::VecDeque<crate::DownloadClientObservation>>>,
     pub(super) observed_history_offsets: Arc<Mutex<Vec<usize>>>,
+    /// Every locator `observe_download` was asked about, scripted or not, so a
+    /// caller-level test can prove how many live client round-trips a pass cost.
+    pub(super) observed_locators: Arc<Mutex<Vec<crate::ClientJobLocator>>>,
     pub(super) queue_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) history_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) completed_downloads: Arc<Mutex<Vec<CompletedDownload>>>,
@@ -1948,6 +1951,7 @@ impl DownloadClient for StubDownloadClient {
         locator: &crate::ClientJobLocator,
         offset: usize,
     ) -> AppResult<crate::DownloadClientObservation> {
+        self.observed_locators.lock().await.push(locator.clone());
         if let Some(error) = self.observation_error.lock().await.as_ref() {
             return Err(AppError::Repository(error.clone()));
         }
@@ -2139,6 +2143,7 @@ impl DownloadClient for StubDownloadClient {
                     items: queue_items,
                     authoritative_client_ids,
                     any_client_read_succeeded: true,
+                    ..Default::default()
                 })
             }
             (Ok(items), Err(_)) | (Err(_), Ok(items)) => {

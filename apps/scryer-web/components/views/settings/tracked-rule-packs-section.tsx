@@ -186,7 +186,7 @@ export function TrackedRulePacksSection({
                     {pack.lastUpdated ? <time dateTime={pack.lastUpdated}>{formatUiDateTime(pack.lastUpdated, dateTimeFormat, { fallback: "—" })}</time> : "—"}
                   </TableCell>
                   <TableCell className="text-center">{canManage ? <div className="inline-flex items-center">
-                    <Checkbox id={autoUpdateId} checked={pack.autoUpdate} disabled={busy} onCheckedChange={(value) => void onSetAutoUpdate(pack, value === true)} />
+                    <Checkbox id={autoUpdateId} size="large" checked={pack.autoUpdate} disabled={busy} onCheckedChange={(value) => void onSetAutoUpdate(pack, value === true)} />
                     <Label htmlFor={autoUpdateId} className="sr-only">Auto-update {pack.name}</Label>
                   </div> : <span className="text-xs text-muted-foreground">{pack.autoUpdate ? "On" : "Off"}</span>}</TableCell>
                   <TableCell className="text-right">{canManage ? <div className="flex justify-end gap-2"><Button id={selectorId("settings-tracked-rule-pack-update", pack.packId)} type="button" variant="secondary" size="sm" disabled={busy} onClick={() => void onPreviewUpdate(pack).then((changes) => { if (changes) setPreview({ pack, changes }); })}><RefreshCw className="mr-2 h-4 w-4" />Check</Button><IconButton id={selectorId("settings-tracked-rule-pack-uninstall", pack.packId)} label={`Uninstall ${pack.name}`} tone="delete" disabled={busy} onClick={() => setPendingUninstall(pack)}><Trash2 className="h-4 w-4" /></IconButton></div> : null}</TableCell>

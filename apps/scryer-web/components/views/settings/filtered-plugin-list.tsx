@@ -3,7 +3,6 @@ import { useClient } from "urql";
 import {
   ArrowUpCircle,
   Download,
-  Loader2,
   Power,
   PowerOff,
   RefreshCw,
@@ -22,6 +21,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { Badge } from "@/components/ui/badge";
 import { IconButton } from "@/components/ui/icon-button";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const FILTERED_PLUGIN_PANEL_CLASS =
   "flex min-h-0 flex-col overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
@@ -163,12 +163,11 @@ export function FilteredPluginList({
                 onClick={() => void updateVisiblePlugins()}
                 disabled={upgradingVisiblePlugins}
               >
-                <ArrowUpCircle
-                  className={cn(
-                    "h-4 w-4",
-                    upgradingVisiblePlugins && "animate-spin",
-                  )}
-                />
+                {upgradingVisiblePlugins ? (
+                  <LoadingMark className="h-4 w-4" />
+                ) : (
+                  <ArrowUpCircle className="h-4 w-4" />
+                )}
               </IconButton>
             ) : null}
             <IconButton
@@ -177,9 +176,11 @@ export function FilteredPluginList({
               onClick={() => void refreshPluginsRegistry()}
               disabled={pluginsRefreshing}
             >
-              <RefreshCw
-                className={cn("h-4 w-4", pluginsRefreshing && "animate-spin")}
-              />
+              {pluginsRefreshing ? (
+                <LoadingMark className="h-4 w-4" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
             </IconButton>
           </div>
         </div>
@@ -191,7 +192,7 @@ export function FilteredPluginList({
           ) : null}
           {pluginsLoading ? (
             <div className={`col-span-full flex items-center gap-2 py-6 text-sm ${FILTERED_PLUGIN_MUTED_CLASS}`}>
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingMark className="h-4 w-4" />
               {t("label.loading")}
             </div>
           ) : familyPlugins.length === 0 ? (
@@ -332,7 +333,7 @@ export function FilteredPluginList({
                           disabled={mutating}
                         >
                           {mutating ? (
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <LoadingMark className="h-3.5 w-3.5" />
                           ) : (
                             <Download className="h-3.5 w-3.5" />
                           )}

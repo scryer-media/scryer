@@ -96,6 +96,7 @@ export function EpisodeDetailsPanel({
           subtitleSearchIdPrefix="series-overview-episode-search-subtitles"
           deleteFileIdPrefix="series-overview-episode-delete-file"
           makePrimaryFileIdPrefix="series-overview-episode-make-primary-file"
+          mediaInfoIdPrefix="series-overview-episode-media-file-info"
         />
       </TitleFilesOnDiskRail>
     </div>

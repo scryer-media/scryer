@@ -1,6 +1,6 @@
 import * as React from "react";
 import { createPortal } from "react-dom";
-import { Loader2, Subtitles } from "lucide-react";
+import { Subtitles } from "lucide-react";
 import { useClient } from "urql";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
@@ -41,6 +41,7 @@ import type {
   SubtitleProviderValidationResult,
   SubtitleSettings,
 } from "@/lib/types";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const DEFAULTS: SubtitleSettings = {
   enabled: false,
@@ -1059,7 +1060,7 @@ export function SettingsSubtitlesContainer({
                   <Subtitles className="h-4 w-4" />
                   {t("settings.subtitles")}
                   {saving ? (
-                    <Loader2 className={`h-3.5 w-3.5 animate-spin ${SUBTITLES_MUTED_TEXT_CLASS}`} />
+                    <LoadingMark className="h-3.5 w-3.5" />
                   ) : null}
                 </h2>
                 <p className={`text-sm ${SUBTITLES_MUTED_TEXT_CLASS}`}>

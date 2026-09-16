@@ -1129,6 +1129,88 @@ async fn resolve_quality_profile_uses_facet_settings_when_library_scope_only_coa
 }
 
 #[tokio::test]
+async fn title_catalog_profile_names_resolve_override_then_library_then_facet_then_global() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            "\"profile-global\"",
+        )
+        .await;
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            "movie",
+            "\"profile-movie\"",
+        )
+        .await;
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            "library-custom",
+            "\"Profile-Library\"",
+        )
+        .await;
+    let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+    quality_profiles
+        .set_profiles(vec![
+            test_quality_profile("profile-global"),
+            test_quality_profile("profile-movie"),
+            test_quality_profile("profile-library"),
+            test_quality_profile("profile-override"),
+        ])
+        .await;
+    let (app, _) = bootstrap_with_settings_repo_and_profiles(
+        settings,
+        quality_profiles,
+        Arc::new(MockIndexerClient),
+    );
+
+    let names = app
+        .title_catalog_profile_names(&["library-custom".to_string()])
+        .await
+        .expect("profile names should resolve");
+
+    let title = |facet: MediaFacet, library_id: &str, tags: &[&str]| {
+        let mut title = make_due_hydration_title("title-profile-names", facet, 1);
+        title.library_id = library_id.to_string();
+        title.tags = tags.iter().map(|tag| tag.to_string()).collect();
+        title
+    };
+    for (title, expected) in [
+        (
+            title(
+                MediaFacet::Movie,
+                "library-custom",
+                &["scryer:quality-profile: Profile-Override "],
+            ),
+            "profile-override",
+        ),
+        (
+            title(
+                MediaFacet::Movie,
+                "library-custom",
+                &["scryer:quality-profile:deleted-profile"],
+            ),
+            "profile-library",
+        ),
+        (
+            title(MediaFacet::Movie, "library-without-default", &[]),
+            "profile-movie",
+        ),
+        (
+            title(MediaFacet::Series, "library-without-default", &[]),
+            "profile-global",
+        ),
+    ] {
+        assert_eq!(names.name_for(&title), Some(expected));
+    }
+}
+
+#[tokio::test]
 async fn resolve_quality_profile_rejects_a_missing_configured_reference() {
     let settings = Arc::new(StoredSettingsRepo::default());
     settings

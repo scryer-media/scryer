@@ -1170,6 +1170,43 @@ impl FillerPolicyValue {
     }
 }
 
+/// Which episode numbering a title's releases are read in.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum ReleaseNumberingValue {
+    /// Bridge to a differing TVDB alternate order when one exists, and require
+    /// corroboration before a reading through it moves an import.
+    Auto,
+    /// Always read releases in the catalog's official numbering.
+    Official,
+    /// Trust TVDB's alternate order for this title's releases.
+    Alternate,
+    /// Trust TVDB's DVD order for this title's releases.
+    Dvd,
+}
+
+impl ReleaseNumberingValue {
+    // Stored as the `scryer:release-numbering:` structured title tag.
+    pub fn as_app_str(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Official => "official",
+            Self::Alternate => "alternate",
+            Self::Dvd => "dvd",
+        }
+    }
+
+    pub fn from_app_str(value: &str) -> Option<Self> {
+        match value {
+            "auto" => Some(Self::Auto),
+            "official" => Some(Self::Official),
+            "alternate" => Some(Self::Alternate),
+            "dvd" => Some(Self::Dvd),
+            _ => None,
+        }
+    }
+}
+
 /// Policy for recap episodes or scenes.
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]

@@ -609,6 +609,13 @@ impl LibraryScanUnmatchedItemRepository for TrackingLibraryScanUnmatchedItemRepo
         Ok((before - items.len()) as u32)
     }
 
+    async fn delete_for_title(&self, title_id: &str) -> AppResult<u32> {
+        let mut items = self.items.lock().await;
+        let before = items.len();
+        items.retain(|item| item.title_id.as_deref() != Some(title_id));
+        Ok((before - items.len()) as u32)
+    }
+
     async fn list_library_scan_unmatched_items(
         &self,
         facet: Option<MediaFacet>,

@@ -3,7 +3,6 @@ import {
   CircleAlert,
   CircleOff,
   Link2,
-  Loader2,
   Pause,
   Play,
   Trash2,
@@ -37,6 +36,7 @@ import {
 } from "@/lib/utils/activity-utils";
 import { sameDownloadQueueItem } from "@/lib/utils/download-queue";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type QueueTableRowProps = {
   queueItem: DownloadQueueItem;
@@ -310,7 +310,7 @@ export const QueueTableRow = memo(function QueueTableRow({
                 }}
               >
                 {isManualImportPending ? (
-                  <Loader2 className="h-5 w-5 animate-spin" />
+                  <LoadingMark className="h-5 w-5" />
                 ) : (
                   <ArrowDownToLine className="h-5 w-5" />
                 )}

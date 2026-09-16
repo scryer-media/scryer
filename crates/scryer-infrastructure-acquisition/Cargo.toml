@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-acquisition"
-version = "0.20.0"
+version = "0.20.1"
 edition.workspace = true
 publish = false
 build = "build.rs"
@@ -33,7 +33,7 @@ tracing = { workspace = true }
 url = "2"
 uuid = { workspace = true }
 unicode-normalization = "0.1"
-zstd = { version = "0.13", default-features = false }
+zstd = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 # Thread-local recorder for asserting emitted metric names, labels and values

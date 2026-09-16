@@ -1,5 +1,5 @@
 import * as React from "react";
-import { CheckCircle2, Loader2, Search } from "lucide-react";
+import { CheckCircle2, Search } from "lucide-react";
 import { useClient } from "urql";
 
 import {
@@ -14,6 +14,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { titlesQuery } from "@/lib/graphql/queries";
 import type { DownloadQueueItem } from "@/lib/types";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type TitleSearchResult = {
   id: string;
@@ -146,7 +147,7 @@ export function AssignTrackedDownloadTitleDialog({
             id="activity-assign-title-loading"
             className="flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground"
           >
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingMark className="h-4 w-4" />
             <span>{t("label.loading")}</span>
           </div>
         ) : null}
@@ -183,7 +184,7 @@ export function AssignTrackedDownloadTitleDialog({
                   </span>
                 </div>
                 {assigning ? (
-                  <Loader2 className="ml-auto h-4 w-4 animate-spin" />
+                  <LoadingMark className="ml-auto h-4 w-4" />
                 ) : (
                   <CheckCircle2 className="ml-auto h-4 w-4 text-muted-foreground/50" />
                 )}

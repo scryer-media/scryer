@@ -1,6 +1,6 @@
 [package]
 name = "scryer-application"
-version = "0.20.0"
+version = "0.20.1"
 edition.workspace = true
 
 [features]
@@ -65,7 +65,7 @@ sha2 = { version = "0.11", optional = true }
 brotli = { version = "8", optional = true }
 tar = "0.4"
 flate2 = "1"
-zstd = { version = "0.13", default-features = false, optional = true }
+zstd = { version = "0.14", default-features = false, optional = true }
 tempfile = "3"
 chardetng = { version = "1", optional = true }
 encoding_rs = { version = "0.8", optional = true }
@@ -103,5 +103,5 @@ bytes = "1"
 http = "1"
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
 rustls = { version = "0.23", default-features = false, features = ["std", "aws_lc_rs"] }
-h3 = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.1.0" }
-h3-quinn = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.1.0" }
+h3 = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.1.1" }
+h3-quinn = { git = "https://github.com/scryer-media/proxy-tunnels.git", tag = "v0.1.1" }

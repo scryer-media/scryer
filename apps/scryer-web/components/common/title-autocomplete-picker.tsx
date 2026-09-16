@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Loader2, Search, X } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { useClient } from "urql";
 
 import { TitlePosterSlot } from "@/components/title-poster-slot";
@@ -12,6 +12,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const MIN_SEARCH_LENGTH = 2;
 const SEARCH_DEBOUNCE_MS = 250;
@@ -333,7 +334,7 @@ export function TitleAutocompletePicker({
             <div id={listboxId} role="listbox" className="max-h-80 overflow-y-auto p-2">
               {loading ? (
                 <div className="flex items-center gap-2 px-2 py-3 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <LoadingMark className="h-4 w-4" />
                   <span>{t("label.loading")}</span>
                 </div>
               ) : null}

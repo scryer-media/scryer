@@ -2,7 +2,7 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Download, Loader2 } from "lucide-react";
+import { Download } from "lucide-react";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import {
   PluginInstallProgressBar,
@@ -13,6 +13,7 @@ import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-pi
 import type { SubtitleSettings } from "@/lib/types/settings";
 import { getSubtitleLanguage } from "@/lib/constants/subtitle-languages";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type Props = {
   settings: SubtitleSettings;
@@ -146,7 +147,7 @@ export function SettingsSubtitlesSection({
   if (loading) {
     return (
       <div className={`flex items-center gap-2 text-sm ${SUBTITLES_MUTED_CLASS}`}>
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <LoadingMark className="h-4 w-4" />
         {t("label.loading")}
       </div>
     );
@@ -336,7 +337,7 @@ export function SettingsSubtitlesSection({
               onClick={onInstallSyncPlugin}
             >
               {syncPluginInstalling || syncPluginLoading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
               ) : (
                 <Download className="h-4 w-4" />
               )}

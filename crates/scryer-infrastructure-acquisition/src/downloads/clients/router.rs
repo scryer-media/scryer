@@ -12,13 +12,14 @@ use scryer_application::{
     DownloadClientCategorySnapshotStore, DownloadClientConfigRepository,
     DownloadClientFeedbackScope, DownloadClientListing, DownloadClientPluginProvider,
     DownloadClientRemotePathMapping, DownloadClientSnapshotOutcome, DownloadClientStatus,
-    DownloadGrabResult, DownloadSourceKind, IndexerArtifactResolutionRequest,
-    IndexerArtifactResolver, IndexerConfigRepository, PersistedSeedGoals, PreparedIndexerArtifact,
-    ProxyConfigRepository, ResolvedDownloadArtifact, ResolvedSeedGoals, SeedGoalRequest,
-    SeedGoalResolver, SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore,
-    accepted_inputs_for_client, apply_remote_path_mappings_to_completed_download,
-    apply_remote_path_mappings_to_status, extract_magnet_info_hash, is_valid_magnet_uri,
-    normalize_torrent_info_hash, parse_download_client_remote_path_mappings,
+    DownloadClientStatusRepository, DownloadGrabResult, DownloadSourceKind,
+    IndexerArtifactResolutionRequest, IndexerArtifactResolver, IndexerConfigRepository,
+    PersistedSeedGoals, PreparedIndexerArtifact, ProxyConfigRepository, ResolvedDownloadArtifact,
+    ResolvedSeedGoals, SeedGoalRequest, SeedGoalResolver, SeedingProfileRepository,
+    SettingsRepository, StagedNzbRef, StagedNzbStore, accepted_inputs_for_client,
+    apply_remote_path_mappings_to_completed_download, apply_remote_path_mappings_to_status,
+    extract_magnet_info_hash, is_valid_magnet_uri, normalize_torrent_info_hash,
+    parse_download_client_remote_path_mappings,
 };
 use scryer_domain::{DownloadClientConfig, DownloadQueueItem, MediaFacet, ProxyConfig};
 use tokio::sync::Semaphore;
@@ -287,6 +288,9 @@ pub struct PrioritizedDownloadClientRouter {
     category_snapshot_store: DownloadClientCategorySnapshotStore,
     feedback_read_backoff:
         Arc<Mutex<HashMap<(String, DownloadFeedbackReadKind), FeedbackReadBackoffState>>>,
+    /// Durable per-client failure record. `None` routes without it, which is
+    /// the pre-status behaviour.
+    download_client_status: Option<Arc<dyn DownloadClientStatusRepository>>,
 }
 
 #[derive(Clone)]
@@ -791,7 +795,71 @@ impl PrioritizedDownloadClientRouter {
             feedback_read_timeout,
             category_snapshot_store: DownloadClientCategorySnapshotStore::default(),
             feedback_read_backoff: Arc::new(Mutex::new(HashMap::new())),
+            download_client_status: None,
         }
+    }
+
+    /// Wire the per-client status so grabs route past a client that is in
+    /// failure backoff.
+    pub fn with_download_client_status(
+        mut self,
+        download_client_status: Arc<dyn DownloadClientStatusRepository>,
+    ) -> Self {
+        self.download_client_status = Some(download_client_status);
+        self
+    }
+
+    /// Sonarr's `DownloadClientProvider` round-robins over the clients whose
+    /// status row is not blocked and only fails when every candidate is. A
+    /// blocked client is skipped, never tried and never failed over from.
+    async fn retain_unblocked_clients(
+        &self,
+        clients: Vec<DownloadClientConfig>,
+    ) -> AppResult<Vec<DownloadClientConfig>> {
+        let Some(status) = self.download_client_status.as_ref() else {
+            return Ok(clients);
+        };
+        let statuses = match status.list().await {
+            Ok(statuses) => statuses,
+            Err(error) => {
+                warn!(error = %error, "download client status could not be read; routing without it");
+                return Ok(clients);
+            }
+        };
+        let now = chrono::Utc::now();
+        let mut earliest_release: Option<chrono::DateTime<chrono::Utc>> = None;
+        let mut unblocked = Vec::with_capacity(clients.len());
+        for config in clients {
+            let blocked_until = statuses
+                .get(&config.id)
+                .filter(|status| status.is_blocked(now))
+                .and_then(|status| status.disabled_until);
+            match blocked_until {
+                Some(until) => {
+                    warn!(
+                        client_id = config.id.as_str(),
+                        client_name = config.name.as_str(),
+                        disabled_until = %until,
+                        "download client skipped because it is in failure backoff"
+                    );
+                    earliest_release = Some(
+                        earliest_release.map_or(until, |current: chrono::DateTime<chrono::Utc>| {
+                            current.min(until)
+                        }),
+                    );
+                }
+                None => unblocked.push(config),
+            }
+        }
+        if unblocked.is_empty()
+            && let Some(until) = earliest_release
+        {
+            return Err(AppError::download_submit_unavailable(format!(
+                "all download clients are blocked until {}",
+                until.to_rfc3339()
+            )));
+        }
+        Ok(unblocked)
     }
 
     pub fn with_indexer_config_repositories(
@@ -2386,7 +2454,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                     "no enabled download clients configured",
                 ));
             }
-            clients
+            match self.retain_unblocked_clients(clients).await {
+                Ok(clients) => clients,
+                Err(error) => {
+                    self.delete_staged_nzb(request.staged_nzb.as_ref(), "all_clients_blocked")
+                        .await;
+                    return Err(error);
+                }
+            }
         };
 
         if let Some(artifact_kind) = resolved_artifact_kind {
@@ -2930,6 +3005,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
 
         let mut queue_items = Vec::new();
         let mut queue_successes = HashSet::new();
+        let mut failed_client_ids = HashSet::new();
         let mut any_client_read_succeeded = false;
         let queue_reads = self
             .poll_feedback_clients(
@@ -2961,6 +3037,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                         DownloadFeedbackReadKind::Queue,
                         elapsed,
                     );
+                    failed_client_ids.insert(config.id.clone());
                     tracing::warn!(client_id = %config.id, error = %error, "failed to list queue for download snapshot");
                 }
             }
@@ -3016,6 +3093,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                             DownloadFeedbackReadKind::RecentActivity,
                             elapsed,
                         );
+                        failed_client_ids.insert(config.id.clone());
                         tracing::warn!(client_id = %config.id, error = %error, "failed to list recent activity for download snapshot");
                     }
                 }
@@ -3034,6 +3112,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 .intersection(&activity_successes)
                 .cloned()
                 .collect(),
+            failed_client_ids,
             any_client_read_succeeded,
         })
     }
@@ -4608,6 +4687,137 @@ mod tests {
             updated_at: Utc::now(),
             proxy_config_id: None,
         }
+    }
+
+    #[derive(Default)]
+    struct StubDownloadClientStatusRepository {
+        statuses: HashMap<String, scryer_application::DownloadClientBackoffStatus>,
+    }
+
+    #[async_trait]
+    impl DownloadClientStatusRepository for StubDownloadClientStatusRepository {
+        async fn list(
+            &self,
+        ) -> AppResult<HashMap<String, scryer_application::DownloadClientBackoffStatus>> {
+            Ok(self.statuses.clone())
+        }
+
+        async fn record_failure(
+            &self,
+            _client_config_id: &str,
+            _now: chrono::DateTime<Utc>,
+        ) -> AppResult<scryer_application::DownloadClientBackoffStatus> {
+            Ok(scryer_application::DownloadClientBackoffStatus::default())
+        }
+
+        async fn record_success(&self, _client_config_id: &str) -> AppResult<()> {
+            Ok(())
+        }
+
+        async fn clear(&self, _client_config_id: &str) -> AppResult<()> {
+            Ok(())
+        }
+    }
+
+    fn router_with_client_status(
+        statuses: HashMap<String, scryer_application::DownloadClientBackoffStatus>,
+    ) -> PrioritizedDownloadClientRouter {
+        PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: Vec::new(),
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            None,
+        )
+        .with_download_client_status(Arc::new(StubDownloadClientStatusRepository { statuses }))
+    }
+
+    /// Sonarr's `DownloadClientProvider` routes past a blocked client instead of
+    /// trying and failing it. The healthy client still gets the grab.
+    #[tokio::test]
+    async fn a_blocked_client_is_skipped_while_another_client_can_take_the_grab() {
+        let blocked = scryer_application::DownloadClientBackoffStatus {
+            disabled_until: Some(Utc::now() + chrono::Duration::minutes(5)),
+            escalation_level: 2,
+            ..Default::default()
+        };
+        let router = router_with_client_status(HashMap::from([("client-a".to_string(), blocked)]));
+
+        let clients = router
+            .retain_unblocked_clients(vec![
+                test_config("client-a", "Client A", "nzbget", 0),
+                test_config("client-b", "Client B", "sabnzbd", 1),
+            ])
+            .await
+            .expect("a healthy client remains, so routing continues");
+
+        assert_eq!(
+            clients
+                .iter()
+                .map(|config| config.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["client-b"]
+        );
+    }
+
+    /// Only when every candidate is blocked does the grab fail, and it fails
+    /// with the time the first client comes back.
+    #[tokio::test]
+    async fn a_grab_fails_closed_only_when_every_client_is_blocked() {
+        let earliest = Utc::now() + chrono::Duration::minutes(1);
+        let router = router_with_client_status(HashMap::from([
+            (
+                "client-a".to_string(),
+                scryer_application::DownloadClientBackoffStatus {
+                    disabled_until: Some(Utc::now() + chrono::Duration::minutes(30)),
+                    ..Default::default()
+                },
+            ),
+            (
+                "client-b".to_string(),
+                scryer_application::DownloadClientBackoffStatus {
+                    disabled_until: Some(earliest),
+                    ..Default::default()
+                },
+            ),
+        ]));
+
+        let error = router
+            .retain_unblocked_clients(vec![
+                test_config("client-a", "Client A", "nzbget", 0),
+                test_config("client-b", "Client B", "sabnzbd", 1),
+            ])
+            .await
+            .expect_err("every candidate is blocked");
+
+        assert!(
+            matches!(error, AppError::DownloadSubmitUnavailable(ref message)
+                if message.contains("all download clients are blocked until")
+                    && message.contains(&earliest.to_rfc3339())),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// A stale status row that has already expired blocks nothing.
+    #[tokio::test]
+    async fn an_expired_block_no_longer_skips_its_client() {
+        let router = router_with_client_status(HashMap::from([(
+            "client-a".to_string(),
+            scryer_application::DownloadClientBackoffStatus {
+                disabled_until: Some(Utc::now() - chrono::Duration::minutes(1)),
+                escalation_level: 3,
+                ..Default::default()
+            },
+        )]));
+
+        let clients = router
+            .retain_unblocked_clients(vec![test_config("client-a", "Client A", "nzbget", 0)])
+            .await
+            .expect("an expired block is not a block");
+
+        assert_eq!(clients.len(), 1);
     }
 
     mod client_read_metrics_tests {
@@ -8426,6 +8636,65 @@ mod tests {
         );
         assert_eq!(
             outcome.authoritative_client_ids,
+            HashSet::from(["healthy".to_string()])
+        );
+    }
+
+    /// A client that errors is reported as failed once, when it was actually
+    /// asked. On the next snapshot the router's feedback backoff skips it, and
+    /// a skipped client is in neither the failed nor the authoritative set —
+    /// per-client status must not see a failure it never observed.
+    #[tokio::test]
+    async fn snapshot_outcome_reports_failure_only_for_clients_it_asked() {
+        let healthy_client = Arc::new(MockDownloadClient::default());
+        let failing_client = Arc::new(FailingQueueDownloadClient::default());
+        let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
+            Arc::new(MockDownloadClientPluginProvider {
+                accepted_inputs: vec!["nzb_url".to_string()],
+                clients: vec![
+                    ("healthy".to_string(), healthy_client),
+                    ("failing".to_string(), failing_client.clone()),
+                ],
+            });
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository {
+                configs: vec![
+                    test_config("healthy", "Healthy", "qbittorrent", 0),
+                    test_config("failing", "Failing", "qbittorrent", 1),
+                ],
+            }),
+            Arc::new(MockSettingsRepository::default()),
+            null_staged_nzb_store(),
+            test_pipeline_limit(),
+            Some(plugin_provider),
+        );
+
+        let first = router
+            .list_snapshot_outcome_excluding_client_types(300, &[])
+            .await
+            .expect("first snapshot");
+        assert_eq!(
+            first.failed_client_ids,
+            HashSet::from(["failing".to_string()]),
+            "the client that was asked and errored is reported as failed"
+        );
+        assert_eq!(failing_client.list_queue_call_count(), 1);
+
+        let second = router
+            .list_snapshot_outcome_excluding_client_types(300, &[])
+            .await
+            .expect("second snapshot");
+        assert_eq!(
+            failing_client.list_queue_call_count(),
+            1,
+            "the failing client is skipped by feedback backoff on the second snapshot"
+        );
+        assert!(
+            second.failed_client_ids.is_empty(),
+            "a client skipped by backoff was not asked, so it is not reported as failed"
+        );
+        assert_eq!(
+            second.authoritative_client_ids,
             HashSet::from(["healthy".to_string()])
         );
     }

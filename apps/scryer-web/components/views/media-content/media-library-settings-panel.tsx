@@ -90,6 +90,7 @@ import {
   formatChmodMode,
   isChmodPresetValue,
 } from "@/lib/constants/chmod";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const INHERIT_VALUE = "__inherit__";
 const BOOLEAN_TRUE_VALUE = "true";
@@ -1206,9 +1207,11 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
               onClick={handleScan}
               disabled={libraryScanDisabled}
             >
-              <RefreshCw
-                className={`mr-1.5 h-4 w-4${scanLoading ? " animate-spin" : ""}`}
-              />
+              {scanLoading ? (
+                <LoadingMark className="mr-1.5 h-4 w-4" />
+              ) : (
+                <RefreshCw className="mr-1.5 h-4 w-4" />
+              )}
               {scanLoading
                 ? t("settings.libraryScanRunning")
                 : t("settings.libraryScanButton")}

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertTriangle, Loader2, RefreshCw } from "lucide-react";
+import { AlertTriangle, RefreshCw } from "lucide-react";
 import { useClient } from "urql";
 import { IndexerErrorTable } from "@/components/common/indexer-error-table";
 import { Button } from "@/components/ui/button";
@@ -19,6 +19,7 @@ import type {
   IndexerErrorConnection,
   IndexerErrorDetail,
 } from "@/lib/types";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const PAGE_SIZE = 50;
 
@@ -177,7 +178,7 @@ export function IndexerErrorHistoryModal({
           <div className="flex items-center justify-between gap-4 pr-8">
             <DialogTitle>{title}</DialogTitle>
             <Button type="button" size="sm" variant="secondary" disabled={loading} className="gap-2" onClick={refresh}>
-              <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
+              {loading ? <LoadingMark className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
               {t("indexerErrors.refresh")}
             </Button>
           </div>
@@ -198,7 +199,7 @@ export function IndexerErrorHistoryModal({
           ) : null}
           {loading && page.items.length === 0 ? (
             <div className="flex items-center gap-2 py-8 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingMark className="h-4 w-4" />
               {t("indexerErrors.loading")}
             </div>
           ) : error && page.items.length === 0 ? null : (
@@ -216,7 +217,7 @@ export function IndexerErrorHistoryModal({
               {!error && page.nextCursor ? (
                 <div className="flex justify-center py-4">
                   <Button type="button" size="sm" variant="secondary" disabled={loading} onClick={() => void fetchPage(page.nextCursor, true)}>
-                    {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+                    {loading ? <LoadingMark className="mr-2 h-4 w-4" /> : null}
                     {t("indexerErrors.loadMore")}
                   </Button>
                 </div>

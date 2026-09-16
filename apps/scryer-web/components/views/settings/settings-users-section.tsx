@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Check, ChevronRight, KeyRound, Loader2, Plus, Power, PowerOff, ShieldOff, Trash2, X } from "lucide-react";
+import { Check, ChevronRight, KeyRound, Plus, Power, PowerOff, ShieldOff, Trash2, X } from "lucide-react";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { InfoHelp } from "@/components/common/info-help";
@@ -23,6 +23,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import type { LibraryRecord, UserRecord } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const USERS_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
@@ -346,7 +347,7 @@ export function SettingsUsersSection({
                               }
                             >
                               {mutatingUserId === user.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <LoadingMark className="h-4 w-4" />
                               ) : (
                                 <Check className="h-4 w-4" />
                               )}

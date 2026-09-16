@@ -106,12 +106,17 @@ impl AppUseCase {
         let mut bridged_titles = Vec::with_capacity(titles.len());
         for title in &titles {
             let bridge = if title.facet == scryer_domain::MediaFacet::Anime {
+                // Propagated, not swallowed: a transient read failure here
+                // used to look exactly like "this title has no bridge", and
+                // the incomplete matcher was then cached as fresh for a
+                // minute. A cour-named file would belong to nobody for that
+                // whole window. Failing the rebuild lets the scan retry once
+                // the store recovers.
                 self.services
                     .catalog
                     .shows
                     .get_anime_numbering_bridge(&title.id)
-                    .await
-                    .unwrap_or_default()
+                    .await?
             } else {
                 None
             };

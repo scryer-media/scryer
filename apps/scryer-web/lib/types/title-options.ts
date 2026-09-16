@@ -8,4 +8,5 @@ export type TitleOptionUpdates = {
   interSeasonMovies?: boolean | null;
   fillerPolicy?: string | null;
   recapPolicy?: string | null;
+  releaseNumbering?: string | null;
 };

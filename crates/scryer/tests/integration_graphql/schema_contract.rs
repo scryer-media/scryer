@@ -852,10 +852,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // schema moved with it - it is an additive enum on existing types.
     // Parsed stereoscopy adds one payload object and four enums for
     // presentation, layout, sampling, and encoding: public types 844->849.
-    assert_eq!(public_types.len(), 849);
+    // The release-numbering bridge adds the `ReleaseNumberingValue` enum, which
+    // names the episode order a title's releases are read in. It is surfaced as
+    // an additive field on `TitleOptionsInput` and `TitlePayload`, both of which
+    // already existed: ENUM 157->158, public types 849->850, and no change to
+    // OBJECT or INPUT_OBJECT.
+    assert_eq!(public_types.len(), 850);
     assert_eq!(kind_count("OBJECT"), 459);
     assert_eq!(kind_count("INPUT_OBJECT"), 221);
-    assert_eq!(kind_count("ENUM"), 157);
+    assert_eq!(kind_count("ENUM"), 158);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
@@ -4351,7 +4356,7 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
           setEpisodeMonitored: __type(name: "SetEpisodeMonitoredInput") { inputFields { name type { ...TypeRef } } }
           setSeriesMovieMonitored: __type(name: "SetSeriesMovieMonitoredInput") { inputFields { name type { ...TypeRef } } }
           deleteMediaFile: __type(name: "DeleteMediaFileInput") { inputFields { name type { ...TypeRef } } }
-          manualImportCandidateMapping: __type(name: "ManualImportCandidateMappingInput") { inputFields { name type { ...TypeRef } } }
+          manualImportCandidateMapping: __type(name: "ManualImportCandidateMappingInput") { inputFields(includeDeprecated: true) { name type { ...TypeRef } } }
           beginManualImportSelection: __type(name: "BeginManualImportSelectionInput") { inputFields { name type { ...TypeRef } } }
           queueManualImport: __type(name: "QueueManualImportInput") { inputFields { name type { ...TypeRef } } }
           pauseDownload: __type(name: "PauseDownloadInput") { inputFields { name type { ...TypeRef } } }
@@ -4496,6 +4501,7 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
     assert_non_null_id_list("deleteEpisodeFiles", "episodeIds");
     assert_non_null_id_list("deleteEpisodeFilesPreview", "episodeIds");
     assert_non_null_id_list("bindPendingImport", "episodeIds");
+    assert_non_null_id_list("manualImportCandidateMapping", "episodeIds");
     assert_nullable_id_list("queueDownloadScope", "episodeSet");
 
     // The interactive search job input replaces the per-item trigger

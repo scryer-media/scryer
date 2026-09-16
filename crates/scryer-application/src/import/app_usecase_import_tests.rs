@@ -2777,6 +2777,7 @@ fn completed_manual_import_record_for(
         file_results: vec![ManualImportFileResult {
             file_path: format!("/downloads/{item_id}/movie.mkv"),
             episode_id: None,
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
             success: true,
             skipped: false,

@@ -1,5 +1,5 @@
-query GetSeries($id: String!, $includeEpisodes: Boolean!, $language: String!) {
-  series(id: $id, includeEpisodes: $includeEpisodes, language: $language) {
+query GetSeries($id: String!, $includeEpisodes: Boolean!, $includeEpisodeOrders: Boolean! = false, $language: String!) {
+  series(id: $id, includeEpisodes: $includeEpisodes, includeEpisodeOrders: $includeEpisodeOrders, language: $language) {
     series {
       tvdb_id
       name
@@ -146,6 +146,21 @@ query GetSeries($id: String!, $includeEpisodes: Boolean!, $language: String!) {
           }
           absolute_start
           episode_count
+        }
+      }
+      episode_orders {
+        season_type
+        seasons {
+          season_number
+          name
+        }
+        entries {
+          tvdb_id
+          season_number
+          episode_number
+          absolute_number
+          name
+          aired
         }
       }
       anime_movies {

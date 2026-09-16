@@ -3379,8 +3379,11 @@ mod tests {
         assert_eq!(json["kind"], "manual_reconciliation_required");
         assert_eq!(json["message"], "x");
     }
+    #[cfg(unix)]
     use std::io::{self, Write};
+    #[cfg(unix)]
     use std::sync::{Arc, Mutex};
+    #[cfg(unix)]
     use tracing_subscriber::fmt::MakeWriter;
 
     #[cfg(unix)]

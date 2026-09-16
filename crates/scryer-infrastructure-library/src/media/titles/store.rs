@@ -4,11 +4,11 @@ use scryer_application::{
     AppError, AppResult, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord, CreateTitleOutcome,
     MAX_USER_TAGS_PER_TITLE, MetadataFieldUpdate, PendingImportStatus, PendingTitleHydration,
     SortDirection, TitleArtworkUrlUpdate, TitleCatalogContentStatus, TitleCatalogFilter,
-    TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogResult, TitleCatalogSort,
-    TitleCatalogSortKey, TitleCatalogTagFilterOption, TitleCredit, TitleDeletePreviewInfo,
-    TitleExternalIdLookup, TitleExternalIdLookupMatch, TitleMetadataUpdate, TitleOptionsPatch,
-    TitleRatingSummary, TitleRepository, TitleTagDefinitionSummary, TitleTagMembershipCounts,
-    is_reserved_title_tag,
+    TitleCatalogFilterCounts, TitleCatalogFilterOptions, TitleCatalogProfileNames,
+    TitleCatalogResult, TitleCatalogSort, TitleCatalogSortKey, TitleCatalogTagFilterOption,
+    TitleCredit, TitleDeletePreviewInfo, TitleExternalIdLookup, TitleExternalIdLookupMatch,
+    TitleMetadataUpdate, TitleOptionsPatch, TitleRatingSummary, TitleRepository,
+    TitleTagDefinitionSummary, TitleTagMembershipCounts, is_reserved_title_tag,
     persisted_records::{
         PersistedTitleDecodeOptions, PersistedTitleReadMode, finalize_persisted_title,
     },
@@ -3139,7 +3139,7 @@ fn build_title_catalog_page_sql(
         sql.push_str(&where_sql);
     }
     sql.push(' ');
-    sql.push_str(&build_title_catalog_order_sql(sort, dialect));
+    sql.push_str(&build_title_catalog_order_sql(&sort, dialect, &mut args));
     sql.push_str(" LIMIT {} OFFSET {}");
     args.push(SqlArg::I64(limit as i64));
     args.push(SqlArg::I64(offset as i64));
@@ -3342,6 +3342,10 @@ fn build_title_catalog_sort_join_sql(
                ON title_catalog_root.id = titles.root_folder_id
               AND title_catalog_root.library_id = titles.library_id"
             .to_string(),
+        TitleCatalogSortKey::Quality => format!(
+            " LEFT JOIN ({}) catalog_media_quality ON catalog_media_quality.title_id = titles.id",
+            title_catalog_media_quality_subquery(dialect)
+        ),
         TitleCatalogSortKey::MediaResolution
         | TitleCatalogSortKey::MediaHdr
         | TitleCatalogSortKey::MediaAudioCodec => format!(
@@ -3375,7 +3379,7 @@ fn build_title_catalog_sort_join_sql(
         }
         TitleCatalogSortKey::Title
         | TitleCatalogSortKey::Monitored
-        | TitleCatalogSortKey::Quality
+        | TitleCatalogSortKey::Profile
         | TitleCatalogSortKey::Status
         | TitleCatalogSortKey::Added
         | TitleCatalogSortKey::Year
@@ -3385,8 +3389,9 @@ fn build_title_catalog_sort_join_sql(
 }
 
 fn build_title_catalog_order_sql(
-    sort: TitleCatalogSort,
+    sort: &TitleCatalogSort,
     dialect: TitleCatalogSqlDialect,
+    args: &mut Vec<SqlArg>,
 ) -> String {
     let direction = match sort.direction {
         SortDirection::Asc => "ASC",
@@ -3409,11 +3414,15 @@ fn build_title_catalog_order_sql(
             title_catalog_ascending_tie_order_sql()
         ),
         TitleCatalogSortKey::Quality => {
-            let missing_direction = nullable_text_missing_direction(sort.direction);
-            let expression = title_catalog_quality_profile_expression(dialect);
+            title_catalog_numeric_sort_order_sql("catalog_media_quality.quality_rank", direction)
+        }
+        TitleCatalogSortKey::Profile => {
+            let names = sort.profile_names.as_ref();
+            let missing = title_catalog_profile_name_expression(names, dialect, args);
+            let name = title_catalog_profile_name_expression(names, dialect, args);
             format!(
-                "ORDER BY CASE WHEN {expression} = '' THEN 1 ELSE 0 END {missing_direction}, \
-                 {expression} {direction}, {}",
+                "ORDER BY CASE WHEN {missing} IS NULL THEN 1 ELSE 0 END ASC, \
+                 LOWER({name}) {direction}, {}",
                 title_catalog_ascending_tie_order_sql()
             )
         }
@@ -3628,6 +3637,54 @@ fn title_catalog_quality_profile_expression(dialect: TitleCatalogSqlDialect) -> 
     }
 }
 
+/// The title's effective quality-profile name, resolved through the same
+/// scopes as `TitleCatalogProfileNames::name_for`. NULL when nothing resolves.
+///
+/// Pushes its bind values onto `args`, so build one per use in the SQL.
+fn title_catalog_profile_name_expression(
+    profile_names: Option<&TitleCatalogProfileNames>,
+    dialect: TitleCatalogSqlDialect,
+    args: &mut Vec<SqlArg>,
+) -> String {
+    let Some(profile_names) = profile_names else {
+        return "CAST(NULL AS TEXT)".to_string();
+    };
+    let mut scopes = Vec::new();
+    let mut push_case = |subject: String, names: &std::collections::BTreeMap<String, String>| {
+        if names.is_empty() {
+            return;
+        }
+        let arms = names
+            .iter()
+            .map(|(key, name)| {
+                args.push(SqlArg::Text(key.clone()));
+                args.push(SqlArg::Text(name.clone()));
+                "WHEN CAST({} AS TEXT) THEN CAST({} AS TEXT)"
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        scopes.push(format!("CASE {subject} {arms} END"));
+    };
+    push_case(
+        title_catalog_quality_profile_expression(dialect),
+        &profile_names.by_profile_id,
+    );
+    push_case(
+        "titles.library_id".to_string(),
+        &profile_names.by_library_id,
+    );
+    push_case("titles.facet".to_string(), &profile_names.by_facet);
+    if let Some(global) = &profile_names.global {
+        args.push(SqlArg::Text(global.clone()));
+        scopes.push("CAST({} AS TEXT)".to_string());
+    }
+    match scopes.len() {
+        0 => "CAST(NULL AS TEXT)".to_string(),
+        1 => scopes.remove(0),
+        _ => format!("COALESCE({})", scopes.join(", ")),
+    }
+}
+
 fn title_catalog_rating_sources_for_sort_key(
     key: TitleCatalogSortKey,
 ) -> Option<&'static [&'static str]> {
@@ -3731,6 +3788,65 @@ fn title_catalog_movie_media_hdr_rank_expression(alias: &str) -> String {
             WHEN TRIM(COALESCE({alias}.video_hdr_format, '')) <> '' THEN 1
             ELSE 0
          END"
+    )
+}
+
+/// Ranks a file's quality tier, higher is better; 0 for a tier outside the
+/// known ladder. Mirrors the tiers `normalized_quality_expression` reports.
+fn title_catalog_media_quality_rank_expression(alias: &str) -> String {
+    format!(
+        "CASE
+            WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN 8
+            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN 7
+            WHEN {alias}.video_height >= 1300 THEN 6
+            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN 5
+            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN 3
+            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN 2
+            WHEN {alias}.video_height >= 300 THEN 1
+            ELSE CASE UPPER(TRIM(COALESCE({alias}.quality_id, '')))
+                WHEN '4320P' THEN 8
+                WHEN '2160P' THEN 7
+                WHEN '1440P' THEN 6
+                WHEN '1080P' THEN 5
+                WHEN '1080I' THEN 4
+                WHEN '720P' THEN 3
+                WHEN '480P' THEN 2
+                WHEN '360P' THEN 1
+                ELSE 0
+            END
+         END"
+    )
+}
+
+/// The quality rank of the file the catalog shows as a title's quality: its
+/// lowest-quality primary file, or its best additional file when it has no
+/// primary. Keep the file choice in step with `list_title_quality_summaries`.
+fn title_catalog_media_quality_subquery(dialect: TitleCatalogSqlDialect) -> String {
+    let quality_rank = title_catalog_media_quality_rank_expression("mf");
+    format!(
+        "SELECT title_id, quality_rank
+           FROM (
+                SELECT mf.title_id,
+                       {quality_rank} AS quality_rank,
+                       ROW_NUMBER() OVER (
+                          PARTITION BY mf.title_id
+                          ORDER BY CASE WHEN mf.role = 'primary' THEN 0 ELSE 1 END ASC,
+                                   CASE WHEN mf.role = 'primary' THEN {quality_rank} ELSE -({quality_rank}) END ASC,
+                                   mf.created_at DESC,
+                                   mf.id DESC
+                       ) AS quality_row
+                  FROM media_files mf
+                 WHERE {}
+                   AND mf.role IN ('primary', 'additional')
+                   AND mf.scan_status <> 'review_required'
+                   AND (
+                       mf.video_height >= 300
+                       OR mf.video_width >= 854
+                       OR TRIM(COALESCE(mf.quality_id, '')) <> ''
+                   )
+           ) ranked
+          WHERE quality_row = 1",
+        title_catalog_live_media_file_predicate(dialect, "mf")
     )
 }
 
@@ -4189,6 +4305,13 @@ fn apply_reused_title_options_patch(
     }
     if let Some(value) = &patch.recap_policy {
         set_reused_title_option_tag(&mut title.tags, "scryer:recap-policy:", value.clone());
+    }
+    if let Some(value) = &patch.release_numbering {
+        set_reused_title_option_tag(
+            &mut title.tags,
+            scryer_domain::RELEASE_NUMBERING_TAG_PREFIX,
+            value.clone(),
+        );
     }
     if let Some(value) = patch.use_season_folders {
         set_reused_title_option_tag(

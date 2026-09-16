@@ -7,6 +7,7 @@ import {
   useSearchParams,
 } from "react-router";
 import { PageShellFallback } from "@/components/root/page-shell-fallback";
+import { SetupIntroLoading } from "@/components/setup/setup-intro";
 import { TranslateContext } from "@/lib/context/translate-context";
 import { useLanguage } from "@/lib/hooks/use-language";
 import { getRuntimeBasePath } from "@/lib/runtime-config";
@@ -70,7 +71,7 @@ export const router = createBrowserRouter(
         {
           path: "/setup",
           element: (
-            <Suspense fallback={<PageShellFallback />}>
+            <Suspense fallback={<SetupIntroLoading />}>
               <SetupPage />
             </Suspense>
           ),

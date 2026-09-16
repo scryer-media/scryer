@@ -9,7 +9,6 @@ import {
   Eye,
   Film,
   Heart,
-  Loader2,
   MonitorPlay,
   PanelRightClose,
   PanelRightOpen,
@@ -57,6 +56,7 @@ import type {
   DiscoveryHomeStatus,
   Facet,
 } from "@/lib/types";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type DiscoveryViewProps = {
   home: DiscoveryHomePayload | null;
@@ -1557,7 +1557,7 @@ export function DiscoveryView({
   if (loading && !home) {
     return (
       <div className="flex min-h-[360px] items-center justify-center">
-        <Loader2 className="h-6 w-6 animate-spin text-[var(--scry-accent)]" />
+        <LoadingMark className="h-6 w-6 text-[var(--scry-accent)]" />
       </div>
     );
   }

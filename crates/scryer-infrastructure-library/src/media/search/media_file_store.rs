@@ -691,6 +691,9 @@ impl MediaFileRepository for MediaFileStore {
         Ok((total > 0).then_some(total))
     }
 
+    /// A title's quality is its lowest-quality primary file; a title with no
+    /// primary file falls back to its best additional file. The catalog's
+    /// quality sort ranks the same file.
     async fn list_title_quality_summaries(
         &self,
         title_ids: &[String],
@@ -710,14 +713,16 @@ impl MediaFileRepository for MediaFileStore {
                        {normalized_quality} AS quality_tier,
                        ROW_NUMBER() OVER (
                           PARTITION BY media_files.title_id
-                          ORDER BY {quality_rank} DESC,
+                          ORDER BY CASE WHEN media_files.role = 'primary' THEN 0 ELSE 1 END ASC,
+                                   CASE WHEN media_files.role = 'primary' THEN -({quality_rank}) ELSE {quality_rank} END ASC,
                                    media_files.created_at DESC,
                                    media_files.id DESC
                        ) AS quality_row
                   FROM media_files
                  WHERE media_files.title_id IN ({placeholders})
                    AND {}
-                   AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
+                   AND media_files.role IN ('primary', 'additional')
+                   AND media_files.scan_status <> 'review_required'
                    AND {normalized_quality} IS NOT NULL
              ) ranked
              WHERE quality_row = 1

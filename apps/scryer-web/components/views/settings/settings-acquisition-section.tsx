@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
-import { Loader2 } from "lucide-react";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useTranslate } from "@/lib/context/translate-context";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type AcquisitionSettings = {
   enabled: boolean;
@@ -84,7 +84,7 @@ export function SettingsAcquisitionSection({
   if (loading || !draft) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <LoadingMark className="h-4 w-4" />
         {t("label.loading")}
       </div>
     );
@@ -190,7 +190,7 @@ export function SettingsAcquisitionSection({
           disabled={disabled}
           onClick={() => void onSave(draft)}
         >
-          {saving ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+          {saving ? <LoadingMark className="mr-1 h-4 w-4" /> : null}
           {t("label.save")}
         </Button>
       </div>

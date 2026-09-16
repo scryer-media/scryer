@@ -10,7 +10,6 @@ import {
   Clock3,
   Filter,
   HardDrive,
-  Loader2,
   Pause,
   Trash2,
   XCircle,
@@ -73,6 +72,7 @@ import {
   queueStateLabels,
   type TranslateFn,
 } from "@/lib/utils/activity-utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 /**
  * Seeding rows are already imported, so only a handful stay on screen; the rest
@@ -304,7 +304,7 @@ function ActivityTableLoadingMask({ label }: { label: string }) {
   return (
     <div className="flex items-center justify-center py-16">
       <div className="inline-flex items-center gap-2 rounded-full border border-border/70 bg-background/90 px-4 py-2 text-sm text-muted-foreground shadow-sm backdrop-blur-sm">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <LoadingMark className="h-4 w-4" />
         <span>{label}</span>
       </div>
     </div>
@@ -1072,7 +1072,7 @@ export function ActivityView({
       })}
       {showHistorySpinner ? (
         <div className="flex items-center justify-center py-3 text-sm text-muted-foreground">
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          <LoadingMark className="mr-2 h-4 w-4" />
           {t("label.loading")}
         </div>
       ) : null}
@@ -1110,7 +1110,7 @@ export function ActivityView({
           className="absolute left-0 flex w-full items-center justify-center py-3 text-sm text-muted-foreground"
           style={{ top: queueVirtualizer.getTotalSize() }}
         >
-          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          <LoadingMark className="mr-2 h-4 w-4" />
           {t("label.loading")}
         </div>
       ) : null}
@@ -1143,7 +1143,7 @@ export function ActivityView({
             className="py-4 text-center text-sm text-muted-foreground"
           >
             <span className="inline-flex items-center">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <LoadingMark className="mr-2 h-4 w-4" />
               {t("label.loading")}
             </span>
           </TableCell>
@@ -1383,7 +1383,7 @@ export function ActivityView({
                   }}
                 >
                   {bulkActionInProgress === "ignore" ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <LoadingMark className="mr-2 h-4 w-4" />
                   ) : (
                     <CircleOff className="mr-2 h-4 w-4" />
                   )}
@@ -1399,7 +1399,7 @@ export function ActivityView({
                   }}
                 >
                   {bulkActionInProgress === "delete" ? (
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    <LoadingMark className="mr-2 h-4 w-4" />
                   ) : (
                     <Trash2 className="mr-2 h-4 w-4" />
                   )}

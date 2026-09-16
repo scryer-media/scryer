@@ -5,7 +5,6 @@ import {
   Eye,
   EyeOff,
   Film,
-  Loader2,
   Search,
   Zap,
 } from "lucide-react";
@@ -33,6 +32,7 @@ import {
   EpisodeTableActionButton,
   EMPTY_EPISODE_FILES,
 } from "./season-section-utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type SeriesMovieTimelineContentProps = {
   link: SeriesMovieLink;
@@ -111,6 +111,7 @@ function SeriesMovieTimelineContent({
               subtitleSearchIdPrefix="series-overview-series-movie-search-subtitles"
               deleteFileIdPrefix="series-overview-series-movie-delete-file"
               makePrimaryFileIdPrefix="series-overview-series-movie-make-primary-file"
+              mediaInfoIdPrefix="series-overview-series-movie-file-info"
             />
           </TitleFilesOnDiskRail>
         }
@@ -118,7 +119,7 @@ function SeriesMovieTimelineContent({
       {searchBlockedForMovie ? <TitleSearchDownloadClientNotice /> : null}
       {!searchBlockedForMovie && searchLoading ? (
         <div className="flex flex-col items-center justify-center gap-4 py-16">
-          <Loader2 className="h-10 w-10 animate-spin text-[var(--scry-accent-text)]" />
+          <LoadingMark className="h-10 w-10 text-[var(--scry-accent-text)]" />
           <p className="text-lg text-muted-foreground">{t("label.searching")}</p>
         </div>
       ) : null}
@@ -328,7 +329,7 @@ export function SeriesMovieTimelineSection(props: SeriesMovieTimelineContentProp
                 showTitleAttribute={false}
               >
                 {autoSearchLoading ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <LoadingMark className="h-4 w-4" />
                 ) : (
                   <Zap className="h-4 w-4" />
                 )}

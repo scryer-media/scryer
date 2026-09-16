@@ -14,6 +14,7 @@ pub(crate) struct ResolvedTitleOptionsInput {
     pub inter_season_movies: Option<Option<bool>>,
     pub filler_policy: Option<Option<String>>,
     pub recap_policy: Option<Option<String>>,
+    pub release_numbering: Option<Option<String>>,
     pub monitor_selection: Option<Option<scryer_domain::MonitorSelection>>,
 }
 
@@ -28,6 +29,7 @@ impl ResolvedTitleOptionsInput {
             inter_season_movies: self.inter_season_movies,
             filler_policy: self.filler_policy.clone(),
             recap_policy: self.recap_policy.clone(),
+            release_numbering: self.release_numbering.clone(),
             monitor_selection: self.monitor_selection.clone(),
         }
     }
@@ -78,6 +80,9 @@ pub(crate) fn apply_title_options(tags: &mut Vec<String>, options: ResolvedTitle
     }
     if let Some(value) = options.recap_policy {
         set_structured_tag(tags, "scryer:recap-policy:", value);
+    }
+    if let Some(value) = options.release_numbering {
+        set_structured_tag(tags, scryer_domain::RELEASE_NUMBERING_TAG_PREFIX, value);
     }
 
     if let Some(use_season_folders) = options.use_season_folders {

@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Loader2, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useClient } from "urql";
 
 import { TitlePoster } from "@/components/title-poster";
@@ -23,6 +23,7 @@ import {
 } from "@/lib/fix-title-match";
 import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type FixableTitle = {
   id: string;
@@ -213,7 +214,7 @@ export function FixTitleMatchDialog({
 
           {searching ? (
             <div className="flex items-center gap-2 rounded-md border border-border px-3 py-6 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingMark className="h-4 w-4" />
               {t("title.fixMatchSearching")}
             </div>
           ) : null}
@@ -314,7 +315,7 @@ export function FixTitleMatchDialog({
           >
             {applying ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <LoadingMark className="mr-2 h-4 w-4" />
                 {t("title.fixMatchApplying")}
               </>
             ) : (

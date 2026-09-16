@@ -78,3 +78,4 @@ test("without an explicit level the wording still decides", () => {
 test("an empty status never toasts, whatever level was asked for", () => {
   assert.equal(resolveStatusToastLevel("   ", { level: "ERROR" }), null);
 });
+

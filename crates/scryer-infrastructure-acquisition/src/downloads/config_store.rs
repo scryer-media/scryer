@@ -194,6 +194,21 @@ impl DownloadClientConfigRepository for DownloadClientConfigStore {
                         &[SqlArg::Timestamp(Utc::now()), SqlArg::Text(id.clone())],
                     )
                     .await?;
+                    // A binding is a fact about a client job. Deleting the
+                    // client deletes every job it could ever list, so the
+                    // bindings end here, in the same transaction: a binding
+                    // that outlives its client can never be resolved again and
+                    // nothing must be left holding a scope. Sonarr drops the
+                    // tracked downloads of a removed client the same way.
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE download_client_bindings
+                            SET ended_at = {}
+                          WHERE client_config_id = {}
+                            AND ended_at IS NULL",
+                        &[SqlArg::Timestamp(Utc::now()), SqlArg::Text(id.clone())],
+                    )
+                    .await?;
                     let rows = SqlRuntime::execute(
                         SqlExec::Tx(tx),
                         "DELETE FROM download_clients WHERE id = {}",
@@ -339,6 +354,29 @@ mod tests {
         .execute(&pool)
         .await
         .expect("indexers table should be created");
+        sqlx::query(
+            "CREATE TABLE download_client_bindings (
+                download_id TEXT PRIMARY KEY,
+                client_config_id TEXT,
+                client_type_snapshot TEXT,
+                native_item_id TEXT,
+                created_at TEXT NOT NULL,
+                ended_at TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("download_client_bindings table should be created");
+        sqlx::query(
+            "INSERT INTO download_client_bindings
+                 (download_id, client_config_id, client_type_snapshot, native_item_id, created_at)
+             VALUES
+                 ('download-1', 'client-1', 'nzbget', 'job-1', '2026-01-01T00:00:00Z'),
+                 ('download-2', 'client-2', 'nzbget', 'job-2', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .expect("bindings should insert");
         sqlx::query("INSERT INTO download_clients (id) VALUES ('client-1'), ('client-2')")
             .execute(&pool)
             .await
@@ -386,6 +424,21 @@ mod tests {
             Some("client-2")
         );
 
+        let ended: Vec<(String, Option<String>)> = sqlx::query_as(
+            "SELECT download_id, ended_at FROM download_client_bindings ORDER BY download_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .expect("bindings should load");
+        assert!(
+            ended[0].1.is_some(),
+            "the deleted client's binding ends in the same transaction"
+        );
+        assert!(
+            ended[1].1.is_none(),
+            "another client's binding is untouched"
+        );
+
         store
             .delete_with_cleared_indexer_mapping_count("missing-client")
             .await
@@ -396,6 +449,16 @@ mod tests {
                 .await
                 .expect("rolled-back mapping should load");
         assert_eq!(missing_mapping.as_deref(), Some("missing-client"));
+        let untouched: Option<String> = sqlx::query_scalar(
+            "SELECT ended_at FROM download_client_bindings WHERE download_id = 'download-2'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("rolled-back binding should load");
+        assert!(
+            untouched.is_none(),
+            "a failed delete rolls its binding cleanup back too"
+        );
     }
 
     #[tokio::test]

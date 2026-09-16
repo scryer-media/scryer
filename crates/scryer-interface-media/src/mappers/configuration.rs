@@ -839,12 +839,16 @@ pub fn from_provider_type(
 }
 
 pub fn from_download_client_config(config: DownloadClientConfig) -> DownloadClientConfigPayload {
-    from_download_client_config_with_fields(config, &[])
+    from_download_client_config_with_fields(config, &[], None)
 }
 
+/// `status` is the client's failure backoff, or `None` for "not in a failure
+/// run" — which is also what every caller that has not read the status table
+/// passes, because a payload built right after a write has nothing to report.
 pub fn from_download_client_config_with_fields(
     config: DownloadClientConfig,
     config_fields: &[ConfigFieldDef],
+    status: Option<&scryer_application::escalation_backoff::DownloadClientStatus>,
 ) -> DownloadClientConfigPayload {
     let base_url =
         scryer_application::resolve_download_client_base_url_from_config_json(&config.config_json);
@@ -864,6 +868,8 @@ pub fn from_download_client_config_with_fields(
         status: config.status.as_str().to_string(),
         last_error: config.last_error,
         last_seen_at: config.last_seen_at,
+        disabled_until: status.and_then(|status| status.disabled_until),
+        escalation_level: status.map_or(0, |status| status.escalation_level as i32),
         proxy_config_id: config.proxy_config_id.map(Into::into),
         created_at: config.created_at,
         updated_at: config.updated_at,

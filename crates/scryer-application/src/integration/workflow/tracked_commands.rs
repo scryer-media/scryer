@@ -1,10 +1,6 @@
 const TRACKED_DOWNLOAD_SNAPSHOT_READ_BUDGET: Duration = Duration::from_millis(25);
 const TRACKED_DOWNLOAD_FAILED_WORKER_LIMIT: usize = 4;
 const DOWNLOAD_QUEUE_POLL_INTERVAL: Duration = Duration::from_secs(10);
-const ABSENT_BINDING_RECONCILE_BATCH_SIZE: usize = 200;
-const ABSENT_BINDING_RECONCILE_RECENCY_FLOOR: chrono::Duration = chrono::Duration::minutes(10);
-const REMOVED_FROM_DOWNLOAD_CLIENT_REASON: &str = "removed from download client";
-
 /// Poll cadence for download-queue snapshots.
 ///
 /// Every tick collects queue AND recent history together, so this is also the
@@ -1009,10 +1005,6 @@ async fn process_tracked_download_snapshot(
         }
     }
 
-    let reconcile_restart_ghosts = matches!(
-        prune,
-        TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes
-    );
     let unavailable_sources = match prune {
         TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes => runtime
             .tracker
@@ -1032,33 +1024,7 @@ async fn process_tracked_download_snapshot(
     };
 
     for source_identity in unavailable_sources {
-        if let Err(error) = app
-            .services
-            .workflow
-            .imports
-            .delete_manual_import_selections_for_source(&source_identity)
-            .await
-        {
-            tracing::warn!(
-                error = %error,
-                client_type = %source_identity.client_type,
-                item_id = %source_identity.item_id,
-                "failed to clean up manual-import selections for unavailable download"
-            );
-        }
-
-        reconcile_authoritatively_absent_source(app, &mut runtime.tracker, &source_identity).await;
-    }
-
-    if reconcile_restart_ghosts && let Some(authoritative_client_ids) = authoritative_client_ids {
-        reconcile_restart_ghost_bindings(
-            app,
-            &mut runtime.tracker,
-            &items,
-            excluded_client_type_refs,
-            authoritative_client_ids,
-        )
-        .await;
+        drop_source_removed_from_client(app, &source_identity).await;
     }
 
     reconcile_terminal_tracked_downloads(app, &mut runtime.tracker).await;
@@ -1182,335 +1148,125 @@ async fn process_tracked_download_snapshot(
     );
 }
 
-async fn reconcile_restart_ghost_bindings(
+/// Record one refresh outcome per enabled download client.
+///
+/// Sonarr's `DownloadMonitoringService` calls `RecordSuccess` / `RecordFailure`
+/// on `DownloadClientStatusService` once per client per refresh, and the
+/// escalation ladder in the repository turns repeated failures into a disabled
+/// window. A client that answered both of its reads this tick is in
+/// `authoritative_client_ids`; one that was asked and errored is in
+/// `failed_client_ids`. A client in neither set was not consulted this tick —
+/// excluded by type (bridged realtime clients) or skipped by the router's
+/// feedback backoff — so it is not judged: without this, a client in the
+/// router's short backoff would climb the escalation ladder once per tick
+/// without a single new observation of it.
+pub(crate) async fn record_download_client_refresh_outcomes(
     app: &AppUseCase,
-    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
-    items: &[DownloadQueueItem],
-    excluded_client_type_refs: &[&str],
-    authoritative_client_ids: &HashSet<String>,
+    authoritative_client_ids: &std::collections::HashSet<String>,
+    failed_client_ids: &std::collections::HashSet<String>,
+    excluded_client_types: &[&str],
 ) {
-    let enabled_clients = match app.enabled_download_clients_by_priority().await {
-        Ok(clients) => clients,
-        Err(error) => {
-            tracing::warn!(error = %error, "skipping absent-binding reconciliation without client configuration");
-            return;
-        }
-    };
-    let observed_before = chrono::Utc::now() - ABSENT_BINDING_RECONCILE_RECENCY_FLOOR;
-    let mut remaining = ABSENT_BINDING_RECONCILE_BATCH_SIZE;
-
-    for client in enabled_clients {
-        if remaining == 0 {
-            break;
-        }
-        if crate::tracked_downloads::tracked_client_type_is_excluded(
-            &client.client_type,
-            excluded_client_type_refs,
-        ) {
-            continue;
-        }
-        if !authoritative_client_ids.contains(&client.id) {
-            continue;
-        }
-
-        let bindings = match app
-            .services
-            .workflow
-            .download_registry
-            .list_active_bindings_for_client_before(
-                &client.id,
-                &client.client_type,
-                observed_before,
-                remaining,
-            )
-            .await
-        {
-            Ok(bindings) => bindings,
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    client_id = %client.id,
-                    client_type = %client.client_type,
-                    "failed to list active bindings for absent-download reconciliation"
-                );
-                continue;
-            }
-        };
-        remaining = remaining.saturating_sub(bindings.len());
-
-        for binding in bindings {
-            let Some(native_item_id) = binding.native_item_id else {
-                continue;
-            };
-            let observed = items.iter().any(|item| {
-                item.client_id == client.id
-                    && item.client_type.eq_ignore_ascii_case(&client.client_type)
-                    && item.download_client_item_id == native_item_id
-            });
-            if observed {
-                continue;
-            }
-
-            let source_identity = crate::ClientJobLocator::new(
-                Some(client.id.as_str()),
-                &client.client_type,
-                native_item_id,
-            );
-            reconcile_authoritatively_absent_source(app, tracker, &source_identity).await;
-        }
-    }
-
-    reconcile_deleted_client_bindings(app, tracker, excluded_client_type_refs, observed_before, remaining)
-        .await;
-}
-
-/// Bindings whose download client configuration no longer exists. The loop
-/// above only visits configured clients, so without this pass a job grabbed
-/// on a since-deleted client stays `Downloading` forever and holds its scope
-/// against every future search. The router reports such jobs as
-/// authoritatively absent, which lets the usual absent-source path fail them.
-async fn reconcile_deleted_client_bindings(
-    app: &AppUseCase,
-    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
-    excluded_client_type_refs: &[&str],
-    observed_before: chrono::DateTime<chrono::Utc>,
-    mut remaining: usize,
-) {
-    if remaining == 0 {
-        return;
-    }
-    let bound_clients = match app
-        .services
-        .workflow
-        .download_registry
-        .list_active_binding_clients()
-        .await
-    {
-        Ok(clients) => clients,
-        Err(error) => {
-            tracing::warn!(error = %error, "failed to list clients holding active bindings");
-            return;
-        }
-    };
-    if bound_clients.is_empty() {
-        return;
-    }
-    let configured = match app
+    let configs = match app
         .services
         .integrations
         .download_client_configs
         .list(None)
         .await
     {
-        Ok(configs) => configs
-            .into_iter()
-            .map(|config| config.id)
-            .collect::<HashSet<_>>(),
-        Err(error) => {
-            tracing::warn!(error = %error, "skipping deleted-client binding reconciliation without client configuration");
-            return;
-        }
-    };
-    for (client_id, client_type) in bound_clients {
-        if remaining == 0 {
-            break;
-        }
-        if configured.contains(&client_id)
-            || crate::tracked_downloads::tracked_client_type_is_excluded(
-                &client_type,
-                excluded_client_type_refs,
-            )
-        {
-            continue;
-        }
-        let bindings = match app
-            .services
-            .workflow
-            .download_registry
-            .list_active_bindings_for_client_before(
-                &client_id,
-                &client_type,
-                observed_before,
-                remaining,
-            )
-            .await
-        {
-            Ok(bindings) => bindings,
-            Err(error) => {
-                tracing::warn!(error = %error, client_id, client_type,
-                    "failed to list active bindings for a deleted download client");
-                continue;
-            }
-        };
-        remaining = remaining.saturating_sub(bindings.len());
-        for binding in bindings {
-            let Some(native_item_id) = binding.native_item_id else {
-                continue;
-            };
-            tracing::warn!(download_id = %binding.download_id, client_id, client_type,
-                item_id = %native_item_id,
-                "download client was deleted while this job was bound; reconciling it as absent");
-            let source_identity =
-                crate::ClientJobLocator::new(Some(client_id.as_str()), &client_type, native_item_id);
-            reconcile_authoritatively_absent_source(app, tracker, &source_identity).await;
-        }
-    }
-}
-
-/// How many `Unknown`-with-cursor pages one absence check follows before
-/// giving the binding the benefit of the doubt until the next snapshot.
-const ABSENT_SOURCE_HISTORY_SCAN_ROUNDS: usize = 8;
-
-/// Where the bounded absence scan left off per job, so the next reconcile
-/// pass resumes instead of re-reading the same first pages. History longer
-/// than one pass's budget is then still walked to its end over successive
-/// passes; a job proven present or absent, or a cursor that stops advancing,
-/// clears its entry.
-static ABSENT_SOURCE_HISTORY_CURSORS: std::sync::LazyLock<
-    std::sync::Mutex<std::collections::HashMap<String, usize>>,
-> = std::sync::LazyLock::new(Default::default);
-
-fn absent_source_cursor_key(locator: &crate::ClientJobLocator) -> String {
-    format!(
-        "{}|{}|{}",
-        locator.client_id.as_deref().unwrap_or(""),
-        locator.client_type,
-        locator.item_id
-    )
-}
-
-fn load_absent_source_cursor(locator: &crate::ClientJobLocator) -> usize {
-    ABSENT_SOURCE_HISTORY_CURSORS
-        .lock()
-        .map(|cursors| cursors.get(&absent_source_cursor_key(locator)).copied())
-        .ok()
-        .flatten()
-        .unwrap_or(0)
-}
-
-fn store_absent_source_cursor(locator: &crate::ClientJobLocator, offset: Option<usize>) {
-    if let Ok(mut cursors) = ABSENT_SOURCE_HISTORY_CURSORS.lock() {
-        match offset {
-            Some(offset) if offset > 0 => {
-                cursors.insert(absent_source_cursor_key(locator), offset);
-            }
-            _ => {
-                cursors.remove(&absent_source_cursor_key(locator));
-            }
-        }
-    }
-}
-
-pub(crate) async fn reconcile_authoritatively_absent_source(
-    app: &AppUseCase,
-    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
-    source_identity: &crate::ClientJobLocator,
-) {
-    let binding = match app
-        .services
-        .workflow
-        .download_registry
-        .find_active_binding_by_locator(source_identity)
-        .await
-    {
-        Ok(Some(binding)) => binding,
-        Ok(None) => return,
+        Ok(configs) => configs,
         Err(error) => {
             tracing::warn!(
                 error = %error,
-                client_id = ?source_identity.client_id,
-                client_type = %source_identity.client_type,
-                item_id = %source_identity.item_id,
-                "failed to resolve active binding for unavailable download"
+                "download client configs could not be read; per-client status not recorded"
             );
             return;
         }
     };
 
-    // Recent activity windows are not complete history. Only the adapter's
-    // exact/complete observation may turn a missing snapshot row into failure.
-    // An adapter without an exact lookup (an older Weaver, a SAB-compatible
-    // backend that ignores `nzo_ids`) answers `Unknown` with the next history
-    // offset so a bounded scan can continue; follow that cursor here, or a job
-    // behind the first history page could never be proven absent and its
-    // binding would block replacement downloads forever.
-    let mut history_offset = load_absent_source_cursor(source_identity);
-    let mut proven_absent = false;
-    for _ in 0..ABSENT_SOURCE_HISTORY_SCAN_ROUNDS {
-        match app
-            .services
-            .integrations
-            .download_client
-            .observe_download(source_identity, history_offset)
-            .await
+    let now = chrono::Utc::now();
+    let status = &app.services.integrations.download_client_status;
+    for config in configs.into_iter().filter(|config| config.is_enabled) {
+        if excluded_client_types
+            .iter()
+            .any(|client_type| config.client_type.eq_ignore_ascii_case(client_type.trim()))
         {
-            Ok(crate::DownloadClientObservation::Absent) => {
-                proven_absent = true;
-                break;
-            }
-            Ok(crate::DownloadClientObservation::Present(_)) => {
-                store_absent_source_cursor(source_identity, None);
-                return;
-            }
-            Ok(crate::DownloadClientObservation::Unknown { reason, next_history_offset }) => {
-                if next_history_offset > history_offset {
-                    history_offset = next_history_offset;
-                    continue;
-                }
-                // No progress: the client is unreadable, or history shrank
-                // beneath a resumed cursor. Start over next pass.
-                store_absent_source_cursor(source_identity, None);
-                tracing::debug!(download_id = %binding.download_id, reason, history_offset,
-                    "client state unknown; preserving download binding");
-                return;
-            }
-            Err(error) => {
-                tracing::warn!(download_id = %binding.download_id, error = %error,
-                    "client state unknown; preserving download binding");
-                return;
-            }
+            continue;
         }
-    }
-    if !proven_absent {
-        // Resume from here next pass rather than re-reading the same prefix,
-        // so a history longer than one pass's budget is still walked to its
-        // end.
-        store_absent_source_cursor(source_identity, Some(history_offset));
-        tracing::debug!(download_id = %binding.download_id, history_offset,
-            "history scan budget exhausted without proving absence; preserving download binding until the next pass resumes the scan");
-        return;
-    }
-    store_absent_source_cursor(source_identity, None);
-    match authoritatively_absent_download_disposition(app, tracker, source_identity, &binding).await
-    {
-        AuthoritativelyAbsentDownloadDisposition::Preserve => return,
-        AuthoritativelyAbsentDownloadDisposition::Fail => {
-            fail_authoritatively_absent_download(
-                app,
-                tracker,
-                source_identity,
-                binding.download_id,
-            )
-            .await;
-        }
-        AuthoritativelyAbsentDownloadDisposition::Terminal => {}
-    }
 
-    // Resolve this before ending the binding so a failed read leaves the
-    // binding available for retry. Configured clients retain their existing
-    // terminal cleanup path; deleted clients cannot perform client cleanup.
-    let configs = match app.services.integrations.download_client_configs.list(None).await {
-        Ok(configs) => configs,
+        let outcome = if authoritative_client_ids.contains(&config.id) {
+            status.record_success(&config.id).await
+        } else if failed_client_ids.contains(&config.id) {
+            status.record_failure(&config.id, now).await.map(|_| ())
+        } else {
+            continue;
+        };
+        if let Err(error) = outcome {
+            tracing::warn!(
+                client_id = config.id.as_str(),
+                error = %error,
+                "failed to record download client refresh status"
+            );
+        }
+    }
+}
+
+/// A job the client no longer lists is gone.
+///
+/// Sonarr's `UpdateTrackable` drops such a job from the queue and never fails
+/// it; the only durable trace is a `DownloadIgnored` history row. This does the
+/// same. The binding — a fact about which client job a grab became — ends, the
+/// durable submission settles on `ignored`, the scopes it still held reopen,
+/// and the queue projection stops carrying the row. Absence is not a failure,
+/// so nothing here reaches blocklisting or re-acquisition-as-failure.
+///
+/// A download that already reached a terminal outcome keeps it:
+/// `finalize_scryer_download_ignored_for_download` preserves `imported` and
+/// `failed`, and the prune never reports a job whose work is still outstanding
+/// (`TrackedDownloadService::should_preserve_tracking`).
+pub(crate) async fn drop_source_removed_from_client(
+    app: &AppUseCase,
+    locator: &crate::ClientJobLocator,
+) {
+    let binding = match app
+        .services
+        .workflow
+        .download_registry
+        .find_active_binding_by_locator(locator)
+        .await
+    {
+        Ok(binding) => binding,
         Err(error) => {
-            tracing::warn!(error = %error, download_id = %binding.download_id,
-                "preserving unavailable download binding until client configuration can be read");
+            tracing::warn!(
+                error = %error,
+                client_id = ?locator.client_id,
+                client_type = %locator.client_type,
+                item_id = %locator.item_id,
+                "failed to resolve the binding of a download removed from its client"
+            );
             return;
         }
     };
-    let client_deleted = source_identity.client_id.as_ref().is_some_and(|client_id| {
-        !configs.iter().any(|config| &config.id == client_id)
-    });
 
+    if let Err(error) = finalize_scryer_download_ignored_for_download(
+        app,
+        crate::domain_events::DomainEventActor::system(),
+        binding.as_ref().map(|binding| &binding.download_id),
+        locator.clone(),
+    )
+    .await
+    {
+        tracing::warn!(
+            error = %error,
+            client_type = %locator.client_type,
+            item_id = %locator.item_id,
+            "failed to record a download removed from its client as ignored"
+        );
+        return;
+    }
+
+    let Some(binding) = binding else {
+        return;
+    };
     if let Err(error) = app
         .services
         .workflow
@@ -1521,244 +1277,17 @@ pub(crate) async fn reconcile_authoritatively_absent_source(
         tracing::warn!(
             error = %error,
             download_id = %binding.download_id,
-            client_id = ?source_identity.client_id,
-            client_type = %source_identity.client_type,
-            item_id = %source_identity.item_id,
-            "failed to end binding for unavailable download"
+            "failed to end the binding of a download removed from its client"
         );
         return;
     }
-
-    if !client_deleted {
-        return;
-    }
-
-    // A cached terminal job can persist its outcome again on the next tick.
-    // Once its binding is ended, that locator-only write would adopt a new
-    // download. Retire only this canonical job after the durable end succeeds.
-    if let Some(id) = tracker
-        .cached_id_for_source_identity_for_download(Some(&binding.download_id), source_identity)
-    {
-        tracker.stop_tracking(&id);
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum AuthoritativelyAbsentDownloadDisposition {
-    Preserve,
-    Terminal,
-    Fail,
-}
-
-async fn authoritatively_absent_download_disposition(
-    app: &AppUseCase,
-    tracker: &crate::tracked_downloads::TrackedDownloadService,
-    source_identity: &crate::ClientJobLocator,
-    binding: &crate::DownloadClientBindingRecord,
-) -> AuthoritativelyAbsentDownloadDisposition {
-    if let Some(id) = tracker
-        .cached_id_for_source_identity_for_download(Some(&binding.download_id), source_identity)
-        && let Some(tracked) = tracker.find(&id)
-    {
-        if crate::tracked_downloads::TrackedDownloadService::should_preserve_tracking(tracked.state)
-        {
-            return AuthoritativelyAbsentDownloadDisposition::Preserve;
-        }
-        if tracked.state.is_terminal() {
-            return AuthoritativelyAbsentDownloadDisposition::Terminal;
-        }
-    }
-
-    let durable_disposition = match app
-        .services
-        .workflow
-        .download_submissions
-        .get_identity_tracked_state_for_download(
-            Some(&binding.download_id),
-            &crate::DownloadSubmissionIdentity::default(),
-            Some(source_identity),
-        )
-        .await
-    {
-        Ok(Some(state)) => match scryer_domain::TrackedDownloadState::from_str_opt(&state) {
-            Some(state)
-                if crate::tracked_downloads::TrackedDownloadService::should_preserve_tracking(
-                    state,
-                ) =>
-            {
-                AuthoritativelyAbsentDownloadDisposition::Preserve
-            }
-            Some(state) if state.is_terminal() => {
-                AuthoritativelyAbsentDownloadDisposition::Terminal
-            }
-            Some(_) | None => AuthoritativelyAbsentDownloadDisposition::Fail,
-        },
-        Ok(None) => AuthoritativelyAbsentDownloadDisposition::Fail,
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                download_id = %binding.download_id,
-                "could not load durable unavailable download state; preserving until it can be read"
-            );
-            return AuthoritativelyAbsentDownloadDisposition::Preserve;
-        }
-    };
-    if durable_disposition != AuthoritativelyAbsentDownloadDisposition::Fail {
-        return durable_disposition;
-    }
-
-    match app
-        .services
-        .workflow
-        .download_registry
-        .load_download(&binding.download_id)
-        .await
-    {
-        Ok(Some(download)) if download.terminal_at.is_some() => {
-            AuthoritativelyAbsentDownloadDisposition::Terminal
-        }
-        Ok(Some(_)) => AuthoritativelyAbsentDownloadDisposition::Fail,
-        Ok(None) => {
-            tracing::warn!(
-                download_id = %binding.download_id,
-                "active download binding has no canonical download row; ending binding without replacing terminal state"
-            );
-            AuthoritativelyAbsentDownloadDisposition::Terminal
-        }
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                download_id = %binding.download_id,
-                "could not determine unavailable download terminal state; ending binding without replacing terminal state"
-            );
-            AuthoritativelyAbsentDownloadDisposition::Terminal
-        }
-    }
-}
-
-async fn fail_authoritatively_absent_download(
-    app: &AppUseCase,
-    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
-    source_identity: &crate::ClientJobLocator,
-    download_id: scryer_domain::download_identity::DownloadId,
-) {
-    let tracked_id =
-        tracker.cached_id_for_source_identity_for_download(Some(&download_id), source_identity);
-
-    if let Some(id) = tracked_id.as_deref() {
-        if let Some(tracked) = tracker.find_mut(id) {
-            tracked.state = scryer_domain::TrackedDownloadState::FailedPending;
-            tracked.status = scryer_domain::TrackedDownloadStatus::Error;
-            tracked.status_messages = vec![REMOVED_FROM_DOWNLOAD_CLIENT_REASON.to_string()];
-            tracked.client_item.attention_reason =
-                Some(REMOVED_FROM_DOWNLOAD_CLIENT_REASON.to_string());
-        }
-        if let Some(tracked) = tracker.find_mut(id) {
-            crate::failed_download_handler::process_failed(app, tracked).await;
-        }
-        if let Some(tracked) = tracker.find_mut(id) {
-            tracked.state = scryer_domain::TrackedDownloadState::Failed;
-            tracked.status = scryer_domain::TrackedDownloadStatus::Error;
-            if tracked.status_messages.is_empty() {
-                tracked
-                    .status_messages
-                    .push(REMOVED_FROM_DOWNLOAD_CLIENT_REASON.to_string());
-            }
-        }
-        if let Some(tracked) = tracker.find(id) {
-            crate::tracked_downloads::persist_tracked_download_state_marker(
-                app,
-                tracked,
-                scryer_domain::TrackedDownloadState::Failed,
-                Some(REMOVED_FROM_DOWNLOAD_CLIENT_REASON),
-                None,
-            )
-            .await;
-        }
-        return;
-    }
-
-    if let Err(error) = app
-        .services
-        .workflow
-        .download_submissions
-        .update_tracked_state(
-            source_identity,
-            scryer_domain::TrackedDownloadState::Failed.as_str(),
-        )
-        .await
-    {
-        tracing::warn!(
-            error = %error,
-            download_id = %download_id,
-            "failed to record legacy tracked state for unavailable download"
-        );
-        return;
-    }
-
-    // Since 0184 the durable row is keyed by the canonical download id; the
-    // wire identity is only a compatibility column, so a token-less item still
-    // gets its failed marker.
-    let identity = match app
-        .services
-        .workflow
-        .download_submissions
-        .get_submission_identity(source_identity)
-        .await
-    {
-        Ok(identity) => identity.unwrap_or_default(),
-        Err(error) => {
-            tracing::warn!(
-                error = %error,
-                download_id = %download_id,
-                "failed to load submission identity for unavailable download"
-            );
-            return;
-        }
-    };
-    if let Err(error) = app
-        .services
-        .workflow
-        .download_submissions
-        .record_identity_tracked_state_for_download(
-            Some(&download_id),
-            &identity,
-            Some(source_identity),
-            scryer_domain::TrackedDownloadState::Failed.as_str(),
-            Some(REMOVED_FROM_DOWNLOAD_CLIENT_REASON),
-            None,
-        )
-        .await
-    {
-        tracing::warn!(
-            error = %error,
-            download_id = %download_id,
-            "failed to record canonical tracked state for unavailable download"
-        );
-    }
-
-    // A restart has no in-memory `TrackedDownload` to hand to the regular
-    // failure handler. The durable submission still identifies the automatic
-    // grab, though, so run the same blocklist-and-reopen path after persisting
-    // its terminal marker. The handler resolves only the scope that still
-    // claims this release, leaving a newer replacement grab untouched.
-    crate::acquisition_workflow::process_download_failure_for_download(
-        app,
-        Some(&download_id),
-        crate::acquisition_workflow::DownloadFailureContext {
-            wanted_item: None,
-            title_id: None,
-            client_id: source_identity.client_id.clone().unwrap_or_default(),
-            client_type: source_identity.client_type.clone(),
-            client_name: None,
-            client_item_id: source_identity.item_id.clone(),
-            release_title: source_identity.item_id.clone(),
-            reason: REMOVED_FROM_DOWNLOAD_CLIENT_REASON.to_string(),
-            remove_from_client_if_configured: false,
-            skip_reacquire: false,
-        },
-    )
-    .await;
+    tracing::info!(
+        download_id = %binding.download_id,
+        client_id = ?locator.client_id,
+        client_type = %locator.client_type,
+        item_id = %locator.item_id,
+        "download is no longer listed by its client; ended its binding and dropped it from the queue"
+    );
 }
 
 fn tracked_download_snapshot_projection_key(
@@ -2052,8 +1581,16 @@ pub async fn start_download_queue_poller_with_options(
                 let crate::ports::DownloadClientSnapshotOutcome {
                     items,
                     authoritative_client_ids,
+                    failed_client_ids,
                     ..
                 } = snapshot;
+                record_download_client_refresh_outcomes(
+                    &app,
+                    &authoritative_client_ids,
+                    &failed_client_ids,
+                    &excluded_client_type_refs,
+                )
+                .await;
                 let completed_download_lookup =
                     crate::completed_download_handler::load_completed_download_lookup_for_items_excluding_client_types(
                         &app,
@@ -3630,9 +3167,12 @@ async fn reconcile_terminal_tracked_downloads(
             if let Some((download_id, tracked, cleanup)) = result {
                 *settled.entry(format!("{:?}", cleanup.outcome)).or_default() += 1;
                 let (id, state) = if let Some(tracked) = tracked {
-                    let id = tracked.id.clone();
                     let state = tracked.state;
-                    tracker.restore_cleanup_download(tracked);
+                    // The effective id, not the rebuilt one: a live poller entry
+                    // for this canonical download keeps its own id, and settling
+                    // the outcome against the rebuilt short id would address an
+                    // entry that is not in the cache.
+                    let id = tracker.restore_cleanup_download(tracked);
                     (id, state)
                 } else if let Some(id) = tracker.cached_id_for_canonical_download_id(&download_id) {
                     let state = tracker.find(&id).expect("cached cleanup download").state;

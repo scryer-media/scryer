@@ -108,6 +108,10 @@ struct InputPathContext {
     /// must name its fact with a literal, because the engine reads that set to
     /// decide whether the subject is even knowable enough to consult the rule.
     static_facts_only: bool,
+    /// The family's own source bounds. Static analysis parses exactly what the
+    /// family's engine would load, so a rule the engine accepts is never
+    /// refused here for its size.
+    limits: RuntimeLimits,
 }
 
 impl InputPathContext {
@@ -117,6 +121,7 @@ impl InputPathContext {
             catalog: RELEASE_CONTRACT.catalog(),
             allow_release_extra: true,
             static_facts_only: false,
+            limits: RuntimeLimits::release_defaults(),
         }
     }
 
@@ -126,6 +131,7 @@ impl InputPathContext {
             catalog: MAINTENANCE_CONTRACT.catalog(),
             allow_release_extra: false,
             static_facts_only: true,
+            limits: RuntimeLimits::maintenance_defaults(),
         }
     }
 
@@ -135,6 +141,7 @@ impl InputPathContext {
             catalog: REQUEST_CONTRACT.catalog(),
             allow_release_extra: false,
             static_facts_only: true,
+            limits: RuntimeLimits::request_defaults(),
         }
     }
 }
@@ -374,9 +381,25 @@ fn unsupported_dynamic_input_path_message(path: &str) -> String {
     )
 }
 
-fn parse_module(rego_source: &str, policy_path: &str) -> Result<Module, String> {
-    let source = Source::from_contents(policy_path.to_string(), rego_source.to_string())
-        .map_err(|e| e.to_string())?;
+/// Parses a policy for static analysis under the same source bounds the
+/// family's engine loads it with.
+///
+/// The limits must be passed rather than left to Regorus: its defaults are
+/// narrower than every family Scryer runs, so a source the engine already holds
+/// — a large community pack, say — would fail to parse here and turn a static
+/// question into an error the caller cannot answer.
+fn parse_module(
+    rego_source: &str,
+    policy_path: &str,
+    limits: &RuntimeLimits,
+) -> Result<Module, String> {
+    let source = Source::from_contents_with_limits(
+        policy_path.to_string(),
+        rego_source.to_string(),
+        limits.max_policy_bytes,
+        limits.max_policy_lines,
+    )
+    .map_err(|e| e.to_string())?;
     let mut parser = Parser::new(&source).map_err(|e| e.to_string())?;
     parser.enable_rego_v1().map_err(|e| e.to_string())?;
     parser.parse().map_err(|e| e.to_string())
@@ -706,7 +729,11 @@ fn object_get_reference(
 /// the current host contract. Dynamic object keys are intentionally ignored:
 /// a retained source is only classified when the AST proves the retired field.
 pub fn retired_release_input_fields(rego_source: &str) -> Result<Vec<String>, String> {
-    let module = parse_module(rego_source, "scryer.rules.retired_input")?;
+    let module = parse_module(
+        rego_source,
+        "scryer.rules.retired_input",
+        &RuntimeLimits::release_defaults(),
+    )?;
     let mut retired = BTreeSet::new();
     for import in &module.imports {
         if static_reference(&import.refr)
@@ -730,7 +757,11 @@ pub fn validate_baseline_dependencies(
     rego_source: &str,
     additional_rule_ids: &[String],
 ) -> Result<(), String> {
-    let module = parse_module(rego_source, "scryer.rules.baseline_dependencies")?;
+    let module = parse_module(
+        rego_source,
+        "scryer.rules.baseline_dependencies",
+        &RuntimeLimits::release_defaults(),
+    )?;
     let additional_rule_ids = additional_rule_ids
         .iter()
         .map(String::as_str)
@@ -881,7 +912,7 @@ fn fact_references(
     policy_path: &str,
     ctx: InputPathContext,
 ) -> Result<BTreeSet<String>, String> {
-    let module = parse_module(rego_source, policy_path)?;
+    let module = parse_module(rego_source, policy_path, &ctx.limits)?;
     module_fact_references(&module, ctx)
 }
 
@@ -961,8 +992,8 @@ pub fn request_person_targeted_paths(
     rule_set_id: &str,
 ) -> Result<Vec<String>, String> {
     let policy_path = request::user_policy_path(rule_set_id);
-    let module = parse_module(rego_source, &policy_path)?;
     let ctx = InputPathContext::request();
+    let module = parse_module(rego_source, &policy_path, &ctx.limits)?;
     if let Some(error) = input_import_error(&module, ctx.family) {
         return Err(error);
     }
@@ -1862,12 +1893,25 @@ mod tests {
         input: UserRuleInput,
         facet: &str,
     ) -> crate::EvalResult {
-        let policy_id = format!("builtin_{}", template_id.replace('-', "_"));
-        let rego_source =
-            crate::rewrite_package_declaration(&built_in_template_source(template_id), &policy_id);
+        evaluate_policy_source(
+            template_id,
+            &built_in_template_source(template_id),
+            input,
+            facet,
+        )
+    }
+
+    fn evaluate_policy_source(
+        name: &str,
+        source: &str,
+        input: UserRuleInput,
+        facet: &str,
+    ) -> crate::EvalResult {
+        let policy_id = format!("builtin_{}", name.replace('-', "_"));
+        let rego_source = crate::rewrite_package_declaration(source, &policy_id);
         let engine = crate::UserRulesEngine::build(&[crate::UserPolicy {
             id: policy_id,
-            name: template_id.to_string(),
+            name: name.to_string(),
             rego_source,
             origin: crate::PolicyOrigin::User,
             applied_facets: Vec::new(),
@@ -1944,6 +1988,26 @@ mod tests {
         );
 
         assert!(crate::UserRulesEngine::build(&[test_policy(rule_set_id, &source)]).is_ok());
+    }
+
+    /// A community pack larger than Regorus' own default bound is a rule the
+    /// release engine holds happily, so every static question asked about it
+    /// must answer rather than fail. Startup asks them about each stored rule,
+    /// and an error there took the whole instance down instead of reporting one
+    /// unreadable rule.
+    #[test]
+    fn release_static_analysis_reads_sources_above_regorus_defaults() {
+        let limits = RuntimeLimits::release_defaults();
+        let rule_set_id = "large_pack_policy";
+        let source = padded_rule_source(rule_set_id, 20_001, 60);
+        assert!(source.len() > 1024 * 1024);
+        assert!(source.len() < limits.max_policy_bytes.get());
+
+        assert_eq!(
+            retired_release_input_fields(&source).expect("large source parses"),
+            Vec::<String>::new()
+        );
+        assert_eq!(validate_baseline_dependencies(&source, &[]), Ok(()));
     }
 
     #[test]
@@ -2115,7 +2179,12 @@ mod tests {
         ] {
             let policy = maintenance_policy(id, body);
             let path = maintenance::user_policy_path(id);
-            let module = parse_module(&policy.rego_source, &path).expect("source should parse");
+            let module = parse_module(
+                &policy.rego_source,
+                &path,
+                &RuntimeLimits::release_defaults(),
+            )
+            .expect("source should parse");
 
             let source_result =
                 <maintenance::MaintenanceFamily as crate::policy::PolicyFamily>::referenced_facts(
@@ -2688,59 +2757,99 @@ mod tests {
             "prefer-web-dl should match canonical WEB-DL input"
         );
 
-        let x265_result = evaluate_template("prefer-x265", synthetic_test_input(), "movie");
+        let hevc_result = evaluate_template("prefer-hevc", synthetic_test_input(), "movie");
         assert!(
-            x265_result
+            hevc_result
                 .entries
                 .iter()
-                .any(|entry| entry.code == "x265_bonus" && entry.delta == 100),
-            "prefer-x265 should match canonical H.265 input"
+                .any(|entry| entry.code == "hevc_bonus" && entry.delta == 100),
+            "prefer-hevc should match canonical H.265 input"
         );
 
         let mut x264_input = synthetic_test_input();
         x264_input.release.video_codec = Some("H.264".to_string());
-        let x264_result = evaluate_template("penalize-x264-4k", x264_input, "movie");
+        let x264_result = evaluate_template("prefer-hevc", x264_input, "movie");
         assert!(
             x264_result
                 .entries
                 .iter()
                 .any(|entry| entry.code == "x264_4k_penalty" && entry.delta == -200),
-            "penalize-x264-4k should match canonical 2160P H.264 input"
+            "prefer-hevc should penalize canonical 2160P H.264 input"
         );
     }
 
     #[test]
     fn group_templates_noop_when_release_group_is_missing() {
-        for template_id in [
-            "anime-group-preference",
-            "block-mini-encodes",
-            "block-low-quality-groups",
-        ] {
-            let mut input = synthetic_test_input();
-            input.release.release_group = None;
-            let result = evaluate_template(template_id, input, "anime");
-            assert!(
-                result.errors.is_empty(),
-                "{template_id} should not raise runtime errors when release_group is null"
-            );
-            assert!(
-                result.entries.is_empty(),
-                "{template_id} should no-op when release_group is null"
-            );
-        }
+        let template_id = "release-group-scores";
+        let mut input = synthetic_test_input();
+        input.release.release_group = None;
+        let result = evaluate_template(template_id, input, "anime");
+        assert!(
+            result.errors.is_empty(),
+            "{template_id} should not raise runtime errors when release_group is null"
+        );
+        assert!(
+            result.entries.is_empty(),
+            "{template_id} should no-op when release_group is null"
+        );
     }
 
     #[test]
-    fn password_protected_template_matches_injected_signal() {
+    fn release_group_template_matches_listed_group_case_insensitively() {
+        let mut input = synthetic_test_input();
+        input.release.release_group = Some("SampleSubs".to_string());
+        let result = evaluate_template("release-group-scores", input, "movie");
+        assert!(
+            result
+                .entries
+                .iter()
+                .any(|entry| entry.code == "preferred_release_group" && entry.delta == 400),
+            "release-group-scores should boost a listed group"
+        );
+    }
+
+    #[test]
+    fn exe_torrent_template_matches_only_torrent_extension_tokens() {
+        let score = |protocol: &str, raw_title: &str| {
+            let mut input = synthetic_test_input();
+            input.release.raw_title = raw_title.to_string();
+            input
+                .release
+                .extra
+                .insert("protocol".to_string(), serde_json::json!(protocol));
+            let result = evaluate_template("block-exe-torrents", input, "movie");
+            assert!(result.errors.is_empty(), "{raw_title}: {:?}", result.errors);
+            result
+                .entries
+                .iter()
+                .any(|entry| entry.code == "blocked_file_extension")
+        };
+
+        assert!(score("torrent", "Sample.Movie.2024.1080p.WEB-DL.x264.exe"));
+        assert!(score("torrent", "Sample.Movie.2024.1080p.mkv.lnk"));
+        assert!(!score("usenet", "Sample.Movie.2024.1080p.WEB-DL.x264.exe"));
+        assert!(!score(
+            "torrent",
+            "Sample.Batch.Movie.2024.1080p.WEB-DL.x264"
+        ));
+    }
+
+    #[test]
+    fn password_protected_rule_matches_injected_signal() {
         let mut input = synthetic_test_input();
         input.release.is_password_protected = Some(true);
-        let result = evaluate_template("block-password-protected", input, "movie");
+        let result = evaluate_policy_source(
+            "password-protected",
+            "import rego.v1\n\nscore_entry[\"password_protected\"] := scryer.block_score() if {\n    input.release.is_password_protected == true\n}\n",
+            input,
+            "movie",
+        );
         assert!(
             result
                 .entries
                 .iter()
                 .any(|entry| entry.code == "password_protected"),
-            "password-protected template should block when the signal is injected"
+            "password-protected rule should block when the signal is injected"
         );
     }
 
@@ -2783,7 +2892,12 @@ mod tests {
         ] {
             let policy = request_policy(id, body);
             let path = request::user_policy_path(id);
-            let module = parse_module(&policy.rego_source, &path).expect("source should parse");
+            let module = parse_module(
+                &policy.rego_source,
+                &path,
+                &RuntimeLimits::release_defaults(),
+            )
+            .expect("source should parse");
 
             let source_result =
                 <request::RequestFamily as crate::policy::PolicyFamily>::referenced_facts(

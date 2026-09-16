@@ -28,7 +28,7 @@
 
 
 <h3 align="center">
-    <a href="https://www.scryer.media/scryer/docs/getting-started/"><h3>Getting Started Guide<h3></a>
+    <a href="https://www.scryer.media/scryer/docs/installation/"><h3>Getting Started Guide<h3></a>
 </h3>
 
 <p align="center">
@@ -80,7 +80,7 @@ Scryer publishes a first-party container image:
 
 For Docker installation, Compose examples, environment variables, volumes, and
 deployment notes, see the [Docker install
-docs](https://www.scryer.media/scryer/docs/getting-started/#docker-compose).
+docs](https://www.scryer.media/scryer/docs/installation/docker/).
 
 ## Windows
 

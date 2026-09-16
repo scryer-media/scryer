@@ -1594,6 +1594,7 @@ mod tests {
             tvdb_start += length;
         }
         scryer_domain::AnimeNumberingBridge {
+            source: Default::default(),
             generated_on: "2026-08-30".to_string(),
             corroborating_order: None,
             seasons,

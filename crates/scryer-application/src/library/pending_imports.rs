@@ -137,6 +137,19 @@ async fn build_pending_import_library_file(
     })
 }
 
+/// Whether this pending import names a directory on disk right now. A path the
+/// process cannot stat is reported as "not a directory" so the file-shaped
+/// paths keep their existing behaviour when media storage is unavailable.
+async fn pending_import_path_is_directory(item: &LibraryScanUnmatchedItem) -> bool {
+    let item_path = item.item_path.trim();
+    if item_path.is_empty() {
+        return false;
+    }
+    tokio::fs::metadata(stored_path_to_path_buf(item_path))
+        .await
+        .is_ok_and(|metadata| metadata.is_dir())
+}
+
 async fn list_pending_import_title_episodes(
     app: &AppUseCase,
     title_id: &str,
@@ -324,6 +337,36 @@ impl AppUseCase {
             pending_import_id: pending_import_id.to_string(),
             locks: self.pending_import_resolution_locks.clone(),
         })
+    }
+
+    /// Release a title binding that can never be resolved file by file.
+    ///
+    /// Folder-level series and anime rows attached before folder binding
+    /// existed still carry a title id, and every episode-binding call on them
+    /// fails because the path is a directory. Dropping the stale binding puts
+    /// the row back in the un-attached state so "Search & Match" can attach the
+    /// folder again, this time through the folder-scanning path.
+    async fn release_stale_directory_title_binding(
+        &self,
+        item: &LibraryScanUnmatchedItem,
+    ) -> AppResult<AppError> {
+        if item.title_id.is_some() {
+            let mut released = item.clone();
+            released.title_id = None;
+            released.updated_at = Utc::now().to_rfc3339();
+            self.services
+                .library
+                .library_scan_unmatched_items
+                .upsert_library_scan_unmatched_item(&released)
+                .await?;
+        }
+
+        Ok(AppError::Validation(
+            "pending import path is a folder, not a file, so it cannot be bound to episodes; \
+             its stale title link was cleared, so reload pending imports and attach the folder \
+             to a title again"
+                .into(),
+        ))
     }
 
     pub async fn pending_import_counts(&self, actor: &User) -> AppResult<PendingImportCounts> {
@@ -644,6 +687,23 @@ impl AppUseCase {
             });
         }
 
+        // The create-and-bind store call stamps the new title onto the row.
+        // For a folder-level series or anime row that leaves a title bound to
+        // a directory, which no episode bind can use, so take the folder route
+        // now: the new title claims the folder and each file becomes its own
+        // title-bound row for episode binding once metadata arrives.
+        if item.facet != MediaFacet::Movie && pending_import_path_is_directory(&item).await {
+            let (title, library_scan) = self
+                .bind_pending_import_to_existing_title(actor, &item, &outcome.title)
+                .await?;
+            return Ok(ResolvePendingImportResult {
+                title,
+                created: true,
+                library_scan,
+                metadata_hydration_state: outcome.metadata_hydration_state,
+            });
+        }
+
         Ok(ResolvePendingImportResult {
             title: outcome.title,
             created: true,
@@ -654,8 +714,9 @@ impl AppUseCase {
 
     /// Bind an item to a title that already exists. Movies are scanned before
     /// their pending row is deleted so an attach cannot silently lose a file.
-    /// Series and anime retain their title-bound pending row for episode
-    /// selection.
+    /// A folder-level series or anime row names the series directory itself, so
+    /// it is scanned the same way; only file-level series and anime rows keep a
+    /// title-bound pending row for episode selection.
     async fn bind_pending_import_to_existing_title(
         &self,
         actor: &User,
@@ -722,6 +783,45 @@ impl AppUseCase {
                     "failed to attach pending import file to selected movie".into(),
                 ));
             }
+            self.services
+                .library
+                .library_scan_unmatched_items
+                .delete_library_scan_unmatched_item(
+                    &item.library_id,
+                    item.facet.clone(),
+                    &item.item_path,
+                )
+                .await?;
+            return Ok((title, Some(summary)));
+        }
+
+        // A folder-level series or anime row points at the series directory, so
+        // there is no single file to bind to an episode. Attaching it does what
+        // the movie branch does: scan the folder, claim it for the title, and
+        // let the normal title scan match episodes. Files the scan cannot place
+        // come back as title-bound file-level rows, so "Bind Episodes" still
+        // works per file afterwards.
+        if pending_import_path_is_directory(item).await {
+            let mut title = title.clone();
+            let item_path = stored_path_to_path_buf(item.item_path.trim());
+            let discovered_files = self
+                .services
+                .library
+                .library_scanner
+                .scan_library(path_to_stored_string(&item_path).as_str())
+                .await?;
+            if discovered_files.is_empty() {
+                return Err(AppError::Validation(
+                    "pending import directory contains no files to attach".into(),
+                ));
+            }
+            crate::folder_ownership::claim_title_folder_if_missing(self, &mut title, &item_path)
+                .await?;
+            let summary = self
+                .scan_title_library_with_discovered_files(actor, title.clone(), discovered_files)
+                .await?;
+            // The scan records its own file-level rows under the file paths, so
+            // deleting the folder row by path leaves those untouched.
             self.services
                 .library
                 .library_scan_unmatched_items
@@ -857,6 +957,9 @@ impl AppUseCase {
         )
         .await?;
         reject_folder_ownership_conflict_resolution(&item)?;
+        if pending_import_path_is_directory(&item).await {
+            return Err(self.release_stale_directory_title_binding(&item).await?);
+        }
         let title_id = item.title_id.as_deref().ok_or_else(|| {
             AppError::Validation("pending import does not have a known title".into())
         })?;
@@ -935,6 +1038,9 @@ impl AppUseCase {
         )
         .await?;
         reject_folder_ownership_conflict_resolution(&item)?;
+        if pending_import_path_is_directory(&item).await {
+            return Err(self.release_stale_directory_title_binding(&item).await?);
+        }
         let title_id = item.title_id.as_deref().ok_or_else(|| {
             AppError::Validation("pending import does not have a known title".into())
         })?;

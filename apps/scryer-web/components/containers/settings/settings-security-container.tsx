@@ -834,7 +834,6 @@ export function SettingsSecurityContainer() {
       confirmPassword={confirmPassword}
       confirmError={confirmError}
       passwordMinLengthDraft={passwordMinLengthDraft}
-      minPasswordLength={MIN_PASSWORD_LENGTH}
       onToggle={handleToggle}
       onConfirmPasswordChange={setConfirmPassword}
       onConfirmEnable={handleConfirmEnable}

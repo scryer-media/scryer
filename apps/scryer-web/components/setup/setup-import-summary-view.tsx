@@ -5,7 +5,6 @@ import {
   Download,
   Eye,
   Library,
-  Loader,
   RotateCcw,
   Route,
   Rss,
@@ -17,6 +16,7 @@ import type { LucideIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import type { UseExternalImportSetupReturn } from "@/lib/hooks/use-external-import-setup";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 interface SetupImportSummaryViewProps {
   wizard: UseExternalImportSetupReturn;
@@ -268,7 +268,7 @@ export default function SetupImportSummaryView({
                   onClick={() => void handleRetry()}
                 >
                   {retrying ? (
-                    <Loader className="h-4 w-4 animate-spin" />
+                    <LoadingMark className="h-4 w-4" />
                   ) : (
                     <RotateCcw className="h-4 w-4" />
                   )}
@@ -352,12 +352,7 @@ export default function SetupImportSummaryView({
             {warmupComplete ? (
               <CircleCheckBig size={15} strokeWidth={2} aria-hidden />
             ) : (
-              <Loader
-                size={15}
-                strokeWidth={2}
-                aria-hidden
-                className="animate-spin"
-              />
+              <LoadingMark className="size-[15px]" />
             )}
             <span>
               {warmupComplete

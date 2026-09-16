@@ -1,6 +1,6 @@
 [package]
 name = "scryer-release-parser"
-version = "0.20.0"
+version = "0.20.1"
 edition.workspace = true
 
 [dependencies]
@@ -9,7 +9,7 @@ chrono.workspace = true
 fixedbitset.workspace = true
 html-escape = "0.2"
 serde.workspace = true
-smallvec = { version = "1.15", features = ["serde"] }
+smallvec = { version = "1.16", features = ["serde"] }
 unicode-normalization = "0.1"
 
 [dev-dependencies]

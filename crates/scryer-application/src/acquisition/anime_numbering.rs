@@ -12,10 +12,16 @@
 //! catalog episodes and a parsed release, it produces every numbering
 //! interpretation that lands on real catalog episodes and picks between them.
 //!
+//! Since 0240 the same machinery also serves ordinary series: Scryer derives a
+//! bridge from the alternate (or DVD) episode order TVDB publishes whenever it
+//! numbers the series differently from the official order the catalog follows.
+//! Those readings are ranked lower and have to be corroborated before they may
+//! move an import; see [`NumberingCandidateKind::Alternate`].
+//!
 //! Everything here is a pure function of its inputs. The lanes that use it
 //! (grab, import, library scan, search-query building) own the gating: this
-//! module is only ever entered for an Anime-facet title that has a stored
-//! bridge, so every other title keeps exactly today's behaviour.
+//! module is only ever entered for a title that has a stored bridge, so every
+//! other title keeps exactly today's behaviour.
 
 use chrono::NaiveDate;
 use scryer_domain::{AnimeCommunitySeason, AnimeNumberingBridge, Episode, Title};
@@ -31,6 +37,12 @@ pub(crate) enum NumberingCandidateKind {
     Absolute,
     /// Parsed (season, episode) taken literally against the catalog.
     Official,
+    /// The parsed season and episode read through a TVDB alternate (or DVD)
+    /// order. Ranked above the literal reading because a group that numbers by
+    /// that order says so with every release, but below a title-anchored one —
+    /// and, unlike every other kind, a reading that disagrees with the literal
+    /// one has to be corroborated before `select` will resolve it.
+    Alternate,
     /// The parsed season read as a community season index.
     Community,
     /// The release names one community season's own title, which pins the
@@ -43,6 +55,7 @@ impl NumberingCandidateKind {
         match self {
             Self::Absolute => "absolute",
             Self::Official => "official",
+            Self::Alternate => "alternate",
             Self::Community => "community",
             Self::TitleAnchored => "title_anchored",
         }
@@ -141,6 +154,10 @@ pub(crate) struct NumberingInput<'a> {
     /// Release posted date or file mtime, when the lane has one. Breaks an
     /// otherwise equal-ranked tie toward the interpretation that aired near it.
     pub(crate) reference_date: Option<NaiveDate>,
+    /// The operator pinned this title's releases to an alternate or DVD order,
+    /// which licenses an alternate reading without further corroboration.
+    /// Derived from the title's `release_numbering` setting.
+    pub(crate) forced_alternate_numbering: bool,
 }
 
 /// How near a reference date an episode has to have aired for that date to
@@ -331,9 +348,13 @@ fn resolve_whole_pack_numbering(input: &NumberingInput<'_>) -> NumberingResoluti
             NumberingResolution::UnresolvedPack
         };
     }
-    community_pack_candidate(projection, title_anchored)
-        .map(NumberingResolution::Resolved)
-        .unwrap_or(NumberingResolution::UnresolvedPack)
+    community_pack_candidate(
+        projection,
+        title_anchored,
+        bridge_candidate_kind(input.bridge),
+    )
+    .map(NumberingResolution::Resolved)
+    .unwrap_or(NumberingResolution::UnresolvedPack)
 }
 
 fn official_pack_key(input: &NumberingInput<'_>) -> Option<Vec<String>> {
@@ -420,6 +441,7 @@ fn community_pack_projection(
 fn community_pack_candidate(
     mut destinations: Vec<(u32, u32, String)>,
     title_anchored: bool,
+    bridge_kind: NumberingCandidateKind,
 ) -> Option<NumberingCandidate> {
     let season = destinations.first()?.0;
     if destinations
@@ -433,7 +455,7 @@ fn community_pack_candidate(
         kind: if title_anchored {
             NumberingCandidateKind::TitleAnchored
         } else {
-            NumberingCandidateKind::Community
+            bridge_kind
         },
         season,
         episode_numbers: destinations
@@ -572,6 +594,26 @@ fn uniquely_indexed_community_seasons<'a>(
     Ok(Some(selected))
 }
 
+/// The kind a reading through this bridge is recorded as. An anime community
+/// bridge keeps `Community`, so anime ranking is untouched; a bridge Scryer
+/// derived from a TVDB alternate order is weaker and says so.
+fn bridge_candidate_kind(bridge: &AnimeNumberingBridge) -> NumberingCandidateKind {
+    if bridge.source.is_tvdb_alternate_order() {
+        NumberingCandidateKind::Alternate
+    } else {
+        NumberingCandidateKind::Community
+    }
+}
+
+/// The word a candidate explanation uses for the bridge's own numbering.
+fn bridge_numbering_noun(bridge: &AnimeNumberingBridge) -> &'static str {
+    if bridge.source.is_tvdb_alternate_order() {
+        "alternate order season"
+    } else {
+        "community season"
+    }
+}
+
 fn official_candidate(input: &NumberingInput<'_>) -> Option<NumberingCandidate> {
     let season = input.parsed.season?;
     if input.parsed.episode_numbers.is_empty() {
@@ -615,8 +657,8 @@ fn community_candidates(input: &NumberingInput<'_>) -> Vec<NumberingCandidate> {
                     input,
                     community_season,
                     &input.parsed.episode_numbers,
-                    NumberingCandidateKind::Community,
-                    &format!("community season {season}"),
+                    bridge_candidate_kind(input.bridge),
+                    &format!("{} {season}", bridge_numbering_noun(input.bridge)),
                 )
             })
             .collect();
@@ -664,9 +706,10 @@ fn absolute_start_candidates(input: &NumberingInput<'_>) -> Vec<NumberingCandida
                 input,
                 community_season,
                 &community_numbers,
-                NumberingCandidateKind::Community,
+                bridge_candidate_kind(input.bridge),
                 &format!(
-                    "community season {} by absolute start {absolute_start}",
+                    "{} {} by absolute start {absolute_start}",
+                    bridge_numbering_noun(input.bridge),
                     community_season.index
                 ),
             )
@@ -1207,12 +1250,86 @@ fn select(
                 || official.is_some_and(|official| official.key() == candidate.key())
             {
                 NumberingResolution::Unchanged
+            } else if candidate.kind == NumberingCandidateKind::Alternate
+                && !alternate_reading_is_corroborated(input, &candidate, official)
+            {
+                // A TVDB alternate order is a plausible reading of the release,
+                // not a demonstrated one: the same `S01E27` is a perfectly good
+                // literal reading too, and most releases of an ordinary series
+                // carry nothing that tells the two apart.
+                //
+                // `Unchanged` — the literal reading — is the only safe answer
+                // here. `Ambiguous` is a veto downstream (RSS and pending
+                // reject the release, the import lane holds it, manual import
+                // blanks its suggestions, the scanner flags the file), so
+                // answering it on an uncorroborated guess would hold or reject
+                // ordinary official-numbered releases for every series whose
+                // TVDB dvd/alternate order happens to differ — which is most of
+                // them. Unchanged leaves those releases behaving exactly as
+                // they did before a bridge existed.
+                NumberingResolution::Unchanged
             } else {
                 NumberingResolution::Resolved(candidate)
             }
         }
         _ => NumberingResolution::Ambiguous(top),
     }
+}
+
+/// Whether an alternate-order reading may resolve on its own.
+///
+/// Three things license it, in the order they are cheapest to establish:
+///
+/// - the operator pinned this title to that order (`release_numbering`), which
+///   is a standing statement that its releases are numbered that way;
+/// - the literal reading lands on no catalog episode at all, so the alternate
+///   one is not competing with a valid answer — it is the only answer;
+/// - the release names one of the episodes the alternate reading lands on, and
+///   names none of the ones the literal reading lands on.
+///
+/// Anything else is a coin toss between two readings of the same digits, and
+/// the caller reports the ambiguity rather than picking.
+fn alternate_reading_is_corroborated(
+    input: &NumberingInput<'_>,
+    candidate: &NumberingCandidate,
+    official: Option<&NumberingCandidate>,
+) -> bool {
+    if input.forced_alternate_numbering {
+        return true;
+    }
+    let Some(official) = official else {
+        return true;
+    };
+    let named = |candidate: &NumberingCandidate| {
+        candidate.episode_ids.iter().any(|episode_id| {
+            input
+                .episodes
+                .iter()
+                .find(|episode| &episode.id == episode_id)
+                .and_then(|episode| episode.title.as_deref())
+                .is_some_and(|name| release_text_names(input.parsed, name))
+        })
+    };
+    named(candidate) && !named(official)
+}
+
+/// Whether the release's own text carries an episode title, as a whole run of
+/// words rather than an incidental substring.
+fn release_text_names(parsed: &ParsedEpisodeMetadata, episode_title: &str) -> bool {
+    let needle = crate::app_usecase_rss::normalize_for_matching(episode_title);
+    // Very short episode titles ("Two", "Home") collide with ordinary release
+    // vocabulary, so they prove nothing.
+    if needle.chars().count() < 5 {
+        return false;
+    }
+    let Some(raw) = parsed.raw.as_deref() else {
+        return false;
+    };
+    let haystack = crate::app_usecase_rss::normalize_for_matching(raw);
+    haystack == needle
+        || haystack.starts_with(&format!("{needle} "))
+        || haystack.ends_with(&format!(" {needle}"))
+        || haystack.contains(&format!(" {needle} "))
 }
 
 fn candidate_airs_near(
@@ -1323,13 +1440,32 @@ fn format_episode_list(numbers: &[u32]) -> String {
 
 // ── lane entry point ──────────────────────────────────────────────────────
 
+/// Whether the operator pinned this title's releases to an alternate order.
+pub(crate) fn title_forces_alternate_numbering(title: &Title) -> bool {
+    scryer_domain::ReleaseNumbering::from_title_tags(&title.tags)
+        .forced_season_type()
+        .is_some()
+}
+
+/// Whether the title's current `release_numbering` setting may read a stored
+/// bridge. The row is rebuilt when the setting changes, but a reader must never
+/// trust a bridge from another order in the meantime: a title switched to `dvd`
+/// would otherwise read its old alternate bridge as though it were the DVD one,
+/// and a title switched to `official` would still translate releases.
+pub(crate) fn title_admits_bridge(title: &Title, bridge: &AnimeNumberingBridge) -> bool {
+    scryer_domain::ReleaseNumbering::from_title_tags(&title.tags)
+        .admits_bridge_source(bridge.source)
+}
+
 /// Rewrite a parsed release into the catalog's own numbering, in place.
 ///
 /// This is the single door every lane goes through. It answers `Unchanged` for
-/// a non-anime title, a title with no bridge, a release the bridge has nothing
-/// to say about, and a release whose literal numbering was right all along — in
-/// each of those cases `parsed` comes back untouched and the caller behaves
-/// exactly as it does today.
+/// a title with no stored bridge, a release the bridge has nothing to say
+/// about, and a release whose literal numbering was right all along — in each
+/// of those cases `parsed` comes back untouched and the caller behaves exactly
+/// as it does today. Presence of a bridge, not the title's facet, is the gate:
+/// the store holds a row only for a title whose upstream numbering actually
+/// disagrees with the catalog's.
 ///
 /// When a community reading wins, the parse is rewritten to the TVDB season and
 /// episode numbers it resolves to, so coverage resolution, the numbering veto
@@ -1342,12 +1478,9 @@ pub(crate) fn translate_release_numbering(
     parsed: &mut crate::ParsedReleaseMetadata,
     reference_date: Option<NaiveDate>,
 ) -> NumberingResolution {
-    let Some(bridge) = bridge else {
+    let Some(bridge) = bridge.filter(|bridge| title_admits_bridge(title, bridge)) else {
         return NumberingResolution::Unchanged;
     };
-    if title.facet != scryer_domain::MediaFacet::Anime {
-        return NumberingResolution::Unchanged;
-    }
     if parsed
         .parse_hints
         .iter()
@@ -1405,6 +1538,9 @@ pub(crate) fn translate_parsed_episode_numbering(
     parsed_title_variants: &[String],
     reference_date: Option<NaiveDate>,
 ) -> NumberingResolution {
+    if !title_admits_bridge(title, bridge) {
+        return NumberingResolution::Unchanged;
+    }
     let resolution = resolve_numbering(&NumberingInput {
         bridge,
         title,
@@ -1412,6 +1548,7 @@ pub(crate) fn translate_parsed_episode_numbering(
         parsed,
         parsed_title_variants,
         reference_date,
+        forced_alternate_numbering: title_forces_alternate_numbering(title),
     });
 
     match &resolution {

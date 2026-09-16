@@ -16,6 +16,7 @@ use scryer_application::{
     TotpRepository, UpstreamScheduler, UserExternalAccountRepository, UserRepository,
     UserUiSettingsRepository, WebauthnRepository,
 };
+use scryer_infrastructure_datastore::migrations::MigrationProgress;
 
 #[cfg(feature = "image-processing")]
 use crate::HttpTitleImageProcessor;
@@ -32,17 +33,17 @@ use crate::postgres::{
 use crate::queries::sql_runtime::StoreDatastore;
 use crate::{
     AcquisitionStore, BlocklistStore, DomainEventStore, DownloadClientConfigStore,
-    DownloadQueueCommandStore, DownloadRegistryStore, DownloadSubmissionStore,
-    ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore, FileSystemStagedNzbStore,
-    HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker, IndexerConfigStore,
-    IndexerErrorStore, IndexerSearchLearningStore, LibraryProbeStore, LibraryScanUnmatchedStore,
-    LifecycleClaimStore, LocationOperationStore, MaintenanceEvaluationStore,
-    MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore, MediaServerConnectionStore,
-    MediaServerSignalStore, MetadataGatewayClient, MigrationMode, NotificationStore, OAuthStore,
-    PendingReleaseStore, PluginStore, PostProcessingScriptStore, ProxyConfigStore,
-    QualityProfileStore, ReleaseStore, RequestRuleDecisionStore, RequestRuleSetStore, RuleSetStore,
-    SeedingProfileStore, SettingsStore, ShowStore, SmgEnrollmentConfig,
-    SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
+    DownloadClientStatusStore, DownloadQueueCommandStore, DownloadRegistryStore,
+    DownloadSubmissionStore, ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore,
+    FileSystemStagedNzbStore, HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker,
+    IndexerConfigStore, IndexerErrorStore, IndexerSearchLearningStore, LibraryProbeStore,
+    LibraryScanUnmatchedStore, LifecycleClaimStore, LocationOperationStore,
+    MaintenanceEvaluationStore, MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore,
+    MediaServerConnectionStore, MediaServerSignalStore, MetadataGatewayClient, MigrationMode,
+    NotificationStore, OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore,
+    ProxyConfigStore, QualityProfileStore, ReleaseStore, RequestRuleDecisionStore,
+    RequestRuleSetStore, RuleSetStore, SeedingProfileStore, SettingsStore, ShowStore,
+    SmgEnrollmentConfig, SqliteLogicalBackupExporter, SqliteServices, SubtitleDownloadStore,
     SubtitleProviderConfigStore, TitleImageStore, TitleMergeStore, TitleStore, TotpStore,
     WantedStore, WebauthnStore, WorkflowOperationStore,
 };
@@ -98,6 +99,8 @@ pub struct DatastoreConfig {
     pub source: DatastoreConfigSource,
     pub data_dir: PathBuf,
     pub migration_mode: MigrationMode,
+    /// Counts the migrations applied while connecting, for the upgrade screen.
+    pub migration_progress: MigrationProgress,
 }
 
 impl DatastoreConfig {
@@ -128,6 +131,7 @@ impl DatastoreConfig {
             source,
             data_dir: data_dir.into(),
             migration_mode,
+            migration_progress: MigrationProgress::default(),
         }
     }
 
@@ -145,6 +149,7 @@ impl DatastoreConfig {
             source,
             data_dir: data_dir.into(),
             migration_mode,
+            migration_progress: MigrationProgress::default(),
         }
     }
 
@@ -798,10 +803,11 @@ impl DatastoreAssembly {
     }
 
     async fn connect_sqlite(config: DatastoreConfig) -> Result<Self, AppError> {
-        let db = SqliteServices::new_with_mode_and_data_dir(
+        let db = SqliteServices::new_with_migration_progress(
             config.database_url.clone(),
             config.migration_mode,
             Some(config.data_dir.clone()),
+            config.migration_progress.clone(),
         )
         .await?;
         let datastore = db.datastore();
@@ -937,10 +943,11 @@ impl DatastoreAssembly {
     }
 
     async fn connect_postgres(config: DatastoreConfig) -> Result<Self, AppError> {
-        let db = PostgresServices::new_with_mode_and_data_dir(
+        let db = PostgresServices::new_with_migration_progress(
             config.database_url.clone(),
             config.migration_mode,
             Some(config.data_dir.clone()),
+            config.migration_progress.clone(),
         )
         .await?;
         let datastore = db.datastore();
@@ -1285,6 +1292,14 @@ impl DatastoreAssembly {
         }
     }
 
+    /// Per-client failure status (migration 0241). Shared by the app services
+    /// and the download-client router so both see the same backoff rows.
+    pub fn download_client_status(
+        &self,
+    ) -> Arc<dyn scryer_application::DownloadClientStatusRepository> {
+        Arc::new(DownloadClientStatusStore::new(self.datastore()))
+    }
+
     pub fn download_registry(&self) -> Arc<dyn scryer_application::DownloadRegistryRepository> {
         match &self.stores {
             DatastoreStores::Sqlite {
@@ -1610,6 +1625,7 @@ impl DatastoreAssembly {
                 .with_acquisition_state(acquisition_store.clone())
                 .with_domain_events(domain_event_store.clone())
                 .with_download_registry(download_registry_store.clone())
+                .with_download_client_status(self.download_client_status())
                 .with_download_submissions(download_submission_store.clone())
                 .with_download_queue_commands(download_queue_command_store.clone())
                 .with_external_import_monitor_snapshots(external_import_monitor_store.clone())
@@ -1735,6 +1751,7 @@ impl DatastoreAssembly {
                 .with_acquisition_state(acquisition_store.clone())
                 .with_domain_events(domain_event_store.clone())
                 .with_download_registry(download_registry_store.clone())
+                .with_download_client_status(self.download_client_status())
                 .with_download_submissions(download_submission_store.clone())
                 .with_download_queue_commands(download_queue_command_store.clone())
                 .with_external_import_monitor_snapshots(external_import_monitor_store.clone())

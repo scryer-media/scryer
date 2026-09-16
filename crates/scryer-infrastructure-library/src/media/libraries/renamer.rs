@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use async_trait::async_trait;
@@ -47,9 +48,31 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
         plan: &RenamePlan,
         permissions: &ImportFilePermissions,
     ) -> AppResult<Vec<RenameApplyItemResult>> {
-        let mut out = Vec::with_capacity(plan.items.len());
+        // A companion only moves when the media file it belongs to actually
+        // moved, so the plan is walked in two passes: primaries first, then
+        // companions gated on their primary's outcome. Results are written back
+        // into their original plan positions so callers can still pair a result
+        // with its item by index (#224).
+        let mut slots: Vec<Option<RenameApplyItemResult>> =
+            (0..plan.items.len()).map(|_| None).collect();
+        let mut primary_outcomes: HashMap<&str, RenameApplyStatus> = HashMap::new();
+        let primary_indexes = plan
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.companion_of.is_none())
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+        let companion_indexes = plan
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, item)| item.companion_of.is_some())
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
 
-        for item in &plan.items {
+        for index in primary_indexes.into_iter().chain(companion_indexes) {
+            let item = &plan.items[index];
             let mut result = RenameApplyItemResult {
                 collection_id: item.collection_id.clone(),
                 media_file_id: item.media_file_id.clone(),
@@ -62,6 +85,19 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                 reason_code: item.reason_code.clone(),
                 error_message: None,
             };
+
+            // The primary's outcome is resolved from the recorded pass-one
+            // results, so this holds whichever order the two appear in.
+            if let Some(primary) = item.companion_of.as_deref()
+                && primary_outcomes.get(primary) != Some(&RenameApplyStatus::Applied)
+            {
+                result.status = RenameApplyStatus::Skipped;
+                result.reason_code = "companion_primary_not_applied".into();
+                result.error_message =
+                    Some("companion left in place because its media file did not move".to_string());
+                slots[index] = Some(result);
+                continue;
+            }
 
             match item.write_action {
                 RenameWriteAction::Noop => {
@@ -85,7 +121,10 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                         result.reason_code = "missing_target".into();
                         result.error_message =
                             Some("rename target path missing for move action".into());
-                        out.push(result);
+                        if item.companion_of.is_none() {
+                            primary_outcomes.insert(&item.current_path, result.status.clone());
+                        }
+                        slots[index] = Some(result);
                         continue;
                     };
 
@@ -99,7 +138,10 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                         result.status = RenameApplyStatus::Failed;
                         result.reason_code = reason_code;
                         result.error_message = Some(message);
-                        out.push(result);
+                        if item.companion_of.is_none() {
+                            primary_outcomes.insert(&item.current_path, result.status.clone());
+                        }
+                        slots[index] = Some(result);
                         continue;
                     }
 
@@ -123,10 +165,13 @@ impl LibraryRenamer for FileSystemLibraryRenamer {
                 }
             }
 
-            out.push(result);
+            if item.companion_of.is_none() {
+                primary_outcomes.insert(&item.current_path, result.status.clone());
+            }
+            slots[index] = Some(result);
         }
 
-        Ok(out)
+        Ok(slots.into_iter().flatten().collect())
     }
 
     async fn rollback(
@@ -342,6 +387,7 @@ mod tests {
                 write_action: RenameWriteAction::Move,
                 source_size_bytes: None,
                 source_mtime_unix_ms: None,
+                companion_of: None,
             }
         };
         let plan = RenamePlan {

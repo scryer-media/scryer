@@ -3,8 +3,8 @@ use super::{
     FillerPolicyValue, ImportDecisionValue, ImportModeValue, ImportSkipReasonValue,
     ImportStatusValue, ImportTypeValue, IndexerRoutingEntryInput, IndexerRoutingEntryPayload,
     JobRunPayload, Long, ManualImportCandidateMappingInput, MediaFacetValue, MonitorSelectionInput,
-    MonitorTypeValue, PendingImportStatusValue, RecapPolicyValue, RenameCollisionPolicyValue,
-    RenameMissingMetadataPolicyValue, ScoringPersonaValue,
+    MonitorTypeValue, PendingImportStatusValue, RecapPolicyValue, ReleaseNumberingValue,
+    RenameCollisionPolicyValue, RenameMissingMetadataPolicyValue, ScoringPersonaValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, OneofObject, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -734,6 +734,8 @@ pub struct TitleOptionsInput {
     pub filler_policy: MaybeUndefined<FillerPolicyValue>,
     /// Recap policy; omission preserves the current value, null clears it, and a value replaces it.
     pub recap_policy: MaybeUndefined<RecapPolicyValue>,
+    /// Which episode numbering this title's releases are read in; omission preserves the current value, null clears it (back to `AUTO`), and a value replaces it. Movies reject this field.
+    pub release_numbering: MaybeUndefined<ReleaseNumberingValue>,
     /// Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
     pub monitor_selection: MaybeUndefined<MonitorSelectionInput>,
 }

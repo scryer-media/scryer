@@ -4666,6 +4666,16 @@ type DownloadClientConfigPayload {
 	"""
 	lastSeenAt: DateTime
 	"""
+	UTC time this client's failure backoff expires, or null when the client
+	is not backed off. Grabs skip a client until this time passes.
+	"""
+	disabledUntil: DateTime
+	"""
+	Which rung of the failure backoff ladder the client is on: 0 when it is
+	healthy, rising to 5 for a client that has been failing for an hour.
+	"""
+	escalationLevel: Int!
+	"""
 	Proxy carrying this client's traffic, or null when none is assigned.
 	Any proxy kind may be assigned. A challenge solver has no effect on a
 	native client, whose requests are not made by a plugin guest.
@@ -13004,7 +13014,11 @@ input ManualImportCandidateMappingInput {
 	"""
 	Episode target ID for an episodic import; null for a series-movie or movie import.
 	"""
-	episodeId: ID
+	episodeId: ID @deprecated(reason: "Use episodeIds, which also covers a file that holds more than one episode.")
+	"""
+	Episode target IDs for an episodic import; empty for a series-movie or movie import. Merged with the deprecated episodeId.
+	"""
+	episodeIds: [ID!]! = []
 	"""
 	Series-movie link ID for a series-movie import; null for an episode or movie import.
 	"""
@@ -13051,6 +13065,10 @@ type ManualImportFilePreviewPayload {
 	Suggested episode ID, or null when no single suggestion is available.
 	"""
 	suggestedEpisodeId: ID
+	"""
+	Every suggested episode ID for this file, in parsed order; empty means no suggestion. A multi-episode file suggests more than one.
+	"""
+	suggestedEpisodeIds: [ID!]!
 	"""
 	Label for the suggested episode, or null when no suggestion exists.
 	"""
@@ -22468,6 +22486,29 @@ type ReleaseDecisionsPagePayload {
 }
 
 """
+Which episode numbering a title's releases are read in.
+"""
+enum ReleaseNumberingValue {
+	"""
+	Bridge to a differing TVDB alternate order when one exists, and require
+	corroboration before a reading through it moves an import.
+	"""
+	AUTO
+	"""
+	Always read releases in the catalog's official numbering.
+	"""
+	OFFICIAL
+	"""
+	Trust TVDB's alternate order for this title's releases.
+	"""
+	ALTERNATE
+	"""
+	Trust TVDB's DVD order for this title's releases.
+	"""
+	DVD
+}
+
+"""
 Withdraws a claim by hand.
 """
 input ReleaseTitleClaimInput {
@@ -23337,6 +23378,10 @@ type RulePackTemplatePayload {
 	Facets to which the template applies.
 	"""
 	appliedFacets: [String!]!
+	"""
+	Whether the pack recommends enabling the template.
+	"""
+	defaultEnabled: Boolean!
 }
 
 """
@@ -25676,9 +25721,13 @@ enum TitleCatalogSortKeyValue {
 	"""
 	MONITORED
 	"""
-	Sort by quality profile or media quality.
+	Sort by the quality of the title's media; ascending runs from lowest to highest resolution.
 	"""
 	QUALITY
+	"""
+	Sort by the name of the title's effective quality profile.
+	"""
+	PROFILE
 	"""
 	Sort by episode count.
 	"""
@@ -26487,6 +26536,10 @@ input TitleOptionsInput {
 	"""
 	recapPolicy: RecapPolicyValue
 	"""
+	Which episode numbering this title's releases are read in; omission preserves the current value, null clears it (back to `AUTO`), and a value replaces it. Movies reject this field.
+	"""
+	releaseNumbering: ReleaseNumberingValue
+	"""
 	Seasons and series movies to monitor under `ADVANCED`; omission preserves the current selection, null clears it, and a value replaces it. Required with `ADVANCED`, and rejected for movies.
 	"""
 	monitorSelection: MonitorSelectionInput
@@ -26644,6 +26697,11 @@ type TitlePayload {
 	Policy for recap episodes, or null when unset.
 	"""
 	recapPolicy: RecapPolicyValue
+	"""
+	Which episode numbering this title's releases are read in, or null when
+	the title follows the default (`AUTO`).
+	"""
+	releaseNumbering: ReleaseNumberingValue
 	"""
 	Provider-native playback links for this title, when an exact catalog mapping exists.
 	"""

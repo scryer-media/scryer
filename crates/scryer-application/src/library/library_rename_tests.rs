@@ -851,6 +851,7 @@ fn fingerprint_deterministic() {
         write_action: RenameWriteAction::Move,
         source_size_bytes: Some(1024),
         source_mtime_unix_ms: Some(1000),
+        companion_of: None,
     }];
     let fp1 = build_rename_plan_fingerprint(
         &items,

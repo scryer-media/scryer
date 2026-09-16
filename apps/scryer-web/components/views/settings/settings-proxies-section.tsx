@@ -68,8 +68,8 @@ import type {
   ProxyRecord,
 } from "@/lib/types";
 import { selectorId } from "@/lib/utils/dom-ids";
-import { cn } from "@/lib/utils";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type SettingsProxiesSectionProps = {
   proxyConfigs: ProxyRecord[];
@@ -336,12 +336,11 @@ export function SettingsProxiesSection({
                               }
                               label={t("settings.proxyTest")}
                             >
-                              <RefreshCw
-                                className={cn(
-                                  "h-4 w-4",
-                                  testingProxyId === proxy.id && "animate-spin",
-                                )}
-                              />
+                              {testingProxyId === proxy.id ? (
+                                <LoadingMark className="h-4 w-4" />
+                              ) : (
+                                <RefreshCw className="h-4 w-4" />
+                              )}
                             </ProxyActionButton>
                             <ProxyActionButton
                               id={selectorId("settings-indexer-proxy-edit", proxy.name)}
@@ -1130,8 +1129,8 @@ export function SettingsProxiesSection({
                     ) : null}
                   </div>
                 ) : null}
-                {showProxyDetails ? (
-                  <div className="flex items-end gap-2">
+                <div className="flex items-end gap-2">
+                  {showProxyDetails ? (
                     <Button
                       id="settings-indexer-proxy-save"
                       type="submit"
@@ -1144,20 +1143,18 @@ export function SettingsProxiesSection({
                           ? t("settings.proxyUpdate")
                           : t("settings.proxyCreate")}
                     </Button>
-                    {editingProxyId ? (
-                      <Button
-                        id="settings-indexer-proxy-cancel"
-                        type="button"
-                        variant="outline"
-                        className="w-36"
-                        onClick={resetProxyDraft}
-                        disabled={mutatingProxyId !== null}
-                      >
-                        {t("label.cancel")}
-                      </Button>
-                    ) : null}
-                  </div>
-                ) : null}
+                  ) : null}
+                  <Button
+                    id="settings-indexer-proxy-cancel"
+                    type="button"
+                    variant="outline"
+                    className="w-36"
+                    onClick={resetProxyDraft}
+                    disabled={mutatingProxyId !== null}
+                  >
+                    {t("label.cancel")}
+                  </Button>
+                </div>
               </form>
             </CardContent>
           </Card>

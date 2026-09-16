@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { ArrowRight, HardDrive, Loader2, ShieldCheck, TriangleAlert } from "lucide-react";
+import { ArrowRight, HardDrive, ShieldCheck, TriangleAlert } from "lucide-react";
 
 import {
   Dialog,
@@ -57,6 +57,7 @@ import {
 } from "@/lib/root-location-operations";
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 /** A configured root of the library the dialog was opened from. */
 export type ChangeRootTarget = {
@@ -392,7 +393,7 @@ export function ChangeRootDialog({
                 id="root-change-previewing"
                 className="flex items-center gap-2 text-sm text-muted-foreground"
               >
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
                 {t("rootChange.previewing")}
               </p>
             ) : null}

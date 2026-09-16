@@ -1,4 +1,5 @@
-import { Loader2, TriangleAlert } from "lucide-react";
+import { TriangleAlert } from "lucide-react";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export interface InvalidMappedRootNoticeItem {
   id: string;
@@ -27,7 +28,7 @@ export function ImportRootValidationNotice({
         aria-live="polite"
         className="mt-3.5 flex items-center gap-2.5 rounded-[11px] border border-[var(--scry-border2)] bg-[rgba(10,17,32,0.5)] px-3.5 py-3 text-[12.5px] text-[var(--scry-muted2)]"
       >
-        <Loader2 size={16} className="animate-spin" aria-hidden />
+        <LoadingMark className="size-[16px]" />
         {t("setup.mappedPathValidationChecking")}
       </div>
     );

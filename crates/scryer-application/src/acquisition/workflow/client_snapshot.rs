@@ -1716,7 +1716,16 @@ pub(crate) async fn try_saved_candidates(
             continue;
         }
 
-        if dl_snapshot.queue_listing_failed() {
+        // A pinned route (an indexer-to-client mapping) names the one client
+        // this release can reach. An unreadable queue then hides nothing worth
+        // deferring for — there is no second client that could already hold it
+        // — and parking here is what leaves the operator with no attempt row
+        // explaining why the pinned client never ran. Let the grab reach the
+        // router, which asks the pinned client and records its answer.
+        let blind_queue = dl_snapshot.queue_listing_failed();
+        let route_pinned =
+            blind_queue && app.release_route_is_pinned(standby.indexer_id.as_deref()).await;
+        if blind_queue && !route_pinned {
             // Cannot confirm the release isn't already active; keep the standby
             // for a later cycle rather than expiring it on an unknown signal.
             info!(
@@ -1736,7 +1745,9 @@ pub(crate) async fn try_saved_candidates(
             };
         }
 
-        if dl_snapshot.is_active(&standby.release_title) {
+        // `is_active` answers blind-true whenever the queue could not be read,
+        // so only consult it when the listing was observable at all.
+        if !blind_queue && dl_snapshot.is_active(&standby.release_title) {
             // The scope is covered for now, but that download can still fail.
             // Expiring the row here is what leaves the next failure with no
             // corpus to walk.
@@ -1810,6 +1821,10 @@ pub(crate) async fn try_saved_candidates(
                 outcome @ (super::pending::PendingGrabOutcome::Deferred
                 | super::pending::PendingGrabOutcome::SubmitRefused(_)),
             ) => {
+                let refused = match outcome {
+                    super::pending::PendingGrabOutcome::SubmitRefused(refused) => Some(refused),
+                    _ => None,
+                };
                 info!(
                     release = standby.release_title.as_str(),
                     "standby reacquisition: download client unavailable, keeping release pending"
@@ -1820,10 +1835,6 @@ pub(crate) async fn try_saved_candidates(
                     .pending_releases
                     .update_pending_release_status(&standby.id, PendingReleaseStatus::Standby, None)
                     .await;
-                let refused = match outcome {
-                    super::pending::PendingGrabOutcome::SubmitRefused(refused) => Some(refused),
-                    _ => None,
-                };
                 return StandbyRecoveryOutcome::Deferred {
                     scope: Some(standby_scope),
                     refused,

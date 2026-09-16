@@ -609,6 +609,8 @@ impl AppUseCase {
             self.refuse_direct_root_write_for_tracked_title(&title, resolved_root_folder_id)
                 .await?;
         }
+        let previous_release_numbering =
+            scryer_domain::ReleaseNumbering::from_title_tags(&title.tags);
         let mut tags = tags.map(|tags| crate::helpers::normalize_tags(&tags));
         if let Some(tags) = tags.as_mut() {
             self.canonicalize_title_quality_profile_tags(tags).await?;
@@ -629,6 +631,15 @@ impl AppUseCase {
 
         self.reconcile_series_movie_link_monitoring_for_title(&title)
             .await?;
+        // The stored numbering bridge was built for the old setting; bring it
+        // in line now rather than at some later hydration.
+        if title.facet != MediaFacet::Movie
+            && scryer_domain::ReleaseNumbering::from_title_tags(&title.tags)
+                != previous_release_numbering
+        {
+            self.reconcile_numbering_bridge_after_setting_change(&title)
+                .await;
+        }
 
         self.emit_title_updated_activity(actor, &title).await;
         Ok(title)

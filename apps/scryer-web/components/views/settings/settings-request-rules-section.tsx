@@ -6,7 +6,6 @@ import {
   Copy,
   Edit,
   Info,
-  Loader2,
   Plus,
   Sparkles,
   Trash2,
@@ -81,6 +80,7 @@ import {
   settingsRequestTemplateId,
   settingsRequestUserId,
 } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type RequestQualityProfileOption = { id: string; name: string };
 
@@ -1159,7 +1159,7 @@ function RequestGatePanel({
             </div>
             <div className="flex shrink-0 items-center gap-2">
               {savingGate ? (
-                <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                <LoadingMark className="h-4 w-4 text-muted-foreground" />
               ) : null}
               <SettingsToggleSwitch
                 id="settings-request-rule-gate"

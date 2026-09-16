@@ -1076,7 +1076,7 @@ async fn graphql_location_operation_surface_requires_library_management_permissi
     // The root-scoped preview is one surface for both of FR-020's destinations,
     // and each of them plans against a library the outsider does not manage.
     for destination in [
-        format!(r#"destinationPath: "/somewhere/else""#),
+        r#"destinationPath: "/somewhere/else""#.to_string(),
         format!(r#"destinationRootId: "{destination_root_id}""#),
     ] {
         let query = format!(

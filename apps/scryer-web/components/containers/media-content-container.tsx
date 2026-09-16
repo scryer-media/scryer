@@ -179,7 +179,7 @@ import {
   type TitleQuickFilters,
 } from "@/components/views/media-content/title-quick-filters";
 import {
-  DEFAULT_TITLE_TABLE_VISIBLE_COLUMNS,
+  defaultTitleTableVisibleColumnsForView,
   defaultSortDirectionForTitleKey,
   isTitleTableColumnSupportedForView,
   type TitleTableColumnKey,
@@ -1095,9 +1095,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const [titleCatalogSort, setTitleCatalogSort] =
     React.useState<TitleCatalogSortState>(defaultTitleCatalogSortState);
   const [visibleTitleTableColumns, setVisibleTitleTableColumns] =
-    React.useState<TitleTableVisibleColumns>(() => ({
-      ...DEFAULT_TITLE_TABLE_VISIBLE_COLUMNS,
-    }));
+    React.useState<TitleTableVisibleColumns>(() =>
+      defaultTitleTableVisibleColumnsForView(view),
+    );
   const setTitleTableColumnVisible = React.useCallback(
     (key: TitleTableColumnKey, checked: boolean) => {
       setVisibleTitleTableColumns((current) => ({

@@ -288,7 +288,20 @@ impl DownloadMutations {
                     .into_iter()
                     .map(|file| scryer_application::ManualImportCandidateMapping {
                         candidate_id: file.candidate_id.to_string(),
-                        episode_id: file.episode_id.map(String::from),
+                        // The deprecated single `episodeId` is merged in as
+                        // the head of the set so an older client that still
+                        // sends it keeps working unchanged.
+                        episode_ids: file
+                            .episode_id
+                            .map(String::from)
+                            .into_iter()
+                            .chain(file.episode_ids.into_iter().map(String::from))
+                            .fold(Vec::new(), |mut ids: Vec<String>, id| {
+                                if !id.trim().is_empty() && !ids.contains(&id) {
+                                    ids.push(id);
+                                }
+                                ids
+                            }),
                         series_movie_link_id: file.series_movie_link_id.map(String::from),
                         disc_selection: file.disc_selection.map(Into::into),
                     })
@@ -349,6 +362,11 @@ impl DownloadMutations {
                         .map(|value| value as i32)
                         .collect(),
                     suggested_episode_id: file.suggested_episode_id.map(Into::into),
+                    suggested_episode_ids: file
+                        .suggested_episode_ids
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
                     suggested_episode_label: file.suggested_episode_label,
                     suggested_series_movie_link_id: file.suggested_series_movie_link_id,
                 })

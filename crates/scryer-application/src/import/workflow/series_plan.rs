@@ -195,20 +195,18 @@ async fn build_episode_pack_import_plan(
         .shows
         .list_episodes_for_title(&title.id)
         .await?;
-    // Members of an anime pack are frequently named in the community's per-cour
-    // numbering while the catalog follows TVDB's official order. Loaded once for
-    // the whole pack; `None` for every non-anime title and for anime SMG has no
-    // bridge for, which leaves pack planning byte-for-byte as it was.
-    let anime_numbering_bridge = if title.facet == scryer_domain::MediaFacet::Anime {
-        app.services
-            .catalog
-            .shows
-            .get_anime_numbering_bridge(&title.id)
-            .await
-            .unwrap_or_default()
-    } else {
-        None
-    };
+    // Members of a pack are frequently named in a numbering the catalog does
+    // not follow — the community's per-cour numbering for anime, a TVDB
+    // alternate order for an ordinary series. Loaded once for the whole pack;
+    // `None` for every title the catalog stores no bridge for, which leaves
+    // pack planning byte-for-byte as it was.
+    let anime_numbering_bridge = app
+        .services
+        .catalog
+        .shows
+        .get_anime_numbering_bridge(&title.id)
+        .await
+        .unwrap_or_default();
     let pack = match verified_episode_pack(
         release_evidence,
         title,
@@ -619,9 +617,6 @@ fn translate_pack_member_numbering(
     let Some(bridge) = anime_numbering_bridge else {
         return Ok(None);
     };
-    if title.facet != scryer_domain::MediaFacet::Anime {
-        return Ok(None);
-    }
     let variants = if parsed_stem.normalized_title_variants.is_empty() {
         vec![parsed_stem.normalized_title.clone()]
     } else {
@@ -1471,6 +1466,7 @@ mod series_plan_tests {
             tvdb_start += length;
         }
         scryer_domain::AnimeNumberingBridge {
+            source: Default::default(),
             generated_on: "2026-08-30".to_string(),
             corroborating_order: None,
             seasons,
@@ -1504,6 +1500,68 @@ mod series_plan_tests {
         assert!(!matches!(
             plan_episode_pack_member(&title, root, &member, &catalog, None),
             PlannedMemberDraft::Resolved(_)
+        ));
+    }
+
+    /// An ordinary series whose TVDB alternate order runs one ahead of the
+    /// official order the catalog follows, and which the operator has NOT
+    /// pinned to that order.
+    fn unpinned_alternate_order_bridge() -> scryer_domain::AnimeNumberingBridge {
+        scryer_domain::AnimeNumberingBridge {
+            source: scryer_domain::NumberingBridgeSource::TvdbAlternate,
+            generated_on: "alternate".to_string(),
+            corroborating_order: Some("alternate".to_string()),
+            seasons: vec![scryer_domain::AnimeCommunitySeason {
+                index: 1,
+                anidb_id: None,
+                anilist_id: None,
+                mal_id: None,
+                titles: Vec::new(),
+                ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                    community_episode_start: 2,
+                    community_episode_end: Some(60),
+                    tvdb_season: 1,
+                    tvdb_episode_start: 1,
+                    tvdb_episode_end: Some(59),
+                }],
+                absolute_start: None,
+                episode_count: None,
+            }],
+        }
+    }
+
+    /// The regression guard for the veto. Most series have a TVDB dvd or
+    /// alternate order that differs from the official one, and most of their
+    /// releases are plainly official-numbered with no episode title to tell the
+    /// two readings apart. Such a member must import on its literal numbering —
+    /// never be held as ambiguous, which is what an uncorroborated alternate
+    /// reading would have caused.
+    #[test]
+    fn a_plain_official_member_of_an_alternate_bridged_series_is_not_held() {
+        let mut title = anime_pack_title();
+        title.facet = scryer_domain::MediaFacet::Series;
+        let catalog: Vec<_> = (1..=60u32)
+            .map(|number| catalog_episode(&format!("ep-{number}"), number, number))
+            .collect();
+        let bridge = unpinned_alternate_order_bridge();
+        let root = Path::new("/downloads/Lantern Verge S01 1080p WEB-DL-FIXTUREGRP");
+        let member = root
+            .join("Season 01")
+            .join("Lantern Verge - S01E05 - 1080p WEB-DL-FIXTUREGRP.mkv");
+
+        let planned = plan_episode_pack_member(&title, root, &member, &catalog, Some(&bridge));
+        match planned {
+            PlannedMemberDraft::Resolved(ref episodes) => {
+                assert_eq!(episodes.len(), 1);
+                assert_eq!(episodes[0].id, "ep-5", "the literal reading must stand");
+            }
+            _ => panic!("an official-numbered member must not be held or skipped"),
+        }
+        // And the bridge changed nothing: the answer matches the no-bridge one.
+        assert!(matches!(
+            plan_episode_pack_member(&title, root, &member, &catalog, None),
+            PlannedMemberDraft::Resolved(ref episodes)
+                if episodes.len() == 1 && episodes[0].id == "ep-5"
         ));
     }
 

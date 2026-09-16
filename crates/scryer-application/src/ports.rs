@@ -3,6 +3,7 @@ use crate::contracts::{
     ClientJobLocator, DownloadClientBindingRecord, DownloadRecord, ObservationResolution,
     ObservedClientJob, TerminalDownloadHistoryRow,
 };
+use crate::escalation_backoff::DownloadClientStatus as DownloadClientBackoffStatus;
 use crate::location::model::{
     FileVerificationRecord, LocationOperation, LocationOperationCounters, LocationOperationState,
     LocationReasonCode, TitleCheckpoint,
@@ -35,7 +36,6 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::Notify;
 
 pub const NOTIFICATION_REQUEST_SCHEMA_VERSION: u32 = 1;
-const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
 
 /// Fallback for repositories that have no tag registry behind them (the null
 /// repository and the non-SQL test doubles). Reads answer empty; writes say so
@@ -131,6 +131,10 @@ pub struct TitleOptionsPatch {
     pub inter_season_movies: Option<Option<bool>>,
     pub filler_policy: Option<Option<String>>,
     pub recap_policy: Option<Option<String>>,
+    /// Which episode numbering this title's releases are read in
+    /// (`auto`/`official`/`alternate`/`dvd`). `Some(None)` clears it back to
+    /// the `auto` default.
+    pub release_numbering: Option<Option<String>>,
     /// Explicit season/series-movie picks for the `advanced` monitor type.
     /// `Some(None)` clears the stored selection.
     pub monitor_selection: Option<Option<MonitorSelection>>,
@@ -1160,7 +1164,7 @@ pub trait TitleRepository: Send + Sync {
             TitleCatalogFilterCounts::default()
         };
         titles.retain(|title| title_matches_catalog_filter(title, &filter));
-        sort_titles_for_catalog(&mut titles, sort);
+        sort_titles_for_catalog(&mut titles, &sort);
 
         let total_count = if include_catalog_counts {
             titles.len()
@@ -1631,7 +1635,7 @@ pub trait TitleRepository: Send + Sync {
     }
 }
 
-fn sort_titles_for_catalog(titles: &mut [Title], sort: TitleCatalogSort) {
+fn sort_titles_for_catalog(titles: &mut [Title], sort: &TitleCatalogSort) {
     titles.sort_by(|left, right| match sort.key {
         TitleCatalogSortKey::Year => {
             compare_nullable_ord_null_last(left.year, right.year, sort.direction)
@@ -1647,6 +1651,16 @@ fn sort_titles_for_catalog(titles: &mut [Title], sort: TitleCatalogSort) {
             compare_nullable_partial_null_last(left.popularity, right.popularity, sort.direction)
                 .then_with(|| compare_titles_by_catalog_title(left, right))
         }
+        TitleCatalogSortKey::Profile => {
+            let profile_name = |title: &Title| {
+                sort.profile_names
+                    .as_ref()
+                    .and_then(|names| names.name_for(title))
+                    .map(str::to_lowercase)
+            };
+            compare_nullable_ord_null_last(profile_name(left), profile_name(right), sort.direction)
+                .then_with(|| compare_titles_by_catalog_title(left, right))
+        }
         _ => {
             let ordering = match sort.key {
                 TitleCatalogSortKey::Title => compare_titles_by_catalog_title(left, right),
@@ -1658,13 +1672,11 @@ fn sort_titles_for_catalog(titles: &mut [Title], sort: TitleCatalogSort) {
                     .monitored
                     .cmp(&right.monitored)
                     .then_with(|| compare_titles_by_catalog_title(left, right)),
-                TitleCatalogSortKey::Quality => title_catalog_quality_profile_id(left)
-                    .cmp(&title_catalog_quality_profile_id(right))
-                    .then_with(|| compare_titles_by_catalog_title(left, right)),
                 TitleCatalogSortKey::Status => title_catalog_status_sort_value(left)
                     .cmp(&title_catalog_status_sort_value(right))
                     .then_with(|| compare_titles_by_catalog_title(left, right)),
-                TitleCatalogSortKey::Episodes
+                TitleCatalogSortKey::Quality
+                | TitleCatalogSortKey::Episodes
                 | TitleCatalogSortKey::Size
                 | TitleCatalogSortKey::Root
                 | TitleCatalogSortKey::MediaResolution
@@ -1692,7 +1704,8 @@ fn sort_titles_for_catalog(titles: &mut [Title], sort: TitleCatalogSort) {
                     .then_with(|| compare_titles_by_catalog_title(left, right)),
                 TitleCatalogSortKey::Year
                 | TitleCatalogSortKey::Runtime
-                | TitleCatalogSortKey::Popularity => Ordering::Equal,
+                | TitleCatalogSortKey::Popularity
+                | TitleCatalogSortKey::Profile => Ordering::Equal,
             };
             match sort.direction {
                 SortDirection::Asc => ordering,
@@ -1751,17 +1764,6 @@ fn title_catalog_sort_value(title: &Title) -> String {
 
 fn title_catalog_name_tie_value(title: &Title) -> String {
     title_catalog_name_tie_key(&title.name)
-}
-
-fn title_catalog_quality_profile_id(title: &Title) -> String {
-    title
-        .tags
-        .iter()
-        .find_map(|tag| tag.strip_prefix(TITLE_QUALITY_PROFILE_TAG_PREFIX))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or_default()
-        .to_lowercase()
 }
 
 fn title_catalog_status_sort_value(title: &Title) -> String {
@@ -3691,6 +3693,37 @@ pub struct IndexerSystemBackoff {
     pub escalation_level: usize,
 }
 
+/// The download-client half of the provider status Sonarr keeps for both
+/// families (`DownloadClientStatusService`), stored in `download_client_status`
+/// (migration 0241).
+///
+/// Only failing clients have rows: [`Self::record_success`] deletes, so `list`
+/// returns exactly the clients currently in a failure run and everything absent
+/// is healthy. [`Self::record_failure`] owns the policy — it applies
+/// [`DownloadClientBackoffStatus::after_failure`] to whatever is stored and
+/// persists the result — so no caller has to know the ladder to record an outage.
+///
+/// The status type is aliased here only because `DownloadClientStatus` is
+/// already taken in this crate by the client's live capability probe
+/// (`contracts.rs`); it is the same `escalation_backoff::DownloadClientStatus`
+/// every caller names.
+#[async_trait]
+pub trait DownloadClientStatusRepository: Send + Sync {
+    async fn list(
+        &self,
+    ) -> AppResult<std::collections::HashMap<String, DownloadClientBackoffStatus>>;
+    /// Record one failure and return the status the client is now in.
+    async fn record_failure(
+        &self,
+        client_config_id: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<DownloadClientBackoffStatus>;
+    /// Clear the failure run: the client answered.
+    async fn record_success(&self, client_config_id: &str) -> AppResult<()>;
+    /// Forget the client entirely, e.g. because its configuration was deleted.
+    async fn clear(&self, client_config_id: &str) -> AppResult<()>;
+}
+
 #[async_trait]
 pub trait IndexerConfigRepository: Send + Sync {
     async fn list(&self, provider_type: Option<String>) -> AppResult<Vec<IndexerConfig>>;
@@ -4422,30 +4455,13 @@ pub trait DownloadRegistryRepository: Send + Sync {
     -> AppResult<Option<DownloadClientBindingRecord>>;
 
     /// Find a non-ended binding with an exact configured-client/type/native-item locator.
+    ///
+    /// Resolve the active binding for an exact locator (client id, client type
+    /// and native item id).
     async fn find_active_binding_by_locator(
         &self,
         locator: &ClientJobLocator,
     ) -> AppResult<Option<DownloadClientBindingRecord>>;
-
-    /// List old active bindings for one configured client/type so an
-    /// authoritative snapshot can reconcile jobs that disappeared while the
-    /// tracker was not running. Implementations must bound the result.
-    async fn list_active_bindings_for_client_before(
-        &self,
-        _client_config_id: &str,
-        _client_type: &str,
-        _observed_before: DateTime<Utc>,
-        _limit: usize,
-    ) -> AppResult<Vec<DownloadClientBindingRecord>> {
-        Ok(Vec::new())
-    }
-
-    /// Distinct `(client_config_id, client_type)` pairs that still hold an
-    /// active binding, so the reconciler can find bindings whose client
-    /// configuration has since been deleted.
-    async fn list_active_binding_clients(&self) -> AppResult<Vec<(String, String)>> {
-        Ok(Vec::new())
-    }
 
     /// End an active binding; ending an already-ended or absent binding is a no-op.
     async fn end_binding(&self, id: &DownloadId) -> AppResult<()>;
@@ -5048,6 +5064,8 @@ pub trait LibraryScanUnmatchedItemRepository: Send + Sync {
         item_path: &str,
     ) -> AppResult<()>;
     async fn delete_for_library(&self, library_id: &str) -> AppResult<u32>;
+    /// Remove every row bound to `title_id`; the title they point at is gone.
+    async fn delete_for_title(&self, title_id: &str) -> AppResult<u32>;
 
     async fn list_library_scan_unmatched_items(
         &self,
@@ -8865,6 +8883,11 @@ pub enum DownloadCleanupClaim {
 pub struct DownloadClientSnapshotOutcome {
     pub items: Vec<DownloadQueueItem>,
     pub authoritative_client_ids: std::collections::HashSet<String>,
+    /// Clients that were asked this cycle and errored on at least one read.
+    /// A client skipped during feedback backoff was never asked, so it is in
+    /// neither this set nor `authoritative_client_ids`; per-client status
+    /// judges only clients that were actually consulted.
+    pub failed_client_ids: std::collections::HashSet<String>,
     pub any_client_read_succeeded: bool,
 }
 
@@ -9404,7 +9427,7 @@ pub trait DownloadClient: Send + Sync {
         self.mark_imported_non_destructive(request).await
     }
 
-    async fn get_client_status(&self) -> AppResult<DownloadClientStatus> {
+    async fn get_client_status(&self) -> AppResult<crate::contracts::DownloadClientStatus> {
         Err(AppError::Repository(
             "client status is not supported for this download client".to_string(),
         ))
@@ -9413,7 +9436,7 @@ pub trait DownloadClient: Send + Sync {
     async fn get_client_status_for_client_id(
         &self,
         _client_id: &str,
-    ) -> AppResult<DownloadClientStatus> {
+    ) -> AppResult<crate::contracts::DownloadClientStatus> {
         self.get_client_status().await
     }
 

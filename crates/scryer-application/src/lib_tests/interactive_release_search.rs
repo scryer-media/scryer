@@ -1071,6 +1071,198 @@ async fn an_unlinked_grab_resolves_the_indexer_artifact_before_client_routing() 
     assert_eq!(rows[0].source_kind, Some(DownloadSourceKind::NzbUrl));
 }
 
+/// An unlinked grab the client actually reports — first downloading, then
+/// completed — must still reach an import-pending offer.
+///
+/// This is the shape the e2e run shows: the download is observed continuously
+/// for seven minutes, the client has it completed the whole time, and the
+/// submission's tracked state, its identity state and the import row all stay
+/// empty. Every other accepted grab carries an identity persisted alongside the
+/// submission by `submit_canonical_download` (`acquisition/submission.rs`); the
+/// unlinked grab is the one that records the submission alone, so it is the one
+/// an observation has nothing to bind back to. The release finishing between
+/// two polls is not the story: the client reports it in both lanes here.
+#[tokio::test]
+async fn an_unlinked_grab_reaches_an_import_offer_once_the_client_completes_it() {
+    let indexer_client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-a",
+            vec![nzb_release("Paperman.2012.1080p.WEB-DL", "g1")],
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        indexer_client,
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let download_client = Arc::new(StubDownloadClient::default());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_download_submissions(submissions.clone())
+            // The search bootstrap does not wire one, and the tracker writes
+            // every observation through it; the download-tracking fixtures
+            // (`bootstrap_with_cleanup_tracking`) wire exactly this.
+            .with_download_registry(Arc::new(FixtureDownloadRegistry::default()))
+            .with_download_client(download_client.clone())
+    });
+    let client_config =
+        create_enabled_download_client_config(&app, &user, "Primary", "nzbget").await;
+
+    let start = app
+        .start_interactive_release_search(
+            &user,
+            query_request("paperman", InteractiveSearchKind::Movie),
+        )
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+    let download_url = done
+        .results
+        .first()
+        .expect("one result")
+        .download_url
+        .clone()
+        .expect("release download url");
+
+    let outcome = app
+        .queue_unlinked_release(&user, &start.id, &download_url, &client_config.id)
+        .await
+        .expect("queue unlinked release");
+
+    // The durable half of an accepted grab: without the identity row there is
+    // nothing for an observation to bind to, whatever the client later reports.
+    let identities = submissions.identities.lock().await.clone();
+    assert_eq!(
+        identities.len(),
+        1,
+        "an accepted unlinked grab must persist its identity like every other accepted grab: {identities:?}"
+    );
+
+    // The client reports the job the way nzbget did in the failing run: first
+    // in the queue, downloading, then completed in history.
+    let source_title = done.results.first().expect("one result").title.clone();
+    let mut client_item =
+        queue_history_fixture_item(&outcome.download_id, DownloadQueueState::Downloading, 40);
+    client_item.client_id = client_config.id.clone();
+    client_item.client_name = client_config.name.clone();
+    client_item.client_type = "nzbget".to_string();
+    // An unlinked grab owns no title, which is the whole shape under test.
+    client_item.title_id = None;
+    client_item.title_name = source_title.clone();
+    client_item.facet = Some("series".to_string());
+    client_item.progress_percent = 40;
+    // The stub calls one client authoritative by default ("primary"); this
+    // flow's client is the one the grab was pinned to, so say so.
+    download_client
+        .set_snapshot_authoritative_client_ids([client_config.id.clone()])
+        .await;
+    *download_client.queue_items.lock().await = vec![client_item.clone()];
+
+    let (_command_tx, tracked_download_rx) = tokio::sync::mpsc::channel(8);
+    let (_snapshot_tx, snapshot_rx) = tokio::sync::mpsc::channel(8);
+    let token = tokio_util::sync::CancellationToken::new();
+    let poller = tokio::spawn(
+        crate::integration::start_download_queue_poller_with_options(
+            app.clone(),
+            token.child_token(),
+            tracked_download_rx,
+            snapshot_rx,
+            crate::integration::DownloadQueuePollerOptions {
+                interval: Duration::from_millis(50),
+                ..Default::default()
+            },
+        ),
+    );
+
+    // Let the poller see it downloading, so the failure under test is not "the
+    // client finished it between two polls" but "it was watched the whole way".
+    timeout(Duration::from_secs(5), async {
+        loop {
+            if *download_client.queue_calls.lock().await >= 2 {
+                break;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the poller should read the client's queue");
+
+    let payload_dir = tempfile::tempdir().expect("payload dir");
+    // A real payload, so what the import check decides is about the missing
+    // title and not about an empty directory.
+    std::fs::write(
+        payload_dir.path().join(format!("{source_title}.mkv")),
+        vec![0u8; 1024],
+    )
+    .expect("write payload file");
+    let mut completed = completed_download_fixture_item(
+        &outcome.download_id,
+        "",
+        source_title.as_str(),
+        payload_dir.path().to_string_lossy().as_ref(),
+    );
+    completed.client_id = client_config.id.clone();
+    completed.client_type = "nzbget".to_string();
+    // No title parameters: the client was handed no title, because there is none.
+    completed.parameters = Vec::new();
+
+    let mut history_item = client_item.clone();
+    history_item.state = DownloadQueueState::Completed;
+    history_item.progress_percent = 100;
+    *download_client.queue_items.lock().await = Vec::new();
+    *download_client.history_items.lock().await = vec![history_item];
+    *download_client.recent_completed_downloads.lock().await = Some(vec![completed.clone()]);
+    *download_client.completed_downloads.lock().await = vec![completed];
+
+    let offered = timeout(Duration::from_secs(10), async {
+        loop {
+            // Either state puts the download on the import activity as a row
+            // the operator can assign by hand (`list_download_history_items`
+            // ranks Pending and Blocked alike); a title-less grab has nothing
+            // to import into, so Blocked is the honest one. The failure this
+            // reproduces is neither: no tracked state at all.
+            if submissions
+                .tracked_states
+                .lock()
+                .await
+                .values()
+                .any(|state| {
+                    state == TrackedDownloadState::ImportPending.as_str()
+                        || state == TrackedDownloadState::ImportBlocked.as_str()
+                })
+            {
+                return true;
+            }
+            sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap_or(false);
+
+    let tracked_states = submissions.tracked_states.lock().await.clone();
+    let identity_states = submissions.identity_states.lock().await.clone();
+
+    token.cancel();
+    poller
+        .await
+        .expect("download queue poller should stop cleanly");
+
+    assert!(
+        *download_client.history_calls.lock().await > 0
+            || !download_client
+                .recent_activity_calls
+                .lock()
+                .await
+                .is_empty(),
+        "the fixture must actually be observed for this assertion to mean anything"
+    );
+    assert!(
+        offered,
+        "a completed unlinked grab must reach an import-pending offer: tracked_states={tracked_states:?} identity_states={identity_states:?}"
+    );
+}
+
 #[tokio::test]
 async fn grab_indexer_name_prefers_the_configured_name_and_falls_back_to_the_source() {
     let (app, _user) = bootstrap_search(
@@ -1355,6 +1547,39 @@ async fn one_release_downloads_its_own_file_and_records_a_grab() {
         grabbed_release_titles(&app).await,
         vec!["Paperman.2012.1080p.WEB-DL".to_string()],
         "a browser download is a grab from the indexer's perspective"
+    );
+}
+
+#[tokio::test]
+async fn browser_downloads_count_against_the_indexer_even_when_a_later_member_fails() {
+    let (app, user, search_id, urls) = browser_download_fixture(vec![
+        nzb_release("Paperman.2012.1080p.WEB-DL", "g1"),
+        nzb_release("Paperman.2012.2160p.WEB-DL", "g2"),
+    ])
+    .await;
+    let stats = Arc::new(RecordingIndexerStatsTracker::default());
+    // Only the first release resolves; the second makes the batch fail.
+    let artifacts = HashMap::from([(urls[0].clone(), nzb_artifact("first"))]);
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_download_client(Arc::new(ArtifactDownloadClient { artifacts }))
+            .with_indexer_stats(stats.clone())
+    });
+
+    let error = app
+        .download_interactive_search_artifacts(&user, &targets(&search_id, &urls))
+        .await
+        .expect_err("the second fetch fails the batch");
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+
+    // The indexer served the first file, so that grab happened and is counted
+    // under the configured indexer name, exactly as the unlinked-queue path
+    // counts one.
+    let grabs = stats.grabs.lock().expect("grab log mutex").clone();
+    assert_eq!(
+        grabs,
+        vec![("idx-a".to_string(), "Synthetic newznab".to_string())],
+        "each served artifact counts once: {grabs:?}"
     );
 }
 

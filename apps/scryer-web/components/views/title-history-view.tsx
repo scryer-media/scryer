@@ -1,4 +1,3 @@
-import { Loader2 } from "lucide-react";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
 import { Button } from "@/components/ui/button";
@@ -13,6 +12,7 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
 import { HistoryEventIcon } from "@/components/common/history-event-icon";
 import { getTitleHistoryFilterLabel } from "@/components/common/title-history-event-meta";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export function TitleHistoryView({
   events,
@@ -105,7 +105,7 @@ export function TitleHistoryView({
         </div>
         {loading && events.length === 0 ? (
           <div className="flex items-center gap-2 py-8 text-sm text-[var(--scry-muted3)]">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingMark className="h-4 w-4" />
             <span>{t("label.loading")}</span>
           </div>
         ) : error ? (

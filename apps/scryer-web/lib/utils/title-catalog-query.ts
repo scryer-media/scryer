@@ -31,6 +31,7 @@ export type TitleCatalogSortStateLike = {
 export type TitleCatalogProjection = {
   library: boolean;
   quality: boolean;
+  profile: boolean;
   size: boolean;
   episodes: boolean;
   runtime: boolean;
@@ -72,6 +73,7 @@ export const EMPTY_TITLE_ADVANCED_FILTERS: TitleCatalogAdvancedFilters = {
 const EMPTY_TITLE_CATALOG_PROJECTION: TitleCatalogProjection = {
   library: false,
   quality: false,
+  profile: false,
   size: false,
   episodes: false,
   runtime: false,
@@ -86,6 +88,7 @@ const TITLE_CATALOG_SORT_KEYS: Record<string, string> = {
   library: "LIBRARY",
   monitored: "MONITORED",
   quality: "QUALITY",
+  profile: "PROFILE",
   episodes: "EPISODES",
   status: "STATUS",
   added: "ADDED",
@@ -219,6 +222,7 @@ export function titleCatalogProjectionSignature(
   return [
     normalized.library && "library",
     normalized.quality && "quality",
+    normalized.profile && "profile",
     normalized.size && "size",
     normalized.episodes && "episodes",
     normalized.runtime && "runtime",
@@ -251,7 +255,8 @@ export function titleCatalogProjectionForTable({
   ) || supportedRatingColumnKeys.has(sort.key);
 
   next.library = selectedOrSorted("library");
-  next.quality = selectedOrSorted("quality");
+  next.quality = activeFacet === "movie" && selectedOrSorted("quality");
+  next.profile = selectedOrSorted("profile");
   next.size = selectedOrSorted("size");
   next.episodes = activeFacet !== "movie" && selectedOrSorted("episodes");
   next.runtime = selectedOrSorted("runtime");

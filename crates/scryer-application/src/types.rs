@@ -861,7 +861,11 @@ pub enum TitleCatalogSortKey {
     Title,
     Library,
     Monitored,
+    /// Quality of the title's own media: its primary files, else its best
+    /// additional file.
     Quality,
+    /// Name of the title's effective quality profile.
+    Profile,
     Episodes,
     Status,
     Size,
@@ -889,18 +893,65 @@ pub enum TitleCatalogSortKey {
     RatingMdblist,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TitleCatalogSort {
     pub key: TitleCatalogSortKey,
     pub direction: SortDirection,
+    /// Effective profile names a `Profile` sort orders by. Resolved by the
+    /// caller because they live in settings, not on the title rows.
+    pub profile_names: Option<TitleCatalogProfileNames>,
+}
+
+impl TitleCatalogSort {
+    pub fn new(key: TitleCatalogSortKey, direction: SortDirection) -> Self {
+        Self {
+            key,
+            direction,
+            profile_names: None,
+        }
+    }
 }
 
 impl Default for TitleCatalogSort {
     fn default() -> Self {
-        Self {
-            key: TitleCatalogSortKey::Title,
-            direction: SortDirection::Asc,
-        }
+        Self::new(TitleCatalogSortKey::Title, SortDirection::Asc)
+    }
+}
+
+/// Quality-profile names by the scopes a title's effective profile resolves
+/// through, most specific first: the title's own override, its library's
+/// default, its facet's default, then the global default.
+///
+/// Only profiles that exist are present, so an override naming a deleted
+/// profile falls through to the next scope.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TitleCatalogProfileNames {
+    /// Lowercased profile id to profile name.
+    pub by_profile_id: BTreeMap<String, String>,
+    /// Library id to the name of that library's default profile.
+    pub by_library_id: BTreeMap<String, String>,
+    /// Facet (`MediaFacet::as_str`) to the name of that facet's default profile.
+    pub by_facet: BTreeMap<String, String>,
+    pub global: Option<String>,
+}
+
+const QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
+
+impl TitleCatalogProfileNames {
+    /// The name of `title`'s effective quality profile.
+    pub fn name_for(&self, title: &Title) -> Option<&str> {
+        let override_name = title
+            .tags
+            .iter()
+            .find_map(|tag| tag.strip_prefix(QUALITY_PROFILE_TAG_PREFIX))
+            .map(|profile_id| profile_id.trim().to_ascii_lowercase())
+            .filter(|profile_id| !profile_id.is_empty())
+            .and_then(|profile_id| self.by_profile_id.get(&profile_id));
+        override_name
+            .or_else(|| self.by_library_id.get(&title.library_id))
+            .or_else(|| self.by_facet.get(title.facet.as_str()))
+            .or(self.global.as_ref())
+            .map(String::as_str)
     }
 }
 

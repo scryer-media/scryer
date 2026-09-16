@@ -6,7 +6,6 @@ import {
   Eye,
   EyeOff,
   Info,
-  Loader2,
   Plus,
   Search,
   SearchX,
@@ -29,6 +28,7 @@ import { TitlePosterSlot } from "@/components/title-poster-slot";
 import { TitleCard } from "@/components/title-card";
 import { cn } from "@/lib/utils";
 import type { Facet } from "@/lib/types/titles";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type SearchSurface = "desktop" | "mobile";
 
@@ -143,7 +143,7 @@ export function SearchSectionLoading({
       )}
     >
       <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[9px] bg-[var(--scry-chip)] text-[var(--scry-accent-ring)]">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <LoadingMark className="h-4 w-4" />
       </span>
       <span className="font-medium">{label}</span>
     </div>

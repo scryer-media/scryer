@@ -1,13 +1,13 @@
 import {
   CircleCheckIcon,
   InfoIcon,
-  Loader2Icon,
   OctagonXIcon,
   TriangleAlertIcon,
 } from "lucide-react"
 import { useTheme } from "next-themes"
 import { Toaster as Sonner, toast, type ToasterProps } from "sonner"
 import { isDarkTheme } from "@/lib/theme"
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
   const { resolvedTheme } = useTheme()
@@ -83,7 +83,7 @@ const Toaster = ({ style, toastOptions, ...props }: ToasterProps) => {
         info: <InfoIcon className="size-4" />,
         warning: <TriangleAlertIcon className="size-4" />,
         error: <OctagonXIcon className="size-4" />,
-        loading: <Loader2Icon className="size-4 animate-spin" />,
+        loading: <LoadingMark className="size-4" />,
       }}
       style={{ ...themeStyle, ...style } as React.CSSProperties}
       {...props}

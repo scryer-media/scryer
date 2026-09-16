@@ -4,7 +4,6 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
-  Loader2,
   Zap,
 } from "lucide-react";
 import {
@@ -56,6 +55,7 @@ import {
   EMPTY_RELEASES,
   EMPTY_SUBTITLE_DOWNLOADS,
 } from "./season-section-utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const EMPTY_INDEXER_PROGRESS: InteractiveSearchIndexerProgress[] = [];
 
@@ -493,7 +493,7 @@ function SeasonSectionImpl({
                 tooltipClassName="w-auto text-left"
               >
                 {seasonSearchLoading === true ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <LoadingMark className="h-4 w-4" />
                 ) : (
                   <Zap className="h-4 w-4" />
                 )}
@@ -528,7 +528,7 @@ function SeasonSectionImpl({
                   "flex items-center gap-2 px-4 py-3 text-sm text-muted-foreground",
                 )}
               >
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
                 {t("label.loading")}
               </div>
             ) : episodes.length === 0 ? (

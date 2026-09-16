@@ -6,7 +6,6 @@ import {
   Clock,
   History,
   Inbox,
-  Loader2,
   Pencil,
   RefreshCw,
   ScrollText,
@@ -122,6 +121,7 @@ import {
 } from "@/lib/utils/poster-images";
 import { normalizeTitleExternalRating } from "@/lib/utils/title-ratings";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type QualityProfileOption = {
   id: string;
@@ -1164,7 +1164,7 @@ export function RequestsView({
                       disabled={approveDisabled}
                     >
                       {isResolving ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <LoadingMark className="h-4 w-4" />
                       ) : (
                         <Check className="h-4 w-4" />
                       )}
@@ -1205,7 +1205,7 @@ export function RequestsView({
                       disabled={actionsDisabled}
                     >
                       {isResolving ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <LoadingMark className="h-4 w-4" />
                       ) : (
                         <X className="h-4 w-4" />
                       )}
@@ -1434,7 +1434,7 @@ export function RequestsView({
                 disabled={loading}
                 aria-label="Refresh requests"
               >
-                <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                {loading ? <LoadingMark className="h-4 w-4" /> : <RefreshCw className="h-4 w-4" />}
               </Button>
             ) : null}
           </div>

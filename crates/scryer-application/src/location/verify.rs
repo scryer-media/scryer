@@ -571,12 +571,13 @@ impl VerifiedCopier {
         progress: &CopyProgress,
     ) -> AppResult<StreamedContentHashes> {
         let partial = partial_destination_path(destination);
-        // A partial at this path can only be an earlier attempt of this
-        // operation's own copy of this file: the ownership guard means nothing
-        // else may write here. Clearing it is what makes the retry — and the
-        // resumed run — start from a clean file rather than appending to a
-        // truncated one.
-        clear_abandoned_partial(&partial).await?;
+        // Whatever sits at the staging path stays there. The copier cannot tell
+        // an interrupted attempt's own partial from a user file that happens to
+        // carry the suffix, and only a caller holding a durable record of its
+        // own staged attempt can — `ConflictResolver` clears exactly that one
+        // before it asks for the copy, which is what makes a resumed run start
+        // from a clean file rather than appending to a truncated one.
+        ensure_partial_path_free(&partial).await?;
 
         let hashes = {
             let source = source.to_path_buf();
@@ -738,24 +739,26 @@ where
     })
 }
 
-/// Removes a partial an earlier attempt abandoned, so this attempt can claim
-/// the name.
+/// Refuses a copy whose staging path is occupied, rather than removing whatever
+/// occupies it.
 ///
-/// A partial that cannot be removed is an error rather than something to work
-/// around: the copy would otherwise fail on the claim anyway, and the reason
-/// the caller needs to see is the removal failure, not "File exists".
-async fn clear_abandoned_partial(partial: &Path) -> AppResult<()> {
-    match tokio::fs::remove_file(partial).await {
-        Ok(()) => {
-            tracing::info!(
-                partial = %partial.display(),
-                "cleared an abandoned partial copy left by an interrupted attempt"
-            );
-            Ok(())
-        }
+/// A file at `<destination>.scryer-partial` is *usually* an interrupted
+/// attempt's own work, but the copier has no way to prove that, and the one
+/// case it cannot prove — a user file that happens to carry the suffix, or a
+/// partial another operation is still writing — is the one where removing it is
+/// unrecoverable. So the occupied name fails the copy the same way an occupied
+/// destination does, and the source is left where it is. The caller that *can*
+/// prove ownership from its own durable record clears the partial before it
+/// asks for the copy (see [`crate::location::resolution::ConflictResolver`]).
+async fn ensure_partial_path_free(partial: &Path) -> AppResult<()> {
+    match tokio::fs::symlink_metadata(partial).await {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(AppError::Repository(format!(
-            "failed to clear the abandoned partial copy at {}: {error}",
+            "failed to inspect the destination staging path {}: {error}",
+            partial.display()
+        ))),
+        Ok(_) => Err(AppError::Validation(format!(
+            "The destination staging path {} is occupied. Nothing was copied and the source was preserved; move or remove that file and try again.",
             partial.display()
         ))),
     }
@@ -1714,33 +1717,37 @@ mod tests {
         assert_eq!(hashes.size_bytes, data.len() as u64);
     }
 
-    /// A partial an interrupted attempt abandoned is this operation's own work,
-    /// so the next attempt clears it and copies cleanly rather than failing on
-    /// a name it cannot claim.
+    /// The copier cannot tell an interrupted attempt's own partial from a user
+    /// file that happens to carry the suffix, so it removes neither: an
+    /// occupied staging path fails the copy and leaves both files alone. The
+    /// caller whose durable record *can* prove the partial is its own clears it
+    /// first (`ConflictResolver`), which is what makes a resumed run copy
+    /// cleanly — see `location::execution::tests`.
     #[tokio::test]
-    async fn an_abandoned_partial_is_cleared_before_the_next_attempt() {
+    async fn an_occupied_staging_path_fails_the_copy_and_is_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let source = dir.path().join("source.bin");
-        let data = write_pattern(&source, 8192);
+        write_pattern(&source, 8192);
         let destination = dir.path().join("destination.bin");
-        std::fs::write(
-            partial_destination_path(&destination),
-            b"the first few bytes a crashed attempt managed to write",
-        )
-        .unwrap();
+        let partial = partial_destination_path(&destination);
+        let occupant = b"a file that merely carries the staging suffix";
+        std::fs::write(&partial, occupant).unwrap();
 
-        let verified = VerifiedCopier::new()
+        let error = VerifiedCopier::new()
             .copy_and_verify(request(&source, &destination, VerificationDepth::Full))
             .await
-            .expect("copy and verify");
+            .expect_err("an occupied staging path is not the copier's to clear");
 
-        assert_eq!(verified.outcome, FileVerificationOutcome::Verified);
-        assert_eq!(
-            std::fs::read(&destination).unwrap(),
-            data,
-            "the destination holds the whole source, not the abandoned prefix"
+        assert!(
+            error.to_string().contains("staging path"),
+            "the reason names the occupied staging path: {error}"
         );
-        assert!(!partial_destination_path(&destination).exists());
+        assert_eq!(
+            std::fs::read(&partial).unwrap(),
+            occupant,
+            "the occupant is preserved byte for byte"
+        );
+        assert!(!destination.exists(), "and nothing was placed");
     }
 
     /// The window between a completed copy's promotion and the verification

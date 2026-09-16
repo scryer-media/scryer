@@ -12,7 +12,7 @@ export const RULE_TEMPLATE_CATEGORIES = [
   "Quality",
   "Size",
   "Audio",
-  "Anime",
+  "Groups",
   "Penalties",
 ] as const;
 
@@ -56,6 +56,21 @@ score_entry["poorly_seeded"] := -300 if {
     input.release.extra.seeders < 3
 }`,
   },
+  {
+    id: "block-exe-torrents",
+    title: "No .exe torrents",
+    description: "Strongly penalize torrents whose title names an executable file extension",
+    category: "Torrent",
+    regoSource: `import rego.v1
+
+blocked_extensions := ["exe", "msi", "bat", "lnk"]
+
+score_entry["blocked_file_extension"] := scryer.block_score() if {
+    input.release.extra.protocol == "torrent"
+    some part in split(lower(input.release.raw_title), ".")
+    part in blocked_extensions
+}`,
+  },
 
   // ── Quality ────────────────────────────────────────────────────
   {
@@ -70,23 +85,15 @@ score_entry["prefer_webdl"] := 100 if {
 }`,
   },
   {
-    id: "prefer-x265",
-    title: "Prefer x265/HEVC",
-    description: "Boost HEVC/x265 releases by 100 points for better compression",
+    id: "prefer-hevc",
+    title: "Prefer HEVC",
+    description: "Boost HEVC releases by 100 points and penalize x264 at 4K by 200",
     category: "Quality",
     regoSource: `import rego.v1
 
-score_entry["x265_bonus"] := 100 if {
-    codec := scryer.normalize_codec(input.release.video_codec)
-    codec == "H.265"
-}`,
-  },
-  {
-    id: "penalize-x264-4k",
-    title: "Penalize x264 at 4K",
-    description: "x264 at 4K is wasteful — penalize by 200 points",
-    category: "Quality",
-    regoSource: `import rego.v1
+score_entry["hevc_bonus"] := 100 if {
+    scryer.normalize_codec(input.release.video_codec) == "H.265"
+}
 
 score_entry["x264_4k_penalty"] := -200 if {
     input.release.quality == "2160P"
@@ -96,95 +103,24 @@ score_entry["x264_4k_penalty"] := -200 if {
 
   // ── Size ───────────────────────────────────────────────────────
   {
-    id: "block-oversized",
-    title: "Penalize oversized releases (>100 GiB)",
-    description: "Apply -10000 above 100 GiB; other scores can offset this penalty",
-    category: "Size",
-    regoSource: `import rego.v1
-
-score_entry["too_large"] := scryer.block_score() if {
-    scryer.size_gib(input.release.size_bytes) > 100
-}`,
-  },
-  {
-    id: "prefer-compact",
-    title: "Prefer compact releases (<5 GiB)",
-    description: "Boost releases under 5 GiB for bandwidth-conscious setups",
+    id: "size-limits",
+    title: "Prefer compact releases, penalize oversized",
+    description: "Boost releases under 5 GiB; apply -10000 above 100 GiB",
     category: "Size",
     regoSource: `import rego.v1
 
 score_entry["compact_bonus"] := 150 if {
     input.release.size_bytes != null
     scryer.size_gib(input.release.size_bytes) < 5
-}`,
-  },
-  {
-    id: "block-tiny-releases",
-    title: "Penalize suspiciously small releases",
-    description: "Penalize releases under 100 MiB that are likely fakes or samples",
-    category: "Size",
-    regoSource: `import rego.v1
+}
 
-score_entry["too_small"] := scryer.block_score() if {
+score_entry["too_large"] := scryer.block_score() if {
     input.release.size_bytes != null
-    input.release.size_bytes > 0
-    scryer.size_gib(input.release.size_bytes) < 0.1
+    scryer.size_gib(input.release.size_bytes) > 100
 }`,
   },
 
   // ── Audio ──────────────────────────────────────────────────────
-  {
-    id: "require-japanese-audio",
-    title: "Prefer Japanese audio (post-download)",
-    description: "Apply -10000 without Japanese audio. Use profile required languages for a mandatory requirement",
-    category: "Audio",
-    appliedFacets: ["anime"],
-    regoSource: `import rego.v1
-
-score_entry["no_japanese_audio"] := scryer.block_score() if {
-    input.file != null
-    not has_japanese_audio
-}
-
-has_japanese_audio if {
-    some lang in input.file.audio_languages
-    scryer.lang_matches(lang, "ja")
-}`,
-  },
-  {
-    id: "require-english-audio",
-    title: "Prefer English audio (post-download)",
-    description: "Apply -10000 without English audio. Use profile required languages for a mandatory requirement",
-    category: "Audio",
-    regoSource: `import rego.v1
-
-score_entry["no_english_audio"] := scryer.block_score() if {
-    input.file != null
-    not has_english_audio
-}
-
-has_english_audio if {
-    some lang in input.file.audio_languages
-    scryer.lang_matches(lang, "en")
-}`,
-  },
-  {
-    id: "prefer-multi-audio",
-    title: "Prefer multi-audio releases",
-    description: "Boost releases that advertise dual audio or contain multiple audio tracks",
-    category: "Audio",
-    regoSource: `import rego.v1
-
-score_entry["multi_audio_release_bonus"] := 200 if {
-    input.release.is_dual_audio
-}
-
-score_entry["multi_audio_file_bonus"] := 200 if {
-    not input.release.is_dual_audio
-    input.file != null
-    input.file.has_multiaudio
-}`,
-  },
   {
     id: "prefer-atmos-audio",
     title: "Prefer Atmos audio",
@@ -201,39 +137,20 @@ score_entry["atmos_missing"] := -20 if {
 }`,
   },
 
-  // ── Anime ──────────────────────────────────────────────────────
+  // ── Groups ─────────────────────────────────────────────────────
   {
-    id: "anime-group-preference",
-    title: "Prefer specific anime release groups",
-    description: "Boost releases from SubsPlease, Erai-raws, EMBER, and Yameii",
-    category: "Anime",
-    appliedFacets: ["anime"],
+    id: "release-group-scores",
+    title: "Prefer release groups",
+    description: "Boost releases from the groups you list; use a negative score to penalize them instead",
+    category: "Groups",
     regoSource: `import rego.v1
 
-preferred_groups := {"subsplease", "erai-raws", "ember", "yameii"}
+preferred_groups := ["examplegroup", "samplesubs", "placeholderrip"]
 
-score_entry["preferred_anime_group"] := 400 if {
+score_entry["preferred_release_group"] := 400 if {
     input.release.release_group != null
     input.release.release_group != ""
-    group := lower(input.release.release_group)
-    preferred_groups[group]
-}`,
-  },
-  {
-    id: "block-mini-encodes",
-    title: "Penalize mini encodes",
-    description: "Penalize releases from known mini-encode groups",
-    category: "Anime",
-    appliedFacets: ["anime"],
-    regoSource: `import rego.v1
-
-mini_groups := {"judas", "bonkai77", "mini-encode", "minifreeza", "smallsizedanime"}
-
-score_entry["block_mini_encode"] := scryer.block_score() if {
-    input.release.release_group != null
-    input.release.release_group != ""
-    group := lower(input.release.release_group)
-    mini_groups[group]
+    lower(input.release.release_group) in preferred_groups
 }`,
   },
 
@@ -250,28 +167,6 @@ score_entry["too_old"] := scryer.block_score() if {
 }`,
   },
   {
-    id: "block-password-protected",
-    title: "Penalize password-protected releases",
-    description: "Strongly penalize releases flagged as password protected",
-    category: "Penalties",
-    regoSource: `import rego.v1
-
-score_entry["password_protected"] := scryer.block_score() if {
-    input.release.is_password_protected == true
-}`,
-  },
-  {
-    id: "require-release-group",
-    title: "Prefer a release group",
-    description: "Penalize releases that do not expose a normalized release-group tag",
-    category: "Penalties",
-    regoSource: `import rego.v1
-
-score_entry["missing_release_group"] := scryer.block_score() if {
-    not input.release.has_release_group
-}`,
-  },
-  {
     id: "block-obfuscated-retagged",
     title: "Penalize obfuscated or retagged releases",
     description: "Strongly penalize releases with normalized obfuscation or retagging signals",
@@ -284,22 +179,6 @@ score_entry["obfuscated_release"] := scryer.block_score() if {
 
 score_entry["retagged_release"] := scryer.block_score() if {
     input.release.is_retagged
-}`,
-  },
-  {
-    id: "block-low-quality-groups",
-    title: "Penalize known low-quality groups",
-    description: "Strongly penalize releases from groups known for poor quality",
-    category: "Penalties",
-    regoSource: `import rego.v1
-
-blocked_groups := {"yify", "yts"}
-
-score_entry["blocked_group"] := scryer.block_score() if {
-    input.release.release_group != null
-    input.release.release_group != ""
-    group := lower(input.release.release_group)
-    blocked_groups[group]
 }`,
   },
   {

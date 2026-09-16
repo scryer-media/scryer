@@ -244,6 +244,7 @@ fn title_catalog_sort_from_input(sort: Option<TitleCatalogSortInput>) -> TitleCa
         TitleCatalogSortKeyValue::Library => TitleCatalogSortKey::Library,
         TitleCatalogSortKeyValue::Monitored => TitleCatalogSortKey::Monitored,
         TitleCatalogSortKeyValue::Quality => TitleCatalogSortKey::Quality,
+        TitleCatalogSortKeyValue::Profile => TitleCatalogSortKey::Profile,
         TitleCatalogSortKeyValue::Episodes => TitleCatalogSortKey::Episodes,
         TitleCatalogSortKeyValue::Status => TitleCatalogSortKey::Status,
         TitleCatalogSortKeyValue::Size => TitleCatalogSortKey::Size,
@@ -274,7 +275,7 @@ fn title_catalog_sort_from_input(sort: Option<TitleCatalogSortInput>) -> TitleCa
         .direction
         .map(SortDirectionValue::into_application)
         .unwrap_or(SortDirection::Asc);
-    TitleCatalogSort { key, direction }
+    TitleCatalogSort::new(key, direction)
 }
 
 fn title_catalog_tag_filter_keys(
@@ -3977,6 +3978,7 @@ impl AcquisitionQueries {
                 category: t.category,
                 rego_source: t.rego_source,
                 applied_facets: t.applied_facets,
+                default_enabled: t.default_enabled,
             })
             .collect())
     }

@@ -1,6 +1,6 @@
 import { formatBytes } from "@/lib/utils/activity-utils";
 import * as React from "react";
-import { Ban, Loader2, Play, RefreshCw, Trash2 } from "lucide-react";
+import { Ban, Play, RefreshCw, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -49,6 +49,7 @@ import {
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { parseMaintenanceFileResults } from "@/lib/utils/maintenance-file-results";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type MaintenanceLibraryOption = { id: string; name: string };
 
@@ -272,7 +273,7 @@ export function MaintenanceGatesPanel({
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     {savingGate === gate ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      <LoadingMark className="h-4 w-4 text-muted-foreground" />
                     ) : null}
                     <SettingsToggleSwitch
                       id={selectorId("settings-maintenance-gate", gate)}
@@ -458,9 +459,11 @@ export function MaintenanceCandidatesPanel({
               disabled={candidatesLoading}
               onClick={refreshCandidates}
             >
-              <RefreshCw
-                className={`mr-2 h-4 w-4 ${candidatesLoading ? "animate-spin" : ""}`}
-              />
+              {candidatesLoading ? (
+                <LoadingMark className="mr-2 h-4 w-4" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
               {t("label.refresh")}
             </Button>
           </div>
@@ -710,9 +713,11 @@ export function MaintenanceRunsPanel({
               disabled={runsLoading}
               onClick={refreshRuns}
             >
-              <RefreshCw
-                className={`mr-2 h-4 w-4 ${runsLoading ? "animate-spin" : ""}`}
-              />
+              {runsLoading ? (
+                <LoadingMark className="mr-2 h-4 w-4" />
+              ) : (
+                <RefreshCw className="mr-2 h-4 w-4" />
+              )}
               {t("label.refresh")}
             </Button>
           </div>

@@ -520,6 +520,10 @@ struct ManualImportFilePreview {
     parsed_season: Option<u32>,
     parsed_episodes: Vec<u32>,
     suggested_episode_id: Option<String>,
+    /// Every episode the file is suggested to cover, in parsed order. Empty
+    /// when no suggestion resolved; a single entry mirrors
+    /// `suggested_episode_id`.
+    suggested_episode_ids: Vec<String>,
     suggested_episode_label: Option<String>,
     suggested_series_movie_link_id: Option<String>,
 }
@@ -547,6 +551,10 @@ pub struct ManualImportSelectionFilePreview {
     pub parsed_season: Option<u32>,
     pub parsed_episodes: Vec<u32>,
     pub suggested_episode_id: Option<String>,
+    /// Every episode the file is suggested to cover, in parsed order. Empty
+    /// when no suggestion resolved; a single entry mirrors
+    /// `suggested_episode_id`.
+    pub suggested_episode_ids: Vec<String>,
     pub suggested_episode_label: Option<String>,
     pub suggested_series_movie_link_id: Option<String>,
 }
@@ -563,7 +571,9 @@ pub struct ManualImportSelectionPreview {
 #[derive(Clone, Debug)]
 pub struct ManualImportCandidateMapping {
     pub candidate_id: String,
-    pub episode_id: Option<String>,
+    /// Every episode this file covers. Empty means the mapping is not
+    /// episodic. A well-named multi-episode file carries more than one.
+    pub episode_ids: Vec<String>,
     pub series_movie_link_id: Option<String>,
     pub disc_selection: Option<scryer_media_types::DiscSelection>,
 }
@@ -1138,19 +1148,18 @@ async fn preview_manual_import(
         )
         | None => HashSet::new(),
     };
-    // Loaded once for the whole preview: community (per-cour) anime numbering
-    // for this title, when SMG published one. `None` for every non-anime title
-    // and for anime whose community numbering matches the catalog's.
-    let anime_numbering_bridge = if title.facet == MediaFacet::Anime {
-        app.services
-            .catalog
-            .shows
-            .get_anime_numbering_bridge(title_id)
-            .await
-            .unwrap_or_default()
-    } else {
-        None
-    };
+    // Loaded once for the whole preview: the release numbering this title's
+    // groups use, when the catalog stores one — community (per-cour) numbering
+    // for anime, a TVDB alternate order for an ordinary series. `None` for
+    // every title whose upstream numbering matches the catalog's, which is
+    // almost all of them.
+    let anime_numbering_bridge = app
+        .services
+        .catalog
+        .shows
+        .get_anime_numbering_bridge(title_id)
+        .await
+        .unwrap_or_default();
     // A verified pack vouches for every standard episode in the seasons its
     // release name declares, not only the season (or episode set) the grab was
     // scoped to: a two-season pack grabbed for season 1 imports its season 2
@@ -1445,6 +1454,55 @@ async fn preview_manual_import(
             parsed_episodes.clear();
         }
 
+        // A well-named multi-episode file (`S01E27E28`) covers the whole set.
+        // Suggest the set only when every parsed number resolves and the
+        // single-episode pipeline already settled on the first of them: a
+        // partial set would silently leave a sibling episode wanted, and a
+        // scoped suggestion that pointed somewhere else must keep winning.
+        let mut multi_suggestion: Option<(Vec<String>, String)> = None;
+        if parsed_episodes.len() > 1
+            && !numbering_ambiguous
+            && let Some(first_suggestion) = suggested_episode_id.as_deref()
+        {
+            let season_str = parsed_season
+                .map(|season| season.to_string())
+                .unwrap_or_else(|| "1".to_string());
+            let mut resolved = Vec::with_capacity(parsed_episodes.len());
+            for number in &parsed_episodes {
+                match app
+                    .services
+                    .catalog
+                    .shows
+                    .find_episode_by_title_and_numbers(title_id, &season_str, &number.to_string())
+                    .await
+                {
+                    Ok(Some(episode)) => resolved.push(episode),
+                    _ => {
+                        resolved.clear();
+                        break;
+                    }
+                }
+            }
+            if resolved.len() == parsed_episodes.len()
+                && resolved
+                    .first()
+                    .is_some_and(|episode| episode.id == first_suggestion)
+            {
+                let label = manual_import_multi_episode_label(&resolved);
+                multi_suggestion = Some((
+                    resolved.into_iter().map(|episode| episode.id).collect(),
+                    label,
+                ));
+            }
+        }
+        let (suggested_episode_ids, suggested_episode_label) = match multi_suggestion {
+            Some((episode_ids, label)) => (episode_ids, Some(label)),
+            None => (
+                suggested_episode_id.iter().cloned().collect::<Vec<_>>(),
+                suggested_episode_label,
+            ),
+        };
+
         previews.push(ManualImportFilePreview {
             file_path: path_to_stored_string(&candidate.canonical_path),
             file_name,
@@ -1454,6 +1512,7 @@ async fn preview_manual_import(
             parsed_season,
             parsed_episodes,
             suggested_episode_id,
+            suggested_episode_ids,
             suggested_episode_label,
             suggested_series_movie_link_id: named_series_movie_link_id.or_else(|| {
                 grabbed_series_movie_link_id.clone().filter(|_| {
@@ -1482,6 +1541,24 @@ pub(crate) async fn preview_manual_import_suggested_episode_ids_for_tests(
             .files
             .into_iter()
             .map(|file| file.suggested_episode_id)
+            .collect(),
+    )
+}
+
+#[cfg(test)]
+pub(crate) async fn preview_manual_import_suggested_episode_id_sets_for_tests(
+    app: &AppUseCase,
+    source_dir: &Path,
+    title: &scryer_domain::Title,
+    release_evidence: &ReleaseEvidence,
+    available_episodes: &[scryer_domain::Episode],
+) -> AppResult<Vec<(Vec<String>, Option<String>)>> {
+    Ok(
+        preview_manual_import(app, source_dir, title, release_evidence, available_episodes)
+            .await?
+            .files
+            .into_iter()
+            .map(|file| (file.suggested_episode_ids, file.suggested_episode_label))
             .collect(),
     )
 }
@@ -1549,6 +1626,52 @@ fn manual_episode_suggestion_for_grabbed_scope(
         return grabbed_episode_ids.iter().next().cloned();
     }
     None
+}
+
+/// Label for one file that covers several episodes, for example
+/// `S01E27-E28 · Episode A / Episode B`.
+///
+/// The numbers come from the catalog rows, not the file name, so the label
+/// names the episodes the import will actually link.
+fn manual_import_multi_episode_label(episodes: &[scryer_domain::Episode]) -> String {
+    let digits = |value: Option<&str>| {
+        let digits = value
+            .unwrap_or_default()
+            .chars()
+            .filter(char::is_ascii_digit)
+            .collect::<String>();
+        if digits.is_empty() {
+            "??".to_string()
+        } else {
+            digits
+        }
+    };
+    let season = episodes
+        .first()
+        .map(|episode| digits(episode.season_number.as_deref()))
+        .unwrap_or_else(|| "??".to_string());
+    let numbers = episodes
+        .iter()
+        .map(|episode| format!("E{:0>2}", digits(episode.episode_number.as_deref())))
+        .collect::<Vec<_>>()
+        .join("-");
+    let titles = episodes
+        .iter()
+        .filter_map(|episode| {
+            episode
+                .title
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+        .collect::<Vec<_>>()
+        .join(" / ");
+    let numbering = format!("S{season:0>2}{numbers}");
+    if titles.is_empty() {
+        numbering
+    } else {
+        format!("{numbering} · {titles}")
+    }
 }
 
 fn manual_import_episode_label(episode: &scryer_domain::Episode) -> String {
@@ -1795,6 +1918,7 @@ pub async fn begin_manual_import_selection(
             parsed_season: file.parsed_season,
             parsed_episodes: file.parsed_episodes,
             suggested_episode_id: file.suggested_episode_id,
+            suggested_episode_ids: file.suggested_episode_ids,
             suggested_episode_label: file.suggested_episode_label,
             suggested_series_movie_link_id: file.suggested_series_movie_link_id,
         });
@@ -1842,17 +1966,26 @@ pub async fn begin_manual_import_selection(
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ManualImportFileMapping {
     pub file_path: String,
+    /// Legacy single-episode target. Kept so a manual-import request payload
+    /// persisted by an older build still deserializes and executes; new
+    /// requests carry `episode_ids` instead.
     #[serde(default)]
     pub episode_id: Option<String>,
+    /// Every episode this file covers, in order. Empty falls back to
+    /// `episode_id`.
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
     #[serde(default)]
     pub series_movie_link_id: Option<String>,
     #[serde(default)]
     pub disc_selection: Option<scryer_media_types::DiscSelection>,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ManualImportMappingTarget<'a> {
-    Episode(&'a str),
+    /// One or more episodes covered by a single file, in the order the
+    /// operator (or the preview) named them. Never empty.
+    Episode(Vec<&'a str>),
     SeriesMovie(&'a str),
     /// The title itself. A standalone movie has exactly one destination, so
     /// there is no sub-target to name.
@@ -1861,6 +1994,39 @@ enum ManualImportMappingTarget<'a> {
 
 fn normalize_manual_import_target(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+/// The episode targets a mapping addresses, in order and de-duplicated.
+///
+/// `episode_ids` is authoritative; the legacy single `episode_id` is honoured
+/// only when the list is empty, so a request payload persisted by an older
+/// build still resolves to the same episode.
+fn manual_import_mapping_episode_ids(mapping: &ManualImportFileMapping) -> Vec<&str> {
+    let mut seen = std::collections::HashSet::new();
+    let mut ids = mapping
+        .episode_ids
+        .iter()
+        .filter_map(|value| normalize_manual_import_target(Some(value)))
+        .filter(|value| seen.insert(*value))
+        .collect::<Vec<_>>();
+    if ids.is_empty()
+        && let Some(episode_id) = normalize_manual_import_target(mapping.episode_id.as_deref())
+    {
+        ids.push(episode_id);
+    }
+    ids
+}
+
+/// The episode targets a candidate mapping addresses, in order and
+/// de-duplicated.
+fn manual_import_candidate_episode_ids(mapping: &ManualImportCandidateMapping) -> Vec<&str> {
+    let mut seen = std::collections::HashSet::new();
+    mapping
+        .episode_ids
+        .iter()
+        .filter_map(|value| normalize_manual_import_target(Some(value)))
+        .filter(|value| seen.insert(*value))
+        .collect()
 }
 
 /// Resolve which target a mapping addresses, given the facet of the title the
@@ -1876,12 +2042,12 @@ fn manual_import_mapping_target<'a>(
     mapping: &'a ManualImportFileMapping,
     facet: &MediaFacet,
 ) -> AppResult<ManualImportMappingTarget<'a>> {
-    let episode_id = normalize_manual_import_target(mapping.episode_id.as_deref());
+    let episode_ids = manual_import_mapping_episode_ids(mapping);
     let series_movie_link_id =
         normalize_manual_import_target(mapping.series_movie_link_id.as_deref());
 
     if let Some(selection) = &mapping.disc_selection {
-        if episode_id.is_some() || series_movie_link_id.is_some() {
+        if !episode_ids.is_empty() || series_movie_link_id.is_some() {
             return Err(AppError::Validation(
                 "disc selection cannot include a separate episode or series-movie target".into(),
             ));
@@ -1917,7 +2083,9 @@ fn manual_import_mapping_target<'a>(
         if !matches!(facet, MediaFacet::Movie)
             && let Some(first) = selection.episode_mappings.first()
         {
-            return Ok(ManualImportMappingTarget::Episode(&first.episode_ids[0]));
+            return Ok(ManualImportMappingTarget::Episode(vec![
+                first.episode_ids[0].as_str(),
+            ]));
         }
         return Err(AppError::Validation(
             "episodic discs require playback-title mappings; movie discs cannot map episodes"
@@ -1925,16 +2093,16 @@ fn manual_import_mapping_target<'a>(
         ));
     }
 
-    match (episode_id, series_movie_link_id) {
-        (Some(episode_id), None) => Ok(ManualImportMappingTarget::Episode(episode_id)),
-        (None, Some(series_movie_link_id)) => {
+    match (episode_ids.is_empty(), series_movie_link_id) {
+        (false, None) => Ok(ManualImportMappingTarget::Episode(episode_ids)),
+        (true, Some(series_movie_link_id)) => {
             Ok(ManualImportMappingTarget::SeriesMovie(series_movie_link_id))
         }
-        (None, None) if matches!(facet, MediaFacet::Movie) => Ok(ManualImportMappingTarget::Movie),
-        (None, None) => Err(AppError::Validation(
+        (true, None) if matches!(facet, MediaFacet::Movie) => Ok(ManualImportMappingTarget::Movie),
+        (true, None) => Err(AppError::Validation(
             "manual import mapping requires episode_id or series_movie_link_id".to_string(),
         )),
-        (Some(_), Some(_)) => Err(AppError::Validation(
+        (false, Some(_)) => Err(AppError::Validation(
             "manual import mapping cannot include both episode_id and series_movie_link_id"
                 .to_string(),
         )),
@@ -2009,7 +2177,8 @@ pub(crate) fn validate_manual_import_candidate_mapping_targets(
         }
         let target = ManualImportFileMapping {
             file_path: String::new(),
-            episode_id: mapping.episode_id.clone(),
+            episode_id: None,
+            episode_ids: mapping.episode_ids.clone(),
             series_movie_link_id: mapping.series_movie_link_id.clone(),
             disc_selection: mapping.disc_selection.clone(),
         };
@@ -2024,10 +2193,13 @@ pub(crate) async fn validate_manual_import_candidate_mapping_scope(
     files: &[ManualImportCandidateMapping],
 ) -> AppResult<()> {
     for mapping in files {
+        for episode_id in manual_import_candidate_episode_ids(mapping) {
+            validate_manual_import_target_scope(app, title_id, Some(episode_id), None).await?;
+        }
         validate_manual_import_target_scope(
             app,
             title_id,
-            mapping.episode_id.as_deref(),
+            None,
             mapping.series_movie_link_id.as_deref(),
         )
         .await?;
@@ -2096,8 +2268,13 @@ async fn validate_manual_import_target_scope(
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ManualImportFileResult {
     pub file_path: String,
+    /// Primary episode this file was mapped to, kept for readers that predate
+    /// multi-episode mappings.
     #[serde(default)]
     pub episode_id: Option<String>,
+    /// Every episode this file was mapped to, in order.
+    #[serde(default)]
+    pub episode_ids: Vec<String>,
     #[serde(default)]
     pub series_movie_link_id: Option<String>,
     pub success: bool,
@@ -2118,9 +2295,14 @@ fn manual_import_file_result(
     error_code: Option<ImportErrorCode>,
     error_message: Option<String>,
 ) -> ManualImportFileResult {
+    let episode_ids = manual_import_mapping_episode_ids(mapping);
     ManualImportFileResult {
         file_path: mapping.file_path.clone(),
-        episode_id: mapping.episode_id.clone(),
+        episode_id: episode_ids.first().map(|id| (*id).to_string()),
+        episode_ids: episode_ids
+            .iter()
+            .map(|id| (*id).to_string())
+            .collect::<Vec<_>>(),
         series_movie_link_id: mapping.series_movie_link_id.clone(),
         success,
         skipped: false,
@@ -2818,10 +3000,13 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
         )
         .await?;
     for mapping in &files {
+        for episode_id in manual_import_mapping_episode_ids(mapping) {
+            validate_manual_import_target_scope(app, &title.id, Some(episode_id), None).await?;
+        }
         validate_manual_import_target_scope(
             app,
             &title.id,
-            mapping.episode_id.as_deref(),
+            None,
             mapping.series_movie_link_id.as_deref(),
         )
         .await?;
@@ -2909,8 +3094,8 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             }
         };
 
-        let episode_id = match target {
-            ManualImportMappingTarget::Episode(episode_id) => episode_id,
+        let mapped_episode_ids = match target {
+            ManualImportMappingTarget::Episode(episode_ids) => episode_ids,
             ManualImportMappingTarget::Movie => {
                 // Only the primary movie file is imported; the other mapped
                 // videos are samples/extras and are recorded as skipped so they
@@ -3025,49 +3210,93 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             }
         };
 
-        // Look up episode
-        let episode = match app
-            .services
-            .catalog
-            .shows
-            .get_episode_by_id(episode_id)
-            .await
+        // Look up every episode this mapping covers. A well-named
+        // multi-episode file (`S01E27E28`) maps to more than one, and each id
+        // is resolved and scoped to the title here so one bad id fails that
+        // file rather than the whole import.
+        let mut mapped_episodes = Vec::with_capacity(mapped_episode_ids.len());
+        let mut lookup_failure = None;
+        for episode_id in &mapped_episode_ids {
+            match app
+                .services
+                .catalog
+                .shows
+                .get_episode_by_id(episode_id)
+                .await
+            {
+                Ok(Some(ep)) if ep.title_id == title.id => mapped_episodes.push(ep),
+                Ok(Some(_)) => {
+                    lookup_failure = Some((
+                        ImportErrorCode::EpisodeNotFound,
+                        format!("episode {episode_id} does not belong to title {}", title.id),
+                    ));
+                    break;
+                }
+                Ok(None) => {
+                    lookup_failure = Some((
+                        ImportErrorCode::EpisodeNotFound,
+                        format!("episode not found: {episode_id}"),
+                    ));
+                    break;
+                }
+                Err(err) => {
+                    lookup_failure = Some((
+                        ImportErrorCode::EpisodeLookupFailed,
+                        format!("episode lookup failed: {}", err),
+                    ));
+                    break;
+                }
+            }
+        }
+        if let Some((error_code, error_message)) = lookup_failure {
+            results.push(manual_import_file_result(
+                mapping,
+                false,
+                None,
+                Some(error_code),
+                Some(error_message),
+            ));
+            continue;
+        }
+        // One file lands under one season folder with one name, so a mapping
+        // that spans seasons is an operator mistake rather than a
+        // multi-episode file.
+        if mapped_episodes
+            .iter()
+            .map(|episode| {
+                episode
+                    .season_number
+                    .as_deref()
+                    .map(str::trim)
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            > 1
         {
-            Ok(Some(ep)) => ep,
-            Ok(None) => {
-                results.push(manual_import_file_result(
-                    mapping,
-                    false,
-                    None,
-                    Some(ImportErrorCode::EpisodeNotFound),
-                    Some(format!("episode not found: {episode_id}")),
-                ));
-                continue;
-            }
-            Err(err) => {
-                results.push(manual_import_file_result(
-                    mapping,
-                    false,
-                    None,
-                    Some(ImportErrorCode::EpisodeLookupFailed),
-                    Some(format!("episode lookup failed: {}", err)),
-                ));
-                continue;
-            }
-        };
-        if episode.title_id != title.id {
+            results.push(manual_import_file_result(
+                mapping,
+                false,
+                None,
+                Some(ImportErrorCode::PolicyMismatch),
+                Some(
+                    "manual import mapping cannot assign one file to episodes in different seasons"
+                        .to_string(),
+                ),
+            ));
+            continue;
+        }
+        let Some(episode) = mapped_episodes.first().cloned() else {
             results.push(manual_import_file_result(
                 mapping,
                 false,
                 None,
                 Some(ImportErrorCode::EpisodeNotFound),
-                Some(format!(
-                    "episode {episode_id} does not belong to title {}",
-                    title.id
-                )),
+                Some("manual import mapping resolved no episode target".to_string()),
             ));
             continue;
-        }
+        };
 
         // Parse release metadata for quality/codec tokens. The operator's
         // mapping decides the episode; the parse still honours the multi-file
@@ -3100,7 +3329,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             }
             episodes
         } else {
-            vec![episode.clone()]
+            mapped_episodes
         };
         match execute_resolved_episode_import(
             app,
@@ -3266,11 +3495,14 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
     let success_count = results.iter().filter(|r| r.success).count();
     let (terminal_status, _, _) = manual_import_terminal_status_and_error(&results);
     if success_count > 0 && terminal_status == ImportStatus::Completed {
-        let episode_ids = results
-            .iter()
-            .filter(|result| result.success)
-            .filter_map(|result| result.episode_id.clone())
-            .collect::<Vec<_>>();
+        let mut episode_ids = Vec::new();
+        for result in results.iter().filter(|result| result.success) {
+            for episode_id in &result.episode_ids {
+                if !episode_ids.contains(episode_id) {
+                    episode_ids.push(episode_id.clone());
+                }
+            }
+        }
         app.append_domain_event(new_title_domain_event(
             actor,
             &title,
@@ -3982,6 +4214,7 @@ mod manual_import_recovery_tests {
             file_results: vec![ManualImportFileResult {
                 file_path: "/downloads/episode.mkv".to_string(),
                 episode_id: Some("episode-1".to_string()),
+                episode_ids: vec!["episode-1".to_string()],
                 series_movie_link_id: None,
                 success: file_success,
                 skipped: false,
@@ -4108,6 +4341,7 @@ mod manual_import_recovery_tests {
         ManualImportFileResult {
             file_path: path.to_string(),
             episode_id: None,
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
             success: false,
             skipped: true,
@@ -4167,6 +4401,7 @@ mod manual_import_recovery_tests {
         ManualImportFileResult {
             file_path: path.to_string(),
             episode_id: None,
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
             success,
             skipped: false,
@@ -4225,6 +4460,7 @@ mod manual_movie_primary_selection_tests {
             file_path: path_to_stored_string(&path),
             disc_selection: None,
             episode_id: None,
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
         }
     }
@@ -4260,6 +4496,7 @@ mod manual_movie_primary_selection_tests {
             disc_selection: None,
             file_path: path_to_stored_string(root.join("gone.mkv")),
             episode_id: None,
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
         };
         let first = write_video(&root, "Movie.2024.1080p.mkv", PAST_SAMPLE_THRESHOLD);

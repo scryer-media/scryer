@@ -26,6 +26,7 @@ import {
 } from "@/lib/location-transfers";
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const DEFAULT_AUTO_DISMISS_MS = 5_000;
 
@@ -100,11 +101,15 @@ function MoveProgressBar({
   return (
     <div>
       <div className="mb-1.5 flex items-center gap-2">
-        <Icon
-          className={cn("h-3.5 w-3.5 shrink-0", spin && "animate-spin")}
-          style={{ color: iconColor }}
-          aria-hidden="true"
-        />
+        {spin ? (
+          <LoadingMark className="h-3.5 w-3.5 shrink-0" />
+        ) : (
+          <Icon
+            className="h-3.5 w-3.5 shrink-0"
+            style={{ color: iconColor }}
+            aria-hidden="true"
+          />
+        )}
         <span className="text-xs font-semibold" style={{ color: labelColor }}>
           {label}
         </span>
@@ -426,11 +431,7 @@ export function LocationMoveToast({
                     {etaCountdown}
                   </span>
                 ) : null}
-                <LoaderCircle
-                  className="h-4 w-4 animate-spin"
-                  style={{ color: ACCENT.base }}
-                  aria-hidden="true"
-                />
+                <LoadingMark className="h-4 w-4" />
               </>
             ) : badge ? (
               <span

@@ -4,7 +4,6 @@ import {
   Eye,
   EyeOff,
   Edit,
-  Loader2,
   RefreshCw,
   Search,
   Trash2,
@@ -14,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { useTranslate } from "@/lib/context/translate-context";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type ActionButtonProps = {
   id: string;
@@ -70,7 +70,7 @@ function ActionButton({
       onClick={onClick}
     >
       {loading ? (
-        <Loader2 className="size-6 animate-spin" />
+        <LoadingMark className="size-6" />
       ) : (
         <Icon className="size-6" />
       )}

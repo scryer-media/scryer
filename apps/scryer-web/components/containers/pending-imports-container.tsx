@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronDown, Loader2, TriangleAlertIcon } from "lucide-react";
+import { ChevronDown, TriangleAlertIcon } from "lucide-react";
 import { useClient } from "urql";
 
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -41,6 +41,7 @@ import {
   selectedLibraryIdsToQueryValue,
 } from "@/lib/utils/library-filter";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type PendingImportsContainerProps = {
   view: ViewId;
@@ -1124,7 +1125,7 @@ export const PendingImportsContainer = React.memo(function PendingImportsContain
       {pendingLoading || ignoredLoading ? (
         <Card>
           <CardContent className="flex items-center gap-2 py-6 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <LoadingMark className="h-4 w-4" />
             {t("pendingImports.loading")}
           </CardContent>
         </Card>

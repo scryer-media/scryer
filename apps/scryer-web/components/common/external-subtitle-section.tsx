@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Ban, Loader2, Trash2 } from "lucide-react";
+import { Ban, Trash2 } from "lucide-react";
 import { useClient } from "urql";
 
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -17,6 +17,7 @@ import { useDeletePreview } from "@/lib/hooks/use-delete-preview";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import { formatUiDateTime } from "@/lib/utils/date-format";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 function formatDateTime(value: string, dateTimeFormat: UiDateTimeFormat) {
   return formatUiDateTime(value, dateTimeFormat, { fallback: value });
@@ -290,7 +291,7 @@ export function ExternalSubtitleSection({
         />
         {submitting ? (
           <div className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <LoadingMark className="h-3.5 w-3.5" />
             <span>
               {pendingAction?.kind === "blocklist"
                 ? t("subtitle.blocklist")

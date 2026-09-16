@@ -1,6 +1,5 @@
 import * as React from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Loader2 } from "lucide-react";
 import { Link } from "react-router";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
@@ -16,12 +15,14 @@ import {
 } from "@/lib/utils/title-ratings";
 import { cn } from "@/lib/utils";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type TitleTableSortKey =
   | "name"
   | "library"
   | "monitored"
   | "quality"
+  | "profile"
   | "episodes"
   | "status"
   | "size"
@@ -51,6 +52,7 @@ export type TitleTableColumnKey =
   | "library"
   | "monitored"
   | "quality"
+  | "profile"
   | "episodes"
   | "size"
   | "added"
@@ -83,6 +85,7 @@ export const DEFAULT_TITLE_TABLE_VISIBLE_COLUMNS: TitleTableVisibleColumns = {
   library: true,
   monitored: true,
   quality: true,
+  profile: false,
   episodes: true,
   size: true,
   added: false,
@@ -114,6 +117,7 @@ export const TITLE_TABLE_COLUMN_KEYS: readonly TitleTableColumnKey[] = [
   "library",
   "monitored",
   "quality",
+  "profile",
   "episodes",
   "size",
   "added",
@@ -142,6 +146,7 @@ export const TITLE_TABLE_COLUMN_KEYS: readonly TitleTableColumnKey[] = [
 ];
 
 export const MOVIE_TITLE_TABLE_ONLY_COLUMNS = new Set<TitleTableColumnKey>([
+  "quality",
   "year",
   "resolution",
   "hdr",
@@ -189,6 +194,19 @@ export function titleTableSupportedRatingColumnsForView(
   return view === "movies"
     ? MOVIE_TITLE_TABLE_RATING_COLUMNS
     : SHARED_TITLE_TABLE_RATING_COLUMNS;
+}
+
+/**
+ * Movies show the quality of their file up front and the profile on request;
+ * a series or anime title spans many files, so it shows its profile instead.
+ */
+export function defaultTitleTableVisibleColumnsForView(
+  view: string,
+): TitleTableVisibleColumns {
+  return {
+    ...DEFAULT_TITLE_TABLE_VISIBLE_COLUMNS,
+    profile: view !== "movies",
+  };
 }
 
 export function isTitleTableColumnSupportedForView(
@@ -999,6 +1017,22 @@ export function resolveDisplayedQualityLabel(
   return item.currentQualityTier ?? item.qualityTier ?? unknownLabel;
 }
 
+/** The Quality column: the tier of the title's own media file, nothing else. */
+export function resolveMediaQualityColumnLabel(
+  item: TitleRecord,
+  unknownLabel: string,
+) {
+  return item.currentQualityTier ?? unknownLabel;
+}
+
+/** The Profile column: the title's effective quality profile name. */
+export function resolveQualityProfileColumnLabel(
+  item: TitleRecord,
+  unknownLabel: string,
+) {
+  return item.qualityTier ?? unknownLabel;
+}
+
 export function defaultSortDirectionForTitleKey(
   key: TitleTableSortKey,
 ): TitleTableSortDirection {
@@ -1163,7 +1197,7 @@ export function TitleCollectionLoadingState() {
       aria-live="polite"
       aria-busy="true"
     >
-      <Loader2 className="h-5 w-5 animate-spin text-primary" />
+      <LoadingMark className="h-5 w-5 text-primary" />
       <div className="text-left">
         <p className="text-sm font-medium text-foreground">
           Loading library...
@@ -1225,7 +1259,7 @@ export function TitleCollectionEmptyState({
             disabled={scanDisabled || scanLoading}
           >
             {scanLoading ? (
-              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+              <LoadingMark className="mr-1.5 h-4 w-4" />
             ) : null}
             {t("settings.libraryScanButton")}
           </Button>

@@ -1,3 +1,5 @@
+import { LoadingMark } from "@/components/common/loading-mark";
+
 export function BackendRestartOverlay() {
   return (
     <div
@@ -11,9 +13,7 @@ export function BackendRestartOverlay() {
         >
           scryer
         </h1>
-        <div
-          className="mx-auto mb-6 size-7 animate-spin rounded-full border-[3px] border-muted border-t-primary"
-        />
+        <LoadingMark className="mx-auto mb-6 block size-10" />
         <p id="backend-restart-status" className="text-sm text-muted-foreground">Service is restarting&hellip;</p>
       </div>
     </div>

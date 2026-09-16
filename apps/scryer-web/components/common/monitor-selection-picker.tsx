@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 import { useClient } from "urql";
 
 import { CheckboxField } from "@/components/ui/checkbox";
@@ -15,6 +15,7 @@ import {
 } from "@/lib/utils/monitor-selection";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type SeasonChoice = {
   number: number;
@@ -353,7 +354,7 @@ export function MonitorSelectionPicker({
           id={`${idPrefix}-monitor-selection-loading`}
           className="flex items-center gap-2 text-sm text-[var(--scry-muted)]"
         >
-          <Loader2 className="h-4 w-4 animate-spin text-[var(--scry-accent)]" />
+          <LoadingMark className="h-4 w-4 text-[var(--scry-accent)]" />
           <span>{t("monitorSelection.loading")}</span>
         </div>
       ) : null}

@@ -163,6 +163,43 @@ const TITLE_ID_UNKNOWN_FIELD_MARKERS: [&str; 5] = [
     "\"title_id\"",
 ];
 
+/// Derive a numbering bridge from the episode orders TVDB publishes.
+///
+/// The catalog follows the `official` order, so that is always the left side of
+/// the join. The right side is whichever alternate order the title's setting
+/// pins; on `auto` it is `alternate` if TVDB has one and `dvd` otherwise, which
+/// is the order release groups are far more likely to have numbered by.
+/// Returns `None` whenever no alternate order disagrees with the official one.
+fn numbering_bridge_from_orders(
+    orders: &[scryer_domain::EpisodeOrderSet],
+    preference: scryer_domain::ReleaseNumbering,
+) -> Option<scryer_domain::AnimeNumberingBridge> {
+    use scryer_domain::NumberingBridgeSource;
+
+    let entries_for = |season_type: &str| {
+        orders
+            .iter()
+            .find(|order| order.season_type == season_type)
+            .map(|order| order.entries.as_slice())
+    };
+    let official = entries_for("official")?;
+    let candidates: &[(&str, NumberingBridgeSource)] = match preference.forced_season_type() {
+        Some("dvd") => &[("dvd", NumberingBridgeSource::TvdbDvd)],
+        Some(_) => &[("alternate", NumberingBridgeSource::TvdbAlternate)],
+        None => &[
+            ("alternate", NumberingBridgeSource::TvdbAlternate),
+            ("dvd", NumberingBridgeSource::TvdbDvd),
+        ],
+    };
+    candidates.iter().find_map(|(season_type, source)| {
+        scryer_domain::numbering_bridge_from_episode_orders(
+            official,
+            entries_for(season_type)?,
+            *source,
+        )
+    })
+}
+
 pub(crate) fn movie_title_queries_not_supported(error: &AppError) -> bool {
     let AppError::Repository(message) = error else {
         return false;
@@ -652,7 +689,87 @@ impl AppUseCase {
         }
     }
 }
+
+/// One lane's claim on a title's hydration persistence.
+enum TitleHydrationClaim {
+    /// This lane owns the title until the guard drops. `title` is the row as it
+    /// stands right now, re-read under the lock, so the result is applied to
+    /// current state rather than to the struct the lane queued.
+    Claimed {
+        _guard: tokio::sync::OwnedMutexGuard<()>,
+        title: Title,
+    },
+    /// Another lane hydrated this title while we waited. The caller only wanted
+    /// an unhydrated title hydrated, and it now is; its work is done.
+    AlreadyHydrated(Title),
+}
+
 impl AppUseCase {
+    /// Take the title's hydration lock and decide whether there is still work.
+    ///
+    /// Only a lane that queued an *unhydrated* title short-circuits: a refresh
+    /// or a language change deliberately re-hydrates a title that already has
+    /// `metadata_fetched_at`, and must not be skipped.
+    async fn claim_title_hydration(&self, title: &Title) -> TitleHydrationClaim {
+        let wanted_first_hydration = title.metadata_fetched_at.is_none();
+        let guard = self
+            .runtime
+            .catalog
+            .title_hydration_locks
+            .acquire(&title.id)
+            .await;
+        let current = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&title.id)
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| title.clone());
+        if wanted_first_hydration && current.metadata_fetched_at.is_some() {
+            debug!(
+                title_id = %current.id,
+                "title hydration: another lane hydrated this title while we waited"
+            );
+            return TitleHydrationClaim::AlreadyHydrated(current);
+        }
+        TitleHydrationClaim::Claimed {
+            _guard: guard,
+            title: current,
+        }
+    }
+
+    /// Persist a series hydration result and read the row back, serialized
+    /// against every other hydration of the same title.
+    async fn persist_series_hydration(
+        &self,
+        target: HydrationTarget,
+        result: super::HydrationResult,
+    ) -> AppResult<Title> {
+        let (_guard, title) = match self.claim_title_hydration(&target.title).await {
+            TitleHydrationClaim::Claimed { _guard, title } => (_guard, title),
+            TitleHydrationClaim::AlreadyHydrated(title) => return Ok(title),
+        };
+        let hydrated = self
+            .apply_hydration_result(title, result, target.source)
+            .await?;
+        self.complete_title_hydration(
+            &hydrated,
+            HydrationCompletionOptions {
+                sync_wanted_after_completion: target.sync_wanted_after_completion,
+            },
+        )
+        .await;
+        Ok(self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&hydrated.id)
+            .await?
+            .unwrap_or(hydrated))
+    }
+
     async fn complete_movie_hydration(
         &self,
         target: &HydrationTarget,
@@ -660,6 +777,14 @@ impl AppUseCase {
         language: &str,
         redirects: &[(i64, i64)],
     ) -> AppResult<Title> {
+        let (_guard, current_title) = match self.claim_title_hydration(&target.title).await {
+            TitleHydrationClaim::Claimed { _guard, title } => (_guard, title),
+            TitleHydrationClaim::AlreadyHydrated(title) => return Ok(title),
+        };
+        let target = &HydrationTarget {
+            title: current_title,
+            ..target.clone()
+        };
         let _location_guard = self
             .acquire_location_title_mutation(
                 &crate::location::ownership_guard::TITLE_HYDRATION_ENTRY,
@@ -984,33 +1109,16 @@ impl AppUseCase {
                                     let mut result =
                                         super::series_to_hydration_result(series.clone(), &language);
                                     result.movie_metadata = movie_metadata.clone();
-                                    let hydrated = match self
-                                        .apply_hydration_result(target.title, result, title_source)
-                                        .await
-                                    {
-                                        Ok(hydrated) => hydrated,
-                                        Err(error) => {
-                                            outcome
-                                                .failed_titles
-                                                .insert(title_id, error.to_string());
-                                            continue;
-                                        }
-                                    };
-                                    self.complete_title_hydration(
-                                        &hydrated,
-                                        HydrationCompletionOptions {
-                                            sync_wanted_after_completion: target
-                                                .sync_wanted_after_completion,
-                                        },
-                                    )
-                                    .await;
-                                    let refreshed = self
-                                        .services
-                                        .catalog
-                                        .titles
-                                        .get_by_id(&hydrated.id)
-                                        .await?
-                                        .unwrap_or(hydrated);
+                                    let refreshed =
+                                        match self.persist_series_hydration(target, result).await {
+                                            Ok(refreshed) => refreshed,
+                                            Err(error) => {
+                                                outcome
+                                                    .failed_titles
+                                                    .insert(title_id, error.to_string());
+                                                continue;
+                                            }
+                                        };
                                     if refreshed.metadata_fetched_at.is_some() {
                                         outcome
                                             .hydrated_titles
@@ -1144,23 +1252,7 @@ impl AppUseCase {
                     .get_series(tvdb_id, language)
                     .await?;
                 let result = super::series_to_hydration_result(series, language);
-                let hydrated = self
-                    .apply_hydration_result(target.title, result, target.source)
-                    .await?;
-                self.complete_title_hydration(
-                    &hydrated,
-                    HydrationCompletionOptions {
-                        sync_wanted_after_completion: target.sync_wanted_after_completion,
-                    },
-                )
-                .await;
-                let refreshed = self
-                    .services
-                    .catalog
-                    .titles
-                    .get_by_id(&hydrated.id)
-                    .await?
-                    .unwrap_or(hydrated);
+                let refreshed = self.persist_series_hydration(target, result).await?;
                 if refreshed.metadata_fetched_at.is_some() {
                     Ok(refreshed)
                 } else {
@@ -1180,22 +1272,65 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    /// Store (or clear) the community season layout SMG reported for an anime
-    /// title.
+    /// Store (or clear) the release-numbering bridge for a title.
     ///
-    /// Anime only, and unconditional within that: the bridge is a snapshot of an
-    /// upstream dataset, so every hydration replaces it wholesale rather than
-    /// merging — a season that AniBridge dropped must disappear here too. A
-    /// non-anime title never gets a row, which is what keeps every other facet
-    /// on exactly today's numbering behaviour.
-    async fn replace_anime_numbering_bridge_after_hydration(
+    /// Unconditional: the bridge is a snapshot of an upstream dataset, so every
+    /// hydration replaces it wholesale rather than merging — a season that the
+    /// upstream order dropped must disappear here too, and `None` clears the row.
+    ///
+    /// Two datasets can supply one. Under `auto`, SMG's AniBridge community
+    /// layout wins where it exists (anime, unchanged from before); otherwise a
+    /// bridge is derived from the alternate — or failing that the DVD — episode
+    /// order TVDB publishes, whenever that order numbers the series differently
+    /// from the official one the catalog follows. The title's
+    /// `release_numbering` setting overrides both: `official` stores nothing at
+    /// all, and `alternate`/`dvd` store only the TVDB order they name, even for
+    /// an anime title SMG supplies a community bridge for.
+    ///
+    /// One exception to "unconditional". `metadataBulk` has no argument for
+    /// episode orders, so bulk hydration always arrives here with none — which
+    /// is indistinguishable, from inside this function, from a single-title
+    /// hydration that asked for orders and found no differing alternate one.
+    /// Clearing on the first reading would delete a TVDB-derived bridge on
+    /// every bulk sweep and restore it on the next single-title hydration, so
+    /// no orders at all plus a stored TVDB-sourced row means "orders were not
+    /// fetched": leave the row alone. The same holds for a pinned order even when
+    /// SMG supplied a community bridge, since the pin never reads that one. An
+    /// `Official` pin still clears it, an anime community bridge is still
+    /// cleared when SMG stops supplying one, and a hydration that did carry
+    /// orders still clears a row whose alternate order no longer differs.
+    async fn replace_numbering_bridge_after_hydration(
         &self,
         title: &Title,
         bridge: Option<&scryer_domain::AnimeNumberingBridge>,
+        episode_orders: &[scryer_domain::EpisodeOrderSet],
     ) {
-        if title.facet != scryer_domain::MediaFacet::Anime {
+        use scryer_domain::ReleaseNumbering;
+
+        let preference = ReleaseNumbering::from_title_tags(&title.tags);
+        let pinned = preference.forced_season_type().is_some();
+        if preference != ReleaseNumbering::Official
+            && (bridge.is_none() || pinned)
+            && episode_orders.is_empty()
+            && self
+                .stored_bridge_is_admitted_tvdb_order(&title.id, preference)
+                .await
+        {
+            debug!(
+                title_id = %title.id,
+                "hydration carried no episode orders; keeping the stored TVDB numbering bridge"
+            );
             return;
         }
+        let derived;
+        let bridge = match preference {
+            ReleaseNumbering::Official => None,
+            ReleaseNumbering::Auto if bridge.is_some() => bridge,
+            ReleaseNumbering::Auto | ReleaseNumbering::Alternate | ReleaseNumbering::Dvd => {
+                derived = numbering_bridge_from_orders(episode_orders, preference);
+                derived.as_ref()
+            }
+        };
         if let Err(error) = self
             .services
             .catalog
@@ -1206,7 +1341,7 @@ impl AppUseCase {
             warn!(
                 title_id = %title.id,
                 error = %error,
-                "failed to persist anime numbering bridge"
+                "failed to persist release numbering bridge"
             );
             return;
         }
@@ -1214,11 +1349,97 @@ impl AppUseCase {
             debug!(
                 title_id = %title.id,
                 generated_on = %bridge.generated_on,
-                community_seasons = bridge.seasons.len(),
+                source = bridge.source.as_str(),
+                bridge_seasons = bridge.seasons.len(),
                 corroborating_order = bridge.corroborating_order.as_deref().unwrap_or("none"),
-                "stored anime numbering bridge"
+                "stored release numbering bridge"
             );
         }
+    }
+
+    /// Whether the catalog already holds a bridge this instance derived from a
+    /// TVDB episode order that `preference` still reads. A read failure answers
+    /// `false`, which falls through to the ordinary replace path rather than
+    /// preserving a row we cannot see.
+    async fn stored_bridge_is_admitted_tvdb_order(
+        &self,
+        title_id: &str,
+        preference: scryer_domain::ReleaseNumbering,
+    ) -> bool {
+        self.services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(title_id)
+            .await
+            .unwrap_or_default()
+            .is_some_and(|stored| {
+                stored.source.is_tvdb_alternate_order()
+                    && preference.admits_bridge_source(stored.source)
+            })
+    }
+
+    /// Bring the stored bridge in line with a `release_numbering` setting the
+    /// operator just changed. A row the new setting does not read is cleared at
+    /// once, so nothing trusts it while the rebuild runs; then, unless the
+    /// title is now pinned to `official`, a single-title hydration — the only
+    /// kind that fetches TVDB episode orders — rebuilds the bridge in the
+    /// background. A failed rebuild is logged and left to the next hydration.
+    pub(crate) async fn reconcile_numbering_bridge_after_setting_change(&self, title: &Title) {
+        let preference = scryer_domain::ReleaseNumbering::from_title_tags(&title.tags);
+        match self
+            .services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(&title.id)
+            .await
+        {
+            Ok(Some(stored)) if !preference.admits_bridge_source(stored.source) => {
+                if let Err(error) = self
+                    .services
+                    .catalog
+                    .shows
+                    .replace_anime_numbering_bridge(&title.id, None)
+                    .await
+                {
+                    warn!(
+                        title_id = %title.id,
+                        error = %error,
+                        "failed to clear a numbering bridge the new release numbering setting does not read"
+                    );
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                warn!(
+                    title_id = %title.id,
+                    error = %error,
+                    "failed to read the numbering bridge after a release numbering change"
+                );
+            }
+        }
+        if preference == scryer_domain::ReleaseNumbering::Official
+            || extract_tvdb_id(title).is_none()
+        {
+            return;
+        }
+        let app = self.clone();
+        let target = HydrationTarget {
+            title: title.clone(),
+            requested_tvdb_id: None,
+            requested_movie_ref: None,
+            sync_wanted_after_completion: false,
+            source: HydrationSource::Interactive,
+        };
+        tokio::spawn(async move {
+            let title_id = target.title.id.clone();
+            if let Err(error) = app.hydrate_title_single_apq(target).await {
+                warn!(
+                    title_id = %title_id,
+                    error = %error,
+                    "failed to rebuild the numbering bridge after a release numbering change"
+                );
+            }
+        });
     }
 
     /// Apply a [`HydrationResult`] to a title: persist metadata, create
@@ -1313,9 +1534,10 @@ impl AppUseCase {
             .await;
         }
 
-        self.replace_anime_numbering_bridge_after_hydration(
+        self.replace_numbering_bridge_after_hydration(
             &title,
             result.anime_numbering_bridge.as_ref(),
+            &result.episode_orders,
         )
         .await;
 
@@ -1782,5 +2004,384 @@ impl AppUseCase {
 async fn sync_wanted_after_hydration(app: &AppUseCase, title: &scryer_domain::Title) {
     if title.monitored && title.metadata_fetched_at.is_some() {
         app.sync_title_for_immediate_acquisition(title).await;
+    }
+}
+
+#[cfg(test)]
+mod numbering_bridge_from_orders_tests {
+    use super::numbering_bridge_from_orders;
+    use scryer_domain::{
+        EpisodeOrderEntry, EpisodeOrderSet, NumberingBridgeSource, ReleaseNumbering,
+    };
+
+    fn entry(tvdb_id: i64, episode_number: i32, name: &str) -> EpisodeOrderEntry {
+        EpisodeOrderEntry {
+            tvdb_id,
+            season_number: Some(1),
+            episode_number: Some(episode_number),
+            absolute_number: None,
+            name: name.to_string(),
+        }
+    }
+
+    /// Official 1..=3, alternate the same three episodes shifted by one, dvd the
+    /// same three shifted by two, so the two alternate readings are telling
+    /// apart by the offset they produce.
+    pub(super) fn orders() -> Vec<EpisodeOrderSet> {
+        vec![
+            EpisodeOrderSet {
+                season_type: "official".into(),
+                entries: vec![
+                    entry(9001, 1, "Lantern Pass"),
+                    entry(9002, 2, "Salt Marsh Relay"),
+                    entry(9003, 3, "Quarry Signal Tower"),
+                ],
+            },
+            EpisodeOrderSet {
+                season_type: "alternate".into(),
+                entries: vec![
+                    entry(9001, 2, "Lantern Pass"),
+                    entry(9002, 3, "Salt Marsh Relay"),
+                    entry(9003, 4, "Quarry Signal Tower"),
+                ],
+            },
+            EpisodeOrderSet {
+                season_type: "dvd".into(),
+                entries: vec![
+                    entry(9001, 3, "Lantern Pass"),
+                    entry(9002, 4, "Salt Marsh Relay"),
+                    entry(9003, 5, "Quarry Signal Tower"),
+                ],
+            },
+        ]
+    }
+
+    fn first_offset(bridge: &scryer_domain::AnimeNumberingBridge) -> i32 {
+        let season = &bridge.seasons[0];
+        let range = &season.ranges[0];
+        range.community_episode_start - range.tvdb_episode_start
+    }
+
+    #[test]
+    fn auto_prefers_the_alternate_order_over_the_dvd_one() {
+        let bridge = numbering_bridge_from_orders(&orders(), ReleaseNumbering::Auto)
+            .expect("an alternate order should build a bridge");
+        assert_eq!(bridge.source, NumberingBridgeSource::TvdbAlternate);
+        assert_eq!(first_offset(&bridge), 1);
+    }
+
+    #[test]
+    fn pinning_the_dvd_order_skips_the_alternate_one() {
+        let bridge = numbering_bridge_from_orders(&orders(), ReleaseNumbering::Dvd)
+            .expect("a dvd order should build a bridge");
+        assert_eq!(bridge.source, NumberingBridgeSource::TvdbDvd);
+        assert_eq!(first_offset(&bridge), 2);
+    }
+
+    #[test]
+    fn pinning_the_alternate_order_never_falls_back_to_dvd() {
+        let orders = vec![
+            orders().swap_remove(0),
+            EpisodeOrderSet {
+                season_type: "dvd".into(),
+                entries: vec![entry(9001, 3, "Lantern Pass")],
+            },
+        ];
+        assert!(numbering_bridge_from_orders(&orders, ReleaseNumbering::Alternate).is_none());
+    }
+
+    #[test]
+    fn orders_without_an_official_set_build_nothing() {
+        let orders = vec![orders().swap_remove(1)];
+        assert!(numbering_bridge_from_orders(&orders, ReleaseNumbering::Auto).is_none());
+    }
+}
+
+/// Bulk hydration never asks SMG for episode orders, so it reaches the bridge
+/// replacement with none. These cover the three readings of "no orders": keep a
+/// TVDB-derived row, still honour an `Official` pin, and still clear an anime
+/// community row SMG has stopped supplying.
+#[cfg(test)]
+mod numbering_bridge_replacement_tests {
+    use crate::lib_tests::bootstrap;
+    use scryer_domain::{
+        AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, MediaFacet, NewTitle,
+        NumberingBridgeSource, RELEASE_NUMBERING_TAG_PREFIX,
+    };
+
+    fn bridge(source: NumberingBridgeSource) -> AnimeNumberingBridge {
+        AnimeNumberingBridge {
+            source,
+            generated_on: "fixture".into(),
+            corroborating_order: None,
+            seasons: vec![AnimeCommunitySeason {
+                index: 1,
+                ranges: vec![AnimeCommunitySeasonRange {
+                    community_episode_start: 2,
+                    community_episode_end: Some(30),
+                    tvdb_season: 1,
+                    tvdb_episode_start: 1,
+                    tvdb_episode_end: Some(29),
+                }],
+                ..Default::default()
+            }],
+        }
+    }
+
+    /// The preserve case: an ordinary bulk sweep must leave a TVDB-derived row
+    /// exactly where it is, or every sweep would delete the numbering the
+    /// import and search lanes depend on.
+    #[tokio::test]
+    async fn a_bulk_hydration_without_orders_keeps_a_tvdb_sourced_bridge() {
+        let (app, user) = bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Harbor Kiln".into(),
+                    facet: MediaFacet::Series,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create the series title");
+        app.services
+            .catalog
+            .shows
+            .replace_anime_numbering_bridge(
+                &title.id,
+                Some(&bridge(NumberingBridgeSource::TvdbAlternate)),
+            )
+            .await
+            .expect("store the derived bridge");
+
+        app.replace_numbering_bridge_after_hydration(&title, None, &[])
+            .await;
+
+        let stored = app
+            .services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(&title.id)
+            .await
+            .expect("read the bridge back");
+        assert_eq!(
+            stored.map(|stored| stored.source),
+            Some(NumberingBridgeSource::TvdbAlternate),
+            "a sweep that fetched no orders must not delete the derived bridge"
+        );
+    }
+
+    /// Pinning a title back to the official order is an operator decision, and
+    /// it clears the row even on a sweep that carried no orders.
+    #[tokio::test]
+    async fn an_official_pin_still_clears_a_tvdb_sourced_bridge() {
+        let (app, user) = bootstrap();
+        let mut title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Salt Marsh Relay".into(),
+                    facet: MediaFacet::Series,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create the series title");
+        app.services
+            .catalog
+            .shows
+            .replace_anime_numbering_bridge(
+                &title.id,
+                Some(&bridge(NumberingBridgeSource::TvdbDvd)),
+            )
+            .await
+            .expect("store the derived bridge");
+        title.tags = vec![format!("{RELEASE_NUMBERING_TAG_PREFIX}official")];
+
+        app.replace_numbering_bridge_after_hydration(&title, None, &[])
+            .await;
+
+        assert!(
+            app.services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(&title.id)
+                .await
+                .expect("read the bridge back")
+                .is_none(),
+            "an official pin must clear the derived bridge"
+        );
+    }
+
+    /// The anime lane is untouched: SMG owning the bridge means SMG dropping it
+    /// clears the row, exactly as before this change.
+    #[tokio::test]
+    async fn an_anime_community_bridge_is_still_cleared_when_smg_stops_supplying_one() {
+        let (app, user) = bootstrap();
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Quarry Signal Tower".into(),
+                    facet: MediaFacet::Anime,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create the anime title");
+        app.services
+            .catalog
+            .shows
+            .replace_anime_numbering_bridge(
+                &title.id,
+                Some(&bridge(NumberingBridgeSource::AnimeCommunity)),
+            )
+            .await
+            .expect("store the community bridge");
+
+        app.replace_numbering_bridge_after_hydration(&title, None, &[])
+            .await;
+
+        assert!(
+            app.services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(&title.id)
+                .await
+                .expect("read the bridge back")
+                .is_none(),
+            "a community bridge SMG no longer supplies must be cleared"
+        );
+    }
+
+    async fn stored_source(
+        app: &crate::AppUseCase,
+        title_id: &str,
+    ) -> Option<NumberingBridgeSource> {
+        app.services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(title_id)
+            .await
+            .expect("read the bridge back")
+            .map(|stored| stored.source)
+    }
+
+    /// A pinned TVDB order is the operator's explicit choice, so it beats the
+    /// community bridge SMG supplies for an anime title.
+    #[tokio::test]
+    async fn a_pinned_order_beats_the_anime_community_bridge() {
+        let (app, user) = bootstrap();
+        let mut title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Lantern Pass Choir".into(),
+                    facet: MediaFacet::Anime,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create the anime title");
+        title.tags = vec![format!("{RELEASE_NUMBERING_TAG_PREFIX}dvd")];
+
+        app.replace_numbering_bridge_after_hydration(
+            &title,
+            Some(&bridge(NumberingBridgeSource::AnimeCommunity)),
+            &super::numbering_bridge_from_orders_tests::orders(),
+        )
+        .await;
+
+        assert_eq!(
+            stored_source(&app, &title.id).await,
+            Some(NumberingBridgeSource::TvdbDvd),
+            "the pinned dvd order must be stored, not the community bridge"
+        );
+    }
+
+    /// A bulk sweep carries the community bridge but no orders; for a pinned
+    /// title that must not overwrite the TVDB row the pin reads.
+    #[tokio::test]
+    async fn a_bulk_hydration_keeps_a_pinned_tvdb_bridge_over_the_community_one() {
+        let (app, user) = bootstrap();
+        let mut title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Ferrous Delta Watch".into(),
+                    facet: MediaFacet::Anime,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create the anime title");
+        app.services
+            .catalog
+            .shows
+            .replace_anime_numbering_bridge(
+                &title.id,
+                Some(&bridge(NumberingBridgeSource::TvdbAlternate)),
+            )
+            .await
+            .expect("store the derived bridge");
+        title.tags = vec![format!("{RELEASE_NUMBERING_TAG_PREFIX}alternate")];
+
+        app.replace_numbering_bridge_after_hydration(
+            &title,
+            Some(&bridge(NumberingBridgeSource::AnimeCommunity)),
+            &[],
+        )
+        .await;
+
+        assert_eq!(
+            stored_source(&app, &title.id).await,
+            Some(NumberingBridgeSource::TvdbAlternate)
+        );
+    }
+
+    /// Changing the setting clears a bridge built for a different order at
+    /// once, and keeps one the new setting still reads.
+    #[tokio::test]
+    async fn a_numbering_setting_change_clears_only_a_bridge_the_new_setting_does_not_read() {
+        let (app, user) = bootstrap();
+        let mut title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Copper Weir Lights".into(),
+                    facet: MediaFacet::Series,
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect("create the series title");
+        app.services
+            .catalog
+            .shows
+            .replace_anime_numbering_bridge(
+                &title.id,
+                Some(&bridge(NumberingBridgeSource::TvdbAlternate)),
+            )
+            .await
+            .expect("store the derived bridge");
+
+        title.tags = vec![format!("{RELEASE_NUMBERING_TAG_PREFIX}alternate")];
+        app.reconcile_numbering_bridge_after_setting_change(&title)
+            .await;
+        assert_eq!(
+            stored_source(&app, &title.id).await,
+            Some(NumberingBridgeSource::TvdbAlternate),
+            "an alternate pin still reads the alternate bridge"
+        );
+
+        title.tags = vec![format!("{RELEASE_NUMBERING_TAG_PREFIX}dvd")];
+        app.reconcile_numbering_bridge_after_setting_change(&title)
+            .await;
+        assert_eq!(
+            stored_source(&app, &title.id).await,
+            None,
+            "a dvd pin must not keep reading the alternate bridge"
+        );
     }
 }

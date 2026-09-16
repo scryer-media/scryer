@@ -37,3 +37,7 @@ design_handoff*
 peer-review-0.16.6-to-0.17.0.md
 .worktrees/
 encryption.key
+
+# Agent working notes never ship
+*-REPORT.md
+*-PLAN.md

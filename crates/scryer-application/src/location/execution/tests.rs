@@ -649,6 +649,101 @@ async fn copied_source_cleanup_revalidates_both_copies_after_interruption() {
     }
 }
 
+/// A destination rewritten in a way its recorded `file_version` cannot see —
+/// the same length and timestamps, which is what a restore from backup or a
+/// same-size rewrite leaves on a filesystem whose signature is length and mtime
+/// — must not authorize dropping the source. The `Identical` disposal is the
+/// one path with no recycle bin behind it, so the recorded identity hash has to
+/// still describe the bytes that are there.
+#[tokio::test]
+async fn an_identical_proof_whose_destination_no_longer_holds_those_bytes_keeps_the_source() {
+    let temp = tempfile::tempdir().unwrap();
+    let store = Arc::new(InMemoryLocationOperationStore::new());
+    let (plan, mover) = identical_pair_fixture(&temp, &store);
+    let file = plan.titles[0].files[0].clone();
+    let operation = queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    store.insert_operation(operation.clone());
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+    let work = plan.to_work_plan();
+    let verified = mover
+        .move_file(FileMoveRequest {
+            operation_id: "op-1",
+            title: &work.titles[0],
+            file: &work.titles[0].files[0],
+            depth: VerificationDepth::Full,
+            progress: &crate::location::verify::CopyProgress::none(),
+        })
+        .await
+        .expect("initially identical");
+    store
+        .record_location_file_verification(&crate::location::model::FileVerificationRecord {
+            operation_id: "op-1".into(),
+            title_id: "title-1".into(),
+            media_file_id: Some("mf-1".into()),
+            source_path: file.source_path.clone(),
+            destination_path: file.destination_path.clone(),
+            hashes: verified.hashes.clone(),
+            depth: verified.depth,
+            outcome: verified.outcome,
+            detail: None,
+            verified_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+
+    // Different bytes, same length. The row is then re-stamped with the version
+    // the rewritten destination carries, which is what a filesystem whose
+    // signature cannot tell the two apart would have recorded — the row reads
+    // as current while its identity hash describes content that is gone.
+    write_file(&file.destination(), b"gone");
+    let mut row = store
+        .file_resolutions("op-1", "title-1")
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(
+        row.disposition,
+        crate::location::resolution::ResolutionDisposition::Identical
+    );
+    assert!(row.identity_hash.is_some(), "the transfer recorded a hash");
+    row.destination_version = Some(
+        crate::location::resolution::file_version(&file.destination())
+            .await
+            .unwrap(),
+    );
+    row.source_version = Some(
+        crate::location::resolution::file_version(&file.source())
+            .await
+            .unwrap(),
+    );
+    store.save_file_resolution(&row).await.unwrap();
+    assert!(
+        row.proof_is_current().await,
+        "the version check alone cannot see the rewrite; that is the point"
+    );
+
+    reconciler
+        .clean_up_title(&operation, &plan.titles[0].to_planned_title())
+        .await
+        .expect_err("a proof whose bytes are gone must not authorize dropping the source");
+    assert_eq!(
+        std::fs::read(file.source()).unwrap(),
+        b"same",
+        "the source is preserved"
+    );
+    assert!(
+        recycler.recycled().is_empty(),
+        "and nothing was recycled either"
+    );
+}
+
 #[tokio::test]
 async fn changed_identical_copies_keep_the_source_and_catalog_intact() {
     for changed_copy in ["source", "destination", "missing"] {
@@ -1240,37 +1335,79 @@ async fn resume_never_recopies_a_verified_file() {
     );
 }
 
-/// The edge case FR-033 names: "crash mid-copy → partial destination state is
-/// expected and resumable". The crashed attempt's partial is under the staging
-/// name, so the resumed run clears it, copies cleanly, and ends with the file
-/// verified exactly once.
-#[tokio::test]
-async fn a_partial_left_by_a_crashed_copy_does_not_block_the_resumed_run() {
-    let temp = tempfile::tempdir().expect("temp dir");
-    let source_root = temp.path().join("a");
-    let destination_root = temp.path().join("b");
-    let plan = single_title_plan(&source_root, &destination_root, "movie.mkv", 11);
-    write_file(&plan.titles[0].files[0].source(), b"hello world");
-
-    // What a process killed mid-copy leaves behind.
-    let destination = plan.titles[0].files[0].destination();
+/// The state a process killed mid-copy leaves behind: the resolution row the
+/// attempt saved before it started copying, and the partial it was writing
+/// beside the destination.
+async fn crashed_copy_fixture(
+    temp: &tempfile::TempDir,
+    store: &Arc<InMemoryLocationOperationStore>,
+    partial_bytes: &[u8],
+) -> (RootMoveExecutionPlan, RootMoveFileMover, std::path::PathBuf) {
+    let plan = single_title_plan(
+        &temp.path().join("a"),
+        &temp.path().join("b"),
+        "movie.mkv",
+        11,
+    );
+    let file = &plan.titles[0].files[0];
+    write_file(&file.source(), b"hello world");
+    let destination = file.destination();
     let partial = crate::location::verify::partial_destination_path(&destination);
-    write_file(&partial, b"hell");
+    write_file(&partial, partial_bytes);
 
-    let store = InMemoryLocationOperationStore::new();
     store.insert_operation(queued_operation(
         "op-1",
         LocationOperationType::RootMove,
         LocationExecutionMode::MoveWithScryer,
         VerificationDepth::Full,
     ));
+    // The row the crashed attempt wrote before it opened the partial: this
+    // operation's own record that it had claimed this destination.
+    store
+        .save_file_resolution(&crate::location::resolution::FileResolution {
+            operation_id: "op-1".into(),
+            title_id: "title-1".into(),
+            source_path: crate::stored_paths::path_to_stored_string(file.source()),
+            original_destination: crate::stored_paths::path_to_stored_string(&destination),
+            destination_path: crate::stored_paths::path_to_stored_string(&destination),
+            disposition: crate::location::resolution::ResolutionDisposition::Placed,
+            completed: false,
+            source_version: None,
+            destination_version: None,
+            identity_hash: None,
+            warning: None,
+            reason_code: None,
+        })
+        .await
+        .expect("seed the crashed attempt's resolution row");
+
+    let resolver = crate::location::resolution::ConflictResolver::new(
+        store.clone(),
+        BTreeMap::from([("title-1".to_string(), "Movies".to_string())]),
+    );
+    let mover = RootMoveFileMover::without_permissions()
+        .forcing_copies()
+        .with_resolver(Arc::new(resolver));
+    (plan, mover, partial)
+}
+
+/// The edge case FR-033 names: "crash mid-copy → partial destination state is
+/// expected and resumable". The crashed attempt's own resolution row is what
+/// proves the partial under the staging name is this operation's work, so the
+/// resumed run clears it, copies cleanly, and ends with the file verified
+/// exactly once.
+#[tokio::test]
+async fn a_partial_left_by_a_crashed_copy_does_not_block_the_resumed_run() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = Arc::new(InMemoryLocationOperationStore::new());
+    let (plan, mover, partial) = crashed_copy_fixture(&temp, &store, b"hell").await;
+    let destination = plan.titles[0].files[0].destination();
     let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
     let recycler = RecordingRecycler::default();
-    let mover = RootMoveFileMover::without_permissions().forcing_copies();
     let admission = RootMoveAdmission::new(&plan, &catalog);
-    let reconciler = RootMoveReconciler::new(&plan, &catalog, &store, &recycler);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
 
-    let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+    let outcome = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
         .run("op-1", &plan.to_work_plan())
         .await
         .expect("run");
@@ -1288,6 +1425,100 @@ async fn a_partial_left_by_a_crashed_copy_does_not_block_the_resumed_run() {
         "the file is verified exactly once"
     );
     assert!(store.verifications()[0].outcome.permits_source_removal());
+}
+
+/// The same staging name, occupied by something this move never wrote: a user
+/// file that happens to carry the suffix, or a partial another operation is
+/// still writing. Nothing proves it is this operation's, so it is preserved and
+/// the file fails instead — exactly what an occupied destination does.
+#[tokio::test]
+async fn a_staging_path_this_move_never_claimed_is_preserved_rather_than_cleared() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = Arc::new(InMemoryLocationOperationStore::new());
+    let plan = single_title_plan(
+        &temp.path().join("a"),
+        &temp.path().join("b"),
+        "movie.mkv",
+        11,
+    );
+    let file = plan.titles[0].files[0].clone();
+    write_file(&file.source(), b"hello world");
+    let destination = file.destination();
+    let partial = crate::location::verify::partial_destination_path(&destination);
+    // No resolution row: this operation has never claimed this destination, so
+    // the occupant predates it.
+    write_file(&partial, b"a file somebody else put here");
+
+    store.insert_operation(queued_operation(
+        "op-1",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    ));
+    let resolver = crate::location::resolution::ConflictResolver::new(
+        store.clone(),
+        BTreeMap::from([("title-1".to_string(), "Movies".to_string())]),
+    );
+    let mover = RootMoveFileMover::without_permissions()
+        .forcing_copies()
+        .with_resolver(Arc::new(resolver));
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
+        .run("op-1", &plan.to_work_plan())
+        .await
+        .expect("run");
+
+    assert_eq!(outcome.state, LocationOperationState::Failed);
+    assert_eq!(
+        std::fs::read(&partial).expect("the occupant is still there"),
+        b"a file somebody else put here",
+        "a file this move did not write is never removed to make room for a copy"
+    );
+    assert!(
+        !destination.exists(),
+        "nothing was placed at the destination"
+    );
+    assert_eq!(
+        std::fs::read(file.source()).expect("source readable"),
+        b"hello world",
+        "the source is preserved"
+    );
+}
+
+/// Even with this operation's own row for the destination, an occupant that
+/// cannot be an abandoned partial of this source — it is longer than the file
+/// being copied — is somebody else's and is preserved.
+#[tokio::test]
+async fn a_staging_occupant_larger_than_the_source_is_preserved() {
+    let temp = tempfile::tempdir().expect("temp dir");
+    let store = Arc::new(InMemoryLocationOperationStore::new());
+    let (plan, mover, partial) =
+        crashed_copy_fixture(&temp, &store, b"a much longer file than the source is").await;
+    let file = plan.titles[0].files[0].clone();
+    let catalog = FakeCatalog::with_title("title-1", placement_for(&plan));
+    let recycler = RecordingRecycler::default();
+    let admission = RootMoveAdmission::new(&plan, &catalog);
+    let reconciler = RootMoveReconciler::new(&plan, &catalog, &*store, &recycler);
+
+    let outcome = LocationOperationRunner::new(&*store, &mover, &admission, &reconciler)
+        .run("op-1", &plan.to_work_plan())
+        .await
+        .expect("run");
+
+    assert_eq!(outcome.state, LocationOperationState::Failed);
+    assert_eq!(
+        std::fs::read(&partial).expect("the occupant is still there"),
+        b"a much longer file than the source is"
+    );
+    assert_eq!(
+        std::fs::read(file.source()).expect("source readable"),
+        b"hello world",
+        "the source is preserved"
+    );
 }
 
 /// The narrower crash window: the copy finished and was promoted onto the

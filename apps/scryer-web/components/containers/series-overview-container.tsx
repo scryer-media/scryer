@@ -163,6 +163,7 @@ export type TitleDetail = {
   interSeasonMovies?: boolean | null;
   fillerPolicy?: string | null;
   recapPolicy?: string | null;
+  releaseNumbering?: string | null;
   effectiveFillerPolicy?: string | null;
   effectiveRecapPolicy?: string | null;
   seriesMovieLinks?: SeriesMovieLink[];

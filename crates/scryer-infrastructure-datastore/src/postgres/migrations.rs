@@ -382,13 +382,20 @@ async fn apply_version_range(
         .map(|row| row.version)
         .collect();
 
-    for migration in catalog.migrations.iter().filter(|migration| {
-        migration.version >= start_version && migration.version <= target_version
-    }) {
-        if applied_versions.contains(&migration.version) {
-            continue;
-        }
+    let pending: Vec<&CompiledMigration> = catalog
+        .migrations
+        .iter()
+        .filter(|migration| {
+            migration.version >= start_version
+                && migration.version <= target_version
+                && !applied_versions.contains(&migration.version)
+        })
+        .collect();
+
+    hook_context.progress.begin(pending.len());
+    for migration in pending {
         apply_single_migration(pool, migration, payload_bytes, install_kind, hook_context).await?;
+        hook_context.progress.complete_one();
     }
 
     Ok(())

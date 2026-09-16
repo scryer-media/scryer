@@ -645,6 +645,10 @@ pub struct SeriesMetadata {
     /// could build one. `None` for non-anime, for an SMG that predates the
     /// field, and for anime whose community numbering matches TVDB's.
     pub anime_numbering_bridge: Option<scryer_domain::AnimeNumberingBridge>,
+    /// TVDB's published episode orders for this series, when the caller asked
+    /// for them. Single-series hydration does; bulk hydration cannot, because
+    /// SMG's `metadataBulk` has no argument for them.
+    pub episode_orders: Vec<scryer_domain::EpisodeOrderSet>,
     pub ratings: crate::TitleRatingSummary,
     pub credits: Vec<crate::TitleCredit>,
     pub genres: Vec<String>,

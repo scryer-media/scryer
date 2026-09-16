@@ -1,4 +1,4 @@
-import { Check, Download, Loader2, X } from "lucide-react";
+import { Check, Download, X } from "lucide-react";
 import { DownloadClientConfigField } from "@/components/common/download-client-config-field";
 import { DownloadClientRemotePathMappingsField } from "@/components/common/download-client-remote-path-mappings-field";
 import { PluginVisualLabel } from "@/components/common/plugin-visual";
@@ -22,6 +22,7 @@ import {
 } from "@/lib/utils/download-clients";
 import type { LocalPathStyle } from "@/lib/utils/local-path-style";
 import * as React from "react";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 function DownloadClientTypeOptionContent({
   typeValue,
@@ -196,6 +197,7 @@ export function SetupDownloadClientView({
             <Input
               id="setup-download-client-api-key"
               type="password"
+              ignorePasswordManagers
               value={draft.apiKey}
               onChange={(e) => onDraftChange({ apiKey: e.target.value })}
             />
@@ -244,6 +246,7 @@ export function SetupDownloadClientView({
               <Input
                 id="setup-download-client-password"
                 type="password"
+                ignorePasswordManagers
                 value={draft.password}
                 onChange={(e) => onDraftChange({ password: e.target.value })}
               />
@@ -318,7 +321,7 @@ export function SetupDownloadClientView({
             disabled={!canTest || testing || saving}
           >
             {testing ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              <LoadingMark className="mr-2 h-4 w-4" />
             ) : null}
             {t("label.testConnection")}
           </Button>

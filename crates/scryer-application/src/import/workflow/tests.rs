@@ -1578,7 +1578,7 @@ mod tests {
         let neither = ManualImportCandidateMapping {
             disc_selection: None,
             candidate_id: "candidate-1".to_string(),
-            episode_id: None,
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
         };
         let err = validate_manual_import_candidate_mapping_targets(&[neither], &MediaFacet::Series)
@@ -1588,7 +1588,7 @@ mod tests {
         let both = ManualImportCandidateMapping {
             disc_selection: None,
             candidate_id: "candidate-1".to_string(),
-            episode_id: Some("episode-1".to_string()),
+            episode_ids: vec!["episode-1".to_string()],
             series_movie_link_id: Some("series-movie-link-1".to_string()),
         };
         let err = validate_manual_import_candidate_mapping_targets(&[both], &MediaFacet::Series)
@@ -1598,7 +1598,7 @@ mod tests {
         let series_movie = ManualImportCandidateMapping {
             disc_selection: None,
             candidate_id: "candidate-1".to_string(),
-            episode_id: None,
+            episode_ids: Vec::new(),
             series_movie_link_id: Some("series-movie-link-1".to_string()),
         };
         validate_manual_import_candidate_mapping_targets(&[series_movie], &MediaFacet::Series)
@@ -1611,7 +1611,7 @@ mod tests {
         let movie = ManualImportCandidateMapping {
             disc_selection: None,
             candidate_id: "candidate-1".to_string(),
-            episode_id: None,
+            episode_ids: Vec::new(),
             series_movie_link_id: None,
         };
         validate_manual_import_candidate_mapping_targets(&[movie], &MediaFacet::Movie)
@@ -1622,7 +1622,7 @@ mod tests {
         let movie_with_both = ManualImportCandidateMapping {
             disc_selection: None,
             candidate_id: "candidate-1".to_string(),
-            episode_id: Some("episode-1".to_string()),
+            episode_ids: vec!["episode-1".to_string()],
             series_movie_link_id: Some("series-movie-link-1".to_string()),
         };
         let err = validate_manual_import_candidate_mapping_targets(
@@ -1635,7 +1635,7 @@ mod tests {
         let duplicate = ManualImportCandidateMapping {
             disc_selection: None,
             candidate_id: "candidate-1".to_string(),
-            episode_id: Some("episode-1".to_string()),
+            episode_ids: vec!["episode-1".to_string()],
             series_movie_link_id: None,
         };
         let err = validate_manual_import_candidate_mapping_targets(

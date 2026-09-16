@@ -175,15 +175,17 @@ pub(crate) fn build_search_queries(
 /// with a distinct name is usually posted), and the absolute number in the
 /// dashed form some groups prefer.
 ///
-/// Returns nothing for a non-anime title, a title with no bridge, and an
-/// episode no community season covers. Season-level and pack queries are out
-/// of scope: the bridge speaks about episodes.
+/// Returns nothing for a title with no bridge and for an episode no bridge
+/// season covers. Season-level and pack queries are out of scope: the bridge
+/// speaks about episodes.
 ///
 /// `episode` is optional because the interactive lane searches from the season
 /// and episode numbers a user typed and may have no catalog row to read an
 /// absolute number from; the bridge's own `absolute_start` covers that case.
-/// Where a wanted TVDB episode sits in the community's numbering, or `None`
-/// when the title, the bridge or the episode puts it out of scope.
+/// Where a wanted TVDB episode sits in the bridge's numbering, or `None` when
+/// the title, the bridge or the episode puts it out of scope. The stored
+/// bridge, not the title's facet, is the gate: WP2 stores bridges for ordinary
+/// series built from TVDB's alternate and DVD orders too.
 ///
 /// The queries the search dispatches and the numberings the indexer-side guard
 /// admits have to agree about that scope exactly: a community form asked for
@@ -195,10 +197,24 @@ fn community_numbering_scope(
     episode_num: i32,
     bridge: Option<&AnimeNumberingBridge>,
 ) -> Option<crate::anime_numbering::CommunityCoordinates> {
-    if title.facet != scryer_domain::MediaFacet::Anime || title.name.trim().is_empty() {
+    if title.name.trim().is_empty() {
         return None;
     }
-    let bridge = bridge.filter(|bridge| !bridge.is_empty())?;
+    let bridge = bridge.filter(|bridge| {
+        !bridge.is_empty() && crate::anime_numbering::title_admits_bridge(title, bridge)
+    })?;
+    // A TVDB alternate/DVD order widens the search only for a title the
+    // operator pinned to it. Release groups numbering by a published alternate
+    // order is the exception for an ordinary series, while a differing dvd
+    // order is very common, so emitting these forms unconditionally would spend
+    // an indexer hit per wanted episode across most of the library for a rare
+    // payoff. An anime community bridge is the opposite case — the groups
+    // really do post per cour — and keeps widening unconditionally.
+    if bridge.source.is_tvdb_alternate_order()
+        && !crate::anime_numbering::title_forces_alternate_numbering(title)
+    {
+        return None;
+    }
     if season_num <= 0 || episode_num <= 0 {
         return None;
     }
@@ -269,8 +285,8 @@ pub(crate) fn community_numbering_queries(
 /// discards them before the numbering translator can read them. Handing it
 /// every numbering that means the same episode keeps them.
 ///
-/// Empty for a non-anime title, a title with no bridge, and an episode no
-/// community season covers — the guard then keeps its single-pair behaviour.
+/// Empty for a title with no bridge and for an episode no bridge season
+/// covers — the guard then keeps its single-pair behaviour.
 /// The application-only search-guard context for one official anime episode.
 /// Both automatic and interactive search call this constructor so neither can
 /// widen the accepted numbering forms without the bridge snapshot and exact
@@ -545,6 +561,7 @@ mod tests {
             tvdb_start += length;
         }
         AnimeNumberingBridge {
+            source: Default::default(),
             generated_on: "2026-08-30".to_string(),
             corroborating_order: Some("dvd".to_string()),
             seasons,
@@ -734,9 +751,65 @@ mod tests {
         assert!(community_numbering_admissible_pairs(&title, 2, 1, Some(&bridge)).is_empty());
         // Cour 1 shares TVDB's numbering, so its official pair is the only one.
         assert!(community_numbering_admissible_pairs(&title, 1, 3, Some(&bridge)).is_empty());
-        // A non-anime title never consults the bridge.
-        let mut other = anime_title();
-        other.facet = scryer_domain::MediaFacet::Series;
-        assert!(community_numbering_admissible_pairs(&other, 1, 56, Some(&bridge)).is_empty());
+    }
+
+    /// WP2 made the stored bridge, not the title's facet, the gate: an ordinary
+    /// series carrying an *anime community* bridge widens exactly as anime
+    /// does, and one without a bridge still never widens.
+    #[test]
+    fn a_plain_series_widens_through_its_bridge_and_not_without_one() {
+        let bridge = bridge();
+        let mut series = anime_title();
+        series.facet = scryer_domain::MediaFacet::Series;
+
+        assert_eq!(
+            community_numbering_admissible_pairs(&series, 1, 56, Some(&bridge)),
+            community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge)),
+        );
+        assert!(community_numbering_admissible_pairs(&series, 1, 56, None).is_empty());
+    }
+
+    /// A bridge Scryer derived from a TVDB alternate/DVD order widens the
+    /// search only for a title pinned to that order. Emitting these forms for
+    /// every series whose dvd order happens to differ would spend an indexer
+    /// hit per wanted episode for a rare payoff.
+    #[test]
+    fn a_tvdb_sourced_bridge_widens_the_search_only_when_the_title_is_pinned() {
+        let mut tvdb_bridge = bridge();
+        tvdb_bridge.source = scryer_domain::NumberingBridgeSource::TvdbAlternate;
+        let mut unpinned = anime_title();
+        unpinned.facet = scryer_domain::MediaFacet::Series;
+
+        assert!(
+            community_numbering_queries(&unpinned, None, 1, 56, Some(&tvdb_bridge)).is_empty(),
+            "an unpinned series must not ask for alternate-numbered forms"
+        );
+        assert!(
+            community_numbering_admissible_pairs(&unpinned, 1, 56, Some(&tvdb_bridge)).is_empty(),
+            "an unpinned series must not widen the search guard either"
+        );
+
+        let mut pinned = unpinned.clone();
+        pinned.tags = vec![format!(
+            "{}alternate",
+            scryer_domain::RELEASE_NUMBERING_TAG_PREFIX
+        )];
+        assert_eq!(
+            community_numbering_queries(&pinned, None, 1, 56, Some(&tvdb_bridge)),
+            community_numbering_queries(&anime_title(), None, 1, 56, Some(&bridge())),
+            "a pinned title asks for exactly the forms an anime bridge would"
+        );
+        assert_eq!(
+            community_numbering_admissible_pairs(&pinned, 1, 56, Some(&tvdb_bridge)),
+            community_numbering_admissible_pairs(&anime_title(), 1, 56, Some(&bridge())),
+        );
+    }
+
+    /// The anime community layout is untouched by the pin gate.
+    #[test]
+    fn an_anime_community_bridge_still_widens_without_a_pin() {
+        assert!(
+            !community_numbering_queries(&anime_title(), None, 1, 56, Some(&bridge())).is_empty()
+        );
     }
 }

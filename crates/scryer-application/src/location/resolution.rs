@@ -70,6 +70,42 @@ impl FileResolution {
         destination_version.as_deref() == Some(expected)
             && file_version(&source).await.ok() == self.source_version
     }
+
+    /// Whether this record proves enough to dispose of the source.
+    ///
+    /// [`Self::proof_is_current`] is the fast negative and stays the first
+    /// question: a `file_version` mismatch short-circuits without reading a
+    /// byte. It is not, however, an answer about *content*. A version is length
+    /// and timestamps, and a destination can be rewritten between the copy and
+    /// the resume in a way that preserves them — a same-length rewrite, a
+    /// restore from backup on a filesystem whose signature cannot tell the two
+    /// apart. Disposal is irreversible, so past the fast negative the bytes
+    /// themselves have to agree with what was recorded.
+    ///
+    /// The destination is re-read and compared against the record's
+    /// `identity_hash`, the full-file BLAKE3 the transfer wrote. A record
+    /// carrying no `identity_hash` proves nothing about content on its own, so
+    /// the two copies are re-hashed and compared to each other instead — never
+    /// unlinked on the strength of a version alone.
+    pub async fn proof_supports_disposal(&self) -> AppResult<bool> {
+        if !self.proof_is_current().await {
+            return Ok(false);
+        }
+        let destination = stored_path_to_path_buf(&self.destination_path);
+        let destination_hashes =
+            hash_existing_file_with_progress(&destination, CopyProgress::none())
+                .await
+                .map_err(|error| file_error(&destination, error))?;
+        if let Some(identity_hash) = self.identity_hash.as_deref() {
+            return Ok(destination_hashes.full_blake3 == identity_hash);
+        }
+        let source = stored_path_to_path_buf(&self.source_path);
+        let source_hashes = hash_existing_file_with_progress(&source, CopyProgress::none())
+            .await
+            .map_err(|error| file_error(&source, error))?;
+        Ok(source_hashes.size_bytes == destination_hashes.size_bytes
+            && source_hashes.full_blake3 == destination_hashes.full_blake3)
+    }
 }
 
 use super::executor::{
@@ -397,6 +433,11 @@ impl ConflictResolver {
             self.store.save_file_resolution(&record).await?;
             let mut file = request.file.clone();
             file.destination_path = destination.clone();
+            if existing.is_none()
+                && let Some(row) = saved.as_ref()
+            {
+                clear_own_abandoned_partial(row, &destination).await?;
+            }
             let mut verified = match existing {
                 Some(proof) => proof,
                 None => {
@@ -444,6 +485,58 @@ impl ConflictResolver {
             return Ok(verified);
         }
     }
+}
+
+/// Clear the staging partial an interrupted attempt of *this* operation left
+/// behind — and nothing else.
+///
+/// The persisted resolution row is the evidence. A saved, still-incomplete row
+/// naming this source and this destination means this operation had already
+/// claimed the destination and begun writing its partial beside it, so an
+/// occupant of the staging path is that attempt's own work and clearing it is
+/// what lets the resumed copy start from a clean file. Without such a row the
+/// copy refuses the occupied staging path instead
+/// ([`super::verify`]'s `ensure_partial_path_free`): a file that merely carries
+/// the suffix is a user file, and deleting one is unrecoverable.
+///
+/// The row is not the only test. An abandoned partial is a prefix of the source
+/// it was copying, so it is a plain file no longer than that source; anything
+/// else at the name is somebody else's, whatever the record says, and it is
+/// preserved exactly as an occupied destination is.
+async fn clear_own_abandoned_partial(row: &FileResolution, destination: &Path) -> AppResult<()> {
+    if row.completed || row.destination_path != path_to_stored_string(destination) {
+        return Ok(());
+    }
+    let partial = super::verify::partial_destination_path(destination);
+    let metadata = match tokio::fs::symlink_metadata(&partial).await {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(file_error(&partial, error)),
+    };
+    let source = stored_path_to_path_buf(&row.source_path);
+    let source_len = tokio::fs::symlink_metadata(&source)
+        .await
+        .map(|metadata| metadata.len())
+        .unwrap_or_default();
+    if !metadata.is_file() || metadata.len() > source_len {
+        return Err(AppError::Validation(format!(
+            "The destination staging path {} is occupied by a file this move did not write. Both files were preserved; move or remove that file and try again.",
+            partial.display()
+        )));
+    }
+    tokio::fs::remove_file(&partial).await.map_err(|error| {
+        AppError::Repository(format!(
+            "failed to clear this move's abandoned partial copy at {}: {error}",
+            partial.display()
+        ))
+    })?;
+    tracing::info!(
+        operation_id = %row.operation_id,
+        title_id = %row.title_id,
+        partial = %partial.display(),
+        "cleared the abandoned partial copy this operation's interrupted attempt left behind"
+    );
+    Ok(())
 }
 
 fn companion_suffix(companion: &Path, media: &Path) -> Option<String> {

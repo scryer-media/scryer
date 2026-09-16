@@ -1503,6 +1503,57 @@ async fn an_operation_type_the_root_move_runner_does_not_walk_declines_resume() 
     );
 }
 
+/// Boot reconciliation must not fail the Activity run of an operation that is
+/// about to be resumed: the generic reconciler runs first, and a terminal run
+/// is refused by the progress and completion writers, so the operation would
+/// report failed forever while the files were still moving.
+#[tokio::test]
+async fn an_interrupted_operations_activity_run_is_reserved_against_boot_reconciliation() {
+    let fixture = RootMoveFixture::new().await;
+    let interrupted_id = "operation-interrupted-run";
+    let mut interrupted = queued_operation(
+        interrupted_id,
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    interrupted.state = LocationOperationState::Moving;
+    interrupted.started_at = Some(chrono::Utc::now());
+    interrupted.job_run_id = Some("job-run-interrupted".to_string());
+
+    let mut finished = queued_operation(
+        "operation-finished-run",
+        LocationOperationType::RootMove,
+        LocationExecutionMode::MoveWithScryer,
+        VerificationDepth::Full,
+    );
+    finished.state = LocationOperationState::Completed;
+    finished.completed_at = Some(chrono::Utc::now());
+    finished.job_run_id = Some("job-run-finished".to_string());
+
+    for operation in [&interrupted, &finished] {
+        fixture
+            .app
+            .services
+            .library
+            .location_operations
+            .create_location_operation(operation, None)
+            .await
+            .expect("persist the operation");
+    }
+
+    let reserved = fixture
+        .app
+        .resumable_location_operation_job_run_ids()
+        .await
+        .expect("read the interrupted operations");
+    assert_eq!(
+        reserved,
+        vec!["job-run-interrupted".to_string()],
+        "only the run of an operation this boot may still pick up is spared"
+    );
+}
+
 /// Retry: a failed operation with a stored plan is reopened and handed back to
 /// the runner, its explanation cleared so Activity shows it queued again; a
 /// finished one is declined. The boot hook only ever picks up interrupted

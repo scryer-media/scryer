@@ -4,7 +4,6 @@ import {
   Eye,
   EyeOff,
   FolderOpen,
-  Loader2,
   LockKeyhole,
   Plus,
   RotateCcw,
@@ -65,6 +64,7 @@ import type {
   BackupSettings,
   UiDateTimeFormat,
 } from "@/lib/types/settings";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type BackupRowCount = {
   table: string;
@@ -253,7 +253,7 @@ function BackupStatusBadge({
       id={id}
       className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium ${statusTone(status)}`}
     >
-      {status === "creating" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+      {status === "creating" ? <LoadingMark className="h-3.5 w-3.5" /> : null}
       {label}
     </span>
   );
@@ -701,7 +701,7 @@ export function SettingsBackupsContainer() {
   if (pageLoading) {
     return (
       <div className={`flex items-center gap-2 text-sm ${BACKUPS_MUTED_TEXT_CLASS}`}>
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <LoadingMark className="h-4 w-4" />
         {t("label.loading")}
       </div>
     );
@@ -852,7 +852,7 @@ export function SettingsBackupsContainer() {
                       onClick={() => void handleSaveAutoBackupSettings()}
                       disabled={!canSaveAutoBackupSettings}
                     >
-                      {autoBackupSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      {autoBackupSaving ? <LoadingMark className="h-4 w-4" /> : null}
                       {t("label.save")}
                     </Button>
 
@@ -957,7 +957,7 @@ export function SettingsBackupsContainer() {
                 onClick={() => void handleSaveBackupSettings()}
                 disabled={!canSaveBackupSettings}
               >
-                {backupSettingsSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                {backupSettingsSaving ? <LoadingMark className="h-4 w-4" /> : null}
                 {t("label.save")}
               </Button>
               <Button
@@ -1138,7 +1138,7 @@ export function SettingsBackupsContainer() {
                                 onClick={() => void handleDownloadBackup(backup)}
                               >
                                 {isDownloading ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  <LoadingMark className="h-4 w-4" />
                                 ) : (
                                   <Download className="h-4 w-4" />
                                 )}
@@ -1152,7 +1152,7 @@ export function SettingsBackupsContainer() {
                               onClick={() => setPendingDeleteFilenames([backup.filename])}
                             >
                               {isDeleting ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <LoadingMark className="h-4 w-4" />
                               ) : (
                                 <Trash2 className="h-4 w-4" />
                               )}
@@ -1262,7 +1262,7 @@ export function SettingsBackupsContainer() {
               onClick={() => void handleCreateBackup()}
               disabled={!canCreateBackup}
             >
-              {creatingRequest ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {creatingRequest ? <LoadingMark className="h-4 w-4" /> : null}
               {t("settings.backupsCreate")}
             </Button>
           </DialogFooter>

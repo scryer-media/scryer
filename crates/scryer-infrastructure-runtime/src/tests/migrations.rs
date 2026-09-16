@@ -5497,3 +5497,114 @@ async fn migration_0221_creates_the_tag_registry_and_adopts_the_labels_already_i
     .await;
     assert!(duplicate.is_err(), "labels must be unique");
 }
+
+/// Migration 0242 resolves the legacy client-less rows migration 0179 left
+/// behind, because the runtime rule that used to resolve them at read time
+/// ("the single configured client of this type") is gone. A row whose type has
+/// exactly one configured client is attributed to it; anything ambiguous is
+/// ended, so it can never hold a scope again.
+#[tokio::test]
+async fn migration_0242_attributes_single_client_bindings_and_ends_the_rest() {
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect("sqlite::memory:")
+        .await
+        .expect("migration test database should open");
+    sqlx::raw_sql(
+        "CREATE TABLE download_clients (id TEXT PRIMARY KEY, client_type TEXT NOT NULL);
+         CREATE TABLE download_client_bindings (
+             download_id TEXT PRIMARY KEY,
+             client_config_id TEXT,
+             client_type_snapshot TEXT,
+             client_name_snapshot TEXT,
+             native_item_id TEXT,
+             created_at TEXT NOT NULL,
+             last_seen_at TEXT,
+             ended_at TEXT
+         );
+         CREATE TABLE download_submissions (
+             id TEXT PRIMARY KEY,
+             download_client_id TEXT NOT NULL DEFAULT '',
+             download_client_type TEXT NOT NULL,
+             download_client_item_id TEXT
+         );
+         INSERT INTO download_clients (id, client_type) VALUES
+             ('client-nzbget', 'nzbget'),
+             ('client-sab-a', 'sabnzbd'),
+             ('client-sab-b', 'sabnzbd');
+         INSERT INTO download_client_bindings
+             (download_id, client_config_id, client_type_snapshot, native_item_id, created_at)
+         VALUES
+             ('download-single', NULL, 'nzbget', 'job-single', '2026-01-01T00:00:00Z'),
+             ('download-ambiguous', '', 'sabnzbd', 'job-ambiguous', '2026-01-01T00:00:00Z'),
+             ('download-unconfigured', NULL, 'weaver', 'job-unconfigured', '2026-01-01T00:00:00Z'),
+             ('download-attributed', 'client-nzbget', 'nzbget', 'job-attributed', '2026-01-01T00:00:00Z');
+         INSERT INTO download_submissions (id, download_client_id, download_client_type, download_client_item_id)
+         VALUES
+             ('submission-single', '', 'nzbget', 'job-single'),
+             ('submission-ambiguous', '', 'sabnzbd', 'job-ambiguous');",
+    )
+    .execute(&pool)
+    .await
+    .expect("legacy fixture should initialize");
+
+    sqlx::raw_sql(include_str!(
+        "../../../scryer/src/db/migrations/0242_end_client_less_download_bindings.sql"
+    ))
+    .execute(&pool)
+    .await
+    .expect("migration 0242 should apply");
+
+    let bindings: Vec<(String, Option<String>, Option<String>)> = sqlx::query_as(
+        "SELECT download_id, client_config_id, ended_at FROM download_client_bindings ORDER BY download_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("bindings should load");
+    let by_id = |wanted: &str| {
+        bindings
+            .iter()
+            .find(|(download_id, _, _)| download_id == wanted)
+            .expect("seeded binding")
+            .clone()
+    };
+
+    let (_, attributed_client, attributed_end) = by_id("download-single");
+    assert_eq!(attributed_client.as_deref(), Some("client-nzbget"));
+    assert!(
+        attributed_end.is_none(),
+        "an attributable binding stays active"
+    );
+
+    for ambiguous in ["download-ambiguous", "download-unconfigured"] {
+        let (_, client, ended_at) = by_id(ambiguous);
+        assert!(
+            client.as_deref().unwrap_or_default().trim().is_empty(),
+            "{ambiguous} cannot be attributed"
+        );
+        assert!(
+            ended_at.is_some(),
+            "{ambiguous} must be ended: nothing can ever read it"
+        );
+    }
+
+    let (_, untouched_client, untouched_end) = by_id("download-attributed");
+    assert_eq!(untouched_client.as_deref(), Some("client-nzbget"));
+    assert!(
+        untouched_end.is_none(),
+        "an attributed binding is untouched"
+    );
+
+    let submissions: Vec<(String, String)> =
+        sqlx::query_as("SELECT id, download_client_id FROM download_submissions ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .expect("submissions should load");
+    assert_eq!(
+        submissions,
+        vec![
+            ("submission-ambiguous".to_string(), String::new()),
+            ("submission-single".to_string(), "client-nzbget".to_string()),
+        ]
+    );
+}

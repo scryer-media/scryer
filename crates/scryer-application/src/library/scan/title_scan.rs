@@ -2228,19 +2228,15 @@ impl AppUseCase {
             .list_episodes_for_title(&title.id)
             .await
             .unwrap_or_default();
-        // Community (per-cour) anime numbering for this title, read once per
-        // scan. `None` for every non-anime title, so the scan of a non-anime
-        // library issues no extra query at all.
-        let anime_numbering_bridge = if title.facet == scryer_domain::MediaFacet::Anime {
-            self.services
-                .catalog
-                .shows
-                .get_anime_numbering_bridge(&title.id)
-                .await
-                .unwrap_or_default()
-        } else {
-            None
-        };
+        // The release numbering this title's groups use, read once per title
+        // per scan. `None` for every title the catalog stores no bridge for.
+        let anime_numbering_bridge = self
+            .services
+            .catalog
+            .shows
+            .get_anime_numbering_bridge(&title.id)
+            .await
+            .unwrap_or_default();
         db_elapsed = db_elapsed.saturating_add(db_started.elapsed());
         debug!(
             title_id = %title.id,

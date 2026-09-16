@@ -1478,18 +1478,27 @@ impl AppUseCase {
                     let actor_id = persisted.actor_user_id.as_deref().ok_or_else(|| {
                         AppError::Validation("search actor is unavailable".into())
                     })?;
-                    let actor = app
-                        .services
-                        .identity
-                        .users
-                        .get_by_id(actor_id)
-                        .await?
-                        .ok_or_else(|| {
-                            AppError::Validation("search actor no longer exists".into())
-                        })?;
-                    if !actor.login_status().is_enabled() {
-                        return Err(AppError::Unauthorized("search actor is disabled".into()));
-                    }
+                    // A maintenance sequence dispatches its Search step as the
+                    // synthetic system actor, which has no persisted user row.
+                    // Reconstructing it is what makes those steps recoverable
+                    // at all; `UserStore` would answer "no such user" forever.
+                    let actor = if actor_id == User::SYSTEM_EXECUTION_ID {
+                        User::system_execution_actor()
+                    } else {
+                        let actor = app
+                            .services
+                            .identity
+                            .users
+                            .get_by_id(actor_id)
+                            .await?
+                            .ok_or_else(|| {
+                                AppError::Validation("search actor no longer exists".into())
+                            })?;
+                        if !actor.login_status().is_enabled() {
+                            return Err(AppError::Unauthorized("search actor is disabled".into()));
+                        }
+                        actor
+                    };
                     app.authorize_acquisition_search(&actor, &request).await?;
                     let scopes = app
                         .resolve_acquisition_search_scopes(&actor, &request)

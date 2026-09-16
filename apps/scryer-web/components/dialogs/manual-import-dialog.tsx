@@ -2,7 +2,7 @@
 import * as React from "react";
 import { ManualDiscSelectionControl } from "./manual-disc-selection";
 import type { ManualDiscSelection } from "@/lib/utils/manual-import-video-facts";
-import { Check, ChevronsUpDown, FileVideo, Loader2, Search } from "lucide-react";
+import { Check, ChevronsUpDown, FileVideo, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -40,6 +40,7 @@ import { type ManualImportVideoFacts } from "@/lib/utils/manual-import-video-fac
 import { buildViewPath } from "@/lib/utils/routing";
 import { useNavigate } from "react-router";
 import { useClient } from "urql";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_CODE = "ARCHIVE_EXTRACTION_PLUGIN_REQUIRED";
 const ARCHIVE_EXTRACTION_PLUGIN_REQUIRED_MESSAGE = [
@@ -56,6 +57,7 @@ type FilePreview = {
   parsedSeason: number | null;
   parsedEpisodes: number[];
   suggestedEpisodeId: string | null;
+  suggestedEpisodeIds: string[];
   suggestedEpisodeLabel: string | null;
   suggestedSeriesMovieLinkId: string | null;
 };
@@ -109,7 +111,7 @@ type AvailableSeriesMovie = {
 
 type ManualImportFileMapping = {
   candidateId: string;
-  episodeId?: string;
+  episodeIds?: string[];
   seriesMovieLinkId?: string;
   discSelection?: import("@/lib/utils/manual-import-video-facts").ManualDiscSelection;
 };
@@ -172,8 +174,35 @@ const UNASSIGNED = "__unassigned__";
 const EPISODE_TARGET_PREFIX = "episode:";
 const SERIES_MOVIE_TARGET_PREFIX = "series-movie:";
 
-function episodeTargetValue(episodeId: string): string {
-  return `${EPISODE_TARGET_PREFIX}${episodeId}`;
+// One file can cover several episodes (`Show.S01E27E28...`), so an episode
+// target carries the whole set. A single id keeps the value it always had.
+function episodeTargetValue(episodeIds: readonly string[]): string {
+  return `${EPISODE_TARGET_PREFIX}${episodeIds.join(",")}`;
+}
+
+function episodeTargetIds(value: string): string[] {
+  if (!value.startsWith(EPISODE_TARGET_PREFIX)) return [];
+  return value
+    .slice(EPISODE_TARGET_PREFIX.length)
+    .split(",")
+    .map((id) => id.trim())
+    .filter((id) => id.length > 0);
+}
+
+// The target a file's preview suggests, or "unassigned" when it suggests none.
+function suggestedTargetValue(file: FilePreview): string {
+  if (file.fileName.toLowerCase().endsWith(".iso")) return UNASSIGNED;
+  const suggestedEpisodeIds =
+    file.suggestedEpisodeIds.length > 0
+      ? file.suggestedEpisodeIds
+      : file.suggestedEpisodeId
+        ? [file.suggestedEpisodeId]
+        : [];
+  if (suggestedEpisodeIds.length > 0) return episodeTargetValue(suggestedEpisodeIds);
+  if (file.suggestedSeriesMovieLinkId) {
+    return seriesMovieTargetValue(file.suggestedSeriesMovieLinkId);
+  }
+  return UNASSIGNED;
 }
 
 function seriesMovieTargetValue(seriesMovieLinkId: string): string {
@@ -234,7 +263,7 @@ function buildManualImportTargetRows(
     }
     rows.push({ kind: "group", key: `group:${seasonLabel}`, label: seasonLabel });
     matchingEpisodes.forEach((episode) => {
-      const value = episodeTargetValue(episode.id);
+      const value = episodeTargetValue([episode.id]);
       rows.push({ kind: "option", key: value, label: episodeLabel(episode), value });
     });
   });
@@ -246,14 +275,38 @@ function ManualImportTargetPickerContent({
   value,
   groupedEpisodes,
   seriesMovies,
+  multiple,
+  onMultipleChange,
   onSelect,
 }: {
   value: string;
   groupedEpisodes: ReadonlyMap<string, AvailableEpisode[]>;
   seriesMovies: readonly AvailableSeriesMovie[];
+  multiple: boolean;
+  onMultipleChange: (multiple: boolean) => void;
   onSelect: (value: string) => void;
 }) {
+  const t = useTranslate();
   const [query, setQuery] = React.useState("");
+  const selectedEpisodeIds = React.useMemo(() => new Set(episodeTargetIds(value)), [value]);
+  const isSelected = (rowValue: string) => {
+    const ids = episodeTargetIds(rowValue);
+    if (ids.length === 0) return rowValue === value;
+    return ids.every((id) => selectedEpisodeIds.has(id));
+  };
+  // A file that holds two episodes must be assignable to both at once; the
+  // single-target picker stays the default so the common case is unchanged.
+  const toggleEpisode = (rowValue: string) => {
+    const [episodeId] = episodeTargetIds(rowValue);
+    if (!episodeId) {
+      onSelect(rowValue);
+      return;
+    }
+    const next = new Set(selectedEpisodeIds);
+    if (next.has(episodeId)) next.delete(episodeId);
+    else next.add(episodeId);
+    onSelect(next.size === 0 ? UNASSIGNED : episodeTargetValue(Array.from(next)));
+  };
   const scrollRef = React.useRef<HTMLDivElement>(null);
   const rows = React.useMemo(
     () => buildManualImportTargetRows(groupedEpisodes, seriesMovies, query),
@@ -268,6 +321,15 @@ function ManualImportTargetPickerContent({
       align="start"
       className="z-[90] w-[var(--radix-popover-trigger-width)] min-w-[280px] p-2"
     >
+      <label className="mb-2 flex items-center gap-2 px-1 text-xs text-muted-foreground">
+        <input
+          type="checkbox"
+          checked={multiple}
+          onChange={(event) => onMultipleChange(event.target.checked)}
+          aria-label={t("queue.manualImportMultipleEpisodesLabel")}
+        />
+        <span>{t("queue.manualImportMultipleEpisodes")}</span>
+      </label>
       <div className="relative mb-2">
         <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
         <Input
@@ -301,7 +363,7 @@ function ManualImportTargetPickerContent({
                     <button
                       type="button"
                       role="option"
-                      aria-selected={row.value === value}
+                      aria-selected={isSelected(row.value)}
                       id={
                         row.value === UNASSIGNED
                           ? selectorId("activity-manual-import-skip-option")
@@ -316,11 +378,14 @@ function ManualImportTargetPickerContent({
                               )
                       }
                       className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-xs text-foreground hover:bg-accent focus-visible:bg-accent focus-visible:outline-none"
-                      onClick={() => onSelect(row.value)}
+                      onClick={() => {
+                        if (multiple) toggleEpisode(row.value);
+                        else onSelect(row.value);
+                      }}
                     >
                       <Check
                         className={`h-3.5 w-3.5 shrink-0 ${
-                          row.value === value ? "opacity-100" : "opacity-0"
+                          isSelected(row.value) ? "opacity-100" : "opacity-0"
                         }`}
                       />
                       <span className="truncate">{row.label}</span>
@@ -344,6 +409,13 @@ const ManualImportTargetSelect = React.memo(function ManualImportTargetSelect({
   onChange,
 }: ManualImportTargetSelectProps) {
   const [open, setOpen] = React.useState(false);
+  const selectedEpisodeIds = React.useMemo(() => episodeTargetIds(value), [value]);
+  // A preview that resolved several episodes opens the picker already in
+  // multi-select mode, so "change" edits the set instead of replacing it.
+  const [multiple, setMultiple] = React.useState(selectedEpisodeIds.length > 1);
+  React.useEffect(() => {
+    if (selectedEpisodeIds.length > 1) setMultiple(true);
+  }, [selectedEpisodeIds.length]);
 
   return (
     <Popover modal open={open} onOpenChange={setOpen}>
@@ -354,11 +426,21 @@ const ManualImportTargetSelect = React.memo(function ManualImportTargetSelect({
           variant="outline"
           role="combobox"
           aria-expanded={open}
-          className="h-8 w-full justify-between gap-2 px-3 text-xs font-normal"
+          className="h-auto min-h-8 w-full justify-between gap-2 px-3 py-1 text-xs font-normal"
         >
-          <span className="truncate">
-            {targetLabels.get(value) ?? "Select target..."}
-          </span>
+          {selectedEpisodeIds.length > 1 ? (
+            <span className="flex flex-wrap items-center gap-1">
+              {selectedEpisodeIds.map((episodeId) => (
+                <Badge key={episodeId} tone="info" className="px-1.5 text-[10px]">
+                  {targetLabels.get(episodeTargetValue([episodeId])) ?? episodeId}
+                </Badge>
+              ))}
+            </span>
+          ) : (
+            <span className="truncate">
+              {targetLabels.get(value) ?? "Select target..."}
+            </span>
+          )}
           <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
         </Button>
       </PopoverTrigger>
@@ -367,9 +449,11 @@ const ManualImportTargetSelect = React.memo(function ManualImportTargetSelect({
           value={value}
           groupedEpisodes={groupedEpisodes}
           seriesMovies={seriesMovies}
+          multiple={multiple}
+          onMultipleChange={setMultiple}
           onSelect={(nextValue) => {
             onChange(candidateId, nextValue);
-            setOpen(false);
+            if (!multiple) setOpen(false);
           }}
         />
       ) : null}
@@ -458,13 +542,7 @@ export function ManualImportDialog({
         // Initialize mappings from suggested matches
         const initial: Record<string, string> = {};
         for (const file of preview.files) {
-          initial[file.candidateId] = file.fileName.toLowerCase().endsWith(".iso")
-            ? UNASSIGNED
-            : file.suggestedEpisodeId
-            ? episodeTargetValue(file.suggestedEpisodeId)
-            : file.suggestedSeriesMovieLinkId
-              ? seriesMovieTargetValue(file.suggestedSeriesMovieLinkId)
-              : UNASSIGNED;
+          initial[file.candidateId] = suggestedTargetValue(file);
         }
         setMappings(initial);
         setDiscSelections({});
@@ -508,7 +586,7 @@ export function ManualImportDialog({
       );
     });
     episodes.forEach((episode) => {
-      labels.set(episodeTargetValue(episode.id), episodeLabel(episode));
+      labels.set(episodeTargetValue([episode.id]), episodeLabel(episode));
     });
     return labels;
   }, [episodes, seriesMovies]);
@@ -520,6 +598,20 @@ export function ManualImportDialog({
       return { ...previous, [candidateId]: value };
     });
   }, []);
+
+  // One click fills every file with what the preview resolved for it — the
+  // whole set for a file that holds several episodes. A disc the user already
+  // mapped keeps its own selection.
+  const applySuggestionsToAll = React.useCallback(() => {
+    setMappings((previous) => {
+      const next: Record<string, string> = { ...previous };
+      for (const file of files) {
+        if (discSelections[file.candidateId]) continue;
+        next[file.candidateId] = suggestedTargetValue(file);
+      }
+      return next;
+    });
+  }, [discSelections, files]);
 
   const assignedCount = React.useMemo(
     () => Object.values(mappings).filter((v) => v !== UNASSIGNED).length,
@@ -535,10 +627,8 @@ export function ManualImportDialog({
         }
         if (target === "__movie__") return [{ candidateId }];
         if (target.startsWith(EPISODE_TARGET_PREFIX)) {
-          return [{
-            candidateId,
-            episodeId: target.slice(EPISODE_TARGET_PREFIX.length),
-          }];
+          const episodeIds = episodeTargetIds(target);
+          return episodeIds.length > 0 ? [{ candidateId, episodeIds }] : [];
         }
         if (target.startsWith(SERIES_MOVIE_TARGET_PREFIX)) {
           return [{
@@ -599,7 +689,7 @@ export function ManualImportDialog({
             id="activity-manual-import-loading"
             className="flex items-center justify-center gap-3 py-12"
           >
-            <Loader2 className="h-5 w-5 animate-spin text-[var(--scry-accent-text)]" />
+            <LoadingMark className="h-5 w-5 text-[var(--scry-accent-text)]" />
             <span className="text-sm text-muted-foreground">
               {extractingArchives
                 ? "Extracting archives. This can take a while..."
@@ -759,6 +849,17 @@ export function ManualImportDialog({
         )}
 
         <DialogFooter>
+          {files.length > 0 ? (
+            <Button
+              id="activity-manual-import-apply-suggestions"
+              variant="outline"
+              className="mr-auto"
+              onClick={applySuggestionsToAll}
+              disabled={importing || loading}
+            >
+              {t("queue.manualImportApplySuggestions")}
+            </Button>
+          ) : null}
           <Button
             id="activity-manual-import-cancel"
             variant="outline"
@@ -774,7 +875,7 @@ export function ManualImportDialog({
           >
             {importing ? (
               <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                <LoadingMark className="mr-2 h-4 w-4" />
                 Queueing...
               </>
             ) : (

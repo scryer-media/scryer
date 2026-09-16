@@ -5,7 +5,7 @@ use scryer_application::{AppError, AppResult};
 use sqlx::ConnectOptions;
 
 use crate::encryption::{EncryptionKey, load_existing_sqlite_migration_encryption_key};
-use crate::migrations::MigrationHookContext;
+use crate::migrations::{MigrationHookContext, MigrationProgress};
 use crate::storage::sql::runtime::{SqlRuntime, StoreDatastore, repo_err};
 use crate::storage::sqlite::writer::{SqliteWriterGate, new_writer_gate};
 use crate::types::MigrationMode;
@@ -55,6 +55,23 @@ impl SqliteServices {
         path: impl AsRef<str>,
         migration_mode: MigrationMode,
         data_dir: Option<PathBuf>,
+    ) -> Result<Self, AppError> {
+        Self::new_with_migration_progress(
+            path,
+            migration_mode,
+            data_dir,
+            MigrationProgress::default(),
+        )
+        .await
+    }
+
+    /// Opens the database like [`Self::new_with_mode_and_data_dir`], counting
+    /// the migrations it applies into `migration_progress`.
+    pub async fn new_with_migration_progress(
+        path: impl AsRef<str>,
+        migration_mode: MigrationMode,
+        data_dir: Option<PathBuf>,
+        migration_progress: MigrationProgress,
     ) -> Result<Self, AppError> {
         crate::spellfix::register_spellfix_auto_extension()?;
 
@@ -141,6 +158,7 @@ impl SqliteServices {
             migration_mode,
             MigrationHookContext {
                 encryption_key: migration_encryption_key,
+                progress: migration_progress,
             },
         )
         .await

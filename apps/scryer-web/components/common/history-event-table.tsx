@@ -4,7 +4,6 @@ import { useQuery } from "urql";
 import {
   ChevronDown,
   ChevronUp,
-  Loader2,
   RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -46,6 +45,7 @@ import {
   getTitleHistoryEventLabel,
   getTitleHistoryEventMeta,
 } from "./title-history-event-meta";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 /**
  * Panel chrome for the history table — the framed surface settings tables pass
@@ -617,7 +617,7 @@ export function HistoryEventTable({
                             onClick={() => void handleRetry(event)}
                           >
                             {retryingId === event.id ? (
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                              <LoadingMark className="mr-2 h-4 w-4" />
                             ) : (
                               <RotateCcw className="mr-2 h-4 w-4" />
                             )}
@@ -685,7 +685,7 @@ export function HistoryEventTable({
                                     onClick={() => void handleRetry(event)}
                                   >
                                     {retryingId === event.id ? (
-                                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                      <LoadingMark className="mr-2 h-4 w-4" />
                                     ) : (
                                       <RotateCcw className="mr-2 h-4 w-4" />
                                     )}
@@ -702,7 +702,7 @@ export function HistoryEventTable({
                                 onClick={() => void handleRetry(event)}
                               >
                                 {retryingId === event.id ? (
-                                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                  <LoadingMark className="mr-2 h-4 w-4" />
                                 ) : (
                                   <RotateCcw className="mr-2 h-4 w-4" />
                                 )}

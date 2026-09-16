@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Loader2, Trash2, Undo2 } from "lucide-react";
+import { Trash2, Undo2 } from "lucide-react";
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
 import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,7 @@ import type { LibraryRecord } from "@/lib/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { groupRecycleBinItems } from "@/lib/utils/recycle-bin";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type RecycledItem = {
   id: string;
@@ -151,7 +152,7 @@ export function SettingsRecycleBinSection({
   if (settingsLoading) {
     return (
       <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <LoadingMark className="h-4 w-4" />
         {t("label.loading")}
       </div>
     );
@@ -167,7 +168,7 @@ export function SettingsRecycleBinSection({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {settingsSaving ? <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" /> : null}
+          {settingsSaving ? <LoadingMark className="h-4 w-4 text-muted-foreground" /> : null}
           <SettingsToggleSwitch
             id="settings-recycle-bin-enabled-toggle"
             checked={enabled}
@@ -257,7 +258,7 @@ export function SettingsRecycleBinSection({
 
           {loading || librariesLoading ? (
             <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingMark className="h-4 w-4" />
               {t("label.loading")}
             </div>
           ) : items.length === 0 ? (

@@ -137,6 +137,17 @@ impl LibraryScanUnmatchedItemRepository for LibraryScanUnmatchedStore {
         .map(|rows| rows as u32)
     }
 
+    async fn delete_for_title(&self, title_id: &str) -> AppResult<u32> {
+        execute_write(
+            &self.datastore,
+            "delete_library_scan_unmatched_items_for_title",
+            "DELETE FROM library_scan_unmatched_items WHERE title_id = {}",
+            vec![SqlArg::Text(title_id.to_string())],
+        )
+        .await
+        .map(|rows| rows as u32)
+    }
+
     async fn list_library_scan_unmatched_items(
         &self,
         facet: Option<MediaFacet>,

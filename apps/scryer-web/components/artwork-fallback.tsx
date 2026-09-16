@@ -1,11 +1,11 @@
 import * as React from "react";
-import { Loader2 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import {
   artworkFallbackStyle,
   type ArtworkFallbackTone,
 } from "@/lib/utils/artwork-fallback";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export function ArtworkFallback({
   className,
@@ -48,7 +48,7 @@ export function ArtworkFallback({
       />
       {showSpinner ? (
         <div className="relative z-10 flex h-full w-full items-center justify-center">
-          <Loader2 className="h-5 w-5 animate-spin text-white/60" />
+          <LoadingMark className="h-5 w-5 text-white/60" />
         </div>
       ) : showText ? (
         <div className="relative z-10 flex h-full w-full flex-col items-center justify-end px-3 pb-5 text-center">

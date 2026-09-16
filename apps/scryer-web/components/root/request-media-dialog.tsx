@@ -1,5 +1,5 @@
 import * as React from "react";
-import { AlertTriangle, CheckCircle2, Clock, Loader2, Send } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Clock, Send } from "lucide-react";
 import { useClient } from "urql";
 
 import { CatalogActionDialogSummary } from "@/components/root/catalog-action-dialog-summary";
@@ -49,6 +49,7 @@ import {
   selectorId,
 } from "@/lib/utils/dom-ids";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 /// How long the dialog waits after the requester stops changing the request
 /// before asking what would happen to it. Short enough to feel live, long
@@ -565,7 +566,7 @@ export function RequestMediaDialog({
             className="h-12 gap-2 bg-primary px-8 text-primary-foreground hover:bg-primary/90"
           >
             {isSubmitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingMark className="h-4 w-4" />
             ) : (
               <Send className="h-4 w-4" />
             )}

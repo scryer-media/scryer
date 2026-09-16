@@ -13,6 +13,9 @@ use futures_util::stream::{StreamExt, TryStreamExt};
 
 use crate::activity::NotificationMediaUpdate;
 use crate::catalog_workflow::{HydrationSource, HydrationTarget};
+use crate::catalog_workflow::{
+    LibraryRootFolder, library_path_is_under_root, library_root_id_containing_path,
+};
 use crate::domain_events::{
     created_media_update, deleted_media_update, new_title_domain_event, title_context_snapshot,
 };
@@ -118,6 +121,13 @@ pub struct RenamePlanItem {
     pub write_action: RenameWriteAction,
     pub source_size_bytes: Option<u64>,
     pub source_mtime_unix_ms: Option<i64>,
+    /// Set on a sidecar that follows a media file: the `current_path` of the
+    /// primary item it belongs to. `None` on the media items themselves.
+    ///
+    /// Optional and defaulted so a plan serialized before companions existed
+    /// still round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub companion_of: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -214,6 +224,14 @@ const RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY: &str = "rename.missing_metadata
 const DEFAULT_COLLISION_POLICY: RenameCollisionPolicy = RenameCollisionPolicy::Skip;
 const DEFAULT_MISSING_METADATA_POLICY: RenameMissingMetadataPolicy =
     RenameMissingMetadataPolicy::FallbackTitle;
+/// The title's files are under no configured root of its library, so there is
+/// no root to rename inside. Change Folder or a root move is the way back.
+pub const RENAME_TITLE_OUTSIDE_LIBRARY_ROOTS: &str = "title_outside_library_roots";
+/// A planned item whose destination left the root its source is under. Always a
+/// planning bug; never executed.
+pub const RENAME_CROSS_ROOT_REFUSED: &str = "cross_root_rename_refused";
+/// A sidecar (external subtitle, `.nfo`) following its media file.
+pub const RENAME_COMPANION_MOVE: &str = "rename_companion_move";
 const GENERATED_COMPONENT_MAX_BYTES: usize = 240;
 const GENERATED_COMPONENT_SUFFIX_RESERVE_BYTES: usize = 24;
 const MAX_RENAME_TEMPLATE_PADDING_WIDTH: usize = 240;
@@ -630,6 +648,11 @@ impl AppUseCase {
                 .await?
             }
         }
+        // Applying is the point at which a title whose root id disagreed with
+        // its folder is corrected: the plan was built against the root the
+        // files are really under, so the record catches up with it (#224).
+        // Preview stays read-only.
+        let planned_title_folders = self.heal_rename_plan_title_roots(&preview).await;
         self.preflight_rename_folder_ownership(&preview).await?;
         self.services
             .library
@@ -662,39 +685,58 @@ impl AppUseCase {
             .library_renamer
             .apply_plan(&preview, &permissions)
             .await?;
+        // Which planned companions belong to which media file, so a media file
+        // that has to be rolled back takes its sidecars back with it (#224).
+        let companions_by_primary = rename_companions_by_primary(&preview);
+
+        // Indexed rather than iterated: rolling a primary back also rewrites
+        // its companions' results, which sit elsewhere in the same vector.
+        for index in 0..item_results.len() {
+            if item_results[index].status != RenameApplyStatus::Applied {
+                continue;
+            }
+            let Some(final_path) = item_results[index].final_path.clone() else {
+                continue;
+            };
+            let Err(failure) = self
+                .persist_rename_item_paths(&item_results[index], &final_path)
+                .await
+            else {
+                continue;
+            };
+
+            let rollback = self
+                .rollback_rename_item_after_db_failure(&item_results[index], &failure.state)
+                .await;
+            let current_path = item_results[index].current_path.clone();
+            let companion_detail = self
+                .rollback_rename_companions_for_primary(
+                    &current_path,
+                    companions_by_primary.get(current_path.as_str()),
+                    &mut item_results,
+                )
+                .await;
+
+            let item = &mut item_results[index];
+            item.status = RenameApplyStatus::Failed;
+            item.reason_code = "db_update_failed".into();
+            item.error_message = Some(format!(
+                "{}; {}{companion_detail}",
+                failure.error, rollback.detail
+            ));
+            if rollback.fully_restored {
+                item.final_path = Some(item.current_path.clone());
+            }
+        }
+
         let mut applied = 0usize;
         let mut skipped = 0usize;
         let mut failed = 0usize;
-
-        for item in &mut item_results {
+        for item in &item_results {
             match item.status {
-                RenameApplyStatus::Applied => {
-                    if let Some(final_path) = item.final_path.clone()
-                        && let Err(failure) =
-                            self.persist_rename_item_paths(item, &final_path).await
-                    {
-                        let rollback = self
-                            .rollback_rename_item_after_db_failure(item, &failure.state)
-                            .await;
-
-                        item.status = RenameApplyStatus::Failed;
-                        item.reason_code = "db_update_failed".into();
-                        item.error_message =
-                            Some(format!("{}; {}", failure.error, rollback.detail));
-                        if rollback.fully_restored {
-                            item.final_path = Some(item.current_path.clone());
-                        }
-                        failed += 1;
-                        continue;
-                    }
-                    applied += 1;
-                }
-                RenameApplyStatus::Skipped => {
-                    skipped += 1;
-                }
-                RenameApplyStatus::Failed => {
-                    failed += 1;
-                }
+                RenameApplyStatus::Applied => applied += 1,
+                RenameApplyStatus::Skipped => skipped += 1,
+                RenameApplyStatus::Failed => failed += 1,
             }
         }
 
@@ -708,8 +750,199 @@ impl AppUseCase {
         };
 
         self.emit_rename_notifications(actor, &result.items).await;
+        self.remove_emptied_rename_source_folders(&result.items, &planned_title_folders)
+            .await;
 
         Ok(result)
+    }
+
+    /// Take a rolled-back media file's already-moved companions back with it.
+    /// Each restored companion becomes its own Failed item so the operator sees
+    /// that it was moved and put back rather than silently left behind (#224).
+    async fn rollback_rename_companions_for_primary(
+        &self,
+        primary_current_path: &str,
+        companions: Option<&Vec<String>>,
+        item_results: &mut [RenameApplyItemResult],
+    ) -> String {
+        let Some(companions) = companions else {
+            return String::new();
+        };
+        let mut restored = 0usize;
+        let mut failures = 0usize;
+        for companion_path in companions {
+            let Some(index) = item_results.iter().position(|item| {
+                item.current_path == *companion_path && item.status == RenameApplyStatus::Applied
+            }) else {
+                continue;
+            };
+            let rollback = self
+                .services
+                .library
+                .library_renamer
+                .rollback(std::slice::from_ref(&item_results[index]))
+                .await;
+            let item = &mut item_results[index];
+            item.status = RenameApplyStatus::Failed;
+            match rollback {
+                Ok(_) => {
+                    restored += 1;
+                    item.reason_code = "companion_rolled_back_with_primary".into();
+                    item.error_message = Some(
+                        "companion restored because its media file was rolled back".to_string(),
+                    );
+                    item.final_path = Some(item.current_path.clone());
+                }
+                Err(error) => {
+                    failures += 1;
+                    warn!(
+                        companion_path = %companion_path,
+                        primary_path = %primary_current_path,
+                        error = %error,
+                        "failed to roll back a companion alongside its media file"
+                    );
+                    // The companion is still where the rename put it, so the
+                    // result keeps that destination as its final path.
+                    item.reason_code = "companion_rollback_failed".into();
+                    item.error_message = Some(format!(
+                        "its media file was rolled back but this companion could not be restored: {error}"
+                    ));
+                }
+            }
+        }
+
+        if restored == 0 && failures == 0 {
+            String::new()
+        } else if failures == 0 {
+            format!("; {restored} companion(s) restored")
+        } else {
+            format!("; {restored} companion(s) restored, {failures} could not be restored")
+        }
+    }
+
+    /// Bring every title in the plan's root id in line with the root its folder
+    /// is under. Best effort: a failure here must not stop the rename, which is
+    /// planned entirely inside the containing root either way.
+    ///
+    /// Returns each planned title's folder path as it stood *before* the rename,
+    /// which bounds the emptied-folder cleanup below.
+    async fn heal_rename_plan_title_roots(&self, preview: &RenamePlan) -> Vec<String> {
+        let mut healed = HashSet::new();
+        let mut title_folders = Vec::new();
+        for item in &preview.items {
+            let probe = rename_apply_probe_for_item(item);
+            let Ok(Some(mut title)) = self.resolve_title_for_rename_item(&probe).await else {
+                continue;
+            };
+            if !healed.insert(title.id.clone()) {
+                continue;
+            }
+            if let Some(folder_path) = title
+                .folder_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|folder_path| !folder_path.is_empty())
+            {
+                title_folders.push(folder_path.to_string());
+            }
+            if let Err(error) = self
+                .heal_title_root_folder_id_for_owned_folder(
+                    &crate::location::ownership_guard::RENAME_APPLY_ENTRY,
+                    &mut title,
+                )
+                .await
+            {
+                warn!(
+                    title_id = %title.id,
+                    error = %error,
+                    "failed to heal the title root folder id before applying a rename"
+                );
+            }
+        }
+        title_folders
+    }
+
+    /// Remove the folders a rename emptied, deepest first.
+    ///
+    /// A folder-renaming plan moves every tracked file out of the old title (or
+    /// season) folder and leaves the husk behind (#224). Only directories that
+    /// are genuinely empty and strictly *inside* a configured library root are
+    /// removed — never a root itself, and never a directory still holding
+    /// anything this rename did not move.
+    async fn remove_emptied_rename_source_folders(
+        &self,
+        items: &[RenameApplyItemResult],
+        planned_title_folders: &[String],
+    ) {
+        if planned_title_folders.is_empty() {
+            return;
+        }
+        let roots = match self.all_library_root_folders().await {
+            Ok(roots) => roots,
+            Err(error) => {
+                warn!(error = %error, "skipping rename source-folder cleanup: roots unavailable");
+                return;
+            }
+        };
+        if roots.is_empty() {
+            return;
+        }
+
+        let mut directories = BTreeSet::new();
+        for item in items {
+            if !matches!(item.status, RenameApplyStatus::Applied) {
+                continue;
+            }
+            let Some(final_path) = item.final_path.as_deref() else {
+                continue;
+            };
+            let source = stored_path_to_path_buf(&item.current_path);
+            let target = stored_path_to_path_buf(final_path);
+            let (Some(source_dir), Some(target_dir)) = (source.parent(), target.parent()) else {
+                continue;
+            };
+            if source_dir != target_dir {
+                directories.insert(path_to_stored_string(source_dir));
+            }
+        }
+
+        let mut ordered = directories.into_iter().collect::<Vec<_>>();
+        ordered.sort_by_key(|directory| {
+            std::cmp::Reverse(stored_path_to_path_buf(directory).components().count())
+        });
+
+        for directory in ordered {
+            let mut current = stored_path_to_path_buf(&directory);
+            loop {
+                if !path_is_inside_any_library_root(&current, &roots) {
+                    break;
+                }
+                // The climb stops at the title folder: an operator's empty
+                // organising directory above it is not ours to remove (#224).
+                if !path_is_within_a_planned_title_folder(&current, planned_title_folders) {
+                    break;
+                }
+                if !directory_is_empty(&current).await {
+                    break;
+                }
+                if let Err(error) = tokio::fs::remove_dir(&current).await {
+                    warn!(
+                        directory = %current.display(),
+                        error = %error,
+                        "could not remove the folder a rename emptied"
+                    );
+                    break;
+                }
+                tracing::info!(
+                    directory = %current.display(),
+                    "removed the folder a rename emptied"
+                );
+                match current.parent() {
+                    Some(parent) => current = parent.to_path_buf(),
+                    None => break,
+                }
+            }
+        }
     }
 
     async fn preflight_rename_folder_ownership(&self, preview: &RenamePlan) -> AppResult<()> {
@@ -723,18 +956,7 @@ impl AppUseCase {
             let Some(proposed_path) = item.proposed_path.as_deref() else {
                 continue;
             };
-            let probe = RenameApplyItemResult {
-                collection_id: item.collection_id.clone(),
-                media_file_id: item.media_file_id.clone(),
-                series_movie_link_ids: item.series_movie_link_ids.clone(),
-                current_path: item.current_path.clone(),
-                proposed_path: item.proposed_path.clone(),
-                final_path: None,
-                write_action: item.write_action.clone(),
-                status: RenameApplyStatus::Skipped,
-                reason_code: String::new(),
-                error_message: None,
-            };
+            let probe = rename_apply_probe_for_item(item);
             let Some(title) = self.resolve_title_for_rename_item(&probe).await? else {
                 continue;
             };
@@ -1061,9 +1283,6 @@ impl AppUseCase {
         planning: &mut RenamePlanningState,
     ) -> AppResult<Vec<RenamePlanItem>> {
         let title = title.clone();
-        // Only the media root varies per title; every template and policy came
-        // from `settings`, which was resolved once for the whole plan.
-        let media_root = self.title_root_folder_path_override(&title).await?;
         let use_season_folders = self.resolve_use_season_folders(&title).await?;
         let collections = self
             .services
@@ -1080,6 +1299,17 @@ impl AppUseCase {
             .into_iter()
             .filter(|file| file.role.is_primary())
             .collect::<Vec<_>>();
+        // Only the media root varies per title; every template and policy came
+        // from `settings`, which was resolved once for the whole plan. It is
+        // resolved from where the files actually are rather than from the
+        // title's recorded root id, so a rename can never plan a cross-root
+        // move (#224).
+        let Some(media_root) = self
+            .rename_media_root_for_title(&title, &media_files)
+            .await?
+        else {
+            return Ok(rename_items_outside_library_roots(&media_files));
+        };
         let episodes = match title.facet {
             MediaFacet::Movie => Vec::new(),
             MediaFacet::Series | MediaFacet::Anime => {
@@ -1142,7 +1372,224 @@ impl AppUseCase {
             built
         };
 
-        self.normalize_existing_rename_collisions(items).await
+        let items = self.normalize_existing_rename_collisions(items).await?;
+        let items = self.refuse_cross_root_rename_items(&title, items).await?;
+        self.plan_rename_companions(items, planning).await
+    }
+
+    /// The root a rename must plan inside: the configured root of the title's
+    /// library that contains the folder the title's files actually live in.
+    ///
+    /// Renaming is a naming operation; moving a title between roots belongs to
+    /// the location engine, which owns collision, hardlink and cleanup
+    /// handling. Planning from `title.root_folder_id` alone meant a title whose
+    /// id disagreed with its folder — every title a scan discovered outside the
+    /// library default root before #224 — got a cross-root move proposed by a
+    /// *rename*.
+    ///
+    /// `Ok(None)` means the title's files are under no configured root at all,
+    /// which is a Change Folder / root move for the operator to drive, not
+    /// something a rename may quietly correct by moving to the default root.
+    async fn rename_media_root_for_title(
+        &self,
+        title: &Title,
+        media_files: &[TitleMediaFile],
+    ) -> AppResult<Option<String>> {
+        let anchor = title
+            .folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+            .or_else(|| {
+                media_files
+                    .iter()
+                    .map(|file| file.file_path.clone())
+                    .find(|path| !path.trim().is_empty())
+            });
+        let Some(anchor) = anchor else {
+            // Nothing on disk to locate the title by; keep the recorded root.
+            return self.title_root_folder_path_override(title).await.map(Some);
+        };
+        let Some(library) = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&title.library_id)
+            .await?
+        else {
+            return self.title_root_folder_path_override(title).await.map(Some);
+        };
+        let Some(root_folder_id) = library_root_id_containing_path(&library, &anchor) else {
+            warn!(
+                title_id = %title.id,
+                anchor = %anchor,
+                "rename skipped: the title's files are under no configured root of its library"
+            );
+            return Ok(None);
+        };
+        Ok(library
+            .roots
+            .into_iter()
+            .find(|root| root.id == root_folder_id)
+            .map(|root| root.path))
+    }
+
+    /// Defensive backstop: a Move/Replace whose proposed path leaves the root
+    /// its current path is under is a planning bug, never something to execute.
+    async fn refuse_cross_root_rename_items(
+        &self,
+        title: &Title,
+        mut items: Vec<RenamePlanItem>,
+    ) -> AppResult<Vec<RenamePlanItem>> {
+        let Some(library) = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&title.library_id)
+            .await?
+        else {
+            return Ok(items);
+        };
+
+        for item in &mut items {
+            if !matches!(
+                item.write_action,
+                RenameWriteAction::Move | RenameWriteAction::Replace
+            ) {
+                continue;
+            }
+            let Some(proposed_path) = item.proposed_path.as_deref() else {
+                continue;
+            };
+            let current_root = library_root_id_containing_path(&library, &item.current_path);
+            let proposed_root = library_root_id_containing_path(&library, proposed_path);
+            if current_root == proposed_root {
+                continue;
+            }
+            warn!(
+                title_id = %title.id,
+                current_path = %item.current_path,
+                proposed_path = %proposed_path,
+                "refusing a rename item that would move a file across library roots"
+            );
+            item.write_action = RenameWriteAction::Skip;
+            item.reason_code = RENAME_CROSS_ROOT_REFUSED.to_string();
+        }
+
+        Ok(items)
+    }
+
+    /// Plan the sidecars that belong to each renamed media file.
+    ///
+    /// External subtitles are not catalog rows at all — they are discovered by
+    /// listing the video's parent directory — so a rename that changes the
+    /// directory or the stem stranded them, and `.nfo` sidecars with them
+    /// (#224). Only stem-matched sidecars and the canonical folder `.nfo`s
+    /// follow; extras and anything else stay put, because moving those is a
+    /// folder move rather than a rename.
+    async fn plan_rename_companions(
+        &self,
+        mut items: Vec<RenamePlanItem>,
+        planning: &mut RenamePlanningState,
+    ) -> AppResult<Vec<RenamePlanItem>> {
+        let mut directory_cache: HashMap<PathBuf, Vec<String>> = HashMap::new();
+        let mut planned_sources: HashSet<String> = HashSet::new();
+        let mut companions = Vec::new();
+
+        for item in &items {
+            if item.companion_of.is_some() || !matches!(item.write_action, RenameWriteAction::Move)
+            {
+                continue;
+            }
+            let Some(proposed_path) = item.proposed_path.as_deref() else {
+                continue;
+            };
+            let source = stored_path_to_path_buf(&item.current_path);
+            let target = stored_path_to_path_buf(proposed_path);
+            let (Some(source_dir), Some(target_dir)) = (source.parent(), target.parent()) else {
+                continue;
+            };
+            let (Some(source_stem), Some(target_stem)) =
+                (path_file_stem(&source), path_file_stem(&target))
+            else {
+                continue;
+            };
+            let source_name = source
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or_default()
+                .to_string();
+            let directory_changed = source_dir != target_dir;
+            if !directory_changed && source_stem == target_stem {
+                continue;
+            }
+
+            let names = match directory_cache.get(source_dir) {
+                Some(names) => names.clone(),
+                None => {
+                    let names = rename_companion_directory_entries(source_dir).await;
+                    directory_cache.insert(source_dir.to_path_buf(), names.clone());
+                    names
+                }
+            };
+
+            for name in names {
+                if name == source_name {
+                    continue;
+                }
+                let Some(new_name) = rename_companion_target_name(
+                    &name,
+                    &source_stem,
+                    &target_stem,
+                    directory_changed,
+                ) else {
+                    continue;
+                };
+                let companion_current = path_to_stored_string(source_dir.join(&name));
+                let companion_proposed = path_to_stored_string(target_dir.join(&new_name));
+                if crate::stored_paths::paths_match(&companion_current, &companion_proposed) {
+                    continue;
+                }
+                // One sidecar belongs to one media file: a folder `.nfo` beside
+                // several files follows the first one and is not planned twice.
+                if !planned_sources.insert(companion_current.clone()) {
+                    continue;
+                }
+                let write_action =
+                    if planning.claim_target(rename_planning_path_key(&companion_proposed)) {
+                        RenameWriteAction::Move
+                    } else {
+                        RenameWriteAction::Skip
+                    };
+                let collision = matches!(write_action, RenameWriteAction::Skip);
+                let reason_code = if collision {
+                    "collision_within_plan"
+                } else {
+                    RENAME_COMPANION_MOVE
+                };
+                let mut companion = rename_plan_item(
+                    RenamePlanItemIds {
+                        collection_id: None,
+                        media_file_id: None,
+                        series_movie_link_ids: Vec::new(),
+                    },
+                    companion_current,
+                    Some(companion_proposed),
+                    Some(new_name),
+                    collision,
+                    reason_code,
+                    write_action,
+                    None,
+                    None,
+                );
+                companion.companion_of = Some(item.current_path.clone());
+                companions.push(companion);
+            }
+        }
+
+        items.append(&mut companions);
+        Ok(items)
     }
 
     async fn refresh_rename_title_metadata_if_stale(
@@ -2246,7 +2693,154 @@ fn rename_plan_item(
         write_action,
         source_size_bytes,
         source_mtime_unix_ms,
+        companion_of: None,
     }
+}
+
+/// Strictly inside a configured root — the root directory itself is never a
+/// folder a rename may remove.
+fn path_is_inside_any_library_root(path: &Path, roots: &[LibraryRootFolder]) -> bool {
+    let stored = path_to_stored_string(path);
+    roots.iter().any(|root| {
+        library_path_is_under_root(&stored, &root.path)
+            && crate::stored_paths::folder_path_identity_key(&stored)
+                != crate::stored_paths::folder_path_identity_key(&root.path)
+    })
+}
+
+async fn directory_is_empty(path: &Path) -> bool {
+    match tokio::fs::read_dir(path).await {
+        Ok(mut entries) => matches!(entries.next_entry().await, Ok(None)),
+        Err(_) => false,
+    }
+}
+
+/// Whether `path` is one of the renamed titles' own folders, or sits inside one
+/// (a season folder, say). Anything above a title folder is out of bounds for
+/// the emptied-folder cleanup.
+fn path_is_within_a_planned_title_folder(path: &Path, planned_title_folders: &[String]) -> bool {
+    let candidate = path_to_stored_string(path);
+    planned_title_folders
+        .iter()
+        .any(|folder| library_path_is_under_root(&candidate, folder))
+}
+
+/// Planned companions grouped by the `current_path` of the media file they
+/// belong to.
+fn rename_companions_by_primary(plan: &RenamePlan) -> HashMap<&str, Vec<String>> {
+    let mut grouped: HashMap<&str, Vec<String>> = HashMap::new();
+    for item in &plan.items {
+        if let Some(primary) = item.companion_of.as_deref() {
+            grouped
+                .entry(primary)
+                .or_default()
+                .push(item.current_path.clone());
+        }
+    }
+    grouped
+}
+
+fn rename_apply_probe_for_item(item: &RenamePlanItem) -> RenameApplyItemResult {
+    RenameApplyItemResult {
+        collection_id: item.collection_id.clone(),
+        media_file_id: item.media_file_id.clone(),
+        series_movie_link_ids: item.series_movie_link_ids.clone(),
+        current_path: item.current_path.clone(),
+        proposed_path: item.proposed_path.clone(),
+        final_path: None,
+        write_action: item.write_action.clone(),
+        status: RenameApplyStatus::Skipped,
+        reason_code: String::new(),
+        error_message: None,
+    }
+}
+
+fn path_file_stem(path: &Path) -> Option<String> {
+    path.file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .map(str::to_string)
+}
+
+/// Every plain file name in `directory`, or an empty list when it cannot be
+/// read. Planning is otherwise database-only, but external subtitles have no
+/// catalog rows at all, so the source directory is the only place they exist.
+async fn rename_companion_directory_entries(directory: &Path) -> Vec<String> {
+    let Ok(mut entries) = tokio::fs::read_dir(directory).await else {
+        return Vec::new();
+    };
+    let mut names = Vec::new();
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        if entry
+            .file_type()
+            .await
+            .map(|file_type| file_type.is_file())
+            .unwrap_or(false)
+            && let Some(name) = entry.file_name().to_str()
+        {
+            names.push(name.to_string());
+        }
+    }
+    names.sort();
+    names
+}
+
+/// The name `name` takes when the media file `<source_stem>.<ext>` becomes
+/// `<target_stem>.<ext>`, or `None` when it is not a companion of that file.
+///
+/// Stem-matched sidecars keep every suffix they carry, so
+/// `<stem>.en.forced.srt` and `<stem>.hi.srt` stay recognisable to the same
+/// language/forced/hearing-impaired parsing that discovered them. The canonical
+/// folder sidecars belong to the folder rather than to one file, so they follow
+/// a folder change under their own name.
+fn rename_companion_target_name(
+    name: &str,
+    source_stem: &str,
+    target_stem: &str,
+    directory_changed: bool,
+) -> Option<String> {
+    if let Some(suffix) = name.strip_prefix(&format!("{source_stem}.")) {
+        return is_rename_companion_suffix(suffix).then(|| format!("{target_stem}.{suffix}"));
+    }
+    if directory_changed && crate::location::collisions::is_canonical_sidecar_name(name) {
+        return Some(name.to_string());
+    }
+    None
+}
+
+fn is_rename_companion_suffix(suffix: &str) -> bool {
+    let extension = suffix
+        .rsplit('.')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    !extension.is_empty()
+        && (scryer_domain::SUBTITLE_EXTENSIONS.contains(&extension.as_str()) || extension == "nfo")
+}
+
+/// Skip items for a title whose files sit under no configured root: the plan
+/// says why rather than proposing a move into the library's default root.
+fn rename_items_outside_library_roots(media_files: &[TitleMediaFile]) -> Vec<RenamePlanItem> {
+    media_files
+        .iter()
+        .map(|file| {
+            rename_plan_item(
+                RenamePlanItemIds {
+                    collection_id: None,
+                    media_file_id: Some(file.id.clone()),
+                    series_movie_link_ids: Vec::new(),
+                },
+                file.file_path.clone(),
+                None,
+                None,
+                false,
+                RENAME_TITLE_OUTSIDE_LIBRARY_ROOTS,
+                RenameWriteAction::Skip,
+                u64::try_from(file.size_bytes).ok(),
+                None,
+            )
+        })
+        .collect()
 }
 
 fn prepare_rename_plan_source(

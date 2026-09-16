@@ -98,6 +98,26 @@ fn submission_client_state_is_authoritative(
         .is_some_and(|client_id| snapshot.authoritative_client_ids.contains(client_id))
 }
 
+/// The client a submission runs on, when that client is currently in failure
+/// backoff, together with the moment it comes back.
+///
+/// A submission that names no client (a row written before per-client
+/// attribution) can never be blocked: migration 0242 attributed or ended those,
+/// and one that survives names nothing to wait for.
+fn blocked_download_client_for_submission<'a>(
+    blocked_clients: &'a std::collections::HashMap<String, DateTime<Utc>>,
+    submission: &'a DownloadSubmission,
+) -> Option<(&'a str, DateTime<Utc>)> {
+    let client_id = submission
+        .download_client_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|client_id| !client_id.is_empty())?;
+    blocked_clients
+        .get(client_id)
+        .map(|until| (client_id, *until))
+}
+
 fn submission_matches_intent(
     submission: &DownloadSubmission,
     intent: &CanonicalDownloadSubmissionIntent,
@@ -123,6 +143,40 @@ enum ObservationStubAdoption {
     ClaimForGrab(Option<crate::PersistedSeedGoals>),
     /// Leave a stub owner rejected like any other title mismatch.
     Refuse,
+}
+
+impl AppUseCase {
+    /// Download clients whose failure backoff is still open, mapped to the
+    /// moment each comes back.
+    ///
+    /// Sonarr consults `DownloadClientStatus` and nothing else to decide that a
+    /// client's silence is not evidence. A status read that fails leaves the
+    /// map empty: the client listing stays the authority, which is the
+    /// pre-status behaviour.
+    async fn blocked_download_clients(&self) -> std::collections::HashMap<String, DateTime<Utc>> {
+        let statuses = match self
+            .services
+            .integrations
+            .download_client_status
+            .list()
+            .await
+        {
+            Ok(statuses) => statuses,
+            Err(error) => {
+                tracing::warn!(
+                    error = %error,
+                    "download client status could not be read; treating every client as available"
+                );
+                return std::collections::HashMap::new();
+            }
+        };
+        let now = Utc::now();
+        statuses
+            .into_iter()
+            .filter(|(_, status)| status.is_blocked(now))
+            .filter_map(|(client_id, status)| status.disabled_until.map(|until| (client_id, until)))
+            .collect()
+    }
 }
 
 impl AppUseCase {
@@ -397,7 +451,7 @@ impl AppUseCase {
                 })
             })
             .cloned();
-        let mut snapshot = if state.submissions.is_empty() {
+        let snapshot = if state.submissions.is_empty() {
             None
         } else {
             let guards = &self.runtime.acquisition.download_submission_guards;
@@ -436,150 +490,34 @@ impl AppUseCase {
             }
         };
 
-        // A cached positive sighting can protect a claim, but absence from
-        // queue + recent history cannot release one. Recheck the exact job
-        // before either the same-request retry or conflict admission forgets it.
-        if let Some(snapshot) = snapshot.as_mut() {
-            for submission in &state.submissions {
-                if !crate::catalog_workflow::submission_scopes_overlap(
-                    &title_id,
-                    &submission.scope,
-                    &intent.scope,
-                    &state.episodes,
-                ) || state
-                    .accepted_download_ids
-                    .contains(&submission.download_id)
-                {
-                    continue;
-                }
-                let locator = ClientJobLocator::from_submission(submission);
-                let durable_state = self
-                    .services
-                    .workflow
-                    .download_submissions
-                    .get_identity_tracked_state_for_download(
-                        Some(&submission.download_id),
-                        &DownloadSubmissionIdentity::default(),
-                        Some(&locator),
-                    )
-                    .await
-                    .map_err(|error| AppError::DownloadSubmitUnavailable(error.to_string()))?;
-                let imported = matches!(
-                    durable_state.as_deref(),
-                    Some("imported" | "imported_seeding")
-                );
-                let cleanup_pending = if imported {
-                    self.services
-                        .workflow
-                        .download_submissions
-                        .has_pending_download_cleanup(&submission.download_id)
-                        .await
-                        .map_err(|error| AppError::DownloadSubmitUnavailable(error.to_string()))?
-                } else {
-                    false
-                };
-                if matches!(durable_state.as_deref(), Some("failed" | "ignored"))
-                    || (imported && !cleanup_pending)
-                {
-                    continue;
-                }
-                match self
-                    .services
-                    .integrations
-                    .download_client
-                    .observe_download(&locator, 0)
-                    .await
-                {
-                    Ok(crate::DownloadClientObservation::Present(item)) => {
-                        snapshot
-                            .items
-                            .retain(|cached| !queue_item_matches_submission(cached, submission));
-                        snapshot.items.push(*item);
-                        if let Some(client_id) = locator.client_id.as_ref() {
-                            snapshot.authoritative_client_ids.insert(client_id.clone());
-                        }
-                    }
-                    Ok(crate::DownloadClientObservation::Absent) => {
-                        let binding = self
-                            .services
-                            .workflow
-                            .download_registry
-                            .find_active_binding_by_locator(&locator)
-                            .await
-                            .map_err(|error| {
-                                AppError::DownloadSubmitUnavailable(error.to_string())
-                            })?;
-                        if binding.is_some() {
-                            // The lifecycle reconciler only visits configured
-                            // clients; a binding on a deleted client would
-                            // otherwise defer this scope forever.
-                            let client_exists = match locator.client_id.as_deref() {
-                                Some(client_id) => self
-                                    .services
-                                    .integrations
-                                    .download_client_configs
-                                    .get_by_id(client_id)
-                                    .await
-                                    .map_err(|error| {
-                                        AppError::DownloadSubmitUnavailable(error.to_string())
-                                    })?
-                                    .is_some(),
-                                None => true,
-                            };
-                            if client_exists {
-                                return Err(AppError::DownloadSubmitUnavailable(
-                                    "download absence is awaiting lifecycle reconciliation; acquisition deferred".into()));
-                            }
-                            tracing::warn!(
-                                download_id = %submission.download_id,
-                                client_id = ?locator.client_id,
-                                "download client was deleted with an active binding; treating the job as absent"
-                            );
-                        }
-                        snapshot
-                            .items
-                            .retain(|cached| !queue_item_matches_submission(cached, submission));
-                        if let Some(client_id) = locator.client_id.as_ref() {
-                            snapshot.authoritative_client_ids.insert(client_id.clone());
-                        }
-                    }
-                    Ok(crate::DownloadClientObservation::Unknown { reason, .. }) => {
-                        return Err(AppError::DownloadSubmitUnavailable(format!(
-                            "client state unknown; acquisition deferred for {}: {reason}",
-                            submission.download_id
-                        )));
-                    }
-                    Err(error) => {
-                        return Err(AppError::DownloadSubmitUnavailable(format!(
-                            "client state unknown; acquisition deferred for {}: {error}",
-                            submission.download_id
-                        )));
-                    }
-                }
-            }
-        }
+        // Clients in failure backoff, with the moment each comes back. A
+        // client that is answering is the authority on what it is running: a
+        // submission with no queue row is simply gone. Only while a client is
+        // blocked is its silence uninformative, and only then does an
+        // overlapping row hold the scope.
+        let blocked_clients = self.blocked_download_clients().await;
 
         if let Some(existing) = existing {
             let snapshot = snapshot
                 .as_ref()
                 .expect("persisted submission has a snapshot");
-            if let Some(item) = snapshot
+            let item = snapshot
                 .items
                 .iter()
-                .find(|item| queue_item_matches_submission(item, &existing))
+                .find(|item| queue_item_matches_submission(item, &existing));
+            if let Some(item) = item
+                && item.state != DownloadQueueState::Failed
             {
-                if item.state != DownloadQueueState::Failed {
-                    return Ok(accepted_existing(existing));
-                }
-                if !submission_client_state_is_authoritative(snapshot, &existing) {
-                    return Err(AppError::DownloadSubmitUnavailable(format!(
-                        "download client state is unavailable for submission {} on title {title_id}",
-                        existing.download_id
-                    )));
-                }
-            } else if !submission_client_state_is_authoritative(snapshot, &existing) {
+                return Ok(accepted_existing(existing));
+            }
+            // The row is gone, or the client reported it Failed: either way this
+            // retry replaces it. Only a client that is in failure backoff can
+            // stop that, because only then is its listing not evidence.
+            if let Some((client_id, until)) =
+                blocked_download_client_for_submission(&blocked_clients, &existing)
+            {
                 return Err(AppError::DownloadSubmitUnavailable(format!(
-                    "download client state is unavailable for submission {} on title {title_id}",
+                    "download client {client_id} is in failure backoff until {until}; submission {} on title {title_id} cannot be resolved yet",
                     existing.download_id
                 )));
             }
@@ -605,6 +543,7 @@ impl AppUseCase {
                 snapshot,
                 &state.episodes,
                 &state.accepted_download_ids,
+                &blocked_clients,
             )?
         } else {
             Vec::new()

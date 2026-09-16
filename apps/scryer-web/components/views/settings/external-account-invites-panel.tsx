@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Link } from "react-router";
-import { Check, ChevronsUpDown, Loader2, Plus, Search } from "lucide-react";
+import { Check, ChevronsUpDown, Plus, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -46,6 +46,7 @@ import { cn } from "@/lib/utils";
 import { AuthenticatedAvatar } from "@/components/common/authenticated-avatar";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const EXTERNAL_INVITES_PANEL_CLASS =
   "overflow-hidden rounded-[14px] border border-[var(--scry-border)] bg-[var(--scry-surf)] shadow-[0_10px_24px_rgba(0,0,0,0.16)]";
@@ -267,7 +268,7 @@ function MediaServerUserCombobox({
             </span>
           </span>
           {loading ? (
-            <Loader2 className="h-4 w-4 shrink-0 animate-spin text-muted-foreground" />
+            <LoadingMark className="h-4 w-4 shrink-0 text-muted-foreground" />
           ) : (
             <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
           )}
@@ -302,7 +303,7 @@ function MediaServerUserCombobox({
           <CommandList>
             {loading ? (
               <div className="flex items-center gap-2 px-3 py-3 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
                 <span>{loadingLabel}</span>
               </div>
             ) : null}
@@ -490,7 +491,7 @@ export function ExternalAccountInvitesPanel({
               {t("settings.externalAccountInvites")}
             </h3>
             {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin text-[var(--scry-muted3)]" />
+              <LoadingMark className="h-4 w-4 text-[var(--scry-muted3)]" />
             ) : null}
           </div>
           {showMediaServersLink ? (
@@ -551,7 +552,7 @@ export function ExternalAccountInvitesPanel({
                 </Label>
                 {mediaServerUserSearchLoading ? (
                   <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <LoadingMark className="h-3 w-3" />
                     {t("label.loading")}
                   </span>
                 ) : null}
@@ -600,7 +601,7 @@ export function ExternalAccountInvitesPanel({
                 disabled={inviteCreateDisabled}
               >
                 {externalInviteSubmitting ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <LoadingMark className="h-4 w-4" />
                 ) : (
                   <Plus className="h-4 w-4" />
                 )}

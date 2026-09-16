@@ -806,6 +806,97 @@ body {
   }
 }
 
+/* The loading mark's delayed entrance: a load that finishes first never shows it. */
+@keyframes scryer-loading-reveal {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@utility animate-loading-reveal {
+  animation: scryer-loading-reveal 200ms ease-out 400ms both;
+}
+
+/*
+ * The setup wizard's welcome (see components/setup/setup-intro.tsx), timed like
+ * Weaver's first-run setup. The big logo appears and holds in the middle while
+ * setup loads (0.576s at least), then flies onto the header logo in 0.624s, and
+ * the rest of the page rises in as it lands. The
+ * flight may wait for setup to finish loading, so the page's animations are
+ * timed from `--setup-intro-flight-delay`.
+ */
+.setup-intro .setup-intro-logo {
+  opacity: 0;
+}
+
+.setup-intro > :not(.setup-intro-header) {
+  opacity: 0;
+}
+
+.setup-intro-playing > :not(.setup-intro-header) {
+  animation: setup-intro-rise 0.33s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(var(--setup-intro-flight-delay, 0ms) + 0.384s);
+}
+
+.setup-intro-appear {
+  animation: setup-intro-appear 0.576s both;
+}
+
+.setup-intro-fly {
+  animation: setup-intro-fly 0.624s cubic-bezier(0.65, 0, 0.25, 1) both;
+  will-change: transform;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-intro-appear {
+    animation: none;
+  }
+}
+
+@keyframes setup-intro-appear {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+    animation-timing-function: cubic-bezier(0.2, 0.7, 0.3, 1);
+  }
+
+  83.33% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+@keyframes setup-intro-fly {
+  from {
+    transform: translate(0, 0) scale(1);
+  }
+
+  to {
+    transform: translate(var(--setup-intro-x), var(--setup-intro-y)) scale(var(--setup-intro-scale));
+  }
+}
+
+@keyframes setup-intro-rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 /* Library scan toast — active phase-bar shimmer sweep */
 @keyframes scry-shimmer {
   0% {
@@ -847,10 +938,6 @@ body {
 [data-code-font] * {
   font-family: var(--font-code), ui-monospace, "SFMono-Regular", "Cascadia Code",
     "Source Code Pro", Menlo, Consolas, monospace;
-}
-
-* {
-  border-color: var(--color-border);
 }
 
 h1,

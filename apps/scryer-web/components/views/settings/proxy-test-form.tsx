@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useTranslate } from "@/lib/context/translate-context";
 import { isSolverProxyProvider, type ProxyRecord } from "@/lib/types";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type ProxyUrlTestResult = {
   ok: boolean;
@@ -154,7 +154,7 @@ export function ProxyTestForm({
               type="submit"
               disabled={isTesting || !url.trim()}
             >
-              {isTesting && <Loader2 className="mr-2 size-4 animate-spin" />}
+              {isTesting && <LoadingMark className="mr-2 size-4" />}
               {t("settings.proxyTest")}
             </Button>
           </div>

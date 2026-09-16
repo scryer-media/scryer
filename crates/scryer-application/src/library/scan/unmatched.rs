@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use chrono::Utc;
@@ -409,6 +409,95 @@ pub(crate) async fn reconcile_library_scan_unmatched_items(
                     &item.item_path,
                 )
                 .await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Drop title-scan rows left behind by a title that no longer owns them.
+///
+/// A title scan records a file it cannot place with the title's folder as the
+/// row's scan root. [`reconcile_library_scan_unmatched_items`] lists rows by
+/// scan root, so the library pass never sees these and the title pass only
+/// sees the folder the title has now. Once the folder is renamed or the title
+/// is deleted, nothing lists the old rows again and they sit in pending
+/// imports forever. Rows under `library_path` (but not at it) are therefore
+/// dropped here when their title is gone or records a different folder.
+pub(crate) async fn reconcile_title_scan_unmatched_items(
+    app: &AppUseCase,
+    facet: &MediaFacet,
+    library_id: &str,
+    library_path: &str,
+) -> AppResult<()> {
+    let repo = &app.services.library.library_scan_unmatched_items;
+    let count = repo
+        .count_library_scan_unmatched_items(Some(facet.clone()), None, None)
+        .await?;
+    if count <= 0 {
+        return Ok(());
+    }
+    let library_root =
+        crate::stored_paths::stored_path_to_path_buf(&normalize_library_scan_root(library_path));
+    let existing = repo
+        .list_library_scan_unmatched_items(Some(facet.clone()), None, None, count, 0)
+        .await?;
+
+    let mut title_folders: HashMap<String, Option<Option<String>>> = HashMap::new();
+    for item in existing {
+        let Some(title_id) = item.title_id.as_deref() else {
+            continue;
+        };
+        if item.library_id != library_id {
+            continue;
+        }
+        let scan_root = crate::stored_paths::stored_path_to_path_buf(&item.scan_root);
+        if scan_root == library_root || !scan_root.starts_with(&library_root) {
+            continue;
+        }
+
+        if !title_folders.contains_key(title_id) {
+            let folder = app
+                .services
+                .catalog
+                .titles
+                .get_by_id(title_id)
+                .await?
+                .map(|title| {
+                    title
+                        .folder_path
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|folder| !folder.is_empty())
+                        .map(|folder| {
+                            normalize_library_scan_root(
+                                &crate::stored_paths::path_to_stored_string(
+                                    crate::stored_paths::stored_path_to_path_buf(folder),
+                                ),
+                            )
+                        })
+                });
+            title_folders.insert(title_id.to_string(), folder);
+        }
+        let stale = match &title_folders[title_id] {
+            None => true,
+            Some(Some(folder)) => *folder != item.scan_root,
+            // No recorded folder to compare against; the title scan owns it.
+            Some(None) => false,
+        };
+        if stale {
+            tracing::debug!(
+                title_id,
+                item_path = %item.item_path,
+                scan_root = %item.scan_root,
+                "dropping pending import left behind by a deleted or moved title"
+            );
+            repo.delete_library_scan_unmatched_item(
+                &item.library_id,
+                facet.clone(),
+                &item.item_path,
+            )
+            .await?;
         }
     }
 

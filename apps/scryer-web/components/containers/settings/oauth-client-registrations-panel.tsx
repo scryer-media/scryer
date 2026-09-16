@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Copy, Loader2, Pencil, Plus, Trash2 } from "lucide-react";
+import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
 import { useClient } from "urql";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
@@ -37,6 +37,7 @@ import {
   type OAuthClientKind,
   type OAuthClientRegistrationForJellyfin,
 } from "@/lib/utils/jellyfin-plugin-oauth-setup";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type OAuthClientRegistration = OAuthClientRegistrationForJellyfin & {
   displayName: string;
@@ -375,7 +376,7 @@ export function OAuthClientRegistrationsPanel() {
               OAuth applications
             </h3>
           </div>
-          {loading ? <Loader2 className="h-4 w-4 animate-spin text-[var(--scry-muted3)]" /> : null}
+          {loading ? <LoadingMark className="h-4 w-4 text-[var(--scry-muted3)]" /> : null}
         </div>
       </div>
 
@@ -535,7 +536,7 @@ export function OAuthClientRegistrationsPanel() {
                 disabled={!canCreateJellyfinPluginClient(busy, jellyfinClientStatus)}
                 onClick={() => void createJellyfinPluginClient()}
               >
-                {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+                {busy ? <LoadingMark className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
                 Create Jellyfin plugin client
               </Button>
               {reconcilingJellyfinClient ? (
@@ -565,7 +566,7 @@ export function OAuthClientRegistrationsPanel() {
                     disabled={loading}
                     onClick={() => void reload(reconcilingJellyfinClient)}
                   >
-                    {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                    {loading ? <LoadingMark className="h-4 w-4" /> : null}
                     Retry client list
                   </Button>
                 </div>
@@ -577,7 +578,7 @@ export function OAuthClientRegistrationsPanel() {
                   disabled={loading}
                   onClick={() => void reload()}
                 >
-                  {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {loading ? <LoadingMark className="h-4 w-4" /> : null}
                   Retry client list
                 </Button>
               ) : null}
@@ -724,7 +725,7 @@ export function OAuthClientRegistrationsPanel() {
             />
           ) : null}
           <Button type="submit" disabled={busy}>
-            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
+            {busy ? <LoadingMark className="h-4 w-4" /> : <Plus className="h-4 w-4" />}
             {editingClient ? "Save application" : "Create application"}
           </Button>
         </form>

@@ -37,7 +37,7 @@ use crate::library_scan_unmatched::{
     build_movie_unmatched_scan_item, build_series_unmatched_scan_item,
     clear_library_scan_unmatched_item, format_library_scan_unmatched_search_attempts,
     normalize_library_scan_item_path, persist_library_scan_unmatched_item,
-    reconcile_library_scan_unmatched_items,
+    reconcile_library_scan_unmatched_items, reconcile_title_scan_unmatched_items,
 };
 use crate::settings::settings::{
     effective_scan_roots_from_root_folders, root_folder_entries_from_library_roots,
@@ -65,11 +65,11 @@ mod scan_title_finalize;
 mod scan_title_scan;
 
 use scan_candidates::{
-    process_movie_full_scan_candidate, process_movie_refresh_candidate,
-    process_resolved_movie_full_scan_candidate, process_resolved_movie_refresh_candidate,
-    process_resolved_series_full_scan_candidate, process_resolved_series_refresh_candidate,
-    process_series_full_scan_candidate, process_series_refresh_candidate,
-    scan_episodic_title_directory_for_progress_metrics,
+    heal_scanned_title_root_folder_id, process_movie_full_scan_candidate,
+    process_movie_refresh_candidate, process_resolved_movie_full_scan_candidate,
+    process_resolved_movie_refresh_candidate, process_resolved_series_full_scan_candidate,
+    process_resolved_series_refresh_candidate, process_series_full_scan_candidate,
+    process_series_refresh_candidate, scan_episodic_title_directory_for_progress_metrics,
 };
 use scan_full::{scan_library_movies, scan_library_series};
 use scan_pipeline::{

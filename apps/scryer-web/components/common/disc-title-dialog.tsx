@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useClient } from "urql";
-import { Disc3, Loader2, TriangleAlert } from "lucide-react";
+import { Disc3, TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -37,6 +37,7 @@ import {
   formatDiscDuration,
 } from "@/lib/utils/disc-review";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const AUTOMATIC = "__automatic__";
 
@@ -225,7 +226,7 @@ export function DiscTitleDialog({ open, onOpenChange, file }: {
         ) : null}
 
         {mode === "loading" ? (
-          <p className="flex items-center gap-2 text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />{t("mediaFile.discMappingLoading")}</p>
+          <p className="flex items-center gap-2 text-muted-foreground"><LoadingMark className="h-4 w-4" />{t("mediaFile.discMappingLoading")}</p>
         ) : mode === "movie" ? (
           <section className="space-y-2">
             <h3 className="text-xs font-medium text-muted-foreground">{t("mediaFile.discChooseTitle")}</h3>
@@ -302,12 +303,12 @@ export function DiscTitleDialog({ open, onOpenChange, file }: {
         </Button>
         {mode === "movie" ? (
           <Button id="disc-title-save" type="button" variant="primary" disabled={busy || (!titleChanged && !review)} onClick={() => { void saveTitle(); }}>
-            {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+            {busy ? <LoadingMark className="mr-1 h-4 w-4" /> : null}
             {t(busy ? "mediaFile.discSaving" : "mediaFile.discUseTitle")}
           </Button>
         ) : mode === "episodes" ? (
           <Button id="disc-title-save" type="button" variant="primary" disabled={busy || !mappingsChanged} onClick={() => { void saveMappings(); }}>
-            {busy ? <Loader2 className="mr-1 h-4 w-4 animate-spin" /> : null}
+            {busy ? <LoadingMark className="mr-1 h-4 w-4" /> : null}
             {t(busy ? "mediaFile.discSaving" : "mediaFile.discMappingSave")}
           </Button>
         ) : null}

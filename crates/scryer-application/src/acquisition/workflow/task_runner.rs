@@ -786,6 +786,43 @@ impl GrabProposal {
     }
 }
 
+/// Arbitration order for two held-back proposals.
+///
+/// `RankHead::compare` is the half of the search comparator that reads off a
+/// scored result alone — allowed, tier, revision, score — so it is the only part
+/// that means anything *between* two searches. The listing tie-breakers below it
+/// (indexer priority, seeders, age) order rows within one query and would be
+/// comparing unrelated things here.
+///
+/// **At equal worth, the widest cover wins.** Scores tie constantly: a season
+/// pack and the episodes inside it are usually the same group at the same
+/// quality. Whoever sorts first then takes the episodes and the other proposal
+/// is set aside for conflicting — so the tie used to be settled by the order the
+/// walk happened to build its proposals in, and one pack grab became several
+/// episode grabs. Sonarr prefers the pack when it covers the wanted episodes; so
+/// do we, but only on a true tie — a strictly better-ranked episode release
+/// still wins outright.
+///
+/// Coverage is counted in episode ids, so a season pack whose season had no
+/// collection to resolve (empty `episode_ids`) claims nothing extra here rather
+/// than displacing episodes it cannot be shown to cover.
+fn compare_grab_proposal_worth(
+    left_best: Option<&IndexerSearchResult>,
+    left_coverage: usize,
+    right_best: Option<&IndexerSearchResult>,
+    right_coverage: usize,
+) -> std::cmp::Ordering {
+    match (left_best, right_best) {
+        (Some(left), Some(right)) => crate::acquisition::scoring::RankHead::compare(left, right),
+        // A proposal with no candidate cannot win; it sorts last rather than
+        // being dropped, so nothing it still owes gets skipped.
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    }
+    .then_with(|| right_coverage.cmp(&left_coverage))
+}
+
 /// Arbitrate this title's held-back grabs and commit the winners.
 ///
 /// Best-first by release worth, greedy on episode conflicts: a proposal whose
@@ -817,23 +854,14 @@ async fn arbitrate_and_commit_title_grabs(
         return (0, 0);
     }
 
-    // `RankHead::compare` is the half of the search comparator that reads off a
-    // scored result alone — allowed, tier, revision, score — so it is the only
-    // part that means anything *between* two searches. The listing tie-breakers
-    // below it (indexer priority, seeders, age) order rows within one query and
-    // would be comparing unrelated things here.
-    proposals.sort_by(
-        |left, right| match (left.best_candidate(), right.best_candidate()) {
-            (Some(left), Some(right)) => {
-                crate::acquisition::scoring::RankHead::compare(left, right)
-            }
-            // A proposal with no candidate cannot win; it sorts last rather than
-            // being dropped, so nothing it still owes gets skipped.
-            (Some(_), None) => std::cmp::Ordering::Less,
-            (None, Some(_)) => std::cmp::Ordering::Greater,
-            (None, None) => std::cmp::Ordering::Equal,
-        },
-    );
+    proposals.sort_by(|left, right| {
+        compare_grab_proposal_worth(
+            left.best_candidate(),
+            left.episode_ids.len(),
+            right.best_candidate(),
+            right.episode_ids.len(),
+        )
+    });
 
     let mut claimed = cycle.claimed_episode_ids();
     let mut committed = 0usize;
@@ -5028,7 +5056,12 @@ pub async fn start_background_acquisition_poller(
     let mut prowlarr_sync_interval = tokio::time::interval(std::time::Duration::from_mins(5));
     let mut direct_indexer_caps_interval =
         tokio::time::interval(std::time::Duration::from_hours(24));
-    let mut rss_sync_interval = tokio::time::interval(std::time::Duration::from_mins(1));
+    // Not a fixed minute: the worker only *considers* RSS on a tick, so a
+    // cadence shorter than its tick could never take effect. The cadence knob
+    // therefore pulls the tick down with it, and leaves it at a minute
+    // otherwise.
+    let mut rss_sync_interval =
+        tokio::time::interval(crate::acquisition::rss::rss_sync_tick_period());
     let mut pending_release_interval = tokio::time::interval(std::time::Duration::from_mins(1));
     let mut maintenance_evaluation_interval = tokio::time::interval_at(
         tokio::time::Instant::now() + maintenance_evaluation_offset,
@@ -6196,5 +6229,109 @@ mod task_runner_tests {
     #[test]
     fn background_acquisition_title_limit_is_four() {
         assert_eq!(BACKGROUND_ACQUISITION_TITLE_LIMIT, 4);
+    }
+
+    fn arbitration_candidate(
+        release_title: &str,
+        decision: Option<crate::QualityProfileDecision>,
+    ) -> IndexerSearchResult {
+        IndexerSearchResult {
+            indexer_id: None,
+            source: "synthetic-indexer".to_string(),
+            title: release_title.to_string(),
+            link: None,
+            download_url: None,
+            source_kind: None,
+            size_bytes: None,
+            published_at: None,
+            thumbs_up: None,
+            thumbs_down: None,
+            indexer_languages: None,
+            indexer_subtitles: None,
+            indexer_grabs: None,
+            password_hint: None,
+            parsed_release_metadata: Some(crate::parse_release_metadata(release_title)),
+            quality_profile_decision: decision,
+            extra: Default::default(),
+            response_attributes: Default::default(),
+            guid: None,
+            info_url: None,
+            provenance: None,
+            candidate_token: None,
+            queue_scope: None,
+            coverage_scope: None,
+            auto_eligible: None,
+            auto_decision_code: None,
+            auto_decision_summary: None,
+        }
+    }
+
+    /// Three proposals of equal worth — E01, E02 and the pack that contains
+    /// them — offered to arbitration in the order the walk built them. The pack
+    /// covers two wanted episodes to their one, so it sorts first and the greedy
+    /// pass commits it; the episode proposals then conflict on episodes the pack
+    /// just claimed and are set aside.
+    #[test]
+    fn a_season_pack_outranks_the_episodes_it_covers_at_equal_worth() {
+        let first_episode = arbitration_candidate("Synthetic.Show.S01E01.1080p.WEB-DL-GRP", None);
+        let second_episode = arbitration_candidate("Synthetic.Show.S01E02.1080p.WEB-DL-GRP", None);
+        let pack = arbitration_candidate("Synthetic.Show.S01.1080p.WEB-DL-GRP", None);
+        // (best candidate, episodes covered), episodes first as the walk offers them.
+        let mut proposals = [
+            (&first_episode, 1usize),
+            (&second_episode, 1usize),
+            (&pack, 2usize),
+        ];
+        proposals.sort_by(|(left, left_coverage), (right, right_coverage)| {
+            compare_grab_proposal_worth(Some(left), *left_coverage, Some(right), *right_coverage)
+        });
+        // The greedy pass commits the head and sets aside everything that
+        // conflicts with what it claimed, so ordering is the whole decision:
+        // the pack first means the pack grabbed and both episodes set aside.
+        assert_eq!(
+            proposals
+                .iter()
+                .map(|(candidate, _)| candidate.title.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "Synthetic.Show.S01.1080p.WEB-DL-GRP",
+                "Synthetic.Show.S01E01.1080p.WEB-DL-GRP",
+                "Synthetic.Show.S01E02.1080p.WEB-DL-GRP",
+            ],
+        );
+    }
+
+    /// A strictly better episode release is not a tie, so the widest-cover rule
+    /// never reaches it: the episode still wins outright.
+    #[test]
+    fn a_better_ranked_episode_release_still_outranks_a_wider_pack() {
+        let better = arbitration_candidate(
+            "Synthetic.Show.S01E01.1080p.WEB-DL-GRP",
+            Some(crate::QualityProfileDecision {
+                release_score: 1_000,
+                scoring_log: Vec::new(),
+                allowed: true,
+                block_codes: Vec::new(),
+                preference_score: 1_000,
+                tier_index: Some(0),
+                size_fit_penalty: 0,
+            }),
+        );
+        let pack = arbitration_candidate(
+            "Synthetic.Show.S01.720p.WEB-DL-GRP",
+            Some(crate::QualityProfileDecision {
+                release_score: 500,
+                scoring_log: Vec::new(),
+                allowed: true,
+                block_codes: Vec::new(),
+                preference_score: 500,
+                tier_index: Some(3),
+                size_fit_penalty: 0,
+            }),
+        );
+        assert_eq!(
+            compare_grab_proposal_worth(Some(&better), 1, Some(&pack), 2),
+            std::cmp::Ordering::Less,
+        );
     }
 }

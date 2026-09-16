@@ -687,6 +687,7 @@ impl ConfigMutations {
         Ok(from_download_client_config_with_fields(
             config,
             &config_fields,
+            None,
         ))
     }
 
@@ -769,6 +770,7 @@ impl ConfigMutations {
         Ok(from_download_client_config_with_fields(
             config,
             &config_fields,
+            None,
         ))
     }
 

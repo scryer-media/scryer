@@ -279,6 +279,8 @@ impl LibraryRepository for MockLibraryRepo {
 #[derive(Default)]
 pub(super) struct MockShowRepo {
     pub(super) fail_monitoring: Mutex<bool>,
+    /// Stands in for a transient store failure on the anime numbering bridge.
+    pub(super) fail_anime_bridge: Mutex<bool>,
     pub(super) anime_numbering_bridges: Mutex<HashMap<String, scryer_domain::AnimeNumberingBridge>>,
     pub(super) collections: Arc<Mutex<Vec<Collection>>>,
     pub(super) episodes: Arc<Mutex<Vec<Episode>>>,
@@ -293,6 +295,11 @@ impl ShowRepository for MockShowRepo {
         &self,
         title_id: &str,
     ) -> AppResult<Option<scryer_domain::AnimeNumberingBridge>> {
+        if *self.fail_anime_bridge.lock().await {
+            return Err(crate::AppError::Repository(
+                "anime numbering bridge is unavailable".into(),
+            ));
+        }
         Ok(self
             .anime_numbering_bridges
             .lock()

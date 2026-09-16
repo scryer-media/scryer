@@ -1495,6 +1495,7 @@ export const beginManualImportSelectionMutation = `mutation BeginManualImportSel
       parsedSeason
       parsedEpisodes
       suggestedEpisodeId
+      suggestedEpisodeIds
       suggestedEpisodeLabel
       suggestedSeriesMovieLinkId
     }

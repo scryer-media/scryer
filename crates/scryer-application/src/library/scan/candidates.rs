@@ -7,6 +7,7 @@ use crate::library_scan_unmatched::{
     series_unmatched_display_name,
 };
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
+use scryer_domain::Library;
 
 fn normalize_title_folder_path(path: Option<String>) -> Option<String> {
     path.filter(|value| !value.is_empty())
@@ -70,8 +71,13 @@ async fn claim_series_candidate_folder(
     crate::folder_ownership::claim_title_folder_if_missing(app, title, &candidate.folder_path).await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "series candidate preparation needs its scan context, the run's library, and the title together"
+)]
 async fn prepare_series_title_for_candidate(
     app: &AppUseCase,
+    library: Option<&Library>,
     facet: &MediaFacet,
     library_id: &str,
     library_path: &str,
@@ -110,7 +116,32 @@ async fn prepare_series_title_for_candidate(
     }
 
     claim_series_candidate_folder(app, title, candidate).await?;
+    heal_scanned_title_root_folder_id(app, library, title).await?;
     Ok(None)
+}
+
+/// Keep a scanned title's root id pointing at the root its folder is actually
+/// under (#224). Evidence, not reassignment: the files are there.
+pub(super) async fn heal_scanned_title_root_folder_id(
+    app: &AppUseCase,
+    library: Option<&Library>,
+    title: &mut Title,
+) -> AppResult<()> {
+    const ENTRY: &crate::location::ownership_guard::GuardedEntry =
+        &crate::location::ownership_guard::LIBRARY_SCAN_ENTRY;
+    match library {
+        // The pipeline loads the library once per run, so a title whose root id
+        // is already right costs no query at all.
+        Some(library) => {
+            app.heal_title_root_folder_id_for_owned_folder_in_library(ENTRY, library, title)
+                .await?;
+        }
+        None => {
+            app.heal_title_root_folder_id_for_owned_folder(ENTRY, title)
+                .await?;
+        }
+    }
+    Ok(())
 }
 
 async fn persist_movie_title_folder_ownership_conflict(
@@ -211,6 +242,26 @@ fn scanned_movie_entry_folder_path(
 }
 
 async fn sync_movie_title_folder_path_for_scan(
+    app: &AppUseCase,
+    library: Option<&Library>,
+    title: &mut Title,
+    scan_root: &Path,
+    representative_path: &str,
+    representative_is_directory: bool,
+) -> AppResult<(Option<String>, Option<String>)> {
+    let synced = sync_movie_title_folder_path_for_scan_inner(
+        app,
+        title,
+        scan_root,
+        representative_path,
+        representative_is_directory,
+    )
+    .await?;
+    heal_scanned_title_root_folder_id(app, library, title).await?;
+    Ok(synced)
+}
+
+async fn sync_movie_title_folder_path_for_scan_inner(
     app: &AppUseCase,
     title: &mut Title,
     scan_root: &Path,
@@ -494,12 +545,31 @@ enum MovieMetadataResolution {
     Unmatched,
 }
 
+/// Create a scan-discovered title on the root the scan actually walked.
+///
+/// `library_path` is the configured scan path of this pipeline run, so the
+/// root containing it is the root the candidate's files live under. Leaving
+/// `root_folder_id` unset would fall back to the library's *default* root
+/// (#224), which then makes every later rename propose a cross-root move.
 async fn create_title_without_hydration_for_library_scan(
     app: &AppUseCase,
     actor: &User,
     library_id: &str,
-    request: NewTitle,
+    library_path: &str,
+    mut request: NewTitle,
 ) -> AppResult<CreateTitleOutcome> {
+    if request.root_folder_id.is_none() {
+        request.root_folder_id = app
+            .library_root_folder_id_containing_path(library_id, library_path)
+            .await?;
+        if request.root_folder_id.is_none() {
+            tracing::debug!(
+                library_id,
+                library_path,
+                "library scan path lies under no configured root; the new title keeps the library default root"
+            );
+        }
+    }
     app.create_title_without_hydration_after_library_authorization(
         actor,
         request,
@@ -618,8 +688,13 @@ pub(super) async fn scan_episodic_title_directory_for_progress_metrics(
         .await
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "series work merging needs the scan's title index, the run's library, and executor state together"
+)]
 async fn merge_series_title_work_for_index(
     app: &AppUseCase,
+    library: Option<&Library>,
     executor: &mut dyn LibraryScanTitleWorkQueue,
     existing_titles: &mut [Title],
     index: usize,
@@ -633,6 +708,7 @@ async fn merge_series_title_work_for_index(
         folder_path,
     )
     .await?;
+    heal_scanned_title_root_folder_id(app, library, &mut existing_titles[index]).await?;
     executor.enqueue(deferred_episodic_title_work(
         existing_titles[index].clone(),
         mode,
@@ -647,6 +723,7 @@ async fn merge_series_title_work_for_index(
 )]
 async fn append_series_title_and_merge_work(
     app: &AppUseCase,
+    library: Option<&Library>,
     executor: &mut dyn LibraryScanTitleWorkQueue,
     existing_titles: &mut Vec<Title>,
     existing_titles_by_name: &mut TitleNameIndex,
@@ -668,6 +745,7 @@ async fn append_series_title_and_merge_work(
     );
     merge_series_title_work_for_index(
         app,
+        library,
         executor,
         existing_titles,
         index,
@@ -716,6 +794,7 @@ async fn resolve_movie_metadata_match(
     actor: &User,
     facet: &MediaFacet,
     library_id: &str,
+    library_path: &str,
     candidate: &PreparedMovieLibraryScanCandidate,
     batch_search_results: &MetadataSearchResults,
     existing_titles: &mut Vec<Title>,
@@ -749,6 +828,7 @@ async fn resolve_movie_metadata_match(
         app,
         actor,
         library_id,
+        library_path,
         build_new_title_from_metadata_match(facet, &selected),
     )
     .await
@@ -784,6 +864,7 @@ async fn resolve_movie_metadata_match(
 )]
 pub(super) async fn process_movie_full_scan_candidate(
     app: &AppUseCase,
+    library: Option<&Library>,
     _actor: &User,
     facet: &MediaFacet,
     library_id: &str,
@@ -811,6 +892,7 @@ pub(super) async fn process_movie_full_scan_candidate(
     {
         let (canonical_folder_path, scan_folder_path) = sync_movie_title_folder_path_for_scan(
             app,
+            library,
             &mut title,
             scan_root,
             &representative_path,
@@ -943,6 +1025,7 @@ pub(super) async fn process_movie_full_scan_candidate(
             let mut title = *title;
             let (canonical_folder_path, scan_folder_path) = sync_movie_title_folder_path_for_scan(
                 app,
+                library,
                 &mut title,
                 scan_root,
                 &representative_path,
@@ -999,6 +1082,7 @@ pub(super) async fn process_movie_full_scan_candidate(
 )]
 pub(super) async fn process_series_full_scan_candidate(
     app: &AppUseCase,
+    library: Option<&Library>,
     _actor: &User,
     facet: &MediaFacet,
     library_id: &str,
@@ -1055,6 +1139,7 @@ pub(super) async fn process_series_full_scan_candidate(
     {
         merge_series_title_work_for_index(
             app,
+            library,
             executor,
             existing_titles,
             index,
@@ -1079,6 +1164,7 @@ pub(super) async fn process_series_full_scan_candidate(
     ) {
         if let Some(conflict) = prepare_series_title_for_candidate(
             app,
+            library,
             facet,
             library_id,
             library_path,
@@ -1095,6 +1181,7 @@ pub(super) async fn process_series_full_scan_candidate(
         }
         merge_series_title_work_for_index(
             app,
+            library,
             executor,
             existing_titles,
             index,
@@ -1162,6 +1249,7 @@ pub(super) async fn process_series_full_scan_candidate(
 )]
 pub(super) async fn process_resolved_movie_full_scan_candidate(
     app: &AppUseCase,
+    library: Option<&Library>,
     actor: &User,
     facet: &MediaFacet,
     library_id: &str,
@@ -1187,6 +1275,7 @@ pub(super) async fn process_resolved_movie_full_scan_candidate(
         actor,
         facet,
         library_id,
+        library_path,
         &candidate,
         batch_search_results,
         existing_titles,
@@ -1201,6 +1290,7 @@ pub(super) async fn process_resolved_movie_full_scan_candidate(
         MovieMetadataResolution::Ready(mut title) => {
             let (canonical_folder_path, scan_folder_path) = sync_movie_title_folder_path_for_scan(
                 app,
+                library,
                 &mut title,
                 scan_root,
                 &candidate.file.path,
@@ -1245,6 +1335,7 @@ pub(super) async fn process_resolved_movie_full_scan_candidate(
         MovieMetadataResolution::ReadyCreated { mut title, .. } => {
             let (canonical_folder_path, scan_folder_path) = sync_movie_title_folder_path_for_scan(
                 app,
+                library,
                 &mut title,
                 scan_root,
                 &candidate.file.path,
@@ -1317,6 +1408,7 @@ pub(super) async fn process_resolved_movie_full_scan_candidate(
 )]
 pub(super) async fn process_resolved_series_full_scan_candidate(
     app: &AppUseCase,
+    library: Option<&Library>,
     actor: &User,
     facet: &MediaFacet,
     library_id: &str,
@@ -1400,6 +1492,7 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
     ) {
         if let Some(conflict) = prepare_series_title_for_candidate(
             app,
+            library,
             facet,
             library_id,
             library_path,
@@ -1416,6 +1509,7 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
         }
         merge_series_title_work_for_index(
             app,
+            library,
             executor,
             existing_titles,
             index,
@@ -1434,6 +1528,7 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
         app,
         actor,
         library_id,
+        library_path,
         build_new_title_from_metadata_match(facet, &selected),
     )
     .await
@@ -1443,6 +1538,7 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
             let mut created_title = created.title;
             if let Some(conflict) = prepare_series_title_for_candidate(
                 app,
+                library,
                 facet,
                 library_id,
                 library_path,
@@ -1460,6 +1556,7 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
             let candidate_folder = candidate.folder_path.clone();
             append_series_title_and_merge_work(
                 app,
+                library,
                 executor,
                 existing_titles,
                 existing_titles_by_name,
@@ -1512,6 +1609,7 @@ pub(super) async fn process_resolved_series_full_scan_candidate(
 )]
 async fn refresh_existing_series_title_match(
     app: &AppUseCase,
+    library: Option<&Library>,
     facet: &MediaFacet,
     library_id: &str,
     library_path: &str,
@@ -1525,6 +1623,7 @@ async fn refresh_existing_series_title_match(
 ) -> AppResult<()> {
     if prepare_series_title_for_candidate(
         app,
+        library,
         facet,
         library_id,
         library_path,
@@ -1555,6 +1654,7 @@ async fn refresh_existing_series_title_match(
 )]
 pub(super) async fn process_series_refresh_candidate(
     app: &AppUseCase,
+    library: Option<&Library>,
     facet: &MediaFacet,
     library_id: &str,
     library_path: &str,
@@ -1584,6 +1684,7 @@ pub(super) async fn process_series_refresh_candidate(
     ) {
         refresh_existing_series_title_match(
             app,
+            library,
             facet,
             library_id,
             library_path,
@@ -1613,6 +1714,7 @@ pub(super) async fn process_series_refresh_candidate(
 )]
 pub(super) async fn process_resolved_series_refresh_candidate(
     app: &AppUseCase,
+    library: Option<&Library>,
     actor: &User,
     facet: &MediaFacet,
     library_id: &str,
@@ -1649,6 +1751,7 @@ pub(super) async fn process_resolved_series_refresh_candidate(
     ) {
         refresh_existing_series_title_match(
             app,
+            library,
             facet,
             library_id,
             library_path,
@@ -1668,6 +1771,7 @@ pub(super) async fn process_resolved_series_refresh_candidate(
         app,
         actor,
         library_id,
+        library_path,
         build_new_title_from_metadata_match(facet, &selected),
     )
     .await
@@ -1677,6 +1781,7 @@ pub(super) async fn process_resolved_series_refresh_candidate(
             let mut created_title = created.title;
             if prepare_series_title_for_candidate(
                 app,
+                library,
                 facet,
                 library_id,
                 library_path,
@@ -1692,6 +1797,7 @@ pub(super) async fn process_resolved_series_refresh_candidate(
             }
             let index = append_series_title_and_merge_work(
                 app,
+                library,
                 executor,
                 existing_titles,
                 existing_titles_by_name,
@@ -1731,6 +1837,7 @@ pub(super) async fn process_resolved_series_refresh_candidate(
 )]
 pub(super) async fn process_movie_refresh_candidate(
     app: &AppUseCase,
+    library: Option<&Library>,
     _actor: &User,
     library_id: &str,
     candidate: PreparedMovieLibraryScanCandidate,
@@ -1763,6 +1870,7 @@ pub(super) async fn process_movie_refresh_candidate(
             let mut title = *title;
             let (canonical_folder_path, scan_folder_path) = sync_movie_title_folder_path_for_scan(
                 app,
+                library,
                 &mut title,
                 root,
                 &representative_path,
@@ -1824,6 +1932,7 @@ pub(super) async fn process_movie_refresh_candidate(
 )]
 pub(super) async fn process_resolved_movie_refresh_candidate(
     app: &AppUseCase,
+    library: Option<&Library>,
     actor: &User,
     library_id: &str,
     candidate: PreparedMovieLibraryScanCandidate,
@@ -1847,6 +1956,7 @@ pub(super) async fn process_resolved_movie_refresh_candidate(
         actor,
         &MediaFacet::Movie,
         library_id,
+        &path_to_stored_string(root),
         &candidate,
         batch_search_results,
         existing_titles,
@@ -1861,6 +1971,7 @@ pub(super) async fn process_resolved_movie_refresh_candidate(
         MovieMetadataResolution::Ready(mut title) => {
             let (canonical_folder_path, scan_folder_path) = sync_movie_title_folder_path_for_scan(
                 app,
+                library,
                 &mut title,
                 root,
                 &representative_path,
@@ -1914,6 +2025,7 @@ pub(super) async fn process_resolved_movie_refresh_candidate(
         MovieMetadataResolution::ReadyCreated { index, mut title } => {
             let (canonical_folder_path, scan_folder_path) = sync_movie_title_folder_path_for_scan(
                 app,
+                library,
                 &mut title,
                 root,
                 &representative_path,

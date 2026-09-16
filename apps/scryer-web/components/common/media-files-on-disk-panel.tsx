@@ -2,7 +2,6 @@ import * as React from "react";
 import {
   File as FileIcon,
   HardDrive,
-  Loader2,
   Search,
   Star,
   Trash2,
@@ -13,10 +12,13 @@ import { ExternalSubtitleSection } from "@/components/common/external-subtitle-s
 import { DiscTitleButton } from "@/components/common/disc-title-dialog";
 import { hasDiscInventory } from "@/lib/utils/disc-review";
 import {
+  AudioTracksPopover,
   MediaInfoBadges,
   SubtitleTracksPopover,
   type MediaInfoFile,
 } from "@/components/common/media-info-badges";
+import { MediaInfoButton } from "@/components/common/media-info-dialog";
+import { audioStreamsForFile, formatMediaFileSize } from "@/lib/utils/media-info-format";
 import { SubtitleSearchModal } from "@/components/views/subtitle-search-modal";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
@@ -26,6 +28,7 @@ import { formatUiDate } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { audioFormatPills, hdrFormatPills } from "@/lib/utils/media-format-pills";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type MediaFileOnDisk = MediaInfoFile & {
   id: string;
@@ -80,6 +83,7 @@ type MediaFilesOnDiskPanelProps<TFile extends MediaFileOnDisk> = {
   deleteFileIdPrefix?: string;
   makePrimaryFileIdPrefix?: string;
   discTitleIdPrefix?: string;
+  mediaInfoIdPrefix?: string;
 };
 
 export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
@@ -104,6 +108,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
   deleteFileIdPrefix = "media-file-delete",
   makePrimaryFileIdPrefix = "media-file-make-primary",
   discTitleIdPrefix = "media-file-disc-title",
+  mediaInfoIdPrefix = "media-file-info",
 }: MediaFilesOnDiskPanelProps<TFile>) {
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
@@ -183,6 +188,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                 .filter((pill) => !selectedTitleAudio?.toLowerCase().includes(pill.toLowerCase()))
                 .map(formatPill),
             ];
+            const selectedTitleAudioStreams = audioStreamsForFile(file);
             const selectedTitleSubtitleStreams =
               file.subtitleStreams.length > 0
                 ? file.subtitleStreams
@@ -301,6 +307,12 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             {badge.label}
                           </span>
                         ))}
+                        {selectedTitleAudioStreams.length > 0 ? (
+                          <AudioTracksPopover
+                            streams={selectedTitleAudioStreams}
+                            presentation="selected-title"
+                          />
+                        ) : null}
                         {selectedTitleSubtitleStreams.length > 0 ? (
                           <SubtitleTracksPopover
                             streams={selectedTitleSubtitleStreams}
@@ -311,9 +323,20 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             No subs
                           </span>
                         )}
+                        <MediaInfoButton
+                          id={selectorId(mediaInfoIdPrefix, file.id)}
+                          file={file}
+                          presentation="selected-title"
+                        />
                       </div>
                     ) : (
-                      <MediaInfoBadges file={file} />
+                      <div className="flex flex-wrap items-center gap-1">
+                        <MediaInfoBadges file={file} />
+                        <MediaInfoButton
+                          id={selectorId(mediaInfoIdPrefix, file.id)}
+                          file={file}
+                        />
+                      </div>
                     )}
                     <ExternalSubtitleSection
                       downloads={downloads}
@@ -388,7 +411,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                               aria-label={t("mediaFile.makePrimary")}
                               leadingIcon={
                                 isPromotingFile ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                  <LoadingMark className="h-3.5 w-3.5" />
                                 ) : (
                                   <Star className="h-3.5 w-3.5" />
                                 )
@@ -421,7 +444,7 @@ export function MediaFilesOnDiskPanel<TFile extends MediaFileOnDisk>({
                             className={selectedTitlePresentation ? "h-8 w-8" : undefined}
                           >
                             {isDeletingFile ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
+                              <LoadingMark className="h-4 w-4" />
                             ) : (
                               <Trash2 className="h-4 w-4" />
                             )}
@@ -484,21 +507,4 @@ function formatMediaFileDate(
   }
 
   return formatUiDate(iso, dateTimeFormat, { fallback: iso });
-}
-
-function formatMediaFileSize(sizeBytes: number | null | undefined) {
-  const bytes = sizeBytes ?? Number.NaN;
-  if (!Number.isFinite(bytes) || bytes <= 0) {
-    return "-";
-  }
-  if (bytes >= 1024 ** 3) {
-    return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
-  }
-  if (bytes >= 1024 ** 2) {
-    return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
-  }
-  if (bytes >= 1024) {
-    return `${(bytes / 1024).toFixed(2)} KB`;
-  }
-  return `${bytes.toFixed(0)} B`;
 }

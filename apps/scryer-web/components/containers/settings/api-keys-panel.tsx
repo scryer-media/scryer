@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   Clipboard,
   KeyRound,
-  Loader2,
   ShieldAlert,
   Trash2,
 } from "lucide-react";
@@ -28,6 +27,7 @@ import {
 import { myApiKeysQuery } from "@/lib/graphql/queries";
 import type { ApiKeySummary, UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDateTime } from "@/lib/utils/date-format";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type MyApiKeysQueryResult = {
   canCreateMyApiKeys: boolean;
@@ -376,7 +376,7 @@ export function ApiKeysPanel({ adoptSession }: {
                 className="h-10 w-full sm:w-auto"
               >
                 {busy ? (
-                  <Loader2 className="animate-spin" aria-hidden="true" />
+                  <LoadingMark />
                 ) : (
                   <KeyRound aria-hidden="true" />
                 )}
@@ -393,7 +393,7 @@ export function ApiKeysPanel({ adoptSession }: {
 
         {!loaded ? (
           <div className="flex items-center gap-2 py-2 text-sm text-[var(--scry-muted3)]">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            <LoadingMark className="h-4 w-4" />
             Loading API keys…
           </div>
         ) : keys.length === 0 ? (
@@ -464,7 +464,7 @@ export function ApiKeysPanel({ adoptSession }: {
                       className="w-fit"
                     >
                       {revokingId === key.id ? (
-                        <Loader2 className="animate-spin" aria-hidden="true" />
+                        <LoadingMark />
                       ) : (
                         <Trash2 aria-hidden="true" />
                       )}

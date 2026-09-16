@@ -107,6 +107,10 @@ pub fn from_title(app: &AppUseCase, title: Title) -> TitlePayload {
     let recap_policy = extract_tag_string(&title.tags, "scryer:recap-policy:")
         .as_deref()
         .and_then(RecapPolicyValue::from_app_str);
+    let release_numbering =
+        extract_tag_string(&title.tags, scryer_domain::RELEASE_NUMBERING_TAG_PREFIX)
+            .as_deref()
+            .and_then(ReleaseNumberingValue::from_app_str);
     let poster_upstream = title.poster_source_url.as_deref().or(title
         .poster_url
         .as_deref()
@@ -188,6 +192,7 @@ pub fn from_title(app: &AppUseCase, title: Title) -> TitlePayload {
         inter_season_movies,
         filler_policy,
         recap_policy,
+        release_numbering,
     }
 }
 

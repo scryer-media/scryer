@@ -6,7 +6,7 @@
 //! checkpointed, resumable operation model so Activity, resume,
 //! cancellation, and the concurrency guard are written once.
 //!
-//! Module map (see `specs/0001-library-location-and-movement/`):
+//! Module map:
 //!
 //! | Module | Responsibility |
 //! |---|---|

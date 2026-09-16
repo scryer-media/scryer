@@ -740,6 +740,61 @@ async fn an_unmapped_observation_is_retained_with_no_subject() {
     ));
 }
 
+/// A connection that was turned off and back on has not swept since it came
+/// back, so its stored success timestamp describes a picture from before the
+/// gap. Reporting that as fresh would hand a rule a watch picture up to the
+/// whole freshness window old, and those facts gate destructive actions.
+#[tokio::test]
+async fn a_re_enabled_connection_reports_never_swept_until_it_sweeps_again() {
+    let fixture = sync_app(
+        vec![jellyfin_connection(true)],
+        vec![verified_account()],
+        StubSignalSource::default(),
+    );
+    fixture
+        .app
+        .run_media_server_signal_sync_job()
+        .await
+        .expect("sweep");
+    let swept = fixture.signals.state_for(CONNECTION_ID).await.unwrap();
+    assert!(swept.last_success_at.is_some());
+    assert!(
+        matches!(
+            fixture
+                .app
+                .maintenance_watch_context()
+                .await
+                .unwrap()
+                .freshness,
+            crate::maintenance_rules::facts::WatchSignalFreshness::Fresh
+        ),
+        "a connection that has swept cleanly is the baseline this test moves away from"
+    );
+
+    // What a disable sweep records: the connection's state as of that sweep,
+    // with the prior success carried forward. The connection itself is enabled
+    // again, but nothing has swept since.
+    let mut disabled = swept.clone();
+    disabled.enabled = false;
+    fixture
+        .signals
+        .upsert_signal_sync_state(&disabled)
+        .await
+        .unwrap();
+
+    let context = fixture.app.maintenance_watch_context().await.unwrap();
+    assert!(
+        matches!(
+            context.freshness,
+            crate::maintenance_rules::facts::WatchSignalFreshness::Unavailable(
+                crate::maintenance_rules::facts::unknown_reason::SIGNAL_SYNC_NEVER_SUCCEEDED
+            )
+        ),
+        "a pre-disable success is not evidence that the re-enabled connection has swept: {:?}",
+        context.freshness
+    );
+}
+
 #[tokio::test]
 async fn unreadable_prior_sync_state_preserves_the_last_success() {
     let fixture = sync_app(

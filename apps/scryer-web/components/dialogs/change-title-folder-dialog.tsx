@@ -6,7 +6,6 @@ import {
   ChevronRight,
   Folder,
   FolderOpen,
-  Loader2,
   ShieldAlert,
   TriangleAlert,
 } from "lucide-react";
@@ -48,6 +47,7 @@ import {
   type FolderMatchScan,
 } from "@/lib/change-title-folder";
 import type { LibraryRootRecord } from "@/lib/types/titles";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export type ChangeFolderTitle = {
   id: string;
@@ -513,7 +513,7 @@ export function ChangeTitleFolderDialog({
                   <div className="max-h-64 overflow-y-auto p-2">
                     {browseLoading ? (
                       <div className="flex items-center gap-2 px-2 py-6 text-sm text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" />
+                        <LoadingMark className="h-4 w-4" />
                         {t("title.changeFolderBrowseLoading")}
                       </div>
                     ) : browseError ? (
@@ -610,7 +610,7 @@ export function ChangeTitleFolderDialog({
 
             {previewLoading ? (
               <div className="flex items-center gap-2 rounded-md border border-border px-3 py-4 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
                 {t("title.changeFolderPreviewLoading")}
               </div>
             ) : null}
@@ -778,7 +778,7 @@ export function ChangeTitleFolderDialog({
             >
               {applying ? (
                 <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  <LoadingMark className="mr-2 h-4 w-4" />
                   {t("title.changeFolderApplying")}
                 </>
               ) : (

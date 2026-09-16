@@ -133,6 +133,7 @@ fn bridge() -> AnimeNumberingBridge {
         tvdb_start += length;
     }
     AnimeNumberingBridge {
+        source: Default::default(),
         generated_on: "2026-08-30".to_string(),
         corroborating_order: Some("dvd".to_string()),
         seasons,
@@ -172,6 +173,7 @@ fn resolve(
         parsed,
         parsed_title_variants: variants,
         reference_date,
+        forced_alternate_numbering: false,
     })
 }
 
@@ -1591,4 +1593,238 @@ fn whole_cour_packs_reject_missing_duplicate_and_cross_season_catalog_rows() {
         resolve(&split, &title(SERIES_NAME), &multi_season, &pack, &[], None),
         NumberingResolution::UnresolvedPack
     ));
+}
+
+// ── TVDB alternate-order bridges (non-anime series) ───────────────────────
+//
+// A synthetic ordinary series: TVDB's official season 1 runs E24..E28, while
+// the alternate order the release groups follow numbers the same five episodes
+// E25..E29 — a one-episode shift introduced partway through the season, which
+// is exactly the `S01E27E28` = official 26+27 case.
+
+mod alternate_order {
+    use super::*;
+
+    const ALT_SERIES_NAME: &str = "Harbor Kiln";
+    const OFFICIAL_EPISODE_TITLES: [&str; 5] = [
+        "Lantern Pass",
+        "Salt Marsh Relay",
+        "Quarry Signal Tower",
+        "Tin Roof Choir",
+        "Winter Ferry Landing",
+    ];
+
+    fn series_title() -> Title {
+        let mut title = title(ALT_SERIES_NAME);
+        title.facet = MediaFacet::Series;
+        title
+    }
+
+    fn alternate_episodes() -> Vec<Episode> {
+        (24..=28u32)
+            .map(|number| {
+                let mut row = episode(
+                    &format!("alt-ep-{number}"),
+                    1,
+                    number,
+                    None,
+                    &format!("2026-01-{:02}", number - 20),
+                );
+                row.title = Some(OFFICIAL_EPISODE_TITLES[(number - 24) as usize].to_string());
+                row
+            })
+            .collect()
+    }
+
+    /// Alternate E25..E29 map onto official E24..E28 of the same season.
+    fn alternate_bridge() -> AnimeNumberingBridge {
+        AnimeNumberingBridge {
+            generated_on: "alternate".to_string(),
+            corroborating_order: Some("alternate".to_string()),
+            source: scryer_domain::NumberingBridgeSource::TvdbAlternate,
+            seasons: vec![AnimeCommunitySeason {
+                index: 1,
+                anidb_id: None,
+                anilist_id: None,
+                mal_id: None,
+                titles: Vec::new(),
+                ranges: vec![AnimeCommunitySeasonRange {
+                    community_episode_start: 25,
+                    community_episode_end: Some(29),
+                    tvdb_season: 1,
+                    tvdb_episode_start: 24,
+                    tvdb_episode_end: Some(28),
+                }],
+                absolute_start: None,
+                episode_count: None,
+            }],
+        }
+    }
+
+    fn alternate_parse(raw: &str, season: u32, episodes: &[u32]) -> ParsedEpisodeMetadata {
+        ParsedEpisodeMetadata {
+            season: Some(season),
+            episode_numbers: episodes.to_vec(),
+            raw: Some(raw.to_string()),
+            ..Default::default()
+        }
+    }
+
+    fn resolve_alternate(
+        title: &Title,
+        parsed: &ParsedEpisodeMetadata,
+        forced: bool,
+    ) -> NumberingResolution {
+        let bridge = alternate_bridge();
+        let episodes = alternate_episodes();
+        resolve_numbering(&NumberingInput {
+            bridge: &bridge,
+            title,
+            episodes: &episodes,
+            parsed,
+            parsed_title_variants: &[ALT_SERIES_NAME.to_string()],
+            reference_date: None,
+            forced_alternate_numbering: forced,
+        })
+    }
+
+    #[test]
+    fn an_episode_title_corroborates_the_alternate_reading() {
+        // Alternate S01E27E28 is official E26 ("Quarry Signal Tower") + E27
+        // ("Tin Roof Choir"); the release names the first of them.
+        let parsed = alternate_parse(
+            "Harbor Kiln S01E27E28 Quarry Signal Tower 1080p WEB-DL",
+            1,
+            &[27, 28],
+        );
+        let resolution = resolve_alternate(&series_title(), &parsed, false);
+        let candidate = resolution.resolved().expect("resolved");
+        assert_eq!(candidate.kind, NumberingCandidateKind::Alternate);
+        assert_eq!(candidate.season, 1);
+        assert_eq!(candidate.episode_numbers, vec![26, 27]);
+        assert!(candidate.covers_episode_id("alt-ep-26"));
+        assert!(candidate.covers_episode_id("alt-ep-27"));
+    }
+
+    #[test]
+    fn an_uncorroborated_alternate_reading_is_left_unchanged() {
+        // Nothing in the release text tells the two readings of `S01E27E28`
+        // apart, so the literal one stands. It must NOT come back `Ambiguous`:
+        // downstream that is a veto, and it would hold or reject ordinary
+        // official-numbered releases for every series with a differing TVDB
+        // order.
+        let parsed = alternate_parse("Harbor Kiln S01E27E28 1080p WEB-DL", 1, &[27, 28]);
+        let resolution = resolve_alternate(&series_title(), &parsed, false);
+        assert!(
+            matches!(resolution, NumberingResolution::Unchanged),
+            "{resolution:?}"
+        );
+    }
+
+    /// The regression guard for the veto above: a plain official-numbered
+    /// release of a series that merely *has* a TVDB alternate bridge must pass
+    /// through untouched, exactly as it did before any bridge existed.
+    #[test]
+    fn a_plain_official_release_of_a_bridged_series_is_left_unchanged() {
+        let parsed = alternate_parse("Harbor Kiln S01E05 1080p WEB-DL", 1, &[5]);
+        let resolution = resolve_alternate(&series_title(), &parsed, false);
+        assert!(
+            matches!(resolution, NumberingResolution::Unchanged),
+            "{resolution:?}"
+        );
+        assert!(resolution.resolved().is_none(), "{resolution:?}");
+        assert!(!resolution.is_ambiguous(), "{resolution:?}");
+    }
+
+    #[test]
+    fn a_release_naming_the_literal_readings_episode_keeps_the_literal_reading() {
+        // "Tin Roof Choir" is official E27 — the literal reading of `S01E27`.
+        // Naming it must not license the alternate reading onto E26; the
+        // literal reading simply stands.
+        let parsed = alternate_parse("Harbor Kiln S01E27 Tin Roof Choir 1080p WEB-DL", 1, &[27]);
+        let resolution = resolve_alternate(&series_title(), &parsed, false);
+        assert!(
+            matches!(resolution, NumberingResolution::Unchanged),
+            "{resolution:?}"
+        );
+    }
+
+    #[test]
+    fn pinning_the_title_to_the_alternate_order_resolves_without_corroboration() {
+        let parsed = alternate_parse("Harbor Kiln S01E27E28 1080p WEB-DL", 1, &[27, 28]);
+        let resolution = resolve_alternate(&series_title(), &parsed, true);
+        let candidate = resolution.resolved().expect("resolved");
+        assert_eq!(candidate.episode_numbers, vec![26, 27]);
+    }
+
+    #[test]
+    fn an_impossible_literal_reading_resolves_on_the_alternate_one_alone() {
+        // Alternate E29 is official E28; there is no official E29 in the
+        // catalog, so the literal reading is not a competing answer.
+        let parsed = alternate_parse("Harbor Kiln S01E29 1080p WEB-DL", 1, &[29]);
+        let resolution = resolve_alternate(&series_title(), &parsed, false);
+        let candidate = resolution.resolved().expect("resolved");
+        assert_eq!(candidate.episode_numbers, vec![28]);
+    }
+
+    #[test]
+    fn an_alternate_reading_that_agrees_with_the_literal_one_changes_nothing() {
+        // Alternate E25 and official E24 are different numbers, but alternate
+        // E24 maps to nothing, so a release of official E24 read literally is
+        // the only reading and nothing downstream changes.
+        let parsed = alternate_parse("Harbor Kiln S01E24 1080p WEB-DL", 1, &[24]);
+        assert_eq!(
+            resolve_alternate(&series_title(), &parsed, false),
+            NumberingResolution::Unchanged
+        );
+    }
+
+    #[test]
+    fn the_operator_setting_is_read_off_the_titles_tag_bag() {
+        let mut pinned = series_title();
+        assert!(!crate::anime_numbering::title_forces_alternate_numbering(
+            &pinned
+        ));
+        pinned.tags.push(format!(
+            "{}dvd",
+            scryer_domain::RELEASE_NUMBERING_TAG_PREFIX
+        ));
+        assert!(crate::anime_numbering::title_forces_alternate_numbering(
+            &pinned
+        ));
+        // `official` pins the catalog's own numbering, which is not a forced
+        // alternate reading.
+        pinned.tags.clear();
+        pinned.tags.push(format!(
+            "{}official",
+            scryer_domain::RELEASE_NUMBERING_TAG_PREFIX
+        ));
+        assert!(!crate::anime_numbering::title_forces_alternate_numbering(
+            &pinned
+        ));
+    }
+
+    /// The regression that guards the anime lane: a community bridge resolves
+    /// with no corroboration at all, exactly as it did before alternate orders
+    /// existed.
+    #[test]
+    fn an_anime_community_bridge_still_resolves_without_corroboration() {
+        let bridge = bridge();
+        let episodes = official_episodes(true);
+        let anime = title(SERIES_NAME);
+        // Community season 2 episode 3 is TVDB S01E17.
+        let parsed = parsed(Some(2), &[3]);
+        let resolution = resolve_numbering(&NumberingInput {
+            bridge: &bridge,
+            title: &anime,
+            episodes: &episodes,
+            parsed: &parsed,
+            parsed_title_variants: &[SERIES_NAME.to_string()],
+            reference_date: None,
+            forced_alternate_numbering: false,
+        });
+        let candidate = resolution.resolved().expect("resolved");
+        assert_eq!(candidate.kind, NumberingCandidateKind::Community);
+        assert_eq!(candidate.episode_numbers, vec![17]);
+    }
 }

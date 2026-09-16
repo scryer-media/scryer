@@ -7135,6 +7135,8 @@ fn pending_import_title_request(
 
 struct PendingImportSearchMetadataGateway {
     results: Vec<RichMetadataSearchItem>,
+    /// Series served to bulk hydration, keyed by TVDB id.
+    series: HashMap<i64, SeriesMetadata>,
 }
 
 #[async_trait]
@@ -7180,17 +7182,26 @@ impl MetadataGateway for PendingImportSearchMetadataGateway {
         Err(AppError::Repository("not implemented in tests".into()))
     }
 
-    async fn get_series(&self, _tvdb_id: i64, _language: &str) -> AppResult<SeriesMetadata> {
-        Err(AppError::Repository("not implemented in tests".into()))
+    async fn get_series(&self, tvdb_id: i64, _language: &str) -> AppResult<SeriesMetadata> {
+        self.series
+            .get(&tvdb_id)
+            .cloned()
+            .ok_or_else(|| AppError::Repository("not implemented in tests".into()))
     }
 
     async fn get_metadata_bulk(
         &self,
         _movie_tvdb_ids: &[i64],
-        _series_tvdb_ids: &[i64],
+        series_tvdb_ids: &[i64],
         _language: &str,
     ) -> AppResult<BulkMetadataResult> {
-        Err(AppError::Repository("not implemented in tests".into()))
+        Ok(BulkMetadataResult {
+            movies: HashMap::new(),
+            series: series_tvdb_ids
+                .iter()
+                .filter_map(|id| self.series.get(id).map(|series| (*id, series.clone())))
+                .collect(),
+        })
     }
 }
 
@@ -7225,6 +7236,7 @@ async fn pending_import_title_search_annotates_same_library_titles_only() {
         library_scanner,
         unmatched_items.clone(),
         Arc::new(PendingImportSearchMetadataGateway {
+            series: HashMap::new(),
             results: vec![
                 pending_import_search_result("123456", "Other Library Movie"),
                 pending_import_search_result("333333", "Existing Movie"),
@@ -8153,6 +8165,383 @@ async fn resolve_pending_import_attaches_series_to_existing_title_in_same_librar
 }
 
 #[tokio::test]
+async fn resolve_pending_import_attaches_series_folder_to_existing_title() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let series_root = tempdir.path().join("series");
+    let series_folder = series_root.join("Fixture Drama (2026)");
+    std::fs::create_dir_all(&series_folder).expect("create series folder");
+    let matched_path = series_folder.join("Fixture Drama - S01E01 - Opening WEBDL-1080p.mkv");
+    let stray_path = series_folder.join("Fixture Drama - Behind The Scenes.mkv");
+    std::fs::write(&matched_path, vec![0_u8; 128]).expect("write matched episode file");
+    std::fs::write(&stray_path, vec![0_u8; 128]).expect("write stray file");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "series.path",
+            series_root.to_string_lossy().as_ref(),
+        )
+        .await;
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner
+        .set_library_files(build_test_library_files(&[
+            matched_path.as_path(),
+            stray_path.as_path(),
+        ]))
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user, titles) = bootstrap_with_scan_unmatched_and_metadata_tracking_and_titles(
+        settings,
+        library_scanner,
+        unmatched_items.clone(),
+        Arc::new(EmptySearchMetadataGateway),
+    );
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile series root");
+
+    let existing_title = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Fixture Drama".to_string(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                year: Some(2026),
+                external_ids: vec![ExternalId {
+                    source: "tvdb".to_string(),
+                    value: "778899".to_string(),
+                }],
+                ..NewTitle::default()
+            },
+        )
+        .await
+        .expect("seed existing series title")
+        .title;
+    {
+        // The title already carries its metadata, so attaching a folder scans
+        // instead of re-hydrating it through the metadata gateway.
+        let mut store = titles.store.lock().await;
+        let stored = store
+            .iter_mut()
+            .find(|candidate| candidate.id == existing_title.id)
+            .expect("stored title");
+        stored.metadata_fetched_at = Some(Utc::now());
+        stored.metadata_language = Some("eng".to_string());
+    }
+    let season = app
+        .services
+        .catalog
+        .shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: existing_title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: Some("1".to_string()),
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("1".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("create season");
+    app.services
+        .catalog
+        .shows
+        .create_episode(Episode {
+            id: Id::new().0,
+            title_id: existing_title.id.clone(),
+            collection_id: Some(season.id.clone()),
+            episode_type: scryer_domain::EpisodeType::Standard,
+            episode_number: Some("1".to_string()),
+            season_number: Some("1".to_string()),
+            episode_label: Some("S01E01".to_string()),
+            title: Some("Opening".to_string()),
+            air_date: Some("2026-01-01".to_string()),
+            duration_seconds: Some(420),
+            has_multi_audio: false,
+            has_subtitle: false,
+            is_filler: false,
+            is_recap: false,
+            absolute_number: None,
+            overview: None,
+            tvdb_id: None,
+            image_url: None,
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("create episode");
+
+    let item = build_test_unmatched_item(
+        "series-folder-attach-1",
+        MediaFacet::Series,
+        series_root.to_string_lossy().as_ref(),
+        series_folder.to_string_lossy().as_ref(),
+        "Fixture Drama (2026)",
+        "Fixture Drama",
+        Some(2026),
+    );
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&item)
+        .await
+        .expect("seed folder-level pending import");
+
+    let result = app
+        .resolve_pending_import(
+            &user,
+            &item.id,
+            pending_import_title_request(
+                MediaFacet::Series,
+                "Fixture Drama",
+                Some("778899"),
+                Some(2026),
+            ),
+            true,
+        )
+        .await
+        .expect("attach the series folder to the existing title");
+
+    assert!(!result.created);
+    assert_eq!(result.title.id, existing_title.id);
+    assert_eq!(
+        result.title.folder_path.as_deref(),
+        Some(series_folder.to_string_lossy().as_ref()),
+        "attaching a folder must claim it for the title"
+    );
+    let summary = result
+        .library_scan
+        .expect("a folder attach reports the scan it ran");
+    assert_eq!(summary.scanned, 2);
+    assert_eq!(summary.matched, 1);
+    assert_eq!(summary.unmatched, 1);
+
+    let media_files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&existing_title.id)
+        .await
+        .expect("list attached media files");
+    assert_eq!(media_files.len(), 1);
+    assert_eq!(media_files[0].file_path, matched_path.to_string_lossy());
+
+    let remaining = unmatched_items.items().await;
+    assert!(
+        remaining
+            .iter()
+            .all(|pending| pending.item_path != series_folder.to_string_lossy()),
+        "the folder-level pending row must be gone once the folder is attached"
+    );
+    let stray_item = remaining
+        .iter()
+        .find(|pending| pending.item_path == stray_path.to_string_lossy())
+        .expect("a file the scan could not place becomes its own pending row");
+    assert_eq!(
+        stray_item.title_id.as_deref(),
+        Some(existing_title.id.as_str()),
+        "leftover files stay bound to the title so they can be bound per file"
+    );
+    assert_eq!(stray_item.status, PendingImportStatus::Pending);
+}
+
+#[tokio::test]
+async fn resolve_pending_import_creating_series_title_from_folder_claims_folder_and_splits_files() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let series_root = tempdir.path().join("series");
+    let series_folder = series_root.join("Fixture Drama (2026)");
+    std::fs::create_dir_all(&series_folder).expect("create series folder");
+    let first_path = series_folder.join("Fixture Drama - S01E01 - Opening WEBDL-1080p.mkv");
+    let second_path = series_folder.join("Fixture Drama - S01E02 - Second WEBDL-1080p.mkv");
+    std::fs::write(&first_path, vec![0_u8; 128]).expect("write first file");
+    std::fs::write(&second_path, vec![0_u8; 128]).expect("write second file");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "series.path",
+            series_root.to_string_lossy().as_ref(),
+        )
+        .await;
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner
+        .set_library_files(build_test_library_files(&[
+            first_path.as_path(),
+            second_path.as_path(),
+        ]))
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user, _titles) = bootstrap_with_scan_unmatched_and_metadata_tracking_and_titles(
+        settings,
+        library_scanner,
+        unmatched_items.clone(),
+        Arc::new(PendingImportSearchMetadataGateway {
+            results: Vec::new(),
+            // The folder scan hydrates the brand-new title before it walks
+            // the files; this series has no episodes yet, so nothing matches.
+            series: HashMap::from([(
+                778_899,
+                SeriesMetadata {
+                    tvdb_id: 778_899,
+                    name: "Fixture Drama".to_string(),
+                    sort_name: "Fixture Drama".to_string(),
+                    slug: "fixture-drama".to_string(),
+                    year: Some(2026),
+                    ..Default::default()
+                },
+            )]),
+        }),
+    );
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile series root");
+
+    let item = build_test_unmatched_item(
+        "series-folder-create-1",
+        MediaFacet::Series,
+        series_root.to_string_lossy().as_ref(),
+        series_folder.to_string_lossy().as_ref(),
+        "Fixture Drama (2026)",
+        "Fixture Drama",
+        Some(2026),
+    );
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&item)
+        .await
+        .expect("seed folder-level pending import");
+
+    let result = app
+        .resolve_pending_import(
+            &user,
+            &item.id,
+            pending_import_title_request(
+                MediaFacet::Series,
+                "Fixture Drama",
+                Some("778899"),
+                Some(2026),
+            ),
+            false,
+        )
+        .await
+        .expect("create a series title from the folder");
+
+    assert!(result.created);
+    assert_eq!(
+        result.title.folder_path.as_deref(),
+        Some(series_folder.to_string_lossy().as_ref()),
+        "creating a title from a folder must claim the folder"
+    );
+    let summary = result
+        .library_scan
+        .expect("a folder resolution reports the scan it ran");
+    assert_eq!(summary.scanned, 2);
+    assert_eq!(
+        summary.matched, 0,
+        "a new title has no episodes to match yet"
+    );
+    assert_eq!(summary.unmatched, 2);
+
+    let remaining = unmatched_items.items().await;
+    assert!(
+        remaining
+            .iter()
+            .all(|pending| pending.item_path != series_folder.to_string_lossy()),
+        "the folder-level pending row must not stay bound to a directory"
+    );
+    for path in [&first_path, &second_path] {
+        let file_item = remaining
+            .iter()
+            .find(|pending| pending.item_path == path.to_string_lossy())
+            .expect("each file becomes its own pending row");
+        assert_eq!(
+            file_item.title_id.as_deref(),
+            Some(result.title.id.as_str())
+        );
+        assert_eq!(file_item.status, PendingImportStatus::Pending);
+    }
+}
+
+#[tokio::test]
+async fn title_bound_directory_pending_import_releases_its_stale_title_link() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let series_folder = tempdir.path().join("Fixture Drama (2026)");
+    std::fs::create_dir_all(&series_folder).expect("create series folder");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched_items.clone(),
+    );
+    let title = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Fixture Drama".to_string(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..NewTitle::default()
+            },
+        )
+        .await
+        .expect("seed existing series title")
+        .title;
+
+    // A row attached before folder binding existed: title-bound, but its path
+    // is the series directory, so no file can be bound to an episode.
+    let mut legacy = build_test_unmatched_item(
+        "series-legacy-folder-bind-1",
+        MediaFacet::Series,
+        tempdir.path().to_string_lossy().as_ref(),
+        series_folder.to_string_lossy().as_ref(),
+        "Fixture Drama (2026)",
+        "Fixture Drama",
+        None,
+    );
+    legacy.title_id = Some(title.id.clone());
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&legacy)
+        .await
+        .expect("seed legacy title-bound folder row");
+
+    let preview_error = app
+        .preview_title_bound_pending_import(&user, &legacy.id)
+        .await
+        .expect_err("a directory cannot be previewed for episode binding");
+    assert!(
+        preview_error.to_string().contains("folder, not a file"),
+        "unexpected error: {preview_error}"
+    );
+    let released = unmatched_items.items().await;
+    assert_eq!(released.len(), 1);
+    assert_eq!(
+        released[0].title_id, None,
+        "the stale title link must be released so the folder can be attached again"
+    );
+
+    // The same repair happens for API clients that call the bind mutation.
+    unmatched_items
+        .upsert_library_scan_unmatched_item(&legacy)
+        .await
+        .expect("restore legacy title-bound folder row");
+    let bind_error = app
+        .bind_title_bound_pending_import(&user, &legacy.id, None, &["episode-1".to_string()])
+        .await
+        .expect_err("a directory cannot be bound to episodes");
+    assert!(
+        bind_error.to_string().contains("folder, not a file"),
+        "unexpected error: {bind_error}"
+    );
+    assert_eq!(unmatched_items.items().await[0].title_id, None);
+}
+
+#[tokio::test]
 async fn resolve_pending_movie_attach_keeps_item_when_title_owns_another_folder() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let movie_path = tempdir.path().join("Missing.Movie.2020.mkv");
@@ -8450,4 +8839,631 @@ async fn ownership_conflict_pending_import_cannot_be_bound_or_adopted() {
         );
     }
     assert_eq!(unmatched_items.items().await, vec![conflict]);
+}
+
+// ── #224: a scan assigns and heals the root it actually walked ────────────
+
+async fn library_root_id_for_path(
+    app: &AppUseCase,
+    facet: &MediaFacet,
+    path: &std::path::Path,
+) -> String {
+    let library_id = scryer_domain::default_library_id_for_facet(facet);
+    let library = app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&library_id)
+        .await
+        .expect("load library")
+        .expect("library exists");
+    let wanted = crate::catalog_workflow::normalize_library_root_path(&path.to_string_lossy());
+    library
+        .roots
+        .iter()
+        .find(|root| crate::catalog_workflow::normalize_library_root_path(&root.path) == wanted)
+        .map(|root| root.id.clone())
+        .unwrap_or_else(|| panic!("root {} should be configured", path.display()))
+}
+
+/// A movie found under the library's *second* root belongs to that root. It
+/// used to land on the library default, which then made every rename of it
+/// propose a cross-root move (#224).
+#[tokio::test]
+async fn movie_full_scan_assigns_the_root_the_candidate_was_found_under() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let default_root = tempdir.path().join("movies-default");
+    let second_root = tempdir.path().join("movies-second");
+    std::fs::create_dir_all(&default_root).expect("create default root");
+    let movie_folder = second_root.join("Harbor Kestrels (2020)");
+    std::fs::create_dir_all(&movie_folder).expect("create movie folder");
+    let movie_file = movie_folder.join("Harbor.Kestrels.2020.mkv");
+    std::fs::write(&movie_file, b"movie").expect("write movie file");
+    let movie_path = movie_file.to_string_lossy().to_string();
+
+    let mut scan_hints = LibraryScanHintSet::new();
+    scan_hints.push(LibraryScanHint {
+        source: LibraryScanHintSource::ExternalImportRadarr,
+        facet: LibraryScanHintFacet::Movie,
+        path_key: crate::library_scan_file_leaf_key(&movie_path).expect("file leaf path key"),
+        full_path_key: crate::library_scan_file_full_path_key(&movie_path),
+        ids: vec![
+            ExternalIdHint::normalized(ExternalIdProvider::Tmdb, "7777")
+                .expect("normalized tmdb id"),
+        ],
+    });
+
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner
+        .set_library_files(vec![build_test_library_file(&movie_path)])
+        .await;
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        library_scanner,
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+        Arc::new(RecordingExactIdMetadataGateway::with_title_id_movies()),
+    );
+
+    app.update_media_settings(
+        &user,
+        MediaFacet::Movie,
+        empty_update_media_settings_with_roots(vec![
+            build_root_folder_entry(&default_root, true),
+            build_root_folder_entry(&second_root, false),
+        ]),
+    )
+    .await
+    .expect("store movie roots");
+
+    let session = app
+        .trigger_library_scan_by_id_with_hints(
+            &user,
+            &scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+            Some(scan_hints),
+        )
+        .await
+        .expect("trigger hinted movie scan");
+    wait_for_projected_library_scan_session_matching(&app, &session.session_id, |session| {
+        matches!(
+            session.status,
+            LibraryScanStatus::Completed | LibraryScanStatus::Warning
+        )
+    })
+    .await;
+
+    let titles = app
+        .list_titles_unpaged(&user, Some(MediaFacet::Movie), None, None)
+        .await
+        .expect("list movie titles");
+    assert_eq!(titles.len(), 1);
+    let second_root_id = library_root_id_for_path(&app, &MediaFacet::Movie, &second_root).await;
+    assert_ne!(
+        second_root_id,
+        library_root_id_for_path(&app, &MediaFacet::Movie, &default_root).await
+    );
+    assert_eq!(
+        titles[0].root_folder_id, second_root_id,
+        "a movie discovered under the second root belongs to that root"
+    );
+}
+
+/// The series side of the same rule.
+#[tokio::test]
+async fn series_full_scan_assigns_the_root_the_candidate_was_found_under() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let default_root = tempdir.path().join("series-default");
+    let second_root = tempdir.path().join("series-second");
+    std::fs::create_dir_all(&default_root).expect("create default root");
+    let folder = second_root.join("Tidewater Signals (1999)");
+    std::fs::create_dir_all(&folder).expect("create show folder");
+    let folder_path = folder.to_string_lossy().to_string();
+
+    let mut scan_hints = LibraryScanHintSet::new();
+    scan_hints.push(LibraryScanHint {
+        source: LibraryScanHintSource::ExternalImportSonarr,
+        facet: LibraryScanHintFacet::Series,
+        path_key: crate::library_scan_folder_leaf_key(&folder_path).expect("folder leaf path key"),
+        full_path_key: crate::library_scan_folder_full_path_key(&folder_path),
+        ids: vec![
+            ExternalIdHint::normalized(ExternalIdProvider::Tvdb, "900001")
+                .expect("normalized tvdb id"),
+        ],
+    });
+
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+        Arc::new(RecordingExactIdMetadataGateway::default().with_rich_external_ids()),
+    );
+
+    app.update_media_settings(
+        &user,
+        MediaFacet::Series,
+        empty_update_media_settings_with_roots(vec![
+            build_root_folder_entry(&default_root, true),
+            build_root_folder_entry(&second_root, false),
+        ]),
+    )
+    .await
+    .expect("store series roots");
+
+    let session = app
+        .trigger_library_scan_by_id_with_hints(
+            &user,
+            &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+            Some(scan_hints),
+        )
+        .await
+        .expect("trigger hinted series scan");
+    wait_for_projected_library_scan_session_matching(&app, &session.session_id, |session| {
+        matches!(
+            session.status,
+            LibraryScanStatus::Completed | LibraryScanStatus::Warning
+        )
+    })
+    .await;
+
+    let titles = app
+        .list_titles_unpaged(&user, Some(MediaFacet::Series), None, None)
+        .await
+        .expect("list series titles");
+    assert_eq!(titles.len(), 1);
+    let second_root_id = library_root_id_for_path(&app, &MediaFacet::Series, &second_root).await;
+    assert_ne!(
+        second_root_id,
+        library_root_id_for_path(&app, &MediaFacet::Series, &default_root).await
+    );
+    assert_eq!(
+        titles[0].root_folder_id, second_root_id,
+        "a show discovered under the second root belongs to that root"
+    );
+}
+
+/// An existing title whose recorded root disagrees with where the scan finds
+/// its files is healed to the containing root — the "remove title, keep files,
+/// rescan" repro in #224.
+#[tokio::test]
+async fn movie_full_scan_heals_an_existing_title_onto_the_root_holding_its_files() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let default_root = tempdir.path().join("movies-default");
+    let second_root = tempdir.path().join("movies-second");
+    std::fs::create_dir_all(&default_root).expect("create default root");
+    let movie_folder = second_root.join("Lantern Drift (2021)");
+    std::fs::create_dir_all(&movie_folder).expect("create movie folder");
+    let movie_file = movie_folder.join("Lantern.Drift.2021.mkv");
+    std::fs::write(&movie_file, b"movie").expect("write movie file");
+    let movie_path = movie_file.to_string_lossy().to_string();
+
+    let mut scan_hints = LibraryScanHintSet::new();
+    scan_hints.push(LibraryScanHint {
+        source: LibraryScanHintSource::ExternalImportRadarr,
+        facet: LibraryScanHintFacet::Movie,
+        path_key: crate::library_scan_file_leaf_key(&movie_path).expect("file leaf path key"),
+        full_path_key: crate::library_scan_file_full_path_key(&movie_path),
+        ids: vec![
+            ExternalIdHint::normalized(ExternalIdProvider::Tmdb, "7777")
+                .expect("normalized tmdb id"),
+        ],
+    });
+
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner
+        .set_library_files(vec![build_test_library_file(&movie_path)])
+        .await;
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        library_scanner,
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+        Arc::new(RecordingExactIdMetadataGateway::with_title_id_movies()),
+    );
+
+    app.update_media_settings(
+        &user,
+        MediaFacet::Movie,
+        empty_update_media_settings_with_roots(vec![
+            build_root_folder_entry(&default_root, true),
+            build_root_folder_entry(&second_root, false),
+        ]),
+    )
+    .await
+    .expect("store movie roots");
+
+    let default_root_id = library_root_id_for_path(&app, &MediaFacet::Movie, &default_root).await;
+    let existing = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Lantern Drift".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: false,
+                tags: vec![],
+                external_ids: vec![ExternalId {
+                    source: "tmdb".to_string(),
+                    value: "7777".to_string(),
+                }],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create existing title");
+    assert_eq!(existing.title.root_folder_id, default_root_id);
+
+    let session = app
+        .trigger_library_scan_by_id_with_hints(
+            &user,
+            &scryer_domain::default_library_id_for_facet(&MediaFacet::Movie),
+            Some(scan_hints),
+        )
+        .await
+        .expect("trigger hinted movie scan");
+    wait_for_projected_library_scan_session_matching(&app, &session.session_id, |session| {
+        matches!(
+            session.status,
+            LibraryScanStatus::Completed | LibraryScanStatus::Warning
+        )
+    })
+    .await;
+
+    let healed = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&existing.title.id)
+        .await
+        .expect("load healed title")
+        .expect("title exists");
+    assert_eq!(
+        healed.root_folder_id,
+        library_root_id_for_path(&app, &MediaFacet::Movie, &second_root).await,
+        "the scan heals the recorded root to the one holding the files"
+    );
+}
+
+/// The background refresh finds an already indexed title through its folder
+/// and probes it directly, so the heal has to run on that path too; otherwise
+/// a stale root id survives every scheduled refresh.
+#[tokio::test]
+async fn series_background_refresh_heals_an_indexed_title_onto_the_root_holding_its_folder() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let default_root = tempdir.path().join("series-default");
+    let second_root = tempdir.path().join("series-second");
+    std::fs::create_dir_all(&default_root).expect("create default root");
+    let show_folder = second_root.join("Quarry Lanterns (2018)");
+    std::fs::create_dir_all(&show_folder).expect("create show folder");
+
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+        Arc::new(RecordingExactIdMetadataGateway::default()),
+    );
+    app.update_media_settings(
+        &user,
+        MediaFacet::Series,
+        empty_update_media_settings_with_roots(vec![
+            build_root_folder_entry(&default_root, true),
+            build_root_folder_entry(&second_root, false),
+        ]),
+    )
+    .await
+    .expect("store series roots");
+
+    let default_root_id = library_root_id_for_path(&app, &MediaFacet::Series, &default_root).await;
+    let existing = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Quarry Lanterns".to_string(),
+                facet: MediaFacet::Series,
+                monitored: false,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create existing title");
+    assert_eq!(existing.title.root_folder_id, default_root_id);
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&existing.title.id, &show_folder.to_string_lossy())
+        .await
+        .expect("record the title folder under the second root");
+
+    app.background_library_refresh_with_tracking(
+        &user,
+        MediaFacet::Series,
+        "series-indexed-root-heal",
+    )
+    .await
+    .expect("series background refresh");
+
+    let healed = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&existing.title.id)
+        .await
+        .expect("load healed title")
+        .expect("title exists");
+    assert_eq!(
+        healed.root_folder_id,
+        library_root_id_for_path(&app, &MediaFacet::Series, &second_root).await,
+        "the refresh heals the recorded root to the one holding the folder"
+    );
+}
+
+/// A folder under no configured root is not evidence for any root, so the
+/// title keeps the id it has.
+#[tokio::test]
+async fn title_root_folder_id_is_untouched_when_the_folder_is_under_no_root() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let default_root = tempdir.path().join("movies-default");
+    let outside = tempdir
+        .path()
+        .join("elsewhere")
+        .join("Cobalt Meridian (2019)");
+    std::fs::create_dir_all(&default_root).expect("create default root");
+    std::fs::create_dir_all(&outside).expect("create outside folder");
+
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+        Arc::new(RecordingExactIdMetadataGateway::default()),
+    );
+    app.update_media_settings(
+        &user,
+        MediaFacet::Movie,
+        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&default_root, true)]),
+    )
+    .await
+    .expect("store movie root");
+
+    let created = app
+        .create_title_without_hydration(
+            &user,
+            NewTitle {
+                name: "Cobalt Meridian".to_string(),
+                facet: MediaFacet::Movie,
+                monitored: false,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    let original_root_folder_id = created.title.root_folder_id.clone();
+    let mut title = created.title;
+    title.folder_path = Some(outside.to_string_lossy().to_string());
+
+    let healed = app
+        .heal_title_root_folder_id_for_owned_folder(
+            &crate::location::ownership_guard::LIBRARY_SCAN_ENTRY,
+            &mut title,
+        )
+        .await
+        .expect("heal attempt");
+    assert!(!healed, "a folder under no root is no evidence of a root");
+    assert_eq!(title.root_folder_id, original_root_folder_id);
+}
+
+// ── Title-scan pending imports left behind by a deleted or moved title ────
+
+fn title_scan_unmatched_row(
+    title_id: &str,
+    scan_root: &std::path::Path,
+    file_name: &str,
+) -> LibraryScanUnmatchedItem {
+    let item_path = scan_root.join(file_name);
+    let mut item = build_test_unmatched_item(
+        &format!("unmatched-{title_id}-{file_name}"),
+        MediaFacet::Series,
+        &scan_root.to_string_lossy(),
+        &item_path.to_string_lossy(),
+        file_name,
+        file_name,
+        None,
+    );
+    item.title_id = Some(title_id.to_string());
+    item.reason_code = "episode_identity_missing".to_string();
+    item
+}
+
+async fn create_series_title_owning(
+    app: &AppUseCase,
+    user: &User,
+    name: &str,
+    folder: &std::path::Path,
+) -> Title {
+    let created = app
+        .create_title_without_hydration(
+            user,
+            NewTitle {
+                name: name.to_string(),
+                facet: MediaFacet::Series,
+                monitored: false,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&created.title.id, &folder.to_string_lossy())
+        .await
+        .expect("record title folder");
+    app.services
+        .catalog
+        .titles
+        .get_by_id(&created.title.id)
+        .await
+        .expect("load title")
+        .expect("title exists")
+}
+
+#[tokio::test]
+async fn deleting_a_title_removes_its_pending_imports() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let root = tempdir.path().join("series");
+    let folder = root.join("Copper Tidewalk");
+    std::fs::create_dir_all(&folder).expect("create show folder");
+
+    let unmatched = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched.clone(),
+        Arc::new(RecordingExactIdMetadataGateway::default()),
+    );
+    let title = create_series_title_owning(&app, &user, "Copper Tidewalk", &folder).await;
+    let bystander = title_scan_unmatched_row("another-title", &folder, "Bystander.avi");
+    unmatched
+        .upsert_library_scan_unmatched_item(&title_scan_unmatched_row(
+            &title.id,
+            &folder,
+            "Copper Tidewalk Season 1 Episode 15.avi",
+        ))
+        .await
+        .expect("seed title row");
+    unmatched
+        .upsert_library_scan_unmatched_item(&bystander)
+        .await
+        .expect("seed bystander row");
+
+    app.delete_title(&user, &title.id, false, None)
+        .await
+        .expect("delete title");
+
+    assert_eq!(
+        unmatched.items().await,
+        vec![bystander],
+        "only the deleted title's pending imports go"
+    );
+}
+
+/// The user report: a show folder renamed, the title deleted and rescanned,
+/// and the files the old title scan could not place still listed under the
+/// old folder name. A full scan now drops them.
+#[tokio::test]
+async fn full_scan_drops_pending_imports_of_a_deleted_or_moved_title() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let root = tempdir.path().join("series");
+    let old_folder = root.join("Copper Tidewalk");
+    let new_folder = root.join("Copper - Tidewalk");
+    std::fs::create_dir_all(&new_folder).expect("create renamed show folder");
+
+    let unmatched = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched.clone(),
+        Arc::new(RecordingExactIdMetadataGateway::default()),
+    );
+    app.update_media_settings(
+        &user,
+        MediaFacet::Series,
+        empty_update_media_settings_with_roots(vec![build_root_folder_entry(&root, true)]),
+    )
+    .await
+    .expect("store series root");
+    let moved = create_series_title_owning(&app, &user, "Copper - Tidewalk", &new_folder).await;
+
+    for row in [
+        title_scan_unmatched_row("deleted-title", &old_folder, "Copper Tidewalk S03E26.avi"),
+        title_scan_unmatched_row(&moved.id, &old_folder, "Copper Tidewalk S04E01.avi"),
+    ] {
+        unmatched
+            .upsert_library_scan_unmatched_item(&row)
+            .await
+            .expect("seed stale row");
+    }
+
+    let session = app
+        .trigger_library_scan_by_id_with_hints(
+            &user,
+            &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+            None,
+        )
+        .await
+        .expect("trigger series scan");
+    wait_for_projected_library_scan_session_matching(&app, &session.session_id, |session| {
+        matches!(
+            session.status,
+            LibraryScanStatus::Completed | LibraryScanStatus::Warning
+        )
+    })
+    .await;
+
+    let remaining = unmatched.items().await;
+    assert!(
+        remaining
+            .iter()
+            .all(|item| !item.scan_root.ends_with("Copper Tidewalk")),
+        "rows under the old folder name must be gone: {remaining:?}"
+    );
+}
+
+/// The cleanup only reads the title's recorded folder: a row under the folder
+/// the title still owns, a row for another library, and a library-level row
+/// are all left for their own reconcile.
+#[tokio::test]
+async fn title_scan_unmatched_reconcile_keeps_rows_a_title_still_owns() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let root = tempdir.path().join("series");
+    let folder = root.join("Copper Tidewalk");
+    std::fs::create_dir_all(&folder).expect("create show folder");
+
+    let unmatched = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MutableLibraryScanner::default()),
+        unmatched.clone(),
+        Arc::new(RecordingExactIdMetadataGateway::default()),
+    );
+    let title = create_series_title_owning(&app, &user, "Copper Tidewalk", &folder).await;
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+
+    let owned = title_scan_unmatched_row(&title.id, &folder, "Copper Tidewalk Extras.avi");
+    let mut other_library = title_scan_unmatched_row("deleted-title", &folder, "Elsewhere.avi");
+    other_library.library_id = "another-library".to_string();
+    let mut conflict = title_scan_unmatched_row("deleted-title", &root, "Loose Folder");
+    conflict.scan_root = root.to_string_lossy().to_string();
+    let stale = title_scan_unmatched_row("deleted-title", &folder, "Gone.avi");
+    for row in [&owned, &other_library, &conflict, &stale] {
+        unmatched
+            .upsert_library_scan_unmatched_item(row)
+            .await
+            .expect("seed row");
+    }
+
+    crate::library_scan_unmatched::reconcile_title_scan_unmatched_items(
+        &app,
+        &MediaFacet::Series,
+        &library_id,
+        &root.to_string_lossy(),
+    )
+    .await
+    .expect("reconcile");
+
+    let mut remaining = unmatched
+        .items()
+        .await
+        .into_iter()
+        .map(|item| item.id)
+        .collect::<Vec<_>>();
+    remaining.sort();
+    let mut expected = vec![owned.id, other_library.id, conflict.id];
+    expected.sort();
+    assert_eq!(remaining, expected);
 }

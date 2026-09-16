@@ -685,7 +685,12 @@ async fn durable_cleanup_recovers_an_untrackable_import_and_rejects_a_reused_loc
         .await
         .unwrap();
     assert_eq!(recovered.2, TerminalDownloadCleanupOutcome::Removed);
-    assert_eq!(recovered.1.unwrap().id, tracked.id);
+    // The rebuilt entry carries the id the poller would derive for this same
+    // client item, so a live poll after a restart names it and does not prune it.
+    assert_eq!(
+        recovered.1.unwrap().id,
+        crate::tracked_downloads::tracked_download_id_for_item(&tracked.client_item)
+    );
     assert_eq!(client.deleted_requests.lock().await.len(), 1);
     client.history_items.lock().await[0].download_id =
         Some(scryer_domain::download_identity::DownloadId::new().to_wire());

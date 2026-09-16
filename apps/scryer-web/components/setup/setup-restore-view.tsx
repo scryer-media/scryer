@@ -1,5 +1,5 @@
 import * as React from "react";
-import { DatabaseBackup, Loader2, LockKeyhole, RotateCcw, Upload } from "lucide-react";
+import { DatabaseBackup, LockKeyhole, RotateCcw, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   SetupBackButton,
@@ -21,6 +21,7 @@ import { scryerFetch } from "@/lib/graphql/urql-client";
 import { getAuthToken } from "@/lib/hooks/use-auth";
 import { getRuntimeBasePath, getRuntimeGraphqlUrl } from "@/lib/runtime-config";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const INSPECT_RESTORE_BUNDLE_OPERATION = `
   mutation InspectRestoreBundle($bundleUpload: Upload!, $password: String) {
@@ -568,7 +569,7 @@ export function SetupRestoreView({
               disabled={applying}
             >
               {applying ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
               ) : (
                 <Upload className="h-4 w-4" />
               )}
@@ -586,7 +587,7 @@ export function SetupRestoreView({
               }
             >
               {inspecting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
               ) : (
                 <Upload className="h-4 w-4" />
               )}

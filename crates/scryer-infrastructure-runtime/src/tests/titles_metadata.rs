@@ -679,10 +679,7 @@ async fn title_catalog_scryer_rating_sort_uses_grouped_rating_summary() {
         &[library_id],
         None,
         TitleCatalogFilter::default(),
-        TitleCatalogSort {
-            key: TitleCatalogSortKey::RatingScryer,
-            direction: SortDirection::Desc,
-        },
+        TitleCatalogSort::new(TitleCatalogSortKey::RatingScryer, SortDirection::Desc),
         10,
         0,
         false,
@@ -702,6 +699,204 @@ async fn title_catalog_scryer_rating_sort_uses_grouped_rating_summary() {
             "title-rating-high",
             "title-rating-low",
             "title-rating-missing"
+        ]
+    );
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn title_catalog_quality_sort_ranks_the_file_quality_the_catalog_shows() {
+    let (services, db) = temp_services("scryer_title_catalog_quality_sort").await;
+    let catalog = title_store(&services);
+    let media_files = media_file_store(&services);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    // (title id, [(role, quality label)]) in the order a 480p -> 4K sort expects.
+    let fixtures: [(&str, &[(MediaFileRole, &str)]); 5] = [
+        ("title-quality-480", &[(MediaFileRole::Primary, "480p")]),
+        (
+            // The additional file never outranks the title's own primary file.
+            "title-quality-720-primary",
+            &[
+                (MediaFileRole::Primary, "720p"),
+                (MediaFileRole::Additional, "2160p"),
+            ],
+        ),
+        (
+            // No primary file: the best additional file stands in.
+            "title-quality-1080-additional",
+            &[
+                (MediaFileRole::Additional, "480p"),
+                (MediaFileRole::Additional, "1080p"),
+            ],
+        ),
+        ("title-quality-2160", &[(MediaFileRole::Primary, "2160p")]),
+        ("title-quality-missing", &[]),
+    ];
+    for (title_id, files) in fixtures {
+        let mut title = make_test_title(title_id, None);
+        title.name = title_id.to_string();
+        TitleRepository::create(&catalog, title)
+            .await
+            .expect("title should insert");
+        for (index, (role, quality)) in files.iter().enumerate() {
+            media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title_id.to_string(),
+                    file_path: format!("/library/{title_id}/file-{index}.mkv"),
+                    size_bytes: 1_000,
+                    role: *role,
+                    quality_label: Some((*quality).to_string()),
+                    ..Default::default()
+                })
+                .await
+                .expect("media file should insert");
+        }
+    }
+
+    let summaries = media_files
+        .list_title_quality_summaries(&[
+            "title-quality-720-primary".to_string(),
+            "title-quality-1080-additional".to_string(),
+        ])
+        .await
+        .expect("quality summaries should list");
+    let summary_for = |title_id: &str| {
+        summaries
+            .iter()
+            .find(|summary| summary.title_id == title_id)
+            .map(|summary| summary.quality_tier.as_str())
+    };
+    assert_eq!(summary_for("title-quality-720-primary"), Some("720P"));
+    assert_eq!(summary_for("title-quality-1080-additional"), Some("1080P"));
+
+    for (direction, expected) in [
+        (
+            SortDirection::Asc,
+            vec![
+                "title-quality-480",
+                "title-quality-720-primary",
+                "title-quality-1080-additional",
+                "title-quality-2160",
+                "title-quality-missing",
+            ],
+        ),
+        (
+            SortDirection::Desc,
+            vec![
+                "title-quality-2160",
+                "title-quality-1080-additional",
+                "title-quality-720-primary",
+                "title-quality-480",
+                "title-quality-missing",
+            ],
+        ),
+    ] {
+        let page = TitleRepository::list_for_libraries_catalog(
+            &catalog,
+            Some(MediaFacet::Movie),
+            std::slice::from_ref(&library_id),
+            None,
+            TitleCatalogFilter::default(),
+            TitleCatalogSort::new(TitleCatalogSortKey::Quality, direction),
+            10,
+            0,
+            false,
+            true,
+        )
+        .await
+        .expect("catalog quality sort should succeed");
+        let ids = page
+            .items
+            .iter()
+            .map(|title| title.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, expected);
+    }
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn title_catalog_profile_sort_orders_by_effective_profile_name() {
+    let (services, db) = temp_services("scryer_title_catalog_profile_sort").await;
+    let catalog = title_store(&services);
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let other_library_id = "library-profile-sort-other".to_string();
+    insert_test_library(&services, &other_library_id, MediaFacet::Movie).await;
+
+    // (title id, library, profile override tag)
+    let fixtures = [
+        (
+            "title-profile-override",
+            movie_library_id.clone(),
+            Some("scryer:quality-profile:Profile-B"),
+        ),
+        (
+            // Names a deleted profile, so the library default applies.
+            "title-profile-deleted-override",
+            other_library_id.clone(),
+            Some("scryer:quality-profile:gone"),
+        ),
+        ("title-profile-library", other_library_id.clone(), None),
+        ("title-profile-facet", movie_library_id.clone(), None),
+    ];
+    for (title_id, library_id, tag) in &fixtures {
+        let mut title = make_test_title(title_id, None);
+        title.name = title_id.to_string();
+        title.library_id = library_id.clone();
+        title.tags = tag.iter().map(|tag| tag.to_string()).collect();
+        TitleRepository::create(&catalog, title)
+            .await
+            .expect("title should insert");
+    }
+
+    let profile_names = TitleCatalogProfileNames {
+        by_profile_id: [
+            ("profile-a".to_string(), "alpha".to_string()),
+            ("profile-b".to_string(), "Bravo".to_string()),
+            ("profile-c".to_string(), "charlie".to_string()),
+        ]
+        .into_iter()
+        .collect(),
+        by_library_id: [(other_library_id.clone(), "alpha".to_string())]
+            .into_iter()
+            .collect(),
+        by_facet: [("movie".to_string(), "charlie".to_string())]
+            .into_iter()
+            .collect(),
+        global: Some("Bravo".to_string()),
+    };
+    let mut sort = TitleCatalogSort::new(TitleCatalogSortKey::Profile, SortDirection::Asc);
+    sort.profile_names = Some(profile_names);
+
+    let page = TitleRepository::list_for_libraries_catalog(
+        &catalog,
+        Some(MediaFacet::Movie),
+        &[movie_library_id, other_library_id],
+        None,
+        TitleCatalogFilter::default(),
+        sort,
+        10,
+        0,
+        false,
+        true,
+    )
+    .await
+    .expect("catalog profile sort should succeed");
+    let ids = page
+        .items
+        .iter()
+        .map(|title| title.id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        ids,
+        vec![
+            "title-profile-deleted-override",
+            "title-profile-library",
+            "title-profile-override",
+            "title-profile-facet",
         ]
     );
 

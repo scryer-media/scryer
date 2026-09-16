@@ -3,7 +3,6 @@ import { useClient } from "urql";
 import {
   ArrowRight,
   HardDrive,
-  Loader2,
   Merge,
   TriangleAlert,
   User,
@@ -88,6 +87,7 @@ import {
 import { formatByteCount } from "@/lib/utils/activity-utils";
 import type { LibraryRootRecord } from "@/lib/types/titles";
 import { cn } from "@/lib/utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 /** A title the move workflow was opened for. */
 export type MoveTitleRef = {
@@ -778,7 +778,7 @@ export function MoveTitlesDialog({
           </div>
         ) : previewLoading ? (
           <div role="status" aria-live="polite" className="flex min-h-64 flex-col items-center justify-center gap-4">
-            <Loader2 aria-hidden="true" className="h-9 w-9 animate-spin text-primary" />
+            <LoadingMark className="h-9 w-9 text-primary" />
             <p className="text-sm text-muted-foreground">{t(step === "manual" ? "move.manualLoading" : "move.gatheringInfo")}</p>
           </div>
         ) : step === "manual" ? (
@@ -840,7 +840,7 @@ export function MoveTitlesDialog({
 
           {previewLoading ? (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <LoadingMark className="h-4 w-4" />
               {t("move.previewLoading")}
             </p>
           ) : null}

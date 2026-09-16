@@ -1,6 +1,6 @@
 
 import * as React from "react";
-import { Bell, Edit, Loader2, Plus, Power, PowerOff, Send, Trash2 } from "lucide-react";
+import { Bell, Edit, Plus, Power, PowerOff, Send, Trash2 } from "lucide-react";
 import { Link } from "react-router";
 import { AddNewButton } from "@/components/common/add-new-button";
 import { InfoHelp } from "@/components/common/info-help";
@@ -46,6 +46,7 @@ import type {
 import type { Facet } from "@/lib/types/titles";
 import type { BoxedActionButtonTone } from "@/lib/utils/action-button-styles";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type SettingsNotificationsSectionProps = {
   channels: NotificationChannel[];
@@ -662,7 +663,7 @@ export function SettingsNotificationsSection({
                                 disabled={testingChannelId === channel.id}
                               >
                                 {testingChannelId === channel.id ? (
-                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                  <LoadingMark className="h-4 w-4" />
                                 ) : (
                                   <Send className="h-4 w-4" />
                                 )}
@@ -697,7 +698,7 @@ export function SettingsNotificationsSection({
                               disabled={mutatingChannelId === channel.id}
                             >
                               {mutatingChannelId === channel.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <LoadingMark className="h-4 w-4" />
                               ) : (
                                 <Trash2 className="h-4 w-4" />
                               )}
@@ -1021,7 +1022,7 @@ export function SettingsNotificationsSection({
                         disabled={mutatingSubscriptionId === sub.id}
                       >
                         {mutatingSubscriptionId === sub.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
+                          <LoadingMark className="h-4 w-4" />
                         ) : (
                           <Trash2 className="h-4 w-4" />
                         )}

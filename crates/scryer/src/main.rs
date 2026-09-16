@@ -767,7 +767,11 @@ async fn run_application() {
 
     // Create the watch channel for bootstrap status communication.
     let (status_tx, status_rx) = watch::channel(BootstrapStatus::Migrating);
-    let splash_state = SplashState { status_rx };
+    let migration_progress = datastore_config.migration_progress.clone();
+    let splash_state = SplashState {
+        status_rx,
+        migration_progress,
+    };
     let cors = CorsConfig::from_env();
     let splash_app = build_splash_router(splash_state, cors.clone(), base_path.clone());
 
@@ -1273,7 +1277,8 @@ async fn bootstrap_application(
         .with_download_client_category_snapshot_store(
             download_client_category_snapshot_store.clone(),
         )
-        .with_seed_goal_resolution(datastore.seeding_profiles()),
+        .with_seed_goal_resolution(datastore.seeding_profiles())
+        .with_download_client_status(datastore.download_client_status()),
     );
     let upstream_scheduler = datastore
         .upstream_scheduler()
@@ -1590,6 +1595,7 @@ async fn bootstrap_application(
         restore_restart_controller.application_upgrade_handle(),
     );
 
+    let mut location_reservations_readable = true;
     let mut upgrade_reconcile_exclusions = match app_use_case
         .finalize_application_upgrade_journal_with_boot_time(application_upgrade_boot_time())
         .await
@@ -1601,10 +1607,24 @@ async fn bootstrap_application(
         }
     };
 
+    // An interrupted location operation is resumed further down, after root
+    // reconciliation — but its Activity run must be spared here, before the
+    // generic reconciler can mark it Failed under the still-running move.
+    match app_use_case
+        .resumable_location_operation_job_run_ids()
+        .await
+    {
+        Ok(reserved) => upgrade_reconcile_exclusions.extend(reserved),
+        Err(error) => {
+            tracing::warn!(error = %error, "could not read the interrupted location operations to spare their runs; preserved interrupted jobs for the next restart");
+            location_reservations_readable = false;
+        }
+    }
+
     // Durable maintenance search intents resume with their original job ids.
     // Keep those reservations out of generic interrupted-job reconciliation.
     match app_use_case.resume_interrupted_maintenance_searches().await {
-        Ok(recovered) => {
+        Ok(recovered) if location_reservations_readable => {
             upgrade_reconcile_exclusions.extend(recovered);
             // Other abandoned jobs cannot be resumed; close them before pollers start.
             if let Err(e) = app_use_case
@@ -1614,9 +1634,13 @@ async fn bootstrap_application(
                 tracing::warn!(error = %e, "failed to reconcile interrupted job runs on startup");
             }
         }
+        // Either the location reservations could not be read, or the
+        // maintenance-search reservation failed. Keep recovery evidence: an
+        // optional recovery pass must not prevent the rest of the application
+        // from starting, and reconciling against a partial exclusion list
+        // would fail runs that are about to be resumed.
+        Ok(_) => {}
         Err(error) => {
-            // Keep recovery evidence if its read failed. An optional recovery
-            // pass must not prevent the rest of the application from starting.
             tracing::warn!(error = %error, "could not reserve maintenance searches; preserved interrupted jobs for the next restart");
         }
     }
@@ -2402,12 +2426,12 @@ fn resolve_explicit_log_file_path(path: &Path, data_dir: &Path) -> PathBuf {
 fn default_windows_log_file_path() -> Option<PathBuf> {
     #[cfg(windows)]
     {
-        return directories::BaseDirs::new().map(|dirs| {
+        directories::BaseDirs::new().map(|dirs| {
             dirs.data_local_dir()
                 .join("scryer")
                 .join("logs")
                 .join("scryer.log")
-        });
+        })
     }
 
     #[cfg(not(windows))]

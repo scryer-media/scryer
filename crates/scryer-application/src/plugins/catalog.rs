@@ -1090,6 +1090,10 @@ fn require_release_asset_url(label: &str, url: &str, repo: &GitHubRepo) -> AppRe
 }
 
 #[cfg(test)]
+#[path = "catalog_compatibility_tests.rs"]
+mod compatibility_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -4,7 +4,6 @@ import {
   Clock3,
   Eye,
   EyeOff,
-  Loader2,
   Search,
   Zap,
 } from "lucide-react";
@@ -51,6 +50,7 @@ import {
   EpisodeTableActionButton,
   type TranslateFn,
 } from "./season-section-utils";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 function renderEpisodeTypeBadges(episode: CollectionEpisode, t: TranslateFn) {
   return (
@@ -425,7 +425,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                   disabled={autoSearching}
                   leadingIcon={
                     autoSearching ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
+                      <LoadingMark className="h-4 w-4" />
                     ) : (
                       <Zap className="h-4 w-4" />
                     )
@@ -563,7 +563,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                 showTitleAttribute={false}
               >
                 {autoSearching ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
+                  <LoadingMark className="h-4 w-4" />
                 ) : (
                   <Zap className="h-4 w-4" />
                 )}

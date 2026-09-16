@@ -1,5 +1,5 @@
 import * as React from "react";
-import { ChevronDown, ChevronUp, Loader2, RefreshCcw, TextSearch } from "lucide-react";
+import { ChevronDown, ChevronUp, RefreshCcw, TextSearch } from "lucide-react";
 import { useClient } from "urql";
 
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ import type { AuditLogEvent } from "@/lib/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDateTime } from "@/lib/utils/date-format";
 import { selectorId } from "@/lib/utils/dom-ids";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const PAGE_SIZE = 100;
 const AUDIT_PANEL_CLASS =
@@ -187,7 +188,7 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
               disabled={loading}
             >
               {loading ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <LoadingMark className="h-4 w-4" />
               ) : (
                 <RefreshCcw className="h-4 w-4" />
               )}
@@ -328,7 +329,7 @@ export const SystemAuditContainer = React.memo(function SystemAuditContainer() {
               disabled={!hasMore || loadingOlder}
               onClick={() => void loadOlderAuditEvents()}
             >
-              {loadingOlder ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              {loadingOlder ? <LoadingMark className="h-4 w-4" /> : null}
               {t("history.loadMore")}
             </Button>
           </div>

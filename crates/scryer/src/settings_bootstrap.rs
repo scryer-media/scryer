@@ -1316,6 +1316,21 @@ pub(crate) async fn seed_service_setting_definitions(
         .map_err(|error| format!("failed to batch seed setting definitions: {error}"))
 }
 
+/// The legacy `SCRYER_JWT_ACCESS_TTL_SECONDS` expressed in whole days.
+///
+/// The setting's unit is days, so a sub-day lifetime cannot be represented
+/// exactly. Rounding to the nearest day with a floor of one keeps the
+/// operator's intent as closely as the setting allows rather than discarding
+/// it; the range matches the 1..=365 the security settings validate.
+pub(crate) fn legacy_jwt_access_ttl_days() -> Option<i64> {
+    jwt_access_ttl_seconds_to_days(&normalize_env_option("SCRYER_JWT_ACCESS_TTL_SECONDS")?)
+}
+
+fn jwt_access_ttl_seconds_to_days(raw: &str) -> Option<i64> {
+    let seconds = raw.parse::<i64>().ok().filter(|seconds| *seconds > 0)?;
+    Some(((seconds + 43_200) / 86_400).clamp(1, 365))
+}
+
 pub(crate) async fn seed_service_settings_from_environment(
     database: Arc<SettingsStore>,
 ) -> Result<(), String> {
@@ -1365,6 +1380,17 @@ pub(crate) async fn seed_service_settings_from_environment(
             SETTINGS_SCOPE_SYSTEM,
             TLS_KEY_KEY,
             normalize_env_option("SCRYER_TLS_KEY").map(Value::String),
+        ),
+        // The access lifetime used to be an environment variable in seconds and
+        // is still documented as one in `.env.example`. `token_lifetime` now
+        // reads only `auth.session_duration_days`, so without this an upgrade
+        // silently replaces the operator's configured lifetime with the seeded
+        // three-day default. Seeded like every other env setting: it loses to a
+        // value the operator has since set in Settings.
+        (
+            SETTINGS_SCOPE_SYSTEM,
+            scryer_application::SESSION_DURATION_DAYS_KEY,
+            legacy_jwt_access_ttl_days().map(Value::from),
         ),
     ];
 
@@ -2059,6 +2085,23 @@ mod tests {
             assert_eq!(seed.default_value_json, "null");
             assert!(!seed.is_sensitive);
         }
+    }
+
+    #[test]
+    fn the_legacy_jwt_access_ttl_seeds_the_session_duration_setting() {
+        // `.env.example:50` documents 86400; a day is what that means.
+        assert_eq!(jwt_access_ttl_seconds_to_days("86400"), Some(1));
+        assert_eq!(jwt_access_ttl_seconds_to_days(" 604800 ".trim()), Some(7));
+        // Sub-day lifetimes cannot be represented; one day is the floor, not
+        // the three-day seeded default.
+        assert_eq!(jwt_access_ttl_seconds_to_days("3600"), Some(1));
+        // Nearest whole day, and the settings range is respected.
+        assert_eq!(jwt_access_ttl_seconds_to_days("129600"), Some(2));
+        assert_eq!(jwt_access_ttl_seconds_to_days("999999999"), Some(365));
+        // Nothing usable means nothing is seeded, so the default applies.
+        assert_eq!(jwt_access_ttl_seconds_to_days("0"), None);
+        assert_eq!(jwt_access_ttl_seconds_to_days("-1"), None);
+        assert_eq!(jwt_access_ttl_seconds_to_days("not-a-number"), None);
     }
 
     #[tokio::test]

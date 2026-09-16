@@ -1013,6 +1013,28 @@ impl AppUseCase {
         Ok(released)
     }
 
+    /// Boot hook, run *before* generic interrupted-job reconciliation: the
+    /// Activity job run ids of the location operations this boot may still
+    /// pick up (FR-033).
+    ///
+    /// A location operation outlives the process on purpose, so its linked
+    /// `workflow_operations` row is not an abandoned job. Reconciling it would
+    /// mark it `Failed` while the runner is still moving files, and the
+    /// progress and completion writers refuse to update a terminal run — so
+    /// Activity would report a failed operation forever. A read failure here
+    /// is the caller's to handle; reconciliation must be skipped rather than
+    /// run with an incomplete exclusion list.
+    pub async fn resumable_location_operation_job_run_ids(&self) -> AppResult<Vec<String>> {
+        let operations = LocationOperationRunner::resumable_operations(
+            self.services.library.location_operations.as_ref(),
+        )
+        .await?;
+        Ok(operations
+            .into_iter()
+            .filter_map(|operation| operation.job_run_id)
+            .collect())
+    }
+
     /// Boot hook: pick every interrupted location operation back up (FR-033).
     ///
     /// Returns how many were resumed. Operations whose plan cannot be read are

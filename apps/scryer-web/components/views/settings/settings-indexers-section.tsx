@@ -80,6 +80,7 @@ import {
   seedingProfileSelectValueToId,
   supportsSeedingProfileAssignment,
 } from "@/lib/utils/seeding-profiles";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 type SettingsIndexersSectionProps = {
   /// Which pane of the Indexers page to render; the page's rail owns the choice.
@@ -1241,10 +1242,11 @@ export function SettingsIndexersSection({
                           disabled={mutatingIndexerId === indexer.id}
                           label={t("settings.indexerSyncNow")}
                         >
-                          <RefreshCw className={cn(
-                            "h-4 w-4",
-                            mutatingIndexerId === indexer.id && "animate-spin",
-                          )} />
+                          {mutatingIndexerId === indexer.id ? (
+                            <LoadingMark className="h-4 w-4" />
+                          ) : (
+                            <RefreshCw className="h-4 w-4" />
+                          )}
                         </IndexerActionButton>
                       ) : null}
                       <IndexerActionButton

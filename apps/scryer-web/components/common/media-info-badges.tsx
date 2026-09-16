@@ -3,154 +3,24 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Badge as UiBadge } from "@/components/ui/badge";
 import { ChevronDown } from "lucide-react";
 import { audioFormatPills, hdrFormatPills } from "@/lib/utils/media-format-pills";
+import {
+  audioStreamsForFile,
+  formatLanguage,
+  formatSingleAudioTrack,
+  formatSingleSubtitleTrack,
+  resolveAudioChannels,
+  resolveAudioCodec,
+  resolveContainerFormat,
+  resolveResolution,
+  resolveSourceType,
+  resolveSubtitleCodec,
+  resolveVideoCodec,
+  type AudioStreamDetail,
+  type MediaInfoFile,
+  type SubtitleStreamDetail,
+} from "@/lib/utils/media-info-format";
 
-export type AudioStreamDetail = {
-  metadata?: Pick<import("@/lib/types/media-analysis").MediaStreamMetadata, "channelLayout" | "disposition" | "programId">;
-  profile?: string | null;
-  name?: string | null;
-  codec: string | null;
-  channels: number | null;
-  language: string | null;
-  bitrateKbps: number | null;
-};
-
-export type SubtitleStreamDetail = {
-  codec: string | null;
-  language: string | null;
-  name: string | null;
-  forced: boolean;
-  default: boolean;
-};
-
-export type MediaInfoFile = {
-  id?: string;
-  analysis?: import("@/lib/types/media-analysis").MediaAnalysisDetails;
-  analysisAttempt?: import("@/lib/types/media-analysis").MediaAnalysisAttempt | null;
-  scanStatus: string;
-  videoCodec: string | null;
-  videoWidth: number | null;
-  videoHeight: number | null;
-  videoBitrateKbps: number | null;
-  videoBitDepth: number | null;
-  videoHdrFormat: string | null;
-  videoFrameRate: string | null;
-  videoProfile: string | null;
-  audioCodec: string | null;
-  audioChannels: number | null;
-  audioBitrateKbps: number | null;
-  audioLanguages: string[];
-  audioStreams: AudioStreamDetail[];
-  subtitleLanguages: string[];
-  subtitleCodecs: string[];
-  subtitleStreams: SubtitleStreamDetail[];
-  hasMultiaudio: boolean;
-  durationSeconds: number | null;
-  numChapters: number | null;
-  containerFormat: string | null;
-  sceneName?: string | null;
-  releaseGroup?: string | null;
-  sourceType?: string | null;
-  resolution?: string | null;
-  videoCodecParsed?: string | null;
-  audioCodecParsed?: string | null;
-  acquisitionScore?: number | null;
-  scoringLog?: string | null;
-  indexerSource?: string | null;
-  grabbedReleaseTitle?: string | null;
-  grabbedAt?: string | null;
-  edition?: string | null;
-  originalFilePath?: string | null;
-  releaseHash?: string | null;
-};
-
-function resolveResolution(width: number | null, height: number | null): string | null {
-  if (width == null && height == null) return null;
-  if ((width != null && width >= 7680) || (height != null && height >= 4200)) return "8K";
-  if ((width != null && width >= 3840) || (height != null && height >= 2100)) return "4K";
-  if ((width != null && width >= 1920) || (height != null && height >= 1000)) return "1080p";
-  if ((width != null && width >= 1280) || (height != null && height >= 700)) return "720p";
-  return height != null ? `${height}p` : null;
-}
-
-function resolveVideoCodec(codec: string | null): string | null {
-  if (codec == null) return null;
-  if (codec === "hevc") return "HEVC";
-  if (codec === "h264") return "H.264";
-  if (codec === "av1") return "AV1";
-  if (codec === "vc1") return "VC-1";
-  return codec.toUpperCase();
-}
-
-function resolveAudioCodec(codec: string | null): string | null {
-  if (codec == null) return null;
-  if (codec === "truehd") return "TrueHD";
-  if (codec === "eac3") return "EAC3";
-  if (codec === "ac3") return "AC3";
-  if (codec === "flac") return "FLAC";
-  if (codec === "aac") return "AAC";
-  if (codec === "dts") return "DTS";
-  if (codec === "opus") return "Opus";
-  return codec.toUpperCase();
-}
-
-function resolveAudioChannels(channels: number | null, layout?: string | null): string | null {
-  if (layout) return layout;
-  if (channels == null) return null;
-  return `${channels}ch`;
-}
-
-let displayNamesCache: Intl.DisplayNames | null = null;
-
-function formatLanguage(code: string | null): string {
-  if (!code) return "?";
-  try {
-    displayNamesCache ??= new Intl.DisplayNames(undefined, { type: "language" });
-    return displayNamesCache.of(code) ?? code;
-  } catch {
-    return code;
-  }
-}
-
-function resolveSubtitleCodec(codec: string | null): string {
-  if (!codec) return "?";
-  const c = codec.toLowerCase();
-  if (c === "subrip" || c === "srt") return "SRT";
-  if (c === "ass" || c === "ssa") return "ASS";
-  if (c === "hdmv_pgs_subtitle" || c === "pgs" || c === "pgssub") return "PGS";
-  if (c === "dvd_subtitle" || c === "dvdsub" || c === "vobsub") return "VobSub";
-  if (c === "webvtt" || c === "vtt") return "WebVTT";
-  if (c === "mov_text") return "TX3G";
-  return codec.toUpperCase();
-}
-
-function formatSingleAudioTrack(stream: AudioStreamDetail): string {
-  const parts = [
-    formatLanguage(stream.language),
-    resolveAudioCodec(stream.codec),
-    stream.profile,
-    resolveAudioChannels(stream.channels, stream.metadata?.channelLayout),
-  ].filter((value): value is string => Boolean(value && value !== "?"));
-  return parts.length > 0 ? parts.join(" ") : "Audio";
-}
-
-function formatSingleSubtitleTrack(track: SubtitleStreamDetail): string {
-  const parts = [formatLanguage(track.language)];
-  if (track.forced) parts.push("Forced");
-  else if (track.default) parts.push("Default");
-  return parts.filter(Boolean).join(" ");
-}
-
-function resolveSourceType(source: string): string | null {
-  const s = source.toLowerCase();
-  if (s === "bluray" || s === "blu-ray") return "BluRay";
-  if (s === "webdl" || s === "web-dl") return "WEB-DL";
-  if (s === "webrip" || s === "web-rip") return "WEBRip";
-  if (s === "hdtv") return "HDTV";
-  if (s === "dvd" || s === "dvdrip") return "DVD";
-  if (s === "remux") return "Remux";
-  if (s === "bdremux") return "BD Remux";
-  return source;
-}
+export type { AudioStreamDetail, MediaInfoFile, SubtitleStreamDetail };
 
 function Badge({
   children,
@@ -177,9 +47,15 @@ function AudioRoles({ stream }: { stream: AudioStreamDetail }) {
   </>;
 }
 
-function AudioTracksPopover({ streams }: { streams: AudioStreamDetail[] }) {
+export function AudioTracksPopover({
+  streams,
+  presentation = "default",
+}: {
+  streams: AudioStreamDetail[];
+  presentation?: "default" | "selected-title";
+}) {
   const t = useTranslate();
-  if (streams.length === 1) {
+  if (streams.length === 1 && presentation === "default") {
     return <Badge tone="info">{formatSingleAudioTrack(streams[0])}<AudioRoles stream={streams[0]} /></Badge>;
   }
   return (
@@ -187,7 +63,11 @@ function AudioTracksPopover({ streams }: { streams: AudioStreamDetail[] }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex cursor-pointer items-center gap-1 rounded border border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--scry-info-text)] hover:bg-[var(--scry-info-bg-strong)]"
+          className={
+            presentation === "selected-title"
+              ? "inline-flex cursor-pointer items-center gap-1 rounded-[6px] bg-[var(--scry-chip)] px-[9px] py-[3px] text-[10.5px] font-semibold text-[var(--scry-muted2)] hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--scry-focus)]"
+              : "inline-flex cursor-pointer items-center gap-1 rounded border border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] px-1.5 py-0.5 text-[11px] font-medium text-[var(--scry-info-text)] hover:bg-[var(--scry-info-bg-strong)]"
+          }
         >
           {t("mediaFile.audioCount", { count: streams.length })}
           <ChevronDown className="h-3 w-3 opacity-70" />
@@ -262,31 +142,6 @@ export function SubtitleTracksPopover({
   );
 }
 
-function resolveContainerFormat(format: string | null): string | null {
-  if (format == null) return null;
-
-  switch (format.trim().toLowerCase()) {
-    case "matroska":
-      return "MKV";
-    case "webm":
-      return "WebM";
-    case "mp4":
-      return "MP4";
-    case "avi":
-      return "AVI";
-    case "mpegts":
-      return "MPEG-TS";
-    case "asf":
-      return "ASF";
-    case "ogg":
-      return "OGG";
-    case "flv":
-      return "FLV";
-    default:
-      return format.toUpperCase();
-  }
-}
-
 export function MediaInfoBadges({
   file,
   includeContainer = false,
@@ -306,13 +161,7 @@ export function MediaInfoBadges({
   const audioPills = audioFormatPills(file);
   const hasVideo = !!(resolution || videoCodec || hdrPills.length > 0 || file.analysis?.is3D);
   const hasRelease = !!(sourceType || file.edition);
-  const audioStreams: AudioStreamDetail[] = file.analysis?.streams.length
-    ? file.analysis.streams.filter((stream) => stream.kind === "AUDIO").map((stream) => ({
-      codec: stream.codec, channels: stream.channels, language: stream.language,
-      profile: stream.metadata.profile, name: stream.name, metadata: stream.metadata,
-      bitrateKbps: stream.metadata.bitrateBps == null ? null : Number(stream.metadata.bitrateBps) / 1000,
-    }))
-    : file.audioStreams;
+  const audioStreams = audioStreamsForFile(file);
   const hasAudioStreams = audioStreams.length > 0;
   const hasSubtitles = file.subtitleStreams.length > 0 || file.subtitleLanguages.length > 0;
   const isPendingScan = file.scanStatus === "imported";

@@ -111,6 +111,34 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    /// The per-client backoff status of every client currently in a failure run,
+    /// keyed by client configuration id. Clients without a row are healthy.
+    pub async fn list_download_client_statuses(
+        &self,
+        actor: &User,
+    ) -> AppResult<std::collections::HashMap<String, crate::escalation_backoff::DownloadClientStatus>>
+    {
+        let settings_permissions = scryer_domain::AppPermissionMask::from_permissions([
+            scryer_domain::AppPermission::ManageSystemSettings,
+            scryer_domain::AppPermission::ManageCatalogSettings,
+        ]);
+        if !self
+            .has_any_app_permission(actor, settings_permissions)
+            .await?
+        {
+            return Err(AppError::Unauthorized(
+                "You do not have permission to perform this action".to_string(),
+            ));
+        }
+
+        self.services
+            .integrations
+            .download_client_status
+            .list()
+            .await
+    }
+}
+impl AppUseCase {
     async fn enabled_download_clients_by_priority(&self) -> AppResult<Vec<DownloadClientConfig>> {
         let mut enabled_clients = self
             .services
@@ -490,6 +518,21 @@ impl AppUseCase {
             .download_client_configs
             .delete_with_cleared_indexer_mapping_count(client_id)
             .await?;
+        // The failure record is about a client that no longer exists. Leaving
+        // it would block a client re-added under the same id.
+        if let Err(error) = self
+            .services
+            .integrations
+            .download_client_status
+            .clear(client_id)
+            .await
+        {
+            tracing::warn!(
+                client_id,
+                error = %error,
+                "failed to clear the deleted download client's status row"
+            );
+        }
         self.refresh_download_client_category_admission_best_effort()
             .await;
         for indexer_id in mapped_indexer_ids {

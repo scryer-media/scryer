@@ -2,8 +2,8 @@ import type { TitleReleaseBlocklistEntry } from "@/components/containers/series-
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
-import { Loader2 } from "lucide-react";
 import { formatDate } from "./helpers";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 export function EpisodeBlocklistPanel({
   entries,
@@ -59,7 +59,7 @@ export function EpisodeBlocklistPanel({
                 onClick={() => onClear(entry.id)}
               >
                 {clearingEntryId === entry.id ? (
-                  <Loader2 className="size-3.5 animate-spin" />
+                  <LoadingMark className="size-3.5" />
                 ) : null}
                 <span>{t("label.clear")}</span>
               </Button>

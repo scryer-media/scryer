@@ -4,8 +4,7 @@ use scryer_domain::{PluginInstallation, PluginSourceKind, PluginSupportTier, Plu
 use scryer_infrastructure_sql::runtime::{SqlArg, SqlRuntime};
 use std::sync::Arc;
 
-#[path = "../../tests/common/mod.rs"]
-mod common;
+use crate::middleware::integration_test_common as common;
 
 const LEGACY_MODULE: &[u8] = b"\0asm\x01\0\0\0";
 

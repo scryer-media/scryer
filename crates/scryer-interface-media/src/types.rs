@@ -82,6 +82,9 @@ pub struct TitlePayload {
     pub filler_policy: Option<FillerPolicyValue>,
     /// Policy for recap episodes, or null when unset.
     pub recap_policy: Option<RecapPolicyValue>,
+    /// Which episode numbering this title's releases are read in, or null when
+    /// the title follows the default (`AUTO`).
+    pub release_numbering: Option<ReleaseNumberingValue>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -145,8 +148,10 @@ pub enum TitleCatalogSortKeyValue {
     Library,
     /// Sort by monitored status.
     Monitored,
-    /// Sort by quality profile or media quality.
+    /// Sort by the quality of the title's media; ascending runs from lowest to highest resolution.
     Quality,
+    /// Sort by the name of the title's effective quality profile.
+    Profile,
     /// Sort by episode count.
     Episodes,
     /// Sort by content status.

@@ -11,6 +11,8 @@ export const boxedActionButtonToneClass = {
     "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)] hover:border-[var(--scry-info-border-strong)] hover:bg-[var(--scry-info-bg-strong)] hover:text-[var(--scry-info-text)]",
   accent:
     "border-[rgba(var(--scry-accent-rgb),0.3)] bg-[rgba(var(--scry-accent-rgb),0.1)] text-[var(--scry-accent-text)] hover:border-[rgba(var(--scry-accent-rgb),0.45)] hover:bg-[rgba(var(--scry-accent-rgb),0.2)] hover:text-[var(--scry-accent-text)]",
+  accentBright:
+    "border-[rgba(var(--scry-accent-rgb),0.7)] bg-[rgba(var(--scry-accent-rgb),0.1)] text-[var(--scry-accent-text)] hover:border-[rgba(var(--scry-accent-rgb),0.9)] hover:bg-[rgba(var(--scry-accent-rgb),0.2)] hover:text-[var(--scry-accent-text)]",
   edit:
     "border-[var(--scry-info-border)] bg-[var(--scry-info-bg)] text-[var(--scry-info-text)] hover:border-[var(--scry-info-border-strong)] hover:bg-[var(--scry-info-bg-strong)] hover:text-[var(--scry-info-text)]",
   reorder:

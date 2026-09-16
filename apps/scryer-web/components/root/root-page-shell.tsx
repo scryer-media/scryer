@@ -16,7 +16,6 @@ import {
   Download,
   LayoutDashboard,
   ListChecks,
-  Loader2,
   Monitor,
   Settings,
   CircleFadingArrowUp,
@@ -124,6 +123,7 @@ import {
   resolveTitleOverviewTargetById,
   resolveTitleOverviewTargetBySlug,
 } from "@/lib/title-overview-loader";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const DashboardContainer = lazy(() =>
   import("@/components/containers/dashboard-container").then((m) => ({
@@ -748,7 +748,7 @@ export default function HomePage() {
         data-slot="root-app-frame"
         className="flex min-h-dvh items-center justify-center text-[var(--scry-body)]"
       >
-        <Loader2 className="h-6 w-6 animate-spin text-[var(--scry-accent-ring)]" />
+        <LoadingMark className="h-6 w-6 text-[var(--scry-accent-ring)]" />
       </div>
     );
   }
@@ -760,7 +760,7 @@ export default function HomePage() {
           data-slot="root-app-frame"
           className="flex min-h-dvh items-center justify-center text-[var(--scry-body)]"
         >
-          <Loader2 className="h-6 w-6 animate-spin text-[var(--scry-accent-ring)]" />
+          <LoadingMark className="h-6 w-6 text-[var(--scry-accent-ring)]" />
         </div>
       );
     }

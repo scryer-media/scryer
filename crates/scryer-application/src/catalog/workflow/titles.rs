@@ -261,7 +261,7 @@ impl AppUseCase {
         requested_library_ids: Option<Vec<String>>,
         query: Option<String>,
         filter: crate::TitleCatalogFilter,
-        sort: crate::TitleCatalogSort,
+        mut sort: crate::TitleCatalogSort,
         limit: usize,
         offset: usize,
         include_external_ids: bool,
@@ -283,6 +283,9 @@ impl AppUseCase {
             .unwrap_or_default();
         if !requested_library_ids.is_empty() {
             library_ids.retain(|library_id| requested_library_ids.contains(library_id));
+        }
+        if sort.key == crate::TitleCatalogSortKey::Profile && sort.profile_names.is_none() {
+            sort.profile_names = Some(self.title_catalog_profile_names(&library_ids).await?);
         }
         self.services
             .catalog
@@ -1060,9 +1063,16 @@ impl AppUseCase {
             snapshot,
             &episodes,
             &HashSet::new(),
+            &HashMap::new(),
         )
     }
 
+    /// `blocked_clients` are the download clients currently in failure backoff,
+    /// mapped to the moment each comes back. A client that is answering is the
+    /// authority on what it is running, so a submission with no queue row is
+    /// simply gone (Sonarr's `QueueSpecification` reads only the live queue).
+    /// Only while a client is blocked is its silence uninformative, and only
+    /// then does an overlapping row hold the scope.
     pub(crate) fn find_blocking_download_submissions_in_state(
         title: &Title,
         scope: &SubmissionScope,
@@ -1070,6 +1080,7 @@ impl AppUseCase {
         snapshot: &DownloadClientSnapshotOutcome,
         episodes: &[scryer_domain::Episode],
         accepted_download_ids: &HashSet<scryer_domain::download_identity::DownloadId>,
+        blocked_clients: &HashMap<String, chrono::DateTime<chrono::Utc>>,
     ) -> AppResult<Vec<SubmissionScopeConflict>> {
         if submissions.is_empty() {
             return Ok(Vec::new());
@@ -1101,28 +1112,26 @@ impl AppUseCase {
                 .items
                 .iter()
                 .find(|item| queue_item_matches_submission(item, submission));
-            let authoritative = submission
+            let blocked_client = submission
                 .download_client_id
                 .as_deref()
                 .map(str::trim)
                 .filter(|client_id| !client_id.is_empty())
-                .is_some_and(|client_id| snapshot.authoritative_client_ids.contains(client_id));
+                .and_then(|client_id| {
+                    blocked_clients
+                        .get(client_id)
+                        .map(|until| (client_id, *until))
+                });
             let Some(queue_item) = queue_item else {
-                if !authoritative {
+                if let Some((client_id, until)) = blocked_client {
                     return Err(AppError::DownloadSubmitUnavailable(format!(
-                        "download client state is unavailable for submission {} on title {}",
+                        "download client {client_id} is in failure backoff until {until}; submission {} on title {} cannot be resolved yet",
                         submission.download_id, title.id
                     )));
                 }
                 continue;
             };
             if !queue_state_blocks_submission(queue_item.state) {
-                if !authoritative {
-                    return Err(AppError::DownloadSubmitUnavailable(format!(
-                        "download client state is unavailable for terminal submission {} on title {}",
-                        submission.download_id, title.id
-                    )));
-                }
                 continue;
             }
 
@@ -1716,6 +1725,13 @@ impl AppUseCase {
             .library
             .library_probe_signatures
             .delete_probe_signatures_for_title_ids(&[title_id.to_string()])
+            .await?;
+        // Pending imports bound to the title: their files are rediscovered by
+        // the next scan if they are still there.
+        self.services
+            .library
+            .library_scan_unmatched_items
+            .delete_for_title(title_id)
             .await?;
 
         Ok(())

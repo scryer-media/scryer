@@ -718,6 +718,43 @@ fn extract_archive(
     collect_extracted_files(&output_dir)
 }
 
+/// Open and read a file, refusing to traverse a symlink at the final component.
+///
+/// The classification above already rejects links, but the entry can be swapped
+/// between the stat and the open. `O_NOFOLLOW` closes that window on Unix; on
+/// Windows the reparse-point flag does the same, so a planted link fails the
+/// open instead of handing the plugin host-side bytes.
+fn read_without_following(path: &std::path::Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        options.custom_flags(libc::O_NOFOLLOW);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt as _;
+        // FILE_FLAG_OPEN_REPARSE_POINT; spelled out rather than pulling
+        // windows-sys into this crate for one constant.
+        options.custom_flags(0x0020_0000);
+    }
+    let mut file = options.open(path)?;
+    // A reparse point opened with the flag above is not a readable file; on
+    // Unix `O_NOFOLLOW` has already failed with ELOOP.
+    if !file.metadata()?.file_type().is_file() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "extraction output entry is not a regular file",
+        ));
+    }
+    let mut content = Vec::new();
+    file.read_to_end(&mut content)?;
+    Ok(content)
+}
+
 /// Read the extraction output back into a bounded response.
 ///
 /// The walk stays inside `output_dir` by construction: it only descends into
@@ -742,7 +779,20 @@ fn collect_extracted_files(
                     "failed to read archive extraction output entry: {error}"
                 ))
             })?;
-            let metadata = entry.metadata().map_err(|error| {
+            // `DirEntry::file_type` does not traverse the link, unlike
+            // `DirEntry::metadata`. Classifying with the followed metadata made
+            // the symlink arm unreachable, so a link planted by the archive was
+            // read — or recursed into — as whatever it pointed at, outside the
+            // WASI preopens.
+            let file_type = entry.file_type().map_err(|error| {
+                ArchiveExtractFailure::temporary(format!(
+                    "failed to inspect archive extraction output entry: {error}"
+                ))
+            })?;
+            if file_type.is_symlink() {
+                continue;
+            }
+            let metadata = std::fs::symlink_metadata(entry.path()).map_err(|error| {
                 ArchiveExtractFailure::temporary(format!(
                     "failed to inspect archive extraction output entry: {error}"
                 ))
@@ -774,7 +824,7 @@ fn collect_extracted_files(
                     "archive expands beyond {MAX_ARCHIVE_RESPONSE_BYTES} bytes"
                 )));
             }
-            let content = std::fs::read(entry.path()).map_err(|error| {
+            let content = read_without_following(&entry.path()).map_err(|error| {
                 ArchiveExtractFailure::temporary(format!(
                     "failed to read extracted file '{relative_path}': {error}"
                 ))
@@ -819,6 +869,48 @@ fn unsupported_response(request: PluginHostRequest) -> PluginHostResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A symlink planted by the archive must not be followed out of the
+    /// extraction workspace, neither as a file to read nor as a directory to
+    /// descend into.
+    #[cfg(unix)]
+    #[test]
+    fn extraction_output_never_follows_a_planted_symlink() {
+        let outside = tempfile::tempdir().expect("secret workspace");
+        std::fs::write(outside.path().join("host-secret.txt"), b"host only")
+            .expect("write the file the sandbox must not reach");
+        let output = tempfile::tempdir().expect("extraction workspace");
+        std::fs::write(output.path().join("real.txt"), b"archive content")
+            .expect("write the archive's own file");
+        std::os::unix::fs::symlink(
+            outside.path().join("host-secret.txt"),
+            output.path().join("leak.txt"),
+        )
+        .expect("plant a file symlink");
+        std::os::unix::fs::symlink(outside.path(), output.path().join("leak-dir"))
+            .expect("plant a directory symlink");
+
+        let Ok(response) = collect_extracted_files(output.path()) else {
+            panic!("collecting the extraction output must succeed");
+        };
+        let names = response
+            .files
+            .iter()
+            .map(|file| file.relative_path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec!["real.txt"],
+            "only the archive's own file is returned: {names:?}"
+        );
+        assert!(
+            !response
+                .files
+                .iter()
+                .any(|file| file.content == b"host only"),
+            "no host bytes escape through the symlink"
+        );
+    }
 
     #[test]
     fn invocation_http_budget_uses_only_remaining_time() {

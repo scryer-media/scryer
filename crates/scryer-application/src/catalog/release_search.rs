@@ -948,16 +948,15 @@ impl AppUseCase {
                 .list_collections_for_title(title_id)
                 .await
                 .unwrap_or_default();
-            let anime_numbering_bridge = if scored_title.facet == MediaFacet::Anime {
-                self.services
-                    .catalog
-                    .shows
-                    .get_anime_numbering_bridge(title_id)
-                    .await
-                    .unwrap_or_default()
-            } else {
-                None
-            };
+            // Read once per title and reused for every release scored against
+            // it; `None` for every title with no stored bridge.
+            let anime_numbering_bridge = self
+                .services
+                .catalog
+                .shows
+                .get_anime_numbering_bridge(title_id)
+                .await
+                .unwrap_or_default();
             let indexer_priority_by_name =
                 self.build_indexer_priority_by_name(indexer_routing).await;
             *prepared = Some(PreparedReleaseScoringInputs {

@@ -59,6 +59,47 @@ impl AcquisitionTitleWalkLocks {
     }
 }
 
+/// Per-title exclusion for metadata hydration.
+///
+/// A title can be hydrated from more than one lane at once — a library scan's
+/// bulk pass and an interactive refresh of the same brand-new title, most
+/// visibly. Each lane fetches metadata from the gateway holding the `Title`
+/// struct it queued, then persists. Without exclusion the two persists
+/// interleave with each other and with the scan's own title upsert, and the
+/// loser's re-read finds a row that no longer says `metadata_fetched_at` — the
+/// hydration then reports "metadata could not be persisted" for a title that
+/// was, in fact, hydrated.
+///
+/// The lock covers persist-and-read-back, not the gateway call, so a slow
+/// metadata fetch never blocks another lane; the winner's fresh row is what the
+/// waiter applies its own result onto, and a waiter that only wanted an
+/// unhydrated title hydrated takes the winner's answer and stops.
+///
+/// The table mirrors [`AcquisitionTitleWalkLocks`]: weak handles so an unlocked
+/// title drops out of the map instead of accumulating.
+#[derive(Clone, Default)]
+pub struct TitleHydrationLocks {
+    locks: Arc<tokio::sync::Mutex<HashMap<String, std::sync::Weak<tokio::sync::Mutex<()>>>>>,
+}
+
+impl TitleHydrationLocks {
+    pub(crate) async fn acquire(&self, title_id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut locks = self.locks.lock().await;
+            locks.retain(|_, lock| lock.strong_count() > 0);
+            if let Some(existing) = locks.get(title_id).and_then(std::sync::Weak::upgrade) {
+                existing
+            } else {
+                let created = Arc::new(tokio::sync::Mutex::new(()));
+                locks.insert(title_id.to_string(), Arc::downgrade(&created));
+                created
+            }
+        };
+
+        lock.lock_owned().await
+    }
+}
+
 /// In-process guard table for download-submission dedupe and scope ownership.
 ///
 /// Scryer is intentionally single-instance, so the database lookup remains the

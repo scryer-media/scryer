@@ -7,7 +7,7 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use tracing::log::LevelFilter;
 
 use crate::encryption::{EncryptionKey, load_existing_encryption_key_without_generation};
-use crate::migrations::MigrationHookContext;
+use crate::migrations::{MigrationHookContext, MigrationProgress};
 use crate::types::MigrationMode;
 
 const DEFAULT_POSTGRES_MAX_CONNECTIONS: u32 = 16;
@@ -42,6 +42,23 @@ impl PostgresServices {
         migration_mode: MigrationMode,
         data_dir: Option<PathBuf>,
     ) -> Result<Self, AppError> {
+        Self::new_with_migration_progress(
+            database_url,
+            migration_mode,
+            data_dir,
+            MigrationProgress::default(),
+        )
+        .await
+    }
+
+    /// Connects like [`Self::new_with_mode_and_data_dir`], counting the
+    /// migrations it applies into `migration_progress`.
+    pub async fn new_with_migration_progress(
+        database_url: impl AsRef<str>,
+        migration_mode: MigrationMode,
+        data_dir: Option<PathBuf>,
+        migration_progress: MigrationProgress,
+    ) -> Result<Self, AppError> {
         let mut connect_options: PgConnectOptions =
             database_url
                 .as_ref()
@@ -69,6 +86,7 @@ impl PostgresServices {
             migration_mode,
             MigrationHookContext {
                 encryption_key: migration_encryption_key,
+                progress: migration_progress,
             },
         )
         .await?;
