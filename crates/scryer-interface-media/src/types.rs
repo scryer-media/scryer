@@ -214,6 +214,18 @@ pub enum TitleCatalogContentStatusValue {
     Ended,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// How much of a title is on disk.
+pub enum TitleCatalogPresenceValue {
+    /// Nothing usable is on disk.
+    Missing,
+    /// Something is on disk and the run is not finished.
+    Partial,
+    /// Everything monitored is on disk.
+    Complete,
+}
+
 #[derive(InputObject, Clone)]
 /// Ordering applied to a title catalog page.
 pub struct TitleCatalogSortInput {
@@ -244,6 +256,10 @@ pub struct TitleCatalogFilterInput {
     pub maximum_year: Option<i32>,
     /// Minimum combined rating on the catalog rating scale; null imposes no rating bound.
     pub minimum_rating: Option<f64>,
+    /// Restrict results to these file-presence states, any-of; null or empty keeps every title.
+    pub presences: Option<Vec<TitleCatalogPresenceValue>>,
+    /// Keep titles holding a file whose scan failed or that needs review when true, and titles holding none when false; null keeps both.
+    pub needs_attention: Option<bool>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -287,6 +303,14 @@ pub struct TitleCatalogFilterCountsPayload {
     pub continuing: i32,
     /// Number of matching ended titles.
     pub ended: i32,
+    /// Number of matching titles with nothing on disk.
+    pub missing: i32,
+    /// Number of matching titles with something on disk and a run unfinished.
+    pub partial: i32,
+    /// Number of matching titles with everything monitored on disk.
+    pub complete: i32,
+    /// Number of matching titles holding a file that needs a person.
+    pub needs_attention: i32,
 }
 
 #[derive(SimpleObject, Clone)]

@@ -5,6 +5,9 @@ import {
   CalendarDays,
   Film,
   Folder,
+  PackageCheck,
+  PackageOpen,
+  PackageX,
   PanelRightClose,
   RefreshCw,
   Search,
@@ -12,10 +15,13 @@ import {
   Sparkles,
   Star,
   Tag,
+  TriangleAlert,
   X,
 } from "lucide-react";
 
 import { LibraryMultiSelect } from "@/components/common/library-multi-select";
+import { UnderlineFilterButton, type UnderlineFilterButtonTone } from "@/components/common/underline-filter-button";
+import type { Translate } from "@/components/root/types";
 import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import { availableTitleTagLabels } from "@/lib/utils/title-tags";
 import { Input } from "@/components/ui/input";
@@ -28,11 +34,16 @@ import type {
   LibraryRecord,
   TitleCatalogFilterOptionsRecord,
 } from "@/lib/types";
-import type { TitleCatalogAdvancedFilters } from "@/lib/utils/title-catalog-query";
+import type {
+  TitleCatalogAdvancedFilters,
+  TitleCatalogPresence,
+} from "@/lib/utils/title-catalog-query";
 import { cn } from "@/lib/utils";
 
 import {
   hasActiveTitleQuickFilters,
+  SPLIT_FILTER_GROUP_CLASS_NAME,
+  splitFilterSegmentClassName,
   TitleQuickFilterBar,
   type TitleQuickFilterCounts,
   type TitleQuickFilters,
@@ -69,6 +80,101 @@ type CatalogFiltersPanelProps = {
 
 function defaultMaximumYear() {
   return new Date().getFullYear() + 3;
+}
+
+type FileFilterSegment = {
+  key: string;
+  label: string;
+  title: string;
+  icon: React.ReactNode;
+  count?: number;
+  tone?: UnderlineFilterButtonTone;
+  selected: boolean;
+  toggle: () => void;
+};
+
+/**
+ * The file filters as two rows of pairs.
+ *
+ * The first row is what is not all there, the second is what is. They are two
+ * groups rather than one because a split control holds a pair, and these are not one
+ * scale: the three presence states partition the catalogue while attention cuts
+ * across them, so an operator can ask for "missing or partial, and broken" without
+ * the control implying those are four points on one line.
+ */
+function fileFilterGroups({
+  t,
+  filters,
+  counts,
+  onFiltersChange,
+}: {
+  t: Translate;
+  filters: TitleCatalogAdvancedFilters;
+  counts?: TitleQuickFilterCounts;
+  onFiltersChange: (updates: Partial<TitleCatalogAdvancedFilters>) => void;
+}): { incomplete: FileFilterSegment[]; onDisk: FileFilterSegment[] } {
+  const presenceSegment = (
+    presence: TitleCatalogPresence,
+    label: string,
+    hint: string,
+    icon: React.ReactNode,
+    count: number | undefined,
+  ): FileFilterSegment => {
+    const selected = filters.presences.includes(presence);
+    return {
+      key: presence,
+      label,
+      title: hint,
+      icon,
+      count,
+      selected,
+      toggle: () =>
+        onFiltersChange({
+          presences: selected
+            ? filters.presences.filter((candidate) => candidate !== presence)
+            : [...filters.presences, presence],
+        }),
+    };
+  };
+
+  return {
+    incomplete: [
+      presenceSegment(
+        "MISSING",
+        t("title.catalogFilters.presenceMissing"),
+        t("title.catalogFilters.presenceMissingHint"),
+        <PackageX className="h-3.5 w-3.5" />,
+        counts?.missing,
+      ),
+      presenceSegment(
+        "PARTIAL",
+        t("title.catalogFilters.presencePartial"),
+        t("title.catalogFilters.presencePartialHint"),
+        <PackageOpen className="h-3.5 w-3.5" />,
+        counts?.partial,
+      ),
+    ],
+    onDisk: [
+      presenceSegment(
+        "COMPLETE",
+        t("title.catalogFilters.presenceComplete"),
+        t("title.catalogFilters.presenceCompleteHint"),
+        <PackageCheck className="h-3.5 w-3.5" />,
+        counts?.complete,
+      ),
+      {
+        key: "NEEDS_ATTENTION",
+        label: t("title.catalogFilters.needsAttention"),
+        title: t("title.catalogFilters.needsAttentionHint"),
+        icon: <TriangleAlert className="h-3.5 w-3.5" />,
+        count: counts?.needsAttention,
+        tone: "danger" as const,
+        selected: filters.needsAttention,
+        toggle: () =>
+          onFiltersChange({ needsAttention: !filters.needsAttention }),
+      },
+    ],
+  };
 }
 
 function FilterLabel({
@@ -257,7 +363,15 @@ export function CatalogFiltersPanel({
     filters.userTagLabels.length > 0 ||
     filters.minimumYear !== null ||
     filters.maximumYear !== null ||
-    minimumRating > 0;
+    minimumRating > 0 ||
+    filters.presences.length > 0 ||
+    filters.needsAttention;
+  const fileGroups = fileFilterGroups({
+    t,
+    filters,
+    counts: quickFilterCounts,
+    onFiltersChange,
+  });
 
   return (
     <aside
@@ -321,6 +435,44 @@ export function CatalogFiltersPanel({
           onClear={onClearQuickFilters}
           appearance="panel"
         />
+        <div
+          role="group"
+          aria-label={t("title.catalogFilters.incompleteFiles")}
+          className={cn(SPLIT_FILTER_GROUP_CLASS_NAME, "mt-2")}
+        >
+          {fileGroups.incomplete.map((option, index) => (
+            <UnderlineFilterButton
+              key={option.key}
+              selected={option.selected}
+              onClick={option.toggle}
+              icon={option.icon}
+              label={option.label}
+              title={option.title}
+              count={option.count}
+              tone={option.tone}
+              className={splitFilterSegmentClassName(option.selected, index > 0)}
+            />
+          ))}
+        </div>
+        <div
+          role="group"
+          aria-label={t("title.catalogFilters.onDiskFiles")}
+          className={cn(SPLIT_FILTER_GROUP_CLASS_NAME, "mt-1.5")}
+        >
+          {fileGroups.onDisk.map((option, index) => (
+            <UnderlineFilterButton
+              key={option.key}
+              selected={option.selected}
+              onClick={option.toggle}
+              icon={option.icon}
+              label={option.label}
+              title={option.title}
+              count={option.count}
+              tone={option.tone}
+              className={splitFilterSegmentClassName(option.selected, index > 0)}
+            />
+          ))}
+        </div>
       </div>
 
       {optionsError ? (

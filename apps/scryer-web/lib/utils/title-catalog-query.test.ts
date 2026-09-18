@@ -8,6 +8,7 @@ import {
   titleCatalogProjectionForTable,
   titleCatalogQueryKey,
   titleCatalogSortInput,
+  type TitleCatalogAdvancedFilters,
 } from "./title-catalog-query.ts";
 
 test("title catalog variables include quick filters like 0.16.6", () => {
@@ -54,6 +55,8 @@ test("title catalog variables include normalized advanced filters", () => {
       minimumYear: 2000,
       maximumYear: 2020,
       minimumRating: 7.5,
+      presences: [],
+      needsAttention: false,
     },
     sort: { key: "name", direction: "asc" },
     limit: 72,
@@ -93,6 +96,73 @@ test("a user-tag filter alone is enough to send a filter input", () => {
     contentStatuses: [],
     tags: ["keep"],
   });
+});
+
+test("a presence filter alone is enough to send a filter input", () => {
+  const variables = buildTitleCatalogQueryVariables({
+    facet: "series",
+    libraryIds: [],
+    query: "",
+    filters: EMPTY_TITLE_QUICK_FILTERS,
+    advancedFilters: {
+      ...EMPTY_TITLE_ADVANCED_FILTERS,
+      presences: ["PARTIAL"],
+    },
+    sort: { key: "name", direction: "asc" },
+    limit: 72,
+    offset: 0,
+  });
+
+  assert.deepEqual(variables.filter, {
+    monitored: null,
+    contentStatuses: [],
+    presences: ["PARTIAL"],
+  });
+});
+
+test("the attention toggle is the only boolean that reaches the wire as true", () => {
+  const forAttention = (needsAttention: boolean) =>
+    buildTitleCatalogQueryVariables({
+      facet: "movie",
+      libraryIds: [],
+      query: "",
+      filters: EMPTY_TITLE_QUICK_FILTERS,
+      advancedFilters: { ...EMPTY_TITLE_ADVANCED_FILTERS, needsAttention },
+      sort: { key: "name", direction: "asc" },
+      limit: 72,
+      offset: 0,
+    }).filter;
+
+  assert.deepEqual(forAttention(true), {
+    monitored: null,
+    contentStatuses: [],
+    needsAttention: true,
+  });
+  // Off is the absence of the filter, not a request for titles without problems.
+  assert.equal(forAttention(false), null);
+});
+
+test("the query key separates presences and ignores picking none", () => {
+  const base = {
+    facet: "series",
+    query: "",
+    libraryIds: [],
+    filters: EMPTY_TITLE_QUICK_FILTERS,
+    sort: { key: "name", direction: "asc" },
+  };
+  const key = (presences: TitleCatalogAdvancedFilters["presences"]) =>
+    titleCatalogQueryKey({
+      ...base,
+      advancedFilters: { ...EMPTY_TITLE_ADVANCED_FILTERS, presences },
+    });
+
+  assert.notEqual(key(["MISSING"]), key([]));
+  assert.notEqual(key(["MISSING"]), key(["COMPLETE"]));
+  assert.notEqual(key(["MISSING"]), key(["PARTIAL"]));
+  // Two picks are one filter however they were clicked, which is why the list is
+  // sorted before it reaches the key.
+  assert.equal(key(["PARTIAL", "MISSING"]), key(["MISSING", "PARTIAL"]));
+  assert.equal(key([]), key([]));
 });
 
 test("user-tag filters round-trip through the query key and drop reserved entries", () => {
