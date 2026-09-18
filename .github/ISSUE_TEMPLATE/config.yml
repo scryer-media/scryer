@@ -1,0 +1,10 @@
+# Routes traffic that is not a concrete bug report or feature request away from
+# the issue tracker. Blank issues stay enabled, and both templates below remain
+# the entry points for actionable reports.
+contact_links:
+  - name: Support and installation help
+    url: https://discord.gg/SQmtZTanqm
+    about: Setup, configuration, and troubleshooting questions are answered by the community in Discord.
+  - name: Ideas, design discussion, and roadmap questions
+    url: https://github.com/scryer-media/scryer/discussions
+    about: Use Discussions for open-ended ideas and proposals that are not yet a concrete, actionable request.
