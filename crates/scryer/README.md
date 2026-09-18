@@ -13,8 +13,9 @@ cargo run -p scryer
 ```
 
 The web app is served from the embedded build when present, or from
-`SCRYER_WEB_DIST_DIR` when set. During UI development run the Next.js app from
-`apps/scryer-web` and point the backend notice at it with `SCRYER_WEB_UI_URL`.
+`SCRYER_WEB_DIST_DIR` when set. During UI development run the Vite dev server
+from `apps/scryer-web` and point the backend notice at it with
+`SCRYER_WEB_UI_URL`.
 
 `crates/scryer/.env.example` lists the bootstrap environment; the ones you are
 most likely to touch:

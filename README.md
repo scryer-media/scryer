@@ -63,7 +63,7 @@ Scryer ships as a single Rust binary with:
 
 - an embedded web UI
 - a GraphQL API
-- SQLite-backed application state
+- SQLite- or PostgreSQL-backed application state
 - a plugin runtime for indexers, download clients, subtitle providers, and notifications
 
 ## Architecture
@@ -76,7 +76,7 @@ Scryer publishes a first-party container image:
 
 - `ghcr.io/scryer-media/scryer:latest`
 - `ghcr.io/scryer-media/scryer:<minor>-latest`
-   - `15-latest` for the `0.15.x` line
+   - `21-latest` for the `0.21.x` line
 
 For Docker installation, Compose examples, environment variables, volumes, and
 deployment notes, see the [Docker install
