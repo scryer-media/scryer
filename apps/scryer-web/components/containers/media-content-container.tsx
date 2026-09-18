@@ -3498,7 +3498,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
           return [];
         }
         setGlobalStatus(
-          error instanceof Error ? error.message : t("status.searchFailed"),
+          error instanceof Error ? error.message : t("nzb.searchFailed"),
         );
         return [];
       } finally {
