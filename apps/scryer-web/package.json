@@ -8,8 +8,9 @@
     "build": "vite build && node scripts/report-build-chunks.mjs",
     "preview": "vite preview",
     "typecheck": "node ./node_modules/@typescript/native/bin/tsc --noEmit",
-    "lint": "npm run typecheck && eslint 'src/**/*.{ts,tsx}' 'components/**/*.{ts,tsx}' 'lib/**/*.{ts,tsx}'",
+    "lint": "npm run typecheck && npm run check:i18n && eslint 'src/**/*.{ts,tsx}' 'components/**/*.{ts,tsx}' 'lib/**/*.{ts,tsx}'",
     "check:react-compiler": "node scripts/check-react-compiler.mjs",
+    "check:i18n": "node scripts/check-i18n-keys.mjs",
     "test": "node --test \"lib/**/*.test.ts\"",
     "test:graphql-compat": "node --test scripts/check-graphql-schema-compat.test.mjs"
   },
