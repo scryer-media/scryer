@@ -26,6 +26,7 @@ const en: LocaleDictionary = {
     "Search indexers for a season pack release for this season.",
   "label.refresh": "Refresh",
   "label.refreshing": "Refreshing…",
+  "label.retry": "Retry",
   "label.save": "Save",
   "label.saving": "Saving…",
   "label.loading": "Loading…",
