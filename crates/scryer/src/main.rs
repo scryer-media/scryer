@@ -12,6 +12,7 @@ mod http_metrics;
 mod indexer_search_routes;
 mod init;
 mod log_buffer;
+mod metadata_gateway_url;
 mod metrics_setup;
 mod middleware;
 mod oauth_routes;
@@ -108,6 +109,7 @@ use backup_routes::{
 };
 use base_path::BasePath;
 use indexer_search_routes::download_indexer_search_artifacts_handler;
+use metadata_gateway_url::MetadataGatewayUrl;
 use middleware::{
     AuthState, AuthlessAccessAllowlist, AuthlessAccessGuardState, AuthlessAccessPolicy,
     AuthlessWebClientProofRouteState, AuthlessWebClientProofState, CorsConfig,
@@ -1310,11 +1312,7 @@ async fn bootstrap_application(
         title_images_for_route.clone(),
         &data_dir,
     ));
-    let metadata_gateway_url = std::env::var("SCRYER_METADATA_GATEWAY_GRAPHQL_URL")
-        .ok()
-        .filter(|v| !v.is_empty())
-        .or_else(|| SMG_GRAPHQL_URL.map(String::from))
-        .unwrap_or_else(|| "http://127.0.0.1:8090/graphql".to_string());
+    let metadata_gateway_url = MetadataGatewayUrl::from_env();
     let smg_registration_secret = SMG_REGISTRATION_SECRET
         .map(String::from)
         .or_else(|| std::env::var("SCRYER_SMG_REGISTRATION_SECRET").ok())
@@ -1337,7 +1335,7 @@ async fn bootstrap_application(
     };
 
     let metadata_gateway = Arc::new(datastore.metadata_gateway_client(
-        metadata_gateway_url,
+        metadata_gateway_url.as_str().to_string(),
         SmgEnrollmentConfig {
             registration_secret: smg_registration_secret,
         },
@@ -1419,13 +1417,7 @@ async fn bootstrap_application(
                 .or_else(|| std::env::var("SCRYER_SMG_REGISTRATION_SECRET").ok())
                 .filter(|value| !value.is_empty()),
         )
-        .with_smg_gateway_url(Some(
-            std::env::var("SCRYER_METADATA_GATEWAY_GRAPHQL_URL")
-                .ok()
-                .filter(|value| !value.is_empty())
-                .or_else(|| SMG_GRAPHQL_URL.map(String::from))
-                .unwrap_or_else(|| "http://127.0.0.1:8090/graphql".to_string()),
-        ))
+        .with_smg_gateway_url(Some(metadata_gateway_url.into_string()))
         .with_metadata_gateway(metadata_gateway)
         .with_image_proxy_cache_control(image_proxy_runtime.clone())
         .with_library_scanner(library_scanner)
