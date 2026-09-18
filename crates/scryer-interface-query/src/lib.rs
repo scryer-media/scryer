@@ -12,8 +12,9 @@ use scryer_application::{
     ExternalImportSetupSecretOverrideDraft, ImageProxyKind, JwtSessionScope, MediaRequestCounts,
     OAuthAuthorizationSource, PendingImportCounts, RenamePlan, RenameWriteAction,
     RulePackRegistryEntry, RuntimePathStyle, SCRYER_VERSION, SortDirection,
-    TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogSort, TitleCatalogSortKey,
-    TitleHistoryFilter, is_supported_title_history_event_type, supported_title_history_event_types,
+    TitleCatalogContentStatus, TitleCatalogFilter, TitleCatalogPresence, TitleCatalogSort,
+    TitleCatalogSortKey, TitleHistoryFilter, is_supported_title_history_event_type,
+    supported_title_history_event_types,
 };
 use scryer_domain::{
     AppPermission, LibraryPermission, RulePackInstallation, RuleSet, TitleHistoryEventType,
@@ -350,6 +351,17 @@ fn title_catalog_filter_from_input(
         minimum_year: filter.minimum_year,
         maximum_year: filter.maximum_year,
         minimum_rating,
+        presences: filter
+            .presences
+            .unwrap_or_default()
+            .into_iter()
+            .map(|presence| match presence {
+                TitleCatalogPresenceValue::Missing => TitleCatalogPresence::Missing,
+                TitleCatalogPresenceValue::Partial => TitleCatalogPresence::Partial,
+                TitleCatalogPresenceValue::Complete => TitleCatalogPresence::Complete,
+            })
+            .collect(),
+        needs_attention: filter.needs_attention,
     })
 }
 
@@ -1247,6 +1259,10 @@ impl CatalogQueries {
                 unmonitored: usize_to_i32_saturating(filter_counts.unmonitored),
                 continuing: usize_to_i32_saturating(filter_counts.continuing),
                 ended: usize_to_i32_saturating(filter_counts.ended),
+                missing: usize_to_i32_saturating(filter_counts.missing),
+                partial: usize_to_i32_saturating(filter_counts.partial),
+                complete: usize_to_i32_saturating(filter_counts.complete),
+                needs_attention: usize_to_i32_saturating(filter_counts.needs_attention),
             },
             managed_bytes: Long::from(managed_bytes),
         })

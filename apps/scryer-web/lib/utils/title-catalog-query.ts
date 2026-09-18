@@ -7,6 +7,12 @@ export type TitleCatalogQuickFilters = {
   ended: boolean;
 };
 
+/**
+ * How much of a title is on disk. The states are toggles an operator combines, so
+ * the filter carries a list rather than one value.
+ */
+export type TitleCatalogPresence = "MISSING" | "PARTIAL" | "COMPLETE";
+
 export type TitleCatalogAdvancedFilters = {
   rootFolderIds: string[];
   genreTagKeys: string[];
@@ -21,6 +27,13 @@ export type TitleCatalogAdvancedFilters = {
   minimumYear: number | null;
   maximumYear: number | null;
   minimumRating: number | null;
+  /** Selected file-presence states, any-of; empty means no presence filter. */
+  presences: TitleCatalogPresence[];
+  /**
+   * Keep titles holding a file whose scan failed or that needs review. A boolean
+   * rather than a state because the two scan statuses are one question.
+   */
+  needsAttention: boolean;
 };
 
 export type TitleCatalogSortStateLike = {
@@ -68,6 +81,8 @@ export const EMPTY_TITLE_ADVANCED_FILTERS: TitleCatalogAdvancedFilters = {
   minimumYear: null,
   maximumYear: null,
   minimumRating: null,
+  presences: [],
+  needsAttention: false,
 };
 
 const EMPTY_TITLE_CATALOG_PROJECTION: TitleCatalogProjection = {
@@ -179,6 +194,7 @@ export function titleCatalogFilterInput(
   // User tags reach the wire in the registry's own normal form, so a stale
   // persisted filter and a freshly picked one produce the same query key.
   const tags = userTitleTags(advancedFilters.userTagLabels);
+  const presences = [...advancedFilters.presences].sort();
   const minimumRating =
     advancedFilters.minimumRating != null && advancedFilters.minimumRating > 0
       ? advancedFilters.minimumRating
@@ -193,7 +209,9 @@ export function titleCatalogFilterInput(
     tags.length === 0 &&
     advancedFilters.minimumYear === null &&
     advancedFilters.maximumYear === null &&
-    minimumRating === null
+    minimumRating === null &&
+    advancedFilters.presences.length === 0 &&
+    !advancedFilters.needsAttention
   ) {
     return null;
   }
@@ -212,6 +230,10 @@ export function titleCatalogFilterInput(
       ? { maximumYear: advancedFilters.maximumYear }
       : {}),
     ...(minimumRating !== null ? { minimumRating } : {}),
+    // Sorted so that picking the same two states in either order is one filter, the
+    // way the tag and root lists above already behave.
+    ...(presences.length > 0 ? { presences } : {}),
+    ...(advancedFilters.needsAttention ? { needsAttention: true } : {}),
   };
 }
 

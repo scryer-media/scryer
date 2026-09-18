@@ -969,6 +969,40 @@ pub struct TitleCatalogFilter {
     pub minimum_year: Option<i32>,
     pub maximum_year: Option<i32>,
     pub minimum_rating: Option<f64>,
+    /// Restrict results to these file-presence states, any-of; an empty list keeps
+    /// every title.
+    ///
+    /// Presence is a fact about the library, not a judgement about acquisition: it
+    /// reads the same on-disk notion of a primary file that the size column already
+    /// counts, so a file parked for review counts as present here and as needing
+    /// attention in [`Self::needs_attention`]. Any-of rather than one-of because the
+    /// states are toggles an operator combines: "missing or partial" is the useful
+    /// question when looking for work.
+    pub presences: Vec<TitleCatalogPresence>,
+    /// `Some(true)` keeps titles holding a file whose scan failed or that needs
+    /// review, `Some(false)` keeps the titles holding none, and `None` keeps both.
+    pub needs_attention: Option<bool>,
+}
+
+/// How much of a title is on disk.
+///
+/// The three states partition the catalogue: every title in scope is exactly one of
+/// them, which is what lets the counts add up to the titles the operator is looking
+/// at. Whether acquisition is searching for what is absent is the Wanted page's
+/// question, and answering it here would mean restating acquisition policy in a
+/// second place.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum TitleCatalogPresence {
+    /// Nothing usable is on disk: no primary file at all.
+    Missing,
+    /// Something is on disk and the run is not finished: at least one live primary
+    /// file, and at least one monitored episode without one.
+    ///
+    /// A movie holds a single file, so it is never partial.
+    Partial,
+    /// Everything monitored is on disk: every monitored episode has a file, or the
+    /// title's own file is present.
+    Complete,
 }
 
 /// A registry row plus how many titles currently carry its label.
@@ -1074,6 +1108,14 @@ pub struct TitleCatalogFilterCounts {
     pub unmonitored: usize,
     pub continuing: usize,
     pub ended: usize,
+    /// Titles with nothing on disk, counted inside the other active filters.
+    pub missing: usize,
+    /// Titles with something on disk and a run still unfinished.
+    pub partial: usize,
+    /// Titles with everything monitored on disk.
+    pub complete: usize,
+    /// Titles holding a file whose scan failed or that needs review.
+    pub needs_attention: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

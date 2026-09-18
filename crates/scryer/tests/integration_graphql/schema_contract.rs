@@ -866,10 +866,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // 850->852. Root-field and INPUT_OBJECT counts are unchanged - the mutation
     // already existed, `SearchSubtitlesInput` only made `language` optional, and
     // MANAGE_SUBTITLES is a value on the existing `LibraryPermissionValue`.
-    assert_eq!(public_types.len(), 852);
+    // The catalogue's file and attention filters add two fields to the existing
+    // `TitleCatalogFilterInput`, four counts to the existing
+    // `TitleCatalogFilterCountsPayload`, and the `TitleCatalogPresenceValue` enum the
+    // first of them needs: ENUM 159->160, public types 852->853, and no change to
+    // OBJECT or INPUT_OBJECT.
+    assert_eq!(public_types.len(), 853);
     assert_eq!(kind_count("OBJECT"), 460);
     assert_eq!(kind_count("INPUT_OBJECT"), 221);
-    assert_eq!(kind_count("ENUM"), 159);
+    assert_eq!(kind_count("ENUM"), 160);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

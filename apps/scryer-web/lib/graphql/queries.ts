@@ -1649,6 +1649,10 @@ export function buildTitlesQuery(
       unmonitored
       continuing
       ended
+      missing
+      partial
+      complete
+      needsAttention
     }`
     : "";
   return `query Titles(

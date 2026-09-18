@@ -17,6 +17,10 @@ export type TitleQuickFilterCounts = {
   unmonitored: number;
   continuing: number;
   ended: number;
+  missing?: number;
+  partial?: number;
+  complete?: number;
+  needsAttention?: number;
 };
 
 function normalizeQuickFilterStatus(
@@ -136,6 +140,45 @@ export function filterTitlesByQuickFilters(
   });
 }
 
+/**
+ * Frames a two-up filter as one control: a shared border the two buttons divide,
+ * rather than two buttons that happen to sit next to each other.
+ */
+export const SPLIT_FILTER_GROUP_CLASS_NAME =
+  "flex w-full overflow-hidden rounded-[10px] border border-[rgba(var(--scry-accent-rgb),0.55)]";
+
+/**
+ * One segment inside {@link SPLIT_FILTER_GROUP_CLASS_NAME}. Square off the
+ * button's own rounding, let the second segment carry the divider, and fill the
+ * selected one.
+ */
+export function splitFilterSegmentClassName(
+  selected: boolean,
+  divider = false,
+): string {
+  return [
+    "h-11 min-w-0 flex-1 justify-center rounded-none border-0 px-3",
+    divider ? "border-l !border-l-[rgba(var(--scry-accent-rgb),0.35)]" : "",
+    selected
+      ? "bg-[rgba(var(--scry-accent-rgb),0.38)] text-white [&>span:last-child]:hidden"
+      : "bg-[var(--scry-inset)] hover:bg-[var(--scry-surface2)]",
+  ].join(" ");
+}
+
+/**
+ * A standalone toggle in the filter panel, for a filter that is one question
+ * rather than a set of states.
+ */
+export function panelFilterButtonClassName(selected: boolean, fullWidth = false): string {
+  return [
+    "h-11 w-full justify-center rounded-[10px] border px-3",
+    fullWidth ? "col-span-2" : "",
+    selected
+      ? "border-[rgba(var(--scry-accent-rgb),0.62)] bg-[rgba(var(--scry-accent-rgb),0.28)] [&>span:last-child]:hidden"
+      : "border-[var(--scry-border2)] bg-[var(--scry-inset)] hover:border-[var(--scry-border3)] hover:bg-[var(--scry-surface2)]",
+  ].join(" ");
+}
+
 export function TitleQuickFilterBar({
   view,
   filters,
@@ -162,23 +205,7 @@ export function TitleQuickFilterBar({
   const allSelected = !hasActiveTitleQuickFilters(filters, view);
   const panelAppearance = appearance === "panel";
   const panelButtonClassName = (selected: boolean, fullWidth = false) =>
-    panelAppearance
-      ? [
-          "h-11 w-full justify-center rounded-[10px] border px-3",
-          fullWidth ? "col-span-2" : "",
-          selected
-            ? "border-[rgba(var(--scry-accent-rgb),0.62)] bg-[rgba(var(--scry-accent-rgb),0.28)] [&>span:last-child]:hidden"
-            : "border-[var(--scry-border2)] bg-[var(--scry-inset)] hover:border-[var(--scry-border3)] hover:bg-[var(--scry-surface2)]",
-        ].join(" ")
-      : undefined;
-  const panelSplitButtonClassName = (selected: boolean, divider = false) =>
-    [
-      "h-11 min-w-0 flex-1 justify-center rounded-none border-0 px-3",
-      divider ? "border-l !border-l-[rgba(var(--scry-accent-rgb),0.35)]" : "",
-      selected
-        ? "bg-[rgba(var(--scry-accent-rgb),0.38)] text-white [&>span:last-child]:hidden"
-        : "bg-[var(--scry-inset)] hover:bg-[var(--scry-surface2)]",
-    ].join(" ");
+    panelAppearance ? panelFilterButtonClassName(selected, fullWidth) : undefined;
 
   return (
     <div
@@ -198,7 +225,7 @@ export function TitleQuickFilterBar({
         >
         {panelAppearance ? (
           <div className="col-span-2 flex w-full justify-center">
-            <div className="flex w-full max-w-[32rem] overflow-hidden rounded-[10px] border border-[rgba(var(--scry-accent-rgb),0.55)]">
+            <div className={SPLIT_FILTER_GROUP_CLASS_NAME}>
               <UnderlineFilterButton
                 selected={filters.monitored}
                 onClick={() => onToggleMonitoring("monitored")}
@@ -206,7 +233,7 @@ export function TitleQuickFilterBar({
                 label={t("title.monitored")}
                 count={counts?.monitored}
                 tone="success"
-                className={panelSplitButtonClassName(filters.monitored)}
+                className={splitFilterSegmentClassName(filters.monitored)}
               />
               <UnderlineFilterButton
                 selected={filters.unmonitored}
@@ -215,7 +242,7 @@ export function TitleQuickFilterBar({
                 label={t("search.monitorType.unmonitored")}
                 count={counts?.unmonitored}
                 tone="danger"
-                className={panelSplitButtonClassName(filters.unmonitored, true)}
+                className={splitFilterSegmentClassName(filters.unmonitored, true)}
               />
             </div>
           </div>
