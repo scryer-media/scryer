@@ -7,7 +7,7 @@ domain → application → infrastructure/interface adapters → the `scryer` bi
 | --- | --- |
 | `scryer-domain` | Shared entities, value objects, and invariants (titles, media facets, downloads, imports, settings types). No IO. |
 | `scryer-application` | Use cases, workflows, and ports (repository/client/provider traits); `AppServices`/`AppUseCase`; background workflow entry points. See its README for a reading guide. |
-| `scryer-infrastructure` | Adapters behind the application ports: SQL stores (SQLite/PostgreSQL), download-client and indexer clients, metadata/subtitle providers, filesystem and media helpers. |
+| `scryer-infrastructure-*` | Adapters behind the application ports: SQL stores (SQLite/PostgreSQL), download-client and indexer clients, metadata/subtitle providers, filesystem and media helpers. |
 | `scryer-interface*` | The GraphQL API. `scryer-interface` composes the schema; `-core` holds context/loaders/error mapping; `-query`, `-subscription`, `-media(-types)`, `-acquisition`, `-import`, `-metadata`, `-security`, `-settings`, `-system` hold the resolvers and payload types per area. |
 | `scryer` | The service binary: HTTP server, embedded web UI, migrations, jobs, tray/desktop entry points, integration tests. |
 | `scryer-plugins` | Plugin host: Wasm loading, descriptor/ABI validation, indexer/download-client/notification/subtitle/archive adapters, permission-enforced HTTP and socket hosts. |
