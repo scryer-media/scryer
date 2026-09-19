@@ -1349,6 +1349,11 @@ impl AppUseCase {
             ),
             Err(error) => (Err(error), None),
         };
+        // Not passing through `submit_canonical_download` also means retiring
+        // the cached client snapshots here: a background walk running beside
+        // this operator grab must re-read the clients rather than judge a
+        // scope on a view taken before the operator claimed it.
+        guards.invalidate_client_snapshots();
         // This is the one grab that does not pass through
         // `submit_canonical_download`, so it reports its own outcome; the
         // indexer's grab is counted the moment the client accepts, like every

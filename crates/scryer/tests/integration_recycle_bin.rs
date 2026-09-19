@@ -437,25 +437,7 @@ async fn graphql_restore_recycled_item_returns_accepted_job_run() {
         .find_or_create_default_user()
         .await
         .expect("default admin");
-    let terminal = timeout(Duration::from_secs(5), async {
-        loop {
-            let run = ctx
-                .app
-                .list_job_runs(&admin, JobKey::RecycleBinRestore, 10)
-                .await
-                .expect("list recycle restore jobs")
-                .into_iter()
-                .find(|run| run.id == run_id);
-            if let Some(run) = run
-                && run.status.is_terminal()
-            {
-                return run;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("restore job should complete");
+    let terminal = wait_for_terminal_job(&ctx, &admin, JobKey::RecycleBinRestore, run_id).await;
     assert_eq!(terminal.status, JobRunStatus::Completed);
     assert!(root.path().join("graphql-restore.mkv").exists());
 }
@@ -965,25 +947,13 @@ async fn restoring_conflict_scans_title_and_tracks_restored_file_as_additional()
         .expect("start recycle restore job");
     assert_eq!(accepted.job_run.job_key, JobKey::RecycleBinRestore);
     assert_eq!(accepted.job_run.status, JobRunStatus::Running);
-    let terminal = timeout(Duration::from_secs(5), async {
-        loop {
-            let run = ctx
-                .app
-                .list_job_runs(&manager, JobKey::RecycleBinRestore, 10)
-                .await
-                .expect("list recycle restore job runs")
-                .into_iter()
-                .find(|run| run.id == accepted.job_run.id);
-            if let Some(run) = run
-                && run.status.is_terminal()
-            {
-                return run;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("recycle restore job should complete");
+    let terminal = wait_for_terminal_job(
+        &ctx,
+        &manager,
+        JobKey::RecycleBinRestore,
+        &accepted.job_run.id,
+    )
+    .await;
     assert_eq!(terminal.status, JobRunStatus::Completed);
 
     let restored_path = title_dir.join("Restore.Movie.Title.2024.720p.WEB-DL-restored.mkv");
@@ -1061,25 +1031,13 @@ async fn failed_restore_job_keeps_recycle_entry_available() {
         .await
         .expect("accept restore job before runtime failure");
 
-    let terminal = timeout(Duration::from_secs(5), async {
-        loop {
-            let run = ctx
-                .app
-                .list_job_runs(&manager, JobKey::RecycleBinRestore, 10)
-                .await
-                .expect("list recycle restore job runs")
-                .into_iter()
-                .find(|run| run.id == accepted.job_run.id);
-            if let Some(run) = run
-                && run.status.is_terminal()
-            {
-                return run;
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-    })
-    .await
-    .expect("restore job should fail");
+    let terminal = wait_for_terminal_job(
+        &ctx,
+        &manager,
+        JobKey::RecycleBinRestore,
+        &accepted.job_run.id,
+    )
+    .await;
     assert_eq!(terminal.status, JobRunStatus::Failed);
     assert!(
         recycle_result.entry_dir.exists(),
@@ -1306,7 +1264,7 @@ async fn wait_for_terminal_job(
     run_id: &str,
 ) -> scryer_application::JobRun {
     let run_id = run_id.to_string();
-    timeout(Duration::from_secs(5), async {
+    timeout(common::WAIT_UNTIL_TIMEOUT, async {
         loop {
             let run = ctx
                 .app

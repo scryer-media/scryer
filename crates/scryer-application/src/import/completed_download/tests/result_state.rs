@@ -341,7 +341,12 @@ async fn verified_import_mark_uses_completed_client_identity() {
     assert!(
         apply_import_result_with_completed(&app, &mut td, result, 0, Some(&completed), None).await
     );
-    tokio::task::yield_now().await;
+    // The mark runs on a spawned task; the mock counts the call only after it
+    // has recorded the request, so the count is the signal the mark landed.
+    crate::test_wait::wait_until("the client to be marked imported", || async {
+        client.call_count() >= 1
+    })
+    .await;
     assert_eq!(td.state, TrackedDownloadState::Imported);
     assert_eq!(client.call_count(), 1);
 

@@ -150,7 +150,7 @@ impl TitleStore {
     async fn find_existing_title_after_unique_conflict(
         &self,
         library_id: &str,
-        external_ids: &[(String, String)],
+        external_ids: &[NormalizedExternalId],
     ) -> AppResult<Option<Title>> {
         if external_ids.is_empty() {
             return Ok(None);
@@ -331,6 +331,39 @@ impl TitleRepository for TitleStore {
             true,
         )
         .await
+    }
+
+    /// The folder-ownership lookup, in SQL. The port's default reads every
+    /// title in the library and lets the caller sift them; a library scan asks
+    /// this once per folder it touches, so that read was the heaviest
+    /// statement of a scan. `folder_path` is compared against the caller's
+    /// candidate spellings of the folder, which is a narrowing filter — the
+    /// caller still decides with `folder_paths_match`.
+    async fn list_folder_path_owner_candidates(
+        &self,
+        library_id: &str,
+        exclude_title_id: &str,
+        match_candidates: &[String],
+    ) -> AppResult<Vec<Title>> {
+        if match_candidates.is_empty() {
+            return Ok(Vec::new());
+        }
+        let placeholders = std::iter::repeat_n("{}", match_candidates.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT {TITLE_COLUMNS} FROM titles \
+             WHERE library_id = {{}} AND id <> {{}} AND folder_path IN ({placeholders}) \
+             ORDER BY LOWER(name), id"
+        );
+        let mut args = vec![
+            SqlArg::Text(library_id.to_string()),
+            SqlArg::Text(exclude_title_id.to_string()),
+        ];
+        args.extend(match_candidates.iter().cloned().map(SqlArg::Text));
+
+        let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
+        decode_runtime_title_rows(&rows, PersistedTitleReadMode::Presentation, false)
     }
 
     /// One scalar, in SQL. The port's default reads every title row in the
@@ -1794,10 +1827,7 @@ impl TitleRepository for TitleStore {
                 }
                 merge_title_external_ids(
                     &mut title.external_ids,
-                    vec![ExternalId {
-                        source: "smg".to_string(),
-                        value: smg_id.to_string(),
-                    }],
+                    vec![ExternalId::new("smg".to_string(), smg_id.to_string())],
                 );
                 persist_title_tx(tx, &title, HydrationStateWrite::Preserve).await
             })
@@ -2261,20 +2291,67 @@ fn single_slug_match(mut titles: Vec<Title>, slug: &str) -> AppResult<Option<Tit
     }
 }
 
-fn normalized_external_ids(external_ids: &[ExternalId]) -> Vec<(String, String)> {
+/// One projected external identity: `(source, kind, value)`, all normalized.
+///
+/// `kind` is `""` when the id carries none, which is what the projection
+/// column stores for user, plugin and pre-kind rows.
+type NormalizedExternalId = (String, String, String);
+
+/// The entries of `external_ids` that should be projected, with the index of
+/// the `ExternalId` each one came from.
+///
+/// Besides trimming and lowercasing, this drops two kinds of redundancy:
+/// exact repeats of the same triple, and a kindless `(source, value)` that a
+/// kinded entry for the same `(source, value)` already covers -- the kinded
+/// one is strictly more specific, so keeping both would project the same
+/// identity twice.
+fn normalized_external_id_entries(
+    external_ids: &[ExternalId],
+) -> Vec<(usize, NormalizedExternalId)> {
+    let mut kinded = std::collections::HashSet::new();
+    for external_id in external_ids {
+        if let Some(kind) = external_id.normalized_kind() {
+            let source = external_id.source.trim().to_ascii_lowercase();
+            let value = external_id.value.trim().to_string();
+            if !source.is_empty() && !value.is_empty() && !kind.is_empty() {
+                kinded.insert((source, value));
+            }
+        }
+    }
+
     let mut seen = std::collections::HashSet::new();
     let mut out = Vec::new();
-    for external_id in external_ids {
+    for (index, external_id) in external_ids.iter().enumerate() {
         let source = external_id.source.trim().to_ascii_lowercase();
         let value = external_id.value.trim().to_string();
         if source.is_empty() || value.is_empty() {
             continue;
         }
-        if seen.insert((source.clone(), value.clone())) {
-            out.push((source, value));
+        let kind = external_id.normalized_kind().unwrap_or_default();
+        if kind.is_empty() && kinded.contains(&(source.clone(), value.clone())) {
+            continue;
+        }
+        if seen.insert((source.clone(), kind.clone(), value.clone())) {
+            out.push((index, (source, kind, value)));
         }
     }
     out
+}
+
+fn normalized_external_ids(external_ids: &[ExternalId]) -> Vec<NormalizedExternalId> {
+    normalized_external_id_entries(external_ids)
+        .into_iter()
+        .map(|(_, triple)| triple)
+        .collect()
+}
+
+/// `source:kind:id`, matching `ExternalId::key` and SMG's own rendering.
+fn external_id_key(source: &str, kind: &str, value: &str) -> String {
+    if kind.is_empty() {
+        format!("{source}:{value}")
+    } else {
+        format!("{source}:{kind}:{value}")
+    }
 }
 
 trait TitleProjectionRow {
@@ -3989,14 +4066,28 @@ fn title_catalog_media_size_subquery(dialect: TitleCatalogSqlDialect) -> String 
 
 fn title_catalog_episode_progress_subquery(dialect: TitleCatalogSqlDialect) -> String {
     format!(
+        // Ownership is asked as EXISTS rather than joined through
+        // `file_episode_map`. An episode can map to several files, so the join
+        // fanned each episode out and every count had to be COUNT(DISTINCT
+        // e.id) to undo it -- three temp B-trees over every episode in the
+        // library, on every page of the catalog. Without the fan-out each
+        // surviving episode is one row again: `e.id` is the primary key and
+        // the `collections` join is on its key, so COUNT(*) counts exactly the
+        // episodes COUNT(DISTINCT e.id) did, and an episode is owned exactly
+        // when the join would have found it at least one live primary file.
         "SELECT e.title_id,
-                COUNT(DISTINCT e.id) AS total_episodes,
-                COUNT(DISTINCT CASE WHEN {} THEN e.id END) AS monitored_episodes,
-                COUNT(DISTINCT CASE WHEN mf.id IS NOT NULL THEN e.id END) AS owned_episodes
+                COUNT(*) AS total_episodes,
+                COUNT(CASE WHEN {} THEN 1 END) AS monitored_episodes,
+                COUNT(CASE WHEN EXISTS (
+                         SELECT 1
+                           FROM file_episode_map fem
+                           JOIN media_files mf ON mf.id = fem.file_id
+                          WHERE fem.episode_id = e.id
+                            AND {}
+                            AND mf.role = 'primary'
+                     ) THEN 1 END) AS owned_episodes
            FROM episodes e
           INNER JOIN collections c ON c.id = e.collection_id
-           LEFT JOIN file_episode_map fem ON fem.episode_id = e.id
-           LEFT JOIN media_files mf ON mf.id = fem.file_id AND {} AND mf.role = 'primary'
           WHERE c.collection_type <> 'specials'
             AND c.collection_index <> '0'
             AND trim(COALESCE(e.title, '')) <> ''
@@ -4137,7 +4228,7 @@ async fn load_title_canonical_tx_or_not_found(
 async fn list_existing_title_ids_for_external_ids_tx(
     tx: &mut SqlTx<'_>,
     library_id: &str,
-    external_ids: &[(String, String)],
+    external_ids: &[NormalizedExternalId],
 ) -> AppResult<Vec<String>> {
     if external_ids.is_empty() {
         return Ok(Vec::new());
@@ -4147,13 +4238,24 @@ async fn list_existing_title_ids_for_external_ids_tx(
         "SELECT DISTINCT title_id FROM title_external_ids WHERE library_id = {}".to_string();
     let mut args = vec![SqlArg::Text(library_id.to_string())];
     sql.push_str(" AND (");
-    for (index, (source, value)) in external_ids.iter().enumerate() {
+    for (index, (source, kind, value)) in external_ids.iter().enumerate() {
         if index > 0 {
             sql.push_str(" OR ");
         }
-        sql.push_str("(LOWER(source) = LOWER({}) AND external_id = {})");
-        args.push(SqlArg::Text(source.clone()));
-        args.push(SqlArg::Text(value.clone()));
+        // An id that names its entity kind matches only that kind: tvdb movie
+        // 7373 is not tvdb series 7373. An id without a kind keeps the old
+        // behaviour and matches any kind, which is what user, plugin and
+        // pre-kind callers supply.
+        if kind.is_empty() {
+            sql.push_str("(LOWER(source) = LOWER({}) AND external_id = {})");
+            args.push(SqlArg::Text(source.clone()));
+            args.push(SqlArg::Text(value.clone()));
+        } else {
+            sql.push_str("(LOWER(source) = LOWER({}) AND external_kind = {} AND external_id = {})");
+            args.push(SqlArg::Text(source.clone()));
+            args.push(SqlArg::Text(kind.clone()));
+            args.push(SqlArg::Text(value.clone()));
+        }
     }
     sql.push(')');
 
@@ -4418,6 +4520,54 @@ async fn persist_title_tx(
     title: &Title,
     hydration_state: HydrationStateWrite,
 ) -> AppResult<()> {
+    // Another title in this library may already own one of these ids (an
+    // upstream mapping error, or an anime mapping that points at a sibling
+    // release). Drop just that id instead of letting the projection's unique
+    // index abort the transaction and discard every other metadata field.
+    let conflicts = conflicting_title_external_ids_tx(tx, title).await?;
+    // Keep the stored JSON identical to what the projection will hold: the
+    // retained entries are exactly the normalized ones minus the conflicts, so
+    // the two views can never disagree.
+    let retained = normalized_external_id_entries(&title.external_ids)
+        .into_iter()
+        .filter(|(_, triple)| {
+            !conflicts.iter().any(|conflict| {
+                (&conflict.source, &conflict.kind, &conflict.value)
+                    == (&triple.0, &triple.1, &triple.2)
+            })
+        })
+        .map(|(index, _)| index)
+        .collect::<std::collections::HashSet<_>>();
+
+    let filtered_title;
+    let title = if retained.len() == title.external_ids.len() {
+        title
+    } else {
+        for conflict in &conflicts {
+            tracing::warn!(
+                title_id = %title.id,
+                title_name = %title.name,
+                library_id = %title.library_id,
+                external_id_key = %conflict.key(),
+                source = %conflict.source,
+                external_kind = %conflict.kind,
+                external_id = %conflict.value,
+                owner_title_id = %conflict.owner_title_id,
+                owner_title_name = conflict.owner_title_name.as_deref().unwrap_or("unknown"),
+                "skipping external id already owned by another title in this library"
+            );
+        }
+        let mut owned = title.clone();
+        let mut index = 0usize;
+        owned.external_ids.retain(|_| {
+            let keep = retained.contains(&index);
+            index += 1;
+            keep
+        });
+        filtered_title = owned;
+        &filtered_title
+    };
+
     let preserve_hydration_state = matches!(hydration_state, HydrationStateWrite::Preserve);
     let (metadata_hydration_next_attempt_at, metadata_hydration_attempt_count) =
         match hydration_state {
@@ -4536,6 +4686,81 @@ fn is_title_external_id_conflict_error(error: &AppError) -> bool {
     )
 }
 
+/// An external id on the title being written that another title in the same
+/// library already owns.
+struct TitleExternalIdConflict {
+    source: String,
+    kind: String,
+    value: String,
+    owner_title_id: String,
+    owner_title_name: Option<String>,
+}
+
+impl TitleExternalIdConflict {
+    fn key(&self) -> String {
+        external_id_key(&self.source, &self.kind, &self.value)
+    }
+}
+
+/// Find the title's external ids that are already projected for a *different*
+/// title in the same library.
+///
+/// This is a pre-check rather than a caught constraint violation on purpose:
+/// on Postgres the transaction is aborted once the error fires, so there is no
+/// way to keep the rest of the write.
+async fn conflicting_title_external_ids_tx(
+    tx: &mut SqlTx<'_>,
+    title: &Title,
+) -> AppResult<Vec<TitleExternalIdConflict>> {
+    let external_ids = normalized_external_ids(&title.external_ids);
+    if external_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut args = vec![
+        SqlArg::Text(title.library_id.clone()),
+        SqlArg::Text(title.id.clone()),
+    ];
+    let mut predicates = Vec::with_capacity(external_ids.len());
+    for (source, kind, value) in &external_ids {
+        predicates.push(
+            "(external_ids.source = {}
+              AND external_ids.external_kind = {}
+              AND external_ids.external_id = {})",
+        );
+        args.push(SqlArg::Text(source.clone()));
+        args.push(SqlArg::Text(kind.clone()));
+        args.push(SqlArg::Text(value.clone()));
+    }
+
+    let sql = format!(
+        "SELECT external_ids.source AS source,
+                external_ids.external_kind AS external_kind,
+                external_ids.external_id AS external_id,
+                external_ids.title_id AS owner_title_id,
+                titles.name AS owner_title_name
+         FROM title_external_ids AS external_ids
+         LEFT JOIN titles ON titles.id = external_ids.title_id
+         WHERE external_ids.library_id = {{}}
+           AND external_ids.title_id <> {{}}
+           AND ({})",
+        predicates.join(" OR ")
+    );
+
+    let rows = SqlRuntime::fetch_all(SqlExec::Tx(tx), &sql, &args).await?;
+    rows.into_iter()
+        .map(|row| {
+            Ok(TitleExternalIdConflict {
+                source: row.text("source")?,
+                kind: row.text("external_kind")?,
+                value: row.text("external_id")?,
+                owner_title_id: row.text("owner_title_id")?,
+                owner_title_name: row.opt_text("owner_title_name")?,
+            })
+        })
+        .collect()
+}
+
 async fn replace_title_external_ids_projection_sql_tx(
     tx: &mut SqlTx<'_>,
     title: &Title,
@@ -4548,19 +4773,23 @@ async fn replace_title_external_ids_projection_sql_tx(
     .await?;
 
     let now = Utc::now();
-    for (source, value) in normalized_external_ids(&title.external_ids) {
+    for (source, kind, value) in normalized_external_ids(&title.external_ids) {
+        let key = external_id_key(&source, &kind, &value);
         SqlRuntime::execute(
             SqlExec::Tx(tx),
             "INSERT INTO title_external_ids
-             (id, title_id, library_id, facet, source, external_id, created_at, updated_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
+             (id, title_id, library_id, facet, source, external_kind, external_id, external_key,
+              created_at, updated_at)
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
             &[
                 SqlArg::Text(scryer_domain::Id::new().0),
                 SqlArg::Text(title.id.clone()),
                 SqlArg::Text(title.library_id.clone()),
                 SqlArg::Text(title.facet.as_str().to_string()),
                 SqlArg::Text(source),
+                SqlArg::Text(kind),
                 SqlArg::Text(value),
+                SqlArg::Text(key),
                 SqlArg::Timestamp(now),
                 SqlArg::Timestamp(now),
             ],
@@ -4623,10 +4852,7 @@ mod tests {
     use sqlx::sqlite::SqlitePoolOptions;
 
     fn hydration_identity(source: &str, value: &str) -> Vec<ExternalId> {
-        vec![ExternalId {
-            source: source.to_string(),
-            value: value.to_string(),
-        }]
+        vec![ExternalId::new(source.to_string(), value.to_string())]
     }
 
     #[test]
@@ -4817,14 +5043,8 @@ mod tests {
             monitored: true,
             tags: vec![],
             external_ids: vec![
-                ExternalId {
-                    source: "SMG".to_string(),
-                    value: "11".to_string(),
-                },
-                ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "901001".to_string(),
-                },
+                ExternalId::new("SMG".to_string(), "11".to_string()),
+                ExternalId::new("tvdb".to_string(), "901001".to_string()),
             ],
             root_folder_id,
             created_by: None,
@@ -4908,6 +5128,445 @@ mod tests {
         .expect("batched SMG external-id lookup should succeed");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].title.id, "redirected-smg-title");
+    }
+
+    async fn migrated_test_store() -> (TitleStore, sqlx::SqlitePool) {
+        scryer_infrastructure_datastore::register_spellfix_auto_extension()
+            .expect("spellfix extension should register before migrations");
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .expect("fresh migrations should apply");
+        let store = TitleStore::new(StoreDatastore::Sqlite {
+            pool: pool.clone(),
+            writer_gate: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+        });
+        (store, pool)
+    }
+
+    fn external_id(source: &str, value: &str) -> ExternalId {
+        ExternalId::new(source, value)
+    }
+
+    fn kinded_external_id(source: &str, kind: &str, value: &str) -> ExternalId {
+        ExternalId::with_kind(source, kind, value)
+    }
+
+    async fn default_root_folder_id(pool: &sqlx::SqlitePool, library_id: &str) -> String {
+        sqlx::query_scalar(
+            "SELECT id FROM library_roots
+              WHERE library_id = ?
+              ORDER BY is_default DESC, path
+              LIMIT 1",
+        )
+        .bind(library_id)
+        .fetch_one(pool)
+        .await
+        .expect("default library root should exist")
+    }
+
+    fn conflict_test_title(
+        id: &str,
+        name: &str,
+        library_id: &str,
+        root_folder_id: &str,
+        external_ids: Vec<ExternalId>,
+    ) -> Title {
+        Title {
+            id: id.to_string(),
+            library_id: library_id.to_string(),
+            name: name.to_string(),
+            facet: MediaFacet::Series,
+            monitored: true,
+            tags: vec![],
+            external_ids,
+            root_folder_id: root_folder_id.to_string(),
+            created_by: None,
+            created_at: Utc::now(),
+            year: None,
+            overview: None,
+            poster_url: None,
+            poster_source_url: None,
+            background_url: None,
+            background_source_url: None,
+            sort_title: None,
+            catalog_sort_key: String::new(),
+            slug: None,
+            imdb_id: None,
+            runtime_minutes: None,
+            popularity: None,
+            canonical_tags: vec![],
+            content_status: None,
+            language: None,
+            first_aired: None,
+            network: None,
+            studio: None,
+            country: None,
+            aliases: vec![],
+            tagged_aliases: vec![],
+            metadata_language: None,
+            metadata_fetched_at: None,
+            min_availability: None,
+            digital_release_date: None,
+            folder_path: None,
+        }
+    }
+
+    /// The projected `source:kind:id` keys for a title, sorted.
+    async fn projected_external_ids(pool: &sqlx::SqlitePool, title_id: &str) -> Vec<String> {
+        let rows = sqlx::query_as::<_, (String, String, String, Option<String>)>(
+            "SELECT source, external_kind, external_id, external_key
+             FROM title_external_ids
+             WHERE title_id = ?
+             ORDER BY source, external_kind, external_id",
+        )
+        .bind(title_id)
+        .fetch_all(pool)
+        .await
+        .expect("projected external ids should load");
+
+        rows.into_iter()
+            .map(|(source, kind, value, key)| {
+                let expected = external_id_key(&source, &kind, &value);
+                assert_eq!(
+                    key.as_deref(),
+                    Some(expected.as_str()),
+                    "external_key must mirror the projected columns"
+                );
+                expected
+            })
+            .collect()
+    }
+
+    async fn stored_external_ids_json(pool: &sqlx::SqlitePool, title_id: &str) -> Vec<String> {
+        let raw: String = sqlx::query_scalar("SELECT external_ids FROM titles WHERE id = ?")
+            .bind(title_id)
+            .fetch_one(pool)
+            .await
+            .expect("titles row should load");
+        let external_ids: Vec<ExternalId> =
+            serde_json::from_str(&raw).expect("external_ids column should be a JSON array");
+        let mut keys = normalized_external_ids(&external_ids)
+            .into_iter()
+            .map(|(source, kind, value)| external_id_key(&source, &kind, &value))
+            .collect::<Vec<_>>();
+        keys.sort();
+        keys
+    }
+
+    #[tokio::test]
+    async fn hydration_skips_an_external_id_owned_by_another_title_and_persists_the_rest() {
+        let (store, pool) = migrated_test_store().await;
+        let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+        let root_folder_id: String = sqlx::query_scalar(
+            "SELECT id FROM library_roots
+              WHERE library_id = ?
+              ORDER BY is_default DESC, path
+              LIMIT 1",
+        )
+        .bind(&library_id)
+        .fetch_one(&pool)
+        .await
+        .expect("default series root should exist");
+
+        // The sibling release already owns anidb 7991 in this library.
+        TitleRepository::create(
+            &store,
+            conflict_test_title(
+                "owner-title",
+                "Berserk: The Golden Age Arc - Memorial Edition",
+                &library_id,
+                &root_folder_id,
+                vec![
+                    kinded_external_id("anidb", "anime", "7991"),
+                    kinded_external_id("tvdb", "series", "376303"),
+                ],
+            ),
+        )
+        .await
+        .expect("owner title should create");
+
+        TitleRepository::create(
+            &store,
+            conflict_test_title(
+                "berserk-2016",
+                "Berserk",
+                &library_id,
+                &root_folder_id,
+                vec![kinded_external_id("tvdb", "series", "307111")],
+            ),
+        )
+        .await
+        .expect("subject title should create");
+
+        let updated = TitleRepository::update_title_hydrated_metadata(
+            &store,
+            "berserk-2016",
+            TitleMetadataUpdate {
+                name: Some("Berserk (2016)".to_string()),
+                year: Some(2016),
+                overview: Some("Guts fights on.".to_string()),
+                poster_url: Some("https://example.invalid/berserk.jpg".to_string()),
+                metadata_fetched_at: Some(Utc::now().to_rfc3339()),
+                extra_external_ids: vec![
+                    // Conflicting id manufactured from the season-0 anime mapping.
+                    kinded_external_id("anidb", "anime", "7991"),
+                    kinded_external_id("anidb", "anime", "11851"),
+                    kinded_external_id("mal", "anime", "32379"),
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("hydration must not fail because one external id is taken");
+
+        // The rest of the metadata survives.
+        assert_eq!(updated.name, "Berserk (2016)");
+        assert_eq!(updated.year, Some(2016));
+        assert_eq!(updated.overview.as_deref(), Some("Guts fights on."));
+        assert!(updated.metadata_fetched_at.is_some());
+
+        // The conflicting id is dropped; every other id is persisted.
+        let projected = projected_external_ids(&pool, "berserk-2016").await;
+        assert_eq!(
+            projected,
+            vec![
+                "anidb:anime:11851".to_string(),
+                "mal:anime:32379".to_string(),
+                "tvdb:series:307111".to_string(),
+            ]
+        );
+
+        // The titles row's JSON column agrees with the projection.
+        assert_eq!(stored_external_ids_json(&pool, "berserk-2016").await, {
+            let mut expected = projected.clone();
+            expected.sort();
+            expected
+        });
+        assert!(
+            !updated
+                .external_ids
+                .iter()
+                .any(|value| value.source.eq_ignore_ascii_case("anidb") && value.value == "7991")
+        );
+
+        // The other title keeps its row untouched.
+        assert_eq!(
+            projected_external_ids(&pool, "owner-title").await,
+            vec![
+                "anidb:anime:7991".to_string(),
+                "tvdb:series:376303".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_movie_and_a_series_can_share_a_provider_number_when_the_kinds_differ() {
+        let (store, pool) = migrated_test_store().await;
+        let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+        let root_folder_id = default_root_folder_id(&pool, &library_id).await;
+
+        // tvdb 7373 is the Golden Age Arc movie; tvdb 307111 is the series.
+        // The same number under two kinds must be able to coexist, which is
+        // what the old (library_id, source, external_id) key forbade.
+        let mut movie_title = conflict_test_title(
+            "golden-age-movie",
+            "Berserk: The Golden Age Arc I",
+            &library_id,
+            &root_folder_id,
+            vec![kinded_external_id("tvdb", "movie", "7373")],
+        );
+        movie_title.facet = MediaFacet::Series;
+        TitleRepository::create(&store, movie_title)
+            .await
+            .expect("movie-kinded title should create");
+
+        TitleRepository::create(
+            &store,
+            conflict_test_title(
+                "same-number-series",
+                "Some Series",
+                &library_id,
+                &root_folder_id,
+                vec![kinded_external_id("tvdb", "series", "7373")],
+            ),
+        )
+        .await
+        .expect("series-kinded title with the same number should create, not be reused");
+
+        assert_eq!(
+            projected_external_ids(&pool, "golden-age-movie").await,
+            vec!["tvdb:movie:7373".to_string()]
+        );
+        assert_eq!(
+            projected_external_ids(&pool, "same-number-series").await,
+            vec!["tvdb:series:7373".to_string()]
+        );
+
+        // A caller that supplies no kind still matches, which is what user and
+        // plugin input does.
+        let matched = TitleRepository::find_by_external_id_in_library_and_facet(
+            &store,
+            &library_id,
+            MediaFacet::Series,
+            "tvdb",
+            "7373",
+        )
+        .await
+        .expect("kindless lookup should succeed")
+        .expect("kindless lookup should match one of the two titles");
+        assert!(matches!(
+            matched.id.as_str(),
+            "golden-age-movie" | "same-number-series"
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_kinded_id_supersedes_the_same_kindless_id_on_the_same_title() {
+        let (store, pool) = migrated_test_store().await;
+        let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+        let root_folder_id = default_root_folder_id(&pool, &library_id).await;
+
+        TitleRepository::create(
+            &store,
+            conflict_test_title(
+                "supersede-title",
+                "Supersede Title",
+                &library_id,
+                &root_folder_id,
+                vec![
+                    external_id("tvdb", "900100"),
+                    kinded_external_id("tvdb", "series", "900100"),
+                ],
+            ),
+        )
+        .await
+        .expect("title should create");
+
+        // Only the more specific entry is projected, and the stored JSON says
+        // the same thing.
+        assert_eq!(
+            projected_external_ids(&pool, "supersede-title").await,
+            vec!["tvdb:series:900100".to_string()]
+        );
+        assert_eq!(
+            stored_external_ids_json(&pool, "supersede-title").await,
+            vec!["tvdb:series:900100".to_string()]
+        );
+    }
+
+    #[tokio::test]
+    async fn external_id_kinds_round_trip_through_the_titles_json() {
+        let (store, pool) = migrated_test_store().await;
+        let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+        let root_folder_id = default_root_folder_id(&pool, &library_id).await;
+
+        TitleRepository::create(
+            &store,
+            conflict_test_title(
+                "round-trip-title",
+                "Round Trip",
+                &library_id,
+                &root_folder_id,
+                vec![
+                    kinded_external_id("tvdb", "SERIES", "700001"),
+                    kinded_external_id("anidb", "anime", "11851"),
+                    external_id("plugin-source", "abc"),
+                ],
+            ),
+        )
+        .await
+        .expect("title should create");
+
+        let loaded = TitleRepository::get_by_id(&store, "round-trip-title")
+            .await
+            .expect("title should load")
+            .expect("title should exist");
+        assert_eq!(
+            loaded
+                .external_ids
+                .iter()
+                .map(ExternalId::key)
+                .collect::<Vec<_>>(),
+            vec![
+                "tvdb:series:700001".to_string(),
+                "anidb:anime:11851".to_string(),
+                "plugin-source:abc".to_string(),
+            ]
+        );
+        assert_eq!(
+            projected_external_ids(&pool, "round-trip-title").await,
+            vec![
+                "anidb:anime:11851".to_string(),
+                "plugin-source:abc".to_string(),
+                "tvdb:series:700001".to_string(),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn hydration_keeps_every_external_id_when_nothing_conflicts() {
+        let (store, pool) = migrated_test_store().await;
+        let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+        let root_folder_id: String = sqlx::query_scalar(
+            "SELECT id FROM library_roots
+              WHERE library_id = ?
+              ORDER BY is_default DESC, path
+              LIMIT 1",
+        )
+        .bind(&library_id)
+        .fetch_one(&pool)
+        .await
+        .expect("default series root should exist");
+
+        TitleRepository::create(
+            &store,
+            conflict_test_title(
+                "clean-title",
+                "Clean Title",
+                &library_id,
+                &root_folder_id,
+                vec![kinded_external_id("tvdb", "series", "500001")],
+            ),
+        )
+        .await
+        .expect("title should create");
+
+        TitleRepository::update_title_hydrated_metadata(
+            &store,
+            "clean-title",
+            TitleMetadataUpdate {
+                metadata_fetched_at: Some(Utc::now().to_rfc3339()),
+                extra_external_ids: vec![
+                    kinded_external_id("anidb", "anime", "424242"),
+                    kinded_external_id("mal", "anime", "99"),
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("hydration should succeed");
+
+        let projected = projected_external_ids(&pool, "clean-title").await;
+        assert_eq!(
+            projected,
+            vec![
+                "anidb:anime:424242".to_string(),
+                "mal:anime:99".to_string(),
+                "tvdb:series:500001".to_string(),
+            ]
+        );
+        assert_eq!(stored_external_ids_json(&pool, "clean-title").await, {
+            let mut expected = projected.clone();
+            expected.sort();
+            expected
+        });
     }
 
     #[test]

@@ -372,30 +372,12 @@ fn title_folder_tokens_include_external_ids_and_prefer_normalized_imdb() {
     let mut title = test_movie_title("Movie");
     title.imdb_id = Some("https://www.imdb.com/title/tt0468569/".to_string());
     title.external_ids = vec![
-        ExternalId {
-            source: "imdb".to_string(),
-            value: "tt0000001".to_string(),
-        },
-        ExternalId {
-            source: "TMDB".to_string(),
-            value: " 155 ".to_string(),
-        },
-        ExternalId {
-            source: "tvdb".to_string(),
-            value: " 123456 ".to_string(),
-        },
-        ExternalId {
-            source: "anidb".to_string(),
-            value: " 69 ".to_string(),
-        },
-        ExternalId {
-            source: "mal".to_string(),
-            value: " 21 ".to_string(),
-        },
-        ExternalId {
-            source: "anilist".to_string(),
-            value: " 21 ".to_string(),
-        },
+        ExternalId::new("imdb".to_string(), "tt0000001".to_string()),
+        ExternalId::new("TMDB".to_string(), " 155 ".to_string()),
+        ExternalId::new("tvdb".to_string(), " 123456 ".to_string()),
+        ExternalId::new("anidb".to_string(), " 69 ".to_string()),
+        ExternalId::new("mal".to_string(), " 21 ".to_string()),
+        ExternalId::new("anilist".to_string(), " 21 ".to_string()),
     ];
 
     let tokens = build_title_folder_tokens(&title, None);
@@ -417,10 +399,7 @@ fn title_folder_template_accepts_external_id_tokens_and_trims_missing_groups() {
         .expect("folder token filters are allowed");
 
     let mut title = test_movie_title("Movie");
-    title.external_ids = vec![ExternalId {
-        source: "tmdb".to_string(),
-        value: "155".to_string(),
-    }];
+    title.external_ids = vec![ExternalId::new("tmdb".to_string(), "155".to_string())];
     let tokens = build_title_folder_tokens(&title, None);
     let rendered = render_title_folder_template("{title} [{tmdb_id:8}]", &tokens);
 
@@ -1141,26 +1120,11 @@ fn movie_rename_items_render_external_id_tokens() {
     let mut title = test_movie_title("Movie (2024)");
     title.imdb_id = Some("0468569".to_string());
     title.external_ids = vec![
-        ExternalId {
-            source: "tmdb".to_string(),
-            value: "155".to_string(),
-        },
-        ExternalId {
-            source: "tvdb".to_string(),
-            value: "123456".to_string(),
-        },
-        ExternalId {
-            source: "anidb".to_string(),
-            value: "69".to_string(),
-        },
-        ExternalId {
-            source: "mal".to_string(),
-            value: "21".to_string(),
-        },
-        ExternalId {
-            source: "anilist".to_string(),
-            value: "21".to_string(),
-        },
+        ExternalId::new("tmdb".to_string(), "155".to_string()),
+        ExternalId::new("tvdb".to_string(), "123456".to_string()),
+        ExternalId::new("anidb".to_string(), "69".to_string()),
+        ExternalId::new("mal".to_string(), "21".to_string()),
+        ExternalId::new("anilist".to_string(), "21".to_string()),
     ];
     let collection = test_movie_collection(&current_path);
     let media_file = test_media_file(&current_path);

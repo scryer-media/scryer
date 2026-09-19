@@ -98,6 +98,73 @@ async fn verify_import_terminalizes_movie_after_one_successful_file() {
     assert!(verify_import(&app, &td, 1).await);
 }
 
+/// A scene movie folder ships a `Sample` video beside the feature. The movie
+/// path imports only the largest video and records no disposition for the
+/// sample, so verification must not demand one for it.
+#[tokio::test]
+async fn verify_import_terminalizes_movie_when_sample_video_has_no_artifact() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    std::fs::create_dir_all(temp_dir.path().join("Sample")).expect("create sample dir");
+    std::fs::File::create(temp_dir.path().join("Paper.Lantern.2012.1080p.mkv"))
+        .expect("create feature")
+        .set_len(60 * 1024 * 1024)
+        .expect("size feature");
+    std::fs::File::create(
+        temp_dir
+            .path()
+            .join("Sample")
+            .join("sample-paper.lantern.2012.1080p.mkv"),
+    )
+    .expect("create sample")
+    .set_len(1024 * 1024)
+    .expect("size sample");
+    let title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);
+    let artifacts = vec![build_artifact(
+        "dl-1",
+        "movie-file",
+        "Paper.Lantern.2012.1080p.mkv",
+    )];
+    let app = build_app(vec![title], vec![], vec![], artifacts);
+    let td = build_tracked_download("title-1", "movie", "Paper.Lantern.2012.1080p");
+    let completed = build_completed_download(
+        "Paper.Lantern.2012.1080p",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("movie"),
+    );
+
+    assert!(verify_import_inner(&app, &td, 1, Some(&completed)).await);
+}
+
+/// The relaxation is scoped to what the movie path could have imported: the
+/// largest visible video still needs its own successful disposition.
+#[tokio::test]
+async fn verify_import_does_not_terminalize_movie_when_largest_video_has_no_artifact() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    std::fs::File::create(temp_dir.path().join("Paper.Lantern.2012.1080p.mkv"))
+        .expect("create feature")
+        .set_len(60 * 1024 * 1024)
+        .expect("size feature");
+    std::fs::File::create(temp_dir.path().join("Paper.Lantern.2012.Featurette.mkv"))
+        .expect("create featurette")
+        .set_len(5 * 1024 * 1024)
+        .expect("size featurette");
+    let title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);
+    let artifacts = vec![build_artifact(
+        "dl-1",
+        "movie-file",
+        "Paper.Lantern.2012.Featurette.mkv",
+    )];
+    let app = build_app(vec![title], vec![], vec![], artifacts);
+    let td = build_tracked_download("title-1", "movie", "Paper.Lantern.2012.1080p");
+    let completed = build_completed_download(
+        "Paper.Lantern.2012.1080p",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("movie"),
+    );
+
+    assert!(!verify_import_inner(&app, &td, 1, Some(&completed)).await);
+}
+
 #[tokio::test]
 async fn verify_import_uses_completed_identity_alias_with_normalized_client_fields() {
     let title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);

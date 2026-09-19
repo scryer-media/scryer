@@ -1100,6 +1100,25 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
+    /// Polls `condition` until it holds, panicking after a 30 s hang guard.
+    async fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
+        let reached = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while !condition() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        })
+        .await;
+        assert!(reached.is_ok(), "timed out waiting until {what}");
+    }
+
+    /// Returns once every task on the runtime is parked. Only valid on a
+    /// paused clock: tokio advances paused time only when no task can run
+    /// and no blocking work is in flight, so this sleep cannot complete while
+    /// a spawned task still has work.
+    async fn run_until_idle() {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+
     use super::{
         IMAGE_PROXY_HOST_RPS, IMAGE_PROXY_HOST_RPS_BURST, IMAGE_PROXY_HOST_RPS_LANE,
         ImageProxyRuntime, image_fetch_policy, image_outbound_http_client, upstream_variant_url,
@@ -1172,7 +1191,7 @@ mod tests {
             },
             cache_entries: Mutex::new(vec![entry.clone()]),
             cache_reads: AtomicUsize::new(0),
-            cache_read_delay: None,
+            cache_read_gate: None,
             cache_write_started: block_metadata.then(|| Arc::new(Notify::new())),
             cache_write_release: block_metadata.then(|| Arc::new(Notify::new())),
             cache_deletes: AtomicUsize::new(0),
@@ -1252,7 +1271,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn jpeg_refresh_publishes_format_and_bytes_together_and_wakes_encoding() {
         let (_temp, runtime, repo, jpeg, _processor) = jpeg_fixture(true).await;
         let mut avif = jpeg.clone();
@@ -1280,11 +1299,12 @@ mod tests {
                 .await
                 .unwrap()
         });
-        tokio::task::yield_now().await;
+        // The reader is now parked behind the in-flight publication.
+        run_until_idle().await;
         assert!(!reader.is_finished());
         repo.cache_write_release.as_ref().unwrap().notify_one();
         tokio::time::timeout(
-            std::time::Duration::from_secs(2),
+            std::time::Duration::from_secs(30),
             runtime.wait_for_cached_jpeg(),
         )
         .await
@@ -1363,7 +1383,9 @@ mod tests {
         source: ImageProxySourceRecord,
         cache_entries: Mutex<Vec<ImageProxyCacheEntryRecord>>,
         cache_reads: AtomicUsize,
-        cache_read_delay: Option<std::time::Duration>,
+        /// Holds cache read number `n` (1-based) until the sender has released
+        /// at least `n` reads.
+        cache_read_gate: Option<tokio::sync::watch::Receiver<usize>>,
         cache_write_started: Option<Arc<Notify>>,
         cache_write_release: Option<Arc<Notify>>,
         cache_deletes: AtomicUsize,
@@ -1401,9 +1423,12 @@ mod tests {
             token: &str,
             variant: &str,
         ) -> AppResult<Option<ImageProxyCacheEntryRecord>> {
-            self.cache_reads.fetch_add(1, Ordering::Relaxed);
-            if let Some(delay) = self.cache_read_delay {
-                tokio::time::sleep(delay).await;
+            let read = self.cache_reads.fetch_add(1, Ordering::Relaxed) + 1;
+            if let Some(gate) = &self.cache_read_gate {
+                gate.clone()
+                    .wait_for(|released| *released >= read)
+                    .await
+                    .expect("cache read gate sender");
             }
             Ok(self
                 .cache_entries
@@ -1625,7 +1650,7 @@ mod tests {
             },
             cache_entries: Mutex::new(Vec::new()),
             cache_reads: AtomicUsize::new(0),
-            cache_read_delay: None,
+            cache_read_gate: None,
             cache_write_started: Some(write_started.clone()),
             cache_write_release: Some(write_release.clone()),
             cache_deletes: AtomicUsize::new(0),
@@ -1672,7 +1697,7 @@ mod tests {
             lifecycle_guard,
         );
 
-        tokio::time::timeout(std::time::Duration::from_secs(1), write_started.notified())
+        tokio::time::timeout(std::time::Duration::from_secs(30), write_started.notified())
             .await
             .expect("background cache write should reach the repository");
         assert!(
@@ -1686,7 +1711,12 @@ mod tests {
 
         let clear_runtime = Arc::clone(&runtime);
         let clear_task = tokio::spawn(async move { clear_runtime.clear_cache().await });
-        tokio::task::yield_now().await;
+        // The in-flight write holds a read guard, so a new reader is refused
+        // only once clear is queued for the write lock.
+        wait_until("clear queues for the cache lifecycle write lock", || {
+            runtime.cache_lifecycle.try_read().is_err()
+        })
+        .await;
         assert!(
             !clear_task.is_finished(),
             "clear must wait until the in-flight cache write releases its lifecycle guard"
@@ -1794,7 +1824,7 @@ mod tests {
             },
             cache_entries: Mutex::new(Vec::new()),
             cache_reads: AtomicUsize::new(0),
-            cache_read_delay: None,
+            cache_read_gate: None,
             cache_write_started: None,
             cache_write_release: None,
             cache_deletes: AtomicUsize::new(0),
@@ -1881,7 +1911,7 @@ mod tests {
                 last_accessed_at: now,
             }]),
             cache_reads: AtomicUsize::new(0),
-            cache_read_delay: None,
+            cache_read_gate: None,
             cache_write_started: None,
             cache_write_release: None,
             cache_deletes: AtomicUsize::new(0),
@@ -1988,7 +2018,7 @@ mod tests {
                 entry(&tokens[2], 10),
             ]),
             cache_reads: AtomicUsize::new(0),
-            cache_read_delay: None,
+            cache_read_gate: None,
             cache_write_started: None,
             cache_write_release: None,
             cache_deletes: AtomicUsize::new(0),
@@ -2095,6 +2125,7 @@ mod tests {
     async fn concurrent_resolve_calls_share_one_cache_miss_initializer() {
         const REQUEST_COUNT: usize = 8;
         let token = "d".repeat(64);
+        let (release_reads, _) = tokio::sync::watch::channel(0_usize);
         let image_repository = Arc::new(TestImageRepository {
             source: ImageProxySourceRecord {
                 token: token.clone(),
@@ -2107,7 +2138,7 @@ mod tests {
             },
             cache_entries: Mutex::new(Vec::new()),
             cache_reads: AtomicUsize::new(0),
-            cache_read_delay: Some(std::time::Duration::from_millis(10)),
+            cache_read_gate: Some(release_reads.subscribe()),
             cache_write_started: None,
             cache_write_release: None,
             cache_deletes: AtomicUsize::new(0),
@@ -2141,6 +2172,28 @@ mod tests {
                 runtime.resolve(&token, "original").await
             }));
         }
+        // Let the initial lookups through only once all of them have started,
+        // so every later read belongs to the shared initializer.
+        wait_until("every request starts its initial cache lookup", || {
+            image_repository.cache_reads.load(Ordering::Relaxed) >= REQUEST_COUNT
+        })
+        .await;
+        release_reads.send_replace(REQUEST_COUNT);
+        // Hold the initializer's lookups until every request has joined it.
+        let key = format!("{token}:original");
+        let inflight = Arc::clone(&runtime.inflight);
+        let joined = || {
+            inflight
+                .try_lock()
+                .ok()
+                .and_then(|inflight| inflight.get(&key).map(std::sync::Weak::strong_count))
+                .unwrap_or(0)
+        };
+        wait_until("every request joins the shared initializer", || {
+            joined() == REQUEST_COUNT
+        })
+        .await;
+        release_reads.send_replace(usize::MAX);
         for task in tasks {
             assert!(task.await.expect("concurrent image resolve").is_none());
         }
@@ -2261,7 +2314,7 @@ mod tests {
                 entry(&tokens[2], 10),
             ]),
             cache_reads: AtomicUsize::new(0),
-            cache_read_delay: None,
+            cache_read_gate: None,
             cache_write_started: None,
             cache_write_release: None,
             cache_deletes: AtomicUsize::new(0),

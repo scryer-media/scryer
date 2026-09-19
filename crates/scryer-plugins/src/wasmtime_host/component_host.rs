@@ -2431,6 +2431,25 @@ mod tests {
         );
     }
 
+    /// Answers the solve call only after spending the whole operation budget,
+    /// by moving the host's shared deadline to the moment the solver replies.
+    struct SolverSpendsOperationBudget {
+        host: ComponentHost,
+        body: serde_json::Value,
+    }
+
+    impl wiremock::Respond for SolverSpendsOperationBudget {
+        fn respond(&self, _request: &wiremock::Request) -> wiremock::ResponseTemplate {
+            *self
+                .host
+                .inner
+                .operation_deadline
+                .lock()
+                .expect("operation deadline lock") = Instant::now();
+            wiremock::ResponseTemplate::new(200).set_body_json(self.body.clone())
+        }
+    }
+
     #[tokio::test(flavor = "multi_thread")]
     async fn component_http_shares_one_deadline_across_solver_and_clearance_replay() {
         use wiremock::matchers::{method, path};
@@ -2438,46 +2457,44 @@ mod tests {
 
         let server = MockServer::start().await;
         let target_url = format!("{}/search", server.uri());
+        let host = component_solver_test_host(server.uri(), "component-solver-shared-deadline");
         Mock::given(method("POST"))
             .and(path("/v1"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(100))
-                    .set_body_json(serde_json::json!({
-                        "status": "ok",
-                        "solution": {
-                            "url": target_url,
-                            "status": 200,
-                            "headers": {},
-                            "cookies": [{"name": "clearance", "value": "solved"}],
-                            "userAgent": "solver-test",
-                            "response": "<html><body>solver response</body></html>",
-                        },
-                    })),
-            )
+            .respond_with(SolverSpendsOperationBudget {
+                host: host.clone(),
+                body: serde_json::json!({
+                    "status": "ok",
+                    "solution": {
+                        "url": target_url,
+                        "status": 200,
+                        "headers": {},
+                        "cookies": [{"name": "clearance", "value": "solved"}],
+                        "userAgent": "solver-test",
+                        "response": "<html><body>solver response</body></html>",
+                    },
+                }),
+            })
             .mount(&server)
             .await;
         Mock::given(method("GET"))
             .and(path("/search"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_delay(Duration::from_millis(100))
-                    .set_body_string("origin response"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_string("origin response"))
             .mount(&server)
             .await;
 
-        let host = component_solver_test_host_with_timeout(
-            server.uri(),
-            "component-solver-shared-deadline",
-            Duration::from_millis(150),
-        );
         let error = host
             .http(component_solver_request(target_url.clone(), Vec::new()))
             .await
             .expect_err("the replay must use only the solver operation's remaining budget");
 
         assert_eq!(error, TransportError::Timeout);
+        let requests = server.received_requests().await.expect("recorded requests");
+        assert!(
+            requests
+                .iter()
+                .all(|request| request.url.path() != "/search"),
+            "a spent operation budget must stop the clearance replay before it is sent"
+        );
 
         let solver_request = server
             .received_requests()

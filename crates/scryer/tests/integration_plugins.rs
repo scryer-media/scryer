@@ -466,6 +466,13 @@ async fn toggle_builtin_disables_and_rebuilds() {
 async fn toggle_updates_timestamp() {
     let ctx = TestContext::new().await;
     ctx.app.seed_builtin_plugins().await.unwrap();
+    // Backdate the seed instead of sleeping: the toggle stamps a newer
+    // `updated_at`, however little wall time has passed.
+    sqlx::query("UPDATE plugin_installations SET updated_at = ? WHERE plugin_id = 'torznab'")
+        .bind("2000-01-01T00:00:00+00:00")
+        .execute(ctx.db.pool())
+        .await
+        .expect("backdate seeded builtin");
 
     let before = ctx
         .customization
@@ -473,9 +480,6 @@ async fn toggle_updates_timestamp() {
         .await
         .unwrap()
         .unwrap();
-
-    // Small delay to ensure timestamp difference
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
 
     ctx.app
         .toggle_plugin(&admin(), "torznab", false)
@@ -490,7 +494,7 @@ async fn toggle_updates_timestamp() {
         .unwrap();
 
     assert!(
-        after.updated_at >= before.updated_at,
+        after.updated_at > before.updated_at,
         "updated_at should advance after toggle"
     );
 }

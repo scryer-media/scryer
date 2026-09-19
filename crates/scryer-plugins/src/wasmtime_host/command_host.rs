@@ -1339,7 +1339,11 @@ mod tests {
             let _ = stream.read_exact(&mut probe);
             let _ = stream.write_all(SOCKET_REPLY);
             let _ = stream.flush();
-            std::thread::sleep(Duration::from_millis(250));
+            // Hold the connection open until the peer closes it, so a read can
+            // never race a FIN from this side. The read timeout is a hang guard.
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+            let mut rest = [0_u8; 64];
+            while matches!(stream.read(&mut rest), Ok(n) if n > 0) {}
         });
         (port, handle)
     }
@@ -1682,6 +1686,8 @@ mod tests {
                 .expect("the host encodes its own base64"),
             SOCKET_REPLY,
         );
+        // Dropping the host closes the socket, which releases the listener.
+        drop(host);
         listener.join().ok();
     }
 

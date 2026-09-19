@@ -1082,12 +1082,21 @@ mod tests {
         )
         .await
         .expect("resolve");
-        std::thread::sleep(Duration::from_secs(1));
+        // Edit the sidecar and move its mtime forward explicitly, rather than
+        // sleeping so the filesystem clock ticks past the first write.
+        let first_modified = std::fs::metadata(&subtitle)
+            .and_then(|metadata| metadata.modified())
+            .expect("subtitle mtime");
         fs::write(
             &subtitle,
             "1\n00:00:01,000 --> 00:00:02,000\nGracias por quedarte con nosotros esta noche, de verdad, porque esto importa mucho.\n\n2\n00:00:03,000 --> 00:00:04,000\nTodavia tenemos mucho trabajo por delante y nadie mas puede resolverlo por nosotros.\n",
         )
         .expect("subtitle");
+        std::fs::File::options()
+            .write(true)
+            .open(&subtitle)
+            .and_then(|file| file.set_modified(first_modified + Duration::from_secs(2)))
+            .expect("advance subtitle mtime");
 
         let reprobed = resolve_external_subtitle_with_detector(
             "media-1",

@@ -4934,10 +4934,10 @@ mod tests {
     #[tokio::test]
     async fn tracked_download_resolution_marks_embedded_external_id_matches_as_id_only() {
         let mut title = build_title("Paper Lantern", MediaFacet::Movie, &[]);
-        title.external_ids.push(scryer_domain::ExternalId {
-            source: "imdb".to_string(),
-            value: "tt2388725".to_string(),
-        });
+        title.external_ids.push(scryer_domain::ExternalId::new(
+            "imdb".to_string(),
+            "tt2388725".to_string(),
+        ));
         let title_repo = Arc::new(TestTitleRepo {
             titles: vec![title.clone()],
         });

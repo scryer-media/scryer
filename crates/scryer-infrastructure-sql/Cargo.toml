@@ -1,12 +1,13 @@
 [package]
 name = "scryer-infrastructure-sql"
-version = "0.21.4"
+version = "0.21.5"
 edition.workspace = true
 publish = false
 
 [dependencies]
 scryer-application = { path = "../scryer-application" }
 chrono = { workspace = true }
+metrics = { workspace = true }
 serde_json = { workspace = true }
 serde = { workspace = true }
 sqlx = { workspace = true }
@@ -16,4 +17,5 @@ zstd = { version = "0.14", default-features = false }
 
 [dev-dependencies]
 blake3 = "1"
+metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 zstd = { version = "0.14", default-features = false, features = ["zdict_builder"] }

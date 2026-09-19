@@ -242,6 +242,125 @@ async fn list_wanted_items_filters_on_latest_decision_code() {
     let _ = std::fs::remove_file(db);
 }
 
+/// Re-evaluating the same release for the same scope with the same verdict is
+/// one ledger row that ages forward, not a row per cycle. RSS re-sees the same
+/// feed every cadence, which is what grew this table by thousands of identical
+/// rows an hour on an idle instance.
+#[tokio::test]
+async fn repeated_identical_release_decisions_update_in_place() {
+    let (services, db) = temp_services("scryer_release_decision_dedupe").await;
+    let workflow = wanted_store(&services);
+    let catalog = title_store(&services);
+    let now = Utc::now();
+    let title = make_test_title("title-dedupe", None);
+    TitleRepository::create(&catalog, title.clone())
+        .await
+        .expect("title should insert");
+
+    let wanted = AcquisitionScopeState {
+        id: "wanted-dedupe".to_string(),
+        title_id: title.id.clone(),
+        title_name: Some(title.name.clone()),
+        title_slug: None,
+        title_facet: None,
+        library_id: None,
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".to_string(),
+        last_search_at: None,
+        status: AcquisitionScopeStatus::Wanted,
+        grabbed_release: None,
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: now.to_rfc3339(),
+        updated_at: now.to_rfc3339(),
+    };
+    workflow
+        .upsert_acquisition_scope_state(&wanted)
+        .await
+        .expect("wanted item should insert");
+
+    let decision =
+        |id: &str, created_at: chrono::DateTime<Utc>, candidate_score: i32| ReleaseDecision {
+            id: id.to_string(),
+            wanted_item_id: wanted.id.clone(),
+            title_id: title.id.clone(),
+            release_title: "Repeated Release 1080p".to_string(),
+            release_url: Some("https://indexer.invalid/repeated.nzb".to_string()),
+            release_size_bytes: Some(4_096),
+            decision_code: "queued_better_or_equal".to_string(),
+            candidate_score,
+            current_score: Some(10),
+            score_delta: Some(candidate_score - 10),
+            explanation_json: None,
+            created_at: created_at.to_rfc3339(),
+        };
+
+    let first_id = workflow
+        .insert_release_decision(&decision("decision-first", now, 10))
+        .await
+        .expect("first decision should insert");
+    let later = now + chrono::Duration::minutes(2);
+    let second_id = workflow
+        .insert_release_decision(&decision("decision-second", later, 12))
+        .await
+        .expect("repeat decision should be accepted");
+
+    assert_eq!(
+        second_id, first_id,
+        "a repeat of the same verdict addresses the row that already holds it"
+    );
+    let stored = workflow
+        .list_release_decisions_for_acquisition_scope_state(&wanted.id, 50, 0)
+        .await
+        .expect("decisions should load");
+    assert_eq!(
+        stored.len(),
+        1,
+        "an identical re-evaluation appends nothing"
+    );
+    assert_eq!(
+        stored[0].candidate_score, 12,
+        "the surviving row carries the freshest scoring"
+    );
+    assert_eq!(
+        stored[0].created_at.trim_end_matches("+00:00"),
+        later.to_rfc3339().trim_end_matches("+00:00"),
+        "the surviving row carries the freshest timestamp"
+    );
+
+    // A different verdict about the same release is a change, and changes are
+    // still history.
+    let mut changed = decision("decision-changed", later, 12);
+    changed.decision_code = "quality_blocked".to_string();
+    workflow
+        .insert_release_decision(&changed)
+        .await
+        .expect("changed decision should insert");
+    // So is the same verdict about a different release.
+    let mut other_release = decision("decision-other-release", later, 12);
+    other_release.release_url = Some("https://indexer.invalid/other.nzb".to_string());
+    other_release.release_title = "Other Release 1080p".to_string();
+    workflow
+        .insert_release_decision(&other_release)
+        .await
+        .expect("other release decision should insert");
+
+    let count = workflow
+        .count_release_decisions_for_acquisition_scope_state(&wanted.id)
+        .await
+        .expect("decision count should load");
+    assert_eq!(count, 3, "changed verdicts and other releases still append");
+
+    let _ = std::fs::remove_file(db);
+}
+
 #[tokio::test]
 async fn release_decision_explanations_are_compressed_and_hydrated_across_read_paths() {
     let (services, db) = temp_services("scryer_release_decision_explanation").await;

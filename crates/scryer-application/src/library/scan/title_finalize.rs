@@ -734,12 +734,29 @@ pub(super) async fn finalize_movie_scan_file(
         {
             Ok(outcome) => outcome,
             Err(error) => {
+                // The file stays catalogued; only its analysis failed. Flag
+                // that record the way the episodic walk does so the failure
+                // is visible instead of silently missing analysis details.
                 warn!(
                     error = %error,
                     title_id = %title.id,
                     file_path = %file.path,
                     "movie media analysis task failed during library scan"
                 );
+                if let Err(mark_error) = app
+                    .services
+                    .library
+                    .media_files
+                    .mark_scan_failed(&persisted_file.file_id, &error.to_string())
+                    .await
+                {
+                    warn!(
+                        error = %mark_error,
+                        title_id = %title.id,
+                        file_path = %file.path,
+                        "failed to mark movie media file as scan_failed after a failed analysis"
+                    );
+                }
                 return;
             }
         };

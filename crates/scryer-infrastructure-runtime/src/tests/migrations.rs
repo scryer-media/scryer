@@ -589,6 +589,89 @@ async fn migrations_0222_through_0224_apply_then_validate() {
     let _ = std::fs::remove_file(db);
 }
 
+/// 0248 collapses the duplicate release decisions the append-only write path
+/// left behind, keeping the newest row of each identity — the one every read
+/// path (`ORDER BY created_at DESC`) would already have shown.
+#[tokio::test]
+async fn migration_0248_keeps_only_the_newest_decision_of_each_identity() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_release_decision_dedupe_migration_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy())
+        .await
+        .expect("migrations should apply");
+    let pool = services.pool().clone();
+    // The pass under test is a DELETE over one table; seeding a whole catalog
+    // to satisfy the scope's foreign key would test the fixture, not the SQL.
+    let mut conn = pool.acquire().await.expect("dedupe connection");
+    sqlx::query("PRAGMA foreign_keys = OFF")
+        .execute(&mut *conn)
+        .await
+        .expect("relax foreign keys for the seeded rows");
+
+    sqlx::query("INSERT INTO wanted_items (id, title_id, media_type, status, created_at, updated_at) VALUES ('wanted-dupe', 'title-dupe', 'movie', 'wanted', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')")
+        .execute(&mut *conn)
+        .await
+        .expect("seed wanted item");
+    for (id, created_at, score) in [
+        ("older", "2026-01-01T00:00:00Z", 1),
+        ("newest", "2026-01-01T00:10:00Z", 3),
+        ("middle", "2026-01-01T00:05:00Z", 2),
+    ] {
+        sqlx::query(
+            "INSERT INTO release_decisions
+             (id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
+              decision_code, candidate_score, created_at)
+             VALUES (?, 'wanted-dupe', 'title-dupe', 'Repeated Release', NULL, NULL,
+                     'queued_better_or_equal', ?, ?)",
+        )
+        .bind(id)
+        .bind(score)
+        .bind(created_at)
+        .execute(&mut *conn)
+        .await
+        .expect("seed duplicate decision");
+    }
+    // One row that differs only in verdict must survive the pass.
+    sqlx::query(
+        "INSERT INTO release_decisions
+         (id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
+          decision_code, candidate_score, created_at)
+         VALUES ('other-code', 'wanted-dupe', 'title-dupe', 'Repeated Release', NULL, NULL,
+                 'quality_blocked', 4, '2026-01-01T00:01:00Z')",
+    )
+    .execute(&mut *conn)
+    .await
+    .expect("seed distinct decision");
+
+    for statement in
+        include_str!("../../../scryer/src/db/migrations/0248_dedupe_release_decisions.sql")
+            .split(';')
+            .map(str::trim)
+            .filter(|statement| !statement.is_empty())
+    {
+        sqlx::query(statement)
+            .execute(&mut *conn)
+            .await
+            .expect("0248 should apply");
+    }
+
+    let surviving: Vec<String> = sqlx::query_scalar("SELECT id FROM release_decisions ORDER BY id")
+        .fetch_all(&mut *conn)
+        .await
+        .expect("read surviving decisions");
+    assert_eq!(
+        surviving,
+        vec!["newest".to_string(), "other-code".to_string()],
+        "only the newest row of each identity survives, and a different verdict is its own identity"
+    );
+
+    drop(conn);
+    drop(services);
+    let _ = std::fs::remove_file(db);
+}
+
 #[tokio::test]
 async fn migration_0155_allows_emby_external_accounts_and_preserves_legacy_rows() {
     let pool = SqlitePoolOptions::new()
@@ -1675,7 +1758,12 @@ async fn migration_0140_upgrades_v0_16_8_title_metadata_and_media_in_place() {
     .expect("upgraded title should remain");
     assert_eq!(title.0, library_id);
     assert_eq!(title.1, r#"["Drama","Slice of Life"]"#);
-    assert_eq!(title.2, r#"[{"source":"tmdb","value":"998731"}]"#);
+    // 0244 stamps the entity kind onto stored ids: this title is a movie, so
+    // its TMDB id names a movie.
+    assert_eq!(
+        title.2,
+        r#"[{"source":"tmdb","kind":"movie","value":"998731"}]"#
+    );
     assert_eq!(title.3, 2023);
     assert_eq!(title.4, "A preserved 0.16.8 overview");
 
@@ -2516,10 +2604,7 @@ async fn migration_0156_queues_tvdb_titles_without_clearing_last_fetch() {
     let catalog = title_store(&services);
 
     let mut tvdb_title = make_test_title("title-tvdb-original-language", None);
-    tvdb_title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "12345".to_string(),
-    }];
+    tvdb_title.external_ids = vec![ExternalId::new("tvdb".to_string(), "12345".to_string())];
     TitleRepository::create(&catalog, tvdb_title.clone())
         .await
         .expect("TVDB title should insert");
@@ -5607,4 +5692,149 @@ async fn migration_0242_attributes_single_client_bindings_and_ends_the_rest() {
             ("submission-single".to_string(), "client-nzbget".to_string()),
         ]
     );
+}
+
+#[tokio::test]
+async fn migration_0244_splits_the_external_id_key_by_entity_kind() {
+    crate::spellfix::register_spellfix_auto_extension()
+        .expect("spellfix auto-extension should register");
+    let db = std::env::temp_dir().join(format!(
+        "scryer_migration_0244_external_id_kind_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("migration test database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(243), true)
+        .await
+        .expect("0243 fixture schema should install");
+
+    // A movie and a series that share TVDB number 7373: legal upstream, and
+    // exactly the pair the pre-0244 key could not tell apart. They live in
+    // different libraries here because the old unique index is still in force
+    // while the fixture is being written.
+    for (title_id, library_id, facet, name, root) in [
+        (
+            "movie-7373",
+            "movie_default_library",
+            "movie",
+            "Golden Age Arc I",
+            "canonical_root_for_movie_default_library",
+        ),
+        (
+            "series-7373",
+            "series_default_library",
+            "series",
+            "Some Series",
+            "canonical_root_for_series_default_library",
+        ),
+    ] {
+        sqlx::query(
+            "INSERT INTO titles (
+                id, library_id, name, name_normalized, facet, root_folder_id,
+                external_ids, created_at
+             ) VALUES (?, ?, ?, LOWER(?), ?, ?,
+                json_array(json_object('source', 'tvdb', 'value', '7373')),
+                '2026-09-01T00:00:00Z')",
+        )
+        .bind(title_id)
+        .bind(library_id)
+        .bind(name)
+        .bind(name)
+        .bind(facet)
+        .bind(root)
+        .execute(&pool)
+        .await
+        .expect("legacy title should insert");
+        sqlx::query(
+            "INSERT INTO title_external_ids (
+                id, title_id, library_id, facet, source, external_id, created_at, updated_at
+             ) VALUES (?, ?, ?, ?, 'tvdb', '7373',
+                '2026-09-01T00:00:00Z', '2026-09-01T00:00:00Z')",
+        )
+        .bind(format!("{title_id}-tvdb"))
+        .bind(title_id)
+        .bind(library_id)
+        .bind(facet)
+        .execute(&pool)
+        .await
+        .expect("legacy projection row should insert");
+    }
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("0244 should apply to a database with a shared provider number");
+
+    let rows: Vec<(String, String, String, String)> = sqlx::query_as(
+        "SELECT title_id, source, external_kind, external_key
+         FROM title_external_ids
+         ORDER BY title_id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("projection rows should load");
+    assert_eq!(
+        rows,
+        vec![
+            (
+                "movie-7373".to_string(),
+                "tvdb".to_string(),
+                "movie".to_string(),
+                "tvdb:movie:7373".to_string(),
+            ),
+            (
+                "series-7373".to_string(),
+                "tvdb".to_string(),
+                "series".to_string(),
+                "tvdb:series:7373".to_string(),
+            ),
+        ]
+    );
+
+    // The stored JSON carries the same kinds, so a later persist projects the
+    // identical rows instead of collapsing them back onto one key.
+    let stored: Vec<(String, String)> = sqlx::query_as(
+        "SELECT id, external_ids FROM titles WHERE id IN ('movie-7373', 'series-7373') ORDER BY id",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("titles rows should load");
+    let kinds = stored
+        .iter()
+        .map(|(id, json)| {
+            let parsed: Vec<scryer_domain::ExternalId> =
+                serde_json::from_str(json).expect("external_ids should be a JSON array");
+            (id.as_str(), parsed[0].key())
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        kinds,
+        vec![
+            ("movie-7373", "tvdb:movie:7373".to_string()),
+            ("series-7373", "tvdb:series:7373".to_string()),
+        ]
+    );
+
+    // Both keys now live under one unique index.
+    let index_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE type = 'index' AND name = 'idx_title_external_ids_library_kind_lookup'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("index lookup should run");
+    assert_eq!(index_rows, 1);
+    let legacy_index: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE type = 'index' AND name = 'idx_title_external_ids_library_lookup'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("legacy index lookup should run");
+    assert_eq!(legacy_index, 0);
+
+    drop(pool);
+    let _ = std::fs::remove_file(db);
 }

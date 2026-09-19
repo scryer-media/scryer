@@ -34,6 +34,10 @@ pub(super) struct MockTitleRepo {
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
     pub(super) pending_import_items: Option<Arc<Mutex<Vec<LibraryScanUnmatchedItem>>>>,
     pub(super) external_id_batch_lookup_calls: AtomicUsize,
+    /// How many times a caller asked for the whole catalog to match against.
+    /// Scheduled pollers must not pay for this before they know they have
+    /// somewhere to send a result.
+    pub(super) list_for_matching_calls: AtomicUsize,
     pub(super) monitor_selections: Arc<Mutex<HashMap<String, scryer_domain::MonitorSelection>>>,
 }
 #[derive(Default)]
@@ -653,6 +657,8 @@ impl TitleRepository for MockTitleRepo {
         facet: Option<MediaFacet>,
         query: Option<String>,
     ) -> AppResult<Vec<Title>> {
+        self.list_for_matching_calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.list(facet, query).await
     }
 
@@ -978,10 +984,9 @@ impl TitleRepository for MockTitleRepo {
         title
             .external_ids
             .retain(|external_id| external_id.source != "smg");
-        title.external_ids.push(ExternalId {
-            source: "smg".to_string(),
-            value: smg_id.to_string(),
-        });
+        title
+            .external_ids
+            .push(ExternalId::new("smg".to_string(), smg_id.to_string()));
         self.smg_identity_backfill_attempts
             .lock()
             .await

@@ -3,8 +3,11 @@ use std::path::Path;
 use scryer_domain::Title;
 
 use crate::library::workflow::{LibraryRootState, library_root_state};
-use crate::stored_paths::{folder_paths_match, path_to_stored_string, stored_path_to_path_buf};
-use crate::{AppError, AppResult, AppUseCase, TitleListProjection};
+use crate::stored_paths::{
+    folder_path_match_candidates, folder_paths_match, path_to_stored_string,
+    stored_path_to_path_buf,
+};
+use crate::{AppError, AppResult, AppUseCase};
 
 fn non_empty_folder_path(path: Option<&str>) -> Option<&str> {
     path.filter(|path| !path.is_empty())
@@ -103,21 +106,19 @@ pub(crate) async fn find_other_folder_owner(
     title: &Title,
     folder_path: &str,
 ) -> AppResult<Option<Title>> {
-    let library_ids = vec![title.library_id.clone()];
     // Ownership is decided from the id and the folder path alone, and a scan or
-    // pending-import pass asks this question once per folder it touches. Paying
-    // for the canonical-tag hydration on every one of those passes was stalling
-    // the read pool on large libraries.
+    // pending-import pass asks this question once per folder it touches —
+    // 11,988 times over a three-library scan of a 111k-file test library.
+    // Reading every title in the library per folder made that the single most
+    // expensive statement of a scan, so the candidate spellings of the folder
+    // go to the repository and it narrows the read; `folder_paths_match` below
+    // is still what decides.
+    let match_candidates = folder_path_match_candidates(folder_path);
     Ok(app
         .services
         .catalog
         .titles
-        .list_with_projection(
-            None,
-            Some(&library_ids),
-            None,
-            TitleListProjection::without_canonical_tags().without_external_ids(),
-        )
+        .list_folder_path_owner_candidates(&title.library_id, &title.id, &match_candidates)
         .await?
         .into_iter()
         .find(|candidate| {

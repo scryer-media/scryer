@@ -111,9 +111,8 @@ async fn notification_broadcast_wakes_once_for_notification_batches() {
         .await
         .expect("batch should append");
 
-    let wake = tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+    let wake = within_deadline("the notification wake", receiver.recv())
         .await
-        .expect("notification wake should arrive")
         .expect("notification broadcast should stay open");
     assert_eq!(
         wake,
@@ -8324,14 +8323,8 @@ async fn acquisition_cycle_submits_paperman_media_request_candidate() {
                 monitored: true,
                 year: Some(2012),
                 external_ids: vec![
-                    ExternalId {
-                        source: "tvdb".to_string(),
-                        value: "5890".to_string(),
-                    },
-                    ExternalId {
-                        source: "imdb".to_string(),
-                        value: "tt2388725".to_string(),
-                    },
+                    ExternalId::new("tvdb".to_string(), "5890".to_string()),
+                    ExternalId::new("imdb".to_string(), "tt2388725".to_string()),
                 ],
                 content_status: Some("Released".to_string()),
                 min_availability: Some("released".to_string()),
@@ -8421,10 +8414,7 @@ async fn acquisition_cycle_submits_bluey_episode_media_request_candidate() {
                 facet: MediaFacet::Series,
                 monitored: true,
                 year: Some(2018),
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "353546".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "353546".to_string())],
                 content_status: Some("Continuing".to_string()),
                 ..Default::default()
             },
@@ -10044,10 +10034,7 @@ async fn add_and_queue_reuse_reconciles_quality_profile_before_submission() {
         facet: MediaFacet::Movie,
         monitored: true,
         tags: vec!["scryer:quality-profile:4k".to_string()],
-        external_ids: vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "765432".to_string(),
-        }],
+        external_ids: vec![ExternalId::new("tvdb".to_string(), "765432".to_string())],
         ..Default::default()
     };
     let existing = app
@@ -10145,10 +10132,7 @@ async fn rss_reused_add_clears_4k_override_and_blocks_2160p_via_library_1080p() 
         facet: MediaFacet::Movie,
         monitored: true,
         tags: vec!["scryer:quality-profile:4k".to_string()],
-        external_ids: vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "975310".to_string(),
-        }],
+        external_ids: vec![ExternalId::new("tvdb".to_string(), "975310".to_string())],
         year: Some(2024),
         content_status: Some("Released".into()),
         min_availability: Some("announced".into()),
@@ -12248,6 +12232,7 @@ async fn an_interactive_walk_waits_for_a_cycle_that_holds_the_title() {
         .title_walk_locks
         .acquire(&title.id)
         .await;
+    let (labels_tx, mut labels) = tokio::sync::mpsc::unbounded_channel();
     let walk = tokio::spawn({
         let app = app.clone();
         let title_id = title.id.clone();
@@ -12258,24 +12243,33 @@ async fn an_interactive_walk_waits_for_a_cycle_that_holds_the_title() {
                 None,
                 None,
                 tokio_util::sync::CancellationToken::new(),
-                |_| {},
+                move |progress| {
+                    let _ = labels_tx.send(progress.stage_label);
+                },
             )
             .await
         }
     });
 
-    // The walk cannot have queried anything while the lock is held.
-    tokio::task::yield_now().await;
-    sleep(Duration::from_millis(50)).await;
+    // The walk announces the wait right before it parks on the title lock, so
+    // once the label arrives it has reached the contention point and the
+    // empty search log below is a real observation, not an early read.
+    loop {
+        let label = within_deadline("the walk's stage label", labels.recv())
+            .await
+            .expect("the walk reports it is waiting before it finishes");
+        if label.contains("waiting for") {
+            break;
+        }
+    }
     assert!(
         indexer_client.searches.lock().await.is_empty(),
         "the interactive walk waits instead of racing the cycle"
     );
 
     drop(held);
-    let stats = timeout(Duration::from_secs(10), walk)
+    let stats = within_deadline("the walk to resume once the lock is released", walk)
         .await
-        .expect("the walk resumes once the lock is released")
         .expect("walk task")
         .expect("interactive title walk");
     assert!(stats.stages > 0, "the walk ran its stages after waiting");
@@ -12545,9 +12539,8 @@ async fn automatic_search_rechecks_pauses_after_waiting_for_the_title() {
         .await
     });
     loop {
-        let label = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+        let label = within_deadline("the walk's stage label", rx.recv())
             .await
-            .unwrap()
             .unwrap();
         if label.contains("waiting for") {
             break;
@@ -12757,18 +12750,18 @@ async fn await_acquisition_search_job(
     actor: &User,
     run_id: &str,
 ) -> AcquisitionSearchJobView {
-    for _ in 0..600 {
-        let view = app
-            .acquisition_search_job(actor, run_id)
-            .await
-            .expect("read the acquisition search job")
-            .expect("the job exists");
-        if view.finished_at.is_some() {
-            return view;
-        }
-        sleep(Duration::from_millis(20)).await;
-    }
-    panic!("the acquisition search job never reached a terminal state");
+    wait_for(
+        "the acquisition search job to reach a terminal state",
+        || async {
+            let view = app
+                .acquisition_search_job(actor, run_id)
+                .await
+                .expect("read the acquisition search job")
+                .expect("the job exists");
+            view.finished_at.is_some().then_some(view)
+        },
+    )
+    .await
 }
 
 #[tokio::test]
@@ -13067,12 +13060,9 @@ async fn a_title_walk_holding_the_writer_gate_still_finishes_while_progress_is_w
         .await
         .expect("start the title-scoped acquisition search");
 
-    let view = tokio::time::timeout(
-        Duration::from_secs(20),
-        await_acquisition_search_job(&app, &actor, &run.id),
-    )
-    .await
-    .expect("a progress write must not strand the walk that holds the writer gate");
+    // A progress write must not strand the walk that holds the writer gate;
+    // the helper's hang guard fails the test if it does.
+    let view = await_acquisition_search_job(&app, &actor, &run.id).await;
     assert!(
         view.total > 0,
         "the walk announced its work items: {view:?}"
@@ -13498,4 +13488,506 @@ async fn a_season_pack_wins_a_tie_against_the_episodes_it_covers() {
         !submitted.contains(&first_episode) && !submitted.contains(&second_episode),
         "the covered episode proposals must be set aside, not grabbed too: {submitted:?}"
     );
+}
+
+/// A scheduled poll that cannot reach an indexer must cost nothing.
+///
+/// The due check below the gate deliberately answers "poll" when it knows
+/// nothing — an empty due set with an empty deferred set is indistinguishable
+/// from a scheduler that has not spoken yet — so with no indexer configured at
+/// all the cycle used to run on every tick and load the whole catalog for
+/// matching before finding it had nowhere to send a grab.
+#[tokio::test]
+async fn rss_sync_without_enabled_indexers_never_loads_the_catalog() {
+    let acquisition_scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user, _, repos) = bootstrap_with_acquisition_tracking_and_indexer_and_repos(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        acquisition_scope_states.clone(),
+        Arc::new(MockIndexerClient),
+    );
+    seed_movie_wanted_for_acquisition(
+        &app,
+        &user,
+        &acquisition_scope_states,
+        "Indexerless Cadence",
+        2024,
+    )
+    .await;
+
+    repos.indexer_configs.store.lock().await.clear();
+    let before = repos
+        .titles
+        .list_for_matching_calls
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let report = app
+        .run_scheduled_rss_sync()
+        .await
+        .expect("an indexerless RSS sync should succeed");
+
+    assert_eq!(report.releases_grabbed, 0);
+    assert_eq!(
+        repos
+            .titles
+            .list_for_matching_calls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        before,
+        "a tick with no enabled indexer must not load the catalog for matching"
+    );
+}
+
+/// Same shape one gate further down: an enabled indexer with nowhere to send
+/// what it finds is still a cycle whose whole result would be discarded, so the
+/// download-client check runs before the catalog load rather than after it.
+#[tokio::test]
+async fn rss_sync_without_download_clients_never_loads_the_catalog() {
+    let acquisition_scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user, _, repos) = bootstrap_with_acquisition_tracking_and_indexer_and_repos(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        acquisition_scope_states.clone(),
+        Arc::new(MockIndexerClient),
+    );
+    seed_movie_wanted_for_acquisition(
+        &app,
+        &user,
+        &acquisition_scope_states,
+        "Clientless Cadence",
+        2024,
+    )
+    .await;
+
+    repos.download_client_configs.store.lock().await.clear();
+    let before = repos
+        .titles
+        .list_for_matching_calls
+        .load(std::sync::atomic::Ordering::Relaxed);
+
+    let report = app
+        .run_scheduled_rss_sync()
+        .await
+        .expect("a clientless RSS sync should succeed");
+
+    assert_eq!(report.releases_grabbed, 0);
+    assert_eq!(
+        repos
+            .titles
+            .list_for_matching_calls
+            .load(std::sync::atomic::Ordering::Relaxed),
+        before,
+        "a tick with no enabled download client must not load the catalog for matching"
+    );
+}
+
+/// The background convergence cycle derives its targets with a catalog-wide
+/// anti-join over every monitored episode. With no download client there is
+/// nothing it can do with the result, so the gate that discards the whole set
+/// runs before the set is built.
+#[tokio::test]
+async fn background_acquisition_without_download_clients_skips_the_missing_scope_sweep() {
+    let acquisition_scope_states = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user, _, repos) = bootstrap_with_acquisition_tracking_and_indexer_and_repos(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        acquisition_scope_states.clone(),
+        Arc::new(MockIndexerClient),
+    );
+    seed_movie_wanted_for_acquisition(
+        &app,
+        &user,
+        &acquisition_scope_states,
+        "Clientless Convergence",
+        2024,
+    )
+    .await;
+
+    // Positive control: with a client configured the cycle does sweep.
+    let before = repos
+        .media_files
+        .missing_scope_sweeps
+        .load(std::sync::atomic::Ordering::Relaxed);
+    app.run_background_acquisition_cycle_once().await;
+    let with_client = repos
+        .media_files
+        .missing_scope_sweeps
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert!(
+        with_client > before,
+        "a cycle with a download client still derives its targets"
+    );
+
+    repos.download_client_configs.store.lock().await.clear();
+    let outcome = app.run_background_acquisition_cycle_once().await;
+
+    assert_eq!(
+        repos
+            .media_files
+            .missing_scope_sweeps
+            .load(std::sync::atomic::Ordering::Relaxed),
+        with_client,
+        "a cycle with no download client must not run the catalog-wide sweep"
+    );
+    assert_eq!(outcome.targets_derived, 0);
+    assert_eq!(outcome.titles_walked, 0);
+}
+
+/// A scheduler tick that decides not to run must leave no durable trace: the
+/// acquisition worker wakes far faster than the cadences it serves, and a run
+/// row plus three domain events per refused tick recorded the heartbeat rather
+/// than the work.
+#[tokio::test]
+async fn refused_scheduled_ticks_record_no_run_and_no_events() {
+    let (app, _) = bootstrap();
+    let job_runs = Arc::new(RecordingJobRunRepo::default());
+    let domain_events = Arc::new(MockDomainEventRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_job_runs(job_runs.clone())
+            .with_domain_events(domain_events.clone())
+            .with_pending_releases(pending_releases.clone())
+    });
+
+    // Nothing is parked, so the pending-release job has nothing to report on.
+    app.run_scheduled_job_now(
+        JobKey::PendingReleaseProcessing,
+        JobTriggerSource::ScheduledInterval,
+    )
+    .await
+    .expect("an idle pending-release tick is not a failure");
+
+    // No indexer is configured, so the RSS cycle would return before its
+    // first read.
+    app.run_scheduled_job_now(JobKey::RssSync, JobTriggerSource::ScheduledInterval)
+        .await
+        .expect("an idle RSS tick is not a failure");
+
+    assert!(
+        job_runs.runs.lock().await.is_empty(),
+        "a refused tick must not create a job run row"
+    );
+    assert!(
+        domain_events.events.lock().await.is_empty(),
+        "a refused tick must not append a domain event"
+    );
+}
+
+/// The gate is about work, not about the job: once something is parked, the
+/// scheduled tick is recorded exactly as before.
+#[tokio::test]
+async fn scheduled_pending_release_tick_with_parked_work_is_recorded() {
+    let (app, _) = bootstrap();
+    let job_runs = Arc::new(RecordingJobRunRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let mut parked = series_pack_anchor_standby(
+        &make_due_hydration_title("title-parked", MediaFacet::Series, 1),
+        "wanted-parked",
+        "Parked Release 1080p",
+    );
+    parked.status = PendingReleaseStatus::Waiting;
+    pending_releases.store.lock().await.push(parked);
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_job_runs(job_runs.clone())
+            .with_pending_releases(pending_releases.clone())
+    });
+
+    app.run_scheduled_job_now(
+        JobKey::PendingReleaseProcessing,
+        JobTriggerSource::ScheduledInterval,
+    )
+    .await
+    .expect("a tick with parked work should run");
+
+    let runs = job_runs.runs.lock().await;
+    assert_eq!(
+        runs.len(),
+        1,
+        "a tick with work to describe still records its run"
+    );
+    assert_eq!(runs[0].job_key, JobKey::PendingReleaseProcessing);
+}
+
+/// Every search subject used to buy its own client snapshot: on the 12k-title
+/// load test that was a queue listing plus a 100-slot history page about a
+/// hundred times a minute, all describing a queue that had not moved between
+/// two seasons of the same show. One build now answers the whole cycle.
+#[tokio::test]
+async fn a_cycle_builds_one_download_client_snapshot_and_reuses_it() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let (app, _user) = bootstrap_with_acquisition_tracking(
+        download_client.clone(),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        Arc::new(TrackingAcquisitionScopeStateRepo::default()),
+    );
+    download_client.queue_items.lock().await.push({
+        let mut item = queue_history_fixture_item("held-job", DownloadQueueState::Downloading, 0);
+        item.title_name = "Snapshot Reuse Fixture".to_string();
+        item
+    });
+
+    let first = crate::acquisition_workflow::DownloadClientSnapshot::fetch(&app).await;
+    let second = crate::acquisition_workflow::DownloadClientSnapshot::fetch(&app).await;
+
+    assert_eq!(
+        *download_client.queue_calls.lock().await,
+        1,
+        "the second subject must reuse the first subject's snapshot"
+    );
+    assert!(
+        first.is_active("Snapshot Reuse Fixture") && second.is_active("Snapshot Reuse Fixture"),
+        "the reused snapshot must answer the double-submit guard exactly as the built one did"
+    );
+}
+
+/// The reuse is only safe because a grab retires it. A cached snapshot that
+/// outlived the submission this process just made would report a claimed scope
+/// as free, which is the double-submit the guard exists to prevent.
+#[tokio::test]
+async fn a_grab_retires_the_cached_download_client_snapshot() {
+    let release_title = "Paperman.2012.720p.WEB-DL.AV1.AAC2.0-NTb";
+    let download_client = Arc::new(StubDownloadClient::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        download_client.clone(),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted_items.clone(),
+        Arc::new(FixedReleaseIndexerClient::new(release_title)),
+    );
+    let title = seed_monitored_movie_for_cycle(&app, &user, &wanted_items, "Paperman", 2012).await;
+
+    // Taken before the grab, and still inside the 30 s reuse window when the
+    // assertions below run.
+    let before = crate::acquisition_workflow::DownloadClientSnapshot::fetch(&app).await;
+    assert!(
+        !before.is_active(&title.name),
+        "nothing is holding the scope yet"
+    );
+    let reads_before = *download_client.queue_calls.lock().await;
+
+    app.run_background_acquisition_cycle_once().await;
+    assert_eq!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .as_slice(),
+        &[release_title.to_string()],
+        "the fixture must reproduce a grab"
+    );
+
+    let after = crate::acquisition_workflow::DownloadClientSnapshot::fetch(&app).await;
+    assert!(
+        *download_client.queue_calls.lock().await > reads_before,
+        "the grab must force the next subject to re-read the clients"
+    );
+    assert!(
+        after.is_active(&title.name),
+        "the snapshot after a grab must see the claim the grab created"
+    );
+}
+
+/// A feed that offers the same unusable release every cycle used to write an
+/// `acquisition_candidate_rejected` row every cycle — 80 a minute on the load
+/// test, all of them the same catalogue refused for the same reason. The
+/// refusal is a fact the first time; a repeat of it is not.
+#[tokio::test]
+async fn a_repeated_rejection_is_recorded_once() {
+    let release_title = "Some.Other.Show.S01E01.1080p.WEB-DL-GRP";
+    let download_client = Arc::new(StubDownloadClient::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        download_client.clone(),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted_items.clone(),
+        Arc::new(FixedReleaseIndexerClient::new(release_title)),
+    );
+    let title =
+        seed_monitored_movie_for_cycle(&app, &user, &wanted_items, "Rejection Repeat", 2024).await;
+
+    app.run_background_acquisition_cycle_once().await;
+    let after_first = rejected_candidate_events(&app, &title.id).await;
+    assert_eq!(
+        after_first.len(),
+        1,
+        "the first refusal of a candidate is the fact worth recording"
+    );
+    let decisions_after_first = wanted_items.release_decisions.lock().await.clone();
+    assert_eq!(decisions_after_first.len(), 1);
+
+    reopen_scope_for_another_search(&wanted_items).await;
+    app.run_background_acquisition_cycle_once().await;
+
+    assert_eq!(
+        rejected_candidate_events(&app, &title.id).await.len(),
+        1,
+        "the same verdict about the same release must not be recorded again"
+    );
+    let decisions_after_second = wanted_items.release_decisions.lock().await.clone();
+    assert_eq!(
+        decisions_after_second.len(),
+        1,
+        "the event and the decision ledger must agree on what counts as one outcome"
+    );
+    assert_eq!(
+        decisions_after_second[0].id, decisions_after_first[0].id,
+        "the repeat aged the existing decision row forward"
+    );
+}
+
+/// The identity the ledger dedupes on includes the verdict, so a scope that
+/// changes its mind about a release says so — the suppression is of repetition,
+/// not of news.
+#[tokio::test]
+async fn a_changed_verdict_about_the_same_release_is_recorded_again() {
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let decision = |id: &str, code: &str| ReleaseDecision {
+        id: id.to_string(),
+        wanted_item_id: "wanted-1".to_string(),
+        title_id: "title-1".to_string(),
+        release_title: "Verdict.Change.2024.1080p.WEB-DL-GRP".to_string(),
+        release_url: Some("https://example.invalid/verdict.nzb".to_string()),
+        release_size_bytes: Some(1_024),
+        decision_code: code.to_string(),
+        candidate_score: 10,
+        current_score: None,
+        score_delta: None,
+        explanation_json: None,
+        created_at: Utc::now().to_rfc3339(),
+    };
+
+    let first = wanted_items
+        .insert_release_decision(&decision("decision-1", "title_mismatch"))
+        .await
+        .expect("record the first verdict");
+    let repeat = wanted_items
+        .insert_release_decision(&decision("decision-2", "title_mismatch"))
+        .await
+        .expect("record the same verdict again");
+    let changed = wanted_items
+        .insert_release_decision(&decision("decision-3", "upgrade_rejected"))
+        .await
+        .expect("record a changed verdict");
+
+    assert_eq!(first, "decision-1");
+    assert_eq!(
+        repeat, "decision-1",
+        "a repeat must age the row it already has"
+    );
+    assert_eq!(
+        changed, "decision-3",
+        "a changed verdict is a new row, and therefore new signal"
+    );
+    assert!(
+        crate::acquisition_workflow::ReleaseDecisionOutcome::of("decision-1", Some(&first))
+            .is_new_signal()
+    );
+    assert!(
+        !crate::acquisition_workflow::ReleaseDecisionOutcome::of("decision-2", Some(&repeat))
+            .is_new_signal()
+    );
+    assert!(
+        crate::acquisition_workflow::ReleaseDecisionOutcome::of("decision-3", Some(&changed))
+            .is_new_signal()
+    );
+    assert!(
+        crate::acquisition_workflow::ReleaseDecisionOutcome::of("decision-4", None).is_new_signal(),
+        "a ledger that could not answer keeps the pre-dedupe behaviour"
+    );
+}
+
+async fn rejected_candidate_events(app: &AppUseCase, title_id: &str) -> Vec<DomainEvent> {
+    app.services
+        .events
+        .domain_events
+        .list(&DomainEventFilter {
+            event_types: Some(vec![DomainEventType::AcquisitionCandidateRejected]),
+            title_id: Some(title_id.to_string()),
+            facet: None,
+            stream_id: None,
+            after_sequence: Some(0),
+            before_sequence: None,
+            limit: 100,
+        })
+        .await
+        .expect("rejected candidate events should load")
+}
+
+/// Put every seeded scope back where a second cycle will search it again,
+/// which is what an idle instance does every cadence.
+async fn reopen_scope_for_another_search(wanted_items: &Arc<TrackingAcquisitionScopeStateRepo>) {
+    let scopes = wanted_items
+        .list_acquisition_scope_states(AcquisitionScopeStatesQuery::default())
+        .await
+        .expect("list seeded scopes");
+    for mut scope in scopes {
+        scope.last_search_at = Some((Utc::now() - chrono::Duration::days(1)).to_rfc3339());
+        wanted_items
+            .upsert_acquisition_scope_state(&scope)
+            .await
+            .expect("reopen scope");
+    }
+}
+
+async fn seed_monitored_movie_for_cycle(
+    app: &AppUseCase,
+    user: &User,
+    wanted_items: &Arc<TrackingAcquisitionScopeStateRepo>,
+    name: &str,
+    year: i32,
+) -> Title {
+    let title = app
+        .add_title(
+            user,
+            NewTitle {
+                name: name.to_string(),
+                sort_title: Some(name.to_string()),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                year: Some(year),
+                content_status: Some("Released".to_string()),
+                min_availability: Some("released".to_string()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create the monitored movie");
+    wanted_items
+        .remember_title_facet(&title.id, MediaFacet::Movie)
+        .await;
+    wanted_items
+        .upsert_acquisition_scope_state(&AcquisitionScopeState {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            title_name: Some(title.name.clone()),
+            title_slug: title.slug.clone(),
+            title_facet: Some(MediaFacet::Movie.as_str().to_string()),
+            library_id: Some(title.library_id.clone()),
+            library_name: Some("Movies".to_string()),
+            library_slug: Some("movies".to_string()),
+            episode_id: None,
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "movie".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Wanted,
+            grabbed_release: None,
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: Utc::now().to_rfc3339(),
+            updated_at: Utc::now().to_rfc3339(),
+        })
+        .await
+        .expect("seed the wanted scope");
+    title
 }

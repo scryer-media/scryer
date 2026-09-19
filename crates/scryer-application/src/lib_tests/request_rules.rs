@@ -1043,10 +1043,7 @@ async fn a_metadata_outage_holds_the_rules_that_read_metadata() {
     // every metadata fact is unknown rather than empty.
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let mut input = media_request_input(library_id, 8_901);
-    input.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "8901".to_string(),
-    }];
+    input.external_ids = vec![ExternalId::new("tvdb".to_string(), "8901".to_string())];
 
     let preflight = harness
         .app
@@ -1897,10 +1894,7 @@ fn sample(harness: &MediaRequestTestHarness, library_id: &str, tvdb_id: i64) -> 
     RequestRuleSample {
         user_id: harness.user.id.clone(),
         library_id: library_id.to_string(),
-        external_ids: vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: tvdb_id.to_string(),
-        }],
+        external_ids: vec![ExternalId::new("tvdb".to_string(), tvdb_id.to_string())],
         quality_profile_id: Some("1080p".to_string()),
         monitor_type: None,
         lease_days: Some(Some(14)),

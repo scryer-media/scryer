@@ -67,7 +67,7 @@ pub(crate) async fn record_release_decision(
     decision_code: ReleaseAutoDecisionCode,
     incumbent_bar: Option<i32>,
     now: &DateTime<Utc>,
-) {
+) -> ReleaseDecisionOutcome {
     let candidate_score = candidate
         .quality_profile_decision
         .as_ref()
@@ -92,12 +92,52 @@ pub(crate) async fn record_release_decision(
         created_at: now.to_rfc3339(),
     };
 
-    let _ = app
+    let written_id = app
         .services
         .workflow
         .acquisition_scope_states
         .insert_release_decision(&decision_record)
         .await;
+    ReleaseDecisionOutcome::of(&decision_record.id, written_id.ok().as_deref())
+}
+
+/// What the ledger did with a decision, and therefore whether this cycle
+/// learned anything.
+///
+/// `insert_release_decision` has been an upsert on the decision's identity
+/// since 5dcc7b375: the same scope reaching the same verdict about the same
+/// release ages the row it already has forward instead of appending. The id it
+/// returns says which happened — the record's own id for a fresh row, the
+/// surviving row's id when one was already on file — and that is the only
+/// "have we said this before?" signal anything needs. It is deliberately not a
+/// second table: a rejection that repeats is not a new fact, and the row that
+/// proves it is the one the decisions view already shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReleaseDecisionOutcome {
+    /// This scope had not reached this verdict about this release before.
+    Recorded,
+    /// The identical verdict was already on file and was aged forward.
+    Unchanged,
+    /// The ledger write failed, so nothing is known about what came before.
+    /// Treated as new everywhere, which keeps the pre-dedupe behaviour when
+    /// the store cannot answer.
+    Unknown,
+}
+
+impl ReleaseDecisionOutcome {
+    pub(crate) fn of(record_id: &str, written_id: Option<&str>) -> Self {
+        match written_id {
+            Some(written_id) if written_id == record_id => Self::Recorded,
+            Some(_) => Self::Unchanged,
+            None => Self::Unknown,
+        }
+    }
+
+    /// Whether this verdict is worth telling the activity feed about: a first
+    /// sighting, a changed verdict, or a write we could not interpret.
+    pub(crate) fn is_new_signal(self) -> bool {
+        !matches!(self, Self::Unchanged)
+    }
 }
 
 /// Persist the same decision ledger entry for a release that was previously

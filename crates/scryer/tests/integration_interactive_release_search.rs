@@ -13,7 +13,10 @@ mod common;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use common::{TestContext, disable_platform_keystore_for_tests, initialize_wasm_runtime_for_tests};
+use common::{
+    GatedHttpServer, TestContext, disable_platform_keystore_for_tests,
+    initialize_wasm_runtime_for_tests, wait_until,
+};
 use scryer_application::{
     AppServices, AppUseCase, FacetRegistry, INDEXER_ROUTING_SETTINGS_KEY, IndexerPluginProvider,
     InteractiveReleaseSearchIndexerStatus, InteractiveReleaseSearchRequest,
@@ -465,10 +468,7 @@ async fn add_movie(app: &AppUseCase, user: &User, name: &str, imdb: &str) -> Str
             facet: MediaFacet::Movie,
             monitored: true,
             tags: vec![],
-            external_ids: vec![ExternalId {
-                source: "imdb".to_string(),
-                value: imdb.to_string(),
-            }],
+            external_ids: vec![ExternalId::new("imdb".to_string(), imdb.to_string())],
             ..Default::default()
         },
     )
@@ -502,16 +502,8 @@ async fn mount_healthy(server: &MockServer, title: &str, guid: &str) {
         .await;
 }
 
-async fn mount_delayed(server: &MockServer, title: &str, guid: &str, delay: Duration) {
-    Mock::given(method("GET"))
-        .and(path("/api"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(delay)
-                .set_body_string(newznab_response_with_title(title, guid)),
-        )
-        .mount(server)
-        .await;
+async fn request_count(server: &MockServer) -> usize {
+    server.received_requests().await.unwrap_or_default().len()
 }
 
 async fn mount_rate_limited(server: &MockServer) {
@@ -526,21 +518,18 @@ async fn mount_rate_limited(server: &MockServer) {
         .await;
 }
 
-async fn request_count(server: &MockServer) -> usize {
-    server.received_requests().await.unwrap_or_default().len()
-}
-
-async fn wait_for_request_or_terminal(
-    server: &MockServer,
+/// Waits until the job's indexer request is held by `server`, asserting the
+/// job stays running meanwhile. `baseline` is the server's count before the job.
+async fn wait_for_held_request(
+    server: &GatedHttpServer,
+    baseline: usize,
     app: &AppUseCase,
     user: &User,
     job_id: &str,
-    deadline: Duration,
 ) {
-    let started = Instant::now();
-    while started.elapsed() < deadline {
-        if request_count(server).await > 0 {
-            return;
+    wait_until("the job's indexer request to reach the gated server", || async {
+        if server.received() > baseline {
+            return true;
         }
         let snapshot = app
             .interactive_release_search(user, job_id)
@@ -552,10 +541,9 @@ async fn wait_for_request_or_terminal(
             InteractiveReleaseSearchState::Running,
             "interactive search ended before its indexer request reached the test server: {snapshot:?}"
         );
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-
-    panic!("expected the indexer request to reach the test server within {deadline:?}");
+        false
+    })
+    .await;
 }
 
 fn indexer_status<'a>(
@@ -569,8 +557,8 @@ fn indexer_status<'a>(
         .unwrap_or_else(|| panic!("indexer {indexer_id} missing from snapshot: {snapshot:?}"))
 }
 
-/// Poll the job until `predicate` holds or `deadline` elapses; returns the
-/// last snapshot either way so callers assert with full context.
+/// Poll the job until `predicate` holds and return that snapshot. Panics with
+/// the last snapshot if `deadline` elapses first.
 async fn wait_for_snapshot(
     app: &AppUseCase,
     user: &User,
@@ -585,9 +573,13 @@ async fn wait_for_snapshot(
             .await
             .expect("poll interactive release search")
             .expect("job should be present in registry");
-        if predicate(&snapshot) || started.elapsed() > deadline {
+        if predicate(&snapshot) {
             return snapshot;
         }
+        assert!(
+            started.elapsed() < deadline,
+            "interactive search did not reach the expected state within {deadline:?}: {snapshot:?}"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 }
@@ -598,8 +590,11 @@ async fn wait_for_snapshot(
 async fn fast_indexer_results_stream_in_before_slow_indexer_completes() {
     let fast = MockServer::start().await;
     mount_healthy(&fast, "Paperman.2012.1080p.WEB-DL-FASTGRP", "fast-1").await;
-    let slow = MockServer::start().await;
-    mount_healthy(&slow, "Paperman.2012.720p.WEB-DL-SLOWGRP", "slow-1").await;
+    let slow = GatedHttpServer::start(
+        newznab_response_with_title("Paperman.2012.720p.WEB-DL-SLOWGRP", "slow-1"),
+        true,
+    )
+    .await;
 
     let now = chrono::Utc::now();
     let (app, user) = setup_app(vec![
@@ -620,17 +615,10 @@ async fn fast_indexer_results_stream_in_before_slow_indexer_completes() {
     .await
     .expect("warmup search");
 
-    // Now make the slow indexer slow. The delay must stay comfortably under
-    // the 12s per-request indexer search timeout or the slow indexer times
-    // out and finishes Failed instead of Completed.
-    slow.reset().await;
-    mount_delayed(
-        &slow,
-        "Paperman.2012.720p.WEB-DL-SLOWGRP",
-        "slow-1",
-        Duration::from_secs(8),
-    )
-    .await;
+    // Now hold the slow indexer's answer until the early partial is observed.
+    // The hold must stay under the 12s per-request indexer search timeout or
+    // the slow indexer times out and finishes Failed instead of Completed.
+    slow.set_open(false);
 
     let start = app
         .start_interactive_release_search(&user, title_request(&title_id))
@@ -641,9 +629,13 @@ async fn fast_indexer_results_stream_in_before_slow_indexer_completes() {
 
     // Early partial: the fast indexer's release lands while the slow one is
     // still searching.
-    let early = wait_for_snapshot(&app, &user, &start.id, Duration::from_secs(5), |snapshot| {
-        !snapshot.results.is_empty()
-    })
+    let early = wait_for_snapshot(
+        &app,
+        &user,
+        &start.id,
+        Duration::from_secs(30),
+        |snapshot| !snapshot.results.is_empty(),
+    )
     .await;
     assert!(
         !early.results.is_empty(),
@@ -658,6 +650,7 @@ async fn fast_indexer_results_stream_in_before_slow_indexer_completes() {
         indexer_status(&early, "slow-b").status,
         InteractiveReleaseSearchIndexerStatus::Searching
     );
+    slow.set_open(true);
 
     let done = wait_for_snapshot(
         &app,
@@ -761,8 +754,11 @@ async fn rate_limited_indexer_is_marked_failed_and_healthy_results_survive() {
 
 #[tokio::test]
 async fn cancel_mid_flight_stops_job_and_outbound_requests() {
-    let slow = MockServer::start().await;
-    mount_healthy(&slow, "Paperman.2012.1080p.WEB-DL-GRP", "slow-1").await;
+    let slow = GatedHttpServer::start(
+        newznab_response_with_title("Paperman.2012.1080p.WEB-DL-GRP", "slow-1"),
+        true,
+    )
+    .await;
 
     let now = chrono::Utc::now();
     let (app, user) = setup_app(vec![indexer_config(
@@ -785,21 +781,16 @@ async fn cancel_mid_flight_stops_job_and_outbound_requests() {
     .await
     .expect("warmup search");
 
-    slow.reset().await;
-    mount_delayed(
-        &slow,
-        "Paperman.2012.1080p.WEB-DL-GRP",
-        "slow-1",
-        Duration::from_secs(6),
-    )
-    .await;
+    // Hold every request from here on, so the job's request stays in flight.
+    slow.set_open(false);
+    let baseline = slow.received();
 
     let start = app
         .start_interactive_release_search(&user, title_request(&title_id))
         .await
         .expect("start job");
-    // Cancel only after the delayed request is in flight.
-    wait_for_request_or_terminal(&slow, &app, &user, &start.id, Duration::from_secs(10)).await;
+    // Cancel only after the held request is in flight.
+    wait_for_held_request(&slow, baseline, &app, &user, &start.id).await;
 
     let cancelled = app
         .cancel_interactive_release_search(&user, &start.id)
@@ -807,9 +798,13 @@ async fn cancel_mid_flight_stops_job_and_outbound_requests() {
         .expect("cancel job");
     assert!(cancelled, "running job should accept the cancel");
 
-    let snapshot = wait_for_snapshot(&app, &user, &start.id, Duration::from_secs(5), |snapshot| {
-        snapshot.state == InteractiveReleaseSearchState::Cancelled
-    })
+    let snapshot = wait_for_snapshot(
+        &app,
+        &user,
+        &start.id,
+        Duration::from_secs(30),
+        |snapshot| snapshot.state == InteractiveReleaseSearchState::Cancelled,
+    )
     .await;
     assert_eq!(snapshot.state, InteractiveReleaseSearchState::Cancelled);
     assert!(snapshot.completed_at.is_some());
@@ -821,13 +816,16 @@ async fn cancel_mid_flight_stops_job_and_outbound_requests() {
         .expect("second cancel");
     assert!(!again);
 
-    // No further outbound requests after the cancel settles.
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let settled = request_count(&slow).await;
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // Release the request the cancelled job left in flight and wait until the
+    // server has answered it, so a job that kept going would now have the
+    // response it needs to send a follow-up.
+    let held = slow.received() - baseline;
+    let answered = slow.answered();
+    slow.set_open(true);
+    slow.wait_for_answered(answered + held).await;
     assert_eq!(
-        request_count(&slow).await,
-        settled,
+        slow.received(),
+        baseline + held,
         "request count should stop growing after cancel"
     );
 }
@@ -836,12 +834,10 @@ async fn cancel_mid_flight_stops_job_and_outbound_requests() {
 
 #[tokio::test]
 async fn same_scope_restart_cancels_previous_job() {
-    let slow = MockServer::start().await;
-    mount_delayed(
-        &slow,
-        "Paperman.2012.1080p.WEB-DL-GRP",
-        "slow-1",
-        Duration::from_secs(5),
+    // Closed for the whole test, so the first job can never finish on its own.
+    let slow = GatedHttpServer::start(
+        newznab_response_with_title("Paperman.2012.1080p.WEB-DL-GRP", "slow-1"),
+        false,
     )
     .await;
 
@@ -859,7 +855,7 @@ async fn same_scope_restart_cancels_previous_job() {
         .start_interactive_release_search(&user, title_request(&title_id))
         .await
         .expect("start first job");
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    wait_for_held_request(&slow, 0, &app, &user, &first.id).await;
     let second = app
         .start_interactive_release_search(&user, title_request(&title_id))
         .await
@@ -1109,7 +1105,7 @@ async fn graphql_start_poll_and_cancel_after_completion() {
 
     // Poll until the job reaches a terminal state (no indexers are configured
     // in the shared TestContext, so this settles almost immediately).
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::WAIT_UNTIL_TIMEOUT;
     let final_state = loop {
         let poll_body = schema_exec(
             &ctx,
@@ -1124,9 +1120,13 @@ async fn graphql_start_poll_and_cancel_after_completion() {
         assert!(!job.is_null(), "job should be pollable: {poll_body}");
         assert_eq!(job["id"], json!(job_id));
         let state = job["state"].as_str().expect("state").to_string();
-        if state != "RUNNING" || Instant::now() > deadline {
+        if state != "RUNNING" {
             break state;
         }
+        assert!(
+            Instant::now() < deadline,
+            "interactive search stayed RUNNING: {poll_body}"
+        );
         tokio::time::sleep(Duration::from_millis(100)).await;
     };
     assert_eq!(final_state, "COMPLETED");

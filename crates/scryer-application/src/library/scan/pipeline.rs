@@ -1050,8 +1050,9 @@ async fn handle_candidate_job_event(
             }
             ctx.summary.scanned += 1;
             ctx.summary.skipped += 1;
-            ctx.coordinator.mark_title_match_completed(1).await;
-            ctx.coordinator.publish_progress().await;
+            ctx.coordinator
+                .mark_title_match_completed_and_publish(1)
+                .await;
         }
         ScanCandidateJobEvent::EvidenceDone { .. } => {
             // The coordinator consumes this lifecycle event directly.
@@ -1484,8 +1485,7 @@ async fn dispatch_media_work(
     let counted_files = reservation.file_count();
     if counted_files > 0 {
         *media_file_total_counted = (*media_file_total_counted).saturating_add(counted_files);
-        coordinator.add_file_total(counted_files).await;
-        coordinator.publish_progress().await;
+        coordinator.add_file_total_and_publish(counted_files).await;
     }
 
     match hydration.submit(reservation).await? {
@@ -1961,13 +1961,17 @@ impl<'a> CandidateJobRunner<'a> {
                             .scan_directory(target_str.as_str())
                             .await
                     }
-                    LibraryScanPipelineKind::Series => app
-                        .services
-                        .library
-                        .library_scanner
-                        .scan_directory_for_progress_with_metrics(target_str.as_str())
+                    // An empty inventory is re-verified before it is trusted:
+                    // a shared-folder mount can answer a readdir with an empty
+                    // listing and no error under concurrent scan load.
+                    LibraryScanPipelineKind::Series => {
+                        scan_episodic_title_directory_for_progress_metrics(
+                            app.services.library.library_scanner.clone(),
+                            target.as_path(),
+                        )
                         .await
-                        .map(|scan| scan.files),
+                        .map(|scan| scan.files)
+                    }
                 };
 
                 let event = match result {

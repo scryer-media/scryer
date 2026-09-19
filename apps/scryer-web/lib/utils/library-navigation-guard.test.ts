@@ -60,6 +60,7 @@ async function waitForPathname(router: DataRouter, pathname: string) {
     return;
   }
   await new Promise<void>((resolve, reject) => {
+    // A hang guard only: the wait ends on the router's own state change.
     const timer = setTimeout(() => {
       unsubscribe();
       reject(
@@ -67,7 +68,7 @@ async function waitForPathname(router: DataRouter, pathname: string) {
           `navigation to ${pathname} never completed; still at ${router.state.location.pathname}`,
         ),
       );
-    }, 500);
+    }, 30_000);
     const unsubscribe = router.subscribe((state) => {
       if (state.location.pathname === pathname) {
         clearTimeout(timer);

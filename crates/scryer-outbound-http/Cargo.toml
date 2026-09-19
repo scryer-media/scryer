@@ -1,6 +1,6 @@
 [package]
 name = "scryer-outbound-http"
-version = "0.21.4"
+version = "0.21.5"
 edition.workspace = true
 
 [dependencies]
@@ -9,6 +9,10 @@ edition.workspace = true
 # the hyper-util `client-proxy` feature it already enables unconditionally.
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "http2", "gzip", "brotli", "deflate", "zstd", "blocking", "socks"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs", "logging", "std", "tls12"] }
+# Same verifier reqwest builds internally for its rustls backend; taken as a
+# direct dependency so the platform root store is loaded once per process
+# instead of once per client build.
+rustls-platform-verifier = { version = "0.7", default-features = false }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

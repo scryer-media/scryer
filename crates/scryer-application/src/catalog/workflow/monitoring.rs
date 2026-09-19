@@ -74,10 +74,7 @@ fn monitor_selection_external_ids_from_movie_entity(
     .into_iter()
     .filter_map(|(source, value)| {
         let value = value?.trim();
-        (!value.is_empty()).then(|| ExternalId {
-            source: source.to_string(),
-            value: value.to_string(),
-        })
+        (!value.is_empty()).then(|| ExternalId::new(source.to_string(), value.to_string()))
     })
     .collect()
 }
@@ -95,10 +92,7 @@ fn monitor_selection_external_ids_from_anime_movie(movie: &AnimeMovie) -> Vec<Ex
     .into_iter()
     .filter_map(|(source, value)| {
         let value = value?.trim().to_string();
-        (!value.is_empty()).then(|| ExternalId {
-            source: source.to_string(),
-            value,
-        })
+        (!value.is_empty()).then(|| ExternalId::new(source.to_string(), value))
     })
     .collect()
 }

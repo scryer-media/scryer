@@ -38,10 +38,7 @@ fn pending_import_title_request(facet: MediaFacet, name: &str, tvdb_id: &str) ->
         facet,
         monitored: false,
         tags: Vec::new(),
-        external_ids: vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: tvdb_id.to_string(),
-        }],
+        external_ids: vec![ExternalId::new("tvdb".to_string(), tvdb_id.to_string())],
         root_folder_id: None,
         min_availability: None,
         poster_url: None,
@@ -184,12 +181,7 @@ async fn seed_series_title(
         tags: vec![],
         canonical_tags: vec![],
         external_ids: tvdb_id
-            .map(|value| {
-                vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: value.to_string(),
-                }]
-            })
+            .map(|value| vec![ExternalId::new("tvdb".to_string(), value.to_string())])
             .unwrap_or_default(),
         root_folder_id,
         created_by: None,

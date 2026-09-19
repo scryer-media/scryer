@@ -1011,10 +1011,10 @@ async fn load_media_request_external_ids(
     .await?;
     rows.iter()
         .map(|row| {
-            Ok(ExternalId {
-                source: row.text("source")?,
-                value: row.text("external_id")?,
-            })
+            Ok(ExternalId::new(
+                row.text("source")?,
+                row.text("external_id")?,
+            ))
         })
         .collect()
 }

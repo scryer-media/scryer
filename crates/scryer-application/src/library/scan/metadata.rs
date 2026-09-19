@@ -952,9 +952,8 @@ where
                 count_candidates_with_metadata_lookup(&ready_candidates, candidate_keys)?;
             if ready_lookup_count > 0 {
                 coordinator
-                    .mark_metadata_completed(ready_lookup_count)
+                    .mark_metadata_completed_and_publish(ready_lookup_count)
                     .await;
-                coordinator.publish_progress().await;
             }
             ready_batches.push(ready_candidates);
             continue;
@@ -3876,7 +3875,10 @@ mod tests {
         assert_eq!(scanner.scan_library_call_count(), 0);
     }
 
-    #[tokio::test]
+    // Paused clock: the gateway, the cancel trigger and the bound are all
+    // virtual timers, so the cancel always lands at 25 ms, before the 150 ms
+    // bound and the 500 ms gateway answer, however loaded the runner is.
+    #[tokio::test(start_paused = true)]
     async fn execute_batch_metadata_searches_returns_quickly_after_cancel() {
         let gateway = Arc::new(DelayedBatchMetadataGateway::new(Duration::from_millis(500)));
         let cancel_token = CancellationToken::new();

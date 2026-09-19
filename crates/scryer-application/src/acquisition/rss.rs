@@ -937,9 +937,100 @@ impl AppUseCase {
         age_unknown_pending.then_some(due)
     }
 
+    /// The scheduler's pre-flight for an RSS tick: the same three gates the
+    /// cycle opens with, asked before a run record or any domain event exists.
+    ///
+    /// The worker's tick is deliberately faster than the RSS cadence, so most
+    /// ticks are refused here. Every read is one the cycle would make anyway,
+    /// so a refused tick is strictly cheaper than it used to be, and an
+    /// admitted one pays for the due check twice — once every cadence, not
+    /// every tick.
+    /// A refused tick still reports itself where a heartbeat belongs — the
+    /// same `scryer_rss_sync_total` outcomes the cycle used to record, so the
+    /// counters an operator watches read exactly as before while the database
+    /// stops growing for them.
+    pub(crate) async fn rss_sync_tick_has_work(&self) -> bool {
+        let tick_start = std::time::Instant::now();
+        let refuse = |outcome: &'static str| {
+            metrics::counter!("scryer_rss_sync_total", "outcome" => outcome).increment(1);
+            metrics::histogram!("scryer_rss_sync_duration_seconds")
+                .record(tick_start.elapsed().as_secs_f64());
+            false
+        };
+
+        if !super::acquisition_workflow::has_enabled_indexers(self).await {
+            debug!("RSS sync: no enabled indexers configured, skipping");
+            return refuse("no_indexers");
+        }
+        if !super::acquisition_workflow::has_enabled_download_clients(self).await {
+            debug!("RSS sync: no enabled download clients configured, skipping indexer search");
+            return refuse("no_clients");
+        }
+        if self.rss_cycle_due_indexers().await.is_none() {
+            debug!("RSS sync: no indexer is due and nothing is pending, skipping");
+            return refuse("not_due");
+        }
+        true
+    }
+
+    /// The scheduler's pre-flight for the pending-release tick.
+    ///
+    /// The job itself only reports; the re-evaluation happens inside the RSS
+    /// cycle. With nothing parked there is nothing to report on, and a run
+    /// record saying so every minute is the scheduler's heartbeat rather than
+    /// the workflow's state. Anything that fails to answer is treated as
+    /// "there is work", so a broken read degrades to the old always-record
+    /// behaviour.
+    pub(crate) async fn pending_release_tick_has_work(&self) -> bool {
+        let waiting = self
+            .services
+            .workflow
+            .pending_releases
+            .list_waiting_pending_releases()
+            .await
+            .map(|pending| !pending.is_empty())
+            .unwrap_or(true);
+        if waiting {
+            return true;
+        }
+        self.services
+            .workflow
+            .pending_releases
+            .list_active_release_age_unknown_pending_releases()
+            .await
+            .map(|pending| !pending.is_empty())
+            .unwrap_or(true)
+    }
+
     pub(crate) async fn run_scheduled_rss_sync(&self) -> AppResult<RssSyncReport> {
         let now = Utc::now();
         let sync_start = std::time::Instant::now();
+
+        // Cheapest gate first, and ahead of every other read this function
+        // makes. With no enabled indexer there is nothing to poll at all, and
+        // the due check below would still say "poll" — an empty due set and an
+        // empty deferred set is indistinguishable from "nothing is known yet",
+        // which deliberately warrants a poll. One config list keeps a tick from
+        // touching the catalog.
+        if !super::acquisition_workflow::has_enabled_indexers(self).await {
+            debug!("RSS sync: no enabled indexers configured, skipping");
+            metrics::counter!("scryer_rss_sync_total", "outcome" => "no_indexers").increment(1);
+            metrics::histogram!("scryer_rss_sync_duration_seconds")
+                .record(sync_start.elapsed().as_secs_f64());
+            return Ok(RssSyncReport::default());
+        }
+
+        // Nothing an indexer could be asked for can be acted on without a
+        // download client, so the client gate runs before the catalog load
+        // too: it used to sit just after it, which cost a full
+        // `list_for_matching` on every tick of an instance with no clients.
+        if !super::acquisition_workflow::has_enabled_download_clients(self).await {
+            debug!("RSS sync: no enabled download clients configured, skipping indexer search");
+            metrics::counter!("scryer_rss_sync_total", "outcome" => "no_clients").increment(1);
+            metrics::histogram!("scryer_rss_sync_duration_seconds")
+                .record(sync_start.elapsed().as_secs_f64());
+            return Ok(RssSyncReport::default());
+        }
 
         // Nothing to ask an indexer and nothing held back to re-evaluate means
         // this whole cycle — every monitored title, every anime numbering
@@ -967,13 +1058,6 @@ impl AppUseCase {
             .titles
             .list_for_matching(None, None)
             .await?;
-        if !super::acquisition_workflow::has_enabled_download_clients(self).await {
-            warn!("RSS sync: no enabled download clients configured, skipping indexer search");
-            metrics::counter!("scryer_rss_sync_total", "outcome" => "no_clients").increment(1);
-            metrics::histogram!("scryer_rss_sync_duration_seconds")
-                .record(sync_start.elapsed().as_secs_f64());
-            return Ok(RssSyncReport::default());
-        }
 
         // Union each monitored library's effective routing. Its overrides have
         // already replaced facet defaults and must not be re-enabled by them.
@@ -3486,10 +3570,10 @@ mod tests {
         let mut title = make_title("native", "静かな夜に遠い空を見上げる物語", Some(2019));
         title.metadata_language = Some("jpn".to_string());
         title.imdb_id = Some("tt1234567".to_string());
-        title.external_ids.push(scryer_domain::ExternalId {
-            source: "tmdb".to_string(),
-            value: "42".to_string(),
-        });
+        title.external_ids.push(scryer_domain::ExternalId::new(
+            "tmdb".to_string(),
+            "42".to_string(),
+        ));
         let bank = build_title_context_bank(std::slice::from_ref(&title));
         let raw = "静かな夜に遠い海を見上げる物語.2019.1080p.WEB.H265-GRP";
         let mut attributes = IndexerResponseAttributes::default();
@@ -4189,10 +4273,10 @@ mod tests {
         // A2(2) on the RSS lane: the release name is the same coin flip, but the
         // indexer asserted the live-action title's own TVDB id.
         let mut live_action = make_series_title("tide-chart-live", "Tide Chart", Some(2023));
-        live_action.external_ids = vec![scryer_domain::ExternalId {
-            source: "tvdb".to_string(),
-            value: "393199".to_string(),
-        }];
+        live_action.external_ids = vec![scryer_domain::ExternalId::new(
+            "tvdb".to_string(),
+            "393199".to_string(),
+        )];
         let mut anime = make_series_title("tide-chart-anime", "Tide Chart", Some(1999));
         anime.facet = MediaFacet::Anime;
         let bank = build_title_context_bank(&[live_action, anime]);

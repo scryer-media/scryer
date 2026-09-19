@@ -242,6 +242,17 @@ impl ConflictResolver {
             .clone()
     }
 
+    /// Test seam: companions currently subscribed to a media file's result,
+    /// so a test can tell a parked companion from one not yet polled far enough.
+    #[cfg(test)]
+    fn companions_waiting_on(&self, operation_id: &str, title_id: &str, source: &Path) -> usize {
+        self.media_results
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&(operation_id.into(), title_id.into(), source.to_path_buf()))
+            .map_or(0, MediaResultSender::receiver_count)
+    }
+
     async fn companion_destination(
         &self,
         request: FileMoveRequest<'_>,

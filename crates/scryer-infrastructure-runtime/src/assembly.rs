@@ -3504,10 +3504,7 @@ mod tests {
             monitored: true,
             tags: vec!["backup".to_string(), "lattice".to_string()],
             canonical_tags: vec![],
-            external_ids: vec![ExternalId {
-                source: "tmdb".to_string(),
-                value: "424242".to_string(),
-            }],
+            external_ids: vec![ExternalId::new("tmdb".to_string(), "424242".to_string())],
             root_folder_id: scryer_domain::root_folder_id_for_path("/data/movies"),
             created_by: None,
             created_at: chrono::Utc::now(),

@@ -7,3 +7,4 @@ pub mod sanitized_corpus;
 pub mod script_output;
 pub mod timestamp;
 pub mod types;
+pub mod writer_gate;

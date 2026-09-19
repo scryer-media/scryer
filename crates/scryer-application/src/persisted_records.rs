@@ -210,10 +210,7 @@ mod tests {
             monitored: true,
             tags: vec!["tag".to_string()],
             canonical_tags: vec![],
-            external_ids: vec![ExternalId {
-                source: "tvdb".to_string(),
-                value: "123".to_string(),
-            }],
+            external_ids: vec![ExternalId::new("tvdb".to_string(), "123".to_string())],
             created_by: None,
             created_at: parse_time("2026-01-01T00:00:00Z"),
             year: Some(2026),

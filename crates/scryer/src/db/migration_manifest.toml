@@ -2377,3 +2377,105 @@ kind = "sql"
 file = "postgres/migrations/0243_download_state_lookup_indexes.sql"
 engine = "postgres"
 scope = "all"
+
+[[migration]]
+version = 244
+description = "title external id kind"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0244_title_external_id_kind.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0244_title_external_id_kind.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 245
+description = "catalog episode progress media lookup"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0245_catalog_episode_progress_media_lookup.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0245_catalog_episode_progress_media_lookup.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 246
+description = "domain event stream index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0246_domain_event_stream_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0246_domain_event_stream_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 247
+description = "titles created_at index"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0247_titles_created_at_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0247_titles_created_at_index.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 248
+description = "dedupe repeated release decisions"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0248_dedupe_release_decisions.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0248_dedupe_release_decisions.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 249
+description = "index the title folder-ownership lookup"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0249_titles_library_folder_path_index.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0249_titles_library_folder_path_index.sql"
+engine = "postgres"
+scope = "all"

@@ -482,6 +482,17 @@ impl TransferHub {
         operation: &LocationOperation,
         stored_high_water: i64,
     ) -> (i64, Option<i64>) {
+        self.progress_at(operation, stored_high_water, Instant::now())
+    }
+
+    /// `progress` against a caller-supplied clock reading, so tests can pin
+    /// the ETA window instead of racing the wall clock.
+    fn progress_at(
+        &self,
+        operation: &LocationOperation,
+        stored_high_water: i64,
+        now: Instant,
+    ) -> (i64, Option<i64>) {
         let success = matches!(
             operation.state,
             super::model::LocationOperationState::Completed
@@ -524,7 +535,6 @@ impl TransferHub {
             value.clamp(0, 9_999)
         };
         telemetry.high_water = telemetry.high_water.max(stored_high_water).max(value);
-        let now = Instant::now();
         telemetry.eta.add_useful(0, now);
         let abandoned = telemetry
             .abandoned_work
@@ -929,9 +939,9 @@ mod tests {
             .eta = eta;
         // 250 actual bytes earn progress; 550 abandoned work bytes earn none.
         // Healthy work has 1,200 bytes left at 100 useful bytes/second.
-        assert_eq!(hub.progress(&operation, 0), (1250, Some(12)));
+        assert_eq!(hub.progress_at(&operation, 0, now), (1250, Some(12)));
         hub.file_failed("op", "failed", "file", 100);
-        assert_eq!(hub.progress(&operation, 0), (1250, Some(12)));
+        assert_eq!(hub.progress_at(&operation, 0, now), (1250, Some(12)));
         hub.state
             .lock()
             .unwrap()
@@ -940,7 +950,7 @@ mod tests {
             .unwrap()
             .eta
             .last_useful = now - Duration::from_secs(31);
-        assert_eq!(hub.progress(&operation, 0), (1250, None));
+        assert_eq!(hub.progress_at(&operation, 0, now), (1250, None));
     }
 
     #[test]

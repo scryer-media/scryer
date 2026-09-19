@@ -444,10 +444,7 @@ async fn fix_title_match_conflicts_are_scoped_to_the_title_library_and_facet() {
                 name: "Rematch Target".to_string(),
                 facet: MediaFacet::Movie,
                 monitored: true,
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "111001".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "111001".to_string())],
                 year: Some(2020),
                 overview: Some("metadata that should reset".to_string()),
                 ..Default::default()
@@ -464,10 +461,7 @@ async fn fix_title_match_conflicts_are_scoped_to_the_title_library_and_facet() {
                 name: "Other Library Identity".to_string(),
                 facet: MediaFacet::Movie,
                 monitored: true,
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "222002".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "222002".to_string())],
                 ..Default::default()
             },
             second_library.id.clone(),
@@ -482,10 +476,7 @@ async fn fix_title_match_conflicts_are_scoped_to_the_title_library_and_facet() {
                 name: "Same Library Conflict".to_string(),
                 facet: MediaFacet::Movie,
                 monitored: true,
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "333003".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "333003".to_string())],
                 ..Default::default()
             },
             default_library_id,
@@ -948,10 +939,7 @@ async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library(
                 name: "Snapshot Identity A".to_string(),
                 facet: MediaFacet::Movie,
                 monitored: true,
-                external_ids: vec![ExternalId {
-                    source: "tmdb".to_string(),
-                    value: "998731".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tmdb".to_string(), "998731".to_string())],
                 ..Default::default()
             },
             default_library_id.clone(),
@@ -966,10 +954,7 @@ async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library(
                 name: "Snapshot Identity B".to_string(),
                 facet: MediaFacet::Movie,
                 monitored: false,
-                external_ids: vec![ExternalId {
-                    source: "tmdb".to_string(),
-                    value: "998731".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tmdb".to_string(), "998731".to_string())],
                 ..Default::default()
             },
             second_library.id.clone(),
@@ -1084,10 +1069,7 @@ async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library(
                 name: "Snapshot Retry Identity".to_string(),
                 facet: MediaFacet::Movie,
                 monitored: true,
-                external_ids: vec![ExternalId {
-                    source: "tmdb".to_string(),
-                    value: "777001".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tmdb".to_string(), "777001".to_string())],
                 ..Default::default()
             },
             second_library.id.clone(),
@@ -1130,10 +1112,7 @@ async fn external_import_monitor_snapshot_emits_title_updated_without_actor() {
                 facet: MediaFacet::Series,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "4242".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "4242".to_string())],
                 min_availability: None,
                 ..Default::default()
             },
@@ -1239,10 +1218,7 @@ async fn external_import_monitor_snapshot_applies_series_child_monitoring() {
                 facet: MediaFacet::Series,
                 monitored: false,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "5252".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "5252".to_string())],
                 min_availability: None,
                 ..Default::default()
             },
@@ -1343,10 +1319,7 @@ async fn external_import_monitor_snapshot_emits_title_updated_for_child_only_cha
                 facet: MediaFacet::Series,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "6262".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "6262".to_string())],
                 min_availability: None,
                 ..Default::default()
             },
@@ -1460,10 +1433,7 @@ async fn external_import_monitor_snapshot_enables_collection_for_monitored_episo
                 facet: MediaFacet::Series,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "7373".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "7373".to_string())],
                 min_availability: None,
                 ..Default::default()
             },

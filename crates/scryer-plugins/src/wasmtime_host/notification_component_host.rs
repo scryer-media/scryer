@@ -829,9 +829,11 @@ pub(crate) mod tests {
             let _ = stream.read_exact(&mut probe);
             let _ = stream.write_all(SOCKET_REPLY);
             let _ = stream.flush();
-            // Hold the connection open until the guest has read; dropping the
-            // listener side early would race the read with a FIN.
-            std::thread::sleep(Duration::from_millis(250));
+            // Hold the connection open until the peer closes it, so a read can
+            // never race a FIN from this side. The read timeout is a hang guard.
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+            let mut rest = [0_u8; 64];
+            while matches!(stream.read(&mut rest), Ok(n) if n > 0) {}
         });
         (port, handle)
     }
@@ -1023,6 +1025,8 @@ pub(crate) mod tests {
         let response = process_notification_component(&spec, &send_request(), invocation())
             .await
             .expect("the fixture component must complete one process exchange");
+        // Dropping the host closes the guest's socket, which releases the listener.
+        drop(spec);
         listener.join().ok();
 
         let PluginResult::Ok(response) = send_result(response) else {

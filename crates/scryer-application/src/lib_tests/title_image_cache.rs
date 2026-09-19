@@ -30,7 +30,7 @@ impl GatedJpegCache {
     }
 
     async fn wait_started(&self, count: usize) {
-        timeout(Duration::from_secs(5), async {
+        timeout(TEST_WAIT_DEADLINE, async {
             while self.started.load(Ordering::SeqCst) < count {
                 sleep(Duration::from_millis(5)).await;
             }
@@ -117,13 +117,11 @@ async fn artwork_jpegs_obey_schedule_admission_shutdown_and_failure_bounds() {
                 .unwrap()
         });
         cache.wait_started(workers).await;
-        sleep(Duration::from_millis(20)).await;
+        // Every worker is parked on the gate, so no further item can start;
+        // the `workers + 8` total below proves none did.
         assert_eq!(cache.started.load(Ordering::SeqCst), workers);
         stop.cancel();
-        let summary = timeout(Duration::from_secs(5), task)
-            .await
-            .unwrap()
-            .unwrap();
+        let summary = timeout(TEST_WAIT_DEADLINE, task).await.unwrap().unwrap();
         assert_eq!(summary.processed, 0);
         assert_eq!(cache.pending.lock().await.len(), 8);
 
@@ -179,10 +177,7 @@ async fn artwork_jpeg_cutoff_drains_only_admitted_work() {
         .environment
         .set_fixed_now_for_tests(Some(artwork_local_time(9, 0)));
     cache.gate.add_permits(2);
-    let summary = timeout(Duration::from_secs(5), task)
-        .await
-        .unwrap()
-        .unwrap();
+    let summary = timeout(TEST_WAIT_DEADLINE, task).await.unwrap().unwrap();
     assert_eq!((summary.processed, summary.failed), (1, 1));
     assert_eq!(cache.started.load(Ordering::SeqCst), 2);
     assert_eq!(cache.pending.lock().await.len(), 7);
@@ -208,6 +203,11 @@ async fn clear_title_image_cache_collapses_duplicate_requests_and_waits_for_scan
         .await
         .expect("scan should start");
 
+    let idle_waiters_before = app
+        .runtime
+        .library
+        .library_scan_tracker
+        .subscription_count();
     assert!(
         app.clear_title_image_cache(&admin)
             .await
@@ -219,7 +219,18 @@ async fn clear_title_image_cache_collapses_duplicate_requests_and_waits_for_scan
             .expect("collapse queued reset")
     );
 
-    sleep(Duration::from_millis(50)).await;
+    // The reset has parked on the scan tracker: it had every chance to clear.
+    wait_until(
+        "the queued reset to park behind the active scan",
+        || async {
+            app.runtime
+                .library
+                .library_scan_tracker
+                .subscription_count()
+                > idle_waiters_before
+        },
+    )
+    .await;
     assert_eq!(
         title_images.clear_calls.load(Ordering::SeqCst),
         0,
@@ -234,12 +245,15 @@ async fn clear_title_image_cache_collapses_duplicate_requests_and_waits_for_scan
         .expect("scan should finish");
     wait_for_title_image_clear_calls(&title_images, 1).await;
 
+    // The request path spawns exactly this refresh. Driving it directly
+    // proves the collapse without racing a detached task against the release.
     assert!(
-        app.clear_title_image_cache(&admin)
-            .await
-            .expect("collapse running reset")
+        matches!(
+            app.run_title_image_cache_refresh().await,
+            Err(AppError::Validation(_))
+        ),
+        "a reset requested while one runs must collapse into it"
     );
-    sleep(Duration::from_millis(50)).await;
     assert_eq!(
         title_images.clear_calls.load(Ordering::SeqCst),
         1,
@@ -426,7 +440,7 @@ async fn wait_for_image_processor_starts(
     processor: &ChunkGatedTitleImageProcessor,
     expected: usize,
 ) {
-    timeout(Duration::from_secs(5), async {
+    timeout(TEST_WAIT_DEADLINE, async {
         while processor.started.load(Ordering::SeqCst) < expected {
             sleep(Duration::from_millis(5)).await;
         }
@@ -473,10 +487,19 @@ async fn artwork_job_yields_maintenance_lock_between_bounded_groups() {
         writer_acquired_for_task.notify_one();
         release_writer_for_task.notified().await;
     });
-    sleep(Duration::from_millis(25)).await;
+    // A queued writer takes every free permit, so a read can no longer be
+    // granted: that is the writer parked behind the image group's read guard.
+    wait_until("the maintenance writer to queue on the lock", || async {
+        app.runtime
+            .catalog
+            .title_image_maintenance_lock
+            .try_read()
+            .is_err()
+    })
+    .await;
 
     processor.first_chunk_gate.add_permits(CHUNK_SIZE);
-    timeout(Duration::from_secs(5), writer_acquired.notified())
+    timeout(TEST_WAIT_DEADLINE, writer_acquired.notified())
         .await
         .expect("maintenance writer should acquire after the first image chunk");
     assert_eq!(
@@ -489,7 +512,7 @@ async fn artwork_job_yields_maintenance_lock_between_bounded_groups() {
     writer.await.expect("maintenance writer should finish");
     wait_for_image_processor_starts(&processor, CHUNK_SIZE + 4).await;
     processor.second_chunk_gate.add_permits(CHUNK_SIZE);
-    timeout(Duration::from_secs(5), async {
+    timeout(TEST_WAIT_DEADLINE, async {
         while title_images.pending_count().await != 0 {
             sleep(Duration::from_millis(5)).await;
         }
@@ -498,7 +521,7 @@ async fn artwork_job_yields_maintenance_lock_between_bounded_groups() {
     .expect("both image chunks should finish");
 
     cancellation.cancel();
-    timeout(Duration::from_secs(5), image_loop)
+    timeout(TEST_WAIT_DEADLINE, image_loop)
         .await
         .expect("image loop should stop after cancellation")
         .expect("image loop task should not panic")
@@ -568,16 +591,14 @@ async fn artwork_cutoff_finishes_admitted_images_and_resumes_pending_work() {
                 .unwrap()
         });
         wait_for_image_processor_starts(&processor, workers).await;
-        sleep(Duration::from_millis(25)).await;
+        // Every admitted image is parked on the gate; the eight-start total
+        // after the next run proves nothing beyond `workers` was admitted.
         assert_eq!(processor.started.load(Ordering::SeqCst), workers);
         app.runtime
             .environment
             .set_fixed_now_for_tests(Some(artwork_local_time(9, 0)));
         processor.first_chunk_gate.add_permits(4);
-        let summary = timeout(Duration::from_secs(5), task)
-            .await
-            .unwrap()
-            .unwrap();
+        let summary = timeout(TEST_WAIT_DEADLINE, task).await.unwrap().unwrap();
         assert_eq!(summary.processed, workers);
         assert_eq!(images.pending_count().await, 8 - workers);
         assert!(summary.reason.contains("nightly"));
@@ -629,7 +650,7 @@ async fn artwork_manual_and_scheduled_triggers_share_one_run_even_at_noon() {
     assert_eq!(jobs.runs.lock().await.len(), 1);
     processor.first_chunk_gate.add_permits(4);
     processor.second_chunk_gate.add_permits(4);
-    timeout(Duration::from_secs(5), async {
+    timeout(TEST_WAIT_DEADLINE, async {
         while app
             .runtime
             .jobs
@@ -647,7 +668,9 @@ async fn artwork_manual_and_scheduled_triggers_share_one_run_even_at_noon() {
     assert_eq!(records[0].status, JobRunStatus::Completed);
 }
 
-#[tokio::test]
+// Paused clock: the sleep below returns only once every task is idle, so the
+// loop has handled both wakeups before the negative checks run.
+#[tokio::test(start_paused = true)]
 async fn artwork_scheduler_does_not_turn_daytime_wakeups_into_encoding() {
     let (app, _) = bootstrap();
     let images = Arc::new(ChunkedTitleImageRepo::new(8));
@@ -741,10 +764,7 @@ async fn artwork_scheduler_retries_transient_errors_without_bypassing_cutoff() {
             );
         }
         token.cancel();
-        timeout(Duration::from_secs(5), worker)
-            .await
-            .unwrap()
-            .unwrap();
+        timeout(TEST_WAIT_DEADLINE, worker).await.unwrap().unwrap();
     }
 }
 
@@ -789,7 +809,9 @@ async fn artwork_scheduler_bounds_retries_of_persistent_repository_errors() {
     worker.await.unwrap();
 }
 
-#[tokio::test]
+// Paused clock: a sleep returns only once every task is idle, so a job that
+// would admit more work during the scan pause has done so before the check.
+#[tokio::test(start_paused = true)]
 async fn artwork_scan_pause_rechecks_cutoff_and_shutdown_abandons_active_images() {
     for shutdown in [false, true] {
         let (app, _) = bootstrap();
@@ -848,17 +870,17 @@ async fn artwork_scan_pause_rechecks_cutoff_and_shutdown_abandons_active_images(
             .fail_session(&scan.session_id)
             .await
             .unwrap();
-        let summary = timeout(Duration::from_secs(5), task)
-            .await
-            .unwrap()
-            .unwrap();
+        let summary = timeout(TEST_WAIT_DEADLINE, task).await.unwrap().unwrap();
         assert_eq!(summary.processed, if shutdown { 0 } else { 2 });
         assert_eq!(images.pending_count().await, if shutdown { 8 } else { 6 });
         assert_eq!(processor.started.load(Ordering::SeqCst), 2);
     }
 }
 
-#[tokio::test]
+// Paused clock: a sleep returns only once every task is idle, so the closed
+// window has been evaluated and every admission has parked on its gate
+// before each check.
+#[tokio::test(start_paused = true)]
 async fn artwork_scheduler_starts_inside_window_and_after_a_sleep_or_clock_jump() {
     for initially_open in [false, true] {
         let (app, _) = bootstrap();
@@ -897,10 +919,7 @@ async fn artwork_scheduler_starts_inside_window_and_after_a_sleep_or_clock_jump(
         assert!(matches!(admitted, 2 | 4));
         token.cancel();
         app.runtime.catalog.artwork_shutdown.cancelled().await;
-        timeout(Duration::from_secs(5), worker)
-            .await
-            .unwrap()
-            .unwrap();
+        timeout(TEST_WAIT_DEADLINE, worker).await.unwrap().unwrap();
         assert_eq!(processor.started.load(Ordering::SeqCst), admitted);
         assert_eq!(images.pending_count().await, 8);
     }
@@ -923,7 +942,7 @@ async fn artwork_shutdown_abandons_in_flight_images_and_closes_future_admission(
     wait_for_image_processor_starts(&processor, 2).await;
     app.runtime.catalog.artwork_shutdown.cancel();
     let admitted = processor.started.load(Ordering::SeqCst);
-    timeout(Duration::from_secs(5), async {
+    timeout(TEST_WAIT_DEADLINE, async {
         while app
             .runtime
             .jobs
@@ -994,7 +1013,7 @@ async fn artwork_failures_remain_pending_and_priority_failure_never_starts_image
         app.trigger_job(&admin, JobKey::ArtworkEncoding)
             .await
             .unwrap();
-        timeout(Duration::from_secs(5), async {
+        timeout(TEST_WAIT_DEADLINE, async {
             while app
                 .runtime
                 .jobs

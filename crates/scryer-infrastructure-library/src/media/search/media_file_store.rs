@@ -904,29 +904,8 @@ impl MediaFileRepository for MediaFileStore {
             .map(|id| SqlArg::Text(id.to_string()))
             .collect();
 
-        // Episode monitoring is authoritative; a season does not veto an
-        // individually monitored episode. Keep the collection ownership join.
-        let episode_sql = format!(
-            "SELECT e.id AS episode_id, e.title_id, t.library_id, t.facet,
-                    e.collection_id, e.season_number, e.episode_number, e.air_date,
-                    t.created_at AS title_created_at
-               FROM episodes e
-              INNER JOIN titles t ON t.id = e.title_id
-              INNER JOIN collections c ON c.id = e.collection_id AND c.title_id = t.id
-              WHERE {} AND {}
-                {title_filter}
-                AND t.deleted_at IS NULL
-                AND NOT EXISTS (
-                    SELECT 1 FROM file_episode_map fem
-                     INNER JOIN media_files mf ON mf.id = fem.file_id
-                     WHERE fem.episode_id = e.id
-                       AND fem.role = 'primary'
-                       AND {live_file}
-                )
-              ORDER BY e.id",
-            title_monitoring,
-            bool_column_is_true(dialect, "e.monitored"),
-        );
+        let episode_sql =
+            missing_scope_episode_sql(dialect, &title_monitoring, title_filter, &live_file);
         let episodes = SqlRuntime::fetch_all(self.datastore.read_exec(), &episode_sql, &args)
             .await?
             .iter()
@@ -2576,6 +2555,40 @@ async fn execute_write(
     .await
 }
 
+/// The missing-episode anti-join, built once so the planner shape can be
+/// asserted in a test without going through the repository method.
+///
+/// Episode monitoring is authoritative; a season does not veto an
+/// individually monitored episode. Keep the collection ownership join.
+fn missing_scope_episode_sql(
+    dialect: SqlDialect,
+    title_monitoring: &str,
+    title_filter: &str,
+    live_file: &str,
+) -> String {
+    format!(
+        "SELECT e.id AS episode_id, e.title_id, t.library_id, t.facet,
+                e.collection_id, e.season_number, e.episode_number, e.air_date,
+                t.created_at AS title_created_at
+           FROM episodes e
+          INNER JOIN titles t ON t.id = e.title_id
+          INNER JOIN collections c ON c.id = e.collection_id AND c.title_id = t.id
+          WHERE {} AND {}
+            {title_filter}
+            AND t.deleted_at IS NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM file_episode_map fem
+                 INNER JOIN media_files mf ON mf.id = fem.file_id
+                 WHERE fem.episode_id = e.id
+                   AND fem.role = 'primary'
+                   AND {live_file}
+            )
+          ORDER BY e.id",
+        title_monitoring,
+        bool_column_is_true(dialect, "e.monitored"),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2590,6 +2603,63 @@ mod tests {
         Collection, CollectionType, Episode, MediaFacet, MovieEntity, SeriesMovieLink, Title,
     };
     use scryer_infrastructure_datastore::SqliteServices;
+
+    /// A single-title missing-scope derivation must be driven by the episode
+    /// index on `title_id`, not by a full scan of `episodes`. The catalog-wide
+    /// form of this query reads the whole btree by design (it has no filter to
+    /// narrow it); the per-title form is what interactive and per-title
+    /// acquisition work runs, and it must stay bounded as the catalog grows.
+    #[tokio::test]
+    async fn single_title_missing_episode_query_uses_the_title_index() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_missing_scope_plan_{}.db",
+            Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("sqlite services should initialize");
+
+        let live_file = format!(
+            "{} AND mf.scan_status <> 'review_required'",
+            live_media_file_predicate(SqlDialect::Sqlite, "mf")
+        );
+        let sql = missing_scope_episode_sql(
+            SqlDialect::Sqlite,
+            &bool_column_is_true(SqlDialect::Sqlite, "t.monitored"),
+            "AND t.id = {}",
+            &live_file,
+        );
+
+        let datastore = services.datastore();
+        let plan = SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            &format!("EXPLAIN QUERY PLAN {sql}"),
+            &[SqlArg::Text("some-title".to_string())],
+        )
+        .await
+        .expect("query plan should explain");
+        let plan_text = plan
+            .iter()
+            .map(|row| row.text("detail").expect("plan detail should read"))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        assert!(
+            !plan_text.contains("SCAN e"),
+            "the per-title missing-episode query must not scan all episodes; plan was:\n{plan_text}"
+        );
+        assert!(
+            plan_text.contains("SEARCH e USING INDEX idx_episodes_title"),
+            "the per-title missing-episode query should drive off idx_episodes_title; \
+             plan was:\n{plan_text}"
+        );
+        assert!(
+            !plan_text.contains("SCAN fem") && !plan_text.contains("SCAN mf"),
+            "the primary-file anti-join must stay indexed; plan was:\n{plan_text}"
+        );
+
+        let _ = std::fs::remove_file(db);
+    }
 
     #[cfg(windows)]
     #[test]

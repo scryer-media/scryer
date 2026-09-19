@@ -107,10 +107,14 @@ if ($manifestValidationExitCode -eq -1978335192) {
   throw "Generated winget manifest validation failed with exit code $manifestValidationExitCode."
 }
 
+# A real uninstall runs `scryer-tray --uninstall-cleanup`, which removes the
+# desktop profile but keeps a backups folder that still holds anything.
 $desktopProfile = Join-Path $env:LOCALAPPDATA "ScryerMedia\Scryer"
-$profileMarker = Join-Path $desktopProfile "preserve-on-uninstall.txt"
-New-Item -ItemType Directory -Force -Path $desktopProfile | Out-Null
-"preserve me" | Set-Content $profileMarker
+$profileMarker = Join-Path $desktopProfile "removed-on-uninstall.txt"
+$backupMarker = Join-Path $desktopProfile "backups\kept-on-uninstall.txt"
+New-Item -ItemType Directory -Force -Path (Split-Path $backupMarker) | Out-Null
+"remove me" | Set-Content $profileMarker
+"keep me" | Set-Content $backupMarker
 $msiProductCode = Get-PublishedMsiProductCode -ManifestDirectory $manifestDirectory
 
 $installed = $false
@@ -128,8 +132,11 @@ try {
       throw "MSI cleanup failed with exit code $($uninstall.ExitCode)."
     }
     Assert-PublishedMsiRemoval
-    if (-not (Test-Path $profileMarker)) {
-      throw "MSI uninstall removed Scryer desktop user data at $profileMarker."
+    if (Test-Path $profileMarker) {
+      throw "MSI uninstall left Scryer desktop profile data at $profileMarker."
+    }
+    if (-not (Test-Path $backupMarker)) {
+      throw "MSI uninstall removed a Scryer backup at $backupMarker."
     }
   }
 }

@@ -2508,15 +2508,16 @@ fn build_bulk_artwork_url_query(movie_ids: &[i64], series_ids: &[i64], language:
 #[cfg(test)]
 mod tests {
     use super::{
-        ArtworkItem, InstanceAuth, MetadataGatewayClient, MetadataSearchQuery, MovieItem,
-        MovieTitleRef, MtlsState, OP_DISCOVER_PUBLIC_FEED, OP_GET_MOVIE, OP_GET_SERIES,
-        OP_METADATA_BULK, OP_SEARCH_TVDB, OP_SEARCH_TVDB_BATCH, OP_SEARCH_TVDB_MULTI,
-        OP_SEARCH_TVDB_RICH, SearchTvdbBatchResult, SearchTvdbResponse, SeriesItem,
-        SmgEnrollmentConfig, apply_instance_auth_headers_with_nonce, apq_cache_key, apq_hash,
-        build_bulk_artwork_url_query, build_search_tvdb_batch_query, canonical_request_host,
-        canonical_request_path_and_query, compatibility_poll_phase, enrollment_retry_delay,
-        is_version_incompatible_response, map_metadata_gateway_outbound_error,
-        movie_metadata_from_item, next_version_compatibility_poll_delay_at, normalize_artwork_url,
+        ArtworkItem, InstanceAuth, MetadataExternalIdItem, MetadataGatewayClient,
+        MetadataSearchQuery, MovieItem, MovieTitleRef, MtlsState, OP_DISCOVER_PUBLIC_FEED,
+        OP_GET_MOVIE, OP_GET_SERIES, OP_METADATA_BULK, OP_SEARCH_TVDB, OP_SEARCH_TVDB_BATCH,
+        OP_SEARCH_TVDB_MULTI, OP_SEARCH_TVDB_RICH, SearchTvdbBatchResult, SearchTvdbResponse,
+        SeriesItem, SmgEnrollmentConfig, apply_instance_auth_headers_with_nonce, apq_cache_key,
+        apq_hash, build_bulk_artwork_url_query, build_search_tvdb_batch_query,
+        canonical_request_host, canonical_request_path_and_query, compatibility_poll_phase,
+        enrollment_retry_delay, external_ids_from_gateway, is_version_incompatible_response,
+        map_metadata_gateway_outbound_error, movie_metadata_from_item,
+        next_version_compatibility_poll_delay_at, normalize_artwork_url,
         normalize_optional_artwork_url, parse_version_compatibility_incompatible,
         parse_version_compatibility_success, pick_artwork_url, series_metadata_from_item,
         sha256_hex, validate_search_tvdb_batch_echo,
@@ -2528,6 +2529,40 @@ mod tests {
         DiscoverySubjectInput, MetadataGateway, TitleCredit,
     };
     use serde_json::json;
+
+    #[test]
+    fn gateway_external_ids_carry_the_entity_kind() {
+        let items: Vec<MetadataExternalIdItem> = serde_json::from_value(json!([
+            {"source": "tvdb", "kind": "Series", "id": "307111", "key": "tvdb:series:307111"},
+            {"source": "anidb", "kind": "anime", "id": "11851", "key": "anidb:anime:11851"},
+            {"source": "smg", "kind": "title", "id": "3036496", "key": "smg:title:3036496"},
+            // A payload that carries only the composite key still yields a kind.
+            {"source": "tmdb", "id": "113082", "key": "tmdb:movie:113082"},
+            // An older gateway that sends neither stays kindless.
+            {"source": "trakt", "id": "9001"},
+            // Blank source or id is dropped as before.
+            {"source": "  ", "kind": "movie", "id": "1"},
+            {"source": "imdb", "kind": "movie", "id": "   "}
+        ]))
+        .expect("external id payload should deserialize");
+
+        let external_ids = external_ids_from_gateway(items);
+
+        assert_eq!(
+            external_ids
+                .iter()
+                .map(scryer_domain::ExternalId::key)
+                .collect::<Vec<_>>(),
+            vec![
+                "tvdb:series:307111".to_string(),
+                "anidb:anime:11851".to_string(),
+                "smg:title:3036496".to_string(),
+                "tmdb:movie:113082".to_string(),
+                "trakt:9001".to_string(),
+            ]
+        );
+        assert!(external_ids[4].kind.is_none());
+    }
     use std::sync::atomic::Ordering;
     use std::sync::{Arc, Mutex, OnceLock};
     use std::time::{Duration, SystemTime};
@@ -5675,18 +5710,51 @@ struct MovieItem {
 #[derive(Clone, Debug, Deserialize)]
 struct MetadataExternalIdItem {
     source: String,
+    /// The entity kind the id names at its source (`movie`, `series`,
+    /// `anime`, `title`, ...). SMG always selects it; a payload from an older
+    /// gateway may omit it.
+    #[serde(default)]
+    kind: Option<String>,
     id: String,
+    /// SMG's own `source:kind:id` rendering, used as the fallback when a
+    /// payload carries `key` but no separate `kind`.
+    #[serde(default)]
+    key: Option<String>,
+}
+
+impl MetadataExternalIdItem {
+    /// The kind SMG reported, falling back to the middle segment of `key`.
+    fn resolved_kind(&self) -> Option<String> {
+        if let Some(kind) = self
+            .kind
+            .as_deref()
+            .and_then(scryer_domain::normalize_external_id_kind)
+        {
+            return Some(kind);
+        }
+        let key = self.key.as_deref()?;
+        let mut segments = key.split(':');
+        let (_source, kind, id) = (segments.next()?, segments.next()?, segments.next()?);
+        if id.trim().is_empty() {
+            return None;
+        }
+        scryer_domain::normalize_external_id_kind(kind)
+    }
 }
 
 fn external_ids_from_gateway(items: Vec<MetadataExternalIdItem>) -> Vec<ExternalId> {
     items
         .into_iter()
         .filter_map(|item| {
+            let kind = item.resolved_kind();
             let source = item.source.trim();
             let value = item.id.trim();
-            (!source.is_empty() && !value.is_empty()).then(|| ExternalId {
-                source: source.to_string(),
-                value: value.to_string(),
+            if source.is_empty() || value.is_empty() {
+                return None;
+            }
+            Some(match kind {
+                Some(kind) => ExternalId::with_kind(source, kind, value),
+                None => ExternalId::new(source, value),
             })
         })
         .collect()

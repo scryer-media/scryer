@@ -1023,6 +1023,78 @@ async fn hold_replacement_for_manual_resolution(
     Ok(result)
 }
 
+/// The library row an earlier additional import created from this exact source
+/// video, when that copy still exists and its sampled content proof matches
+/// the source.
+///
+/// `additional_import_dest_path` mints a fresh " (N)" name whenever the previous
+/// one is taken, and `check_not_already_imported` only inspects the chosen
+/// destination, so a retried copy import of the same source would otherwise
+/// land as yet another numbered file every pass. Resolving the earlier copy as
+/// the destination lets the duplicate check reject the retry instead.
+///
+/// Path and size alone would also match a later download that reuses the same
+/// source path with different bytes, so the head/tail sampled proof (never a
+/// full read) has to agree too. A copy that is gone is simply no match; any
+/// other failure to read the evidence is an error, so the caller backs off
+/// instead of minting another destination on unverified state.
+async fn existing_additional_import_media_file(
+    app: &AppUseCase,
+    title: &scryer_domain::Title,
+    source_video: &Path,
+    source_size: i64,
+) -> AppResult<Option<crate::TitleMediaFile>> {
+    let source_key = path_to_stored_string(source_video);
+    let candidates = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await?
+        .into_iter()
+        .filter(|file| file.role == crate::MediaFileRole::Additional)
+        .filter(|file| file.original_file_path.as_deref() == Some(source_key.as_str()))
+        .filter(|file| file.size_bytes == source_size)
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+
+    let source_video = source_video.to_path_buf();
+    tokio::task::spawn_blocking(move || {
+        let mut source_proof = None;
+        for candidate in candidates {
+            let copy_path = Path::new(&candidate.file_path);
+            match std::fs::metadata(copy_path) {
+                Ok(metadata) if metadata.len() as i64 == source_size => {}
+                Ok(_) => continue,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(error) => {
+                    return Err(AppError::Repository(format!(
+                        "failed to stat earlier additional import {}: {error}",
+                        copy_path.display()
+                    )));
+                }
+            }
+            let source_proof = match source_proof.as_ref() {
+                Some(proof) => proof,
+                None => {
+                    source_proof.insert(crate::fs_integrity::import_content_proof(&source_video)?)
+                }
+            };
+            let copy_proof = crate::fs_integrity::import_content_proof(copy_path)?;
+            if copy_proof.size_bytes == source_proof.size_bytes
+                && copy_proof.sample_blake3 == source_proof.sample_blake3
+            {
+                return Ok(Some(candidate));
+            }
+        }
+        Ok(None)
+    })
+    .await
+    .map_err(|error| AppError::Repository(error.to_string()))?
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "additional movie imports share the normal movie path context without using the upgrade gate"
@@ -1063,7 +1135,28 @@ async fn import_additional_movie_download(
         };
         full_folder_path.join(&rendered_filename)
     };
-    let dest_path = additional_import_dest_path(&canonical_dest_path, parsed);
+    let prior_additional_file =
+        existing_additional_import_media_file(app, title, source_video, source_size).await?;
+    let dest_path = match prior_additional_file.as_ref() {
+        Some(prior) => PathBuf::from(&prior.file_path),
+        None => additional_import_dest_path(&canonical_dest_path, parsed),
+    };
+    // The duplicate check consults `existing_files` for move-mode ownership, and
+    // the caller only passes primary rows; include the prior additional row so
+    // a retry is refused as a duplicate under every import mode.
+    let check_existing_files = prior_additional_file
+        .as_ref()
+        .map(|prior| {
+            let mut files = existing_files.to_vec();
+            files.push(prior.clone());
+            files
+        })
+        .unwrap_or_default();
+    let existing_files = if prior_additional_file.is_some() {
+        check_existing_files.as_slice()
+    } else {
+        existing_files
+    };
     let linked_episode_artifacts = series_movie_context
         .map(|context| context.linked_episode_artifacts)
         .unwrap_or(&[]);

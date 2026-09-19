@@ -97,6 +97,8 @@ type ExternalAccountInvitesPanelProps = {
     event: React.FormEvent<HTMLFormElement>,
   ) => Promise<void> | void;
   showMediaServersLink?: boolean;
+  unlinkExternalAccount: (id: string) => Promise<void>;
+  unlinkingAccountId: string | null;
 };
 
 function providerLabel(provider: ExternalAccountProvider): string {
@@ -433,6 +435,8 @@ export function ExternalAccountInvitesPanel({
   externalInviteSubmitting,
   updateExternalInviteDraft,
   createExternalAccountInvite,
+  unlinkExternalAccount,
+  unlinkingAccountId,
   showMediaServersLink = false,
 }: ExternalAccountInvitesPanelProps) {
   const t = useTranslate();
@@ -647,18 +651,21 @@ export function ExternalAccountInvitesPanel({
                   <TableHead className={cn("w-36", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
                     {t("settings.externalAccountInviteLastLogin")}
                   </TableHead>
+                  <TableHead className={cn("w-32 text-right", EXTERNAL_INVITES_TABLE_HEADER_CELL_CLASS)}>
+                    {t("label.actions")}
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground">
+                    <TableCell colSpan={8} className="text-muted-foreground">
                       {t("label.loading")}
                     </TableCell>
                   </TableRow>
                 ) : sortedInvites.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={7} className="text-muted-foreground">
+                    <TableCell colSpan={8} className="text-muted-foreground">
                       {t("settings.noExternalAccountInvites")}
                     </TableCell>
                   </TableRow>
@@ -704,6 +711,23 @@ export function ExternalAccountInvitesPanel({
                         </TableCell>
                         <TableCell>
                           {formatTimestamp(invite.lastLoginAt, dateTimeFormat)}
+                        </TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            id={selectorId("settings-external-account-invite-unlink", invite.id)}
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={unlinkingAccountId !== null}
+                            onClick={() => void unlinkExternalAccount(invite.id)}
+                          >
+                            {unlinkingAccountId === invite.id ? (
+                              <LoadingMark className="h-4 w-4" />
+                            ) : null}
+                            {invite.status === "PENDING_CLAIM"
+                              ? t("label.cancel")
+                              : t("profile.unlinkAccount")}
+                          </Button>
                         </TableCell>
                       </TableRow>
                     );

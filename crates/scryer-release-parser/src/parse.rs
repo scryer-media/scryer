@@ -6513,6 +6513,26 @@ fn parse_parenthetical_standard_after_absolute_at(
     None
 }
 
+/// Is the token at `index` a bare number sitting in its own hyphen-delimited
+/// slot (` - NNN - `)?
+///
+/// Sonarr renames anime episodes as `Show - SxxEyy - NNN - Episode Title`, so a
+/// number fenced by hyphens on both sides is the absolute episode number rather
+/// than a range endpoint. A genuine spaced range (`Show S01E01 - 03 [1080p]`)
+/// is followed by metadata or nothing at all, never by another hyphenated
+/// segment.
+fn is_delimited_absolute_number_slot(tokens: &[Token], index: usize) -> bool {
+    let Some(token) = tokens.get(index) else {
+        return false;
+    };
+    if token.normalized.is_empty() || !token.normalized.bytes().all(|byte| byte.is_ascii_digit()) {
+        return false;
+    }
+    tokens
+        .get(index + 1)
+        .is_some_and(|following| following.separator_before == SeparatorKind::Hyphen)
+}
+
 fn parse_hyphenated_standard_episode_range_at(
     tokens: &[Token],
     index: usize,
@@ -6524,6 +6544,14 @@ fn parse_hyphenated_standard_episode_range_at(
     }
     let next = tokens.get(index + 1)?;
     if next.separator_before != SeparatorKind::Hyphen {
+        return Some((season, episode_numbers, index));
+    }
+    if is_delimited_absolute_number_slot(tokens, index + 1) {
+        // Sonarr's anime layout writes the absolute episode number in its own
+        // ` - NNN - ` slot: `Show (1997) - S02E01 - 083 - Episode Title`. That
+        // number is a second coordinate for the *same* episode, not the far end
+        // of a range, and reading it as one silently widens one file into a
+        // season-sized pack that nothing downstream can place.
         return Some((season, episode_numbers, index));
     }
     let range_end = parse_episode_component(next.normalized.as_str()).or_else(|| {

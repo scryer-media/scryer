@@ -18,7 +18,12 @@ use crate::types::{
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(20);
 const MAX_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
+#[cfg(not(test))]
 const OUTPUT_READER_JOIN_TIMEOUT: Duration = Duration::from_secs(1);
+/// Unit tests only: on a loaded runner a reader thread can lag well past a
+/// second behind its child's exit, which would turn a success into IoFailed.
+#[cfg(test)]
+const OUTPUT_READER_JOIN_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_STDIN_BYTES: usize = 64 * 1024;
 const MAX_OUTPUT_BYTES: usize = 512 * 1024;
 const MAX_ARGS: usize = 128;
@@ -569,7 +574,7 @@ mod tests {
             env,
             working_directory: None,
             stdin_base64: None,
-            timeout_ms: Some(5_000),
+            timeout_ms: Some(MAX_TIMEOUT.as_millis() as u64),
         };
 
         let state = ProcessHostState::new(vec!["/usr/bin/env".to_string()]);

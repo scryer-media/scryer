@@ -1568,12 +1568,13 @@ mod tests {
     }
 
     /// A probe blocked inside a hung mount answers nothing; the preview must
-    /// say "unknown" and move on rather than wait on it.
-    struct HungProbe(std::time::Duration);
+    /// say "unknown" and move on rather than wait on it. It stays blocked until
+    /// the test drops the sender, so a late answer can never race the bound.
+    struct HungProbe(std::sync::Mutex<std::sync::mpsc::Receiver<()>>);
 
     impl VolumeProbe for HungProbe {
         fn volume_id(&self, _path: &Path) -> Option<VolumeId> {
-            std::thread::sleep(self.0);
+            let _ = self.0.lock().expect("hung probe gate").recv();
             Some(VolumeId("late".to_string()))
         }
 
@@ -1591,18 +1592,20 @@ mod tests {
             recycled_bytes: 10,
             recycle_base_path: None,
         };
-        let started = std::time::Instant::now();
-        let estimate = estimate_free_space_within(
-            request.clone(),
-            HungProbe(std::time::Duration::from_millis(400)),
-            std::time::Duration::from_millis(20),
+        let (release_probe, probe_gate) = std::sync::mpsc::channel();
+        // The probe never answers while the estimate runs, so only the bound
+        // can end it; a preview that waited on the probe would hang here.
+        let estimate = crate::test_wait::within_deadline(
+            "the preview to give up on the hung probe",
+            estimate_free_space_within(
+                request.clone(),
+                HungProbe(std::sync::Mutex::new(probe_gate)),
+                std::time::Duration::from_millis(20),
+            ),
         )
         .await;
+        drop(release_probe);
         assert_eq!(estimate, FreeSpaceEstimate::unknown());
-        assert!(
-            started.elapsed() < std::time::Duration::from_millis(300),
-            "the preview waited on the hung probe"
-        );
 
         // A probe that answers in time is the ordinary estimate, unchanged.
         let quick = FakeProbe {
@@ -1611,7 +1614,7 @@ mod tests {
         };
         let expected = estimate_free_space(&request, &quick);
         let bounded =
-            estimate_free_space_within(request, quick, std::time::Duration::from_secs(5)).await;
+            estimate_free_space_within(request, quick, crate::test_wait::TEST_WAIT_DEADLINE).await;
         assert_eq!(bounded, expected);
     }
 }

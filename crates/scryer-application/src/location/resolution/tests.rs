@@ -509,7 +509,7 @@ async fn a_companion_uses_the_longest_matching_media_stem() {
     resolve(&resolver, &title, 1).await.unwrap();
     // The shorter prefix has not run: waiting for it would stall this sibling.
     let companion = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+        crate::test_wait::TEST_WAIT_DEADLINE,
         resolve(&resolver, &title, 2),
     )
     .await
@@ -615,6 +615,32 @@ async fn resolve_with(
         .await
 }
 
+/// Drives `companion` until it has subscribed to its media file's result, then
+/// polls it once more: Pending is then a real "still waiting", not a future
+/// that simply has not been polled far enough to settle yet.
+async fn assert_companion_parked<F>(
+    resolver: &ConflictResolver,
+    title: &PlannedTitle,
+    mut companion: std::pin::Pin<&mut F>,
+    message: &str,
+) where
+    F: std::future::Future<Output = AppResult<VerifiedFile>>,
+{
+    tokio::select! {
+        biased;
+        settled = companion.as_mut() => {
+            panic!("{message}: settled early (ok = {})", settled.is_ok())
+        }
+        () = crate::test_wait::wait_until("the companion to wait on its media file", || async {
+            resolver.companions_waiting_on("op", &title.title_id, &title.files[0].source_path) > 0
+        }) => {}
+    }
+    assert!(
+        futures_util::poll!(tokio::task::unconstrained(companion.as_mut())).is_pending(),
+        "{message}"
+    );
+}
+
 /// A movie with one subtitle, neither of which exists at the destination yet.
 fn media_with_subtitle(temp: &tempfile::TempDir) -> (ConflictResolver, PlannedTitle) {
     let (_, resolver, mut title) = fixture(temp);
@@ -650,17 +676,18 @@ async fn a_transient_media_failure_keeps_its_companions_waiting_for_the_retry() 
 
     let companion = resolve_with(&resolver, &outage, &title, 1);
     tokio::pin!(companion);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(200), &mut companion)
-            .await
-            .is_err(),
-        "the subtitle must not settle while its media file is still being retried"
-    );
+    assert_companion_parked(
+        &resolver,
+        &title,
+        companion.as_mut(),
+        "the subtitle must not settle while its media file is still being retried",
+    )
+    .await;
 
     resolve_with(&resolver, &outage, &title, 0)
         .await
         .expect("the retry places the media file");
-    let subtitle = tokio::time::timeout(std::time::Duration::from_secs(5), companion)
+    let subtitle = tokio::time::timeout(crate::test_wait::TEST_WAIT_DEADLINE, companion)
         .await
         .expect("the placed media file releases its companion")
         .expect("the companion follows the media file");
@@ -681,14 +708,16 @@ async fn an_abandoned_media_file_releases_its_waiting_companions() {
         .expect_err("the media file never places");
     let companion = resolve_with(&resolver, &outage, &title, 1);
     tokio::pin!(companion);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(200), &mut companion)
-            .await
-            .is_err()
-    );
+    assert_companion_parked(
+        &resolver,
+        &title,
+        companion.as_mut(),
+        "the companion must wait while its media file is unplaced",
+    )
+    .await;
 
     resolver.media_abandoned("op", &title, &title.files[0], FileAbandonment::GivenUp);
-    let error = tokio::time::timeout(std::time::Duration::from_secs(5), companion)
+    let error = tokio::time::timeout(crate::test_wait::TEST_WAIT_DEADLINE, companion)
         .await
         .expect("abandoning the media file releases its companion")
         .expect_err("a companion of a media file that never moved does not move");
@@ -713,14 +742,16 @@ async fn a_media_file_canceled_while_waiting_releases_its_companions_as_canceled
         .expect_err("the media file meets the outage");
     let companion = resolve_with(&resolver, &outage, &title, 1);
     tokio::pin!(companion);
-    assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(200), &mut companion)
-            .await
-            .is_err()
-    );
+    assert_companion_parked(
+        &resolver,
+        &title,
+        companion.as_mut(),
+        "the companion must wait while its media file is unplaced",
+    )
+    .await;
 
     resolver.media_abandoned("op", &title, &title.files[0], FileAbandonment::Canceled);
-    let error = tokio::time::timeout(std::time::Duration::from_secs(5), companion)
+    let error = tokio::time::timeout(crate::test_wait::TEST_WAIT_DEADLINE, companion)
         .await
         .expect("a canceled media file releases its companion")
         .expect_err("a companion of a media file that never moved does not move");

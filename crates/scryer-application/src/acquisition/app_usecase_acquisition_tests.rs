@@ -171,19 +171,25 @@ fn unknown_availability_treated_as_announced() {
     ));
 }
 
-#[tokio::test]
+// Paused clock: the test owns time, so "missed four ticks" and "no catch-up
+// tick waiting" hold exactly instead of depending on how late the runner wakes.
+#[tokio::test(start_paused = true)]
 async fn skip_interval_does_not_replay_missed_poll_ticks_in_a_burst() {
-    let mut interval = new_skip_interval(std::time::Duration::from_millis(50));
+    let period = std::time::Duration::from_millis(50);
+    let mut interval = new_skip_interval(period);
+    let start = interval.tick().await;
+
+    tokio::time::advance(std::time::Duration::from_millis(220)).await;
     interval.tick().await;
 
-    tokio::time::sleep(std::time::Duration::from_millis(220)).await;
-    interval.tick().await;
-
-    let next_tick =
-        tokio::time::timeout(std::time::Duration::from_millis(10), interval.tick()).await;
     assert!(
-        next_tick.is_err(),
+        futures_util::poll!(std::pin::pin!(interval.tick())).is_pending(),
         "skip interval should not have an immediate catch-up tick waiting"
+    );
+    assert_eq!(
+        interval.tick().await - start,
+        period * 5,
+        "the next tick lands on the schedule, skipping the missed ones"
     );
 }
 

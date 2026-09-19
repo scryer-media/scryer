@@ -121,28 +121,20 @@ impl EpisodeDeleteFixture {
     }
 
     /// Poll the media-file deletion runs until `run_id` reaches a terminal
-    /// status. Bounded so a job that never finishes fails fast instead of
-    /// hanging the suite.
+    /// status, under the shared hang guard.
     async fn wait_for_run(&self, run_id: &str) -> JobRun {
-        timeout(Duration::from_secs(5), async {
-            loop {
-                let run = self
-                    .app
+        wait_for(
+            "the episode file deletion job to reach a terminal status",
+            || async {
+                self.app
                     .list_job_runs(&self.admin, JobKey::MediaFileDeletion, 10)
                     .await
                     .expect("list media file deletion runs")
                     .into_iter()
-                    .find(|run| run.id == run_id);
-                if let Some(run) = run
-                    && run.status.is_terminal()
-                {
-                    return run;
-                }
-                sleep(Duration::from_millis(25)).await;
-            }
-        })
+                    .find(|run| run.id == run_id && run.status.is_terminal())
+            },
+        )
         .await
-        .expect("episode file deletion job should reach a terminal status")
     }
 
     async fn remaining_file_ids(&self) -> Vec<String> {

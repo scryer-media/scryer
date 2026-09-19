@@ -1291,10 +1291,7 @@ async fn graphql_location_operation_preview_surfaces_the_merge_summary() {
         "Twin Film (Restored)",
         &destination_library_id,
         &destination_root_id,
-        vec![ExternalId {
-            source: "tmdb".to_string(),
-            value: "424242".to_string(),
-        }],
+        vec![ExternalId::new("tmdb".to_string(), "424242".to_string())],
     )
     .await;
 
@@ -1303,10 +1300,7 @@ async fn graphql_location_operation_preview_surfaces_the_merge_summary() {
         &ctx,
         "Twin Film",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tmdb".to_string(),
-            value: "424242".to_string(),
-        }],
+        vec![ExternalId::new("tmdb".to_string(), "424242".to_string())],
         vec![],
         true,
     )
@@ -1396,10 +1390,7 @@ async fn graphql_an_ambiguous_destination_identity_names_its_candidates() {
         "Split A",
         &destination_library_id,
         &destination_root_id,
-        vec![ExternalId {
-            source: "tmdb".to_string(),
-            value: "111".to_string(),
-        }],
+        vec![ExternalId::new("tmdb".to_string(), "111".to_string())],
     )
     .await;
     let second = title_in_library(
@@ -1407,10 +1398,7 @@ async fn graphql_an_ambiguous_destination_identity_names_its_candidates() {
         "Split B",
         &destination_library_id,
         &destination_root_id,
-        vec![ExternalId {
-            source: "imdb".to_string(),
-            value: "tt222".to_string(),
-        }],
+        vec![ExternalId::new("imdb".to_string(), "tt222".to_string())],
     )
     .await;
 
@@ -1420,14 +1408,8 @@ async fn graphql_an_ambiguous_destination_identity_names_its_candidates() {
         "Split Source",
         MediaFacet::Movie,
         vec![
-            ExternalId {
-                source: "tmdb".to_string(),
-                value: "111".to_string(),
-            },
-            ExternalId {
-                source: "imdb".to_string(),
-                value: "tt222".to_string(),
-            },
+            ExternalId::new("tmdb".to_string(), "111".to_string()),
+            ExternalId::new("imdb".to_string(), "tt222".to_string()),
         ],
         vec![],
         true,

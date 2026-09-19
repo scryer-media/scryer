@@ -13,14 +13,8 @@ fn sample_title() -> Title {
         tags: vec![],
         canonical_tags: vec![],
         external_ids: vec![
-            ExternalId {
-                source: "tvdb".to_string(),
-                value: "123".to_string(),
-            },
-            ExternalId {
-                source: "imdb".to_string(),
-                value: "tt456".to_string(),
-            },
+            ExternalId::new("tvdb".to_string(), "123".to_string()),
+            ExternalId::new("imdb".to_string(), "tt456".to_string()),
         ],
         created_by: None,
         created_at: Utc::now(),

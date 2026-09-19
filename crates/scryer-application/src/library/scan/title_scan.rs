@@ -1249,8 +1249,9 @@ impl LibraryScanMediaAnalysisPool {
         if reservation.file_count > 0
             && let Some(coordinator) = self.coordinator.as_ref()
         {
-            coordinator.mark_file_failed(reservation.file_count).await;
-            coordinator.publish_progress().await;
+            coordinator
+                .mark_file_failed_and_publish(reservation.file_count)
+                .await;
         }
     }
 
@@ -1385,8 +1386,9 @@ impl LibraryScanMediaAnalysisPool {
                 && self.file_total_mode == LibraryScanFileTotalMode::BackgroundRefreshAggregate
                 && let Some(coordinator) = self.coordinator.as_ref()
             {
-                coordinator.add_file_total(discovered_file_count).await;
-                coordinator.publish_progress().await;
+                coordinator
+                    .add_file_total_and_publish(discovered_file_count)
+                    .await;
             }
             self.analysis_ready
                 .push_back(QueuedLibraryScanTitleAnalysisWork { work, coverage });
@@ -1531,8 +1533,7 @@ impl LibraryScanMediaAnalysisPool {
         }
 
         if let Some(coordinator) = self.coordinator.as_ref() {
-            coordinator.mark_file_total_known().await;
-            coordinator.publish_progress().await;
+            coordinator.mark_file_total_known_and_publish().await;
         }
         self.file_total_known_marked = true;
         Ok(())
@@ -1655,8 +1656,9 @@ async fn hydrate_enumerate_and_walk_title_work(
                     && ctx.file_total_mode == LibraryScanFileTotalMode::BackgroundRefreshAggregate
                     && let Some(coordinator) = ctx.coordinator.as_ref()
                 {
-                    coordinator.add_file_total(known_file_count).await;
-                    coordinator.publish_progress().await;
+                    coordinator
+                        .add_file_total_and_publish(known_file_count)
+                        .await;
                 }
             }
             Err(error) => return (known_file_count, Err(error)),
@@ -1701,11 +1703,16 @@ async fn enumerate_library_scan_title_work(
     Ok(work)
 }
 
-type TitleScanAnalysisTaskResult = AppResult<(
-    PlannedTitleScanFile,
-    crate::media::discs::CataloguedMediaAnalysis,
-    Duration,
-)>;
+/// The outcome of one file's analysis task.
+///
+/// The plan travels back out with the analysis result so that a failure can
+/// be attributed to the file it belongs to. Returning a bare `Err` would end
+/// the whole title walk and drop every file still queued behind it.
+struct TitleScanAnalysisTaskResult {
+    plan: PlannedTitleScanFile,
+    analysis: AppResult<crate::media::discs::CataloguedMediaAnalysis>,
+    elapsed: Duration,
+}
 
 fn launch_pending_title_scan_analysis_tasks(
     analysis_set: &mut tokio::task::JoinSet<TitleScanAnalysisTaskResult>,
@@ -1726,20 +1733,38 @@ fn launch_pending_title_scan_analysis_tasks(
         let file_path = plan.file.path.clone();
         analysis_set.spawn(async move {
             tracing::debug!(file_path = %file_path, "title scan analysis task: start");
-            let _permit = analysis_limit
+            let analysis_started = Instant::now();
+            let permit = analysis_limit
                 .acquire_owned()
                 .await
-                .map_err(|error| AppError::Repository(error.to_string()))?;
-            let analysis_started = Instant::now();
+                .map_err(|error| AppError::Repository(error.to_string()));
+            let _permit = match permit {
+                Ok(permit) => permit,
+                Err(error) => {
+                    return TitleScanAnalysisTaskResult {
+                        plan,
+                        analysis: Err(error),
+                        elapsed: analysis_started.elapsed(),
+                    };
+                }
+            };
             let file_id = match &plan.record {
                 PlannedTitleScanRecord::Existing { file_id, .. } => Some(file_id.as_str()),
                 PlannedTitleScanRecord::New => None,
             };
-            let outcome = app
+            let analysis = app
                 .analyze_catalogued_media_file(file_id, stored_path_to_path_buf(&file_path))
-                .await?;
-            tracing::debug!(file_path = %file_path, "title scan analysis task: complete");
-            Ok::<_, AppError>((plan, outcome, analysis_started.elapsed()))
+                .await;
+            tracing::debug!(
+                file_path = %file_path,
+                failed = analysis.is_err(),
+                "title scan analysis task: complete"
+            );
+            TitleScanAnalysisTaskResult {
+                plan,
+                analysis,
+                elapsed: analysis_started.elapsed(),
+            }
         });
     }
 }
@@ -1762,13 +1787,32 @@ async fn finalize_title_scan_analysis_task_result(
     ctx: TitleScanAnalysisFinalizeContext<'_>,
     result: Result<TitleScanAnalysisTaskResult, tokio::task::JoinError>,
 ) -> AppResult<Duration> {
-    let (plan, analysis_outcome, analysis_duration) =
-        result.map_err(|error| AppError::Repository(error.to_string()))??;
+    let TitleScanAnalysisTaskResult {
+        plan,
+        analysis,
+        elapsed: analysis_duration,
+    } = result.map_err(|error| AppError::Repository(error.to_string()))?;
     if library_scan_cancel_requested(ctx.cancel_token) {
         return Ok(analysis_duration);
     }
 
     let file_path = plan.file.path.clone();
+    // One file's analysis failing is that file's problem. The file is still
+    // catalogued (without analysis details) and marked scan_failed with the
+    // real error, and the walk carries on with the rest of the title.
+    let analysis_outcome = match analysis {
+        Ok(outcome) => Some(outcome),
+        Err(error) => {
+            warn!(
+                error = %error,
+                title_id = %ctx.title.id,
+                title_name = %ctx.title.name,
+                file_path = %file_path,
+                "media analysis failed for one file during title scan; continuing with the title"
+            );
+            return finalize_failed_title_scan_analysis(ctx, plan, error, analysis_duration).await;
+        }
+    };
     debug!(
         title_id = %ctx.title.id,
         title_name = %ctx.title.name,
@@ -1779,7 +1823,7 @@ async fn finalize_title_scan_analysis_task_result(
         ctx.app,
         ctx.title,
         plan,
-        Some(analysis_outcome),
+        analysis_outcome,
         ctx.scan_mode.clone(),
         ctx.episode_links,
         ctx.summary,
@@ -1812,6 +1856,76 @@ async fn finalize_title_scan_analysis_task_result(
         file_path = %file_path,
         "title scan stage: finalize file complete"
     );
+
+    Ok(analysis_duration)
+}
+
+/// Record one file's failed analysis without ending the title walk.
+///
+/// The file is still catalogued, so it stays visible and importable the way
+/// Sonarr keeps a file whose media info could not be read, and its record is
+/// flagged `scan_failed` with the real error. The delta counts the file as
+/// failed so the scan's progress reports it instead of silently losing it.
+async fn finalize_failed_title_scan_analysis(
+    ctx: TitleScanAnalysisFinalizeContext<'_>,
+    plan: PlannedTitleScanFile,
+    error: AppError,
+    analysis_duration: Duration,
+) -> AppResult<Duration> {
+    let file_path = plan.file.path.clone();
+    let outcome = finalize_title_scan_file(
+        ctx.app,
+        ctx.title,
+        plan,
+        None,
+        ctx.scan_mode.clone(),
+        ctx.episode_links,
+        ctx.summary,
+        ctx.db_elapsed,
+        ctx.external_subtitle_cache,
+    )
+    .await;
+
+    match ctx
+        .app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_path(&file_path)
+        .await
+    {
+        Ok(Some(record)) => {
+            if let Err(mark_error) = ctx
+                .app
+                .services
+                .library
+                .media_files
+                .mark_scan_failed(&record.id, &error.to_string())
+                .await
+            {
+                warn!(
+                    error = %mark_error,
+                    title_id = %ctx.title.id,
+                    file_path = %file_path,
+                    "failed to mark media file as scan_failed after a failed title scan analysis"
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(lookup_error) => {
+            warn!(
+                error = %lookup_error,
+                title_id = %ctx.title.id,
+                file_path = %file_path,
+                "failed to look up media file after a failed title scan analysis"
+            );
+        }
+    }
+
+    ctx.pending_progress
+        .absorb(TitleScanProgressDelta::failed(1));
+    *ctx.title_updated_since_emit |= outcome.title_updated;
+    flush_title_scan_progress_batch(ctx.app, ctx.session_id, ctx.pending_progress).await;
 
     Ok(analysis_duration)
 }
@@ -2177,7 +2291,8 @@ impl AppUseCase {
             );
         }
 
-        let discovered_files = match pre_scanned_files {
+        let walked_here = pre_scanned_file_count.is_none() && title_dir_present;
+        let mut discovered_files = match pre_scanned_files {
             Some(files) => files,
             None if !title_dir_present => Vec::new(),
             None => {
@@ -2190,15 +2305,51 @@ impl AppUseCase {
                     walk_elapsed.saturating_add(Duration::from_millis(scan_result.walk_ms));
                 stat_elapsed =
                     stat_elapsed.saturating_add(Duration::from_millis(scan_result.stat_ms));
-                if file_total_mode == LibraryScanFileTotalMode::MarkKnownAfterThisWalk
-                    && let Some(coordinator) = session_coordinator.as_ref()
-                {
-                    coordinator.add_file_total(scan_result.files.len()).await;
-                    coordinator.mark_file_total_known().await;
-                }
                 scan_result.files
             }
         };
+
+        // A full-folder scan that ends up with zero files for a directory that
+        // exists has not proved the folder is empty. A shared-folder mount
+        // under concurrent readdir load returns an empty listing with no
+        // error, and the inventory that fed `pre_scanned_files` can have been
+        // built from exactly such a listing. Re-walk once before accepting it.
+        if !scoped_discovered_files && title_dir_present && discovered_files.is_empty() {
+            let scan_result = scan_episodic_title_directory_for_progress_metrics(
+                self.services.library.library_scanner.clone(),
+                &title_dir,
+            )
+            .await?;
+            walk_elapsed = walk_elapsed.saturating_add(Duration::from_millis(scan_result.walk_ms));
+            stat_elapsed = stat_elapsed.saturating_add(Duration::from_millis(scan_result.stat_ms));
+            if !scan_result.files.is_empty() {
+                warn!(
+                    title_id = %title.id,
+                    title_name = %title.name,
+                    title_dir = %title_dir_str,
+                    files = scan_result.files.len(),
+                    "title inventory was empty; a re-walk of the title directory found media files"
+                );
+            }
+            discovered_files = scan_result.files;
+        }
+
+        if walked_here
+            && file_total_mode == LibraryScanFileTotalMode::MarkKnownAfterThisWalk
+            && let Some(coordinator) = session_coordinator.as_ref()
+        {
+            coordinator.add_file_total(discovered_files.len()).await;
+            coordinator.mark_file_total_known().await;
+        }
+
+        if !scoped_discovered_files && title_dir_present && discovered_files.is_empty() {
+            warn!(
+                title_id = %title.id,
+                title_name = %title.name,
+                title_dir = %title_dir_str,
+                "title directory exists but the scan found no media files in it"
+            );
+        }
         let db_started = Instant::now();
         let existing_files = self
             .services
@@ -2457,7 +2608,11 @@ impl AppUseCase {
                             "episode_identity_missing"
                         }
                     });
-                    debug!(
+                    // A file on disk that the scan cannot place is a gap in the
+                    // library, not routine noise: it must be visible in the log
+                    // and counted against the session, never absorbed into the
+                    // completed tally.
+                    warn!(
                         title_id = %title.id,
                         title_name = %title.name,
                         file_path = %file.path,
@@ -2494,7 +2649,7 @@ impl AppUseCase {
                         );
                     }
                     summary.unmatched += 1;
-                    pending_progress.absorb(TitleScanProgressDelta::completed(1));
+                    pending_progress.absorb(TitleScanProgressDelta::failed(1));
                     flush_title_scan_progress_batch(self, session_id, &mut pending_progress).await;
                     continue;
                 }
@@ -2833,10 +2988,7 @@ mod tests {
             monitored: true,
             tags: vec![],
             canonical_tags: vec![],
-            external_ids: vec![ExternalId {
-                source: "tvdb".into(),
-                value: "131313".into(),
-            }],
+            external_ids: vec![ExternalId::new("tvdb", "131313")],
             created_by: None,
             created_at: Utc::now(),
             year: Some(2024),

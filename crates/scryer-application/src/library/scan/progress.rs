@@ -171,12 +171,183 @@ impl LibraryScanSession {
 struct LibraryScanRuntimeState {
     sessions: HashMap<String, LibraryScanSession>,
     next_sequence: u64,
+    /// At most one coalesced delta per session that has been folded into the
+    /// live session already but has not been written to the event log yet.
+    /// See [`stage_library_scan_delta`].
+    pending_deltas: HashMap<String, PendingLibraryScanDelta>,
 }
+
+/// A run of per-title deltas merged into one event-log record.
+struct PendingLibraryScanDelta {
+    data: LibraryScanDeltaRecordedEventData,
+    /// Captured when the run opens so a flush can build the event even after
+    /// the session has left the tracker (completed/failed/canceled).
+    facet: MediaFacet,
+    merged: usize,
+}
+
+/// How many per-title deltas one pending record may absorb before it is
+/// written out even though no progress publish is due.
+///
+/// A scan phase can walk thousands of unchanged titles without publishing
+/// progress once (the background refresh's title-match loop does exactly
+/// that), so the publish boundary alone is not a bound. This caps both the
+/// staleness of the persisted log and what a crash can lose.
+const LIBRARY_SCAN_PENDING_DELTA_MERGE_LIMIT: usize = 256;
 
 #[derive(Clone)]
 struct LibraryScanTrackerEvent {
     sequence: u64,
     session: LibraryScanSession,
+}
+
+/// The outcome of folding one delta into the live session.
+pub(crate) struct StagedLibraryScanDelta {
+    /// The live session after the delta was applied.
+    pub(crate) session: LibraryScanSession,
+    /// The delta records that must be appended to the event log now, in
+    /// order. Usually empty: a coalescable delta is merged into the pending
+    /// record instead and written at the next flush.
+    pub(crate) to_persist: Vec<LibraryScanDeltaRecordedEventData>,
+}
+
+/// True when `delta` carries nothing but phase completion/failure counters.
+///
+/// Those are the only fields whose projection is a plain clamped addition
+/// against state the delta itself does not move, which is what makes a run of
+/// them safe to sum into one record. Anything that moves a total, latches a
+/// `*_total_known` flag, or sets a summary changes how a *later* field in the
+/// same record is projected, so it is never merged.
+fn is_coalescable_library_scan_delta(delta: &LibraryScanDeltaRecordedEventData) -> bool {
+    delta.found_titles_total.is_none()
+        && delta.found_titles_delta == 0
+        && delta.title_match_total_known.is_none()
+        && delta.metadata_total_delta == 0
+        && delta.metadata_total_known.is_none()
+        && delta.file_total_delta == 0
+        && delta.file_total_known.is_none()
+        && delta.summary.is_none()
+}
+
+/// True when merging `incoming` into `pending` projects identically to
+/// applying the two records in order.
+///
+/// `mark_completed`/`mark_failed` share one remaining-capacity budget per
+/// phase, and the merged record always spends it on `completed` first, so a
+/// phase that carries both in a single record would redistribute the clamp if
+/// the original order was failure-first. Phases that only ever move one of the
+/// two counters are unaffected (`min(a, r) + min(b, r - min(a, r))` is
+/// `min(a + b, r)`), which covers every per-title loop.
+fn can_merge_library_scan_deltas(
+    pending: &LibraryScanDeltaRecordedEventData,
+    incoming: &LibraryScanDeltaRecordedEventData,
+) -> bool {
+    fn phase_is_single_sided(
+        pending_completed: i64,
+        pending_failed: i64,
+        incoming_completed: i64,
+        incoming_failed: i64,
+    ) -> bool {
+        let completed = pending_completed
+            .max(0)
+            .saturating_add(incoming_completed.max(0));
+        let failed = pending_failed.max(0).saturating_add(incoming_failed.max(0));
+        completed == 0 || failed == 0
+    }
+
+    phase_is_single_sided(
+        pending.title_match_completed_delta,
+        pending.title_match_failed_delta,
+        incoming.title_match_completed_delta,
+        incoming.title_match_failed_delta,
+    ) && phase_is_single_sided(
+        pending.metadata_completed_delta,
+        pending.metadata_failed_delta,
+        incoming.metadata_completed_delta,
+        incoming.metadata_failed_delta,
+    ) && phase_is_single_sided(
+        pending.file_completed_delta,
+        pending.file_failed_delta,
+        incoming.file_completed_delta,
+        incoming.file_failed_delta,
+    )
+}
+
+fn merge_library_scan_delta(
+    pending: &mut LibraryScanDeltaRecordedEventData,
+    incoming: &LibraryScanDeltaRecordedEventData,
+) {
+    pending.title_match_completed_delta = pending
+        .title_match_completed_delta
+        .saturating_add(incoming.title_match_completed_delta);
+    pending.title_match_failed_delta = pending
+        .title_match_failed_delta
+        .saturating_add(incoming.title_match_failed_delta);
+    pending.metadata_completed_delta = pending
+        .metadata_completed_delta
+        .saturating_add(incoming.metadata_completed_delta);
+    pending.metadata_failed_delta = pending
+        .metadata_failed_delta
+        .saturating_add(incoming.metadata_failed_delta);
+    pending.file_completed_delta = pending
+        .file_completed_delta
+        .saturating_add(incoming.file_completed_delta);
+    pending.file_failed_delta = pending
+        .file_failed_delta
+        .saturating_add(incoming.file_failed_delta);
+}
+
+/// Folds `delta` into the session's pending record and returns whatever must
+/// be written to the event log now.
+///
+/// An idle scheduled scan probes every title and records one delta per
+/// unchanged title; persisting each one appended ~12k domain events per
+/// library per cycle for a library where nothing changed. The event log only
+/// has to carry the progress information, not one record per probe, so a run
+/// of per-title counter deltas collapses into a single record that is written
+/// at the next flush.
+fn stage_library_scan_delta(
+    pending: &mut HashMap<String, PendingLibraryScanDelta>,
+    session_id: &str,
+    facet: &MediaFacet,
+    delta: LibraryScanDeltaRecordedEventData,
+) -> Vec<LibraryScanDeltaRecordedEventData> {
+    let mut to_persist = Vec::new();
+
+    if !is_coalescable_library_scan_delta(&delta) {
+        if let Some(previous) = pending.remove(session_id) {
+            to_persist.push(previous.data);
+        }
+        to_persist.push(delta);
+        return to_persist;
+    }
+
+    match pending.get_mut(session_id) {
+        Some(existing) if can_merge_library_scan_deltas(&existing.data, &delta) => {
+            merge_library_scan_delta(&mut existing.data, &delta);
+            existing.merged = existing.merged.saturating_add(1);
+            if existing.merged >= LIBRARY_SCAN_PENDING_DELTA_MERGE_LIMIT
+                && let Some(flushed) = pending.remove(session_id)
+            {
+                to_persist.push(flushed.data);
+            }
+        }
+        _ => {
+            if let Some(previous) = pending.remove(session_id) {
+                to_persist.push(previous.data);
+            }
+            pending.insert(
+                session_id.to_string(),
+                PendingLibraryScanDelta {
+                    data: delta,
+                    facet: facet.clone(),
+                    merged: 1,
+                },
+            );
+        }
+    }
+
+    to_persist
 }
 
 fn library_scan_scopes_conflict(
@@ -327,6 +498,13 @@ impl LibraryScanTracker {
         });
 
         rx
+    }
+
+    /// Test seam: live subscriptions to the tracker's event stream, so a test
+    /// can tell when a waiter such as [`Self::wait_until_idle`] has parked.
+    #[cfg(test)]
+    pub(crate) fn subscription_count(&self) -> usize {
+        self.broadcast.receiver_count()
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<LibraryScanSession> {
@@ -486,6 +664,9 @@ impl LibraryScanTracker {
                 state
                     .sessions
                     .insert(snapshot.session_id.clone(), snapshot.clone());
+                // A session id is never reused, but never let a stale record
+                // from an abandoned session leak into a new one.
+                state.pending_deltas.remove(&snapshot.session_id);
                 state.next_sequence = state.next_sequence.saturating_add(1);
                 LibraryScanTrackerEvent {
                     sequence: state.next_sequence,
@@ -508,6 +689,65 @@ impl LibraryScanTracker {
             .any(|active| library_scan_scopes_conflict(active, facet, library_id))
     }
 
+    /// Applies `delta` to the live session and stages it for the event log.
+    ///
+    /// The live session - and therefore every GraphQL progress subscriber -
+    /// sees the delta immediately, exactly as [`Self::apply_delta`] would.
+    /// What changes is the persisted log: a run of per-title counter deltas is
+    /// coalesced into one record, so `to_persist` is usually empty and the run
+    /// is written by the next [`Self::take_pending_delta`] flush.
+    pub(crate) async fn apply_and_stage_delta(
+        &self,
+        session_id: &str,
+        delta: LibraryScanDeltaRecordedEventData,
+    ) -> Option<StagedLibraryScanDelta> {
+        let (event, to_persist) = {
+            let mut state = self.state.lock().await;
+            let snapshot = {
+                let session = state.sessions.get_mut(session_id)?;
+                apply_library_scan_delta_fields(session, &delta);
+                session.updated_at = Utc::now();
+                session.clone()
+            };
+            let to_persist = stage_library_scan_delta(
+                &mut state.pending_deltas,
+                session_id,
+                &snapshot.facet,
+                delta,
+            );
+            state.next_sequence = state.next_sequence.saturating_add(1);
+            (
+                LibraryScanTrackerEvent {
+                    sequence: state.next_sequence,
+                    session: snapshot,
+                },
+                to_persist,
+            )
+        };
+        self.notify_event(event.clone()).await;
+        Some(StagedLibraryScanDelta {
+            session: event.session,
+            to_persist,
+        })
+    }
+
+    /// Takes the session's coalesced delta, if any, so the caller can append
+    /// it before the next progress/terminal event.
+    pub(crate) async fn take_pending_delta(
+        &self,
+        session_id: &str,
+    ) -> Option<(LibraryScanDeltaRecordedEventData, MediaFacet)> {
+        let mut state = self.state.lock().await;
+        state
+            .pending_deltas
+            .remove(session_id)
+            .map(|pending| (pending.data, pending.facet))
+    }
+
+    /// Per-delta append path, kept for the projection tests that assert the
+    /// live session folds one delta at a time. Production records go through
+    /// [`Self::apply_and_stage_delta`].
+    #[cfg(test)]
     pub(crate) async fn apply_delta(
         &self,
         session_id: &str,
@@ -662,6 +902,9 @@ impl LibraryScanTracker {
             }
 
             let mut session = state.sessions.remove(session_id)?;
+            // The completion path flushes before it gets here; this only keeps
+            // an unflushed record from outliving its session.
+            state.pending_deltas.remove(session_id);
             session.updated_at = Utc::now();
             session.title_match_total_known = true;
             session.metadata_total_known = true;
@@ -693,6 +936,7 @@ impl LibraryScanTracker {
             session.title_match_total_known = true;
             session.metadata_total_known = true;
             session.file_total_known = true;
+            state.pending_deltas.remove(session_id);
             session.status = LibraryScanStatus::Failed;
             state.next_sequence = state.next_sequence.saturating_add(1);
             LibraryScanTrackerEvent {
@@ -712,6 +956,7 @@ impl LibraryScanTracker {
             session.title_match_total_known = true;
             session.metadata_total_known = true;
             session.file_total_known = true;
+            state.pending_deltas.remove(session_id);
             session.status = LibraryScanStatus::Canceled;
             state.next_sequence = state.next_sequence.saturating_add(1);
             LibraryScanTrackerEvent {
@@ -1571,7 +1816,9 @@ mod tests {
         assert!(matches!(still_active_error, AppError::Validation(_)));
     }
 
-    #[tokio::test]
+    // The paused clock fires the coalescing flush timer only once every task
+    // is idle, so both events are always in the same window on any runner.
+    #[tokio::test(start_paused = true)]
     async fn subscription_coalesces_concurrent_sessions_independently() {
         let tracker = LibraryScanTracker::new();
         let mut receiver = tracker.subscribe();
@@ -1599,9 +1846,8 @@ mod tests {
         let mut received = Vec::new();
         for _ in 0..2 {
             received.push(
-                tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+                crate::test_wait::within_deadline("a coalesced session", receiver.recv())
                     .await
-                    .expect("receive coalesced session in time")
                     .expect("subscription remains open"),
             );
         }
@@ -1612,7 +1858,9 @@ mod tests {
         assert_eq!(received[1].found_titles, 7);
     }
 
-    #[tokio::test]
+    // The paused clock fires the coalescing flush timer only once every task
+    // is idle, so both events are always in the same window on any runner.
+    #[tokio::test(start_paused = true)]
     async fn terminal_event_does_not_discard_another_sessions_pending_progress() {
         let tracker = LibraryScanTracker::new();
         let mut receiver = tracker.subscribe();
@@ -1637,14 +1885,13 @@ mod tests {
         tracker.add_found_titles(&second.session_id, 11).await;
         tracker.fail_session(&first.session_id).await;
 
-        let terminal = tokio::time::timeout(Duration::from_secs(2), receiver.recv())
+        let terminal = crate::test_wait::within_deadline("the terminal session", receiver.recv())
             .await
-            .expect("receive terminal session in time")
             .expect("subscription remains open");
-        let pending = tokio::time::timeout(Duration::from_secs(2), receiver.recv())
-            .await
-            .expect("receive other pending session in time")
-            .expect("subscription remains open");
+        let pending =
+            crate::test_wait::within_deadline("the other pending session", receiver.recv())
+                .await
+                .expect("subscription remains open");
 
         assert_eq!(terminal.session_id, first.session_id);
         assert_eq!(terminal.status, LibraryScanStatus::Failed);
@@ -1750,9 +1997,11 @@ mod tests {
     async fn wait_until_idle_returns_immediately_without_sessions() {
         let tracker = LibraryScanTracker::new();
 
-        tokio::time::timeout(Duration::from_millis(100), tracker.wait_until_idle())
-            .await
-            .expect("idle tracker should resolve immediately");
+        let mut waiter = Box::pin(tokio::task::unconstrained(tracker.wait_until_idle()));
+        assert!(
+            futures_util::poll!(waiter.as_mut()).is_ready(),
+            "idle tracker should resolve on its first poll"
+        );
     }
 
     #[tokio::test]
@@ -1763,14 +2012,12 @@ mod tests {
             .await
             .expect("start session");
 
-        let waiter = tokio::spawn({
-            let tracker = tracker.clone();
-            async move { tracker.wait_until_idle().await }
-        });
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
+        // One unconstrained poll runs the waiter through its active-session
+        // check to its park point, so Pending proves it saw the scan and
+        // blocked rather than merely not having been scheduled yet.
+        let mut waiter = Box::pin(tokio::task::unconstrained(tracker.wait_until_idle()));
         assert!(
-            !waiter.is_finished(),
+            futures_util::poll!(waiter.as_mut()).is_pending(),
             "waiter should block while scan is active"
         );
 
@@ -1779,10 +2026,8 @@ mod tests {
             .await
             .expect("session should fail");
 
-        tokio::time::timeout(Duration::from_secs(1), waiter)
-            .await
-            .expect("waiter should resolve once scan finishes")
-            .expect("waiter task should not panic");
+        crate::test_wait::within_deadline("the idle waiter to resolve after the scan ends", waiter)
+            .await;
     }
 
     #[tokio::test]

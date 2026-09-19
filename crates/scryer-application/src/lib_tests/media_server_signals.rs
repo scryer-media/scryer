@@ -629,10 +629,7 @@ fn sync_app(
 /// Seeds a movie title with a TMDB id so the sweep has something to map onto.
 async fn seed_movie_title(app: &AppUseCase, title_id: &str, tmdb: &str) {
     let mut title = make_due_hydration_title(title_id, MediaFacet::Movie, 1);
-    title.external_ids = vec![ExternalId {
-        source: "tmdb".to_string(),
-        value: tmdb.to_string(),
-    }];
+    title.external_ids = vec![ExternalId::new("tmdb".to_string(), tmdb.to_string())];
     app.services
         .catalog
         .titles

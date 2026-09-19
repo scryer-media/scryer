@@ -1673,3 +1673,146 @@ fn graphql_response_status(request: &mut async_graphql::Request) -> StatusCode {
     let _ = request;
     StatusCode::OK
 }
+
+/// Hang guard for [`wait_until`]: a condition wait fails only if its
+/// condition never holds.
+pub const WAIT_UNTIL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// Polls `condition` until it holds. Panics, naming `what`, if it has not held
+/// after [`WAIT_UNTIL_TIMEOUT`].
+pub async fn wait_until<F, Fut>(what: &str, mut condition: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + WAIT_UNTIL_TIMEOUT;
+    while !condition().await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out after {WAIT_UNTIL_TIMEOUT:?} waiting for {what}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+}
+
+/// An HTTP server that answers every request with one fixed body, but only
+/// while its gate is open. A request that arrives while the gate is closed is
+/// held until the test opens it, so a test controls exactly when a response
+/// lands instead of racing a fixed delay.
+pub struct GatedHttpServer {
+    uri: String,
+    open: tokio::sync::watch::Sender<bool>,
+    received: tokio::sync::watch::Receiver<usize>,
+    answered: tokio::sync::watch::Receiver<usize>,
+}
+
+/// Serves one connection: reads a request head, then answers once the gate
+/// opens, unless the client closes the connection first.
+async fn serve_gated_connection(
+    mut stream: tokio::net::TcpStream,
+    body: Arc<String>,
+    mut open: tokio::sync::watch::Receiver<bool>,
+    received: Arc<tokio::sync::watch::Sender<usize>>,
+    answered: Arc<tokio::sync::watch::Sender<usize>>,
+) {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let mut head = Vec::new();
+    let mut chunk = [0_u8; 4096];
+    while !head.windows(4).any(|window| window == b"\r\n\r\n") {
+        match stream.read(&mut chunk).await {
+            Ok(0) | Err(_) => return,
+            Ok(read) => head.extend_from_slice(&chunk[..read]),
+        }
+    }
+    received.send_modify(|count| *count += 1);
+    tokio::select! {
+        biased;
+        opened = open.wait_for(|open| *open) => {
+            if opened.is_err() {
+                return;
+            }
+        }
+        // A GET carries no body, so any read result here means the client
+        // closed or reset the connection while the request was held.
+        _ = stream.read(&mut chunk) => return,
+    }
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    let _ = stream.write_all(response.as_bytes()).await;
+    let _ = stream.shutdown().await;
+    answered.send_modify(|count| *count += 1);
+}
+
+impl GatedHttpServer {
+    /// Starts the server with its gate `open` or closed.
+    pub async fn start(body: String, open: bool) -> Self {
+        let (open_tx, open_rx) = tokio::sync::watch::channel(open);
+        let (received_tx, received_rx) = tokio::sync::watch::channel(0_usize);
+        let (answered_tx, answered_rx) = tokio::sync::watch::channel(0_usize);
+        let body = Arc::new(body);
+        let received_tx = Arc::new(received_tx);
+        let answered_tx = Arc::new(answered_tx);
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("gated server must bind");
+        let address = listener.local_addr().expect("gated server address");
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                tokio::spawn(serve_gated_connection(
+                    stream,
+                    body.clone(),
+                    open_rx.clone(),
+                    received_tx.clone(),
+                    answered_tx.clone(),
+                ));
+            }
+        });
+        Self {
+            uri: format!("http://{address}"),
+            open: open_tx,
+            received: received_rx,
+            answered: answered_rx,
+        }
+    }
+
+    pub fn uri(&self) -> String {
+        self.uri.clone()
+    }
+
+    /// Opens or closes the gate. Opening releases every held request.
+    pub fn set_open(&self, open: bool) {
+        self.open.send_replace(open);
+    }
+
+    /// Requests received so far, answered or not.
+    pub fn received(&self) -> usize {
+        *self.received.borrow()
+    }
+
+    /// Requests the server has written a response for.
+    pub fn answered(&self) -> usize {
+        *self.answered.borrow()
+    }
+
+    /// Waits until at least `count` requests have arrived.
+    pub async fn wait_for_received(&self, count: usize) {
+        let mut received = self.received.clone();
+        tokio::time::timeout(WAIT_UNTIL_TIMEOUT, received.wait_for(|seen| *seen >= count))
+            .await
+            .unwrap_or_else(|_| panic!("the gated server never received {count} request(s)"))
+            .expect("gated server state");
+    }
+
+    /// Waits until the server has written at least `count` responses.
+    pub async fn wait_for_answered(&self, count: usize) {
+        let mut answered = self.answered.clone();
+        tokio::time::timeout(WAIT_UNTIL_TIMEOUT, answered.wait_for(|seen| *seen >= count))
+            .await
+            .unwrap_or_else(|_| panic!("the gated server never answered {count} request(s)"))
+            .expect("gated server state");
+    }
+}

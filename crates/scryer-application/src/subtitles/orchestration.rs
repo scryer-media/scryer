@@ -2502,10 +2502,7 @@ mod tests {
             monitored: true,
             tags: vec![],
             canonical_tags: vec![],
-            external_ids: vec![ExternalId {
-                source: "imdb".into(),
-                value: "tt7654321".into(),
-            }],
+            external_ids: vec![ExternalId::new("imdb", "tt7654321")],
             created_by: None,
             created_at: Utc::now(),
             year,
@@ -2603,14 +2600,10 @@ mod tests {
     #[test]
     fn subtitle_external_ids_prefers_scoped_anime_ids_over_title_level_ids() {
         let mut title = sample_title(MediaFacet::Anime, None);
-        title.external_ids.push(ExternalId {
-            source: "anilist".into(),
-            value: "161645".into(),
-        });
-        title.external_ids.push(ExternalId {
-            source: "mal".into(),
-            value: "54492".into(),
-        });
+        title
+            .external_ids
+            .push(ExternalId::new("anilist", "161645"));
+        title.external_ids.push(ExternalId::new("mal", "54492"));
 
         let episode_context = SubtitleEpisodeContext {
             season: Some(2),

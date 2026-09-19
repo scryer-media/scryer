@@ -142,10 +142,7 @@ pub(crate) fn build_rematched_external_ids(
         if source.is_empty() || value.is_empty() {
             continue;
         }
-        next.push(ExternalId {
-            source: source.to_string(),
-            value: value.to_string(),
-        });
+        next.push(ExternalId::new(source.to_string(), value.to_string()));
     }
 
     next

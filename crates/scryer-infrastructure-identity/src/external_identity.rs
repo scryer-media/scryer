@@ -1732,10 +1732,7 @@ fn plex_external_id(value: &str) -> Option<ExternalId> {
     if external_id.is_empty() {
         return None;
     }
-    Some(ExternalId {
-        source: source.into(),
-        value: external_id.into(),
-    })
+    Some(ExternalId::new(source, external_id))
 }
 
 fn media_server_url(value: &str) -> AppResult<Url> {
@@ -1842,10 +1839,7 @@ mod tests {
     fn plex_legacy_guids_map_only_compatible_external_ids() {
         assert_eq!(
             plex_external_id("com.plexapp.agents.themoviedb://550?lang=en"),
-            Some(ExternalId {
-                source: "tmdb".into(),
-                value: "550".into(),
-            })
+            Some(ExternalId::new("tmdb", "550"))
         );
         assert_eq!(plex_external_id("plex://movie/internal-id"), None);
         assert_eq!(
@@ -1853,10 +1847,7 @@ mod tests {
                 { "id": "plex://movie/internal-id" },
                 { "id": "tmdb://550" }
             ]))),
-            vec![ExternalId {
-                source: "tmdb".into(),
-                value: "550".into(),
-            }]
+            vec![ExternalId::new("tmdb", "550")]
         );
     }
 
@@ -2012,13 +2003,7 @@ mod tests {
         .expect("hydrate metadata")
         .expect("movie should parse");
 
-        assert_eq!(
-            item.external_ids,
-            vec![ExternalId {
-                source: "tmdb".into(),
-                value: "550".into(),
-            }]
-        );
+        assert_eq!(item.external_ids, vec![ExternalId::new("tmdb", "550")]);
     }
 
     #[tokio::test]

@@ -1,8 +1,6 @@
 use super::*;
 use crate::library::library::library_scan_cancel_requested;
-use crate::library_scan_coordinator::{
-    LibraryScanCoordinator, load_projected_library_scan_session,
-};
+use crate::library_scan_coordinator::{LibraryScanCoordinator, LibraryScanProjectionReplay};
 use tokio_util::sync::CancellationToken;
 
 const LIBRARY_SCAN_DISCOVERY_WORK_QUEUE_CAPACITY: usize = 16;
@@ -116,6 +114,10 @@ pub(crate) async fn wait_for_projected_library_scan_session(
     session_id: &str,
 ) -> AppResult<LibraryScanSession> {
     let mut receiver = app.runtime.library.library_scan_tracker.subscribe();
+    // One fold that survives the loop. Each pass folds only the events
+    // appended since the previous one, which is the same projection a fresh
+    // replay from sequence 0 would produce - see `LibraryScanProjectionReplay`.
+    let mut replay = LibraryScanProjectionReplay::new(session_id);
 
     loop {
         if let Some(session) = app
@@ -135,7 +137,7 @@ pub(crate) async fn wait_for_projected_library_scan_session(
             return Ok(session);
         }
 
-        let projected_session = load_projected_library_scan_session(app, session_id).await?;
+        let projected_session = replay.advance(app).await?;
         if let Some(session) = projected_session
             && (matches!(
                 session.status,
@@ -163,7 +165,7 @@ pub(crate) async fn wait_for_projected_library_scan_session(
                 }
             }
             Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                if let Some(session) = load_projected_library_scan_session(app, session_id).await?
+                if let Some(session) = replay.advance(app).await?
                     && (matches!(
                         session.status,
                         LibraryScanStatus::Failed | LibraryScanStatus::Canceled

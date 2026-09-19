@@ -552,12 +552,24 @@ pub(super) async fn visible_source_files_have_terminal_dispositions(
             &completed_lookup
         }
     };
-    let filter_samples = td.facet.as_deref() != Some("movie");
-    let files = crate::import_workflow::find_video_files(
+    let is_movie = td.facet.as_deref() == Some("movie");
+    let filter_samples = !is_movie;
+    let mut files = crate::import_workflow::find_video_files(
         std::path::Path::new(&completed.dest_dir),
         filter_samples,
     )
     .ok()?;
+    if is_movie && files.len() > 1 {
+        // The movie import path selects exactly one video, the largest, and
+        // records an artifact only for it. Samples, proofs, and extras beside
+        // it never get a disposition, so demanding one for every visible video
+        // can never be satisfied and sent the download back to ImportPending on
+        // every poll, re-importing the same movie each time. Verify what the
+        // movie path could actually have imported.
+        if let Ok(largest) = crate::import_workflow::pick_largest_file(&files) {
+            files.retain(|file| *file == largest);
+        }
+    }
     if files.is_empty() {
         return Some(
             artifact_member_completion(artifacts, td) != ArtifactMemberCompletion::Incomplete,

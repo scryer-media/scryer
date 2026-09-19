@@ -1208,15 +1208,17 @@ mod tests {
 
     #[test]
     fn canonical_retry_after_parser_reads_http_date_first() {
-        let future = (chrono::Utc::now() + chrono::Duration::seconds(12))
+        let now = chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        let future = (now + chrono::Duration::seconds(12))
             .format("%a, %d %b %Y %H:%M:%S GMT")
             .to_string();
 
-        let (delay, source) =
-            parse_retry_after(&future).expect("expected parsed retry-after delay");
+        let (delay, source) = scryer_outbound_http::parse_retry_after_at(&future, now)
+            .expect("expected parsed retry-after delay");
         assert_eq!(source, scryer_outbound_http::RetryAfterSource::HttpDate);
-        assert!(delay >= Duration::from_secs(10));
-        assert!(delay <= Duration::from_secs(12));
+        assert_eq!(delay, Duration::from_secs(12));
     }
 
     #[test]

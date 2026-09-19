@@ -146,6 +146,7 @@ pub fn from_title(app: &AppUseCase, title: Title) -> TitlePayload {
             .into_iter()
             .map(|id| ExternalIdPayload {
                 source: id.source,
+                kind: id.kind,
                 value: id.value,
             })
             .collect(),
@@ -363,6 +364,7 @@ pub fn from_media_request(
             .into_iter()
             .map(|id| ExternalIdPayload {
                 source: id.source,
+                kind: id.kind,
                 value: id.value,
             })
             .collect(),
@@ -1126,6 +1128,7 @@ pub fn monitor_selection_payload(
                     .iter()
                     .map(|external_id| ExternalIdPayload {
                         source: external_id.source.clone(),
+                        kind: external_id.kind.clone(),
                         value: external_id.value.clone(),
                     })
                     .collect(),
@@ -1165,9 +1168,8 @@ pub fn monitor_selection_from_input(
                 external_ids: movie
                     .external_ids
                     .into_iter()
-                    .map(|external_id| scryer_domain::ExternalId {
-                        source: external_id.source,
-                        value: external_id.value,
+                    .map(|external_id| {
+                        scryer_domain::ExternalId::new(external_id.source, external_id.value)
                     })
                     .collect(),
             })

@@ -343,10 +343,7 @@ fn push_metadata_match_external_id(external_ids: &mut Vec<ExternalId>, source: &
         return;
     }
 
-    external_ids.push(ExternalId {
-        source: source.to_string(),
-        value: value.to_string(),
-    });
+    external_ids.push(ExternalId::new(source.to_string(), value.to_string()));
 }
 
 pub(crate) fn build_new_title_from_metadata_match(

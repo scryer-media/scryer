@@ -820,13 +820,10 @@ impl AppUseCase {
 
                 if requested_ref.smg_id.is_none() {
                     (
-                        vec![ExternalId {
-                            source: "tvdb".into(),
-                            value: requested_ref
+                        vec![ExternalId::with_kind("tvdb", "movie", requested_ref
                                 .tvdb_id
                                 .expect("movie rematch reference requires an identity")
-                                .to_string(),
-                        }],
+                                .to_string())],
                         Some(requested_ref),
                     )
                 } else {
@@ -864,29 +861,19 @@ impl AppUseCase {
                         imdb_id: crate::normalize::normalize_imdb_id(&movie.imdb_id),
                     };
                     let mut identity_ids = Vec::new();
+                    // A movie rematch: SMG's id names a title, the provider
+                    // ids name a movie.
                     if let Some(smg_id) = resolved_ref.smg_id {
-                        identity_ids.push(ExternalId {
-                            source: "smg".into(),
-                            value: smg_id.to_string(),
-                        });
+                        identity_ids.push(ExternalId::with_kind("smg", "title", smg_id.to_string()));
                     }
                     if let Some(tvdb_id) = resolved_ref.tvdb_id {
-                        identity_ids.push(ExternalId {
-                            source: "tvdb".into(),
-                            value: tvdb_id.to_string(),
-                        });
+                        identity_ids.push(ExternalId::with_kind("tvdb", "movie", tvdb_id.to_string()));
                     }
                     if let Some(tmdb_id) = resolved_ref.tmdb_id {
-                        identity_ids.push(ExternalId {
-                            source: "tmdb".into(),
-                            value: tmdb_id.to_string(),
-                        });
+                        identity_ids.push(ExternalId::with_kind("tmdb", "movie", tmdb_id.to_string()));
                     }
                     if let Some(imdb_id) = resolved_ref.imdb_id.as_deref() {
-                        identity_ids.push(ExternalId {
-                            source: "imdb".into(),
-                            value: imdb_id.to_string(),
-                        });
+                        identity_ids.push(ExternalId::with_kind("imdb", "movie", imdb_id.to_string()));
                     }
                     (identity_ids, Some(resolved_ref))
                 }
@@ -895,10 +882,7 @@ impl AppUseCase {
                 let tvdb_id = target_tvdb_id
                     .ok_or_else(|| AppError::Validation("tvdb id is required".into()))?;
                 (
-                    vec![ExternalId {
-                        source: "tvdb".into(),
-                        value: tvdb_id.to_string(),
-                    }],
+                    vec![ExternalId::with_kind("tvdb", "series", tvdb_id.to_string())],
                     None,
                 )
             }

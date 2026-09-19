@@ -6064,6 +6064,12 @@ input ExternalIdInput {
 	"""
 	source: String!
 	"""
+	Entity kind the identifier names at that source, such as `movie`,
+	`series`, `anime` or `title`. Omit it when the kind is unknown: the
+	identifier then matches a stored id of any kind.
+	"""
+	kind: String
+	"""
 	Provider-issued identifier value.
 	"""
 	value: String!
@@ -6077,6 +6083,11 @@ type ExternalIdPayload {
 	Provider or source name.
 	"""
 	source: String!
+	"""
+	Entity kind the identifier names at that source, such as `movie`,
+	`series`, `anime` or `title`. Absent when the identifier does not say.
+	"""
+	kind: String
 	"""
 	Identifier assigned by that source.
 	"""

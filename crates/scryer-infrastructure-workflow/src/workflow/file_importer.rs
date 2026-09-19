@@ -3424,7 +3424,14 @@ mod tests {
         );
     }
 
-    #[tokio::test]
+    /// Returns once every task on the runtime is parked. Only valid on a
+    /// paused clock: tokio advances paused time only when no task can run, so
+    /// this sleep cannot complete while a spawned waiter still has work.
+    async fn run_until_idle() {
+        tokio::time::sleep(Duration::from_millis(1)).await;
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn copy_lanes_are_volume_scoped_and_do_not_block_fast_lanes() {
         let coordinator = ImportPlacementCoordinator::new(1, 2);
         let first_copy = coordinator.copy.acquire("volume-a", "copy").await;
@@ -3433,20 +3440,20 @@ mod tests {
             let copy = coordinator.copy.clone();
             async move { copy.acquire("volume-a", "copy").await }
         });
-        tokio::task::yield_now().await;
+        run_until_idle().await;
         assert!(
             !third_copy.is_finished(),
             "a third copy to one volume must wait"
         );
 
         let fast = tokio::time::timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(30),
             coordinator.fast.acquire("client-a", "fast"),
         )
         .await
         .expect("a hardlink lane must remain available while copies are blocked");
         let other_volume = tokio::time::timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(30),
             coordinator.copy.acquire("volume-b", "copy"),
         )
         .await
@@ -3455,7 +3462,7 @@ mod tests {
         drop(fast);
         drop(other_volume);
         drop(first_copy);
-        let third_copy = tokio::time::timeout(Duration::from_secs(1), third_copy)
+        let third_copy = tokio::time::timeout(Duration::from_secs(30), third_copy)
             .await
             .expect("waiting copy should start after one same-volume slot is released")
             .expect("copy waiter should not panic");
@@ -3463,7 +3470,7 @@ mod tests {
         drop(second_copy);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn fast_lanes_are_client_scoped() {
         let coordinator = ImportPlacementCoordinator::new(1, 2);
         let first = coordinator.fast.acquire("client-a", "fast").await;
@@ -3471,18 +3478,18 @@ mod tests {
             let fast = coordinator.fast.clone();
             async move { fast.acquire("client-a", "fast").await }
         });
-        tokio::task::yield_now().await;
+        run_until_idle().await;
         assert!(!same_client.is_finished());
 
         let other_client = tokio::time::timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(30),
             coordinator.fast.acquire("client-b", "fast"),
         )
         .await
         .expect("different clients should place fast imports concurrently");
         drop(other_client);
         drop(first);
-        let same_client = tokio::time::timeout(Duration::from_secs(1), same_client)
+        let same_client = tokio::time::timeout(Duration::from_secs(30), same_client)
             .await
             .expect("same client should continue after its lane is released")
             .expect("fast waiter should not panic");

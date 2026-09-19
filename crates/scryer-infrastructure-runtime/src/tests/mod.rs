@@ -53,6 +53,7 @@ mod rule_packs;
 mod scope_indexer_coverage;
 mod settings_and_writer;
 mod sql_runtime_gated_write;
+mod sqlite_write_batching;
 mod stores_migrations_regressions;
 mod title_images;
 mod title_tags;

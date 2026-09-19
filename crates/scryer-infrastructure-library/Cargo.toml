@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-library"
-version = "0.21.4"
+version = "0.21.5"
 edition.workspace = true
 publish = false
 
@@ -40,4 +40,6 @@ zune-core = { version = "=0.5.3", optional = true }
 [dev-dependencies]
 scryer-infrastructure-datastore = { path = "../scryer-infrastructure-datastore" }
 tempfile = "3"
+# Paused-clock tests (`start_paused`) run the runtime to idle.
+tokio = { workspace = true, features = ["test-util"] }
 zstd = { version = "0.14", default-features = false, features = ["zdict_builder"] }

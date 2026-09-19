@@ -361,6 +361,64 @@ fn wanted_seed_row_to_item(row: &SqlRow) -> AppResult<AcquisitionScopeState> {
     })
 }
 
+/// The identity a release decision is deduplicated on: which scope decided,
+/// what it decided, and which release it decided about.
+///
+/// `release_url` is the release's own identity when the indexer gave one;
+/// title and size carry the rest, and stand alone for a decision recorded
+/// without a canonical source. `COALESCE` rather than `IS NULL` handling keeps
+/// one predicate that means the same thing on SQLite and Postgres — a SQL
+/// `NULL` never equals a `NULL`, so a decision with no URL would otherwise
+/// never match itself.
+#[derive(Clone)]
+struct ReleaseDecisionIdentityArgs {
+    wanted_item_id: String,
+    decision_code: String,
+    release_url: String,
+    release_title: String,
+    release_size_bytes: i64,
+}
+
+/// Stands in for "no size recorded" in the identity comparison. Negative, so
+/// it cannot collide with a real byte count.
+const RELEASE_DECISION_UNKNOWN_SIZE: i64 = -1;
+
+impl ReleaseDecisionIdentityArgs {
+    fn of(decision: &ReleaseDecision) -> Self {
+        Self {
+            wanted_item_id: decision.wanted_item_id.clone(),
+            decision_code: decision.decision_code.clone(),
+            release_url: decision.release_url.clone().unwrap_or_default(),
+            release_title: decision.release_title.clone(),
+            release_size_bytes: decision
+                .release_size_bytes
+                .unwrap_or(RELEASE_DECISION_UNKNOWN_SIZE),
+        }
+    }
+
+    fn args(&self) -> Vec<SqlArg> {
+        vec![
+            SqlArg::Text(self.wanted_item_id.clone()),
+            SqlArg::Text(self.decision_code.clone()),
+            SqlArg::Text(self.release_url.clone()),
+            SqlArg::Text(self.release_title.clone()),
+            SqlArg::I64(self.release_size_bytes),
+        ]
+    }
+}
+
+/// Newest first, so a table that still holds pre-dedupe duplicates collapses
+/// onto the row a reader would have seen anyway.
+const RELEASE_DECISION_IDENTITY_SELECT_SQL: &str = "SELECT id
+       FROM release_decisions
+      WHERE wanted_item_id = {}
+        AND decision_code = {}
+        AND COALESCE(release_url, '') = {}
+        AND release_title = {}
+        AND COALESCE(release_size_bytes, -1) = {}
+      ORDER BY created_at DESC
+      LIMIT 1";
+
 fn release_decision_row_to_item(row: &SqlRow) -> AppResult<ReleaseDecision> {
     let id = row.text("id")?;
     Ok(ReleaseDecision {
@@ -983,30 +1041,88 @@ impl AcquisitionScopeStateRepository for WantedStore {
                     None
                 }
             };
-        execute_datastore_write(
-            &self.datastore,
-            "insert_release_decision",
-            "INSERT INTO release_decisions
-             (id, wanted_item_id, title_id, release_title, release_url, release_size_bytes,
-              decision_code, candidate_score, current_score, score_delta, explanation_json, created_at)
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-            vec![
-                SqlArg::Text(decision.id.clone()),
-                SqlArg::Text(decision.wanted_item_id.clone()),
-                SqlArg::Text(decision.title_id.clone()),
-                SqlArg::Text(decision.release_title.clone()),
-                SqlArg::OptText(decision.release_url.clone()),
-                SqlArg::OptI64(decision.release_size_bytes),
-                SqlArg::Text(decision.decision_code.clone()),
-                SqlArg::I32(decision.candidate_score),
-                SqlArg::OptI32(decision.current_score),
-                SqlArg::OptI32(decision.score_delta),
-                SqlArg::OptBytes(explanation_json),
-                timestamp_arg_for_datastore(&self.datastore, &decision.created_at)?,
-            ],
-        )
-        .await?;
-        Ok(decision.id.clone())
+        // The same verdict, on the same release, for the same scope is one
+        // ledger row that ages forward — not a new row per re-evaluation.
+        // RSS re-sees the same feed every cadence, so an idle instance was
+        // appending thousands of byte-identical `queued_better_or_equal` rows
+        // (4,720 rows / 2.7 MB per 110 minutes on the 12k-title load test) for
+        // 19 scopes. A changed verdict still appends: `decision_code` is part
+        // of the identity, so the ledger keeps the history that means
+        // something and drops the history that repeats.
+        let identity = ReleaseDecisionIdentityArgs::of(decision);
+        let created_at = timestamp_arg_for_datastore(&self.datastore, &decision.created_at)?;
+        let insert_args = vec![
+            SqlArg::Text(decision.id.clone()),
+            SqlArg::Text(decision.wanted_item_id.clone()),
+            SqlArg::Text(decision.title_id.clone()),
+            SqlArg::Text(decision.release_title.clone()),
+            SqlArg::OptText(decision.release_url.clone()),
+            SqlArg::OptI64(decision.release_size_bytes),
+            SqlArg::Text(decision.decision_code.clone()),
+            SqlArg::I32(decision.candidate_score),
+            SqlArg::OptI32(decision.current_score),
+            SqlArg::OptI32(decision.score_delta),
+            SqlArg::OptBytes(explanation_json.clone()),
+            created_at.clone(),
+        ];
+        let update_args = vec![
+            SqlArg::Text(decision.title_id.clone()),
+            SqlArg::I32(decision.candidate_score),
+            SqlArg::OptI32(decision.current_score),
+            SqlArg::OptI32(decision.score_delta),
+            SqlArg::OptBytes(explanation_json),
+            created_at,
+        ];
+        let fallback_id = decision.id.clone();
+        SqlRuntime::run_in_transaction(&self.datastore, "insert_release_decision", move |tx| {
+            let identity = identity.clone();
+            let insert_args = insert_args.clone();
+            let update_args = update_args.clone();
+            let fallback_id = fallback_id.clone();
+            Box::pin(async move {
+                let existing = SqlRuntime::fetch_optional(
+                    SqlExec::Tx(tx),
+                    RELEASE_DECISION_IDENTITY_SELECT_SQL,
+                    &identity.args(),
+                )
+                .await?
+                .as_ref()
+                .map(|row| row.text("id"))
+                .transpose()?;
+
+                let Some(existing_id) = existing else {
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "INSERT INTO release_decisions
+                         (id, wanted_item_id, title_id, release_title, release_url,
+                          release_size_bytes, decision_code, candidate_score, current_score,
+                          score_delta, explanation_json, created_at)
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                        &insert_args,
+                    )
+                    .await?;
+                    return Ok(fallback_id);
+                };
+
+                let mut args = update_args;
+                args.push(SqlArg::Text(existing_id.clone()));
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE release_decisions
+                        SET title_id = {},
+                            candidate_score = {},
+                            current_score = {},
+                            score_delta = {},
+                            explanation_json = {},
+                            created_at = {}
+                      WHERE id = {}",
+                    &args,
+                )
+                .await?;
+                Ok(existing_id)
+            })
+        })
+        .await
     }
 
     async fn get_acquisition_scope_state_by_id(

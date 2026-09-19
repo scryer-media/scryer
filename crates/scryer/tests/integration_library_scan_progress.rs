@@ -2,12 +2,14 @@
 
 mod common;
 
+use std::sync::{Arc, Condvar, Mutex};
+
 use serde_json::json;
 use tokio::time::{Duration, Instant};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 
-use common::TestContext;
+use common::{TestContext, WAIT_UNTIL_TIMEOUT};
 use scryer_application::{
     LibraryRepository, LibraryRootDraft, LibraryScanSession, LibraryScanStatus,
 };
@@ -106,7 +108,7 @@ async fn wait_for_scan_status(
     session_id: &str,
     expected_status: LibraryScanStatus,
 ) -> LibraryScanSession {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + WAIT_UNTIL_TIMEOUT;
 
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
@@ -139,6 +141,55 @@ async fn wait_for_scan_status(
     }
 }
 
+/// A metadata-gateway answer held until the test opens the gate, so a scan
+/// stays active in title matching for exactly as long as the test needs.
+/// wiremock serves each mock server from its own thread, so blocking here
+/// stalls only the gateway, never the test.
+struct GatedResponse {
+    open: Arc<(Mutex<bool>, Condvar)>,
+    template: ResponseTemplate,
+}
+
+impl wiremock::Respond for GatedResponse {
+    fn respond(&self, _request: &wiremock::Request) -> ResponseTemplate {
+        let (open, released) = &*self.open;
+        // The wait bound is a hang guard for a test that never releases.
+        let _ = released
+            .wait_timeout_while(
+                open.lock().expect("gate lock"),
+                WAIT_UNTIL_TIMEOUT,
+                |open| !*open,
+            )
+            .expect("gate lock");
+        self.template.clone()
+    }
+}
+
+/// Mounts an empty title-match answer that waits for [`release_gate`].
+async fn mount_gated_title_match(ctx: &TestContext) -> Arc<(Mutex<bool>, Condvar)> {
+    let gate = Arc::new((Mutex::new(false), Condvar::new()));
+    Mock::given(method("POST"))
+        .and(path("/graphql"))
+        .respond_with(GatedResponse {
+            open: gate.clone(),
+            template: ResponseTemplate::new(200).set_body_json(json!({
+                "data": {
+                    "searchTvdbBatch": [],
+                    "searchTitlesBatch": []
+                }
+            })),
+        })
+        .with_priority(1)
+        .mount(&ctx.smg_server)
+        .await;
+    gate
+}
+
+fn release_gate(gate: &(Mutex<bool>, Condvar)) {
+    *gate.0.lock().expect("gate lock") = true;
+    gate.1.notify_all();
+}
+
 #[tokio::test]
 async fn active_library_scans_query_returns_progress_snapshot() {
     let ctx = TestContext::new().await;
@@ -150,21 +201,7 @@ async fn active_library_scans_query_returns_progress_snapshot() {
         .expect("create unknown series folder");
     set_media_path(&ctx, "series.path", series_root.to_string_lossy().as_ref()).await;
 
-    Mock::given(method("POST"))
-        .and(path("/graphql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_millis(750))
-                .set_body_json(json!({
-                    "data": {
-                        "searchTvdbBatch": [],
-                        "searchTitlesBatch": []
-                    }
-                })),
-        )
-        .with_priority(1)
-        .mount(&ctx.smg_server)
-        .await;
+    let gate = mount_gated_title_match(&ctx).await;
 
     let start_resp = ctx
         .http_client()
@@ -191,7 +228,7 @@ async fn active_library_scans_query_returns_progress_snapshot() {
         .to_string();
     assert_eq!(start["data"]["scanLibrary"]["facet"], "SERIES");
 
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + WAIT_UNTIL_TIMEOUT;
     let scan = loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         assert!(
@@ -246,6 +283,7 @@ async fn active_library_scans_query_returns_progress_snapshot() {
             .is_some()
     );
     assert!(scan["mediaAnalysisProgress"]["failed"].as_u64().is_some());
+    release_gate(&gate);
 }
 
 #[tokio::test]
@@ -293,21 +331,7 @@ async fn graphql_allows_concurrent_scans_for_distinct_libraries_in_same_facet() 
         .await
         .expect("create second movie library");
 
-    Mock::given(method("POST"))
-        .and(path("/graphql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_secs(2))
-                .set_body_json(json!({
-                    "data": {
-                        "searchTvdbBatch": [],
-                        "searchTitlesBatch": []
-                    }
-                })),
-        )
-        .with_priority(1)
-        .mount(&ctx.smg_server)
-        .await;
+    let gate = mount_gated_title_match(&ctx).await;
 
     let mutation = r#"mutation ScanLibrary($input: ScanLibraryInput!) {
         scanLibrary(input: $input) { sessionId libraryId facet status }
@@ -359,6 +383,7 @@ async fn graphql_allows_concurrent_scans_for_distinct_libraries_in_same_facet() 
     )
     .await;
     assert!(duplicate.get("errors").is_some());
+    release_gate(&gate);
 
     ctx.app
         .cancel_library_scan(&admin, &first_session_id)
@@ -481,21 +506,7 @@ async fn cancel_library_scan_mutation_marks_active_full_scan_canceled() {
         .expect("create unknown series folder");
     set_media_path(&ctx, "series.path", series_root.to_string_lossy().as_ref()).await;
 
-    Mock::given(method("POST"))
-        .and(path("/graphql"))
-        .respond_with(
-            ResponseTemplate::new(200)
-                .set_delay(Duration::from_millis(750))
-                .set_body_json(json!({
-                    "data": {
-                        "searchTvdbBatch": [],
-                        "searchTitlesBatch": []
-                    }
-                })),
-        )
-        .with_priority(1)
-        .mount(&ctx.smg_server)
-        .await;
+    let gate = mount_gated_title_match(&ctx).await;
 
     let start_resp = ctx
         .http_client()
@@ -540,6 +551,7 @@ async fn cancel_library_scan_mutation_marks_active_full_scan_canceled() {
         cancel_body["data"]["cancelLibraryScan"]["accepted"],
         serde_json::Value::Bool(true)
     );
+    release_gate(&gate);
 
     let canceled_session =
         wait_for_scan_status(&mut progress_rx, &session_id, LibraryScanStatus::Canceled).await;

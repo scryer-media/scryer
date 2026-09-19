@@ -240,6 +240,7 @@ pub fn describe_metrics() {
     scryer_application::describe_rule_metrics();
     scryer_infrastructure_acquisition::describe_indexer_metrics();
     scryer_infrastructure_acquisition::describe_download_client_router_metrics();
+    scryer_infrastructure_sql::writer_gate::describe_writer_gate_metrics();
     scryer_interface::describe_graphql_metrics();
     scryer_outbound_http::describe_outbound_http_metrics();
     crate::runtime_health::describe_runtime_health_metrics();
@@ -610,9 +611,9 @@ mod tests {
 
         shutdown.cancel();
 
-        tokio::time::timeout(Duration::from_secs(2), task)
+        tokio::time::timeout(Duration::from_secs(30), task)
             .await
-            .expect("upkeep task did not stop within 2s after cancellation")
+            .expect("upkeep task did not stop after cancellation")
             .expect("upkeep task panicked");
     }
 

@@ -143,10 +143,7 @@ impl MetadataGateway for MediaRequestMetadataGateway {
 }
 
 fn external_id(source: &str, value: impl ToString) -> ExternalId {
-    ExternalId {
-        source: source.to_string(),
-        value: value.to_string(),
-    }
+    ExternalId::new(source, value.to_string())
 }
 
 fn assert_external_ids(external_ids: &[ExternalId], expected: &[(&str, &str)]) {
@@ -297,18 +294,9 @@ async fn submit_media_request_creates_request_requester_and_domain_event() {
     assert_eq!(
         request.external_ids,
         vec![
-            ExternalId {
-                source: "imdb".to_string(),
-                value: "tt0009010".to_string(),
-            },
-            ExternalId {
-                source: "imdb".to_string(),
-                value: "tt1234567".to_string(),
-            },
-            ExternalId {
-                source: "tvdb".to_string(),
-                value: "9010".to_string(),
-            },
+            ExternalId::new("imdb".to_string(), "tt0009010".to_string()),
+            ExternalId::new("imdb".to_string(), "tt1234567".to_string()),
+            ExternalId::new("tvdb".to_string(), "9010".to_string()),
         ]
     );
 
@@ -663,10 +651,7 @@ async fn submit_media_request_accepts_search_correlation_id_without_tvdb() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let mut input = media_request_input(library_id, 9019);
-    input.external_ids = vec![ExternalId {
-        source: "imdb".to_string(),
-        value: "tt7654321".to_string(),
-    }];
+    input.external_ids = vec![ExternalId::new("imdb".to_string(), "tt7654321".to_string())];
 
     harness
         .app
@@ -678,10 +663,7 @@ async fn submit_media_request_accepts_search_correlation_id_without_tvdb() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].external_ids,
-        vec![ExternalId {
-            source: "imdb".to_string(),
-            value: "tt7654321".to_string(),
-        }]
+        vec![ExternalId::new("imdb".to_string(), "tt7654321".to_string())]
     );
 }
 
@@ -931,10 +913,7 @@ async fn submit_media_request_rejects_ids_that_cannot_correlate_to_smg_search() 
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
     let mut input = media_request_input(library_id, 9020);
-    input.external_ids = vec![ExternalId {
-        source: "unknown".to_string(),
-        value: "opaque".to_string(),
-    }];
+    input.external_ids = vec![ExternalId::new("unknown".to_string(), "opaque".to_string())];
 
     let error = harness
         .app
@@ -1257,14 +1236,8 @@ async fn request_only_user_can_list_submitted_bluey_series_request() {
     input.content_status = Some("Continuing".to_string());
     input.requested_monitor_type = Some("allEpisodes".to_string());
     input.external_ids = vec![
-        ExternalId {
-            source: "tvdb".to_string(),
-            value: "353546".to_string(),
-        },
-        ExternalId {
-            source: "imdb".to_string(),
-            value: "tt7678620".to_string(),
-        },
+        ExternalId::new("tvdb".to_string(), "353546".to_string()),
+        ExternalId::new("imdb".to_string(), "tt7678620".to_string()),
     ];
 
     harness
@@ -1919,10 +1892,7 @@ fn advanced_monitor_selection() -> scryer_domain::MonitorSelection {
         seasons: vec![2, 1],
         series_movies: vec![scryer_domain::MonitorSelectionMovie {
             name: "Harbor Movie".to_string(),
-            external_ids: vec![ExternalId {
-                source: "tvdb".to_string(),
-                value: "555".to_string(),
-            }],
+            external_ids: vec![ExternalId::new("tvdb".to_string(), "555".to_string())],
         }],
     }
 }

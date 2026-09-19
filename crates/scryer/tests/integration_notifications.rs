@@ -5,7 +5,11 @@ mod common;
 use async_graphql::Request;
 use async_trait::async_trait;
 use chrono::Utc;
-use common::{TestContext, disabled_auth_runtime_handle, initialize_wasm_runtime_for_tests};
+use common::{
+    TestContext, WAIT_UNTIL_TIMEOUT, disabled_auth_runtime_handle,
+    initialize_wasm_runtime_for_tests, wait_until,
+};
+use scryer_application::DomainEventRepository as _;
 use scryer_application::testing::AppUseCaseTestExt;
 use scryer_application::{
     AppError, AppResult, MediaServerConnectionRepository, NotificationAppPayload,
@@ -27,6 +31,7 @@ use scryer_domain::{
 };
 use scryer_infrastructure_library::media::servers::MediaServerConnectionStore;
 use scryer_infrastructure_notifications::notifications::store::NotificationStore;
+use scryer_infrastructure_workflow::workflow::stores::DomainEventStore;
 use scryer_interface::build_schema;
 use serde_json::{Value, json};
 use std::collections::HashMap;
@@ -653,10 +658,7 @@ fn title_context(
 }
 
 fn external_id(source: &str, value: &str) -> ExternalId {
-    ExternalId {
-        source: source.to_string(),
-        value: value.to_string(),
-    }
+    ExternalId::new(source, value)
 }
 
 fn new_event(
@@ -687,7 +689,8 @@ async fn wait_for_captured(
     provider: &FakeNotificationProvider,
     expected: usize,
 ) -> Vec<CapturedNotification> {
-    for _ in 0..50 {
+    let deadline = tokio::time::Instant::now() + WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         let captured = provider.captured();
         if captured.len() >= expected {
             return captured;
@@ -705,7 +708,8 @@ async fn wait_for_wiremock_requests(
     server: &wiremock::MockServer,
     expected: usize,
 ) -> Vec<wiremock::Request> {
-    for _ in 0..50 {
+    let deadline = tokio::time::Instant::now() + WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         let requests = server
             .received_requests()
             .await
@@ -1381,8 +1385,9 @@ async fn notification_dispatcher_delivers_jellyfin_media_server_target_refresh()
     .await;
 
     let cancel = CancellationToken::new();
+    // The dispatcher subscribes before its first catch-up poll, so an event
+    // appended before or after it starts is delivered either way.
     let dispatcher = tokio::spawn(start_notification_dispatcher(app.clone(), cancel.clone()));
-    tokio::task::yield_now().await;
 
     app.append_domain_event(new_event(
         "evt-jellyfin-media-server-target-refresh",
@@ -1902,26 +1907,38 @@ async fn notification_dispatcher_deduplicates_overlapping_file_delete_subscripti
 
     let cancel = CancellationToken::new();
     let dispatcher = tokio::spawn(start_notification_dispatcher(app.clone(), cancel.clone()));
-    app.append_domain_event(new_event(
-        "evt-file-delete-deduplicated",
-        "title-1",
-        "movie",
-        DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
-            title: title_context("Upgrade Movie", "movie", DomainExternalIds::default()),
-            media_updates: vec![MediaPathUpdate {
-                path: "/library/Upgrade Movie.old.mkv".to_string(),
-                update_type: MediaUpdateType::Deleted,
-            }],
-            file_id: Some("file-old".to_string()),
-            reason: MediaFileDeletedReason::UpgradeCleanup,
-            episode_ids: Vec::new(),
-        }),
-    ))
-    .await
-    .expect("file deletion event should append");
+    let event = app
+        .append_domain_event(new_event(
+            "evt-file-delete-deduplicated",
+            "title-1",
+            "movie",
+            DomainEventPayload::MediaFileDeleted(MediaFileDeletedEventData {
+                title: title_context("Upgrade Movie", "movie", DomainExternalIds::default()),
+                media_updates: vec![MediaPathUpdate {
+                    path: "/library/Upgrade Movie.old.mkv".to_string(),
+                    update_type: MediaUpdateType::Deleted,
+                }],
+                file_id: Some("file-old".to_string()),
+                reason: MediaFileDeletedReason::UpgradeCleanup,
+                episode_ids: Vec::new(),
+            }),
+        ))
+        .await
+        .expect("file deletion event should append");
 
     wait_for_captured(&provider, 1).await;
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    // The dispatcher delivers an event to every subscription before it
+    // records the event's offset, so once the offset covers it, any duplicate
+    // delivery would already have been captured.
+    let events = DomainEventStore::new(ctx.db.datastore());
+    wait_until("the dispatcher to finish the deletion event", || async {
+        events
+            .get_subscriber_offset("notification_dispatcher")
+            .await
+            .expect("read notification dispatcher offset")
+            >= event.sequence
+    })
+    .await;
     assert_eq!(provider.captured().len(), 1);
     cancel.cancel();
     dispatcher.await.expect("dispatcher should stop");
@@ -1960,8 +1977,9 @@ async fn notification_dispatcher_delivers_structured_lifecycle_metadata() {
     .await;
 
     let cancel = CancellationToken::new();
+    // The dispatcher subscribes before its first catch-up poll, so an event
+    // appended before or after it starts is delivered either way.
     let dispatcher = tokio::spawn(start_notification_dispatcher(app.clone(), cancel.clone()));
-    tokio::task::yield_now().await;
 
     let scenarios = vec![
         (
@@ -2262,8 +2280,9 @@ async fn notification_dispatcher_prefers_local_catalog_metadata_over_snapshot() 
     .await;
 
     let cancel = CancellationToken::new();
+    // The dispatcher subscribes before its first catch-up poll, so an event
+    // appended before or after it starts is delivered either way.
     let dispatcher = tokio::spawn(start_notification_dispatcher(app.clone(), cancel.clone()));
-    tokio::task::yield_now().await;
 
     app.append_domain_event(new_event(
         "evt-local-enrichment",
@@ -2369,8 +2388,9 @@ async fn notification_dispatcher_replays_notifications_after_operational_burst()
     }
 
     let cancel = CancellationToken::new();
+    // The dispatcher subscribes before its first catch-up poll, so an event
+    // appended before or after it starts is delivered either way.
     let dispatcher = tokio::spawn(start_notification_dispatcher(app.clone(), cancel.clone()));
-    tokio::task::yield_now().await;
 
     app.append_domain_event(new_event(
         "evt-import-after-burst",
@@ -2438,8 +2458,9 @@ async fn notification_dispatcher_ignores_operational_burst_while_running() {
 
     let mut wake_rx = app.notification_wake_receiver();
     let cancel = CancellationToken::new();
+    // The dispatcher subscribes before its first catch-up poll, so an event
+    // appended before or after it starts is delivered either way.
     let dispatcher = tokio::spawn(start_notification_dispatcher(app.clone(), cancel.clone()));
-    tokio::task::yield_now().await;
 
     for i in 0..300 {
         app.append_domain_event(new_event(
@@ -2495,7 +2516,7 @@ async fn notification_dispatcher_ignores_operational_burst_while_running() {
         .await
         .expect("notification event should append");
 
-    let wake = tokio::time::timeout(Duration::from_secs(1), wake_rx.recv())
+    let wake = tokio::time::timeout(WAIT_UNTIL_TIMEOUT, wake_rx.recv())
         .await
         .expect("notification wake should arrive")
         .expect("notification wake channel should stay open");

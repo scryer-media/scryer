@@ -1590,9 +1590,10 @@ async fn observe_rule_with_gates(
 }
 
 /// The handler trigger runs in the background; poll the candidate until it
-/// reaches `state` or the budget runs out.
+/// reaches `state`. The deadline is a hang guard only.
 async fn wait_for_candidate_state(ctx: &TestContext, rule_set_id: &str, state: &str) -> Value {
-    for _ in 0..50 {
+    let deadline = tokio::time::Instant::now() + common::WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         let shown = gql(
             ctx,
             &candidates_query(),

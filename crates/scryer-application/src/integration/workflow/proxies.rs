@@ -3022,6 +3022,7 @@ mod proxy_tests {
         let address = listener
             .local_addr()
             .expect("test listener should have an address");
+        let (probe_done, probe_returned) = tokio::sync::oneshot::channel::<()>();
         let server_task = tokio::spawn(async move {
             let (mut first, _) = listener
                 .accept()
@@ -3031,11 +3032,13 @@ mod proxy_tests {
             let _ = first.read(&mut request).await;
             drop(first);
 
-            match tokio::time::timeout(std::time::Duration::from_millis(500), listener.accept())
-                .await
-            {
-                Ok(Ok((_second, _))) => 2,
-                _ => 1,
+            // A fallback connects before the probe can return, so once the
+            // probe has returned a second connection is either already queued
+            // or never coming. `biased` checks the queue first.
+            tokio::select! {
+                biased;
+                accepted = listener.accept() => if accepted.is_ok() { 2 } else { 1 },
+                _ = probe_returned => 1,
             }
         });
         let now = Utc::now();
@@ -3071,6 +3074,7 @@ mod proxy_tests {
         let error = probe_solver_health(&config)
             .await
             .expect_err("closed health connection should fail immediately");
+        let _ = probe_done.send(());
         let connection_count = server_task.await.expect("test server should join");
 
         assert!(

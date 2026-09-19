@@ -182,6 +182,22 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
         }
     };
 
+    // Derivation is the expensive half of this cycle: the missing-scope
+    // anti-join walks every monitored episode in the catalog, and at library
+    // scale that is a multi-second read on every tick — taken here while a
+    // library scan is writing. Nothing downstream can act on a target without
+    // a download client, so the gate that would have thrown the whole set away
+    // runs before the set is built.
+    if !has_enabled_download_clients(app).await {
+        debug!("background acquisition: no enabled download clients configured, skipping cycle");
+        metrics::counter!(
+            "scryer_background_acquisition_cycles_total",
+            "outcome" => "no_clients",
+        )
+        .increment(1);
+        return BackgroundAcquisitionCycleOutcome::default();
+    }
+
     let mut targets = match app.derive_acquisition_targets(&now).await {
         Ok(targets) => targets,
         Err(err) => {
@@ -194,17 +210,6 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
     }
     if targets.is_empty() {
         return BackgroundAcquisitionCycleOutcome::default();
-    }
-
-    if !has_enabled_download_clients(app).await {
-        warn!(
-            target_count = targets.len(),
-            "background acquisition: no enabled download clients configured, skipping cycle"
-        );
-        return BackgroundAcquisitionCycleOutcome {
-            targets_derived: targets.len(),
-            ..BackgroundAcquisitionCycleOutcome::default()
-        };
     }
 
     let hot_resume = app.background_acquisition_hot_resume_position().await;
@@ -3833,14 +3838,23 @@ async fn process_single_target(
         };
         if !is_allowed {
             // Blocked on quality alone: admission never looked at an incumbent.
-            record_release_decision(app, item, title, candidate, decision_code, None, now).await;
-            app.emit_acquisition_candidate_rejected_event(
-                None,
-                title,
-                candidate.title.clone(),
-                decision_code.as_str().to_string(),
-            )
-            .await;
+            let recorded =
+                record_release_decision(app, item, title, candidate, decision_code, None, now)
+                    .await;
+            // A feed that repeats the same release every cycle would otherwise
+            // repeat its rejection every cycle too — 80 identical rows a
+            // minute on the load test, all of them the same catalogue of
+            // Pokémon releases refused for the same reason. The first refusal
+            // is the fact; a verdict that has not changed is not one.
+            if recorded.is_new_signal() {
+                app.emit_acquisition_candidate_rejected_event(
+                    None,
+                    title,
+                    candidate.title.clone(),
+                    decision_code.as_str().to_string(),
+                )
+                .await;
+            }
             continue;
         }
 
@@ -3874,7 +3888,7 @@ async fn process_single_target(
             skipped_for_failed = true;
         }
 
-        record_release_decision(
+        let recorded = record_release_decision(
             app,
             item,
             title,
@@ -3886,13 +3900,19 @@ async fn process_single_target(
         .await;
 
         if !decision_code.is_eligible() {
-            app.emit_acquisition_candidate_rejected_event(
-                None,
-                title,
-                candidate.title.clone(),
-                decision_code.as_str().to_string(),
-            )
-            .await;
+            // Same rule as the quality-blocked arm above: the rejection is
+            // told once per (scope, release, verdict), and again when the
+            // verdict changes, because the decision code is part of the
+            // ledger identity this asked.
+            if recorded.is_new_signal() {
+                app.emit_acquisition_candidate_rejected_event(
+                    None,
+                    title,
+                    candidate.title.clone(),
+                    decision_code.as_str().to_string(),
+                )
+                .await;
+            }
             // A fact about the *scope*, not about this candidate: the ranked
             // order is (tier, revision, score) and admission compares the same
             // three in the same order, so nothing below a rejected candidate
@@ -4940,32 +4960,32 @@ pub async fn start_background_acquisition_poller(
         });
     }
 
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::PluginRegistryRefresh,
         Utc::now() + chrono::Duration::hours(1),
     )
     .await;
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::HealthChecks,
         Utc::now() + chrono::Duration::seconds(30),
     )
     .await;
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::StagedNzbPrune,
         Utc::now() + chrono::Duration::hours(1),
     )
     .await;
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::FullHashBackfill,
         Utc::now() + chrono::Duration::minutes(15),
     )
     .await;
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::Housekeeping,
         Utc::now() + chrono::Duration::hours(24),
     )
     .await;
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::ProwlarrSync,
         Utc::now() + chrono::Duration::minutes(5),
     )
@@ -4974,9 +4994,9 @@ pub async fn start_background_acquisition_poller(
     // here made the jobs view promise a sweep four minutes before the worker
     // would actually wake for it.
     let rss_sync_tick = crate::acquisition::rss::rss_sync_tick_period();
-    app.set_job_next_run_at(JobKey::RssSync, Utc::now() + rss_sync_next_run_delta(rss_sync_tick))
+    app.advertise_job_next_run_at(JobKey::RssSync, Utc::now() + rss_sync_next_run_delta(rss_sync_tick))
         .await;
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::PendingReleaseProcessing,
         Utc::now() + chrono::Duration::minutes(1),
     )
@@ -5004,7 +5024,7 @@ pub async fn start_background_acquisition_poller(
             std::time::Duration::ZERO
         }
     };
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::MaintenanceRuleEvaluation,
         Utc::now()
             + chrono::Duration::from_std(maintenance_evaluation_offset)
@@ -5027,7 +5047,7 @@ pub async fn start_background_acquisition_poller(
             std::time::Duration::ZERO
         }
     };
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::LifecycleActionHandling,
         Utc::now()
             + chrono::Duration::from_std(lifecycle_action_offset)
@@ -5050,7 +5070,7 @@ pub async fn start_background_acquisition_poller(
             std::time::Duration::ZERO
         }
     };
-    app.set_job_next_run_at(
+    app.advertise_job_next_run_at(
         JobKey::MediaServerSignalSync,
         Utc::now()
             + chrono::Duration::from_std(media_server_signal_offset)
@@ -5215,7 +5235,7 @@ pub async fn start_background_acquisition_poller(
             _ = registry_refresh_interval.tick() => {
                 let app = app.clone();
                 run_task("registry_refresh", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::PluginRegistryRefresh,
                         Utc::now() + chrono::Duration::hours(1),
                     ).await;
@@ -5228,7 +5248,7 @@ pub async fn start_background_acquisition_poller(
             _ = health_check_interval.tick() => {
                 let app = app.clone();
                 run_task("health_check", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::HealthChecks,
                         Utc::now() + chrono::Duration::hours(6),
                     ).await;
@@ -5240,7 +5260,7 @@ pub async fn start_background_acquisition_poller(
             _ = staged_nzb_prune_interval.tick() => {
                 let app = app.clone();
                 run_task("staged_nzb_prune", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::StagedNzbPrune,
                         Utc::now() + chrono::Duration::hours(1),
                     ).await;
@@ -5253,7 +5273,7 @@ pub async fn start_background_acquisition_poller(
             _ = housekeeping_interval.tick() => {
                 let app = app.clone();
                 run_task("housekeeping", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::Housekeeping,
                         Utc::now() + chrono::Duration::hours(24),
                     ).await;
@@ -5266,7 +5286,7 @@ pub async fn start_background_acquisition_poller(
             _ = pending_release_interval.tick() => {
                 let app = app.clone();
                 run_task("pending_releases", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::PendingReleaseProcessing,
                         Utc::now() + chrono::Duration::minutes(1),
                     ).await;
@@ -5279,7 +5299,7 @@ pub async fn start_background_acquisition_poller(
             _ = prowlarr_sync_interval.tick() => {
                 let app = app.clone();
                 run_task("prowlarr_sync", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::ProwlarrSync,
                         Utc::now() + chrono::Duration::minutes(5),
                     ).await;
@@ -5308,7 +5328,7 @@ pub async fn start_background_acquisition_poller(
                 let app = app.clone();
                 let cadence = maintenance_evaluation_cadence;
                 spawn_single_scheduled_task(&mut maintenance_evaluation_tasks, run_task("maintenance_rule_evaluation", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::MaintenanceRuleEvaluation,
                         Utc::now()
                             + chrono::Duration::from_std(cadence)
@@ -5324,7 +5344,7 @@ pub async fn start_background_acquisition_poller(
                 let app = app.clone();
                 let cadence = lifecycle_action_cadence;
                 run_task("lifecycle_action_handling", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::LifecycleActionHandling,
                         Utc::now()
                             + chrono::Duration::from_std(cadence)
@@ -5340,7 +5360,7 @@ pub async fn start_background_acquisition_poller(
                 let app = app.clone();
                 let cadence = media_server_signal_cadence;
                 run_task("media_server_signal_sync", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::MediaServerSignalSync,
                         Utc::now()
                             + chrono::Duration::from_std(cadence)
@@ -5355,7 +5375,7 @@ pub async fn start_background_acquisition_poller(
             _ = rss_sync_interval.tick() => {
                 let app = app.clone();
                 run_task("rss_sync", async move {
-                    app.set_job_next_run_at(
+                    app.advertise_job_next_run_at(
                         JobKey::RssSync,
                         Utc::now() + rss_sync_next_run_delta(rss_sync_tick),
                     ).await;

@@ -895,7 +895,9 @@ fn is_title_external_id_projection_conflict_error(message: &str) -> bool {
     message.contains("UNIQUE constraint failed")
         && (message.contains("_title_external_id_projection_check")
             || message.contains("title_external_ids.facet")
-            || message.contains("idx_title_external_ids_facet_lookup"))
+            || message.contains("title_external_ids.external_kind")
+            || message.contains("idx_title_external_ids_facet_lookup")
+            || message.contains("idx_title_external_ids_library_kind_lookup"))
 }
 
 #[doc(hidden)]
@@ -904,6 +906,7 @@ pub async fn title_external_id_projection_conflict_hint(pool: &SqlitePool) -> Op
         "SELECT
              facet,
              source,
+             external_kind,
              external_id,
              GROUP_CONCAT(DISTINCT title_id) AS title_ids
          FROM (
@@ -911,6 +914,8 @@ pub async fn title_external_id_projection_conflict_hint(pool: &SqlitePool) -> Op
                  t.id AS title_id,
                  t.facet AS facet,
                  LOWER(TRIM(json_extract(external_id.value, '$.source'))) AS source,
+                 LOWER(TRIM(COALESCE(json_extract(external_id.value, '$.kind'), '')))
+                     AS external_kind,
                  TRIM(json_extract(external_id.value, '$.value')) AS external_id
              FROM titles AS t
              JOIN json_each(t.external_ids) AS external_id
@@ -920,11 +925,12 @@ pub async fn title_external_id_projection_conflict_hint(pool: &SqlitePool) -> Op
                  t.id,
                  t.facet,
                  LOWER(TRIM(json_extract(external_id.value, '$.source'))),
+                 LOWER(TRIM(COALESCE(json_extract(external_id.value, '$.kind'), ''))),
                  TRIM(json_extract(external_id.value, '$.value'))
          ) AS canonical
-         GROUP BY facet, source, external_id
+         GROUP BY facet, source, external_kind, external_id
          HAVING COUNT(DISTINCT title_id) > 1
-         ORDER BY facet, source, external_id
+         ORDER BY facet, source, external_kind, external_id
          LIMIT 5",
     )
     .fetch_all(pool)
@@ -940,14 +946,20 @@ pub async fn title_external_id_projection_conflict_hint(pool: &SqlitePool) -> Op
         .filter_map(|row| {
             let facet: String = row.try_get("facet").ok()?;
             let source: String = row.try_get("source").ok()?;
+            let external_kind: String = row.try_get("external_kind").unwrap_or_default();
             let external_id: String = row.try_get("external_id").ok()?;
             let title_ids: Option<String> = row.try_get("title_ids").ok();
             let title_ids = title_ids.unwrap_or_default();
+            let key = if external_kind.is_empty() {
+                format!("{source}/{external_id}")
+            } else {
+                format!("{source}/{external_kind}/{external_id}")
+            };
 
             Some(if title_ids.is_empty() {
-                format!("{facet}/{source}/{external_id}")
+                format!("{facet}/{key}")
             } else {
-                format!("{facet}/{source}/{external_id} (titles: {title_ids})")
+                format!("{facet}/{key} (titles: {title_ids})")
             })
         })
         .collect::<Vec<_>>();

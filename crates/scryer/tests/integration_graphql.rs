@@ -161,6 +161,24 @@ async fn gql(ctx: &TestContext, query: &str, variables: Value) -> Value {
     ctx.graphql_json(query, variables, None).await
 }
 
+/// Repeats a variable-free query until `done` accepts its error-free body,
+/// and returns that body. Panics with the last body at the hang guard.
+async fn gql_until(ctx: &TestContext, query: &str, done: impl Fn(&Value) -> bool) -> Value {
+    let deadline = tokio::time::Instant::now() + common::WAIT_UNTIL_TIMEOUT;
+    loop {
+        let body = gql(ctx, query, json!({})).await;
+        assert_no_errors(&body);
+        if done(&body) {
+            return body;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "query never reached the expected state: {body}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+}
+
 async fn gql_with_token(ctx: &TestContext, query: &str, variables: Value, token: &str) -> Value {
     ctx.graphql_json(query, variables, Some(token)).await
 }

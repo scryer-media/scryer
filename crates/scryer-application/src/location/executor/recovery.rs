@@ -91,7 +91,12 @@ pub(super) struct StorageWatch {
 impl StorageWatch {
     /// Longer than this and the mount is hung, which is as unavailable as
     /// missing; the blocked thread finishes on its own later.
+    #[cfg(not(test))]
     const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
+    /// Tests probe healthy temp directories, where only a starved blocking
+    /// pool could be slow, so the bound is the shared test hang guard.
+    #[cfg(test)]
+    const PROBE_TIMEOUT: Duration = crate::test_wait::TEST_WAIT_DEADLINE;
 
     pub async fn capture(source: &Path, destination: &Path) -> Option<Self> {
         let paths = [source.to_path_buf(), destination.to_path_buf()];

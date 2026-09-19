@@ -555,6 +555,90 @@ mod title_history_filter_tests {
         assert!(filtered.is_empty());
     }
 
+    /// The append returns the stored row straight from `INSERT ... RETURNING`,
+    /// so what the caller gets must still equal what a read of the row gives —
+    /// above all the generated `sequence`.
+    #[tokio::test]
+    async fn append_returns_the_stored_row_including_its_sequence() {
+        let store = store().await;
+
+        let first = store
+            .append(event_with_payload(
+                "event-a",
+                download_ignored_event().payload,
+            ))
+            .await
+            .expect("event should append");
+        let second = store
+            .append(event_with_payload(
+                "event-b",
+                download_ignored_event().payload,
+            ))
+            .await
+            .expect("event should append");
+
+        assert_eq!(first.sequence, 1);
+        assert_eq!(second.sequence, 2);
+
+        let batch = store
+            .append_many(vec![
+                event_with_payload("event-c", download_ignored_event().payload),
+                event_with_payload("event-d", download_ignored_event().payload),
+            ])
+            .await
+            .expect("events should append");
+        assert_eq!(
+            batch.iter().map(|event| event.sequence).collect::<Vec<_>>(),
+            vec![3, 4]
+        );
+
+        let stored = store
+            .list(&DomainEventFilter {
+                limit: 50,
+                ..DomainEventFilter::default()
+            })
+            .await
+            .expect("events should load");
+        let by_id = |event_id: &str| {
+            stored
+                .iter()
+                .find(|event| event.event_id == event_id)
+                .cloned()
+                .expect("event should be stored")
+        };
+        for returned in [first, second, batch[0].clone(), batch[1].clone()] {
+            assert_eq!(by_id(&returned.event_id), returned);
+        }
+    }
+
+    /// The replay append still answers with the already-stored row, which
+    /// `ON CONFLICT DO NOTHING` does not hand back through `RETURNING`.
+    #[tokio::test]
+    async fn replaying_an_append_returns_the_row_already_stored() {
+        let store = store().await;
+        let first = store
+            .append_once(download_ignored_event())
+            .await
+            .expect("event should append");
+        let replayed = store
+            .append_once(download_ignored_event())
+            .await
+            .expect("replayed event should resolve");
+
+        assert_eq!(first, replayed);
+        assert_eq!(
+            store
+                .list(&DomainEventFilter {
+                    limit: 50,
+                    ..DomainEventFilter::default()
+                })
+                .await
+                .expect("events should load")
+                .len(),
+            1
+        );
+    }
+
     #[tokio::test]
     async fn append_populates_query_projections() {
         let store = store().await;

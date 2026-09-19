@@ -499,10 +499,7 @@ mod title_image_cache_refresh_tests {
             monitored: true,
             tags: Vec::new(),
             canonical_tags: vec![],
-            external_ids: vec![scryer_domain::ExternalId {
-                source: "tvdb".to_string(),
-                value: "123".to_string(),
-            }],
+            external_ids: vec![scryer_domain::ExternalId::new("tvdb".to_string(), "123".to_string())],
             created_by: None,
             created_at: chrono::Utc::now(),
             year: None,

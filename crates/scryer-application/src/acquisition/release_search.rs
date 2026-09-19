@@ -539,50 +539,57 @@ pub(crate) fn series_movie_search_title(
         .as_deref()
         .and_then(crate::normalize::normalize_imdb_id)
     {
-        search_title.external_ids.push(scryer_domain::ExternalId {
-            source: "imdb".to_string(),
-            value: imdb_id,
-        });
+        search_title
+            .external_ids
+            .push(scryer_domain::ExternalId::new("imdb".to_string(), imdb_id));
     }
     if let Some(tvdb_id) = movie
         .tvdb_id
         .as_ref()
         .filter(|value| !value.trim().is_empty())
     {
-        search_title.external_ids.push(scryer_domain::ExternalId {
-            source: "tvdb".to_string(),
-            value: tvdb_id.clone(),
-        });
+        search_title
+            .external_ids
+            .push(scryer_domain::ExternalId::new(
+                "tvdb".to_string(),
+                tvdb_id.clone(),
+            ));
     }
     if let Some(tmdb_id) = movie
         .tmdb_id
         .as_ref()
         .filter(|value| !value.trim().is_empty())
     {
-        search_title.external_ids.push(scryer_domain::ExternalId {
-            source: "tmdb".to_string(),
-            value: tmdb_id.clone(),
-        });
+        search_title
+            .external_ids
+            .push(scryer_domain::ExternalId::new(
+                "tmdb".to_string(),
+                tmdb_id.clone(),
+            ));
     }
     if let Some(anidb_id) = movie
         .anidb_id
         .as_ref()
         .filter(|value| !value.trim().is_empty())
     {
-        search_title.external_ids.push(scryer_domain::ExternalId {
-            source: "anidb".to_string(),
-            value: anidb_id.clone(),
-        });
+        search_title
+            .external_ids
+            .push(scryer_domain::ExternalId::new(
+                "anidb".to_string(),
+                anidb_id.clone(),
+            ));
     }
     if let Some(mal_id) = movie
         .mal_id
         .as_ref()
         .filter(|value| !value.trim().is_empty())
     {
-        search_title.external_ids.push(scryer_domain::ExternalId {
-            source: "mal".to_string(),
-            value: mal_id.clone(),
-        });
+        search_title
+            .external_ids
+            .push(scryer_domain::ExternalId::new(
+                "mal".to_string(),
+                mal_id.clone(),
+            ));
     }
     search_title.aliases = series_movie_search_aliases(&search_title);
     search_title.tagged_aliases = search_title
@@ -2097,10 +2104,9 @@ impl AppUseCase {
                     "anidb" | "anidb_id"
                 )
             });
-            search_title.external_ids.push(scryer_domain::ExternalId {
-                source: "anidb".into(),
-                value: anidb_id,
-            });
+            search_title
+                .external_ids
+                .push(scryer_domain::ExternalId::new("anidb", anidb_id));
             return search_title;
         }
 
@@ -3363,14 +3369,8 @@ mod tests {
         title.name.clear();
         title.facet = MediaFacet::Movie;
         title.external_ids = vec![
-            scryer_domain::ExternalId {
-                source: "smg".to_string(),
-                value: "101".to_string(),
-            },
-            scryer_domain::ExternalId {
-                source: "tmdb".to_string(),
-                value: "603".to_string(),
-            },
+            scryer_domain::ExternalId::new("smg".to_string(), "101".to_string()),
+            scryer_domain::ExternalId::new("tmdb".to_string(), "603".to_string()),
         ];
 
         let query_result = build_movie_search_queries(&title, "movie", "movie".to_string());
@@ -4558,14 +4558,8 @@ mod tests {
         title.facet = MediaFacet::Series;
         title.year = Some(2023);
         title.external_ids = vec![
-            ExternalId {
-                source: "tvdb".to_string(),
-                value: "392276".to_string(),
-            },
-            ExternalId {
-                source: "tmdb".to_string(),
-                value: "111110".to_string(),
-            },
+            ExternalId::new("tvdb".to_string(), "392276".to_string()),
+            ExternalId::new("tmdb".to_string(), "111110".to_string()),
         ];
         title
     }
@@ -4672,10 +4666,9 @@ mod tests {
     #[test]
     fn conflicting_response_id_does_not_veto_an_unambiguous_title() {
         let mut title = make_title();
-        title.external_ids.push(ExternalId {
-            source: "tvdb".to_string(),
-            value: "425348".to_string(),
-        });
+        title
+            .external_ids
+            .push(ExternalId::new("tvdb".to_string(), "425348".to_string()));
         let mut subject = numbering_scoped_subject(&title, Some(1), Some(2));
         subject.tvdb_id = Some("425348".to_string());
         let mut candidate = make_candidate("Nightfall.S01E02.1080p.WEB-DL.x264-GRP", None);

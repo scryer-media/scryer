@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-acquisition"
-version = "0.21.4"
+version = "0.21.5"
 edition.workspace = true
 publish = false
 build = "build.rs"
@@ -44,6 +44,8 @@ scryer-plugin-sdk = { path = "../scryer-plugin-sdk" }
 # travelled through a tunnel rather than merely failing to go direct.
 scryer-tunnel = { workspace = true, features = ["test-support"] }
 tempfile = "3"
+# Paused-clock tests (`start_paused`) drive timers and run the runtime to idle.
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
 wiremock = { workspace = true }
 

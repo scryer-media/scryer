@@ -8050,16 +8050,24 @@ mod tests {
     }
 
     async fn wait_for_started(probe: &SearchConcurrencyProbe, expected: usize) {
-        for _ in 0..100 {
-            if probe.started.load(Ordering::SeqCst) >= expected {
-                return;
+        let started = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            while probe.started.load(Ordering::SeqCst) < expected {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
             }
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-        }
-        panic!(
+        })
+        .await;
+        assert!(
+            started.is_ok(),
             "timed out waiting for {expected} searches to start; saw {}",
             probe.started.load(Ordering::SeqCst)
         );
+    }
+
+    /// Returns once every task on the runtime is parked. Only valid on a
+    /// paused clock: tokio advances paused time only when no task can run, so
+    /// this sleep cannot complete while any spawned search still has work.
+    async fn run_until_idle() {
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
     }
 
     fn indexed_mock_configs(count: usize) -> Vec<IndexerConfig> {
@@ -8161,17 +8169,19 @@ mod tests {
         });
 
         wait_for_started(&probe, limit).await;
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // Every other leaf search has now had its chance to start, and is
+        // parked on the shared limit instead.
+        run_until_idle().await;
         assert_eq!(probe.max_active.load(Ordering::SeqCst), limit);
         assert_eq!(probe.started.load(Ordering::SeqCst), limit);
 
         probe.release_all();
-        tokio::time::timeout(std::time::Duration::from_secs(2), first_search)
+        tokio::time::timeout(std::time::Duration::from_secs(30), first_search)
             .await
             .expect("first search should finish")
             .expect("first search task should join")
             .expect("first search should succeed");
-        tokio::time::timeout(std::time::Duration::from_secs(2), second_search)
+        tokio::time::timeout(std::time::Duration::from_secs(30), second_search)
             .await
             .expect("second search should finish")
             .expect("second search task should join")
@@ -8224,7 +8234,7 @@ mod tests {
 
         wait_for_started(&probe, 1).await;
         cancel_token.cancel();
-        let error = tokio::time::timeout(std::time::Duration::from_secs(2), search)
+        let error = tokio::time::timeout(std::time::Duration::from_secs(30), search)
             .await
             .expect("search should return promptly")
             .expect("search task should join")
@@ -8641,7 +8651,7 @@ mod tests {
         assert_eq!(*starts.lock().expect("start order mutex"), expected);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn rss_cache_followers_do_not_consume_search_permits() {
         let probe = Arc::new(SearchConcurrencyProbe::default());
         let scheduler = Arc::new(RecordingScheduler::default());
@@ -8702,7 +8712,8 @@ mod tests {
                 )
                 .await
         });
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        // The follower has now reached its wait on the leader's result.
+        run_until_idle().await;
 
         assert_eq!(probe.started.load(Ordering::SeqCst), 1);
         assert_eq!(
@@ -8871,7 +8882,7 @@ mod tests {
         assert_eq!(BACKGROUND_INDEXER_SEARCH_CONCURRENCY_LIMIT, 4);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn automatic_strategy_concurrency_is_shared_across_cloned_clients() {
         assert_leaf_search_limit_shared_across_clones(
             SearchMode::Auto,
@@ -8880,7 +8891,7 @@ mod tests {
         .await;
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn interactive_strategy_concurrency_is_shared_across_cloned_clients() {
         assert_leaf_search_limit_shared_across_clones(
             SearchMode::Interactive,
@@ -13244,10 +13255,10 @@ mod tests {
         assert_eq!(alias.as_deref(), Some("Sora no Vale"));
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn indexer_rate_limiter_reserves_concurrent_slots_for_one_indexer() {
         let limiter = IndexerRateLimiter::new();
-        let started_at = std::time::Instant::now();
+        let started_at = tokio::time::Instant::now();
 
         let (first, second, third) = tokio::join!(
             async {
@@ -13266,19 +13277,15 @@ mod tests {
         let mut dispatches = [first, second, third];
         dispatches.sort();
 
-        assert!(
-            dispatches[0] < std::time::Duration::from_millis(500),
-            "the first request should dispatch immediately: {dispatches:?}"
-        );
-        assert!(
-            dispatches[1] >= std::time::Duration::from_millis(1_900)
-                && dispatches[1] < std::time::Duration::from_secs(3),
-            "the second request should dispatch at roughly two seconds: {dispatches:?}"
-        );
-        assert!(
-            dispatches[2] >= std::time::Duration::from_millis(3_900)
-                && dispatches[2] < std::time::Duration::from_secs(6),
-            "the third request should dispatch at roughly four seconds: {dispatches:?}"
+        // On the paused clock each reserved slot dispatches exactly on its
+        // two-second boundary.
+        assert_eq!(
+            dispatches,
+            [
+                std::time::Duration::ZERO,
+                std::time::Duration::from_secs(2),
+                std::time::Duration::from_secs(4),
+            ],
         );
     }
 

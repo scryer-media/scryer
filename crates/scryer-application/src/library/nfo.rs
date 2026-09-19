@@ -1514,14 +1514,8 @@ mod tests {
                 canonical_genre_tag("sci-fi", "Sci-Fi"),
             ],
             external_ids: vec![
-                ExternalId {
-                    source: "tvdb".into(),
-                    value: "12345".into(),
-                },
-                ExternalId {
-                    source: "tmdb".into(),
-                    value: "603".into(),
-                },
+                ExternalId::new("tvdb", "12345"),
+                ExternalId::new("tmdb", "603"),
             ],
             created_by: None,
             created_at: Utc::now(),

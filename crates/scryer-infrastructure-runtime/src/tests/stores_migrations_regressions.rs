@@ -306,10 +306,7 @@ async fn scoped_anibridge_external_ids_round_trip_for_collections_and_episodes()
     let mut title = make_test_title("title-anime", None);
     title.facet = MediaFacet::Anime;
     title.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Anime);
-    title.external_ids = vec![ExternalId {
-        source: "tvdb_id".to_string(),
-        value: "431162".to_string(),
-    }];
+    title.external_ids = vec![ExternalId::new("tvdb_id".to_string(), "431162".to_string())];
     TitleRepository::create(&catalog, title.clone())
         .await
         .expect("title should insert");
@@ -402,10 +399,7 @@ async fn scoped_anibridge_external_ids_round_trip_for_collections_and_episodes()
         TitleMetadataUpdate {
             metadata_language: Some("eng".to_string()),
             metadata_fetched_at: Some(Utc::now().to_rfc3339()),
-            extra_external_ids: vec![ExternalId {
-                source: "anidb".to_string(),
-                value: "18562".to_string(),
-            }],
+            extra_external_ids: vec![ExternalId::new("anidb".to_string(), "18562".to_string())],
             ..TitleMetadataUpdate::default()
         },
     )

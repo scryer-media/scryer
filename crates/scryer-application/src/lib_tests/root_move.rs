@@ -291,22 +291,7 @@ impl RootMoveFixture {
     /// id and the runner works in the background, so a story test watches the
     /// operation the way Activity does.
     async fn settle(&self, operation_id: &str) -> LocationOperation {
-        timeout(Duration::from_secs(10), async {
-            loop {
-                let operation = self
-                    .app
-                    .location_operation(operation_id)
-                    .await
-                    .expect("read operation")
-                    .expect("operation row exists");
-                if operation.state.is_terminal() {
-                    return operation;
-                }
-                sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("the operation reached a terminal state")
+        settle_location_operation(&self.app, operation_id).await
     }
 
     fn verifications(&self) -> Vec<crate::location::model::FileVerificationRecord> {
@@ -330,17 +315,11 @@ impl RootMoveFixture {
     /// terminal state, so a test that watched the operation settle has to give
     /// Activity the same beat the UI does.
     async fn settled_job_run(&self, run_id: &str) -> crate::JobRunRecord {
-        timeout(Duration::from_secs(10), async {
-            loop {
-                let run = self.job_run(run_id).await;
-                if run.status.is_terminal() {
-                    return run;
-                }
-                sleep(Duration::from_millis(5)).await;
-            }
+        wait_for("the job run to reach a terminal status", || async {
+            let run = self.job_run(run_id).await;
+            run.status.is_terminal().then_some(run)
         })
         .await
-        .expect("the job run reached a terminal status")
     }
 }
 

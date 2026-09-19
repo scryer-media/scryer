@@ -1679,7 +1679,7 @@ mod tests {
                     headers: BTreeMap::new(),
                 },
                 None,
-                Duration::from_secs(5),
+                Duration::from_secs(30),
             )
         })
         .await
@@ -1743,7 +1743,7 @@ mod tests {
                         headers: BTreeMap::new(),
                     },
                     None,
-                    Duration::from_secs(5),
+                    Duration::from_secs(30),
                 )
             })
             .await
@@ -1792,7 +1792,7 @@ mod tests {
                     headers: BTreeMap::new(),
                 },
                 None,
-                Duration::from_secs(5),
+                Duration::from_secs(30),
             )
         })
         .await
@@ -1853,7 +1853,7 @@ mod tests {
                     headers: BTreeMap::new(),
                 },
                 None,
-                Duration::from_secs(10),
+                Duration::from_secs(30),
             )
         })
         .await
@@ -1923,7 +1923,7 @@ mod tests {
                     headers: BTreeMap::new(),
                 },
                 None,
-                Duration::from_secs(15),
+                Duration::from_secs(30),
             )
         })
         .await
@@ -2202,7 +2202,7 @@ mod tests {
                 headers: BTreeMap::new(),
             },
             None,
-            Duration::from_secs(2),
+            Duration::from_secs(30),
         )
         .expect("accepted HTTP failure response");
         host.finish_indexer_error_capture(true);
@@ -2246,7 +2246,7 @@ mod tests {
                 headers: BTreeMap::new(),
             },
             None,
-            Duration::from_secs(2),
+            Duration::from_secs(30),
         )
         .expect("accepted HTTP success response");
         host.finish_indexer_error_capture(true);
@@ -2379,7 +2379,7 @@ mod tests {
                             headers: BTreeMap::new(),
                         },
                         None,
-                        Duration::from_secs(2),
+                        Duration::from_secs(30),
                     )
                     .expect("sibling child request should remain dispatchable");
                 let rate_limit_message = host.rate_limit_message("newznab").unwrap();
@@ -2428,7 +2428,7 @@ mod tests {
                         headers: BTreeMap::new(),
                     },
                     None,
-                    Duration::from_secs(2),
+                    Duration::from_secs(30),
                 )
                 .expect("plugin HTTP request should succeed from an async runtime");
 

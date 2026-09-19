@@ -749,10 +749,7 @@ async fn search_indexers_for_title_uses_tagged_aliases_for_auto_evaluation() {
                 facet: MediaFacet::Anime,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "1309".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "1309".to_string())],
                 year: Some(2022),
                 min_availability: None,
                 ..Default::default()

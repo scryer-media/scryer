@@ -625,7 +625,7 @@ async fn wait_for_iron_vale_scan_to_settle(
 }
 
 async fn wait_for_library_scan_sessions_to_clear(ctx: &TestContext) {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + common::WAIT_UNTIL_TIMEOUT;
     loop {
         if ctx.app.active_library_scan_sessions().await.is_empty() {
             return;

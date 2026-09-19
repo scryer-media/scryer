@@ -2380,7 +2380,7 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
         .await
         .expect("publish completed Weaver delta");
 
-    let blocked = tokio::time::timeout(std::time::Duration::from_secs(5), async {
+    let blocked = tokio::time::timeout(crate::common::WAIT_UNTIL_TIMEOUT, async {
         loop {
             let body = gql(
                 &ctx,
@@ -2467,9 +2467,10 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
         .update_import_status_and_notify(&import_id, ImportStatus::Pending, None)
         .await
         .expect("stage pending manual import");
-    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
 
-    let pending = gql(
+    // The import status reaches the queue read model on its own schedule;
+    // wait for this item's row to show it.
+    let pending = gql_until(
         &ctx,
         r#"
         query {
@@ -2479,10 +2480,9 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
           }
         }
         "#,
-        json!({}),
+        |body| body["data"]["downloadImport"]["items"][0]["importStatus"] == json!("PENDING"),
     )
     .await;
-    assert_no_errors(&pending);
     let row = &pending["data"]["downloadImport"]["items"][0];
     assert_eq!(row["downloadClientItemId"], json!(item_id));
     assert_eq!(row["displayState"], json!("IMPORT_PENDING"));
@@ -2493,8 +2493,7 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
         .update_import_status_and_notify(&import_id, ImportStatus::Processing, None)
         .await
         .expect("stage processing manual import");
-    tokio::time::sleep(std::time::Duration::from_millis(350)).await;
-    let processing = gql(
+    let processing = gql_until(
         &ctx,
         r#"
         query {
@@ -2504,10 +2503,9 @@ async fn graphql_download_import_exposes_background_import_blocked_state_from_ca
           }
         }
         "#,
-        json!({}),
+        |body| body["data"]["downloadImport"]["items"][0]["importStatus"] == json!("PROCESSING"),
     )
     .await;
-    assert_no_errors(&processing);
     let row = &processing["data"]["downloadImport"]["items"][0];
     assert_eq!(row["downloadClientItemId"], json!(item_id));
     assert_eq!(row["displayState"], json!("IMPORTING"));
@@ -2714,7 +2712,7 @@ async fn graphql_delete_download_marks_import_item_delete_completed_after_poller
         token.child_token(),
     ));
 
-    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    tokio::time::timeout(crate::common::WAIT_UNTIL_TIMEOUT, async {
         loop {
             let status: Option<String> = sqlx::query_scalar(
                 "SELECT status
@@ -2754,32 +2752,7 @@ async fn graphql_delete_download_marks_import_item_delete_completed_after_poller
         ),
     );
 
-    let queue_body = gql(
-        &ctx,
-        r#"
-        {
-          downloadQueue(includeAllActivity: true) {
-            downloadClientItemId
-            state
-            deleteStatus
-            deleteErrorMessage
-          }
-        }
-        "#,
-        json!({}),
-    )
-    .await;
-    assert_no_errors(&queue_body);
-
-    assert!(
-        queue_body["data"]["downloadQueue"]
-            .as_array()
-            .expect("download queue should be an array")
-            .iter()
-            .all(|item| item["downloadClientItemId"].as_str() != Some("123"))
-    );
-
-    let import_body = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let import_body = tokio::time::timeout(crate::common::WAIT_UNTIL_TIMEOUT, async {
         loop {
             let body = gql(
                 &ctx,
@@ -2814,6 +2787,34 @@ async fn graphql_delete_download_marks_import_item_delete_completed_after_poller
     })
     .await
     .expect("queue poller should publish tracked import activity to the runtime cache");
+
+    // The poller has now published a snapshot that includes the deleted item,
+    // so its absence from the queue is the poller's decision, not a race.
+    let queue_body = gql(
+        &ctx,
+        r#"
+        {
+          downloadQueue(includeAllActivity: true) {
+            downloadClientItemId
+            state
+            deleteStatus
+            deleteErrorMessage
+          }
+        }
+        "#,
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&queue_body);
+
+    assert!(
+        queue_body["data"]["downloadQueue"]
+            .as_array()
+            .expect("download queue should be an array")
+            .iter()
+            .all(|item| item["downloadClientItemId"].as_str() != Some("123"))
+    );
+
     queue_token.cancel();
     queue_handle
         .await
@@ -3558,7 +3559,24 @@ async fn drive_unlinked_completed_grab(with_identity: bool, staged: u8) -> Optio
             )
             .await
             .expect("publish in-flight unlinked snapshot");
-        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        // Wait until the poller has recorded the in-flight observation before
+        // reporting the job complete.
+        tokio::time::timeout(crate::common::WAIT_UNTIL_TIMEOUT, async {
+            loop {
+                let observed: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM downloads WHERE first_observed_at IS NOT NULL",
+                )
+                .fetch_one(ctx.db.pool())
+                .await
+                .expect("downloads should load");
+                if observed > 0 {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+            }
+        })
+        .await
+        .expect("the in-flight snapshot should record the download's first observation");
         // Mode 1 drops the job from `items` entirely; mode 2 is the production
         // shape the forensics prove (`downloads.last_observed_at` keeps moving,
         // and only the Phase 1 items loop stamps it): the job leaves the queue
@@ -3594,7 +3612,7 @@ async fn drive_unlinked_completed_grab(with_identity: bool, staged: u8) -> Optio
             .expect("publish completed unlinked delta");
     }
 
-    let tracked = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+    let tracked = tokio::time::timeout(crate::common::WAIT_UNTIL_TIMEOUT, async {
         loop {
             let state: Option<String> = sqlx::query_scalar(
                 "SELECT tracked_state FROM download_submissions

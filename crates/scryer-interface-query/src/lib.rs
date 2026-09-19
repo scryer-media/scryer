@@ -84,6 +84,7 @@ fn from_metadata_search_item(
             .into_iter()
             .map(|external_id| ExternalIdPayload {
                 source: external_id.source,
+                kind: external_id.kind,
                 value: external_id.value,
             })
             .collect(),
@@ -2224,6 +2225,7 @@ impl ActivityQueries {
             }),
             title_id: title_id.map(String::from),
             facet: facet.map(MediaFacetValue::into_domain),
+            stream_id: None,
             after_sequence: after_sequence.map(|value| value.0),
             before_sequence: before_sequence.map(|value| value.0),
             limit: limit.unwrap_or(100).max(1) as usize,

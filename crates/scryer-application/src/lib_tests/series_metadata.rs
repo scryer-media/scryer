@@ -78,10 +78,7 @@ async fn series_hydration_persists_and_clears_episode_image_url() {
                 facet: MediaFacet::Series,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb_id".into(),
-                    value: "880088".into(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb_id", "880088")],
                 min_availability: None,
                 ..Default::default()
             },
@@ -194,10 +191,7 @@ async fn anime_hybrid_movie_mapping_creates_series_movie_link() {
                 facet: MediaFacet::Anime,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb_id".into(),
-                    value: "348545".into(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb_id", "348545")],
                 min_availability: None,
                 ..Default::default()
             },
@@ -691,10 +685,7 @@ async fn anime_mapping_without_movie_link_does_not_create_series_movie_link() {
                 facet: MediaFacet::Anime,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb_id".into(),
-                    value: "361218".into(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb_id", "361218")],
                 min_availability: None,
                 ..Default::default()
             },
@@ -799,10 +790,7 @@ async fn anime_hydration_persists_scoped_anibridge_ids_for_episode_and_full_seas
                 name: "The Apiary Almanac".into(),
                 facet: MediaFacet::Anime,
                 monitored: true,
-                external_ids: vec![ExternalId {
-                    source: "tvdb_id".into(),
-                    value: "431162".into(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb_id", "431162")],
                 min_availability: None,
                 ..Default::default()
             },
@@ -935,10 +923,7 @@ async fn anime_movies_create_series_movie_links_without_collection_metadata() {
                 facet: MediaFacet::Anime,
                 monitored: true,
                 tags: vec!["scryer:monitor-specials:false".into()],
-                external_ids: vec![ExternalId {
-                    source: "tvdb_id".into(),
-                    value: "267440".into(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb_id", "267440")],
                 min_availability: None,
                 ..Default::default()
             },
@@ -1918,10 +1903,7 @@ async fn advanced_monitoring_monitors_only_the_selected_series_movies() {
             seasons: vec![1],
             series_movies: vec![scryer_domain::MonitorSelectionMovie {
                 name: "Iron Rail".into(),
-                external_ids: vec![ExternalId {
-                    source: "tvdb".into(),
-                    value: "131963".into(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb", "131963")],
             }],
         },
     )

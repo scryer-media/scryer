@@ -1,6 +1,6 @@
 [package]
 name = "scryer"
-version = "0.21.4"
+version = "0.21.5"
 edition.workspace = true
 
 [features]
@@ -65,6 +65,9 @@ url = "2"
 
 [dev-dependencies]
 async-trait = { workspace = true }
+# `test-util` gives tests a paused clock: a test observes a timer by the
+# virtual time it advances rather than by wall-clock elapsed time.
+tokio = { workspace = true, features = ["test-util"] }
 chrono = { workspace = true }
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
 wiremock = { workspace = true }

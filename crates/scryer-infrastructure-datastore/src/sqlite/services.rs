@@ -13,6 +13,14 @@ use crate::types::MigrationMode;
 const DEFAULT_SQLITE_MAX_CONNECTIONS: u32 = 16;
 const MAX_SQLITE_CONNECTIONS_CAP: u32 = 64;
 const SQLITE_SLOW_STATEMENT_WARN_MS: u64 = 1000;
+/// SQLite's built-in default is 1000 pages, which under a library scan's write
+/// rate (~1100 WAL pages/s) checkpoints roughly once a second and rewrites the
+/// same hot btree pages over and over. 16k pages (~64 MB at a 4 KiB page size)
+/// moves that to one checkpoint every ~15 s while keeping the WAL well under
+/// 100 MB. Durability is unchanged: a checkpoint only moves already-committed
+/// WAL frames into the main database.
+const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 16_384;
+const MAX_SQLITE_WAL_AUTOCHECKPOINT_PAGES: u32 = 262_144;
 
 fn sqlite_max_connections_from_env() -> u32 {
     std::env::var("SCRYER_SQLITE_MAX_CONNECTIONS")
@@ -21,6 +29,19 @@ fn sqlite_max_connections_from_env() -> u32 {
         .filter(|value| *value > 0)
         .unwrap_or(DEFAULT_SQLITE_MAX_CONNECTIONS)
         .clamp(1, MAX_SQLITE_CONNECTIONS_CAP)
+}
+
+/// `0` disables automatic checkpointing entirely, so it is allowed through
+/// unclamped for operators who drive checkpoints themselves.
+fn sqlite_wal_autocheckpoint_pages_from_env() -> u32 {
+    match std::env::var("SCRYER_SQLITE_WAL_AUTOCHECKPOINT_PAGES")
+        .ok()
+        .and_then(|value| value.parse::<u32>().ok())
+    {
+        Some(0) => 0,
+        Some(value) => value.min(MAX_SQLITE_WAL_AUTOCHECKPOINT_PAGES),
+        None => DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+    }
 }
 
 #[derive(Clone)]
@@ -139,7 +160,11 @@ impl SqliteServices {
                 // power loss may drop the last commit(s), never corrupts; needs
                 // product sign-off to enable.
                 // .synchronous(sqlx::sqlite::SqliteSynchronous::Normal)
-                .busy_timeout(std::time::Duration::from_millis(10_000));
+                .busy_timeout(std::time::Duration::from_millis(10_000))
+                .pragma(
+                    "wal_autocheckpoint",
+                    sqlite_wal_autocheckpoint_pages_from_env().to_string(),
+                );
         }
 
         let pool = pool_opts.connect_with(connect_opts).await.map_err(|err| {

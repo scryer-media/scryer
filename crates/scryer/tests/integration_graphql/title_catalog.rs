@@ -1854,10 +1854,7 @@ async fn graphql_titles_by_external_ids_returns_catalog_titles() {
         &ctx,
         "Mario",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "18861".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "18861".to_string())],
         vec![],
         true,
     )
@@ -1866,10 +1863,7 @@ async fn graphql_titles_by_external_ids_returns_catalog_titles() {
         &ctx,
         "Comet Duplicate",
         MediaFacet::Series,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "18861".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "18861".to_string())],
         vec![],
         true,
     )
@@ -1878,10 +1872,7 @@ async fn graphql_titles_by_external_ids_returns_catalog_titles() {
         &ctx,
         "The Super Comet Galaxy Movie",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "354713".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "354713".to_string())],
         vec![],
         true,
     )

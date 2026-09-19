@@ -14,6 +14,7 @@ use sqlx::{Postgres, Row, Sqlite, Transaction};
 use tokio::sync::Mutex;
 
 use super::common::parse_utc_datetime;
+use crate::writer_gate::WriterGateHold;
 
 const SQLITE_BUSY_RETRY_DELAYS: [Duration; 5] = [
     Duration::from_millis(50),
@@ -158,8 +159,12 @@ impl SqlRuntime {
             )));
         };
 
-        let _guard = writer_gate.lock().await;
-        run_with_sqlite_busy_retries(op_name, || op(pool.clone())).await
+        let mut hold = WriterGateHold::acquire(writer_gate, op_name).await;
+        let result = run_with_sqlite_busy_retries(op_name, || op(pool.clone())).await;
+        if result.is_ok() {
+            hold.committed();
+        }
+        result
     }
 
     pub async fn execute(exec: SqlExec<'_, '_>, template: &str, args: &[SqlArg]) -> AppResult<u64> {
@@ -385,8 +390,8 @@ impl SqlRuntime {
     {
         match datastore {
             StoreDatastore::Sqlite { pool, writer_gate } => {
-                let _guard = writer_gate.lock().await;
-                run_with_sqlite_busy_retries(op_name, || {
+                let mut hold = WriterGateHold::acquire(writer_gate, op_name).await;
+                let outcome = run_with_sqlite_busy_retries(op_name, || {
                     let pool = pool.clone();
                     let op = &op;
                     async move {
@@ -399,7 +404,11 @@ impl SqlRuntime {
                         Ok(result)
                     }
                 })
-                .await
+                .await;
+                if outcome.is_ok() {
+                    hold.committed();
+                }
+                outcome
             }
             StoreDatastore::Postgres { pool } => {
                 let mut tx = SqlTx::Postgres(pool.begin().await.map_err(repo_err)?);
@@ -1332,5 +1341,97 @@ mod tests {
             count, 0,
             "ragged rejection must not perform a partial insert"
         );
+    }
+
+    /// The writer gate is the sqlite serialization point, so its wait, hold
+    /// and outcome must be observable per transaction name. The recorder is a
+    /// thread-local, so the whole async body runs inside `block_on` on this
+    /// same thread.
+    #[test]
+    fn run_in_transaction_records_writer_gate_metrics() {
+        use std::collections::BTreeMap;
+
+        use metrics_util::debugging::{DebugValue, DebuggingRecorder};
+
+        use crate::writer_gate::{
+            WRITER_GATE_HOLD_SECONDS, WRITER_GATE_WAIT_SECONDS, WRITER_TRANSACTIONS_TOTAL,
+        };
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread runtime");
+        let recorder = DebuggingRecorder::new();
+        let snapshotter = recorder.snapshotter();
+
+        metrics::with_local_recorder(&recorder, || {
+            runtime.block_on(async {
+                let datastore = memory_datastore("writer_gate_metrics").await;
+                let pool = sqlite_pool(&datastore).clone();
+                sqlx::query("CREATE TABLE gate_probe (n INTEGER NOT NULL)")
+                    .execute(&pool)
+                    .await
+                    .expect("create scratch table");
+
+                SqlRuntime::run_in_transaction(&datastore, "gate_probe_insert", move |tx| {
+                    Box::pin(async move {
+                        SqlRuntime::execute(
+                            SqlExec::Tx(tx),
+                            "INSERT INTO gate_probe (n) VALUES ({})",
+                            &[SqlArg::I64(1)],
+                        )
+                        .await
+                    })
+                })
+                .await
+                .expect("named write must commit");
+            });
+        });
+
+        let series = snapshotter
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .map(|(key, _, _, value)| {
+                let labels = key
+                    .key()
+                    .labels()
+                    .map(|label| (label.key().to_string(), label.value().to_string()))
+                    .collect::<BTreeMap<_, _>>();
+                (key.key().name().to_string(), labels, value)
+            })
+            .collect::<Vec<_>>();
+
+        let find = |name: &str| {
+            series
+                .iter()
+                .find(|(metric, labels, _)| {
+                    metric == name
+                        && labels.get("transaction").map(String::as_str)
+                            == Some("gate_probe_insert")
+                })
+                .unwrap_or_else(|| panic!("missing `{name}` series: {series:?}"))
+        };
+
+        for name in [WRITER_GATE_WAIT_SECONDS, WRITER_GATE_HOLD_SECONDS] {
+            match &find(name).2 {
+                DebugValue::Histogram(samples) => {
+                    assert_eq!(samples.len(), 1, "`{name}` must record exactly one sample");
+                    assert!(
+                        samples[0].into_inner() >= 0.0,
+                        "`{name}` sample must be a non-negative duration"
+                    );
+                }
+                other => panic!("`{name}` must be a histogram, got {other:?}"),
+            }
+        }
+
+        let (_, labels, value) = find(WRITER_TRANSACTIONS_TOTAL);
+        assert_eq!(
+            labels.get("outcome").map(String::as_str),
+            Some("committed"),
+            "a successful transaction must count as committed: {labels:?}"
+        );
+        assert_eq!(value, &DebugValue::Counter(1));
     }
 }

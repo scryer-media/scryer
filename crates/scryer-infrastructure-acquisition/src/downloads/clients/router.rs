@@ -4366,10 +4366,9 @@ mod tests {
         }
     }
 
-    struct DelayedQueueDownloadClient {
-        delay: Duration,
-        queue_items: Vec<DownloadQueueItem>,
-    }
+    /// A client whose queue read never completes, so a feedback timeout
+    /// around it always has to fire.
+    struct StalledQueueDownloadClient;
 
     struct FeedbackScopeQueueDownloadClient {
         scopes: Mutex<Vec<Vec<String>>>,
@@ -4401,7 +4400,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl DownloadClient for DelayedQueueDownloadClient {
+    impl DownloadClient for StalledQueueDownloadClient {
         async fn submit_download(
             &self,
             _request: &DownloadClientAddRequest,
@@ -4417,8 +4416,7 @@ mod tests {
         }
 
         async fn list_queue(&self) -> AppResult<Vec<DownloadQueueItem>> {
-            tokio::time::sleep(self.delay).await;
-            Ok(self.queue_items.clone())
+            std::future::pending().await
         }
     }
 
@@ -4470,18 +4468,18 @@ mod tests {
         }
     }
 
-    struct DelayedCompletedDownloadClient {
-        delay: Duration,
-    }
+    /// A client whose completion reads never complete, so a feedback timeout
+    /// around them always has to fire.
+    struct StalledCompletedDownloadClient;
 
-    impl DelayedCompletedDownloadClient {
-        async fn delay(&self) {
-            tokio::time::sleep(self.delay).await;
+    impl StalledCompletedDownloadClient {
+        async fn stall(&self) {
+            std::future::pending::<()>().await;
         }
     }
 
     #[async_trait]
-    impl DownloadClient for DelayedCompletedDownloadClient {
+    impl DownloadClient for StalledCompletedDownloadClient {
         async fn submit_download(
             &self,
             _request: &DownloadClientAddRequest,
@@ -4492,7 +4490,7 @@ mod tests {
         async fn list_completed_downloads(
             &self,
         ) -> AppResult<Vec<scryer_domain::CompletedDownload>> {
-            self.delay().await;
+            self.stall().await;
             Ok(Vec::new())
         }
 
@@ -4500,7 +4498,7 @@ mod tests {
             &self,
             _limit: usize,
         ) -> AppResult<Vec<scryer_domain::CompletedDownload>> {
-            self.delay().await;
+            self.stall().await;
             Ok(Vec::new())
         }
 
@@ -4509,7 +4507,7 @@ mod tests {
             _limit: usize,
             _excluded_client_types: &[&str],
         ) -> AppResult<Vec<scryer_domain::CompletedDownload>> {
-            self.delay().await;
+            self.stall().await;
             Ok(Vec::new())
         }
 
@@ -4520,7 +4518,7 @@ mod tests {
             _client_types: &[String],
             _excluded_client_types: &[&str],
         ) -> AppResult<Vec<scryer_domain::CompletedDownload>> {
-            self.delay().await;
+            self.stall().await;
             Ok(Vec::new())
         }
 
@@ -4530,7 +4528,7 @@ mod tests {
             _client_type: &str,
             _download_client_item_id: &str,
         ) -> AppResult<Option<scryer_domain::CompletedDownload>> {
-            self.delay().await;
+            self.stall().await;
             Ok(None)
         }
     }
@@ -8444,10 +8442,7 @@ mod tests {
     #[tokio::test]
     async fn download_client_timeout_wrapper_times_out_feedback_reads() {
         let wrapped = FeedbackTimeoutDownloadClient::new(
-            Arc::new(DelayedQueueDownloadClient {
-                delay: Duration::from_millis(25),
-                queue_items: vec![test_queue_item("slow")],
-            }),
+            Arc::new(StalledQueueDownloadClient),
             Duration::from_millis(5),
         );
 
@@ -8466,9 +8461,7 @@ mod tests {
     #[tokio::test]
     async fn download_client_timeout_wrapper_times_out_all_completion_reads() {
         let wrapped = FeedbackTimeoutDownloadClient::new(
-            Arc::new(DelayedCompletedDownloadClient {
-                delay: Duration::from_millis(25),
-            }),
+            Arc::new(StalledCompletedDownloadClient),
             Duration::from_millis(5),
         );
         let client_ids = vec!["client-a".to_string()];
@@ -8604,10 +8597,7 @@ mod tests {
             .unwrap()
             .push(test_queue_item("fast"));
 
-        let slow_client: Arc<dyn DownloadClient> = Arc::new(DelayedQueueDownloadClient {
-            delay: Duration::from_millis(25),
-            queue_items: vec![test_queue_item("slow")],
-        });
+        let slow_client: Arc<dyn DownloadClient> = Arc::new(StalledQueueDownloadClient);
 
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {
@@ -8831,10 +8821,11 @@ mod tests {
             null_staged_nzb_store(),
             test_pipeline_limit(),
             Some(plugin_provider),
-            Duration::from_secs(5),
+            // Only a failure bound: a sequential poll deadlocks on the barrier.
+            Duration::from_secs(120),
         );
 
-        let items = tokio::time::timeout(Duration::from_secs(1), router.list_queue())
+        let items = tokio::time::timeout(Duration::from_secs(30), router.list_queue())
             .await
             .expect("both feedback reads should reach the barrier concurrently")
             .expect("parallel queue listing should succeed");
@@ -8933,19 +8924,20 @@ mod tests {
             null_staged_nzb_store(),
             test_pipeline_limit(),
             Some(plugin_provider),
-            Duration::from_secs(5),
+            // Only a failure bound: client one is held until the test releases it.
+            Duration::from_secs(120),
         ));
 
         let poll = tokio::spawn({
             let router = router.clone();
             async move { router.list_queue().await }
         });
-        tokio::time::timeout(Duration::from_secs(1), fifth_started.notified())
+        tokio::time::timeout(Duration::from_secs(30), fifth_started.notified())
             .await
             .expect("client five should start while client one remains blocked");
         first_release.notify_one();
 
-        let items = tokio::time::timeout(Duration::from_secs(1), poll)
+        let items = tokio::time::timeout(Duration::from_secs(30), poll)
             .await
             .expect("queue polling should finish after client one is released")
             .expect("queue polling task should not panic")
@@ -8968,14 +8960,8 @@ mod tests {
 
     #[tokio::test]
     async fn list_queue_returns_timeout_error_when_all_clients_time_out() {
-        let slow_a: Arc<dyn DownloadClient> = Arc::new(DelayedQueueDownloadClient {
-            delay: Duration::from_millis(25),
-            queue_items: vec![test_queue_item("slow-a")],
-        });
-        let slow_b: Arc<dyn DownloadClient> = Arc::new(DelayedQueueDownloadClient {
-            delay: Duration::from_millis(25),
-            queue_items: vec![test_queue_item("slow-b")],
-        });
+        let slow_a: Arc<dyn DownloadClient> = Arc::new(StalledQueueDownloadClient);
+        let slow_b: Arc<dyn DownloadClient> = Arc::new(StalledQueueDownloadClient);
 
         let plugin_provider: Arc<dyn DownloadClientPluginProvider> =
             Arc::new(MockDownloadClientPluginProvider {

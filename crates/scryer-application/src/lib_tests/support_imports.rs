@@ -240,6 +240,10 @@ pub(super) struct MockMediaFileRepo {
     /// real facet (movie/series/anime) for the derived target, since the thinned
     /// state row does not carry it.
     pub(super) missing_scope_titles: Option<Arc<super::MockTitleRepo>>,
+    /// How many catalog-wide missing-scope sweeps ran. The real sweep is an
+    /// anti-join over every monitored episode, so a scheduled cycle that cannot
+    /// act on the result must not take one.
+    pub(super) missing_scope_sweeps: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl MockMediaFileRepo {
@@ -423,6 +427,8 @@ impl MediaFileRepository for MockMediaFileRepo {
     }
 
     async fn list_missing_scope_candidates(&self) -> AppResult<MissingScopeCandidates> {
+        self.missing_scope_sweeps
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         if let Some(candidates) = &self.missing_scope_candidates_override {
             return Ok(candidates.clone());
         }

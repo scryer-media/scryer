@@ -7,6 +7,23 @@ pub(crate) async fn has_enabled_download_clients(app: &AppUseCase) -> bool {
         .map(|configs| configs.into_iter().any(|config| config.is_enabled))
         .unwrap_or(false)
 }
+
+/// Whether any indexer is configured and enabled.
+///
+/// A cycle that would query indexers has nothing to reach without one, so this
+/// is the cheapest gate a scheduled poll can put in front of the catalog work
+/// it would otherwise assemble and throw away. A repository error is treated as
+/// "yes" so a transient read never silently suppresses polling.
+pub(crate) async fn has_enabled_indexers(app: &AppUseCase) -> bool {
+    app.services
+        .integrations
+        .indexer_configs
+        .list(None)
+        .await
+        .map(|configs| configs.into_iter().any(|config| config.is_enabled))
+        .unwrap_or(true)
+}
+
 impl AppUseCase {
     pub async fn get_wanted_item(
         &self,

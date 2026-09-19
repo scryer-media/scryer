@@ -99,13 +99,19 @@ async fn reseeding_an_unchanged_builtin_leaves_updated_at_alone() {
     };
 
     seed("0.2.2").await;
+    // Backdate the seed instead of sleeping: any later write stamps a newer
+    // `updated_at`, however little wall time has passed.
+    sqlx::query("UPDATE plugin_installations SET updated_at = ? WHERE plugin_id = 'newznab'")
+        .bind("2000-01-01T00:00:00+00:00")
+        .execute(services.pool())
+        .await
+        .expect("backdate seeded builtin");
     let first = customization
         .get_plugin_installation("newznab")
         .await
         .expect("load seeded builtin")
         .expect("builtin installation should exist");
 
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     seed("0.2.2").await;
     let unchanged = customization
         .get_plugin_installation("newznab")
@@ -117,7 +123,6 @@ async fn reseeding_an_unchanged_builtin_leaves_updated_at_alone() {
         "re-seeding identical metadata should not touch updated_at"
     );
 
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
     seed("0.3.0").await;
     let bumped = customization
         .get_plugin_installation("newznab")

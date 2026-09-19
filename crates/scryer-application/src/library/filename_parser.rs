@@ -1399,10 +1399,7 @@ mod tests {
             monitored: true,
             tags: vec![],
             canonical_tags: vec![],
-            external_ids: vec![ExternalId {
-                source: "tvdb".into(),
-                value: "12345".into(),
-            }],
+            external_ids: vec![ExternalId::new("tvdb", "12345")],
             created_by: None,
             created_at: Utc::now(),
             year: Some(2024),
@@ -1598,6 +1595,88 @@ mod tests {
             generated_on: "2026-08-30".to_string(),
             corroborating_order: None,
             seasons,
+        }
+    }
+
+    /// Per-season episode counts of a long-running multi-cour anime, shaped
+    /// like Pokémon's TVDB record (S00 specials plus S01-S20).
+    const LONG_RUNNING_ANIME_SEASON_LENGTHS: [u32; 21] = [
+        20, 82, 52, 28, 52, 65, 40, 52, 52, 47, 52, 52, 52, 34, 84, 58, 93, 47, 146, 136, 150,
+    ];
+
+    /// Episodes for every season of that record, keyed `ep-<season>-<number>`,
+    /// in the same order a catalog would hold them.
+    fn long_running_anime_episodes() -> Vec<Episode> {
+        let mut episodes = Vec::new();
+        for (season, length) in LONG_RUNNING_ANIME_SEASON_LENGTHS.iter().enumerate() {
+            for number in 1..=*length {
+                episodes.push(episode(
+                    &format!("ep-{season}-{number}"),
+                    &season.to_string(),
+                    &number.to_string(),
+                ));
+            }
+        }
+        episodes
+    }
+
+    /// Sonarr writes anime episodes with the absolute number in its own
+    /// hyphen-delimited slot. Every one of those files names exactly one
+    /// episode, and the scan must place it there — reading the absolute number
+    /// as the far end of an episode range turns a single file into a
+    /// season-sized pack that resolves to nothing and is dropped without a
+    /// `media_files` row (issue: 1,880 anime files lost on a 111k-file scan).
+    #[test]
+    fn title_scan_places_sonarr_absolute_numbered_anime_files_on_their_own_episode() {
+        let title = title("Pokémon", MediaFacet::Anime);
+        let episodes = long_running_anime_episodes();
+
+        // (season, episode, absolute) triples taken from the real library.
+        // Season 1 survived the defect because there the absolute number equals
+        // the episode number, so the bogus range was one episode wide.
+        for (season, number, absolute) in [
+            (1_u32, 1_u32, 1_u32),
+            (2, 1, 83),
+            (2, 36, 118),
+            (3, 1, 135),
+            (10, 1, 473),
+            (20, 150, 1373),
+        ] {
+            let path = format!(
+                "/library/Pokémon (1997) {{tvdb-76703}}/Season {season:02}/Pokémon (1997) - S{season:02}E{number:02} - {absolute:03} - Episode Name [WEBDL-1080p].mkv"
+            );
+            let path = Path::new(&path);
+            let input = LibraryFilenameParseInput {
+                path,
+                display_name: None,
+                library_root: Some(Path::new("/library")),
+                title: Some(&title),
+                facet: Some(&title.facet),
+                collections: &[],
+                series_movie_links: &[],
+                episodes: &episodes,
+                existing_record: None,
+                anime_numbering_bridge: None,
+                mode: LibraryFilenameParseMode::TitleScan,
+                fallback_policy: LibraryFilenameFallbackPolicy::NeedReleaseMetadata,
+            };
+
+            let parse = parse_library_filename(&input);
+
+            assert_eq!(
+                parse.unmatched_reason(),
+                None,
+                "S{season:02}E{number:02} - {absolute:03} was refused"
+            );
+            assert_eq!(
+                parse
+                    .target_episodes()
+                    .iter()
+                    .map(|episode| episode.id.as_str())
+                    .collect::<Vec<_>>(),
+                vec![format!("ep-{season}-{number}").as_str()],
+                "S{season:02}E{number:02} - {absolute:03} resolved to the wrong episodes"
+            );
         }
     }
 

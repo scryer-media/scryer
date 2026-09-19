@@ -2689,7 +2689,10 @@ mod tests {
         assert_eq!(account.last_login_at, None);
     }
 
-    #[tokio::test]
+    // Paused clock: the per-connection lookup timeout can only fire once every
+    // lookup task is idle, so a healthy connection scheduled late on a loaded
+    // runner is never reported as timed out.
+    #[tokio::test(start_paused = true)]
     async fn media_server_users_fail_open_across_connections() {
         let admin = admin_user();
         let mut jellyfin_connection = test_media_server_connection(
@@ -2767,7 +2770,9 @@ mod tests {
         assert!(groups_by_id["jellyfin-fail"].users.is_empty());
     }
 
-    #[tokio::test]
+    // Paused clock: the stalled lookup's timeout fires only after the healthy
+    // lookup has finished, independent of how the runner schedules the tasks.
+    #[tokio::test(start_paused = true)]
     async fn media_server_users_timeout_does_not_block_successful_connections() {
         let admin = admin_user();
         let mut stalled_jellyfin_connection = test_media_server_connection(
@@ -2794,16 +2799,14 @@ mod tests {
             )),
         );
 
-        let started_at = std::time::Instant::now();
-        let groups = app
-            .list_media_server_users(&admin, None)
-            .await
-            .expect("list media server users");
-
-        assert!(
-            started_at.elapsed() < std::time::Duration::from_secs(1),
-            "stalled media server lookup should be bounded by the per-connection timeout"
-        );
+        // The stalled lookup never returns, so finishing at all proves the
+        // per-connection timeout bounded it.
+        let groups = crate::test_wait::within_deadline(
+            "the stalled media server lookup to be bounded by its timeout",
+            app.list_media_server_users(&admin, None),
+        )
+        .await
+        .expect("list media server users");
         let groups_by_id = groups
             .iter()
             .map(|group| (group.connection_id.as_str(), group))

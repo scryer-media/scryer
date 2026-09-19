@@ -416,13 +416,12 @@ async fn flush_title_scan_progress_batch(
 
     let delta = std::mem::take(pending_progress);
     let coordinator = LibraryScanCoordinator::new(app.clone(), session_id.to_string());
-    if delta.completed > 0 {
-        coordinator.mark_file_completed(delta.completed).await;
-    }
-    if delta.failed > 0 {
-        coordinator.mark_file_failed(delta.failed).await;
-    }
-    coordinator.publish_progress().await;
+    // One flush is one transaction: the completed/failed deltas and the
+    // coalesced progress event are the same events in the same order, they
+    // just no longer each pay a commit (and two fsyncs) of their own.
+    coordinator
+        .mark_file_progress_and_publish(delta.completed, delta.failed)
+        .await;
 }
 
 fn slug_from_library_name(name: &str) -> String {

@@ -110,6 +110,7 @@ pub struct DownloadSubmissionGuardTable {
     uncertain_titles: Arc<std::sync::Mutex<HashMap<String, UncertainDownloadSubmissionClaim>>>,
     title_states: Arc<std::sync::Mutex<HashMap<String, CanonicalSubmissionTitleState>>>,
     client_snapshot: Arc<std::sync::Mutex<Option<CachedDownloadClientSnapshot>>>,
+    acquisition_snapshot: Arc<std::sync::Mutex<Option<CachedAcquisitionClientSnapshot>>>,
 }
 
 #[derive(Clone)]
@@ -151,6 +152,17 @@ impl CanonicalSubmissionTitleState {
 struct CachedDownloadClientSnapshot {
     refreshed_at: std::time::Instant,
     snapshot: DownloadClientSnapshotOutcome,
+}
+
+/// The derived acquisition view of the same clients: every queue and history
+/// page folded into the sets the double-submit guard asks about.
+///
+/// Held behind an `Arc` because a walk hands one out per search subject and a
+/// thousand-item history is not worth copying each time.
+#[derive(Clone)]
+struct CachedAcquisitionClientSnapshot {
+    refreshed_at: std::time::Instant,
+    snapshot: Arc<crate::acquisition_workflow::DownloadClientSnapshot>,
 }
 
 #[derive(Clone)]
@@ -211,8 +223,29 @@ impl DownloadSubmissionGuardTable {
         self.acquire_key(title_id.to_string()).await
     }
 
+    /// Test seam: how many callers hold or are parked on a title's submission
+    /// lock, so a test can tell when a second submission reached contention.
+    #[cfg(test)]
+    pub(crate) async fn title_lock_participants(&self, title_id: &str) -> usize {
+        self.locks
+            .lock()
+            .await
+            .get(title_id)
+            .map_or(0, std::sync::Weak::strong_count)
+    }
+
     pub(crate) async fn acquire_client_snapshot(&self) -> tokio::sync::OwnedMutexGuard<()> {
         self.acquire_key("download-client-snapshot".to_string())
+            .await
+    }
+
+    /// Serializes the *derived* snapshot build, so the subjects of one walk
+    /// queue behind a single set of client reads instead of each starting its
+    /// own. Deliberately a different key from `acquire_client_snapshot`: the
+    /// two builds read different endpoints, and neither should be able to
+    /// stall behind the other.
+    pub(crate) async fn acquire_acquisition_snapshot(&self) -> tokio::sync::OwnedMutexGuard<()> {
+        self.acquire_key("acquisition-client-snapshot".to_string())
             .await
     }
 
@@ -252,8 +285,25 @@ impl DownloadSubmissionGuardTable {
     /// the caches survives.
     pub(crate) fn forget_settled_download(&self, title_id: &str) {
         self.clear_title_state(title_id);
+        self.invalidate_client_snapshots();
+    }
+
+    /// Both client-state caches stop describing the clients: a grab was just
+    /// submitted, or a download settled. The next reader re-asks.
+    ///
+    /// This is what keeps snapshot reuse exactly as strict as a fetch per
+    /// subject was. A cached snapshot may only answer questions about a queue
+    /// nothing has touched since it was read; the moment this process hands a
+    /// client something — or learns a client finished something — the cached
+    /// answer could say "free" about a scope that is now claimed, and that is
+    /// precisely the double-submit the guard exists to prevent.
+    pub(crate) fn invalidate_client_snapshots(&self) {
         *self
             .client_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        *self
+            .acquisition_snapshot
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     }
@@ -277,6 +327,34 @@ impl DownloadSubmissionGuardTable {
             .as_ref()
             .filter(|cached| cached.refreshed_at.elapsed() <= CACHED_SUBMISSION_STATE_MAX_AGE)
             .map(|cached| cached.snapshot.clone())
+    }
+
+    /// The derived snapshot a walk may still reuse, or `None` when there is
+    /// none or it has aged past `CACHED_SUBMISSION_STATE_MAX_AGE` — the same
+    /// bound the submission path's cache already honours.
+    pub(crate) fn cached_acquisition_snapshot(
+        &self,
+    ) -> Option<Arc<crate::acquisition_workflow::DownloadClientSnapshot>> {
+        self.acquisition_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+            .filter(|cached| cached.refreshed_at.elapsed() <= CACHED_SUBMISSION_STATE_MAX_AGE)
+            .map(|cached| Arc::clone(&cached.snapshot))
+    }
+
+    pub(crate) fn store_acquisition_snapshot(
+        &self,
+        snapshot: Arc<crate::acquisition_workflow::DownloadClientSnapshot>,
+    ) {
+        *self
+            .acquisition_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(CachedAcquisitionClientSnapshot {
+                refreshed_at: std::time::Instant::now(),
+                snapshot,
+            });
     }
 
     pub(crate) fn store_client_snapshot(&self, snapshot: DownloadClientSnapshotOutcome) {

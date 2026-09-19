@@ -924,14 +924,8 @@ mod tests {
     #[test]
     fn catalog_external_ids_convert_into_identities() {
         let external_ids = vec![
-            ExternalId {
-                source: "TMDB".to_string(),
-                value: "603".to_string(),
-            },
-            ExternalId {
-                source: "  ".to_string(),
-                value: "ignored".to_string(),
-            },
+            ExternalId::new("TMDB".to_string(), "603".to_string()),
+            ExternalId::new("  ".to_string(), "ignored".to_string()),
         ];
 
         let source = SourceTitleIdentity::new("src", MediaFacet::Movie)

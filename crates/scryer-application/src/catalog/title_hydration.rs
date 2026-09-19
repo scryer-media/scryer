@@ -325,6 +325,11 @@ pub async fn start_background_title_hydration_loop(
             } else {
                 metrics::counter!("scryer_title_metadata_hydration_scan_owned_yields_total")
                     .increment(1);
+                #[cfg(test)]
+                app.runtime
+                    .catalog
+                    .title_hydration_scan_yields
+                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 debug!(
                     blocked_facets = ?active_scan_facet_labels(&blocked_facets),
                     "title hydration loop: yielding while library scan owns active facet"
@@ -467,11 +472,15 @@ pub async fn start_background_title_hydration_loop(
                     original_attempts.remove(&title_id);
                 }
 
-                for (title_id, _) in outcome.failed_titles {
+                for (title_id, reason) in outcome.failed_titles {
                     metrics::counter!("scryer_title_metadata_hydration_failure_total").increment(1);
                     if let Some((previous_attempt_count, facet)) =
                         original_attempts.remove(&title_id)
                     {
+                        if crate::catalog_workflow::is_non_retryable_hydration_failure(&reason) {
+                            clear_non_retryable_title_hydration(&app, &title_id, &reason).await;
+                            continue;
+                        }
                         schedule_title_hydration_retry(
                             &app,
                             &title_id,
@@ -506,11 +515,18 @@ pub async fn start_background_title_hydration_loop(
                     title_ids = ?title_ids,
                     "title hydration loop: batch failed"
                 );
+                let reason = error.to_string();
+                let non_retryable =
+                    crate::catalog_workflow::is_non_retryable_hydration_failure(&reason);
                 for title_id in title_ids {
                     metrics::counter!("scryer_title_metadata_hydration_failure_total").increment(1);
                     if let Some((previous_attempt_count, facet)) =
                         original_attempts.get(&title_id).cloned()
                     {
+                        if non_retryable {
+                            clear_non_retryable_title_hydration(&app, &title_id, &reason).await;
+                            continue;
+                        }
                         schedule_title_hydration_retry(
                             &app,
                             &title_id,
@@ -533,6 +549,34 @@ pub async fn start_background_title_hydration_loop(
         {
             return;
         }
+    }
+}
+
+/// Stop retrying a title whose hydration failure is deterministic.
+///
+/// Replaying the identical write cannot change the outcome, so the retry state
+/// is cleared after a single WARN instead of spending the full attempt budget.
+async fn clear_non_retryable_title_hydration(app: &AppUseCase, title_id: &str, reason: &str) {
+    metrics::counter!("scryer_title_metadata_hydration_terminal_failures_total").increment(1);
+    warn!(
+        hydration_source = HydrationSource::BackgroundDue.as_str(),
+        title_id = %title_id,
+        reason = %reason,
+        "title hydration loop: deterministic failure, clearing retry state without retrying"
+    );
+    if let Err(error) = app
+        .services
+        .catalog
+        .titles
+        .clear_title_metadata_hydration_retry_state(title_id)
+        .await
+    {
+        warn!(
+            hydration_source = HydrationSource::BackgroundDue.as_str(),
+            title_id = %title_id,
+            error = %error,
+            "title hydration loop: failed to clear non-retryable retry state"
+        );
     }
 }
 
@@ -620,6 +664,32 @@ fn title_hydration_retry_delay(attempt_count: i64) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_id_conflicts_are_not_retryable() {
+        assert!(crate::catalog_workflow::is_non_retryable_hydration_failure(
+            "repository error: UNIQUE constraint failed: title_external_ids.library_id, title_external_ids.source, title_external_ids.external_id"
+        ));
+        assert!(crate::catalog_workflow::is_non_retryable_hydration_failure(
+            "duplicate key value violates unique constraint \"idx_title_external_ids_library_lookup\""
+        ));
+    }
+
+    #[test]
+    fn transient_and_unrelated_failures_stay_retryable() {
+        for reason in [
+            "metadata could not be persisted",
+            "bulk metadata response missing title",
+            "database is locked",
+            "UNIQUE constraint failed: titles.id",
+            "duplicate key value violates unique constraint \"titles_pkey\"",
+        ] {
+            assert!(
+                !crate::catalog_workflow::is_non_retryable_hydration_failure(reason),
+                "{reason} should stay retryable"
+            );
+        }
+    }
 
     #[test]
     fn next_title_hydration_retry_stops_after_max_attempts() {

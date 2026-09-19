@@ -3632,7 +3632,7 @@ mod tests {
             .await;
         let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
         let error = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
+            std::time::Duration::from_secs(30),
             client.get_completed_download_for_source("sab", "sabnzbd", "missing-job"),
         )
         .await

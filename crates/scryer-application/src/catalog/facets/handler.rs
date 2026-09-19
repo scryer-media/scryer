@@ -43,10 +43,7 @@ pub(crate) fn external_ids_from_hydration_metadata(
         .as_deref()
         .and_then(crate::normalize::normalize_imdb_id)
     {
-        external_ids.push(ExternalId {
-            source: "imdb".to_string(),
-            value: imdb_id,
-        });
+        external_ids.push(ExternalId::new("imdb".to_string(), imdb_id));
     }
     external_ids.extend(metadata_update.extra_external_ids.iter().cloned());
     external_ids
@@ -89,10 +86,30 @@ fn original_language_update(language: Option<&str>) -> MetadataFieldUpdate<Strin
         .map_or(MetadataFieldUpdate::Unchanged, MetadataFieldUpdate::Set)
 }
 
+/// Pick the mapping that describes the title itself.
+///
+/// AniBridge hands us one mapping per TVDB season, ordered by season, so the
+/// season-0 entry (specials, and for some series a prequel movie carrying its
+/// own AniDB/MAL ids) can be listed first. Stamping those ids onto the series
+/// mints an identity that belongs to a different title, so prefer the lowest
+/// *positive* season — season 1 is the series proper — and fall back to a
+/// season-0/unknown-season mapping only when there is no positive-season one.
 pub(crate) fn primary_anime_mapping(anime_mappings: &[AnimeMapping]) -> Option<&AnimeMapping> {
-    anime_mappings
-        .iter()
-        .find(|mapping| mapping.mapping_type != "S")
+    let lowest_positive_season = |skip_specials: bool| {
+        anime_mappings
+            .iter()
+            .filter(|mapping| mapping.thetvdb_season.is_some_and(|season| season > 0))
+            .filter(|mapping| !skip_specials || mapping.mapping_type != "S")
+            .min_by_key(|mapping| mapping.thetvdb_season.unwrap_or(i32::MAX))
+    };
+
+    lowest_positive_season(true)
+        .or_else(|| lowest_positive_season(false))
+        .or_else(|| {
+            anime_mappings
+                .iter()
+                .find(|mapping| mapping.mapping_type != "S")
+        })
         .or(anime_mappings.first())
 }
 
@@ -102,69 +119,102 @@ fn primary_anime_mapping_extra_external_ids(anime_mappings: &[AnimeMapping]) -> 
     };
 
     let mut external_ids = Vec::new();
-    push_positive_external_id(&mut external_ids, "mal", mapping.mal_id);
-    push_positive_external_id(&mut external_ids, "anilist", mapping.anilist_id);
-    push_positive_external_id(&mut external_ids, "anidb", mapping.anidb_id);
-    push_positive_external_id(&mut external_ids, "kitsu", mapping.kitsu_id);
-    push_positive_external_id(&mut external_ids, "simkl", mapping.simkl_id);
-    push_positive_external_id(&mut external_ids, "tvdb", mapping.thetvdb_id);
-    push_positive_external_id(&mut external_ids, "tmdb", mapping.themoviedb_id);
-    push_positive_imdb_external_id(&mut external_ids, mapping.imdb_id);
-    push_positive_external_id(&mut external_ids, "trakt", mapping.trakt_id);
+    // AniDB/MAL/AniList/Kitsu/Simkl ids always name an anime entry.
+    push_positive_kinded_external_id(&mut external_ids, "mal", ANIME_KIND, mapping.mal_id);
+    push_positive_kinded_external_id(&mut external_ids, "anilist", ANIME_KIND, mapping.anilist_id);
+    push_positive_kinded_external_id(&mut external_ids, "anidb", ANIME_KIND, mapping.anidb_id);
+    push_positive_kinded_external_id(&mut external_ids, "kitsu", ANIME_KIND, mapping.kitsu_id);
+    push_positive_kinded_external_id(&mut external_ids, "simkl", ANIME_KIND, mapping.simkl_id);
+
+    // The shared sources are ambiguous on their own -- a mapping's TVDB id may
+    // name a movie or a series -- so they are only stamped when the mapping
+    // says which. The SMG title already carries these ids with kinds, so
+    // dropping an undecidable one loses nothing.
+    if let Some(kind) = anime_mapping_entity_kind(mapping) {
+        push_positive_kinded_external_id(&mut external_ids, "tvdb", kind, mapping.thetvdb_id);
+        push_positive_kinded_external_id(&mut external_ids, "tmdb", kind, mapping.themoviedb_id);
+        push_positive_imdb_external_id(&mut external_ids, kind, mapping.imdb_id);
+        push_positive_kinded_external_id(&mut external_ids, "trakt", kind, mapping.trakt_id);
+    }
     external_ids
 }
 
-fn push_positive_external_id(external_ids: &mut Vec<ExternalId>, source: &str, value: Option<i64>) {
-    if let Some(value) = value.filter(|value| *value > 0) {
-        external_ids.push(ExternalId {
-            source: source.to_string(),
-            value: value.to_string(),
-        });
+const ANIME_KIND: &str = "anime";
+
+/// The entity kind an anime mapping's shared (TVDB/TMDB/IMDb/Trakt) ids name,
+/// or `None` when the mapping does not say.
+fn anime_mapping_entity_kind(mapping: &AnimeMapping) -> Option<&'static str> {
+    match mapping
+        .global_media_type
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "show" | "shows" | "series" | "tv" | "tvshow" | "tv_show" => Some("series"),
+        "movie" | "movies" | "film" => Some("movie"),
+        _ => None,
     }
 }
 
-fn push_positive_imdb_external_id(external_ids: &mut Vec<ExternalId>, value: Option<i64>) {
+fn push_positive_kinded_external_id(
+    external_ids: &mut Vec<ExternalId>,
+    source: &str,
+    kind: &str,
+    value: Option<i64>,
+) {
+    if let Some(value) = value.filter(|value| *value > 0) {
+        external_ids.push(ExternalId::with_kind(source, kind, value.to_string()));
+    }
+}
+
+fn push_positive_imdb_external_id(
+    external_ids: &mut Vec<ExternalId>,
+    kind: &str,
+    value: Option<i64>,
+) {
     let Some(imdb_id) = value
         .filter(|value| *value > 0)
         .and_then(|value| crate::normalize::normalize_imdb_id(&value.to_string()))
     else {
         return;
     };
-    external_ids.push(ExternalId {
-        source: "imdb".to_string(),
-        value: imdb_id,
-    });
+    external_ids.push(ExternalId::with_kind("imdb", kind, imdb_id));
 }
 
 /// Build a [`HydrationResult`] from an already-fetched [`MovieMetadata`].
 ///
 /// Shared by the single-title facet handler path and the bulk hydration loop.
 pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> HydrationResult {
+    // Every id here belongs to a movie payload, so the entity kind is known:
+    // SMG's own id names a title, the provider ids name a movie, and the AniDB
+    // id names an anime entry.
     let mut extra_external_ids = Vec::new();
     if let Some(smg_id) = movie.smg_id {
-        extra_external_ids.push(scryer_domain::ExternalId {
-            source: "smg".into(),
-            value: smg_id.to_string(),
-        });
+        extra_external_ids.push(scryer_domain::ExternalId::with_kind(
+            "smg",
+            "title",
+            smg_id.to_string(),
+        ));
     }
-    push_positive_external_id(&mut extra_external_ids, "tvdb", movie.tvdb_id);
+    push_positive_kinded_external_id(&mut extra_external_ids, "tvdb", "movie", movie.tvdb_id);
     if let Some(imdb_id) = crate::normalize::normalize_imdb_id(movie.imdb_id.as_str()) {
-        extra_external_ids.push(scryer_domain::ExternalId {
-            source: "imdb".into(),
-            value: imdb_id,
-        });
+        extra_external_ids.push(scryer_domain::ExternalId::with_kind(
+            "imdb", "movie", imdb_id,
+        ));
     }
     if let Some(anidb_id) = movie.anidb_id {
-        extra_external_ids.push(scryer_domain::ExternalId {
-            source: "anidb".into(),
-            value: anidb_id.to_string(),
-        });
+        extra_external_ids.push(scryer_domain::ExternalId::with_kind(
+            "anidb",
+            ANIME_KIND,
+            anidb_id.to_string(),
+        ));
     }
     if let Some(tmdb_id) = movie.tmdb_id {
-        extra_external_ids.push(scryer_domain::ExternalId {
-            source: "tmdb".into(),
-            value: tmdb_id.to_string(),
-        });
+        extra_external_ids.push(scryer_domain::ExternalId::with_kind(
+            "tmdb",
+            "movie",
+            tmdb_id.to_string(),
+        ));
     }
 
     let update = TitleMetadataUpdate {
@@ -412,6 +462,7 @@ mod tests {
         let mut secondary_mapping = anime_mapping("S", Some(9999));
         secondary_mapping.mal_id = Some(999);
         let mut primary_mapping = anime_mapping("R", Some(15146));
+        primary_mapping.global_media_type = "show".to_string();
         primary_mapping.mal_id = Some(111_001);
         primary_mapping.anilist_id = Some(222_002);
         primary_mapping.kitsu_id = Some(444_004);
@@ -426,47 +477,117 @@ mod tests {
             "eng",
         );
 
+        // The anime-only sources are always `anime`; the shared sources are
+        // stamped as `series` because this mapping says it describes a show.
         assert_eq!(
             result.metadata_update.extra_external_ids,
             vec![
-                ExternalId {
-                    source: "mal".to_string(),
-                    value: "111001".to_string(),
-                },
-                ExternalId {
-                    source: "anilist".to_string(),
-                    value: "222002".to_string(),
-                },
-                ExternalId {
-                    source: "anidb".to_string(),
-                    value: "15146".to_string(),
-                },
-                ExternalId {
-                    source: "kitsu".to_string(),
-                    value: "444004".to_string(),
-                },
-                ExternalId {
-                    source: "simkl".to_string(),
-                    value: "555005".to_string(),
-                },
-                ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "12345".to_string(),
-                },
-                ExternalId {
-                    source: "tmdb".to_string(),
-                    value: "666006".to_string(),
-                },
-                ExternalId {
-                    source: "imdb".to_string(),
-                    value: "tt777007".to_string(),
-                },
-                ExternalId {
-                    source: "trakt".to_string(),
-                    value: "888008".to_string(),
-                },
+                ExternalId::with_kind("mal", "anime", "111001"),
+                ExternalId::with_kind("anilist", "anime", "222002"),
+                ExternalId::with_kind("anidb", "anime", "15146"),
+                ExternalId::with_kind("kitsu", "anime", "444004"),
+                ExternalId::with_kind("simkl", "anime", "555005"),
+                ExternalId::with_kind("tvdb", "series", "12345"),
+                ExternalId::with_kind("tmdb", "series", "666006"),
+                ExternalId::with_kind("imdb", "series", "tt777007"),
+                ExternalId::with_kind("trakt", "series", "888008"),
             ]
         );
+    }
+
+    #[test]
+    fn primary_anime_mapping_prefers_the_lowest_positive_tvdb_season() {
+        // Shaped like SMG's AniBridge payload for Berserk (2016), tvdb 307111:
+        // the season-0 mapping (the Golden Age Arc I movie, anidb 7991) is
+        // listed first, ahead of the two broadcast seasons.
+        let mut season_zero = anime_mapping("M", Some(7991));
+        season_zero.thetvdb_season = Some(0);
+        let mut season_one = anime_mapping("TV", Some(11851));
+        season_one.thetvdb_season = Some(1);
+        let mut season_two = anime_mapping("TV", Some(12414));
+        season_two.thetvdb_season = Some(2);
+
+        let mappings = vec![season_zero, season_one, season_two];
+
+        assert_eq!(
+            primary_anime_mapping(&mappings).and_then(|mapping| mapping.anidb_id),
+            Some(11851)
+        );
+        assert!(
+            primary_anime_mapping_extra_external_ids(&mappings)
+                .contains(&ExternalId::with_kind("anidb", "anime", "11851"))
+        );
+    }
+
+    #[test]
+    fn anime_mapping_shared_source_ids_are_dropped_without_a_definite_kind() {
+        // The mapping does not say what its TVDB/TMDB/IMDb/Trakt ids name, so
+        // stamping them would mint an ambiguous identity. The SMG title
+        // already carries those ids with kinds.
+        let mut mapping = anime_mapping("R", Some(15146));
+        mapping.global_media_type = String::new();
+        mapping.thetvdb_id = Some(12345);
+        mapping.themoviedb_id = Some(666_006);
+        mapping.imdb_id = Some(777_007);
+        mapping.trakt_id = Some(888_008);
+
+        let external_ids = primary_anime_mapping_extra_external_ids(&[mapping]);
+
+        assert_eq!(
+            external_ids,
+            vec![ExternalId::with_kind("anidb", "anime", "15146")]
+        );
+    }
+
+    #[test]
+    fn anime_mapping_movie_media_type_stamps_movie_kinds() {
+        let mut mapping = anime_mapping("M", Some(7991));
+        mapping.global_media_type = "movie".to_string();
+        mapping.thetvdb_id = Some(7373);
+
+        let external_ids = primary_anime_mapping_extra_external_ids(&[mapping]);
+
+        assert_eq!(
+            external_ids,
+            vec![
+                ExternalId::with_kind("anidb", "anime", "7991"),
+                ExternalId::with_kind("tvdb", "movie", "7373"),
+            ]
+        );
+    }
+
+    #[test]
+    fn primary_anime_mapping_skips_specials_within_positive_seasons() {
+        let mut special = anime_mapping("S", Some(100));
+        special.thetvdb_season = Some(1);
+        let mut regular = anime_mapping("TV", Some(200));
+        regular.thetvdb_season = Some(2);
+
+        assert_eq!(
+            primary_anime_mapping(&[special, regular]).and_then(|mapping| mapping.anidb_id),
+            Some(200)
+        );
+    }
+
+    #[test]
+    fn primary_anime_mapping_falls_back_when_no_positive_season_exists() {
+        let mut special = anime_mapping("S", Some(100));
+        special.thetvdb_season = Some(0);
+        let mut regular = anime_mapping("M", Some(200));
+        regular.thetvdb_season = None;
+
+        assert_eq!(
+            primary_anime_mapping(&[special, regular]).and_then(|mapping| mapping.anidb_id),
+            Some(200)
+        );
+
+        let mut only_special = anime_mapping("S", Some(300));
+        only_special.thetvdb_season = Some(0);
+        assert_eq!(
+            primary_anime_mapping(&[only_special]).and_then(|mapping| mapping.anidb_id),
+            Some(300)
+        );
+        assert!(primary_anime_mapping(&[]).is_none());
     }
 
     #[test]
@@ -702,10 +823,7 @@ mod tests {
             result
                 .metadata_update
                 .extra_external_ids
-                .contains(&ExternalId {
-                    source: "smg".to_string(),
-                    value: "42001".to_string(),
-                })
+                .contains(&ExternalId::with_kind("smg", "title", "42001"))
         );
     }
 

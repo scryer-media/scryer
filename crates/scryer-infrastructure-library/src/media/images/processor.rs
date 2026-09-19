@@ -597,7 +597,9 @@ mod tests {
                 });
             }
         });
-        let outcome = tokio::time::timeout(std::time::Duration::from_secs(30), encode).await;
+        // Only a deadlock bound: low-priority AVIF encoding on a loaded runner
+        // can take tens of seconds.
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(120), encode).await;
         let _ = release.send(());
         outcome
             .expect("AVIF must finish without the global pool")

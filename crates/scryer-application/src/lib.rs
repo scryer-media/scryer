@@ -1067,3 +1067,5 @@ impl AppError {
 
 #[cfg(test)]
 pub(crate) mod lib_tests;
+#[cfg(test)]
+pub(crate) mod test_wait;

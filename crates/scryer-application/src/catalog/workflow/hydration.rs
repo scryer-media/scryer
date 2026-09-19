@@ -150,6 +150,19 @@ pub(crate) struct HydrationBatchOutcome {
     pub(crate) deferred_titles: HashSet<String>,
 }
 
+/// Does this hydration failure reproduce identically on every retry?
+///
+/// A title external id that another title in the same library already owns is
+/// deterministic: the same write replays into the same unique index, so
+/// backing off burns the whole retry budget without ever succeeding. The store
+/// now skips such an id instead of failing the write, so this is a backstop
+/// for the paths that still surface the raw constraint violation.
+pub(crate) fn is_non_retryable_hydration_failure(reason: &str) -> bool {
+    (reason.contains("UNIQUE constraint failed")
+        || reason.contains("duplicate key value violates unique constraint"))
+        && reason.contains("title_external_ids")
+}
+
 /// The selections the SMG title-id surface introduced, lowercased and quoted the
 /// way a GraphQL validation error names an unknown field. A gateway that
 /// predates the surface answers any of them with `Cannot query field "<name>"`,
@@ -1518,6 +1531,13 @@ impl AppUseCase {
                     error = %err,
                     "failed to persist metadata"
                 );
+                // A deterministic failure is reported to the caller so the
+                // retry scheduler can stop instead of replaying the identical
+                // write; transient failures keep today's tolerant behaviour
+                // and continue with the pre-hydration title.
+                if is_non_retryable_hydration_failure(&err.to_string()) {
+                    return Err(err);
+                }
                 title
             }
         };
@@ -1874,11 +1894,25 @@ impl AppUseCase {
             now,
         )?;
 
-        self.services
+        // Per-title work, so it stays out of the log at INFO. The store write
+        // holds the single writer for its whole transaction; when it grows with
+        // the catalog this histogram is what shows it, without a scan's worth of
+        // log lines.
+        let write_started_at = Instant::now();
+        let outcome = self
+            .services
             .library
             .discovery
             .replace_title_more_like_this_items(&title.id, &language, &records)
-            .await?;
+            .await;
+        metrics::histogram!(
+            "scryer_title_recommendations_store_duration_seconds",
+            "outcome" => if outcome.is_ok() { "ok" } else { "error" },
+        )
+        .record(write_started_at.elapsed().as_secs_f64());
+        metrics::histogram!("scryer_title_recommendations_card_count")
+            .record(records.len() as f64);
+        outcome?;
 
         Ok(())
     }

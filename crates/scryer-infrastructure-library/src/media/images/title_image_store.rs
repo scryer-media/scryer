@@ -17,6 +17,15 @@ use scryer_infrastructure_sql::domain_event_payload::{
 use super::{normalize_title_image_source_url, title_image_blob_digest};
 
 const DOMAIN_EVENT_COLUMNS: &str = "sequence, event_id, occurred_at, actor_kind, actor_user_id, actor_display_name, title_id, facet, correlation_id, causation_id, schema_version, stream_kind, stream_id, event_type, payload_json";
+/// The insert half of an append; `RETURNING {DOMAIN_EVENT_COLUMNS}` is bolted
+/// on so the generated `sequence` comes back from the insert itself rather than
+/// from a follow-up `SELECT ... WHERE event_id = ?`.
+const APPEND_DOMAIN_EVENT_INSERT_SQL: &str = "INSERT INTO domain_events (
+            event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
+            title_id, facet, correlation_id, causation_id, schema_version,
+            stream_kind, stream_id, event_type, payload_json, import_status,
+            media_file_delete_reason, download_id
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 
 #[derive(Clone)]
 pub struct TitleImageStore {
@@ -91,8 +100,15 @@ async fn list_prioritized_refresh_work(
     skipped: &[TitleImageSyncTask],
 ) -> AppResult<Vec<TitleImageSyncTask>> {
     for &(kind, variant_key, _) in IMAGE_REFRESH_PRIORITIES {
-        let (sql, args) = build_variant_refresh_sql(kind, variant_key, limit, skipped);
+        // The skipped rows are excluded client-side so the SQL text stays identical
+        // across iterations and keeps its place in the statement cache. Over-fetching
+        // by the number of skipped rows for this kind leaves the same first `limit`
+        // survivors the interpolated `AND NOT (...)` clauses used to produce.
+        let skipped_for_kind = skipped.iter().filter(|task| task.kind == kind).count();
+        let (sql, args) =
+            build_variant_refresh_sql(kind, variant_key, limit.saturating_add(skipped_for_kind));
         let candidates = fetch_refresh_candidates(datastore.read_exec(), &sql, &args, kind).await?;
+        let candidates = retain_unskipped(candidates, skipped, limit);
         let mut tasks = Vec::with_capacity(candidates.len());
         for candidate in candidates {
             let variants = missing_variant_specs(
@@ -100,6 +116,7 @@ async fn list_prioritized_refresh_work(
                 candidate.kind,
                 &candidate.title_id,
                 &candidate.source_url,
+                candidate.cached_source_url.as_deref(),
             )
             .await?;
             if !variants.is_empty() {
@@ -118,25 +135,35 @@ async fn list_prioritized_refresh_work(
     Ok(Vec::new())
 }
 
+/// Drops the rows the caller already deferred, preserving the query's order, then
+/// truncates to the caller's real limit.
+fn retain_unskipped(
+    candidates: Vec<RefreshCandidate>,
+    skipped: &[TitleImageSyncTask],
+    limit: usize,
+) -> Vec<RefreshCandidate> {
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            !skipped.iter().any(|task| {
+                task.kind == candidate.kind
+                    && task.title_id == candidate.title_id
+                    && task.source_url == candidate.source_url
+            })
+        })
+        .take(limit)
+        .collect()
+}
+
 fn build_variant_refresh_sql(
     kind: TitleImageKind,
     variant_key: &str,
     limit: usize,
-    skipped: &[TitleImageSyncTask],
 ) -> (String, Vec<SqlArg>) {
     let source_col = match kind {
         TitleImageKind::Poster => "poster_url",
         TitleImageKind::Fanart => "background_url",
     };
-    let skipped_for_kind = skipped
-        .iter()
-        .filter(|task| task.kind == kind)
-        .collect::<Vec<_>>();
-    let skipped_clause = skipped_for_kind
-        .iter()
-        .map(|_| format!("AND NOT (t.id = {{}} AND t.{source_col} = {{}})"))
-        .collect::<Vec<_>>()
-        .join("\n           ");
 
     let sql = format!(
         "SELECT t.id AS title_id, t.{source_col} AS source_url, ti.source_url AS cached_source_url
@@ -154,21 +181,16 @@ fn build_variant_refresh_sql(
                 OR ti.source_url <> t.{source_col}
                 OR pv.id IS NULL
            )
-           {skipped_clause}
          ORDER BY t.created_at ASC
          LIMIT {{}}"
     );
 
-    let mut args = vec![
+    let args = vec![
         SqlArg::Text(kind.as_str().to_string()),
         SqlArg::Text(variant_key.to_string()),
         SqlArg::Text(local_title_image_route_pattern().to_string()),
+        SqlArg::I64(limit as i64),
     ];
-    for task in skipped_for_kind {
-        args.push(SqlArg::Text(task.title_id.clone()));
-        args.push(SqlArg::Text(task.source_url.clone()));
-    }
-    args.push(SqlArg::I64(limit as i64));
     (sql, args)
 }
 
@@ -190,6 +212,7 @@ async fn fetch_refresh_tasks(
                 title_id: row.text("title_id")?,
                 kind,
                 source_url: row.text("source_url")?,
+                cached_source_url: row.opt_text("cached_source_url")?,
             })
         })
         .collect()
@@ -209,6 +232,7 @@ struct RefreshCandidate {
     title_id: String,
     kind: TitleImageKind,
     source_url: String,
+    cached_source_url: Option<String>,
 }
 
 fn variant_specs_for_kind(kind: TitleImageKind) -> Vec<TitleImageVariantSpec> {
@@ -227,7 +251,22 @@ async fn missing_variant_specs(
     kind: TitleImageKind,
     title_id: &str,
     source_url: &str,
+    cached_source_url: Option<&str>,
 ) -> AppResult<Vec<TitleImageVariantSpec>> {
+    // The selection query already carried `title_images.source_url` for this
+    // (title, kind). When it is absent or stale every spec is missing regardless of
+    // which variant rows exist, so the per-candidate round trip buys nothing.
+    let normalized_source = normalize_title_image_source_url(source_url)?;
+    let normalized_cached = cached_source_url
+        .map(normalize_title_image_source_url)
+        .transpose()?;
+    if normalized_cached
+        .as_deref()
+        .is_none_or(|cached| cached != normalized_source)
+    {
+        return Ok(variant_specs_for_kind(kind));
+    }
+
     let rows = SqlRuntime::fetch_all(
         exec,
         "SELECT ti.source_url, tiv.variant_key
@@ -241,7 +280,6 @@ async fn missing_variant_specs(
     )
     .await?;
     let stored_source = rows.first().map(|row| row.text("source_url")).transpose()?;
-    let normalized_source = normalize_title_image_source_url(source_url)?;
     let normalized_stored_source = stored_source
         .as_deref()
         .map(normalize_title_image_source_url)
@@ -488,7 +526,7 @@ async fn upsert_title_image_blob_tx(
         )));
     }
 
-    SqlRuntime::execute(
+    let inserted = SqlRuntime::execute(
         SqlExec::Tx(tx),
         "INSERT INTO title_image_blobs (
             digest, format, width, height, bytes, created_at, updated_at
@@ -505,6 +543,11 @@ async fn upsert_title_image_blob_tx(
         ],
     )
     .await?;
+    if inserted > 0 {
+        // Our own row landed: the digest collision check below only has something to
+        // say when an existing row won the conflict.
+        return Ok(());
+    }
 
     let stored = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
@@ -759,14 +802,14 @@ async fn append_domain_event_tx(
         ))
     })?;
     let projections = derive_domain_event_projections(event_type, &payload);
-    SqlRuntime::execute(
+    let inserted = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
-        "INSERT INTO domain_events (
-            event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
-            title_id, facet, correlation_id, causation_id, schema_version,
-            stream_kind, stream_id, event_type, payload_json, import_status,
-            media_file_delete_reason, download_id
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+        &[
+            APPEND_DOMAIN_EVENT_INSERT_SQL,
+            " RETURNING ",
+            DOMAIN_EVENT_COLUMNS,
+        ]
+        .concat(),
         &[
             SqlArg::Text(event.event_id.clone()),
             SqlArg::Timestamp(event.occurred_at),
@@ -788,23 +831,9 @@ async fn append_domain_event_tx(
         ],
     )
     .await?;
-    fetch_domain_event_by_event_id(SqlExec::Tx(tx), &event.event_id)
-        .await?
-        .ok_or_else(|| AppError::Repository("failed to reload inserted domain event".into()))
-}
-
-async fn fetch_domain_event_by_event_id(
-    exec: SqlExec<'_, '_>,
-    event_id: &str,
-) -> AppResult<Option<DomainEvent>> {
-    SqlRuntime::fetch_optional(
-        exec,
-        &format!("SELECT {DOMAIN_EVENT_COLUMNS} FROM domain_events WHERE event_id = {{}}"),
-        &[SqlArg::Text(event_id.to_string())],
-    )
-    .await?
-    .map(|row| domain_event_from_row(&row))
-    .transpose()
+    let row = inserted
+        .ok_or_else(|| AppError::Repository("failed to reload inserted domain event".into()))?;
+    domain_event_from_row(&row)
 }
 
 fn domain_event_from_row(row: &SqlRow) -> AppResult<DomainEvent> {
@@ -869,5 +898,76 @@ fn stream_from_parts(kind: &str, identifier: Option<String>) -> AppResult<Domain
         other => Err(AppError::Repository(format!(
             "unknown domain event stream kind: {other}"
         ))),
+    }
+}
+
+#[cfg(test)]
+mod refresh_selection_tests {
+    use super::*;
+
+    fn candidate(title_id: &str, kind: TitleImageKind, source_url: &str) -> RefreshCandidate {
+        RefreshCandidate {
+            title_id: title_id.to_string(),
+            kind,
+            source_url: source_url.to_string(),
+            cached_source_url: None,
+        }
+    }
+
+    fn task(title_id: &str, kind: TitleImageKind, source_url: &str) -> TitleImageSyncTask {
+        TitleImageSyncTask {
+            title_id: title_id.to_string(),
+            kind,
+            source_url: source_url.to_string(),
+            variants: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn refresh_sql_text_does_not_depend_on_limit_or_skipped_rows() {
+        let (small, _) = build_variant_refresh_sql(TitleImageKind::Poster, "w250", 4);
+        let (large, _) = build_variant_refresh_sql(TitleImageKind::Poster, "w250", 128);
+        assert_eq!(small, large);
+        assert!(!small.contains("AND NOT ("));
+    }
+
+    #[test]
+    fn refresh_sql_binds_every_value_it_filters_on() {
+        let (sql, args) = build_variant_refresh_sql(TitleImageKind::Fanart, "w1280", 64);
+        assert_eq!(sql.matches("{}").count(), args.len());
+        assert!(matches!(args.last(), Some(SqlArg::I64(64))));
+    }
+
+    #[test]
+    fn skipped_rows_are_dropped_in_query_order_and_truncated_to_the_limit() {
+        let candidates = vec![
+            candidate("a", TitleImageKind::Poster, "https://img/a.jpg"),
+            candidate("b", TitleImageKind::Poster, "https://img/b.jpg"),
+            candidate("c", TitleImageKind::Poster, "https://img/c.jpg"),
+            candidate("d", TitleImageKind::Poster, "https://img/d.jpg"),
+        ];
+        let skipped = vec![task("b", TitleImageKind::Poster, "https://img/b.jpg")];
+        let kept = retain_unskipped(candidates, &skipped, 2);
+        let ids = kept
+            .iter()
+            .map(|candidate| candidate.title_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["a", "c"]);
+    }
+
+    #[test]
+    fn skipped_rows_only_match_their_own_kind_and_source_url() {
+        let candidates = vec![
+            candidate("a", TitleImageKind::Poster, "https://img/a.jpg"),
+            candidate("b", TitleImageKind::Poster, "https://img/b.jpg"),
+        ];
+        let skipped = vec![
+            // Same id, different kind.
+            task("a", TitleImageKind::Fanart, "https://img/a.jpg"),
+            // Same id, but the title's source url has since changed.
+            task("b", TitleImageKind::Poster, "https://img/old-b.jpg"),
+        ];
+        let kept = retain_unskipped(candidates, &skipped, 8);
+        assert_eq!(kept.len(), 2);
     }
 }

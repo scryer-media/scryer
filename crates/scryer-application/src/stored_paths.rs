@@ -107,6 +107,74 @@ pub fn folder_paths_match(left: &str, right: &str) -> bool {
     }
 }
 
+/// The stored-path spellings a repository can compare by plain equality to
+/// narrow a folder-ownership lookup to the rows [`folder_paths_match`] would
+/// accept for `folder_path`.
+///
+/// This is a filter, not a replacement for the matcher: the caller still runs
+/// `folder_paths_match` over whatever comes back, so a row this set lets
+/// through is never accepted on the strength of the equality alone. It covers
+/// the spellings the application actually writes for one folder — the value as
+/// given, its component-normalized form, the NFC and NFD forms of both, and
+/// each of those with a trailing separator.
+pub fn folder_path_match_candidates(folder_path: &str) -> Vec<String> {
+    // An empty path has no identity key, so `folder_paths_match` rejects every
+    // row against it; there is nothing to look up.
+    if folder_path.is_empty() {
+        return Vec::new();
+    }
+    let mut candidates = Vec::<String>::new();
+    let mut push = |value: String| {
+        if !value.is_empty() && !candidates.contains(&value) {
+            candidates.push(value);
+        }
+    };
+
+    let mut roots = vec![folder_path.to_string()];
+    let component_normalized = path_to_stored_string(
+        stored_path_to_path_buf(folder_path)
+            .components()
+            .collect::<PathBuf>(),
+    );
+    if !roots.contains(&component_normalized) {
+        roots.push(component_normalized);
+    }
+
+    for root in roots {
+        for form in unicode_identity_forms(&root) {
+            for separator in folder_path_trailing_separators() {
+                if !form.ends_with(*separator) {
+                    push(format!("{form}{separator}"));
+                }
+            }
+            push(form);
+        }
+    }
+    candidates
+}
+
+/// The escape form is ASCII by construction and re-composing it would change
+/// its meaning, so it is never re-normalized.
+fn unicode_identity_forms(value: &str) -> Vec<String> {
+    if value.starts_with(STORED_PATH_PREFIX) || value.is_ascii() {
+        return vec![value.to_string()];
+    }
+    let mut forms = vec![value.to_string()];
+    for form in [
+        value.nfc().collect::<String>(),
+        value.nfd().collect::<String>(),
+    ] {
+        if !forms.contains(&form) {
+            forms.push(form);
+        }
+    }
+    forms
+}
+
+const fn folder_path_trailing_separators() -> &'static [char] {
+    if cfg!(windows) { &['/', '\\'] } else { &['/'] }
+}
+
 pub(crate) fn stored_path_is_within_folder(folder: &str, path: &str) -> bool {
     if cfg!(windows) {
         let Some(folder) = folder_path_identity_key(folder) else {
@@ -330,6 +398,61 @@ mod tests {
         assert_ne!(nfc, nfd);
         assert!(super::paths_match(nfc, nfd));
         assert!(super::paths_match_ignoring_case(nfc, nfd));
+    }
+
+    /// Every candidate has to name the same folder as the value it came from,
+    /// or the narrowed lookup would hand the caller rows it then rejects.
+    #[test]
+    fn folder_path_candidates_all_match_the_folder_they_came_from() {
+        for folder in [
+            "/media/movies/Arrival (2016)",
+            "/media/movies/Arrival (2016)/",
+            "/media//movies/./Arrival (2016)",
+            "/Volumes/Media/TV/Pok\u{e9}mon",
+            "/Volumes/Media/TV/Poke\u{301}mon",
+        ] {
+            let candidates = super::folder_path_match_candidates(folder);
+            assert!(
+                candidates.contains(&folder.to_string()),
+                "{folder} is not among its own candidates"
+            );
+            for candidate in &candidates {
+                assert!(
+                    super::folder_paths_match(candidate, folder),
+                    "candidate {candidate} does not match {folder}"
+                );
+            }
+        }
+    }
+
+    /// The spellings one folder actually reaches the store as: written with a
+    /// trailing separator, with a redundant component, or in the other unicode
+    /// form. Each has to be reachable from the others' candidate sets.
+    #[test]
+    fn folder_path_candidates_cover_the_spellings_of_one_folder() {
+        let canonical = "/media/movies/Arrival (2016)";
+        for stored in [
+            "/media/movies/Arrival (2016)/",
+            "/media/movies/./Arrival (2016)",
+        ] {
+            assert!(
+                super::folder_path_match_candidates(canonical).contains(&stored.to_string())
+                    || super::folder_path_match_candidates(stored).contains(&canonical.to_string()),
+                "{stored} is not reachable from {canonical}"
+            );
+        }
+
+        let nfc = "/Volumes/Media/TV/Pok\u{e9}mon";
+        let nfd = "/Volumes/Media/TV/Poke\u{301}mon";
+        assert!(super::folder_path_match_candidates(nfc).contains(&nfd.to_string()));
+        assert!(super::folder_path_match_candidates(nfd).contains(&nfc.to_string()));
+    }
+
+    #[test]
+    fn folder_path_candidates_exclude_other_folders() {
+        let candidates = super::folder_path_match_candidates("/media/movies/Arrival (2016)");
+        assert!(!candidates.contains(&"/media/movies/Arrival (2017)".to_string()));
+        assert!(!candidates.contains(&"/media/movies".to_string()));
     }
 
     #[test]

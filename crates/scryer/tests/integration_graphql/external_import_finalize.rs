@@ -209,7 +209,8 @@ fn finalize_input(session_id: &str, library_id: &str) -> Value {
 
 /// Poll the tracked apply session until it settles, mirroring the Summary step.
 async fn await_settled_apply(ctx: &TestContext, actor: &User, session_id: &str) -> Value {
-    for _ in 0..600 {
+    let deadline = tokio::time::Instant::now() + crate::common::WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         let body = schema_exec(
             ctx,
             WARMUP_STATUS,

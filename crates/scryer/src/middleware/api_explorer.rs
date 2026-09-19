@@ -124,8 +124,22 @@ pub(super) async fn validate_session(
 /// Idle subscriptions must also end after disabling the explorer or revoking access.
 pub(super) async fn until_revoked(
     app: AppUseCase,
-    mut session: watch::Receiver<Option<ResolvedActor>>,
+    session: watch::Receiver<Option<ResolvedActor>>,
 ) {
+    until_revoked_rechecking_after(app, session, || tokio::time::sleep(Duration::from_secs(1)))
+        .await;
+}
+
+/// [`until_revoked`] with the pause between rechecks supplied by the caller,
+/// so a test can drive the recheck loop one round at a time.
+async fn until_revoked_rechecking_after<P, F>(
+    app: AppUseCase,
+    mut session: watch::Receiver<Option<ResolvedActor>>,
+    mut pause: P,
+) where
+    P: FnMut() -> F,
+    F: std::future::Future<Output = ()>,
+{
     if session.wait_for(|actor| actor.is_some()).await.is_err() {
         // A normal connection never opts in. Finishing this future would close it.
         std::future::pending::<()>().await;
@@ -135,7 +149,7 @@ pub(super) async fn until_revoked(
         if validate_session(&app, &session).await.is_err() {
             return;
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        pause().await;
     }
 }
 
@@ -437,13 +451,11 @@ mod tests {
         validate_session(&ctx.app, &session).await.unwrap();
         let (sender, ordinary_session) = watch::channel(None);
         drop(sender);
+        // With no actor ever to wait for, the first poll settles the future in
+        // its terminal wait.
         assert!(
-            tokio::time::timeout(
-                Duration::from_millis(20),
-                until_revoked(ctx.app.clone(), ordinary_session)
-            )
-            .await
-            .is_err()
+            futures_util::FutureExt::now_or_never(until_revoked(ctx.app.clone(), ordinary_session))
+                .is_none()
         );
         let mut stale = admin.clone();
         stale.user.authorization.libraries.insert(
@@ -452,16 +464,35 @@ mod tests {
         );
         let (_sender, stale_session) = watch::channel(Some(stale));
         assert!(validate_session(&ctx.app, &stale_session).await.is_err());
-        let mut revocation = Box::pin(until_revoked(ctx.app.clone(), session.clone()));
+        // Each pause reports a finished recheck, then waits for the test's tick.
+        let (rechecked_tx, mut rechecked) = tokio::sync::mpsc::unbounded_channel();
+        let tick = std::sync::Arc::new(tokio::sync::Notify::new());
+        let revocation = tokio::spawn(until_revoked_rechecking_after(
+            ctx.app.clone(),
+            session.clone(),
+            {
+                let tick = tick.clone();
+                move || {
+                    let _ = rechecked_tx.send(());
+                    let tick = tick.clone();
+                    async move { tick.notified().await }
+                }
+            },
+        ));
+        tokio::time::timeout(Duration::from_secs(30), rechecked.recv())
+            .await
+            .expect("a valid session should pass its first recheck")
+            .expect("recheck reports");
         assert!(
-            tokio::time::timeout(Duration::from_millis(20), &mut revocation)
-                .await
-                .is_err()
+            !revocation.is_finished(),
+            "a valid session must survive its recheck"
         );
         set_enabled(&ctx, &admin, false).await;
-        tokio::time::timeout(Duration::from_secs(2), revocation)
+        tick.notify_one();
+        tokio::time::timeout(Duration::from_secs(30), revocation)
             .await
-            .unwrap();
+            .expect("disabling the explorer should end the session at its next recheck")
+            .expect("revocation task");
         set_enabled(&ctx, &admin, true).await;
         scryer_application::LibraryRepository::set_app_permission_mask_for_user(
             &ctx.libraries,

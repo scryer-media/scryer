@@ -42,7 +42,7 @@ impl NotifyingLibraryScanner {
         if self.directory_scan_calls.load(Ordering::SeqCst) > 0 {
             return;
         }
-        timeout(Duration::from_secs(5), async {
+        timeout(TEST_WAIT_DEADLINE, async {
             loop {
                 let notified = self.directory_scan_started.notified();
                 if self.directory_scan_calls.load(Ordering::SeqCst) > 0 {
@@ -326,7 +326,7 @@ impl PerDirectoryBlockingLibraryScanner {
         if self.blocked_scan_calls.load(Ordering::SeqCst) > 0 {
             return;
         }
-        timeout(Duration::from_secs(5), async {
+        timeout(TEST_WAIT_DEADLINE, async {
             loop {
                 let notified = self.blocked_scan_started.notified();
                 if self.blocked_scan_calls.load(Ordering::SeqCst) > 0 {
@@ -343,7 +343,7 @@ impl PerDirectoryBlockingLibraryScanner {
         if self.blocked_scan_calls.load(Ordering::SeqCst) >= expected {
             return;
         }
-        timeout(Duration::from_secs(5), async {
+        timeout(TEST_WAIT_DEADLINE, async {
             loop {
                 let notified = self.blocked_scan_started.notified();
                 if self.blocked_scan_calls.load(Ordering::SeqCst) >= expected {
@@ -454,7 +454,7 @@ impl BlockingMediaAnalyzer {
         if self.analyze_calls.load(Ordering::SeqCst) > 0 {
             return;
         }
-        timeout(Duration::from_secs(5), async {
+        timeout(TEST_WAIT_DEADLINE, async {
             loop {
                 let notified = self.analyze_started.notified();
                 if self.analyze_calls.load(Ordering::SeqCst) > 0 {
@@ -471,7 +471,7 @@ impl BlockingMediaAnalyzer {
         if self.active_calls.load(Ordering::SeqCst) >= expected {
             return;
         }
-        timeout(Duration::from_secs(5), async {
+        timeout(TEST_WAIT_DEADLINE, async {
             loop {
                 let notified = self.analyze_started.notified();
                 if self.active_calls.load(Ordering::SeqCst) >= expected {
@@ -571,6 +571,43 @@ impl MediaAnalyzer for CountingValidMediaAnalyzer {
     }
 }
 
+/// An analyzer that fails for one path and succeeds for every other, so a
+/// test can prove one file's analysis failure does not take the rest of the
+/// title's files down with it.
+#[derive(Clone)]
+struct FailingPathMediaAnalyzer {
+    failing_path: std::path::PathBuf,
+    analyze_calls: Arc<AtomicUsize>,
+}
+
+impl FailingPathMediaAnalyzer {
+    fn new(failing_path: std::path::PathBuf) -> Self {
+        Self {
+            failing_path,
+            analyze_calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn analyze_calls(&self) -> usize {
+        self.analyze_calls.load(Ordering::SeqCst)
+    }
+}
+
+#[async_trait]
+impl MediaAnalyzer for FailingPathMediaAnalyzer {
+    async fn analyze_file(&self, path: std::path::PathBuf) -> AppResult<MediaAnalysisOutcome> {
+        self.analyze_calls.fetch_add(1, Ordering::SeqCst);
+        if path == self.failing_path {
+            return Err(AppError::Repository(
+                "simulated transient probe failure".to_string(),
+            ));
+        }
+        Ok(MediaAnalysisOutcome::Valid(Box::new(
+            test_valid_media_analysis(),
+        )))
+    }
+}
+
 type MetadataSearchBatch = (Vec<MetadataSearchQuery>, String, bool);
 
 #[derive(Clone, Default)]
@@ -612,18 +649,9 @@ impl RecordingExactIdMetadataGateway {
             return vec![];
         }
         vec![
-            ExternalId {
-                source: "smg".to_string(),
-                value: "5555".to_string(),
-            },
-            ExternalId {
-                source: "tmdb".to_string(),
-                value: "6666".to_string(),
-            },
-            ExternalId {
-                source: "imdb".to_string(),
-                value: "tt0055555".to_string(),
-            },
+            ExternalId::new("smg".to_string(), "5555".to_string()),
+            ExternalId::new("tmdb".to_string(), "6666".to_string()),
+            ExternalId::new("imdb".to_string(), "tt0055555".to_string()),
         ]
     }
 
@@ -722,14 +750,8 @@ impl MetadataGateway for RecordingExactIdMetadataGateway {
                         smg_id: Some(7_777),
                         primary_source: Some("tmdb".to_string()),
                         external_ids: vec![
-                            ExternalId {
-                                source: "tmdb".to_string(),
-                                value: tmdb_id,
-                            },
-                            ExternalId {
-                                source: "imdb".to_string(),
-                                value: "tt0077777".to_string(),
-                            },
+                            ExternalId::new("tmdb".to_string(), tmdb_id),
+                            ExternalId::new("imdb".to_string(), "tt0077777".to_string()),
                         ],
                         year: Some(2020),
                         auto_match_safe: true,
@@ -797,7 +819,7 @@ impl BlockingBulkHydrationMetadataGateway {
         if self.bulk_calls.load(Ordering::SeqCst) >= expected_calls {
             return;
         }
-        timeout(Duration::from_secs(5), async {
+        timeout(TEST_WAIT_DEADLINE, async {
             loop {
                 let notified = self.bulk_started.notified();
                 if self.bulk_calls.load(Ordering::SeqCst) >= expected_calls {
@@ -914,10 +936,7 @@ async fn manual_title_create_without_hydration_does_not_fetch_poster() {
                 facet: MediaFacet::Movie,
                 monitored: false,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "1234".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "1234".to_string())],
                 min_availability: None,
                 ..Default::default()
             },
@@ -1024,10 +1043,7 @@ async fn title_scan_returns_error_when_one_off_hydration_fails() {
                 facet: MediaFacet::Movie,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".into(),
-                    value: "900001".into(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb", "900001")],
                 min_availability: None,
                 ..Default::default()
             },
@@ -1605,6 +1621,143 @@ async fn series_title_scan_imports_episode_file_as_primary() {
         media_file_role_for_path(&files, episode_path.as_path()),
         MediaFileRole::Primary
     );
+}
+
+#[tokio::test]
+async fn series_title_scan_isolates_one_files_analysis_failure_from_the_rest_of_the_title() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let title_dir = tempdir.path().join("Fresh Show (2026)");
+    std::fs::create_dir(&title_dir).expect("create series folder");
+    let failing_path = title_dir.join("Fresh Show - 1x01 - Pilot WEBDL-1080p.mkv");
+    let healthy_path = title_dir.join("Fresh Show - 1x02 - Second WEBDL-1080p.mkv");
+    std::fs::write(&failing_path, vec![0_u8; 128]).expect("write first episode file");
+    std::fs::write(&healthy_path, vec![0_u8; 128]).expect("write second episode file");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "series.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner
+        .set_library_files(build_test_library_files(&[
+            failing_path.as_path(),
+            healthy_path.as_path(),
+        ]))
+        .await;
+    let unmatched_items = Arc::new(TrackingLibraryScanUnmatchedItemRepo::default());
+    let (base_app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        settings,
+        library_scanner,
+        unmatched_items,
+        Arc::new(EmptySearchMetadataGateway),
+    );
+    let analyzer = FailingPathMediaAnalyzer::new(failing_path.clone());
+    let app = base_app
+        .with_test_overrides(|builder| builder.with_media_analyzer(Arc::new(analyzer.clone())));
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile series root");
+
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Fresh Show".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                year: Some(2026),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series title");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&title.id, title_dir.to_string_lossy().as_ref())
+        .await
+        .expect("set series folder path");
+    let season = app
+        .services
+        .catalog
+        .shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: Some("1".to_string()),
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("2".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("create season");
+    for (number, label, name) in [("1", "S01E01", "Pilot"), ("2", "S01E02", "Second")] {
+        app.services
+            .catalog
+            .shows
+            .create_episode(Episode {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_id: Some(season.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some(number.to_string()),
+                season_number: Some("1".to_string()),
+                episode_label: Some(label.to_string()),
+                title: Some(name.to_string()),
+                air_date: Some("2026-01-01".to_string()),
+                duration_seconds: Some(420),
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                image_url: None,
+                monitored: true,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create episode");
+    }
+
+    // The walk must succeed even though one file's analysis failed.
+    app.scan_title_library(&user, &title.id)
+        .await
+        .expect("scan series title");
+
+    assert_eq!(analyzer.analyze_calls(), 2);
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(
+        files.len(),
+        2,
+        "both files stay catalogued when one file's analysis fails"
+    );
+    let failed = files
+        .iter()
+        .find(|file| file.file_path == failing_path.to_string_lossy())
+        .expect("failed file is catalogued");
+    assert_eq!(failed.scan_status, "failed");
+    let healthy = files
+        .iter()
+        .find(|file| file.file_path == healthy_path.to_string_lossy())
+        .expect("healthy file is catalogued");
+    assert_ne!(healthy.scan_status, "failed");
 }
 
 #[tokio::test]
@@ -5285,7 +5438,7 @@ async fn cancel_full_library_scan_with_in_flight_title_walk_drains_executor_perm
         .expect("cancel full library scan");
     assert!(cancel_result.accepted);
 
-    let summary = timeout(Duration::from_secs(5), handle)
+    let summary = timeout(TEST_WAIT_DEADLINE, handle)
         .await
         .expect("scan task should drain after cancellation")
         .expect("join canceled scan task")
@@ -7116,12 +7269,7 @@ fn pending_import_title_request(
         monitored: true,
         tags: vec!["should-be-cleared".to_string()],
         external_ids: tvdb_id
-            .map(|value| {
-                vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: value.to_string(),
-                }]
-            })
+            .map(|value| vec![ExternalId::new("tvdb".to_string(), value.to_string())])
             .unwrap_or_default(),
         root_folder_id: Some("should-be-cleared".to_string()),
         min_availability: Some("should-be-cleared".to_string()),
@@ -7264,10 +7412,8 @@ async fn pending_import_title_search_annotates_same_library_titles_only() {
     other_library_title.id = "other-library-movie-title".to_string();
     other_library_title.library_id = "other-movie-library".to_string();
     other_library_title.name = "Other Library Movie".to_string();
-    other_library_title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "123456".to_string(),
-    }];
+    other_library_title.external_ids =
+        vec![ExternalId::new("tvdb".to_string(), "123456".to_string())];
     {
         let mut store = titles.store.lock().await;
         store.push(other_library_title);
@@ -7275,10 +7421,8 @@ async fn pending_import_title_search_annotates_same_library_titles_only() {
             let mut noise_title = existing_title.title.clone();
             noise_title.id = format!("noise-movie-title-{index}");
             noise_title.name = format!("Noise Movie {index}");
-            noise_title.external_ids = vec![ExternalId {
-                source: "tvdb".to_string(),
-                value: format!("9{index:05}"),
-            }];
+            noise_title.external_ids =
+                vec![ExternalId::new("tvdb".to_string(), format!("9{index:05}"))];
             store.push(noise_title);
         }
     }
@@ -7416,10 +7560,7 @@ async fn resolve_pending_import_creates_unmonitored_movie_title_and_keeps_item_b
         Some("123456"),
         Some(2020),
     );
-    request.external_ids = vec![ExternalId {
-        source: "tmdb".to_string(),
-        value: "5001".to_string(),
-    }];
+    request.external_ids = vec![ExternalId::new("tmdb".to_string(), "5001".to_string())];
     let result = app
         .resolve_pending_import(&user, "movie-resolve-1", request, false)
         .await
@@ -7650,10 +7791,7 @@ async fn hydrate_titles_bulk_updates_title_name_for_selected_metadata_language()
                 facet: MediaFacet::Movie,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "123456".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "123456".to_string())],
                 root_folder_id: None,
                 min_availability: None,
                 poster_url: None,
@@ -7767,7 +7905,7 @@ async fn background_hydration_completes_without_inline_recommendation_refresh() 
         .await
         .expect("seed due movie title");
     let mut outcome = timeout(
-        Duration::from_secs(2),
+        TEST_WAIT_DEADLINE,
         app.hydrate_titles_bulk(vec![crate::catalog_workflow::HydrationTarget {
             title: title.clone(),
             requested_tvdb_id: None,
@@ -7808,7 +7946,7 @@ async fn interactive_hydration_queues_recommendations_off_the_hydration_path() {
         .expect("seed due movie title");
 
     timeout(
-        Duration::from_secs(2),
+        TEST_WAIT_DEADLINE,
         app.hydrate_titles_bulk(vec![crate::catalog_workflow::HydrationTarget {
             title,
             requested_tvdb_id: None,
@@ -7821,13 +7959,11 @@ async fn interactive_hydration_queues_recommendations_off_the_hydration_path() {
     .expect("interactive hydration should not wait for recommendation refresh")
     .expect("hydrate title");
 
-    timeout(Duration::from_secs(2), async {
-        while recommendation_calls.load(Ordering::SeqCst) == 0 {
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("queued recommendation refresh should reach the metadata gateway");
+    wait_until(
+        "the queued recommendation refresh to reach the metadata gateway",
+        || async { recommendation_calls.load(Ordering::SeqCst) > 0 },
+    )
+    .await;
     assert_eq!(
         recommendation_calls.load(Ordering::SeqCst),
         1,
@@ -7866,10 +8002,7 @@ async fn resolve_pending_import_rejects_existing_title_in_same_library() {
                 facet: MediaFacet::Movie,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "123456".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "123456".to_string())],
                 root_folder_id: None,
                 min_availability: None,
                 poster_url: None,
@@ -7998,10 +8131,7 @@ async fn resolve_pending_import_attaches_movie_to_existing_title_in_same_library
                 facet: MediaFacet::Movie,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "123456".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "123456".to_string())],
                 root_folder_id: None,
                 min_availability: None,
                 poster_url: None,
@@ -8120,10 +8250,7 @@ async fn resolve_pending_import_attaches_series_to_existing_title_in_same_librar
                 name: "Existing Show".to_string(),
                 facet: MediaFacet::Series,
                 monitored: true,
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "654321".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "654321".to_string())],
                 ..NewTitle::default()
             },
         )
@@ -8212,10 +8339,7 @@ async fn resolve_pending_import_attaches_series_folder_to_existing_title() {
                 facet: MediaFacet::Series,
                 monitored: true,
                 year: Some(2026),
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "778899".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "778899".to_string())],
                 ..NewTitle::default()
             },
         )
@@ -8571,10 +8695,7 @@ async fn resolve_pending_movie_attach_keeps_item_when_title_owns_another_folder(
                 name: "Existing Movie".to_string(),
                 facet: MediaFacet::Movie,
                 monitored: true,
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "123456".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "123456".to_string())],
                 root_folder_id: None,
                 year: Some(2020),
                 ..NewTitle::default()
@@ -8684,10 +8805,7 @@ async fn resolve_pending_movie_directory_retries_until_every_file_is_attached() 
                 name: "Existing Movie".to_string(),
                 facet: MediaFacet::Movie,
                 monitored: true,
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "123456".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "123456".to_string())],
                 root_folder_id: None,
                 year: Some(2020),
                 ..NewTitle::default()
@@ -9081,10 +9199,7 @@ async fn movie_full_scan_heals_an_existing_title_onto_the_root_holding_its_files
                 facet: MediaFacet::Movie,
                 monitored: false,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tmdb".to_string(),
-                    value: "7777".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tmdb".to_string(), "7777".to_string())],
                 min_availability: None,
                 ..Default::default()
             },
@@ -9469,4 +9584,109 @@ async fn title_scan_unmatched_reconcile_keeps_rows_a_title_still_owns() {
     let mut expected = vec![owned.id, other_library.id, conflict.id];
     expected.sort();
     assert_eq!(remaining, expected);
+}
+
+/// An idle scheduled scan re-probes every title and records a delta for each
+/// unchanged one. Those deltas used to be one domain event each (~12k rows per
+/// library per cycle on the load-test library); they must now collapse into a
+/// handful of coalesced records without moving the projected session.
+#[tokio::test]
+async fn unchanged_title_deltas_coalesce_into_few_events_without_moving_projection() {
+    const TITLES: usize = 2_000;
+
+    let (app, _user) = bootstrap();
+    let session_id = "coalesced-delta-session";
+    let tracker = app.runtime.library.library_scan_tracker.clone();
+    let session = tracker
+        .start_session_with_id_for_library(
+            session_id.to_string(),
+            MediaFacet::Movie,
+            Some("library-1".to_string()),
+            LibraryScanMode::Full,
+        )
+        .await
+        .expect("start scan session");
+
+    let coordinator = crate::library_scan_coordinator::LibraryScanCoordinator::with_facet(
+        app.clone(),
+        session_id,
+        MediaFacet::Movie,
+    );
+    coordinator.publish_started(&session).await;
+    coordinator.register_discovery_batch(TITLES, false).await;
+    coordinator.mark_discovery_complete(false).await;
+    coordinator.publish_progress().await;
+
+    let deltas_after_discovery = recorded_library_scan_delta_events(&app).await;
+
+    for index in 0..TITLES {
+        coordinator.mark_title_match_completed(1).await;
+
+        // The live tracker - and therefore GraphQL progress - still sees every
+        // delta the moment it is recorded, coalescing or not.
+        let live = tracker
+            .get_session(session_id)
+            .await
+            .expect("live session during scan");
+        assert_eq!(live.title_match_progress.completed, index + 1);
+    }
+
+    coordinator.mark_metadata_total_known().await;
+    coordinator.mark_file_total_known().await;
+    let summary = LibraryScanSummary {
+        scanned: TITLES,
+        matched: 0,
+        imported: 0,
+        skipped: TITLES,
+        unmatched: 0,
+    };
+    coordinator.set_summary(summary.clone()).await;
+    coordinator.publish_progress().await;
+
+    // The per-event baseline: the live session folded every single delta.
+    let baseline = tracker
+        .get_session(session_id)
+        .await
+        .expect("live session before completion");
+    coordinator.maybe_complete().await;
+
+    let delta_events = recorded_library_scan_delta_events(&app).await;
+    let per_title_delta_events = delta_events - deltas_after_discovery;
+    assert!(
+        per_title_delta_events < TITLES / 100,
+        "expected the {TITLES} unchanged-title deltas to coalesce, got {per_title_delta_events} delta events"
+    );
+    assert!(
+        delta_events < 32,
+        "expected a handful of coalesced delta events, got {delta_events}"
+    );
+
+    let projected =
+        crate::library_scan_coordinator::load_projected_library_scan_session(&app, session_id)
+            .await
+            .expect("projected session")
+            .expect("session snapshot");
+    assert_eq!(projected.status, LibraryScanStatus::Completed);
+    assert_eq!(projected.found_titles, baseline.found_titles);
+    assert_eq!(
+        projected.title_match_progress,
+        baseline.title_match_progress
+    );
+    assert_eq!(projected.metadata_progress, baseline.metadata_progress);
+    assert_eq!(projected.file_progress, baseline.file_progress);
+    assert_eq!(projected.summary, Some(summary));
+}
+
+async fn recorded_library_scan_delta_events(app: &AppUseCase) -> usize {
+    app.services
+        .events
+        .domain_events
+        .list(&DomainEventFilter {
+            event_types: Some(vec![DomainEventType::LibraryScanDeltaRecorded]),
+            limit: 0,
+            ..DomainEventFilter::default()
+        })
+        .await
+        .expect("list delta events")
+        .len()
 }

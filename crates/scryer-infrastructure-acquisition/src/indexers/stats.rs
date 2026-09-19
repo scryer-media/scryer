@@ -768,7 +768,7 @@ mod tests {
             .join()
             .expect("worker callback must not require an entered runtime");
 
-            let row = timeout(Duration::from_secs(5), async {
+            let row = timeout(Duration::from_secs(30), async {
                 loop {
                     if let Some(row) = sqlx::query(
                         "SELECT queries_today, api_current FROM indexer_api_quotas WHERE indexer_id = ?",
@@ -1139,24 +1139,34 @@ mod tests {
         tracker.record_api_limits("idx-gated", Some(7), Some(100), None, None);
 
         let flushing_tracker = tracker.clone();
-        let mut flush_task = tokio::spawn(async move {
+        let flush_task = tokio::spawn(async move {
             flushing_tracker.flush_pending_quota_updates().await;
         });
-        assert!(
-            timeout(Duration::from_millis(100), &mut flush_task)
-                .await
-                .is_err(),
-            "quota persistence must wait for the shared writer gate"
-        );
+        // Wait until a flush has taken the pending updates. This runtime is
+        // single-threaded, so once the test observes that, the flush has run
+        // up to its next await on the write path.
+        timeout(Duration::from_secs(30), async {
+            while !tracker.pending_quota_updates.lock().unwrap().is_empty() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("a quota flush should take the pending updates");
 
+        // The pool has one connection, so this read queues behind any write
+        // that went around the gate and would then see its row.
         let count_while_held: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM indexer_api_quotas")
             .fetch_one(&pool)
             .await
             .expect("quota table should remain readable");
-        assert_eq!(count_while_held, 0);
+        assert_eq!(
+            count_while_held, 0,
+            "quota persistence must wait for the shared writer gate"
+        );
+        assert!(!flush_task.is_finished());
 
         drop(guard);
-        timeout(Duration::from_secs(5), flush_task)
+        timeout(Duration::from_secs(30), flush_task)
             .await
             .expect("quota flush should finish after releasing the writer gate")
             .expect("quota flush task should not panic");
@@ -1185,7 +1195,7 @@ mod tests {
         assert_eq!(tracker.pending_quota_updates.lock().unwrap().len(), 1);
 
         create_quota_table(&pool).await;
-        let row = timeout(Duration::from_secs(5), async {
+        let row = timeout(Duration::from_secs(30), async {
             loop {
                 if let Some(row) = sqlx::query(
                     "SELECT api_current, api_max, queries_today

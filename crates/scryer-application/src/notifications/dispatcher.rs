@@ -1551,14 +1551,8 @@ mod tests {
 
     fn media_request_test_external_ids() -> Vec<ExternalId> {
         vec![
-            ExternalId {
-                source: "imdb".to_string(),
-                value: "tt7654321".to_string(),
-            },
-            ExternalId {
-                source: "tvdb".to_string(),
-                value: "456".to_string(),
-            },
+            ExternalId::new("imdb".to_string(), "tt7654321".to_string()),
+            ExternalId::new("tvdb".to_string(), "456".to_string()),
         ]
     }
 
@@ -2035,17 +2029,11 @@ mod tests {
         let mut payload = NotificationExternalIdsPayload::default();
         push_external_id(
             &mut payload,
-            &ExternalId {
-                source: "smg".to_string(),
-                value: "101".to_string(),
-            },
+            &ExternalId::new("smg".to_string(), "101".to_string()),
         );
         push_external_id(
             &mut payload,
-            &ExternalId {
-                source: "tmdb".to_string(),
-                value: "603".to_string(),
-            },
+            &ExternalId::new("tmdb".to_string(), "603".to_string()),
         );
 
         assert!(!payload.by_source.contains_key("smg"));

@@ -1112,7 +1112,10 @@ impl crate::AppUseCase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[tokio::test]
+    // Paused clock: the 150 ms bound fires only once the waiter has parked on
+    // its 2 s backoff, and the completion must land before any virtual time
+    // passes, so a notify can never be confused with the backoff.
+    #[tokio::test(start_paused = true)]
     async fn orphaned_queued_row_backs_off_and_completion_wakes_waiter() {
         use crate::location::model::{
             LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
@@ -1333,7 +1336,9 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    // Paused clock: each 10 ms bound fires only once the waiter has parked, so
+    // an `Err` means it is really waiting, not merely unscheduled.
+    #[tokio::test(start_paused = true)]
     async fn transfer_dispatch_is_fifo_and_holds_one_instance_slot() {
         use crate::location::model::{
             LocationExecutionMode, LocationOperationState, LocationOperationType, VerificationDepth,
@@ -1607,7 +1612,8 @@ mod tests {
         assert!(denied.message().contains("title-1"));
     }
 
-    #[tokio::test]
+    // Paused clock: the 10 ms bound fires only once the drain has parked.
+    #[tokio::test(start_paused = true)]
     async fn title_mutation_drain_waits_for_admitted_work_and_preserves_other_titles() {
         let registry = LocationOwnershipRegistry::new();
         let mutation = registry.admit_title_mutation("moving").unwrap();

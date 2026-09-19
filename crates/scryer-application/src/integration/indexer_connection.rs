@@ -2012,18 +2012,28 @@ mod tests {
         }
     }
 
-    async fn wait_for_plan_sync_calls(provider: &RecordingPluginProvider, expected_calls: usize) {
-        for _ in 0..50 {
-            if *provider.plan_sync_calls.lock().unwrap() == expected_calls {
-                tokio::task::yield_now().await;
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                assert_eq!(*provider.plan_sync_calls.lock().unwrap(), expected_calls);
-                return;
-            }
-            tokio::task::yield_now().await;
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-
+    /// Waits for the queued background sync to call `plan_sync` and then to
+    /// finish applying its plan. Every sync holds `managed_indexer_sync_lock`
+    /// across both, and tokio's mutex is FIFO, so taking the lock here waits
+    /// out that sync and any other sync already queued behind it; the exact
+    /// count afterwards is therefore a settled observation.
+    async fn wait_for_plan_sync_calls(
+        app: &AppUseCase,
+        provider: &RecordingPluginProvider,
+        expected_calls: usize,
+    ) {
+        crate::test_wait::wait_until(
+            "the background sync to call plan_sync",
+            move || async move { *provider.plan_sync_calls.lock().unwrap() >= expected_calls },
+        )
+        .await;
+        drop(
+            crate::test_wait::within_deadline(
+                "the background sync to release the managed indexer sync lock",
+                app.runtime.integrations.managed_indexer_sync_lock.lock(),
+            )
+            .await,
+        );
         assert_eq!(*provider.plan_sync_calls.lock().unwrap(), expected_calls);
     }
 
@@ -2031,7 +2041,7 @@ mod tests {
         receiver: &mut tokio::sync::broadcast::Receiver<()>,
         context: &str,
     ) {
-        tokio::time::timeout(Duration::from_secs(1), receiver.recv())
+        tokio::time::timeout(crate::test_wait::TEST_WAIT_DEADLINE, receiver.recv())
             .await
             .unwrap_or_else(|_| panic!("timed out waiting for indexersChanged: {context}"))
             .unwrap_or_else(|error| {
@@ -3371,7 +3381,7 @@ mod tests {
             .await
             .expect("managed parent should save before background sync failure");
 
-        wait_for_plan_sync_calls(&provider, 1).await;
+        wait_for_plan_sync_calls(&app, &provider, 1).await;
         let stored = indexer_repo
             .get_by_id(&created.id)
             .await
@@ -3454,7 +3464,7 @@ mod tests {
             .expect("managed parent should enable before background sync failure");
 
         assert!(updated.is_enabled);
-        wait_for_plan_sync_calls(&provider, 1).await;
+        wait_for_plan_sync_calls(&app, &provider, 1).await;
         let stored = indexer_repo
             .get_by_id("cfg-1")
             .await
@@ -3989,7 +3999,7 @@ mod tests {
             .await
             .expect("managed parent should queue background sync");
 
-        wait_for_plan_sync_calls(&provider, 1).await;
+        wait_for_plan_sync_calls(&app, &provider, 1).await;
         let configs = indexer_repo.list(None).await.unwrap();
         assert_eq!(configs.len(), 2);
         assert!(configs.iter().any(|config| config.id == created.id));
@@ -4035,7 +4045,7 @@ mod tests {
             .await
             .expect("create should keep parent when background sync fails");
 
-        wait_for_plan_sync_calls(&provider, 1).await;
+        wait_for_plan_sync_calls(&app, &provider, 1).await;
         let configs = indexer_repo.list(None).await.unwrap();
         assert_eq!(configs.len(), 1);
         assert_eq!(configs[0].id, created.id);
@@ -4431,7 +4441,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(updated.base_url, "https://manager.changed.example");
-        wait_for_plan_sync_calls(&provider, 1).await;
+        wait_for_plan_sync_calls(&app, &provider, 1).await;
         assert_eq!(*provider.plan_sync_calls.lock().unwrap(), 1);
     }
 

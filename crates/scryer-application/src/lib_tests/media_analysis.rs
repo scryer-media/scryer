@@ -485,7 +485,7 @@ async fn stale_analysis_skips_busy_destinations_and_yields_to_foreground_imports
         .acquire_destination(&dir.path().join("Movie.iso"))
         .await;
     timeout(
-        Duration::from_secs(1),
+        TEST_WAIT_DEADLINE,
         app.refresh_stale_media_analysis("fixture-library"),
     )
     .await
@@ -526,13 +526,13 @@ async fn stale_analysis_keeps_single_flight_after_caller_cancellation() {
         let app = app.clone();
         async move { app.refresh_stale_media_analysis("fixture-library").await }
     });
-    timeout(Duration::from_secs(5), started.notified())
+    timeout(TEST_WAIT_DEADLINE, started.notified())
         .await
         .unwrap();
     caller.abort();
     let _ = caller.await;
     timeout(
-        Duration::from_secs(1),
+        TEST_WAIT_DEADLINE,
         app.refresh_stale_media_analysis("fixture-library"),
     )
     .await
@@ -541,7 +541,7 @@ async fn stale_analysis_keeps_single_flight_after_caller_cancellation() {
     assert_eq!(seen.lock().await.len(), 1);
     resume.notify_one();
     let _finished = timeout(
-        Duration::from_secs(5),
+        TEST_WAIT_DEADLINE,
         app.runtime
             .library
             .media_analysis_refresh_lock
@@ -577,7 +577,7 @@ async fn stale_analysis_does_not_record_results_for_replaced_sources() {
         let app = app.clone();
         async move { app.refresh_stale_media_analysis("fixture-library").await }
     });
-    timeout(Duration::from_secs(5), started.notified())
+    timeout(TEST_WAIT_DEADLINE, started.notified())
         .await
         .unwrap();
     std::fs::write(
@@ -724,7 +724,7 @@ async fn disc_title_selection_rejects_concurrent_selection_and_source_changes() 
                     .await
             }
         });
-        timeout(Duration::from_secs(5), started.notified())
+        timeout(TEST_WAIT_DEADLINE, started.notified())
             .await
             .expect("inspection started");
         if change_source {

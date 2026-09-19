@@ -2260,6 +2260,16 @@ mod tests {
         let host = HostKey::from(format!("host-rps-{}.example.test", Uuid::new_v4()));
         let destination = DestinationKey::from(host.to_string());
         let registry = RateLimitRegistry::new();
+        // A near-zero refill rate keeps the drained bucket empty for the rest
+        // of the test, however slowly it runs.
+        registry.register_host_profile(
+            host.clone(),
+            scryer_outbound_http::HostRpsProfile::limited(
+                0.001,
+                scryer_outbound_http::DEFAULT_HOST_RPS_BURST,
+            ),
+            scryer_outbound_http::HostRpsProfileSource::ExplicitRegistration,
+        );
 
         for _ in 0..scryer_outbound_http::DEFAULT_HOST_RPS_BURST {
             assert_eq!(registry.acquire_host_rps(&host).await, None);

@@ -215,7 +215,7 @@ async fn stale_self_password_change_cannot_overwrite_a_newer_change() {
             )
             .await
     });
-    timeout(Duration::from_secs(5), users.wait_for_own_password_update())
+    timeout(TEST_WAIT_DEADLINE, users.wait_for_own_password_update())
         .await
         .expect("stale password change should reach the conditional write");
 
@@ -228,7 +228,7 @@ async fn stale_self_password_change_cannot_overwrite_a_newer_change() {
     .expect("newer password change should win");
     users.resume_own_password_update();
 
-    let stale_result = timeout(Duration::from_secs(5), stale_change)
+    let stale_result = timeout(TEST_WAIT_DEADLINE, stale_change)
         .await
         .expect("stale password change should finish")
         .expect("stale password task should not panic");
@@ -277,7 +277,7 @@ async fn concurrent_initial_password_claims_allow_exactly_one_winner() {
             .set_initial_own_password(&first_actor, "first-password".to_string())
             .await
     });
-    timeout(Duration::from_secs(5), users.wait_for_own_password_update())
+    timeout(TEST_WAIT_DEADLINE, users.wait_for_own_password_update())
         .await
         .expect("first claim should reach the conditional write");
 
@@ -286,7 +286,7 @@ async fn concurrent_initial_password_claims_allow_exactly_one_winner() {
         .expect("second claim should win");
     users.resume_own_password_update();
 
-    let first_result = timeout(Duration::from_secs(5), first_claim)
+    let first_result = timeout(TEST_WAIT_DEADLINE, first_claim)
         .await
         .expect("first claim should finish")
         .expect("first claim task should not panic");

@@ -41,31 +41,29 @@ async fn location_move_drains_an_already_admitted_download_submission() {
             )
             .await
     });
-    tokio::time::timeout(
-        std::time::Duration::from_secs(5),
+    within_deadline(
+        "the download submission to reach the client",
         client.submit_started.notified(),
     )
-    .await
-    .unwrap();
+    .await;
     let entities = [crate::location::ownership_guard::OwnedEntity::Title(
         title.id.clone(),
     )];
-    let drain = app
-        .runtime
-        .library
-        .location_ownership
-        .drain_title_mutations(&entities);
-    tokio::pin!(drain);
+    // One unconstrained poll runs the drain to the title's admission lock:
+    // Pending means it is parked behind the admitted submission's lease.
+    let mut drain = Box::pin(tokio::task::unconstrained(
+        app.runtime
+            .library
+            .location_ownership
+            .drain_title_mutations(&entities),
+    ));
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(10), &mut drain)
-            .await
-            .is_err()
+        futures_util::poll!(drain.as_mut()).is_pending(),
+        "the drain must wait for the admitted submission"
     );
     assert!(submissions.store.lock().await.is_empty());
     gate.notify_one();
-    let exclusive = tokio::time::timeout(std::time::Duration::from_secs(5), drain)
-        .await
-        .unwrap();
+    let exclusive = within_deadline("the drain after the submission lands", drain).await;
     assert_eq!(
         submissions.store.lock().await.len(),
         1,
@@ -415,10 +413,7 @@ async fn add_title_with_outcome_returns_pending_and_reuses_existing_tvdb_title()
         facet: MediaFacet::Movie,
         monitored: true,
         tags: vec![],
-        external_ids: vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "123456".to_string(),
-        }],
+        external_ids: vec![ExternalId::new("tvdb".to_string(), "123456".to_string())],
         min_availability: None,
         ..Default::default()
     };
@@ -466,10 +461,7 @@ async fn add_title_and_queue_download_with_outcome_reuses_matching_queue_submiss
         facet: MediaFacet::Movie,
         monitored: true,
         tags: vec![],
-        external_ids: vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "654321".to_string(),
-        }],
+        external_ids: vec![ExternalId::new("tvdb".to_string(), "654321".to_string())],
         min_availability: None,
         ..Default::default()
     };
@@ -539,10 +531,7 @@ async fn add_title_and_queue_download_records_accepted_torrent_hash_fingerprint(
         facet: MediaFacet::Movie,
         monitored: true,
         tags: vec![],
-        external_ids: vec![ExternalId {
-            source: "tmdb".to_string(),
-            value: "987654".to_string(),
-        }],
+        external_ids: vec![ExternalId::new("tmdb".to_string(), "987654".to_string())],
         min_availability: None,
         ..Default::default()
     };
@@ -586,10 +575,7 @@ async fn queue_existing_title_download_reuses_matching_queue_submission() {
                 facet: MediaFacet::Movie,
                 monitored: true,
                 tags: vec![],
-                external_ids: vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "7654321".to_string(),
-                }],
+                external_ids: vec![ExternalId::new("tvdb".to_string(), "7654321".to_string())],
                 min_availability: None,
                 ..Default::default()
             },
@@ -730,9 +716,11 @@ async fn concurrent_queue_requests_for_one_title_submit_once() {
             .await
         }
     });
-    tokio::time::timeout(std::time::Duration::from_secs(2), first_started)
-        .await
-        .expect("first submission should reach the downloader gate");
+    within_deadline(
+        "the first submission to reach the downloader gate",
+        first_started,
+    )
+    .await;
     let second = tokio::spawn({
         let app = app.clone();
         let user = user.clone();
@@ -748,18 +736,29 @@ async fn concurrent_queue_requests_for_one_title_submit_once() {
             .await
         }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // The first submission holds the title's submission lock at the gate, so
+    // a second participant on that lock is the second queue parked behind it.
+    wait_until(
+        "the second submission to park on the title lock",
+        || async {
+            app.runtime
+                .acquisition
+                .download_submission_guards
+                .title_lock_participants(&title.id)
+                .await
+                >= 2
+        },
+    )
+    .await;
     *download_client.submit_gate.lock().await = None;
     gate.notify_one();
 
-    let first = tokio::time::timeout(std::time::Duration::from_secs(2), first)
+    let first = within_deadline("the first queue task", first)
         .await
-        .expect("first queue task should complete")
         .expect("first task")
         .expect("first queue");
-    let second = tokio::time::timeout(std::time::Duration::from_secs(2), second)
+    let second = within_deadline("the second queue task", second)
         .await
-        .expect("second queue task should complete")
         .expect("second task")
         .expect("second queue");
     let QueueDownloadOutcome::Queued(first) = first else {
@@ -835,9 +834,11 @@ async fn concurrent_different_releases_for_one_scope_leave_the_second_as_a_confl
             .await
         }
     });
-    tokio::time::timeout(std::time::Duration::from_secs(2), first_started)
-        .await
-        .expect("first submission should reach the downloader gate");
+    within_deadline(
+        "the first submission to reach the downloader gate",
+        first_started,
+    )
+    .await;
     let second = tokio::spawn({
         let app = app.clone();
         let user = user.clone();
@@ -858,18 +859,29 @@ async fn concurrent_different_releases_for_one_scope_leave_the_second_as_a_confl
             .await
         }
     });
-    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    // The first submission holds the title's submission lock at the gate, so
+    // a second participant on that lock is the second queue parked behind it.
+    wait_until(
+        "the second submission to park on the title lock",
+        || async {
+            app.runtime
+                .acquisition
+                .download_submission_guards
+                .title_lock_participants(&title.id)
+                .await
+                >= 2
+        },
+    )
+    .await;
     *download_client.submit_gate.lock().await = None;
     gate.notify_one();
 
-    let first = tokio::time::timeout(std::time::Duration::from_secs(2), first)
+    let first = within_deadline("the first queue task", first)
         .await
-        .expect("first queue task should complete")
         .expect("first task")
         .expect("first queue");
-    let second = tokio::time::timeout(std::time::Duration::from_secs(2), second)
+    let second = within_deadline("the second queue task", second)
         .await
-        .expect("second queue task should complete")
         .expect("second task")
         .expect("second queue");
     assert!(matches!(first, QueueDownloadOutcome::Queued(_)));
@@ -1211,6 +1223,7 @@ async fn queue_existing_title_download_episode_scope_records_grabbed_history_con
             event_types: Some(vec![DomainEventType::ReleaseGrabbed]),
             title_id: Some(title.id.clone()),
             facet: None,
+            stream_id: None,
             after_sequence: Some(0),
             before_sequence: None,
             limit: 10,
@@ -1288,6 +1301,7 @@ async fn queue_existing_title_download_records_configured_provider_in_grabbed_hi
             event_types: Some(vec![DomainEventType::ReleaseGrabbed]),
             title_id: Some(title.id.clone()),
             facet: None,
+            stream_id: None,
             after_sequence: Some(0),
             before_sequence: None,
             limit: 10,

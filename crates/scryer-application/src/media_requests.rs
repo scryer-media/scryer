@@ -1621,7 +1621,7 @@ pub(crate) fn normalize_media_request_external_ids(
 
     Ok(seen
         .into_iter()
-        .map(|(source, value)| ExternalId { source, value })
+        .map(|(source, value)| ExternalId::new(source, value))
         .collect())
 }
 

@@ -3360,6 +3360,14 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
     Err("WASI Preview 2 indexer components must embed a top-level plugin descriptor".to_string())
 }
 
+/// Deadline for entering a trusted indexer component once at startup.
+#[cfg(not(test))]
+const STARTUP_COMPONENT_INIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// Unit tests only: an unoptimized build on a loaded runner can need well over
+/// five seconds to initialize a component.
+#[cfg(test)]
+const STARTUP_COMPONENT_INIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WasmPluginDescriptorLoader;
 
@@ -3400,7 +3408,7 @@ impl PluginDescriptorLoader for WasmPluginDescriptorLoader {
                                     Vec::new(),
                                     Default::default(),
                                     None,
-                                    std::time::Duration::from_secs(5),
+                                    STARTUP_COMPONENT_INIT_TIMEOUT,
                                     None,
                                     None,
                                 )?;

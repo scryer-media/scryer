@@ -3469,7 +3469,7 @@ mod tests {
             super::drain_indexer_accounting_on_shutdown(&accounting).await;
         });
 
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             while let Some(probe) = gate.admit() {
                 drop(probe);
                 tokio::task::yield_now().await;
@@ -3484,7 +3484,7 @@ mod tests {
 
         tracker.record_api_request_sent("shutdown-indexer", "Shutdown indexer");
         drop(admission);
-        tokio::time::timeout(Duration::from_secs(1), task)
+        tokio::time::timeout(Duration::from_secs(30), task)
             .await
             .expect("shutdown must finish after the callback")
             .expect("shutdown task must not panic");
@@ -3511,7 +3511,7 @@ mod tests {
         assert_eq!(flush_count.load(Ordering::SeqCst), 0);
 
         token.cancel();
-        tokio::time::timeout(Duration::from_secs(1), handle)
+        tokio::time::timeout(Duration::from_secs(30), handle)
             .await
             .expect("shutdown flush waiter should finish")
             .expect("shutdown flush task should not panic");
@@ -3555,10 +3555,30 @@ mod tests {
             }),
         );
 
+        // The launcher runs on its own thread; poll for its observable effects.
+        let wait_until = |what: &str, condition: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while !condition() {
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "timed out waiting for {what}"
+                );
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+
         controller.schedule_restart();
-        std::thread::sleep(Duration::from_millis(40));
+        wait_until("the failed launch to clear the schedule", &|| {
+            attempts.load(Ordering::SeqCst) == 1
+                && !controller.inner.scheduled.load(Ordering::SeqCst)
+        });
         controller.schedule_restart();
-        std::thread::sleep(Duration::from_millis(40));
+        wait_until("the retry to launch", &|| {
+            attempts.load(Ordering::SeqCst) == 2
+        });
+        wait_until("the retry to clear the schedule", &|| {
+            !controller.inner.scheduled.load(Ordering::SeqCst)
+        });
 
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }

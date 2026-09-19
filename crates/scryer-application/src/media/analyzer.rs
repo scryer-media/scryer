@@ -137,9 +137,13 @@ pub(crate) async fn probe_native_catalog(
     operation: crate::media::metrics::ProbeOperation,
 ) -> AppResult<Result<scryer_mediainfo::MediaAnalysis, String>> {
     let source_path = path.clone();
+    // A metadata read that fails is an I/O failure for this file, not
+    // evidence about the file's identity. Folding it into `None` and
+    // comparing made a transient failure read as "the source changed".
+    let source_before = super::discs::MediaSourceVersion::read(&path).await?;
     let key = AnalysisKey {
         path: path.clone(),
-        source: super::discs::MediaSourceVersion::read(&path).await.ok(),
+        source: Some(source_before),
         selection: selection.clone(),
     };
     let flight = NATIVE_PROBE_FLIGHTS.start_with_priority(
@@ -165,11 +169,8 @@ pub(crate) async fn probe_native_catalog(
         },
     );
     let outcome = flight.outcome().await?;
-    if key.source
-        != super::discs::MediaSourceVersion::read(&source_path)
-            .await
-            .ok()
-    {
+    let source_after = super::discs::MediaSourceVersion::read(&source_path).await?;
+    if key.source.as_ref() != Some(&source_after) {
         return Err(AppError::Validation(
             "media source changed during inspection".into(),
         ));
@@ -188,7 +189,9 @@ pub(crate) async fn hold_native_probe_for_test(
     };
     let (release, held) = std::sync::mpsc::channel();
     let flight = NATIVE_PROBE_FLIGHTS.start(key, move || {
-        held.recv_timeout(std::time::Duration::from_secs(10))
+        // No deadline: the test releases the probe, and a test that fails
+        // first drops the sender, which ends the wait too.
+        held.recv()
             .map_err(|error| AppError::Repository(error.to_string()))?;
         Ok(scryer_mediainfo::analyze_catalog_file(&path).map_err(|error| error.to_string()))
     });
@@ -330,7 +333,7 @@ mod tests {
             ));
         }
         for _ in 0..3 {
-            tokio::time::timeout(std::time::Duration::from_secs(5), entries.recv())
+            tokio::time::timeout(crate::test_wait::TEST_WAIT_DEADLINE, entries.recv())
                 .await
                 .unwrap()
                 .unwrap();
@@ -347,7 +350,7 @@ mod tests {
             || Ok(99),
         );
         assert_eq!(
-            tokio::time::timeout(std::time::Duration::from_secs(5), foreground.outcome())
+            tokio::time::timeout(crate::test_wait::TEST_WAIT_DEADLINE, foreground.outcome())
                 .await
                 .unwrap()
                 .unwrap(),
@@ -372,9 +375,8 @@ mod tests {
         let (resume, blocked) = std::sync::mpsc::channel();
         let first = flights.start(key.clone(), move || {
             let _ = started.send(());
-            blocked
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .unwrap();
+            // Released by the test; a failed test drops the sender instead.
+            blocked.recv().unwrap();
             Ok(MediaAnalysisOutcome::Invalid("shared result".into()))
         });
         let request = tokio::spawn(async move { first.outcome().await });
@@ -414,9 +416,8 @@ mod tests {
         };
         let (resume, blocked) = std::sync::mpsc::channel();
         let original = flights.start(key.clone(), move || {
-            blocked
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .unwrap();
+            // Released by the test; a failed test drops the sender instead.
+            blocked.recv().unwrap();
             Ok(MediaAnalysisOutcome::Invalid("original".into()))
         });
         let mut selected_key = key.clone();

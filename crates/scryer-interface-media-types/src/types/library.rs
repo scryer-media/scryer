@@ -706,6 +706,10 @@ pub struct MediaRenameApplyPayload {
 pub struct ExternalIdInput {
     /// Provider namespace for the identifier, such as TVDB or IMDb.
     pub source: String,
+    /// Entity kind the identifier names at that source, such as `movie`,
+    /// `series`, `anime` or `title`. Omit it when the kind is unknown: the
+    /// identifier then matches a stored id of any kind.
+    pub kind: Option<String>,
     /// Provider-issued identifier value.
     pub value: String,
 }

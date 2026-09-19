@@ -241,14 +241,8 @@ async fn hydrated_title_metadata_with_extra_external_ids_completes_on_single_con
     title.facet = MediaFacet::Anime;
     title.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Anime);
     title.external_ids = vec![
-        ExternalId {
-            source: "tvdb".to_string(),
-            value: "12345".to_string(),
-        },
-        ExternalId {
-            source: "mal".to_string(),
-            value: "old-mal".to_string(),
-        },
+        ExternalId::new("tvdb".to_string(), "12345".to_string()),
+        ExternalId::new("mal".to_string(), "old-mal".to_string()),
     ];
     // The hydration payload's `extra_tags` are the anime metadata trio, which
     // all live in the reserved `scryer:` namespace; a stale one is replaced by
@@ -269,21 +263,15 @@ async fn hydrated_title_metadata_with_extra_external_ids_completes_on_single_con
         metadata_language: Some("eng".to_string()),
         metadata_fetched_at: Some(Utc::now().to_rfc3339()),
         extra_external_ids: vec![
-            ExternalId {
-                source: "mal".to_string(),
-                value: "834".to_string(),
-            },
-            ExternalId {
-                source: "anilist".to_string(),
-                value: "269".to_string(),
-            },
+            ExternalId::new("mal".to_string(), "834".to_string()),
+            ExternalId::new("anilist".to_string(), "269".to_string()),
         ],
         extra_tags: vec!["scryer:mal-score:9.1".to_string()],
         ..TitleMetadataUpdate::default()
     };
 
     let updated = timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(30),
         TitleRepository::update_title_hydrated_metadata(&catalog, &title.id, update),
     )
     .await
@@ -329,10 +317,7 @@ async fn hydrated_title_metadata_preserves_retry_until_fetch_marker_sqlite() {
     let catalog = title_store(&services);
 
     let mut title = make_test_title("title-hydration-retry-preserve", None);
-    title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "12345".to_string(),
-    }];
+    title.external_ids = vec![ExternalId::new("tvdb".to_string(), "12345".to_string())];
     TitleRepository::create(&catalog, title.clone())
         .await
         .expect("title should insert");
@@ -408,10 +393,7 @@ async fn replace_title_match_state_completes_on_single_connection_sqlite() {
     let mut title = make_test_title("title-replace-match-state", None);
     title.facet = MediaFacet::Anime;
     title.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Anime);
-    title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "12345".to_string(),
-    }];
+    title.external_ids = vec![ExternalId::new("tvdb".to_string(), "12345".to_string())];
     title.year = Some(2024);
     title.overview = Some("overview before clear".to_string());
     title.popularity = Some(42.0);
@@ -449,14 +431,11 @@ async fn replace_title_match_state_completes_on_single_connection_sqlite() {
     .expect("media file should insert");
 
     let updated = timeout(
-        Duration::from_secs(1),
+        Duration::from_secs(30),
         TitleRepository::replace_match_state(
             &catalog,
             &title.id,
-            vec![ExternalId {
-                source: "tvdb".to_string(),
-                value: "99999".to_string(),
-            }],
+            vec![ExternalId::new("tvdb".to_string(), "99999".to_string())],
             vec!["score:9.1".to_string()],
         ),
     )
@@ -1020,10 +999,7 @@ async fn identical_metadata_identity_is_isolated_by_library_title() {
         insert_test_library(&services, id, MediaFacet::Movie).await;
     }
 
-    let external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "123456".to_string(),
-    }];
+    let external_ids = vec![ExternalId::new("tvdb".to_string(), "123456".to_string())];
     let mut title_a = make_test_title("title-library-a", None);
     title_a.library_id = "movie-library-a".to_string();
     title_a.facet = MediaFacet::Movie;
@@ -1179,10 +1155,7 @@ async fn identical_metadata_identity_is_isolated_by_library_title() {
     let rematched_a = TitleRepository::replace_match_state(
         &catalog,
         &title_a.id,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "654321".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "654321".to_string())],
         vec!["rematched".to_string()],
     )
     .await
@@ -1453,10 +1426,7 @@ async fn title_lookup_by_external_id_preserves_source_image_url() {
         "title-external-id",
         Some("https://artworks.thetvdb.com/poster-external.jpg"),
     );
-    title.external_ids = vec![ExternalId {
-        source: "TVDB".to_string(),
-        value: "123456".to_string(),
-    }];
+    title.external_ids = vec![ExternalId::new("TVDB".to_string(), "123456".to_string())];
     TitleRepository::create(&catalog, title.clone())
         .await
         .expect("title should insert");
@@ -1504,10 +1474,7 @@ async fn create_title_marks_supported_movie_identities_for_background_hydration(
 
     for source in ["smg", "tmdb", "imdb", "tvdb", "wikidata"] {
         let mut title = make_test_title(&format!("title-{source}"), None);
-        title.external_ids = vec![ExternalId {
-            source: source.to_string(),
-            value: format!("{source}-id"),
-        }];
+        title.external_ids = vec![ExternalId::new(source.to_string(), format!("{source}-id"))];
         TitleRepository::create(&catalog, title)
             .await
             .expect("identity-backed title should insert");
@@ -1551,20 +1518,14 @@ async fn list_titles_due_for_hydration_excludes_active_facets_in_due_order() {
     let mut anime_title = make_test_title("anime-due", None);
     anime_title.facet = MediaFacet::Anime;
     anime_title.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Anime);
-    anime_title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "301".to_string(),
-    }];
+    anime_title.external_ids = vec![ExternalId::new("tvdb".to_string(), "301".to_string())];
     TitleRepository::create(&catalog, anime_title)
         .await
         .expect("anime title should insert");
 
     let mut movie_title = make_test_title("movie-due", None);
     movie_title.facet = MediaFacet::Movie;
-    movie_title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "101".to_string(),
-    }];
+    movie_title.external_ids = vec![ExternalId::new("tvdb".to_string(), "101".to_string())];
     TitleRepository::create(&catalog, movie_title)
         .await
         .expect("movie title should insert");
@@ -1572,10 +1533,7 @@ async fn list_titles_due_for_hydration_excludes_active_facets_in_due_order() {
     let mut series_title = make_test_title("series-due", None);
     series_title.facet = MediaFacet::Series;
     series_title.library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
-    series_title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "201".to_string(),
-    }];
+    series_title.external_ids = vec![ExternalId::new("tvdb".to_string(), "201".to_string())];
     TitleRepository::create(&catalog, series_title)
         .await
         .expect("series title should insert");
@@ -1638,10 +1596,7 @@ async fn title_queries_find_by_external_id() {
         "title-external-id",
         Some("https://artworks.thetvdb.com/poster-external.jpg"),
     );
-    title.external_ids = vec![ExternalId {
-        source: "TVDB".to_string(),
-        value: "123456".to_string(),
-    }];
+    title.external_ids = vec![ExternalId::new("TVDB".to_string(), "123456".to_string())];
     TitleRepository::create(&catalog, title.clone())
         .await
         .expect("title should insert");
@@ -1722,10 +1677,8 @@ async fn title_queries_list_existing_external_ids_in_library_and_facet_is_scoped
         "same-library-movie",
         Some("https://artworks.thetvdb.com/same.jpg"),
     );
-    same_library_movie.external_ids = vec![ExternalId {
-        source: "TVDB".to_string(),
-        value: "333333".to_string(),
-    }];
+    same_library_movie.external_ids =
+        vec![ExternalId::new("TVDB".to_string(), "333333".to_string())];
     TitleRepository::create(&catalog, same_library_movie)
         .await
         .expect("same-library movie should insert");
@@ -1734,10 +1687,8 @@ async fn title_queries_list_existing_external_ids_in_library_and_facet_is_scoped
         "same-library-movie-upper",
         Some("https://artworks.thetvdb.com/upper.jpg"),
     );
-    same_library_movie_upper.external_ids = vec![ExternalId {
-        source: "TVDB".to_string(),
-        value: "555555".to_string(),
-    }];
+    same_library_movie_upper.external_ids =
+        vec![ExternalId::new("TVDB".to_string(), "555555".to_string())];
     TitleRepository::create(&catalog, same_library_movie_upper)
         .await
         .expect("same-library uppercase-source movie should insert");
@@ -1747,10 +1698,8 @@ async fn title_queries_list_existing_external_ids_in_library_and_facet_is_scoped
         Some("https://artworks.thetvdb.com/other.jpg"),
     );
     other_library_movie.library_id = "other-movie-library".to_string();
-    other_library_movie.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "123456".to_string(),
-    }];
+    other_library_movie.external_ids =
+        vec![ExternalId::new("tvdb".to_string(), "123456".to_string())];
     TitleRepository::create(&catalog, other_library_movie)
         .await
         .expect("other-library movie should insert");
@@ -1762,10 +1711,8 @@ async fn title_queries_list_existing_external_ids_in_library_and_facet_is_scoped
     different_facet_title.facet = MediaFacet::Series;
     different_facet_title.library_id =
         scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
-    different_facet_title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "444444".to_string(),
-    }];
+    different_facet_title.external_ids =
+        vec![ExternalId::new("tvdb".to_string(), "444444".to_string())];
     TitleRepository::create(&catalog, different_facet_title)
         .await
         .expect("different-facet title should insert");
@@ -1808,19 +1755,13 @@ async fn title_queries_list_by_external_ids_preserve_request_order_for_unique_fi
     let catalog = title_store(&services);
 
     let mut first = make_test_title("title-a", Some("https://artworks.thetvdb.com/a.jpg"));
-    first.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "123456".to_string(),
-    }];
+    first.external_ids = vec![ExternalId::new("tvdb".to_string(), "123456".to_string())];
     TitleRepository::create(&catalog, first.clone())
         .await
         .expect("first title should insert");
 
     let mut second = make_test_title("title-b", Some("https://artworks.thetvdb.com/b.jpg"));
-    second.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "345678".to_string(),
-    }];
+    second.external_ids = vec![ExternalId::new("tvdb".to_string(), "345678".to_string())];
     TitleRepository::create(&catalog, second.clone())
         .await
         .expect("second title should insert");
@@ -1874,20 +1815,17 @@ async fn title_queries_list_by_external_id_lookups_return_all_matching_titles() 
 
     let mut first = make_test_title("title-shared-a", Some("https://artworks.thetvdb.com/a.jpg"));
     first.library_id = "library-a".to_string();
-    first.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "123456".to_string(),
-    }];
+    first.external_ids = vec![ExternalId::new("tvdb".to_string(), "123456".to_string())];
     TitleRepository::create(&catalog, first.clone())
         .await
         .expect("first title should insert");
 
     let mut second = make_test_title("title-shared-b", Some("https://artworks.thetvdb.com/b.jpg"));
     second.library_id = "library-b".to_string();
-    second.external_ids = vec![ExternalId {
-        source: "tvdb_series".to_string(),
-        value: "123456".to_string(),
-    }];
+    second.external_ids = vec![ExternalId::new(
+        "tvdb_series".to_string(),
+        "123456".to_string(),
+    )];
     TitleRepository::create(&catalog, second.clone())
         .await
         .expect("second title should insert");
@@ -2139,20 +2077,14 @@ async fn title_create_or_get_existing_reuses_external_ids_not_slug_only() {
 
     let mut existing = make_test_title("title-existing-external-id", None);
     existing.slug = Some("shared-slug".to_string());
-    existing.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "12345".to_string(),
-    }];
+    existing.external_ids = vec![ExternalId::new("tvdb".to_string(), "12345".to_string())];
     TitleRepository::create(&catalog, existing.clone())
         .await
         .expect("existing title should insert");
 
     let mut same_slug = make_test_title("title-same-slug-new-external-id", None);
     same_slug.slug = Some("shared-slug".to_string());
-    same_slug.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "67890".to_string(),
-    }];
+    same_slug.external_ids = vec![ExternalId::new("tvdb".to_string(), "67890".to_string())];
     let same_slug_outcome = TitleRepository::create_or_get_existing(&catalog, same_slug.clone())
         .await
         .expect("same-slug title should create");
@@ -3154,10 +3086,7 @@ async fn bulk_title_reads_hydrate_canonical_tags_only_when_the_projection_asks()
     let catalog = title_store(&services);
 
     let mut title = make_test_title("title-projection", None);
-    title.external_ids = vec![ExternalId {
-        source: "tvdb".to_string(),
-        value: "778899".to_string(),
-    }];
+    title.external_ids = vec![ExternalId::new("tvdb".to_string(), "778899".to_string())];
     let library_ids = vec![title.library_id.clone()];
     TitleRepository::create(&catalog, title.clone())
         .await
@@ -3262,4 +3191,151 @@ async fn bulk_title_reads_hydrate_canonical_tags_only_when_the_projection_asks()
     assert!(for_matching[0].canonical_tags.is_empty());
 
     let _ = std::fs::remove_file(db);
+}
+
+/// The folder-ownership lookup narrows in SQL but has to answer exactly what
+/// reading the whole library and sifting it answered: the other title that
+/// owns the folder, the library's own rows only, and the list order.
+async fn assert_folder_path_owner_candidates(catalog: &TitleStore) -> AppResult<()> {
+    let owned_folder = "/data/movies/Arrival (2016)";
+
+    let mut owner = make_test_title("title-folder-owner", None);
+    owner.name = "Zulu".to_string();
+    owner.folder_path = Some(owned_folder.to_string());
+    TitleRepository::create(catalog, owner.clone()).await?;
+
+    let mut second_owner = make_test_title("title-folder-owner-second", None);
+    second_owner.name = "Alpha".to_string();
+    second_owner.folder_path = Some(owned_folder.to_string());
+    TitleRepository::create(catalog, second_owner.clone()).await?;
+
+    let mut claimant = make_test_title("title-folder-claimant", None);
+    claimant.name = "Mike".to_string();
+    claimant.folder_path = None;
+    TitleRepository::create(catalog, claimant.clone()).await?;
+
+    let mut elsewhere = make_test_title("title-folder-elsewhere", None);
+    elsewhere.name = "Bravo".to_string();
+    elsewhere.folder_path = Some("/data/movies/Dune (2021)".to_string());
+    TitleRepository::create(catalog, elsewhere.clone()).await?;
+
+    let candidates = scryer_application::stored_paths::folder_path_match_candidates(owned_folder);
+    let owners = TitleRepository::list_folder_path_owner_candidates(
+        catalog,
+        &claimant.library_id,
+        &claimant.id,
+        &candidates,
+    )
+    .await?;
+
+    assert_eq!(
+        owners
+            .iter()
+            .map(|title| title.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![second_owner.id.as_str(), owner.id.as_str()],
+        "only the folder's owners come back, in LOWER(name), id order"
+    );
+
+    // The excluded title never answers for its own folder.
+    let self_owned = TitleRepository::list_folder_path_owner_candidates(
+        catalog,
+        &owner.library_id,
+        &owner.id,
+        &candidates,
+    )
+    .await?;
+    assert_eq!(
+        self_owned
+            .iter()
+            .map(|title| title.id.as_str())
+            .collect::<Vec<_>>(),
+        vec![second_owner.id.as_str()]
+    );
+
+    // A folder nobody owns reads nothing at all.
+    let unowned = TitleRepository::list_folder_path_owner_candidates(
+        catalog,
+        &claimant.library_id,
+        &claimant.id,
+        &scryer_application::stored_paths::folder_path_match_candidates(
+            "/data/movies/Nothing Here",
+        ),
+    )
+    .await?;
+    assert!(unowned.is_empty());
+
+    // A different library shares neither rows nor answers.
+    let other_library = TitleRepository::list_folder_path_owner_candidates(
+        catalog,
+        "library-that-does-not-exist",
+        &claimant.id,
+        &candidates,
+    )
+    .await?;
+    assert!(other_library.is_empty());
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn folder_path_owner_candidates_find_only_the_folder_owners() {
+    let (services, db) = temp_services("scryer_title_folder_owner").await;
+    let catalog = title_store(&services);
+
+    assert_folder_path_owner_candidates(&catalog)
+        .await
+        .expect("folder owner lookup should behave consistently");
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn folder_path_owner_candidates_find_only_the_folder_owners_postgres() -> AppResult<()> {
+    let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        eprintln!(
+            "skipping PostgreSQL folder owner lookup test; SCRYER_TEST_POSTGRES_URL is not set"
+        );
+        return Ok(());
+    };
+
+    let admin_pool = sqlx::PgPool::connect(&raw_url)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
+    let schema = format!(
+        "scryer_test_{}_{}",
+        std::process::id(),
+        Id::new().0.replace('-', "_")
+    );
+
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin_pool)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to create schema: {error}")))?;
+
+    let result = async {
+        let mut url = url::Url::parse(&raw_url)
+            .map_err(|error| AppError::Validation(format!("invalid postgres test URL: {error}")))?;
+        url.query_pairs_mut()
+            .append_pair("options", &format!("-csearch_path={schema}"));
+        let services =
+            crate::PostgresServices::new_with_mode(url.to_string(), crate::MigrationMode::Apply)
+                .await?;
+        let catalog = TitleStore::new(services.datastore());
+        let result = assert_folder_path_owner_candidates(&catalog).await;
+        services.pool().close().await;
+        result
+    }
+    .await;
+
+    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin_pool)
+        .await;
+    admin_pool.close().await;
+    cleanup.map_err(|error| AppError::Repository(format!("failed to drop schema: {error}")))?;
+    result
 }

@@ -1183,7 +1183,8 @@ fn newznab_request_is_capabilities(request: &str) -> bool {
 /// Newznab 2.2.2 reads `t=caps` before searching, so the search request these
 /// tests care about is no longer the first one to arrive.
 fn recv_newznab_search_request(requests: &mpsc::Receiver<String>) -> String {
-    let deadline = Instant::now() + Duration::from_secs(10);
+    // A hang guard only: the first request waits on a wasm compile.
+    let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         let request = requests
@@ -1210,18 +1211,17 @@ fn spawn_newznab_raw_response_server(
     body: &'static str,
 ) -> (String, mpsc::Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
     let address = listener.local_addr().unwrap();
     let (request_tx, request_rx) = mpsc::channel();
 
+    // The server answers until the test process exits, however long the
+    // plugin takes to compile before its first request.
     std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             match listener.accept() {
                 Ok((mut stream, _)) => {
-                    stream.set_nonblocking(false).unwrap();
                     stream
-                        .set_read_timeout(Some(Duration::from_secs(2)))
+                        .set_read_timeout(Some(Duration::from_secs(30)))
                         .unwrap();
                     let mut buffer = [0_u8; 8192];
                     let bytes_read = stream.read(&mut buffer).unwrap_or(0);
@@ -1242,12 +1242,6 @@ fn spawn_newznab_raw_response_server(
                         )
                     };
                     let _ = stream.write_all(response.as_bytes());
-                }
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
                 }
                 Err(_) => break,
             }

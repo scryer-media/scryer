@@ -2210,6 +2210,9 @@ mod tests {
         verifications: Vec<FileVerificationRecord>,
         ownership: BTreeMap<(String, String), String>,
         cancel_requested: BTreeSet<String>,
+        /// Cancel checks that answered "canceled", so a test can wait until
+        /// the runner has actually seen a cancel it requested.
+        cancel_observations: usize,
         operation_states: Vec<LocationOperationState>,
         checkpoint_states: Vec<(String, TitleCheckpointState)>,
         /// Every `bytes_verified` a checkpoint write carried, so an in-flight
@@ -2261,6 +2264,10 @@ mod tests {
                 .transfer_titles
                 .get(&(operation_id.to_string(), title_id.to_string()))
                 .cloned()
+        }
+
+        fn cancel_observed(&self) -> bool {
+            self.inner.lock().expect("lock").cancel_observations > 0
         }
 
         fn request_cancel(&self, operation_id: &str) {
@@ -2466,12 +2473,12 @@ mod tests {
         }
 
         async fn location_operation_cancel_requested(&self, operation_id: &str) -> AppResult<bool> {
-            Ok(self
-                .inner
-                .lock()
-                .expect("lock")
-                .cancel_requested
-                .contains(operation_id))
+            let mut state = self.inner.lock().expect("lock");
+            let requested = state.cancel_requested.contains(operation_id);
+            if requested {
+                state.cancel_observations += 1;
+            }
+            Ok(requested)
         }
 
         async fn upsert_transfer_title(
@@ -3324,10 +3331,13 @@ mod tests {
         ]);
         let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
             .with_transfers(&hub);
-        let result = tokio::time::timeout(Duration::from_secs(5), runner.run("op-1", &plan))
-            .await
-            .expect("copies must continue during CRC")
-            .unwrap();
+        let result = tokio::time::timeout(
+            crate::test_wait::TEST_WAIT_DEADLINE,
+            runner.run("op-1", &plan),
+        )
+        .await
+        .expect("copies must continue during CRC")
+        .unwrap();
         assert_eq!(result.state, LocationOperationState::Completed);
         assert_eq!(result.counters.files_processed, 6);
         assert_eq!(mover.max_copying.load(Ordering::SeqCst), 2);
@@ -3363,28 +3373,36 @@ mod tests {
         let plan = OperationWorkPlan::new(vec![planned_title("first", 0, 100)]);
         let runner = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
             .with_transfers(&hub);
-        let finished = AtomicBool::new(false);
         let run = async {
             let result = runner.run("op-1", &plan).await;
-            finished.store(true, Ordering::SeqCst);
-            result
+            // Sampled at the moment the runner returns: a runner that did not
+            // drain would return while verifiers are still parked.
+            (result, mover.verifying.load(Ordering::SeqCst))
         };
         let cancel = async {
             while mover.started.load(Ordering::SeqCst) < 3 {
                 mover.entered.notified().await;
             }
             store.request_cancel("op-1");
-            tokio::time::sleep(Duration::from_millis(20)).await;
-            assert!(!finished.load(Ordering::SeqCst));
+            // Verifiers stay parked until the runner has seen the cancel, so
+            // the release below can only drain work the cancel left in flight.
+            crate::test_wait::wait_until("the runner to observe the cancel", || async {
+                store.cancel_observed()
+            })
+            .await;
             assert!(mover.started.load(Ordering::SeqCst) < 100);
             mover.release.add_permits(100);
         };
-        let (result, ()) =
-            tokio::time::timeout(Duration::from_secs(5), async { tokio::join!(run, cancel) })
-                .await
-                .unwrap();
+        let ((result, verifying_at_return), ()) =
+            crate::test_wait::within_deadline("the canceled pipeline to drain and return", async {
+                tokio::join!(run, cancel)
+            })
+            .await;
         assert_eq!(result.unwrap().state, LocationOperationState::Canceled);
-        assert_eq!(mover.verifying.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            verifying_at_return, 0,
+            "the runner must drain its verifiers before it returns"
+        );
         assert!(reconciler.cleaned.lock().unwrap().is_empty());
         // The title was left unfinished, not mid-flight: nothing of it is
         // copying or verifying any more, so its row must not keep saying so.
@@ -4708,21 +4726,24 @@ mod tests {
     #[tokio::test]
     async fn a_slow_file_pulses_its_progress_before_it_finishes() {
         let store = FakeStore::with_operation(operation());
+        let observer = Arc::new(RecordingObserver::default());
         let mover = SlowMover {
             report_bytes: 60,
-            settle_after: Duration::from_millis(120),
+            observer: observer.clone(),
         };
         let admission = ScriptedAdmission::new(&[]);
         let reconciler = RecordingReconciler::default();
-        let observer = RecordingObserver::default();
         let plan = OperationWorkPlan::new(vec![planned_title("title-1", 1, 1)]);
 
-        let outcome = LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
-            .with_progress_pulse_interval(Duration::from_millis(10))
-            .with_progress_observer(&observer)
-            .run("op-1", &plan)
-            .await
-            .expect("the run should succeed");
+        let outcome = crate::test_wait::within_deadline(
+            "a pulse to carry the in-flight bytes",
+            LocationOperationRunner::new(&store, &mover, &admission, &reconciler)
+                .with_progress_pulse_interval(Duration::from_millis(10))
+                .with_progress_observer(observer.as_ref())
+                .run("op-1", &plan),
+        )
+        .await
+        .expect("the run should succeed");
 
         assert_eq!(outcome.state, LocationOperationState::Completed);
         assert!(
@@ -4758,18 +4779,20 @@ mod tests {
         );
     }
 
-    /// Reports part of a file's bytes, then takes long enough for the pulse to
-    /// notice before it returns.
+    /// Reports part of a file's bytes, then stays in flight until a pulse has
+    /// carried those bytes to the observer, so the pulse never races the file.
     struct SlowMover {
         report_bytes: u64,
-        settle_after: Duration,
+        observer: Arc<RecordingObserver>,
     }
 
     #[async_trait]
     impl TitleFileMover for SlowMover {
         async fn move_file(&self, request: FileMoveRequest<'_>) -> AppResult<VerifiedFile> {
             request.progress.advance(self.report_bytes);
-            tokio::time::sleep(self.settle_after).await;
+            self.observer
+                .wait_for_moving_bytes(self.report_bytes as i64)
+                .await;
             Ok(VerifiedFile {
                 source_path: request.file.source_path.clone(),
                 destination_path: request.file.destination_path.clone(),
@@ -4784,6 +4807,29 @@ mod tests {
     #[derive(Default)]
     struct RecordingObserver {
         snapshots: Mutex<Vec<(LocationOperationState, LocationOperationCounters)>>,
+        recorded: tokio::sync::Notify,
+    }
+
+    impl RecordingObserver {
+        async fn wait_for_moving_bytes(&self, bytes: i64) {
+            loop {
+                if self
+                    .snapshots
+                    .lock()
+                    .expect("lock")
+                    .iter()
+                    .any(|(state, counters)| {
+                        *state == LocationOperationState::Moving
+                            && counters.bytes_processed == bytes
+                    })
+                {
+                    return;
+                }
+                // `notify_one` keeps a permit, so a snapshot recorded between
+                // the check and this await still wakes it.
+                self.recorded.notified().await;
+            }
+        }
     }
 
     #[async_trait]
@@ -4793,6 +4839,7 @@ mod tests {
                 .lock()
                 .expect("lock")
                 .push((snapshot.state, snapshot.counters));
+            self.recorded.notify_one();
         }
     }
 

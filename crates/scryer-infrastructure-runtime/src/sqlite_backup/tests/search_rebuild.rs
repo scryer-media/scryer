@@ -110,7 +110,9 @@ async fn restore_search_rebuild_uses_the_existing_connection() {
     original_pool.close().await;
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
-        .acquire_timeout(std::time::Duration::from_millis(250))
+        // A nested acquire on this one-connection pool never succeeds, so this
+        // is only the bound that turns that deadlock into an error.
+        .acquire_timeout(std::time::Duration::from_secs(30))
         .connect_with(
             db_connect_options(target.path().join("catalog-check.db").to_str().unwrap()).unwrap(),
         )

@@ -11,10 +11,7 @@ async fn graphql_media_rename_preview_for_anime_uses_media_file_rows() {
         &ctx,
         "Rename Preview Show",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "91001".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "91001".to_string())],
         vec![],
         true,
     )
@@ -160,10 +157,7 @@ async fn graphql_media_rename_preview_for_anime_uses_saved_anime_template() {
         &ctx,
         "Template Scope Show",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "91567".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "91567".to_string())],
         vec![],
         true,
     )
@@ -326,10 +320,7 @@ async fn graphql_media_rename_preview_for_anime_series_movie_uses_season_zero_nu
         &ctx,
         "Festival Saga",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "92001".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "92001".to_string())],
         vec![],
         true,
     )
@@ -469,10 +460,7 @@ async fn apply_media_rename_for_anime_updates_media_files_and_series_movie_speci
         &ctx,
         "Anime Apply Show",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "93001".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "93001".to_string())],
         vec![],
         true,
     )
@@ -689,10 +677,7 @@ async fn graphql_media_rename_preview_for_movies_stays_collection_based() {
         &ctx,
         "Regression Movie (2024)",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94001".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94001".to_string())],
         vec![],
         true,
     )
@@ -796,10 +781,7 @@ async fn apply_media_rename_for_movies_updates_collection_and_media_file_paths()
         &ctx,
         "Movie Apply Sync (2024)",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94002".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94002".to_string())],
         vec![],
         true,
     )
@@ -903,10 +885,7 @@ async fn apply_media_rename_for_movies_uses_folder_template_and_updates_title_fo
         &ctx,
         "Movie Apply Folder",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94003".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94003".to_string())],
         vec![],
         true,
     )
@@ -1014,10 +993,7 @@ async fn graphql_media_rename_preview_for_anime_tracked_destination_returns_erro
         &ctx,
         "Tracked Collision Anime",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "95001".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "95001".to_string())],
         vec![],
         true,
     )
@@ -1101,10 +1077,7 @@ async fn graphql_media_rename_preview_for_anime_tracked_destination_returns_erro
         &ctx,
         "Tracked Collision Owner",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "95002".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "95002".to_string())],
         vec![],
         true,
     )
@@ -1175,10 +1148,7 @@ async fn graphql_media_rename_preview_for_movies_tracked_destination_returns_err
         &ctx,
         "Tracked Collision Movie (2024)",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "96001".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "96001".to_string())],
         vec![],
         true,
     )
@@ -1212,10 +1182,7 @@ async fn graphql_media_rename_preview_for_movies_tracked_destination_returns_err
         &ctx,
         "Tracked Collision Owner Movie (2024)",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "96002".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "96002".to_string())],
         vec![],
         true,
     )
@@ -1291,10 +1258,7 @@ async fn graphql_media_rename_preview_for_anime_multi_episode_file_uses_episode_
         &ctx,
         "Range Preview Show",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "97002".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "97002".to_string())],
         vec![],
         true,
     )
@@ -1404,10 +1368,7 @@ async fn apply_media_rename_refuses_an_untracked_existing_target() {
         &ctx,
         "Untracked Collision Movie (2024)",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "97001".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "97001".to_string())],
         vec![],
         true,
     )
@@ -1528,10 +1489,7 @@ async fn apply_media_rename_for_anime_rolls_back_when_media_file_update_fails() 
         &ctx,
         "Anime Media Rollback",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "98001".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "98001".to_string())],
         vec![],
         true,
     )
@@ -1687,10 +1645,7 @@ async fn graphql_media_rename_preview_scopes_returned_items_without_changing_cou
         &ctx,
         "Rename Preview Show",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "91001".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "91001".to_string())],
         vec![],
         true,
     )
@@ -1929,10 +1884,7 @@ async fn graphql_media_rename_preview_does_not_refresh_stale_title_metadata_lang
         &ctx,
         "Saved English Title",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94123".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94123".to_string())],
         vec![],
         true,
     )
@@ -2048,10 +2000,7 @@ async fn graphql_media_rename_preview_bulk_matches_per_title_previews() {
             &ctx,
             name,
             MediaFacet::Anime,
-            vec![ExternalId {
-                source: "tvdb".to_string(),
-                value: format!("9200{index}"),
-            }],
+            vec![ExternalId::new("tvdb".to_string(), format!("9200{index}"))],
             vec![],
             true,
         )
@@ -2311,10 +2260,7 @@ async fn rename_preview_plans_inside_the_root_holding_the_files_not_the_recorded
         &ctx,
         "Harbor Kestrels",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94101".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94101".to_string())],
         vec![],
         true,
     )
@@ -2386,10 +2332,7 @@ async fn rename_preview_skips_a_title_whose_files_are_under_no_configured_root()
         &ctx,
         "Cobalt Meridian",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94102".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94102".to_string())],
         vec![],
         true,
     )
@@ -2442,10 +2385,7 @@ async fn rename_preview_refuses_an_item_whose_destination_leaves_its_source_root
         &ctx,
         "Lantern Drift",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94103".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94103".to_string())],
         vec![],
         true,
     )
@@ -2502,10 +2442,7 @@ async fn apply_media_rename_moves_companions_and_removes_the_emptied_folder() {
         &ctx,
         "Tidewater Signals",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94104".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94104".to_string())],
         vec![],
         true,
     )
@@ -2614,10 +2551,7 @@ async fn apply_media_rename_repoints_external_subtitle_rows_at_the_moved_sidecar
         &ctx,
         "Lanternfall Harbor",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94117".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94117".to_string())],
         vec![],
         true,
     )
@@ -2720,10 +2654,7 @@ async fn apply_media_rename_leaves_unrelated_extras_and_their_folder_alone() {
         &ctx,
         "Wrenfield Passage",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94106".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94106".to_string())],
         vec![],
         true,
     )
@@ -2779,10 +2710,7 @@ async fn apply_media_rename_skips_an_occupied_companion_target_without_blocking_
         &ctx,
         "Seagrass Ledger",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94105".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94105".to_string())],
         vec![],
         true,
     )
@@ -2869,10 +2797,7 @@ async fn apply_media_rename_leaves_companions_behind_when_the_primary_cannot_mov
         &ctx,
         "Marrowgate Hollow",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94107".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94107".to_string())],
         vec![],
         true,
     )
@@ -2954,10 +2879,7 @@ async fn apply_media_rename_rolls_companions_back_with_their_primary_on_a_db_fai
         &ctx,
         "Pellucid Quarry",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94108".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94108".to_string())],
         vec![],
         true,
     )
@@ -3092,10 +3014,7 @@ async fn apply_media_rename_reports_a_companion_that_could_not_be_rolled_back_at
         &ctx,
         "Tessellate Ferry",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94109".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94109".to_string())],
         vec![],
         true,
     )
@@ -3207,10 +3126,7 @@ async fn apply_media_rename_removes_the_title_folder_but_not_the_directory_above
         &ctx,
         "Kestrel Hollow",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "94109".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "94109".to_string())],
         vec![],
         true,
     )

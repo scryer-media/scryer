@@ -46,6 +46,7 @@ fn from_metadata_search_item(
             .into_iter()
             .map(|external_id| ExternalIdPayload {
                 source: external_id.source,
+                kind: external_id.kind,
                 value: external_id.value,
             })
             .collect(),
@@ -432,6 +433,7 @@ fn metadata_anime_movie_external_ids(
         let value = value?.trim().to_string();
         (!value.is_empty()).then(|| ExternalIdPayload {
             source: source.to_string(),
+            kind: None,
             value,
         })
     })

@@ -1120,6 +1120,39 @@ pub trait TitleRepository: Send + Sync {
             .await?
             .len() as u64)
     }
+    /// Titles in `library_id`, other than `exclude_title_id`, that record a
+    /// folder path the caller should test for ownership of one folder.
+    ///
+    /// `match_candidates` are the stored spellings of that folder from
+    /// [`crate::stored_paths::folder_path_match_candidates`]; a repository that
+    /// can index `folder_path` narrows to them in SQL instead of handing the
+    /// whole library back. The candidates are a filter and not the decision:
+    /// the caller applies `folder_paths_match` to every row returned, so a
+    /// repository is free to ignore them and return every title in the library,
+    /// which is exactly what this default does.
+    ///
+    /// Rows keep the list order (`LOWER(name)`, then id) so the caller's
+    /// "first owner wins" stays stable.
+    async fn list_folder_path_owner_candidates(
+        &self,
+        library_id: &str,
+        exclude_title_id: &str,
+        match_candidates: &[String],
+    ) -> AppResult<Vec<Title>> {
+        let _ = match_candidates;
+        let library_ids = [library_id.to_string()];
+        Ok(self
+            .list_with_projection(
+                None,
+                Some(&library_ids),
+                None,
+                TitleListProjection::without_canonical_tags().without_external_ids(),
+            )
+            .await?
+            .into_iter()
+            .filter(|title| title.id != exclude_title_id)
+            .collect())
+    }
     async fn list_delete_preview_info(&self) -> AppResult<Vec<TitleDeletePreviewInfo>> {
         Ok(self
             .list_without_external_ids(None, None)

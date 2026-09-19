@@ -12,10 +12,19 @@ pub(crate) struct MediaSourceVersion {
 }
 
 impl MediaSourceVersion {
+    /// Read the identity a file had at this moment.
+    ///
+    /// A failure here is an I/O failure for that one file and is reported as
+    /// such. It must never be folded into an `Option` and compared, because a
+    /// transient metadata failure would then read as "the source changed"
+    /// and blame the file for a fault of the mount.
     pub(crate) async fn read(path: &std::path::Path) -> AppResult<Self> {
-        let metadata = tokio::fs::metadata(path)
-            .await
-            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let metadata = tokio::fs::metadata(path).await.map_err(|error| {
+            AppError::Repository(format!(
+                "failed to read media source metadata for {}: {error}",
+                path.display()
+            ))
+        })?;
         #[cfg(unix)]
         use std::os::unix::fs::MetadataExt;
         Ok(Self {
@@ -448,5 +457,43 @@ impl AppUseCase {
             .get_media_file_by_id(file_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("media file {file_id}")))
+    }
+}
+
+#[cfg(test)]
+mod media_source_version_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn read_reports_a_metadata_failure_as_an_io_error_for_that_path() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("gone.mkv");
+
+        let error = MediaSourceVersion::read(&missing)
+            .await
+            .expect_err("missing file must fail");
+
+        match error {
+            AppError::Repository(message) => {
+                assert!(
+                    message.contains("failed to read media source metadata"),
+                    "{message}"
+                );
+                assert!(message.contains("gone.mkv"), "{message}");
+            }
+            other => panic!("expected a repository error, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn read_returns_the_same_version_for_an_unchanged_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("episode.mkv");
+        std::fs::write(&path, b"video").expect("write file");
+
+        let first = MediaSourceVersion::read(&path).await.expect("first read");
+        let second = MediaSourceVersion::read(&path).await.expect("second read");
+
+        assert_eq!(first, second);
     }
 }

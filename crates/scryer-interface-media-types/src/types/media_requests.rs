@@ -11,6 +11,9 @@ use chrono::{DateTime, Utc};
 pub struct ExternalIdPayload {
     /// Provider or source name.
     pub source: String,
+    /// Entity kind the identifier names at that source, such as `movie`,
+    /// `series`, `anime` or `title`. Absent when the identifier does not say.
+    pub kind: Option<String>,
     /// Identifier assigned by that source.
     pub value: String,
 }

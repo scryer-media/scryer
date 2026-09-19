@@ -1343,10 +1343,11 @@ mod tests {
 
     #[tokio::test]
     async fn run_backup_operation_with_timeout_returns_timeout_error() {
-        let error = run_backup_operation_with_timeout(std::time::Duration::from_millis(5), async {
-            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-            Ok::<_, AppError>(())
-        })
+        // A backup that never finishes, so only the timeout can end the wait.
+        let error = run_backup_operation_with_timeout(
+            std::time::Duration::from_millis(5),
+            std::future::pending::<Result<(), AppError>>(),
+        )
         .await
         .expect_err("slow backup task should time out");
 

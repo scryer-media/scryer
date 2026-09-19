@@ -295,6 +295,28 @@ mod tests {
         Cache::new(config).expect("test Wasmtime cache must initialize")
     }
 
+    fn is_stats_file(path: &Path) -> bool {
+        path.extension()
+            .is_some_and(|extension| extension == "stats")
+    }
+
+    /// Every regular file under a Wasmtime cache directory that `keep` accepts.
+    fn cache_files(directory: &Path, keep: fn(&Path) -> bool) -> Vec<std::path::PathBuf> {
+        let mut found = Vec::new();
+        let mut pending = vec![directory.to_path_buf()];
+        while let Some(next) = pending.pop() {
+            for entry in fs::read_dir(&next).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    pending.push(path);
+                } else if keep(&path) {
+                    found.push(path);
+                }
+            }
+        }
+        found
+    }
+
     fn engine_with_cache(cache: Cache) -> Engine {
         let mut config = Config::new();
         config.cache(Some(cache));
@@ -375,8 +397,25 @@ mod tests {
         wasmtime::Module::from_binary(&reader_engine, &wasm).unwrap();
         assert_eq!(reader_cache.cache_hits(), 1);
         assert_eq!(reader_cache.cache_misses(), 0);
-        // Allow the cache workers to process their asynchronous maintenance events.
-        std::thread::sleep(Duration::from_millis(250));
+        // The writer's cache worker handles its events one at a time, in order.
+        // Queue a second update behind the first by compiling a module the cache
+        // has not seen; once that module's `.stats` file exists, the worker has
+        // finished the first update, including its cleanup-lock attempt.
+        let known_entries = cache_files(&directory, |path| !is_stats_file(path));
+        let sentinel = wat::parse_str("(module (func (export \"sentinel\")))").unwrap();
+        wasmtime::Module::from_binary(&writer_engine, &sentinel).unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(30);
+        while !cache_files(&directory, is_stats_file).iter().any(|stats| {
+            !known_entries.contains(
+                &stats.with_file_name(stats.file_stem().expect("a stats file has a stem")),
+            )
+        }) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the writer's cache worker never recorded the sentinel module"
+            );
+            std::thread::sleep(Duration::from_millis(1));
+        }
         assert_eq!(
             fs::metadata(&lock_path).unwrap().modified().unwrap(),
             old_time

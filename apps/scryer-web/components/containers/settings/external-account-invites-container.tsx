@@ -6,7 +6,10 @@ import {
   type ExternalInviteMediaServerUserGroup,
   type ExternalInviteUser,
 } from "@/components/views/settings/external-account-invites-panel";
-import { createExternalAccountInviteMutation } from "@/lib/graphql/mutations";
+import {
+  createExternalAccountInviteMutation,
+  unlinkExternalAccountMutation,
+} from "@/lib/graphql/mutations";
 import {
   externalAuthRuntimeSettingsQuery,
   externalAccountInvitesQuery,
@@ -84,6 +87,7 @@ export function ExternalAccountInvitesContainer({
   const [loading, setLoading] = useState(true);
   const [externalInviteSubmitting, setExternalInviteSubmitting] =
     useState(false);
+  const [unlinkingAccountId, setUnlinkingAccountId] = useState<string | null>(null);
 
   const updateExternalInviteDraft = useCallback(
     (patch: Partial<ExternalInviteDraft>) => {
@@ -297,6 +301,31 @@ export function ExternalAccountInvitesContainer({
     }
   };
 
+  const unlinkExternalAccount = async (id: string) => {
+    setUnlinkingAccountId(id);
+    try {
+      const { data, error } = await client
+        .mutation<{ unlinkExternalAccount?: { linkedAccountId: string } }>(
+          unlinkExternalAccountMutation,
+          { linkedAccountId: id },
+        )
+        .toPromise();
+      if (error) throw error;
+      if (data?.unlinkExternalAccount?.linkedAccountId !== id) {
+        throw new Error(t("profile.linkedAccountUnlinkFailed"));
+      }
+      setInvites((current) => current.filter((account) => account.id !== id));
+      setGlobalStatus(t("profile.linkedAccountUnlinked"));
+      notifyExternalAccountInviteSourcesChanged();
+    } catch (error) {
+      setGlobalStatus(
+        error instanceof Error ? error.message : t("profile.linkedAccountUnlinkFailed"),
+      );
+    } finally {
+      setUnlinkingAccountId(null);
+    }
+  };
+
   return (
     <ExternalAccountInvitesPanel
       users={users}
@@ -310,6 +339,8 @@ export function ExternalAccountInvitesContainer({
       externalInviteSubmitting={externalInviteSubmitting}
       updateExternalInviteDraft={updateExternalInviteDraft}
       createExternalAccountInvite={createExternalAccountInvite}
+      unlinkExternalAccount={unlinkExternalAccount}
+      unlinkingAccountId={unlinkingAccountId}
       showMediaServersLink={showMediaServersLink}
     />
   );

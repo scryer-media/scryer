@@ -671,12 +671,19 @@ mod tests {
         let (_temp, _settings, migrator) = test_migrator().await;
         let spec = MIGRATIONS[0];
         let (release, wait) = tokio::sync::oneshot::channel();
+        let (started_tx, started) = tokio::sync::oneshot::channel();
         let handle = migrator.spawn_retryable(spec, async move {
+            let _ = started_tx.send(());
             wait.await.map_err(|error| error.to_string())?;
             Ok(())
         });
 
-        tokio::task::yield_now().await;
+        // Once the migration body is running, the runner has had every chance
+        // to record it early.
+        tokio::time::timeout(std::time::Duration::from_secs(30), started)
+            .await
+            .expect("background migration should start")
+            .expect("migration start signal");
         assert!(
             !migrator
                 .ledger

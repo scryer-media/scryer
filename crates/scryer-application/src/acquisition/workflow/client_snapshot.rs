@@ -7,6 +7,7 @@ pub(crate) const STALE_INITIAL_CLAIM_SECONDS: i64 = 24 * 60 * 60;
 
 /// Snapshot of the download client's current queue and recent history,
 /// fetched once per polling cycle to avoid repeated API calls.
+#[derive(Clone)]
 pub(crate) struct DownloadClientSnapshot {
     /// Lowercase title names of items currently queued or downloading.
     active_titles: std::collections::HashSet<String>,
@@ -338,7 +339,50 @@ fn history_item_is_live_claim(state: DownloadQueueState) -> bool {
 }
 
 impl DownloadClientSnapshot {
+    /// The clients' state as this cycle sees it, reusing the build another
+    /// subject of the same cycle already paid for.
+    ///
+    /// Every search subject asks this question, and a walk over a large
+    /// library has thousands of them: on the 12k-title load test the untouched
+    /// version listed every client's queue plus a 100-slot history page about
+    /// a hundred times a minute, roughly a megabyte of client traffic per
+    /// minute describing a queue that had not changed between two seasons of
+    /// the same show.
+    ///
+    /// Reuse is bounded by the two things that can make the answer wrong:
+    ///
+    /// * age — a snapshot past `CACHED_SUBMISSION_STATE_MAX_AGE` is never
+    ///   handed out, the same bound the submission path already applies to its
+    ///   own cached client state; and
+    /// * events — every grab this process submits, and every download it sees
+    ///   settle, drops the cache through
+    ///   `DownloadSubmissionGuardTable::invalidate_client_snapshots` before
+    ///   the next subject is evaluated.
+    ///
+    /// So a reused snapshot describes a queue that nothing has touched since
+    /// it was read, which is exactly what a per-subject fetch guaranteed. The
+    /// guard's conservative failure modes are untouched: an unreadable queue
+    /// still reads as possibly-active, and it is cached in that state, so a
+    /// client outage suppresses grabs for the rest of the cycle rather than
+    /// being re-asked into an accidental "free".
     pub(crate) async fn fetch(app: &AppUseCase) -> Self {
+        let guards = &app.runtime.acquisition.download_submission_guards;
+        if let Some(cached) = guards.cached_acquisition_snapshot() {
+            return (*cached).clone();
+        }
+        // Subjects that arrive together wait for one build instead of each
+        // starting its own; the second check is what makes the wait worth
+        // taking.
+        let _build_guard = guards.acquire_acquisition_snapshot().await;
+        if let Some(cached) = guards.cached_acquisition_snapshot() {
+            return (*cached).clone();
+        }
+        let snapshot = std::sync::Arc::new(Self::build(app).await);
+        guards.store_acquisition_snapshot(std::sync::Arc::clone(&snapshot));
+        (*snapshot).clone()
+    }
+
+    async fn build(app: &AppUseCase) -> Self {
         let mut active_titles = std::collections::HashSet::new();
         let mut active_client_ids = std::collections::HashSet::new();
         let mut active_raw_item_id_counts = std::collections::HashMap::new();
@@ -432,7 +476,9 @@ impl DownloadClientSnapshot {
                     }
                 }
                 if !active_titles.is_empty() {
-                    info!(
+                    // One line per snapshot build, which a walk does per
+                    // cycle: a running count of the queue, not an event.
+                    debug!(
                         active_count = active_titles.len(),
                         "download client snapshot: active queue items"
                     );

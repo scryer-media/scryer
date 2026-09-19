@@ -474,9 +474,40 @@ impl AcquisitionScopeStateRepository for TrackingAcquisitionScopeStateRepo {
         Ok(())
     }
 
+    /// Mirrors the SQL store's upsert (5dcc7b375): a decision whose identity —
+    /// scope, verdict, and the release it is about — is already on file ages
+    /// that row forward and returns *its* id, rather than appending a second
+    /// row that says the same thing. Callers read the returned id to tell a
+    /// first sighting from a repeat, so an append-only fake here would hide
+    /// the behaviour under test.
     async fn insert_release_decision(&self, decision: &ReleaseDecision) -> AppResult<String> {
         let _writer = self.writer_transaction().await;
-        self.release_decisions.lock().await.push(decision.clone());
+        let mut decisions = self.release_decisions.lock().await;
+        let identity = |candidate: &ReleaseDecision| {
+            (
+                candidate.wanted_item_id.clone(),
+                candidate.decision_code.clone(),
+                candidate.release_url.clone().unwrap_or_default(),
+                candidate.release_title.clone(),
+                candidate.release_size_bytes.unwrap_or(-1),
+            )
+        };
+        let wanted_identity = identity(decision);
+        if let Some(existing) = decisions
+            .iter_mut()
+            .rev()
+            .find(|candidate| identity(candidate) == wanted_identity)
+        {
+            let existing_id = existing.id.clone();
+            existing.title_id = decision.title_id.clone();
+            existing.candidate_score = decision.candidate_score;
+            existing.current_score = decision.current_score;
+            existing.score_delta = decision.score_delta;
+            existing.explanation_json = decision.explanation_json.clone();
+            existing.created_at = decision.created_at.clone();
+            return Ok(existing_id);
+        }
+        decisions.push(decision.clone());
         Ok(decision.id.clone())
     }
 

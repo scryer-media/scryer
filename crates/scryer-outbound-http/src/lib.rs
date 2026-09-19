@@ -1491,18 +1491,10 @@ pub async fn prepare_plugin_http_target_with_extra_ca(
         .host_str()
         .ok_or(OutboundDestinationError::MissingHost { label })?
         .to_string();
-    let mut builder = reqwest_client_builder()
+    let builder = reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)
+        .map_err(|message| OutboundDestinationError::TrustBundle { label, message })?
         .redirect(reqwest::redirect::Policy::none())
         .resolve_to_addrs(&host, &resolved_addrs);
-    if !extra_ca_bundle_pem.trim().is_empty() {
-        builder =
-            builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem).map_err(
-                |source| OutboundDestinationError::TrustBundle {
-                    label,
-                    message: source,
-                },
-            )?);
-    }
     let client = builder
         .build()
         .map_err(|source| OutboundDestinationError::ClientBuild {
@@ -1609,14 +1601,10 @@ pub fn prepare_plugin_blocking_http_target_with_policy(
         .host_str()
         .ok_or(OutboundDestinationError::MissingHost { label })?
         .to_string();
-    let mut builder = blocking_reqwest_client_builder()
+    let builder = blocking_reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)
+        .map_err(|message| OutboundDestinationError::TrustBundle { label, message })?
         .redirect(reqwest::redirect::Policy::none())
         .resolve_to_addrs(&host, &resolved_addrs);
-    if !extra_ca_bundle_pem.trim().is_empty() {
-        let certificates = uploaded_root_certificates(extra_ca_bundle_pem)
-            .map_err(|message| OutboundDestinationError::TrustBundle { label, message })?;
-        builder = builder.tls_certs_merge(certificates);
-    }
     let client = builder
         .build()
         .map_err(|source| OutboundDestinationError::ClientBuild {
@@ -1635,28 +1623,64 @@ pub fn prepare_plugin_blocking_http_target_with_policy(
 
 fn reqwest_client_builder() -> reqwest::ClientBuilder {
     install_default_rustls_provider();
-    Client::builder()
-        .min_tls_version(reqwest::tls::Version::TLS_1_2)
+    let builder = Client::builder()
         .timeout(STANDARD_HTTP_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(DEFAULT_USER_AGENT)
         .gzip(true)
         .brotli(true)
         .deflate(true)
-        .zstd(true)
+        .zstd(true);
+    match cached_tls_client_config("") {
+        Ok(config) => builder.use_preconfigured_tls(config.as_ref().clone()),
+        // The cached platform verifier could not be built (no readable system
+        // trust store). Fall back to reqwest building its own, which fails the
+        // same way it did before this cache existed.
+        Err(_) => builder.min_tls_version(reqwest::tls::Version::TLS_1_2),
+    }
+}
+
+/// [`reqwest_client_builder`] with an operator-installed private CA bundle
+/// merged into the platform roots. Prefer this over `tls_certs_merge`: the
+/// base builder already carries a preconfigured rustls config, and reqwest
+/// ignores `root_certs` once a preconfigured backend is set.
+fn reqwest_client_builder_with_extra_ca(
+    extra_ca_bundle_pem: &str,
+) -> Result<reqwest::ClientBuilder, String> {
+    let builder = reqwest_client_builder();
+    if extra_ca_bundle_pem.trim().is_empty() {
+        return Ok(builder);
+    }
+    let config = cached_tls_client_config(extra_ca_bundle_pem)?;
+    Ok(builder.use_preconfigured_tls(config.as_ref().clone()))
 }
 
 fn blocking_reqwest_client_builder() -> reqwest::blocking::ClientBuilder {
     install_default_rustls_provider();
-    BlockingClient::builder()
-        .min_tls_version(reqwest::tls::Version::TLS_1_2)
+    let builder = BlockingClient::builder()
         .timeout(STANDARD_HTTP_TIMEOUT)
         .redirect(reqwest::redirect::Policy::none())
         .user_agent(DEFAULT_USER_AGENT)
         .gzip(true)
         .brotli(true)
         .deflate(true)
-        .zstd(true)
+        .zstd(true);
+    match cached_tls_client_config("") {
+        Ok(config) => builder.use_preconfigured_tls(config.as_ref().clone()),
+        Err(_) => builder.min_tls_version(reqwest::tls::Version::TLS_1_2),
+    }
+}
+
+/// Blocking twin of [`reqwest_client_builder_with_extra_ca`].
+fn blocking_reqwest_client_builder_with_extra_ca(
+    extra_ca_bundle_pem: &str,
+) -> Result<reqwest::blocking::ClientBuilder, String> {
+    let builder = blocking_reqwest_client_builder();
+    if extra_ca_bundle_pem.trim().is_empty() {
+        return Ok(builder);
+    }
+    let config = cached_tls_client_config(extra_ca_bundle_pem)?;
+    Ok(builder.use_preconfigured_tls(config.as_ref().clone()))
 }
 
 pub fn install_default_rustls_provider() {
@@ -1666,6 +1690,113 @@ pub fn install_default_rustls_provider() {
         // The provider is process-global; parallel workspace tests may install it first.
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     });
+}
+
+/// The protocol versions reqwest selects for `min_tls_version(TLS_1_2)`:
+/// rustls' full version set filtered to TLS 1.2 and newer.
+const TLS_PROTOCOL_VERSIONS: &[&rustls::SupportedProtocolVersion] =
+    &[&rustls::version::TLS13, &rustls::version::TLS12];
+
+/// How many distinct extra-CA bundles keep a cached TLS configuration. The
+/// no-bundle entry is never evicted; plugin bundles beyond this rotate.
+const TLS_CLIENT_CONFIG_CACHE_CAPACITY: usize = 8;
+
+/// Cached rustls configurations keyed by the trimmed extra-CA bundle PEM.
+///
+/// Every per-request plugin client used to be built with reqwest's own rustls
+/// backend, and each `build()` constructed a fresh
+/// `rustls_platform_verifier::Verifier`, which on Linux re-reads and re-parses
+/// the whole of `/etc/ssl/certs` (measured at ~600 `openat` per second under
+/// load). The verifier is immutable once built, so one per distinct trust
+/// bundle is enough for the life of the process.
+///
+/// Keyed by the PEM text itself rather than a hash: a hash collision between
+/// two different operator bundles would silently hand a plugin the wrong roots.
+static TLS_CLIENT_CONFIGS: LazyLock<Mutex<TlsClientConfigCache>> =
+    LazyLock::new(|| Mutex::new(Vec::new()));
+
+/// Cached TLS configurations paired with the bundle PEM that produced them.
+type TlsClientConfigCache = Vec<(String, Arc<rustls::ClientConfig>)>;
+
+/// Returns the process-cached rustls configuration for `extra_ca_bundle_pem`,
+/// building it on first use. An empty bundle yields the platform-roots-only
+/// configuration.
+fn cached_tls_client_config(
+    extra_ca_bundle_pem: &str,
+) -> Result<Arc<rustls::ClientConfig>, String> {
+    let key = extra_ca_bundle_pem.trim();
+    if let Ok(cache) = TLS_CLIENT_CONFIGS.lock()
+        && let Some((_, config)) = cache.iter().find(|(cached, _)| cached == key)
+    {
+        return Ok(Arc::clone(config));
+    }
+
+    let config = Arc::new(build_tls_client_config(key)?);
+    let Ok(mut cache) = TLS_CLIENT_CONFIGS.lock() else {
+        return Ok(config);
+    };
+    // Another thread may have raced us here; hand back the entry that wins so
+    // the cached configuration stays pointer-stable.
+    if let Some((_, existing)) = cache.iter().find(|(cached, _)| cached == key) {
+        return Ok(Arc::clone(existing));
+    }
+    if cache.len() >= TLS_CLIENT_CONFIG_CACHE_CAPACITY {
+        let evict = usize::from(cache.first().is_some_and(|(cached, _)| cached.is_empty()));
+        cache.remove(evict);
+    }
+    cache.push((key.to_string(), Arc::clone(&config)));
+    Ok(config)
+}
+
+/// Builds the rustls configuration reqwest would have built itself for
+/// `min_tls_version(TLS_1_2)` plus `tls_certs_merge(bundle)`: the platform
+/// verifier over the system roots, augmented by the bundle's roots when one is
+/// supplied, TLS 1.2/1.3 only, and the HTTP/2 + HTTP/1.1 ALPN list reqwest
+/// advertises for its default version preference.
+fn build_tls_client_config(extra_ca_bundle_pem: &str) -> Result<rustls::ClientConfig, String> {
+    install_default_rustls_provider();
+    let provider = rustls::crypto::CryptoProvider::get_default()
+        .cloned()
+        .ok_or_else(|| "no default rustls crypto provider is installed".to_string())?;
+
+    let verifier: Arc<dyn rustls::client::danger::ServerCertVerifier> = if extra_ca_bundle_pem
+        .is_empty()
+    {
+        Arc::new(
+            rustls_platform_verifier::Verifier::new(Arc::clone(&provider))
+                .map_err(|error| format!("failed to load platform root certificates: {error}"))?,
+        )
+    } else {
+        // Keep the pre-cache parse error for a malformed or empty bundle.
+        uploaded_root_certificates(extra_ca_bundle_pem)?;
+        Arc::new(
+            rustls_platform_verifier::Verifier::new_with_extra_roots(
+                uploaded_root_certificate_ders(extra_ca_bundle_pem)?,
+                Arc::clone(&provider),
+            )
+            .map_err(|error| format!("failed to load platform root certificates: {error}"))?,
+        )
+    };
+
+    let mut config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_protocol_versions(TLS_PROTOCOL_VERSIONS)
+        .map_err(|error| format!("invalid TLS protocol versions: {error}"))?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    Ok(config)
+}
+
+/// The DER form of an uploaded bundle, for the platform verifier's extra roots.
+fn uploaded_root_certificate_ders(
+    bundle_pem: &str,
+) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>, String> {
+    use rustls::pki_types::pem::PemObject;
+
+    rustls::pki_types::CertificateDer::pem_slice_iter(bundle_pem.as_bytes())
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("failed to parse uploaded trusted certificate bundle: {error}"))
 }
 
 pub fn generic_reqwest_client() -> Client {
@@ -1787,7 +1918,7 @@ pub fn transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
 ) -> Result<Client, String> {
     let proxy = transport_proxy(proxy_url, credentials)
         .map_err(|error| format!("failed to build indexer transport proxy: {error}"))?;
-    let mut builder = reqwest_client_builder()
+    let builder = reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)?
         .timeout(timeout)
         .redirect(redirect_policy)
         .user_agent(PROXY_USER_AGENT)
@@ -1795,9 +1926,6 @@ pub fn transport_proxy_reqwest_client_with_extra_ca_with_redirect_policy(
         .pool_idle_timeout(Duration::from_secs(60))
         .no_proxy()
         .proxy(proxy);
-    if !extra_ca_bundle_pem.trim().is_empty() {
-        builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
-    }
     builder
         .build()
         .map_err(|error| format!("failed to build indexer transport proxy client: {error}"))
@@ -1831,7 +1959,7 @@ pub fn blocking_transport_proxy_reqwest_client_with_redirect_policy(
 ) -> Result<BlockingClient, String> {
     let proxy = transport_proxy(proxy_url, credentials)
         .map_err(|error| format!("failed to build indexer transport proxy: {error}"))?;
-    let mut builder = blocking_reqwest_client_builder()
+    let builder = blocking_reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)?
         .timeout(timeout)
         .redirect(redirect_policy)
         .user_agent(PROXY_USER_AGENT)
@@ -1839,9 +1967,6 @@ pub fn blocking_transport_proxy_reqwest_client_with_redirect_policy(
         .pool_idle_timeout(Duration::from_secs(60))
         .no_proxy()
         .proxy(proxy);
-    if !extra_ca_bundle_pem.trim().is_empty() {
-        builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
-    }
     builder
         .build()
         .map_err(|error| format!("failed to build indexer transport proxy client: {error}"))
@@ -1923,11 +2048,8 @@ pub fn smg_reqwest_client() -> Client {
 }
 
 pub fn blocking_plugin_host_client(extra_ca_bundle_pem: &str) -> Result<BlockingClient, String> {
-    let mut builder = blocking_reqwest_client_builder().redirect(reqwest::redirect::Policy::none());
-    if !extra_ca_bundle_pem.trim().is_empty() {
-        builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
-    }
-    builder
+    blocking_reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)?
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|error| format!("failed to build plugin HTTP client: {error}"))
 }
@@ -1936,13 +2058,9 @@ pub fn blocking_plugin_host_client(extra_ca_bundle_pem: &str) -> Result<Blocking
 /// requests from the plugin host. Redirects remain disabled to preserve the
 /// existing solve-call behavior.
 pub fn blocking_proxy_reqwest_client(extra_ca_bundle_pem: &str) -> Result<BlockingClient, String> {
-    let mut builder = blocking_reqwest_client_builder()
+    blocking_reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)?
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(PROXY_USER_AGENT);
-    if !extra_ca_bundle_pem.trim().is_empty() {
-        builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
-    }
-    builder
+        .user_agent(PROXY_USER_AGENT)
         .build()
         .map_err(|error| format!("failed to build proxy HTTP client: {error}"))
 }
@@ -1951,13 +2069,9 @@ pub fn blocking_proxy_reqwest_client(extra_ca_bundle_pem: &str) -> Result<Blocki
 /// components for challenge-solver requests. Redirects stay disabled and the
 /// operator-installed private roots match the guarded target client.
 pub fn proxy_reqwest_client_with_extra_ca(extra_ca_bundle_pem: &str) -> Result<Client, String> {
-    let mut builder = reqwest_client_builder()
+    reqwest_client_builder_with_extra_ca(extra_ca_bundle_pem)?
         .redirect(reqwest::redirect::Policy::none())
-        .user_agent(PROXY_USER_AGENT);
-    if !extra_ca_bundle_pem.trim().is_empty() {
-        builder = builder.tls_certs_merge(uploaded_root_certificates(extra_ca_bundle_pem)?);
-    }
-    builder
+        .user_agent(PROXY_USER_AGENT)
         .build()
         .map_err(|error| format!("failed to build proxy HTTP client: {error}"))
 }
@@ -2733,6 +2847,15 @@ fn default_max_retry_after() -> Duration {
 }
 
 pub fn parse_retry_after(raw_value: &str) -> Option<(Duration, RetryAfterSource)> {
+    parse_retry_after_at(raw_value, Utc::now())
+}
+
+/// [`parse_retry_after`] against a caller-supplied `now`, so an HTTP-date
+/// value resolves to an exact delay.
+pub fn parse_retry_after_at(
+    raw_value: &str,
+    now: DateTime<Utc>,
+) -> Option<(Duration, RetryAfterSource)> {
     let trimmed = raw_value.trim();
     if trimmed.is_empty() {
         return None;
@@ -2740,7 +2863,6 @@ pub fn parse_retry_after(raw_value: &str) -> Option<(Duration, RetryAfterSource)
 
     if let Ok(retry_at) = DateTime::parse_from_rfc2822(trimmed) {
         let retry_at = retry_at.with_timezone(&Utc);
-        let now = Utc::now();
         if retry_at > now
             && let Ok(delay) = (retry_at - now).to_std()
             && !delay.is_zero()
@@ -2911,6 +3033,90 @@ mod tests {
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+
+    /// A self-signed CA, reused from the plugin HTTP host tests, standing in
+    /// for an operator-uploaded private root.
+    const TEST_EXTRA_CA_PEM: &str = concat!(
+        "-----BEGIN CERTIFICATE-----\n",
+        "MIIDITCCAgmgAwIBAgIUY40m7DS0vG3xUR0EXxPLYFVq/WkwDQYJKoZIhvcNAQEL\n",
+        "BQAwGDEWMBQGA1UEAwwNZTJlLWppbWFrdS1jYTAeFw0yNjA1MjExNzE4NTNaFw0z\n",
+        "NjA1MTgxNzE4NTNaMBgxFjAUBgNVBAMMDWUyZS1qaW1ha3UtY2EwggEiMA0GCSqG\n",
+        "SIb3DQEBAQUAA4IBDwAwggEKAoIBAQCygxcuiabmKSdpOdnE2Vg9x8AxDtsv3apm\n",
+        "qaAeDTaG2uPeSjQsxKJfYDkRmOS9eqEV+yYQeiRwAdq3vadUd/eVlfvvrCtCswkx\n",
+        "vHhDvKpgc8KW239IdygK8JFHJz1FTfZRfgWgiKGnlqef6R1w8BjewD6/byv+VJxR\n",
+        "cQaVmrBfc7ZzXL41C/WCpdZLMyzRn1EeoEvTYqn1+Yqhhx8WlIQlT2Ha3gOIvAAX\n",
+        "Xh1CyfosZbFGfuVk4njM01K00N8GaMk0CWwMvgKADPKNh29S1Pv4PnL5k03Qb4gS\n",
+        "bAMRWJi+xMYmtAdINPnJscPKj++vOMdJxGQunpgkXKoHELZWLOANAgMBAAGjYzBh\n",
+        "MB8GA1UdIwQYMBaAFMJFcy1sAajZvY0Amv6QuPe4iqPUMA8GA1UdEwEB/wQFMAMB\n",
+        "Af8wDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBTCRXMtbAGo2b2NAJr+kLj3uIqj\n",
+        "1DANBgkqhkiG9w0BAQsFAAOCAQEAIZkWiXfdJSLtHUlqUfT5R9ko8acIt1uQt2kI\n",
+        "3SiDqyFrHWTT+cyfFyqBIEASPLX9fgPHkz42K4P1Kc9W4JR8o/QWRK7A0hvbCzuB\n",
+        "Z/5+agQ15hA1priLKk/oqoILFhT3LHR3/6mzk6vJ3EmIyDITUZ6tQiQS0zyXCxpR\n",
+        "8aCN5dsNaBwN42hxBrm/7TjiNCdX54zjLg6cPbtrsHnAI7NBi3O/WNEYISiUcC5O\n",
+        "FnEYx13QF8BQo/cY55EZDrEnF4+R6Q3DPQJHhd6tIoEYvxp8wVnUjQb3nWib1wvW\n",
+        "dlYNMnHca3kyT/MHY4oX5MmPsHY8ANxBBz0XSKw5ysN4cNpK/Q==\n",
+        "-----END CERTIFICATE-----\n",
+    );
+
+    /// The whole point of the cache: preparing two plugin targets must not
+    /// rebuild (and so must not re-read from disk) the platform root store.
+    #[test]
+    fn plugin_target_preparation_reuses_the_cached_platform_roots() {
+        let system = cached_tls_client_config("").expect("system TLS config");
+        assert!(Arc::ptr_eq(
+            &system,
+            &cached_tls_client_config("").expect("system TLS config")
+        ));
+        // Whitespace-only bundles are the "no bundle" case, not a new entry.
+        assert!(Arc::ptr_eq(
+            &system,
+            &cached_tls_client_config("   \n").expect("system TLS config")
+        ));
+
+        // Two DNS-free preparations against a public literal address.
+        for _ in 0..2 {
+            prepare_plugin_blocking_http_target("https://93.184.216.34/", "", "test")
+                .expect("prepared plugin target");
+        }
+
+        assert!(Arc::ptr_eq(
+            &system,
+            &cached_tls_client_config("").expect("system TLS config")
+        ));
+    }
+
+    /// An uploaded bundle gets its own cached configuration, and its root is
+    /// the one that ends up in the verifier's extra roots.
+    #[test]
+    fn extra_ca_bundle_is_cached_separately_and_carries_its_root() {
+        let ders =
+            uploaded_root_certificate_ders(TEST_EXTRA_CA_PEM).expect("bundle DER should parse");
+        assert_eq!(ders.len(), 1);
+
+        let mut store = rustls::RootCertStore::empty();
+        store
+            .add(ders[0].clone())
+            .expect("bundle root should be accepted as a trust anchor");
+        assert_eq!(store.len(), 1);
+
+        let bundled = cached_tls_client_config(TEST_EXTRA_CA_PEM).expect("bundled TLS config");
+        let system = cached_tls_client_config("").expect("system TLS config");
+        assert!(!Arc::ptr_eq(&bundled, &system));
+        assert!(Arc::ptr_eq(
+            &bundled,
+            &cached_tls_client_config(TEST_EXTRA_CA_PEM).expect("bundled TLS config")
+        ));
+    }
+
+    #[test]
+    fn a_malformed_extra_ca_bundle_is_still_rejected() {
+        let error = cached_tls_client_config("-----BEGIN CERTIFICATE-----\nnot base64\n")
+            .expect_err("a malformed bundle must not be trusted");
+        assert!(
+            error.contains("uploaded trusted certificate bundle"),
+            "unexpected error: {error}"
+        );
+    }
 
     #[test]
     fn transport_proxy_credentials_are_redacted_in_debug_output() {
@@ -3129,12 +3335,17 @@ mod tests {
 
     #[test]
     fn parses_http_date_retry_after_first() {
-        let retry_at = DateTime::<Utc>::from(SystemTime::now() + Duration::from_secs(60));
-        let header = retry_at.to_rfc2822();
-        let (delay, source) = parse_retry_after(&header).expect("expected parsed Retry-After");
+        // A fixed `now` on a whole second: the HTTP date carries whole seconds
+        // only, so the parsed delay is exact.
+        let now = DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let header = (now + chrono::Duration::seconds(60)).to_rfc2822();
+        let (delay, source) =
+            parse_retry_after_at(&header, now).expect("expected parsed Retry-After");
 
         assert_eq!(source, RetryAfterSource::HttpDate);
-        assert!(delay.as_secs() >= 59);
+        assert_eq!(delay, Duration::from_secs(60));
     }
 
     #[test]
@@ -4011,14 +4222,14 @@ mod tests {
         let _ = registry
             .record_destination_cooldown(
                 &destination,
-                Duration::from_millis(50),
+                Duration::from_secs(120),
                 RetryAfterSource::Seconds,
             )
             .await;
         let (_, source) = registry
             .record_destination_cooldown(
                 &destination,
-                Duration::from_millis(5),
+                Duration::from_secs(5),
                 RetryAfterSource::FallbackBackoff,
             )
             .await;
@@ -4082,7 +4293,7 @@ mod tests {
         let registry = RateLimitRegistry::new();
         let _ = registry.record_destination_cooldown_blocking(
             &destination,
-            Duration::from_secs(5),
+            Duration::from_secs(120),
             RetryAfterSource::Seconds,
         );
 
@@ -4110,7 +4321,7 @@ mod tests {
         let registry = RateLimitRegistry::new();
         let _ = registry.record_destination_cooldown_blocking(
             &destination,
-            Duration::from_secs(5),
+            Duration::from_secs(120),
             RetryAfterSource::Seconds,
         );
         let dispatches = Arc::new(AtomicUsize::new(0));
@@ -4227,15 +4438,35 @@ mod tests {
         );
     }
 
+    /// One token per ~17 minutes. The governor bucket runs on the real clock,
+    /// so a test that drains a burst and then expects the next acquire to wait
+    /// must use a refill interval no scheduler stall can reach.
+    fn near_zero_rps_profile(burst: u32) -> HostRpsProfile {
+        HostRpsProfile::limited(0.001, burst)
+    }
+
+    /// True when the host's default-lane bucket has no token left, without
+    /// waiting for one.
+    fn host_rps_exhausted(registry: &RateLimitRegistry, host: &HostKey) -> bool {
+        registry
+            .acquire_host_rps_blocking_until(host, std::time::Instant::now())
+            .is_err()
+    }
+
     #[tokio::test]
     async fn host_rps_is_shared_per_host() {
         let registry = RateLimitRegistry::isolated();
         let host: HostKey = "rps.example.test".into();
+        registry.register_host_profile(
+            host.clone(),
+            near_zero_rps_profile(DEFAULT_HOST_RPS_BURST),
+            HostRpsProfileSource::ExplicitRegistration,
+        );
 
         for _ in 0..DEFAULT_HOST_RPS_BURST {
             assert_eq!(registry.acquire_host_rps(&host).await, None);
         }
-        assert!(registry.acquire_host_rps(&host).await.is_some());
+        assert!(host_rps_exhausted(&registry, &host));
     }
 
     #[tokio::test]
@@ -4284,17 +4515,23 @@ mod tests {
     async fn blocking_and_async_callers_share_governor_capacity() {
         let registry = RateLimitRegistry::isolated();
         let host: HostKey = "shared-blocking.example.test".into();
+        registry.register_host_profile(
+            host.clone(),
+            near_zero_rps_profile(DEFAULT_HOST_RPS_BURST),
+            HostRpsProfileSource::ExplicitRegistration,
+        );
 
         for _ in 0..DEFAULT_HOST_RPS_BURST {
             assert_eq!(registry.acquire_host_rps(&host).await, None);
         }
 
+        // The blocking path sees the capacity the async path drained.
         let blocking_registry = registry.clone();
         let blocking_host = host.clone();
         let blocking = tokio::task::spawn_blocking(move || {
-            blocking_registry.acquire_host_rps_blocking(&blocking_host)
+            host_rps_exhausted(&blocking_registry, &blocking_host)
         });
-        assert!(blocking.await.unwrap().is_some());
+        assert!(blocking.await.unwrap());
     }
 
     #[test]
@@ -4303,18 +4540,21 @@ mod tests {
         let host: HostKey = "deadline-blocking.example.test".into();
         registry.register_host_profile(
             host.clone(),
-            HostRpsProfile::limited(1.0, 1),
+            near_zero_rps_profile(1),
             HostRpsProfileSource::ExplicitRegistration,
         );
 
         assert_eq!(registry.acquire_host_rps_blocking(&host), None);
-        let started_at = std::time::Instant::now();
+        // The next token is ~17 minutes out, past the caller's deadline, so the
+        // call must refuse instead of sleeping. A pacer that slept would blow
+        // straight through the deadline.
+        let deadline = std::time::Instant::now() + Duration::from_secs(60);
         assert!(
             registry
-                .acquire_host_rps_blocking_until(&host, started_at + Duration::from_millis(25),)
+                .acquire_host_rps_blocking_until(&host, deadline)
                 .is_err()
         );
-        assert!(started_at.elapsed() < Duration::from_millis(200));
+        assert!(std::time::Instant::now() < deadline);
     }
 
     #[tokio::test]
@@ -4323,18 +4563,18 @@ mod tests {
         let host: HostKey = "deadline-async.example.test".into();
         registry.register_host_profile(
             host.clone(),
-            HostRpsProfile::limited(1.0, 1),
+            near_zero_rps_profile(1),
             HostRpsProfileSource::ExplicitRegistration,
         );
 
         assert_eq!(registry.acquire_host_rps(&host).await, None);
-        let started_at = Instant::now();
+        // The paced acquire has to sleep ~17 minutes for its token, so the
+        // caller's 25 ms deadline always fires first and drops it.
         assert!(
-            tokio::time::timeout(Duration::from_millis(25), registry.acquire_host_rps(&host),)
+            tokio::time::timeout(Duration::from_millis(25), registry.acquire_host_rps(&host))
                 .await
                 .is_err()
         );
-        assert!(started_at.elapsed() < Duration::from_millis(200));
     }
 
     #[tokio::test]
@@ -4352,6 +4592,11 @@ mod tests {
         let registry = RateLimitRegistry::isolated();
         let host: HostKey = "snapshot.example.test".into();
         let destination: DestinationKey = "snapshot.example.test".into();
+        registry.register_host_profile(
+            host.clone(),
+            near_zero_rps_profile(DEFAULT_HOST_RPS_BURST),
+            HostRpsProfileSource::ExplicitRegistration,
+        );
 
         for _ in 0..DEFAULT_HOST_RPS_BURST {
             assert_eq!(registry.acquire_host_rps(&host).await, None);
@@ -4360,30 +4605,39 @@ mod tests {
         let waiting_host = host.clone();
         let waiting =
             tokio::spawn(async move { waiting_registry.acquire_host_rps(&waiting_host).await });
-        sleep(Duration::from_millis(5)).await;
+        let host_is_waiting = |registry: &RateLimitRegistry| {
+            registry.snapshot().host_rps.iter().any(|entry| {
+                entry.host_key == host
+                    && entry.lane.as_ref() == "default"
+                    && !entry.available_in.is_zero()
+                    && entry.profile_source == HostRpsProfileSource::ExplicitRegistration
+            })
+        };
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while !host_is_waiting(&registry) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the queued acquire should record its host RPS wait");
         let _ = registry
             .record_destination_cooldown(
                 &destination,
-                Duration::from_secs(1),
+                Duration::from_secs(120),
                 RetryAfterSource::Seconds,
             )
             .await;
 
         let snapshot = registry.snapshot();
 
-        assert!(snapshot.host_rps.iter().any(|entry| {
-            entry.host_key == host
-                && entry.lane.as_ref() == "default"
-                && !entry.available_in.is_zero()
-                && entry.profile_source == HostRpsProfileSource::UnknownPublicDefault
-        }));
         assert!(
             snapshot
                 .destination_cooldowns
                 .iter()
                 .any(|entry| entry.destination_key == destination && !entry.available_in.is_zero())
         );
-        assert!(waiting.await.unwrap().is_some());
+        assert!(!waiting.is_finished());
+        waiting.abort();
     }
 
     #[tokio::test]

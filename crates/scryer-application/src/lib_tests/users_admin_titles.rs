@@ -451,22 +451,56 @@ async fn library_managers_receive_only_their_scoped_interactive_job_events() {
         .subscribe_job_run_events(&manager)
         .await
         .expect("manager can subscribe to own interactive jobs");
-    let manager_event =
-        tokio::time::timeout(std::time::Duration::from_secs(5), manager_events.recv())
-            .await
-            .expect("manager should receive active interactive job")
-            .expect("job event should be delivered");
+    let manager_event = within_deadline(
+        "the manager's active interactive job event",
+        manager_events.recv(),
+    )
+    .await
+    .expect("job event should be delivered");
     assert_eq!(manager_event.id, run.id);
 
     let mut other_events = app
         .subscribe_job_run_events(&other_manager)
         .await
         .expect("other manager subscription should initialize");
+    // A sentinel the other manager may see. The subscription sends its whole
+    // replay in one synchronous burst, and the sentinel arrives either in that
+    // replay or live after it, so once the sentinel is in hand everything the
+    // replay could have leaked is already in the channel.
+    let sentinel = JobRunRecord {
+        id: "other-manager-sentinel".to_string(),
+        operation_type: format!(
+            "media_file_deletion:{}:file-2",
+            scryer_domain::default_library_id_for_facet(&MediaFacet::Movie)
+        ),
+        actor_user_id: Some(other_manager.id.clone()),
+        ..run.clone()
+    };
+    app.runtime
+        .jobs
+        .job_run_tracker
+        .upsert_active_run(JobRun::from_record(&sentinel, None))
+        .await;
+    let mut seen = Vec::new();
+    loop {
+        let event = within_deadline(
+            "the other manager's sentinel job event",
+            other_events.recv(),
+        )
+        .await
+        .expect("job event should be delivered");
+        let is_sentinel = event.id == sentinel.id;
+        seen.push(event.id);
+        if is_sentinel {
+            break;
+        }
+    }
+    while let Ok(event) = other_events.try_recv() {
+        seen.push(event.id);
+    }
     assert!(
-        tokio::time::timeout(std::time::Duration::from_millis(100), other_events.recv())
-            .await
-            .is_err(),
-        "an interactive job must not be broadcast to a different manager"
+        !seen.contains(&run.id),
+        "an interactive job must not be broadcast to a different manager: {seen:?}"
     );
 }
 

@@ -5,6 +5,10 @@ use std::path::{Path, PathBuf};
 use crate::{AppError, AppResult};
 use scryer_domain::VIDEO_EXTENSIONS;
 
+/// How many times a directory that reads back with zero entries is re-read
+/// before the empty listing is accepted as the truth.
+const EMPTY_DIRECTORY_READ_ATTEMPTS: usize = 3;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WalkEntryKind {
     Directory { via_symlink: bool },
@@ -236,7 +240,40 @@ impl FilesystemWalker {
         Ok(walked)
     }
 
+    /// Read a directory, treating a zero-entry listing as unverified.
+    ///
+    /// A successful `read_dir` that yields no entries at all is not proof that
+    /// the directory is empty. Docker Desktop's shared-folder mount answers a
+    /// readdir under concurrent load with an empty listing and no error, which
+    /// made whole show folders look like they held neither seasons nor files.
+    /// An empty listing is therefore re-read a bounded number of times before
+    /// it is accepted; a genuinely empty directory only costs the extra
+    /// readdirs.
     fn read_directory(&self, dir: &Path) -> AppResult<WalkedDirectory> {
+        let mut attempt = 1usize;
+        loop {
+            let (listing, entry_count) = self.read_directory_once(dir)?;
+            if entry_count > 0 {
+                if attempt > 1 {
+                    tracing::warn!(
+                        path = %dir.display(),
+                        attempt,
+                        entries = entry_count,
+                        "directory listing was empty on an earlier read; a re-read returned entries"
+                    );
+                }
+                return Ok(listing);
+            }
+            if attempt >= EMPTY_DIRECTORY_READ_ATTEMPTS {
+                return Ok(listing);
+            }
+            attempt = attempt.saturating_add(1);
+        }
+    }
+
+    /// One `read_dir` pass, returning the listing and the number of raw
+    /// directory entries it saw before any policy filtering.
+    fn read_directory_once(&self, dir: &Path) -> AppResult<(WalkedDirectory, usize)> {
         let entries = fs::read_dir(dir).map_err(|err| {
             AppError::Repository(format!("failed to read directory {}: {err}", dir.display()))
         })?;
@@ -245,8 +282,10 @@ impl FilesystemWalker {
         let mut files = Vec::new();
         let mut filenames_lower = HashSet::new();
         let mut symlinked_subdirs = HashSet::new();
+        let mut entry_count = 0usize;
 
         for entry in entries {
+            entry_count = entry_count.saturating_add(1);
             let entry = entry.map_err(|err| {
                 AppError::Repository(format!("failed to read entry in {}: {err}", dir.display()))
             })?;
@@ -284,13 +323,16 @@ impl FilesystemWalker {
         subdirs.sort();
         files.sort();
 
-        Ok(WalkedDirectory {
-            path: dir.to_path_buf(),
-            subdirs,
-            files,
-            filenames_lower,
-            symlinked_subdirs,
-        })
+        Ok((
+            WalkedDirectory {
+                path: dir.to_path_buf(),
+                subdirs,
+                files,
+                filenames_lower,
+                symlinked_subdirs,
+            },
+            entry_count,
+        ))
     }
 
     fn apply_walk_filter(&self, root: &Path, listing: &mut WalkedDirectory) {
@@ -554,5 +596,51 @@ mod tests {
             walked[0].files,
             vec![dir.path().join("movie.mkv"), dir.path().join("movie.nfo")]
         );
+    }
+
+    #[test]
+    fn walker_accepts_a_genuinely_empty_directory_after_bounded_re_reads() {
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        let walked = FilesystemWalker::new().walk(dir.path()).expect("walk");
+
+        assert_eq!(walked.len(), 1);
+        assert!(walked[0].files.is_empty());
+        assert!(walked[0].subdirs.is_empty());
+    }
+
+    #[test]
+    fn walker_keeps_directories_whose_only_entries_are_filtered_out() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("poster.jpg"), b"poster").expect("poster");
+
+        let walked = FilesystemWalker::new()
+            .supported_video_files_only()
+            .walk(dir.path())
+            .expect("walk");
+
+        assert_eq!(walked.len(), 1);
+        assert!(walked[0].files.is_empty());
+    }
+
+    #[test]
+    fn read_directory_once_counts_raw_entries_before_filtering() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        fs::write(dir.path().join("poster.jpg"), b"poster").expect("poster");
+
+        let (listing, entry_count) = FilesystemWalker::new()
+            .supported_video_files_only()
+            .read_directory_once(dir.path())
+            .expect("read directory");
+
+        assert_eq!(entry_count, 1);
+        assert!(listing.files.is_empty());
+
+        let (empty_listing, empty_count) = FilesystemWalker::new()
+            .read_directory_once(tempfile::tempdir().expect("tempdir").path())
+            .expect("read directory");
+
+        assert_eq!(empty_count, 0);
+        assert!(empty_listing.files.is_empty());
     }
 }

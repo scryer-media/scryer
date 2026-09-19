@@ -114,7 +114,10 @@ async fn graphql_passkey_register_start_requires_authentication() {
 async fn graphql_passkey_authenticate_start_is_public() {
     let ctx = TestContext::new().await;
 
-    let started = std::time::Instant::now();
+    // Pause the clock: work takes no virtual time, while a login-failure delay
+    // is a tokio sleep that advances virtual time by the whole delay.
+    tokio::time::pause();
+    let started = tokio::time::Instant::now();
     let body = schema_exec(
         &ctx,
         r#"
@@ -136,11 +139,11 @@ async fn graphql_passkey_authenticate_start_is_public() {
     );
     assert_eq!(code, "LOGIN_FAILED");
     assert!(
-        elapsed < std::time::Duration::from_millis(450),
-        "form-login-disabled passkey auth should not use login timing fuzz"
+        elapsed.is_zero(),
+        "form-login-disabled passkey auth should not use login timing fuzz, slept {elapsed:?}"
     );
 
-    let started = std::time::Instant::now();
+    let started = tokio::time::Instant::now();
     let complete_body = schema_exec(
         &ctx,
         r#"
@@ -161,8 +164,8 @@ async fn graphql_passkey_authenticate_start_is_public() {
     );
     assert_eq!(code, "LOGIN_FAILED");
     assert!(
-        elapsed < std::time::Duration::from_millis(450),
-        "form-login-disabled passkey completion should not use login timing fuzz"
+        elapsed.is_zero(),
+        "form-login-disabled passkey completion should not use login timing fuzz, slept {elapsed:?}"
     );
 }
 

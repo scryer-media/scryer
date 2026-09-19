@@ -386,10 +386,7 @@ async fn housekeeping_respects_configured_history_retention() {
         &ctx,
         "Retention Fixture",
         MediaFacet::Series,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "12345".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "12345".to_string())],
         vec![],
         true,
     )
@@ -663,10 +660,7 @@ async fn housekeeping_skips_history_retention_when_keep_forever_is_enabled() {
         &ctx,
         "Retention Keep Forever Fixture",
         MediaFacet::Series,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "67890".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "67890".to_string())],
         vec![],
         true,
     )

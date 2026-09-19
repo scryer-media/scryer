@@ -19,6 +19,19 @@ const PLAYBACK_INCREMENTAL_DELAYS: [Duration; 3] = [
     Duration::from_secs(5 * 60),
     Duration::from_secs(20 * 60),
 ];
+/// A library scan broadcasts hundreds of thousands of domain events. Each one
+/// used to wake this loop into a `media_server_connections.list` plus an
+/// `ImportCompleted` read; the poll is a catch-up drain, so one per burst is
+/// worth exactly as much as one per event.
+const PLAYBACK_EVENT_POLL_COALESCE_WINDOW: Duration = Duration::from_secs(3);
+/// How long to wait before retrying a poll that failed.
+const PLAYBACK_EVENT_POLL_RETRY_DELAY: Duration = Duration::from_secs(30);
+
+/// Schedule the next catch-up poll, leaving an already-scheduled one alone so a
+/// burst of broadcasts collapses into a single poll.
+fn schedule_event_poll(poll_due_at: &mut Option<Instant>, now: Instant) {
+    poll_due_at.get_or_insert(now + PLAYBACK_EVENT_POLL_COALESCE_WINDOW);
+}
 
 type PlaybackEntityKey = (MediaServerPlaybackEntityKind, String);
 
@@ -47,7 +60,12 @@ pub async fn start_background_media_server_playback_reconciliation_loop(
     let mut event_rx = app.runtime.events.domain_event_broadcast.subscribe();
     let mut full_reconciliation = tokio::time::interval(PLAYBACK_RECONCILIATION_INTERVAL);
     let mut queue = PlaybackRefreshQueue::new();
-    let mut should_poll_events = true;
+    // `Some(deadline)` means a catch-up poll is owed once `deadline` passes;
+    // the first one is owed immediately.
+    let mut poll_due_at = Some(Instant::now());
+    // Highest domain-event sequence the broadcast has announced, used to skip
+    // the `ImportCompleted` read outright while no media server is enabled.
+    let mut broadcast_high_water: Option<i64> = None;
     let started_at = Utc::now();
     let mut last_event_sequence = match repo.get_subscriber_offset(PLAYBACK_EVENT_SUBSCRIBER).await
     {
@@ -59,16 +77,23 @@ pub async fn start_background_media_server_playback_reconciliation_loop(
     };
 
     loop {
-        if should_poll_events {
-            match enqueue_import_completed_events(&app, &mut queue, last_event_sequence, started_at)
-                .await
+        if poll_due_at.is_some_and(|deadline| deadline <= Instant::now()) {
+            match enqueue_import_completed_events(
+                &app,
+                &mut queue,
+                last_event_sequence,
+                started_at,
+                broadcast_high_water,
+            )
+            .await
             {
                 Ok(sequence) => {
                     last_event_sequence = sequence;
-                    should_poll_events = false;
+                    poll_due_at = None;
                 }
                 Err(error) => {
                     tracing::warn!(error = %error, "failed to queue imported media for playback refresh");
+                    poll_due_at = Some(Instant::now() + PLAYBACK_EVENT_POLL_RETRY_DELAY);
                 }
             }
         }
@@ -84,14 +109,29 @@ pub async fn start_background_media_server_playback_reconciliation_loop(
                 }
             } => process_due_incremental_refreshes(&app, &mut queue).await,
             result = event_rx.recv() => match result {
-                Ok(high_water_sequence) => should_poll_events = high_water_sequence > last_event_sequence,
+                Ok(high_water_sequence) => {
+                    broadcast_high_water = Some(
+                        broadcast_high_water.map_or(high_water_sequence, |seen| seen.max(high_water_sequence)),
+                    );
+                    if high_water_sequence > last_event_sequence {
+                        schedule_event_poll(&mut poll_due_at, Instant::now());
+                    }
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
-                    tracing::warn!(skipped, "media-server playback event receiver lagged; replaying persisted imports");
-                    should_poll_events = true;
+                    // Expected whenever the event stream outruns this loop (a
+                    // library scan does that by design); the poll below picks
+                    // the skipped events up from the store.
+                    tracing::debug!(skipped, "media-server playback event receiver lagged; replaying persisted imports");
+                    schedule_event_poll(&mut poll_due_at, Instant::now());
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             },
-            _ = tokio::time::sleep(Duration::from_secs(30)), if should_poll_events => {},
+            _ = async {
+                match poll_due_at {
+                    Some(deadline) => tokio::time::sleep_until(deadline).await,
+                    None => std::future::pending::<()>().await,
+                }
+            } => {},
         }
     }
 }
@@ -128,6 +168,7 @@ async fn enqueue_import_completed_events(
     queue: &mut PlaybackRefreshQueue,
     mut after_sequence: i64,
     started_at: chrono::DateTime<Utc>,
+    broadcast_high_water: Option<i64>,
 ) -> AppResult<i64> {
     let repo = app.services.events.domain_events.clone();
     let connections = app
@@ -139,6 +180,20 @@ async fn enqueue_import_completed_events(
         .into_iter()
         .filter(|connection| connection.enabled)
         .collect::<Vec<_>>();
+
+    // With no media server enabled there is nothing to refresh, so reading the
+    // `ImportCompleted` events would only walk them to move the offset along.
+    // When the broadcast has told us where the stream ends, move the offset
+    // there directly and skip the read: every event at or below that sequence
+    // would have been dropped, and an event that arrives after a connection is
+    // enabled raises the high water again.
+    if connections.is_empty()
+        && let Some(high_water) = broadcast_high_water.filter(|value| *value > after_sequence)
+    {
+        repo.set_subscriber_offset(PLAYBACK_EVENT_SUBSCRIBER, high_water)
+            .await?;
+        return Ok(high_water);
+    }
 
     loop {
         let events = repo
@@ -606,10 +661,7 @@ fn unique_title_match<'a>(
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
-        ids.push(ExternalId {
-            source: "imdb".into(),
-            value: imdb_id.into(),
-        });
+        ids.push(ExternalId::new("imdb", imdb_id));
     }
     let candidates = catalog
         .iter()
@@ -732,16 +784,49 @@ mod tests {
             provider_item_id: provider_item_id.into(),
             external_ids: external_ids
                 .iter()
-                .map(|(source, value)| ExternalId {
-                    source: (*source).into(),
-                    value: (*value).into(),
-                })
+                .map(|(source, value)| ExternalId::new(*source, *value))
                 .collect(),
             series_provider_item_id: None,
             season_number: None,
             episode_number: None,
             episode_number_end: None,
         }
+    }
+
+    #[test]
+    fn a_burst_of_wakeups_schedules_a_single_coalesced_poll() {
+        let now = Instant::now();
+        let mut poll_due_at = None;
+
+        schedule_event_poll(&mut poll_due_at, now);
+        let first_deadline = poll_due_at;
+        assert_eq!(
+            first_deadline,
+            Some(now + PLAYBACK_EVENT_POLL_COALESCE_WINDOW)
+        );
+
+        for offset in 1..1_000 {
+            schedule_event_poll(&mut poll_due_at, now + Duration::from_millis(offset));
+        }
+
+        assert_eq!(poll_due_at, first_deadline);
+    }
+
+    #[test]
+    fn a_wakeup_after_a_completed_poll_schedules_the_next_one() {
+        let now = Instant::now();
+        let mut poll_due_at = None;
+        schedule_event_poll(&mut poll_due_at, now);
+
+        // The loop clears the deadline once the poll has drained the stream.
+        poll_due_at = None;
+
+        let later = now + Duration::from_secs(60);
+        schedule_event_poll(&mut poll_due_at, later);
+        assert_eq!(
+            poll_due_at,
+            Some(later + PLAYBACK_EVENT_POLL_COALESCE_WINDOW)
+        );
     }
 
     #[test]
@@ -788,14 +873,8 @@ mod tests {
     #[test]
     fn exact_tmdb_matches_are_preferred_over_compatible_ids() {
         let expected = vec![
-            ExternalId {
-                source: "tmdb".into(),
-                value: "tmdb://123".into(),
-            },
-            ExternalId {
-                source: "tvdb".into(),
-                value: "456".into(),
-            },
+            ExternalId::new("tmdb", "tmdb://123"),
+            ExternalId::new("tvdb", "456"),
         ];
         let tmdb = catalog_item(
             MediaServerCatalogItemKind::Series,
@@ -818,10 +897,7 @@ mod tests {
 
     #[test]
     fn ambiguous_exact_matches_are_skipped() {
-        let expected = vec![ExternalId {
-            source: "tmdb".into(),
-            value: "123".into(),
-        }];
+        let expected = vec![ExternalId::new("tmdb", "123")];
         let first = catalog_item(
             MediaServerCatalogItemKind::Movie,
             "provider-one",

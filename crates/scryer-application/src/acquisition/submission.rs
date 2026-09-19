@@ -611,13 +611,21 @@ impl AppUseCase {
         let _prepared_artifact = self
             .prepare_indexer_artifact_for_submission(&mut request, Some(title_id.clone()))
             .await?;
-        let grab = match self
+        let grab_result = self
             .services
             .integrations
             .download_client
             .submit_download(&request)
-            .await
-        {
+            .await;
+        // The clients now hold something they did not hold a moment ago — or,
+        // on an ambiguous error, may hold it. Either way the cached client
+        // snapshots have stopped describing them, and the next subject this
+        // walk evaluates must not be told the scope is free on their word.
+        self.runtime
+            .acquisition
+            .download_submission_guards
+            .invalidate_client_snapshots();
+        let grab = match grab_result {
             Ok(grab) => grab,
             Err(error) => {
                 if error.is_download_submit_ambiguous() {

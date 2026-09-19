@@ -167,18 +167,18 @@ async fn await_completion(
     user: &User,
     job_id: &str,
 ) -> InteractiveReleaseSearchSnapshot {
-    for _ in 0..200 {
-        let snapshot = app
-            .interactive_release_search(user, job_id)
-            .await
-            .expect("poll interactive release search")
-            .expect("job present");
-        if snapshot.state != InteractiveReleaseSearchState::Running {
-            return snapshot;
-        }
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
-    panic!("interactive release search never reached a terminal state");
+    wait_for(
+        "the interactive release search to reach a terminal state",
+        || async {
+            let snapshot = app
+                .interactive_release_search(user, job_id)
+                .await
+                .expect("poll interactive release search")
+                .expect("job present");
+            (snapshot.state != InteractiveReleaseSearchState::Running).then_some(snapshot)
+        },
+    )
+    .await
 }
 
 fn indexer_view<'a>(
@@ -874,6 +874,7 @@ async fn an_unlinked_grab_records_an_orphan_scoped_submission_and_history() {
             event_types: Some(vec![DomainEventType::ReleaseGrabbed]),
             title_id: None,
             facet: None,
+            stream_id: None,
             after_sequence: Some(0),
             before_sequence: None,
             limit: 10,
@@ -1177,16 +1178,10 @@ async fn an_unlinked_grab_reaches_an_import_offer_once_the_client_completes_it()
 
     // Let the poller see it downloading, so the failure under test is not "the
     // client finished it between two polls" but "it was watched the whole way".
-    timeout(Duration::from_secs(5), async {
-        loop {
-            if *download_client.queue_calls.lock().await >= 2 {
-                break;
-            }
-            sleep(Duration::from_millis(20)).await;
-        }
+    wait_until("the poller to read the client's queue twice", || async {
+        *download_client.queue_calls.lock().await >= 2
     })
-    .await
-    .expect("the poller should read the client's queue");
+    .await;
 
     let payload_dir = tempfile::tempdir().expect("payload dir");
     // A real payload, so what the import check decides is about the missing
@@ -1215,7 +1210,8 @@ async fn an_unlinked_grab_reaches_an_import_offer_once_the_client_completes_it()
     *download_client.recent_completed_downloads.lock().await = Some(vec![completed.clone()]);
     *download_client.completed_downloads.lock().await = vec![completed];
 
-    let offered = timeout(Duration::from_secs(10), async {
+    // Bounded rather than panicking so a miss reports the tracked states below.
+    let offered = timeout(TEST_WAIT_DEADLINE, async {
         loop {
             // Either state puts the download on the import activity as a row
             // the operator can assign by hand (`list_download_history_items`
@@ -1421,6 +1417,7 @@ async fn grabbed_release_titles(app: &AppUseCase) -> Vec<String> {
             event_types: Some(vec![DomainEventType::ReleaseGrabbed]),
             title_id: None,
             facet: None,
+            stream_id: None,
             after_sequence: Some(0),
             before_sequence: None,
             limit: 50,

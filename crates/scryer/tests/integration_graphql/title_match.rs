@@ -13,18 +13,9 @@ fn graphql_fix_title_match_movie_updates_identity_and_history() {
                 "Broken Movie Match",
                 MediaFacet::Movie,
                 vec![
-                    ExternalId {
-                        source: "tvdb".to_string(),
-                        value: "999".to_string(),
-                    },
-                    ExternalId {
-                        source: "imdb".to_string(),
-                        value: "tt0000999".to_string(),
-                    },
-                    ExternalId {
-                        source: "tmdb".to_string(),
-                        value: "4444".to_string(),
-                    },
+                    ExternalId::new("tvdb".to_string(), "999".to_string()),
+                    ExternalId::new("imdb".to_string(), "tt0000999".to_string()),
+                    ExternalId::new("tmdb".to_string(), "4444".to_string()),
                 ],
                 vec!["scryer:quality-profile:4k".to_string()],
                 true,
@@ -187,14 +178,8 @@ fn graphql_fix_title_match_series_rebuilds_and_relinks_library() {
                 title_name,
                 MediaFacet::Series,
                 vec![
-                    ExternalId {
-                        source: "tvdb".to_string(),
-                        value: "999".to_string(),
-                    },
-                    ExternalId {
-                        source: "mal".to_string(),
-                        value: "5555".to_string(),
-                    },
+                    ExternalId::new("tvdb".to_string(), "999".to_string()),
+                    ExternalId::new("mal".to_string(), "5555".to_string()),
                 ],
                 vec![
                     "scryer:season-folder:enabled".to_string(),
@@ -427,10 +412,7 @@ fn graphql_fix_title_match_rejects_duplicate_target_tvdb_id() {
                 &ctx,
                 "Existing Correct Match",
                 MediaFacet::Movie,
-                vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "123456".to_string(),
-                }],
+                vec![ExternalId::new("tvdb".to_string(), "123456".to_string())],
                 vec![],
                 true,
             )
@@ -439,10 +421,7 @@ fn graphql_fix_title_match_rejects_duplicate_target_tvdb_id() {
                 &ctx,
                 "Broken Match",
                 MediaFacet::Movie,
-                vec![ExternalId {
-                    source: "tvdb".to_string(),
-                    value: "999".to_string(),
-                }],
+                vec![ExternalId::new("tvdb".to_string(), "999".to_string())],
                 vec![],
                 true,
             )

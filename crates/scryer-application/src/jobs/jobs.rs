@@ -20,7 +20,7 @@ use serde_json::json;
 use std::collections::{BTreeSet, HashMap};
 use std::time::UNIX_EPOCH;
 use tokio::sync::broadcast;
-use tracing::{Instrument, info, warn};
+use tracing::{Instrument, debug, info, warn};
 
 const BACKGROUND_LIBRARY_REFRESH_INTERVAL_SECONDS: i64 = 6 * 60 * 60;
 const BACKGROUND_LIBRARY_REFRESH_STAGGER_SECONDS: i64 = 15 * 60;
@@ -1132,11 +1132,47 @@ impl AppUseCase {
         Ok(run_payload)
     }
 
+    /// Whether a scheduled tick of `job_key` has anything to do, answered
+    /// before any durable trace of the tick exists.
+    ///
+    /// The acquisition worker deliberately wakes faster than the cadences it
+    /// serves, so most ticks of the frequent jobs decide to do nothing. Those
+    /// ticks used to create a `workflow_operations` row and three domain
+    /// events each before the job body reached its own gate: on an idle
+    /// 12k-title instance that was ~1,000 rows and ~1.5 MB of `domain_events`
+    /// per 110 minutes, none of it describing anything that happened. A tick
+    /// that decides not to run now records nothing at all; the decision to run
+    /// is still the job body's, which re-checks the same gates.
+    ///
+    /// Only the scheduler is gated. An explicit trigger is a user asking for a
+    /// run and is always recorded, including the run that found nothing.
+    async fn scheduled_tick_has_work(
+        &self,
+        job_key: JobKey,
+        trigger_source: JobTriggerSource,
+    ) -> bool {
+        if trigger_source == JobTriggerSource::Manual {
+            return true;
+        }
+        match job_key {
+            JobKey::RssSync => self.rss_sync_tick_has_work().await,
+            JobKey::PendingReleaseProcessing => self.pending_release_tick_has_work().await,
+            _ => true,
+        }
+    }
+
     pub async fn run_scheduled_job_now(
         &self,
         job_key: JobKey,
         trigger_source: JobTriggerSource,
     ) -> AppResult<()> {
+        if !self.scheduled_tick_has_work(job_key, trigger_source).await {
+            debug!(
+                job_key = job_key.as_str(),
+                "scheduled tick has no work; not recording a run"
+            );
+            return Ok(());
+        }
         let hash_start = if job_key == JobKey::FullHashBackfill {
             let guard = self.runtime.jobs.full_hash_start_lock.lock().await;
             if self.runtime.jobs.full_hash_shutdown.is_cancelled()
@@ -1352,7 +1388,21 @@ impl AppUseCase {
         Ok(next_run_at)
     }
 
-    pub async fn set_job_next_run_at(&self, job_key: JobKey, next_run_at: chrono::DateTime<Utc>) {
+    /// Re-advertise a recurring job's next wake without writing a domain event.
+    ///
+    /// The advertised next run lives in the in-memory tracker, which is what
+    /// the jobs view reads through [`Self::list_jobs`]. The matching
+    /// `job_next_run_updated` event has no reader at all — no projection is
+    /// replayed from it and no client subscribes to it — so a periodic worker
+    /// that re-advertises its own cadence every tick was appending a row per
+    /// tick that nothing would ever read (1,072 of them per idle 110 minutes
+    /// on the 12k-title load test). Schedule changes that come from outside
+    /// the worker's own cadence still go through [`Self::set_job_next_run_at`].
+    pub async fn advertise_job_next_run_at(
+        &self,
+        job_key: JobKey,
+        next_run_at: chrono::DateTime<Utc>,
+    ) {
         self.runtime
             .jobs
             .job_run_tracker
@@ -1361,6 +1411,10 @@ impl AppUseCase {
         if job_key == JobKey::DiscoverySync {
             self.runtime.jobs.discovery_sync_wake.notify_waiters();
         }
+    }
+
+    pub async fn set_job_next_run_at(&self, job_key: JobKey, next_run_at: chrono::DateTime<Utc>) {
+        self.advertise_job_next_run_at(job_key, next_run_at).await;
         let _ = self
             .append_domain_event(new_job_run_domain_event(
                 None,

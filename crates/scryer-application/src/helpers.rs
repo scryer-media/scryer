@@ -629,7 +629,7 @@ pub(crate) fn sanitize_ids(ids: Vec<ExternalId>) -> Vec<ExternalId> {
             if source.is_empty() || value.is_empty() {
                 None
             } else {
-                Some(ExternalId { source, value })
+                Some(ExternalId::new(source, value))
             }
         })
         .collect()

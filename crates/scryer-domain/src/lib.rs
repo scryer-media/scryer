@@ -868,10 +868,64 @@ impl UserAuthorization {
     }
 }
 
+/// One external identity for a title.
+///
+/// `kind` is the entity kind the id names at its source: the same provider
+/// hands out the same number for different entities (tvdb movie 7373 and tvdb
+/// series 307111 are unrelated), so `(source, value)` alone is an ambiguous
+/// key. It stays optional because user, plugin and legacy inputs carry no
+/// kind; `None` serializes away, so `titles.external_ids` JSON written before
+/// this field round-trips unchanged.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ExternalId {
     pub source: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
     pub value: String,
+}
+
+impl ExternalId {
+    /// An id whose entity kind is unknown: user input, plugins, legacy rows.
+    pub fn new(source: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            source: source.into(),
+            kind: None,
+            value: value.into(),
+        }
+    }
+
+    pub fn with_kind(
+        source: impl Into<String>,
+        kind: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        Self {
+            source: source.into(),
+            kind: normalize_external_id_kind(&kind.into()),
+            value: value.into(),
+        }
+    }
+
+    /// The kind, trimmed and lowercased, or `None` when absent or blank.
+    pub fn normalized_kind(&self) -> Option<String> {
+        self.kind.as_deref().and_then(normalize_external_id_kind)
+    }
+
+    /// `source:kind:id`, with the kind segment omitted when it is unknown.
+    pub fn key(&self) -> String {
+        let source = self.source.trim().to_ascii_lowercase();
+        let value = self.value.trim();
+        match self.normalized_kind() {
+            Some(kind) => format!("{source}:{kind}:{value}"),
+            None => format!("{source}:{value}"),
+        }
+    }
+}
+
+/// Trim and lowercase an external-id kind, collapsing blank kinds to `None`.
+pub fn normalize_external_id_kind(kind: &str) -> Option<String> {
+    let kind = kind.trim().to_ascii_lowercase();
+    if kind.is_empty() { None } else { Some(kind) }
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -4596,6 +4650,12 @@ pub struct DomainEventFilter {
     pub event_types: Option<Vec<DomainEventType>>,
     pub title_id: Option<String>,
     pub facet: Option<MediaFacet>,
+    /// Scope the read to one event stream, matching `DomainEventStream::id`
+    /// (a library-scan session id, a title id, a download id, ...). A stream
+    /// reader that already knows which stream it wants sets this so the
+    /// database narrows to that stream instead of handing every stored event
+    /// of those types to the caller to filter in memory.
+    pub stream_id: Option<String>,
     pub after_sequence: Option<i64>,
     pub before_sequence: Option<i64>,
     pub limit: usize,
@@ -7297,6 +7357,44 @@ pub fn normalize_tags(tags: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_id_key_includes_the_kind_only_when_there_is_one() {
+        assert_eq!(
+            ExternalId::with_kind("TVDB", "Series", "307111").key(),
+            "tvdb:series:307111"
+        );
+        assert_eq!(ExternalId::new("tvdb", " 307111 ").key(), "tvdb:307111");
+        // A blank kind is the same as no kind.
+        assert_eq!(
+            ExternalId::with_kind("tvdb", "   ", "7373").key(),
+            "tvdb:7373"
+        );
+        assert!(ExternalId::with_kind("tvdb", "  ", "7373").kind.is_none());
+    }
+
+    #[test]
+    fn external_id_json_round_trips_and_stays_compatible_with_kindless_rows() {
+        let kinded = ExternalId::with_kind("tvdb", "movie", "7373");
+        let json = serde_json::to_string(&kinded).expect("kinded id should serialize");
+        assert_eq!(json, r#"{"source":"tvdb","kind":"movie","value":"7373"}"#);
+        assert_eq!(
+            serde_json::from_str::<ExternalId>(&json).expect("kinded id should parse"),
+            kinded
+        );
+
+        // A kindless id serializes without the field, so rows written before
+        // the field existed round-trip byte for byte.
+        let kindless = ExternalId::new("tvdb", "307111");
+        let json = serde_json::to_string(&kindless).expect("kindless id should serialize");
+        assert_eq!(json, r#"{"source":"tvdb","value":"307111"}"#);
+        assert_eq!(
+            serde_json::from_str::<ExternalId>(r#"{"source":"tvdb","value":"307111"}"#)
+                .expect("legacy row should parse"),
+            kindless
+        );
+        assert!(kindless.normalized_kind().is_none());
+    }
 
     #[test]
     fn id_round_trip() {

@@ -809,10 +809,9 @@ mod tests {
     #[test]
     fn matches_unique_episodic_title_by_imdb_id() {
         let mut title = test_title("Completely Different Name", MediaFacet::Series, None, &[]);
-        title.external_ids.push(ExternalId {
-            source: "imdb".to_string(),
-            value: "tt0944947".to_string(),
-        });
+        title
+            .external_ids
+            .push(ExternalId::new("imdb".to_string(), "tt0944947".to_string()));
         let titles = vec![title.clone()];
         let parsed = crate::parse_release_metadata("Farwander.S08E05.[tt0944947].1080p.WEB-DL");
 
@@ -825,10 +824,9 @@ mod tests {
     #[test]
     fn resolve_monitored_episode_title_marks_external_id_matches_as_id_only() {
         let mut title = test_title("Completely Different Name", MediaFacet::Series, None, &[]);
-        title.external_ids.push(ExternalId {
-            source: "imdb".to_string(),
-            value: "tt0944947".to_string(),
-        });
+        title
+            .external_ids
+            .push(ExternalId::new("imdb".to_string(), "tt0944947".to_string()));
         let titles = vec![title.clone()];
         let parsed = crate::parse_release_metadata("Farwander.S08E05.[tt0944947].1080p.WEB-DL");
 

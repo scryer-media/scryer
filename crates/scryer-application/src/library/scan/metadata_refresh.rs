@@ -374,10 +374,7 @@ mod tests {
             monitored: false,
             tags: Vec::new(),
             canonical_tags: vec![],
-            external_ids: vec![ExternalId {
-                source: "tvdb".to_string(),
-                value: "123".to_string(),
-            }],
+            external_ids: vec![ExternalId::new("tvdb".to_string(), "123".to_string())],
             root_folder_id: "root-1".to_string(),
             created_by: None,
             created_at: DateTime::from_timestamp(0, 0).expect("valid timestamp"),

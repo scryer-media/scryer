@@ -335,7 +335,8 @@ async fn graphql_query_subject_interactive_search_starts_and_polls() {
     // No indexers are configured in the shared TestContext, so the job settles
     // almost immediately.
     let mut state = payload["state"].as_str().unwrap_or_default().to_string();
-    for _ in 0..50 {
+    let deadline = tokio::time::Instant::now() + crate::common::WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         let poll = gql(
             &ctx,
             r#"query($id: ID!) {

@@ -993,12 +993,21 @@ mod tests {
         assert!(reconcile_fixture(&app, &video, "media-5").await);
         let first_cache = repo.probe_cache_for_media_file("media-5").await;
 
-        std::thread::sleep(Duration::from_secs(1));
+        // Edit the sidecar and move its mtime forward explicitly, rather than
+        // sleeping so the filesystem clock ticks past the first write.
+        let first_modified = std::fs::metadata(&subtitle)
+            .and_then(|metadata| metadata.modified())
+            .expect("subtitle mtime");
         fs::write(
             &subtitle,
             "1\n00:00:01,000 --> 00:00:02,000\n今夜ここに残ってくれて本当にありがとう。まだやるべきことがたくさんあるので、最後まで一緒に確認しましょう。\n\n2\n00:00:03,000 --> 00:00:04,000\n誰も代わりに解決できないから、私たちが落ち着いて話し合いながら最後までやり切るしかありません。\n\n3\n00:00:05,000 --> 00:00:06,000\nこの計画は複雑ではありません。必要なのは、状況をよく見て丁寧に進めることだけです。\n",
         )
         .expect("subtitle");
+        std::fs::File::options()
+            .write(true)
+            .open(&subtitle)
+            .and_then(|file| file.set_modified(first_modified + Duration::from_secs(2)))
+            .expect("advance subtitle mtime");
 
         assert!(reconcile_fixture(&app, &video, "media-5").await);
 

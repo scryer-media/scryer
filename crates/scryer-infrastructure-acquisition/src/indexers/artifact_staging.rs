@@ -760,7 +760,7 @@ mod tests {
             )
             .await
         });
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             while !contains_partial(tempdir.path()) {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }
@@ -769,7 +769,7 @@ mod tests {
         .expect("writer creates partial artifact");
         task.abort();
         assert!(task.await.is_err());
-        tokio::time::timeout(Duration::from_secs(2), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             while contains_partial(tempdir.path()) {
                 tokio::time::sleep(Duration::from_millis(5)).await;
             }

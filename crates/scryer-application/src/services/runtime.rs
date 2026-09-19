@@ -67,6 +67,10 @@ pub struct AppRuntimeCatalogState {
     pub title_image_maintenance_lock: Arc<tokio::sync::RwLock<()>>,
     pub title_image_cache_clear_scheduled: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) media_request_enrichment: MediaRequestEnrichmentCache,
+    /// Test seam: times the hydration worker yielded to a scan-owned facet,
+    /// mirroring `scryer_title_metadata_hydration_scan_owned_yields_total`.
+    #[cfg(test)]
+    pub(crate) title_hydration_scan_yields: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 /// How long one media-request enrichment stays reusable. Long enough that a requester who
@@ -554,6 +558,14 @@ impl DownloadQueueSnapshotCache {
         });
     }
 
+    /// Test seam: commits whatever is staged right now instead of waiting out
+    /// the coalesce window, so a test can read its own staged snapshot without
+    /// racing the spawned commit timer.
+    #[cfg(test)]
+    pub(crate) async fn commit_pending_for_test(&self) {
+        self.commit_pending().await;
+    }
+
     async fn commit_pending(&self) {
         let Some(pending) = self.pending.lock().await.take() else {
             return;
@@ -761,7 +773,9 @@ mod download_queue_snapshot_cache_tests {
         }
     }
 
-    #[tokio::test]
+    // Paused clock: the burst is staged without the runtime ever idling, so
+    // virtual time cannot reach the coalesce window until the burst is done.
+    #[tokio::test(start_paused = true)]
     async fn one_thousand_item_burst_commits_one_revision_and_deduplicates() {
         let cache = DownloadQueueSnapshotCache::default();
         for index in 0..1_000 {
@@ -1565,7 +1579,16 @@ mod import_execution_coordinator_tests {
         ImportExecutionCoordinator, MAX_CONCURRENT_IMPORT_FINALIZATIONS,
         MAX_CONCURRENT_IMPORT_PREPARATIONS,
     };
-    use std::time::Duration;
+    use crate::test_wait::within_deadline;
+
+    /// Polls a pinned acquisition once. The acquisitions are wrapped in
+    /// `unconstrained`, so `Pending` can only mean the waiter is parked on the
+    /// permit the test holds, never on an exhausted cooperative budget.
+    macro_rules! assert_parked {
+        ($future:expr, $message:expr) => {
+            assert!(futures_util::poll!($future.as_mut()).is_pending(), $message)
+        };
+    }
 
     #[tokio::test]
     async fn serializes_only_matching_import_destinations() {
@@ -1573,30 +1596,24 @@ mod import_execution_coordinator_tests {
         let first = coordinator
             .acquire_destination(std::path::Path::new("library/movie.mkv"))
             .await;
-        let waiting = tokio::spawn({
-            let coordinator = coordinator.clone();
-            async move {
-                let _second = coordinator
-                    .acquire_destination(std::path::Path::new("library/movie.mkv"))
-                    .await;
-            }
-        });
+        let mut waiting = std::pin::pin!(tokio::task::unconstrained(
+            coordinator.acquire_destination(std::path::Path::new("library/movie.mkv"))
+        ));
 
-        tokio::task::yield_now().await;
-        assert!(!waiting.is_finished());
-        let other = tokio::time::timeout(
-            Duration::from_secs(1),
+        assert_parked!(waiting, "a matching destination must wait");
+        let other = within_deadline(
+            "a different destination to acquire without waiting",
             coordinator.acquire_destination(std::path::Path::new("library/other.mkv")),
         )
-        .await
-        .expect("different destination should not wait");
+        .await;
         drop(other);
 
         drop(first);
-        tokio::time::timeout(Duration::from_secs(1), waiting)
-            .await
-            .expect("matching destination should acquire after finalization")
-            .expect("waiting import task should complete");
+        within_deadline(
+            "the matching destination to acquire after finalization",
+            waiting,
+        )
+        .await;
     }
 
     #[cfg(windows)]
@@ -1606,22 +1623,17 @@ mod import_execution_coordinator_tests {
         let first = coordinator
             .acquire_destination(std::path::Path::new(r"C:\Media\Show\Episode.mkv"))
             .await;
-        let waiting = tokio::spawn({
-            let coordinator = coordinator.clone();
-            async move {
-                let _second = coordinator
-                    .acquire_destination(std::path::Path::new("c:/media/show/episode.mkv"))
-                    .await;
-            }
-        });
+        let mut waiting = std::pin::pin!(tokio::task::unconstrained(
+            coordinator.acquire_destination(std::path::Path::new("c:/media/show/episode.mkv"))
+        ));
 
-        tokio::task::yield_now().await;
-        assert!(!waiting.is_finished());
+        assert_parked!(waiting, "a path variant must share the destination permit");
         drop(first);
-        tokio::time::timeout(Duration::from_secs(1), waiting)
-            .await
-            .expect("Windows path variants should share one destination permit")
-            .expect("waiting import task should complete");
+        within_deadline(
+            "the Windows path variant to acquire the shared destination permit",
+            waiting,
+        )
+        .await;
     }
 
     #[tokio::test]
@@ -1636,28 +1648,33 @@ mod import_execution_coordinator_tests {
             finalizations.push(coordinator.acquire_finalization().await);
         }
 
-        let waiting_preparation = tokio::spawn({
-            let coordinator = coordinator.clone();
-            async move { coordinator.acquire_preparation().await }
-        });
-        let waiting_finalization = tokio::spawn({
-            let coordinator = coordinator.clone();
-            async move { coordinator.acquire_finalization().await }
-        });
-        tokio::task::yield_now().await;
-        assert!(!waiting_preparation.is_finished());
-        assert!(!waiting_finalization.is_finished());
+        let mut waiting_preparation = std::pin::pin!(tokio::task::unconstrained(
+            coordinator.acquire_preparation()
+        ));
+        let mut waiting_finalization = std::pin::pin!(tokio::task::unconstrained(
+            coordinator.acquire_finalization()
+        ));
+        assert_parked!(
+            waiting_preparation,
+            "a ninth preparation must wait for a permit"
+        );
+        assert_parked!(
+            waiting_finalization,
+            "a ninth finalization must wait for a permit"
+        );
 
         drop(preparations.pop());
         drop(finalizations.pop());
-        let preparation = tokio::time::timeout(Duration::from_secs(1), waiting_preparation)
-            .await
-            .expect("preparation waiter should start after one preparation finishes")
-            .expect("preparation waiter should not panic");
-        let finalization = tokio::time::timeout(Duration::from_secs(1), waiting_finalization)
-            .await
-            .expect("finalization waiter should start after one finalization finishes")
-            .expect("finalization waiter should not panic");
+        let preparation = within_deadline(
+            "the preparation waiter to start after one preparation finishes",
+            waiting_preparation,
+        )
+        .await;
+        let finalization = within_deadline(
+            "the finalization waiter to start after one finalization finishes",
+            waiting_finalization,
+        )
+        .await;
         drop(preparation);
         drop(finalization);
     }
@@ -1666,21 +1683,18 @@ mod import_execution_coordinator_tests {
     async fn permits_only_one_archive_extraction_at_a_time() {
         let coordinator = ImportExecutionCoordinator::default();
         let first = coordinator.acquire_archive_extraction().await;
-        let waiting = tokio::spawn({
-            let coordinator = coordinator.clone();
-            async move {
-                let _second = coordinator.acquire_archive_extraction().await;
-            }
-        });
+        let mut waiting = std::pin::pin!(tokio::task::unconstrained(
+            coordinator.acquire_archive_extraction()
+        ));
 
-        tokio::task::yield_now().await;
-        assert!(!waiting.is_finished());
+        assert_parked!(waiting, "a second extraction must wait");
 
         drop(first);
-        tokio::time::timeout(Duration::from_secs(1), waiting)
-            .await
-            .expect("second extraction should acquire after the first completes")
-            .expect("waiting extraction task should complete");
+        within_deadline(
+            "the second extraction to acquire after the first completes",
+            waiting,
+        )
+        .await;
     }
 }
 
@@ -2373,6 +2387,8 @@ impl AppRuntimeState {
                     false,
                 )),
                 media_request_enrichment: MediaRequestEnrichmentCache::default(),
+                #[cfg(test)]
+                title_hydration_scan_yields: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             },
             acquisition: AppRuntimeAcquisitionState {
                 acquisition_wake: Arc::new(tokio::sync::Notify::new()),

@@ -14,6 +14,7 @@ use crate::settings::keys::{
     DISCOVERY_PERSONALIZED_ENABLED_KEY, DISCOVERY_REGION_KEY, METADATA_LANGUAGE_KEY,
     SETTINGS_SCOPE_SYSTEM,
 };
+use crate::test_wait::{TEST_WAIT_DEADLINE, wait_until};
 use crate::{
     AppError, AppResult, BulkMetadataResult, CatalogDiscoveryGroupKind, CatalogDiscoveryQuery,
     CatalogDiscoverySurface, DiscoveryContextChangeType, DiscoveryContextChangesInput,
@@ -2406,8 +2407,10 @@ async fn title_more_like_this_queues_empty_cache_refresh_off_the_read_path() {
     source_title.library_id = movie_library_id.clone();
     titles.store.lock().await.push(source_title);
 
+    // The gateway call parks until `recommendation_gate` is released below, so
+    // the read completing at all proves it did not await the refresh.
     let items = tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+        TEST_WAIT_DEADLINE,
         app.title_more_like_this(&viewer, "source-title", 12),
     )
     .await
@@ -2416,7 +2419,7 @@ async fn title_more_like_this_queues_empty_cache_refresh_off_the_read_path() {
 
     assert!(items.is_empty());
     tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+        TEST_WAIT_DEADLINE,
         gateway.title_recommendation_started.notified(),
     )
     .await
@@ -2430,22 +2433,18 @@ async fn title_more_like_this_queues_empty_cache_refresh_off_the_read_path() {
     assert!(inputs[0].include_unresolved);
 
     recommendation_gate.notify_one();
-    tokio::time::timeout(std::time::Duration::from_secs(1), async {
-        loop {
-            if discovery
+    wait_until(
+        "the queued recommendation refresh to populate the cache",
+        || async {
+            discovery
                 .title_more_like_this_items
                 .lock()
                 .await
                 .get("source-title")
                 .is_some_and(|items| !items.is_empty())
-            {
-                break;
-            }
-            tokio::task::yield_now().await;
-        }
-    })
-    .await
-    .expect("queued recommendation refresh should populate the cache");
+        },
+    )
+    .await;
 
     let items = app
         .title_more_like_this(&viewer, "source-title", 12)
@@ -2850,14 +2849,20 @@ async fn metadata_language_change_refreshes_public_discovery_feed() {
         .await
         .expect("language change should be accepted");
 
-    for _ in 0..50 {
-        if !gateway.public_feed_inputs.lock().await.is_empty()
-            && !gateway.submitted_inputs.lock().await.is_empty()
-        {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    wait_until(
+        "the language change to refresh the snapshot and the public feed",
+        || async {
+            !gateway.public_feed_inputs.lock().await.is_empty()
+                && !gateway.submitted_inputs.lock().await.is_empty()
+                && discovery
+                    .runs
+                    .lock()
+                    .await
+                    .iter()
+                    .any(|run| run.kind == "public_feed")
+        },
+    )
+    .await;
 
     let submitted_inputs = gateway.submitted_inputs.lock().await;
     assert_eq!(submitted_inputs.len(), 1);
@@ -6934,10 +6939,7 @@ fn test_title(id: &str, name: &str, facet: MediaFacet, external_ids: Vec<(&str, 
         canonical_tags: vec![],
         external_ids: external_ids
             .into_iter()
-            .map(|(source, value)| ExternalId {
-                source: source.to_string(),
-                value: value.to_string(),
-            })
+            .map(|(source, value)| ExternalId::new(source.to_string(), value.to_string()))
             .collect(),
         root_folder_id: "root".to_string(),
         created_by: None,

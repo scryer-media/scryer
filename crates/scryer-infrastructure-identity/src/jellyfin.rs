@@ -298,10 +298,9 @@ fn provider_ids(value: Option<&Value>) -> Vec<ExternalId> {
     values
         .iter()
         .filter_map(|(source, value)| {
-            value.as_str().map(|value| ExternalId {
-                source: source.clone(),
-                value: value.to_string(),
-            })
+            value
+                .as_str()
+                .map(|value| ExternalId::new(source.clone(), value.to_string()))
         })
         .collect()
 }

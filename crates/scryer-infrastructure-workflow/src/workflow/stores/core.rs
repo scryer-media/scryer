@@ -29,6 +29,15 @@ use crate::types::WorkflowOperationRecord;
 use super::download_submission_store::{BindingClaim, claim_or_create_binding_download_id_tx};
 
 pub const DOMAIN_EVENT_COLUMNS: &str = "sequence, event_id, occurred_at, actor_kind, actor_user_id, actor_display_name, title_id, facet, correlation_id, causation_id, schema_version, stream_kind, stream_id, event_type, payload_json, import_status, media_file_delete_reason, download_id";
+/// The insert half of an append. Both append paths bolt `RETURNING
+/// {DOMAIN_EVENT_COLUMNS}` onto it so the stored row — above all the generated
+/// `sequence` — comes back from the insert instead of a follow-up `SELECT`.
+const APPEND_DOMAIN_EVENT_INSERT_SQL: &str = "INSERT INTO domain_events (
+            event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
+            title_id, facet, correlation_id, causation_id, schema_version,
+            stream_kind, stream_id, event_type, payload_json, import_status,
+            media_file_delete_reason, download_id
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})";
 pub const DOWNLOAD_SUBMISSION_COLUMNS: &str = "id, title_id, facet, download_client_id, download_client_type, download_client_item_id, source_hint, source_provider_id, source_provider_name, source_kind, source_title, info_hash, release_size_bytes, request_signature, purpose, episode_id, collection_id, series_movie_link_id";
 pub const IMPORT_COLUMNS: &str = "id, source_client_id, source_system, source_ref, import_type, status, payload_json, result_json, download_id, import_transfer_phase, import_transfer_bytes, import_transfer_total_bytes, import_transfer_started_at, import_transfer_updated_at, started_at, finished_at, created_at, updated_at";
 pub const DOWNLOAD_QUEUE_COMMAND_COLUMNS: &str = "id, action, canonical_download_id, client_id, client_type, download_client_item_id, is_history, status, error_text, requested_by_user_id, started_at, finished_at, created_at, updated_at";
@@ -81,20 +90,17 @@ async fn append_domain_events_with_replay(
                     ))
                 })?;
                 let projections = derive_domain_event_projections(event_type, &payload);
-                SqlRuntime::execute(
+                let inserted = SqlRuntime::fetch_optional(
                     SqlExec::Tx(tx),
                     &[
-                        "INSERT INTO domain_events (
-                        event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
-                        title_id, facet, correlation_id, causation_id, schema_version,
-                        stream_kind, stream_id, event_type, payload_json, import_status,
-                        media_file_delete_reason, download_id
-                     ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                        APPEND_DOMAIN_EVENT_INSERT_SQL,
                         if allow_replay {
                             " ON CONFLICT(event_id) DO NOTHING"
                         } else {
                             ""
                         },
+                        " RETURNING ",
+                        DOMAIN_EVENT_COLUMNS,
                     ]
                     .concat(),
                     &[
@@ -120,11 +126,16 @@ async fn append_domain_events_with_replay(
                     ],
                 )
                 .await?;
-                let stored = fetch_domain_event_by_event_id(SqlExec::Tx(tx), &event.event_id)
-                    .await?
-                    .ok_or_else(|| {
-                        AppError::Repository("failed to reload inserted domain event".into())
-                    })?;
+                // `ON CONFLICT DO NOTHING` returns no row for an event that is
+                // already stored, so the replay path still reads that one back.
+                let stored = match inserted {
+                    Some(row) => domain_event_from_row(&row)?,
+                    None => fetch_domain_event_by_event_id(SqlExec::Tx(tx), &event.event_id)
+                        .await?
+                        .ok_or_else(|| {
+                            AppError::Repository("failed to reload inserted domain event".into())
+                        })?,
+                };
                 out.push(stored);
             }
             Ok(out)
@@ -146,14 +157,14 @@ pub async fn append_domain_event_tx(
         ))
     })?;
     let projections = derive_domain_event_projections(event_type, &payload);
-    SqlRuntime::execute(
+    let inserted = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
-        "INSERT INTO domain_events (
-            event_id, occurred_at, actor_kind, actor_user_id, actor_display_name,
-            title_id, facet, correlation_id, causation_id, schema_version,
-            stream_kind, stream_id, event_type, payload_json, import_status,
-            media_file_delete_reason, download_id
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+        &[
+            APPEND_DOMAIN_EVENT_INSERT_SQL,
+            " RETURNING ",
+            DOMAIN_EVENT_COLUMNS,
+        ]
+        .concat(),
         &[
             SqlArg::Text(event.event_id.clone()),
             SqlArg::Timestamp(event.occurred_at),
@@ -176,9 +187,9 @@ pub async fn append_domain_event_tx(
     )
     .await?;
 
-    fetch_domain_event_by_event_id(SqlExec::Tx(tx), &event.event_id)
-        .await?
-        .ok_or_else(|| AppError::Repository("failed to reload inserted domain event".into()))
+    let row = inserted
+        .ok_or_else(|| AppError::Repository("failed to reload inserted domain event".into()))?;
+    domain_event_from_row(&row)
 }
 
 pub async fn commit_successful_grab_tx(
@@ -964,6 +975,10 @@ pub fn build_domain_event_list_sql(filter: &DomainEventFilter) -> (String, Vec<S
     if let Some(facet) = filter.facet.as_ref() {
         where_clauses.push("facet = {}".to_string());
         args.push(SqlArg::Text(facet.as_str().to_string()));
+    }
+    if let Some(stream_id) = filter.stream_id.as_ref() {
+        where_clauses.push("stream_id = {}".to_string());
+        args.push(SqlArg::Text(stream_id.clone()));
     }
     if let Some(after_sequence) = filter.after_sequence {
         where_clauses.push("sequence > {}".to_string());

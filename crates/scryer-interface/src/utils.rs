@@ -170,10 +170,7 @@ pub(crate) fn map_add_input(
     let mut external_ids = external_ids
         .unwrap_or_default()
         .into_iter()
-        .map(|item| ExternalId {
-            source: item.source,
-            value: item.value,
-        })
+        .map(|item| ExternalId::new(item.source, item.value))
         .collect::<Vec<_>>();
     // Every facet retains every external id it was added with. Series and anime
     // titles hold their imdb/tmdb/smg ids alongside tvdb: those ids flow on into
@@ -195,10 +192,7 @@ pub(crate) fn map_add_input(
         if !external_ids.iter().any(|external_id| {
             external_id.source.eq_ignore_ascii_case(source) && external_id.value == value
         }) {
-            external_ids.push(ExternalId {
-                source: source.to_string(),
-                value,
-            });
+            external_ids.push(ExternalId::new(source.to_string(), value));
         }
     }
     Ok(NewTitle {

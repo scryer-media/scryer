@@ -1018,17 +1018,42 @@ async fn discover_connect_servers_with_timeout(
     password: &str,
     timeout: std::time::Duration,
 ) -> AppResult<Vec<EmbyConnectServer>> {
-    let deadline = tokio::time::Instant::now() + timeout;
-    let session = tokio::time::timeout_at(
-        deadline,
-        authenticate_connect(client, connect_base, username_or_email.trim(), password),
+    discover_connect_servers_until(
+        client,
+        connect_base,
+        username_or_email,
+        password,
+        tokio::time::sleep(timeout),
+        || {},
     )
     .await
-    .map_err(|_| AppError::Repository("Emby Connect discovery timed out".into()))??;
-    let secrets =
-        tokio::time::timeout_at(deadline, connect_servers(client, connect_base, &session))
-            .await
-            .map_err(|_| AppError::Repository("Emby Connect discovery timed out".into()))??;
+}
+
+/// Discovery bounded by `deadline`: authentication and the server list fail
+/// when it fires first, and address probes still in flight then report
+/// unreachable. Like `tokio::time::timeout`, each step is polled before the
+/// deadline. `on_probe_recorded` runs after each probe result lands, so a
+/// test can end discovery at a known point instead of racing a timer.
+async fn discover_connect_servers_until(
+    client: &Client,
+    connect_base: &Url,
+    username_or_email: &str,
+    password: &str,
+    deadline: impl std::future::Future<Output = ()>,
+    mut on_probe_recorded: impl FnMut(),
+) -> AppResult<Vec<EmbyConnectServer>> {
+    let timed_out = || AppError::Repository("Emby Connect discovery timed out".into());
+    tokio::pin!(deadline);
+    let session = tokio::select! {
+        biased;
+        session = authenticate_connect(client, connect_base, username_or_email.trim(), password) => session?,
+        () = &mut deadline => return Err(timed_out()),
+    };
+    let secrets = tokio::select! {
+        biased;
+        secrets = connect_servers(client, connect_base, &session) => secrets?,
+        () = &mut deadline => return Err(timed_out()),
+    };
 
     let mut servers = secrets
         .iter()
@@ -1083,9 +1108,10 @@ async fn discover_connect_servers_with_timeout(
         .buffer_unordered(CONNECT_PROBE_CONCURRENCY);
 
     loop {
-        let next = match tokio::time::timeout_at(deadline, probes.next()).await {
-            Ok(next) => next,
-            Err(_) => break,
+        let next = tokio::select! {
+            biased;
+            next = probes.next() => next,
+            () = &mut deadline => break,
         };
         let Some((index, is_local, (api_base_url, status))) = next else {
             break;
@@ -1098,6 +1124,7 @@ async fn discover_connect_servers_with_timeout(
             server.remote_api_base_url = api_base_url;
             server.remote_status = status;
         }
+        on_probe_recorded();
     }
 
     for server in &mut servers {
@@ -1727,10 +1754,9 @@ fn provider_ids(value: Option<&Value>) -> Vec<ExternalId> {
     values
         .iter()
         .filter_map(|(source, value)| {
-            value.as_str().map(|value| ExternalId {
-                source: source.clone(),
-                value: value.to_string(),
-            })
+            value
+                .as_str()
+                .map(|value| ExternalId::new(source.clone(), value.to_string()))
         })
         .collect()
 }
@@ -1741,8 +1767,58 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use wiremock::matchers::{header, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// An Emby public-info endpoint that holds every request until all
+    /// `barrier` parties have one in flight, then answers as `server_id`.
+    /// wiremock can only delay a response for a fixed time, so it cannot
+    /// prove requests overlap.
+    async fn spawn_gated_public_info_server(
+        server_id: &'static str,
+        barrier: Arc<tokio::sync::Barrier>,
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind gated Emby server");
+        let uri = format!(
+            "http://{}",
+            listener.local_addr().expect("gated server address")
+        );
+        tokio::spawn(async move {
+            loop {
+                let Ok((mut stream, _)) = listener.accept().await else {
+                    return;
+                };
+                let barrier = barrier.clone();
+                tokio::spawn(async move {
+                    let mut request = Vec::new();
+                    let mut chunk = [0_u8; 1024];
+                    while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        match stream.read(&mut chunk).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(read) => request.extend_from_slice(&chunk[..read]),
+                        }
+                    }
+                    barrier.wait().await;
+                    let body = serde_json::json!({
+                        "Id": server_id,
+                        "ServerName": "Test Emby",
+                        "Version": "4.9.5.0"
+                    })
+                    .to_string();
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes()).await;
+                    let _ = stream.shutdown().await;
+                });
+            }
+        });
+        uri
+    }
 
     fn test_client() -> Client {
         scryer_outbound_http::install_default_rustls_provider();
@@ -2625,24 +2701,11 @@ mod tests {
     #[tokio::test]
     async fn connect_discovery_probes_all_addresses_concurrently() {
         let connect = MockServer::start().await;
-        let first = MockServer::start().await;
-        let second = MockServer::start().await;
-        for (server, server_id) in [(&first, "server-a"), (&second, "server-b")] {
-            Mock::given(method("GET"))
-                .and(path("/System/Info/Public"))
-                .respond_with(
-                    ResponseTemplate::new(200)
-                        .set_delay(std::time::Duration::from_millis(200))
-                        .set_body_json(serde_json::json!({
-                            "Id": server_id,
-                            "ServerName": "Test Emby",
-                            "Version": "4.9.5.0"
-                        })),
-                )
-                .expect(2)
-                .mount(server)
-                .await;
-        }
+        // Both servers hold their answers until all four probes (local and
+        // remote for each) are in flight, so sequential probing never finishes.
+        let all_probes = Arc::new(tokio::sync::Barrier::new(4));
+        let first = spawn_gated_public_info_server("server-a", all_probes.clone()).await;
+        let second = spawn_gated_public_info_server("server-b", all_probes).await;
         Mock::given(method("POST"))
             .and(path("/user/authenticate"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -2654,50 +2717,44 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/servers"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
-                {"SystemId": "server-a", "AccessKey": "key-a", "Name": "Alpha", "LocalAddress": first.uri(), "Url": first.uri()},
-                {"SystemId": "server-b", "AccessKey": "key-b", "Name": "Beta", "LocalAddress": second.uri(), "Url": second.uri()}
+                {"SystemId": "server-a", "AccessKey": "key-a", "Name": "Alpha", "LocalAddress": first, "Url": first},
+                {"SystemId": "server-b", "AccessKey": "key-b", "Name": "Beta", "LocalAddress": second, "Url": second}
             ])))
             .mount(&connect)
             .await;
 
-        let servers = discover_connect_servers_with_timeout(
-            &test_client(),
-            &normalized_candidate(&connect.uri()).expect("Connect base"),
-            "alice",
-            "password",
-            std::time::Duration::from_millis(600),
+        let servers = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            discover_connect_servers_until(
+                &test_client(),
+                &normalized_candidate(&connect.uri()).expect("Connect base"),
+                "alice",
+                "password",
+                std::future::pending(),
+                || {},
+            ),
         )
         .await
-        .expect("all concurrent probes should finish inside the aggregate deadline");
+        .expect("all four probes should be in flight at once")
+        .expect("discovery should succeed");
 
         assert_eq!(servers.len(), 2);
         assert!(servers.iter().all(|server| {
             server.local_status == EmbyConnectAddressStatus::Reachable
                 && server.remote_status == EmbyConnectAddressStatus::Reachable
         }));
-        first.verify().await;
-        second.verify().await;
     }
 
     #[tokio::test]
     async fn connect_discovery_preserves_completed_probes_at_deadline() {
         let connect = MockServer::start().await;
         let fast = MockServer::start().await;
-        let slow = MockServer::start().await;
         mount_public_info(&fast, "server-fast").await;
-        Mock::given(method("GET"))
-            .and(path("/System/Info/Public"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_delay(std::time::Duration::from_secs(2))
-                    .set_body_json(serde_json::json!({
-                        "Id": "server-slow",
-                        "ServerName": "Slow Emby",
-                        "Version": "4.9.5.0"
-                    })),
-            )
-            .mount(&slow)
-            .await;
+        // The barrier's second party never arrives, so the slow server never
+        // answers and its probe is still in flight when the deadline fires.
+        let slow =
+            spawn_gated_public_info_server("server-slow", Arc::new(tokio::sync::Barrier::new(2)))
+                .await;
         Mock::given(method("POST"))
             .and(path("/user/authenticate"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -2710,19 +2767,33 @@ mod tests {
             .and(path("/servers"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {"SystemId": "server-fast", "AccessKey": "key-fast", "Name": "Fast", "LocalAddress": fast.uri()},
-                {"SystemId": "server-slow", "AccessKey": "key-slow", "Name": "Slow", "LocalAddress": slow.uri()}
+                {"SystemId": "server-slow", "AccessKey": "key-slow", "Name": "Slow", "LocalAddress": slow}
             ])))
             .mount(&connect)
             .await;
 
-        let servers = discover_connect_servers_with_timeout(
-            &test_client(),
-            &normalized_candidate(&connect.uri()).expect("Connect base"),
-            "alice",
-            "password",
-            std::time::Duration::from_millis(250),
+        // Fire the deadline once every probe but the slow local one has
+        // landed: the fast local probe and both missing remote addresses.
+        let (recorded_tx, mut recorded_rx) = tokio::sync::watch::channel(0_usize);
+        let deadline = async move {
+            recorded_rx
+                .wait_for(|recorded| *recorded >= 3)
+                .await
+                .expect("discovery keeps the probe counter alive");
+        };
+        let servers = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            discover_connect_servers_until(
+                &test_client(),
+                &normalized_candidate(&connect.uri()).expect("Connect base"),
+                "alice",
+                "password",
+                deadline,
+                move || recorded_tx.send_modify(|recorded| *recorded += 1),
+            ),
         )
         .await
+        .expect("discovery should stop at the deadline")
         .expect("probe deadline should return partial discovery results");
 
         assert_eq!(servers.len(), 2);

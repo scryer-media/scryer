@@ -161,6 +161,7 @@ test("facet counts are computed over the whole result set", () => {
 });
 
 test("facets OR within a group and AND across groups", () => {
+  const now = Date.parse("2026-09-02T00:00:00Z");
   const releases = [
     release({
       title: "usenet-1080p",
@@ -183,7 +184,7 @@ test("facets OR within a group and AND across groups", () => {
       ...EMPTY_INDEXER_SEARCH_FILTERS,
       facets: ["resolution:1080p", "resolution:2160p"],
     },
-    Date.now(),
+    now,
   );
   assert.equal(bothResolutions.length, 3);
 
@@ -193,7 +194,7 @@ test("facets OR within a group and AND across groups", () => {
       ...EMPTY_INDEXER_SEARCH_FILTERS,
       facets: ["resolution:1080p", "protocol:usenet"],
     },
-    Date.now(),
+    now,
   );
   assert.deepEqual(
     usenet1080.map((entry) => entry.title),

@@ -2237,10 +2237,7 @@ fn test_title(id: &str, name: &str, facet: MediaFacet, external_ids: Vec<(&str, 
         canonical_tags: vec![],
         external_ids: external_ids
             .into_iter()
-            .map(|(source, value)| ExternalId {
-                source: source.to_string(),
-                value: value.to_string(),
-            })
+            .map(|(source, value)| ExternalId::new(source.to_string(), value.to_string()))
             .collect(),
         root_folder_id: "root".to_string(),
         created_by: None,

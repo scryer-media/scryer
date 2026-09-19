@@ -77,10 +77,7 @@ fn test_movie_title_with_aliases_and_ids(
     title.aliases = aliases.into_iter().map(str::to_string).collect();
     title.external_ids = external_ids
         .into_iter()
-        .map(|(source, value)| ExternalId {
-            source: source.to_string(),
-            value: value.to_string(),
-        })
+        .map(|(source, value)| ExternalId::new(source.to_string(), value.to_string()))
         .collect();
     title
 }

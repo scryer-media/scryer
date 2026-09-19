@@ -1407,7 +1407,9 @@ mod tests {
 
     #[test]
     fn failed_login_bucket_blocks_after_five_failures() {
-        let limiter = ScryerRateLimiter::from_env();
+        // The test bucket's hour-long window means no cell can replenish
+        // between calls, however slowly they run.
+        let limiter = ScryerRateLimiter::for_authentication_test(5, 1_000, 1_000, 1_000);
         let key = RateLimitKey::new(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10)), None);
 
         for _ in 0..5 {

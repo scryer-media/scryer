@@ -475,10 +475,7 @@ async fn add_search_title(
 }
 
 fn external_id(source: &str, value: &str) -> ExternalId {
-    ExternalId {
-        source: source.to_string(),
-        value: value.to_string(),
-    }
+    ExternalId::new(source, value)
 }
 
 async fn captured_urls(server: &MockServer) -> Vec<String> {

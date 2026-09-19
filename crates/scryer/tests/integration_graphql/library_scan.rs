@@ -804,7 +804,8 @@ async fn library_series_scan_hydrates_without_creating_wanted_for_unmonitored_ti
         .expect("scan library");
 
     let mut hydrated_title = None;
-    for _ in 0..20 {
+    let deadline = tokio::time::Instant::now() + crate::common::WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         let titles = ctx
             .titles
             .list(Some(MediaFacet::Series), None)
@@ -961,7 +962,8 @@ async fn library_anime_scan_hydrates_and_relinks_files_from_discovered_folder_pa
 
     let mut hydrated_title = None;
     let mut linked_files = Vec::new();
-    for _ in 0..100 {
+    let deadline = tokio::time::Instant::now() + crate::common::WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         let titles = ctx
             .titles
             .list(Some(MediaFacet::Anime), None)
@@ -1185,7 +1187,8 @@ async fn library_anime_scan_prefers_tvshow_nfo_identity_for_nightfall_fixture() 
     assert_eq!(summary.unmatched, 0);
 
     let mut hydrated_title = None;
-    for _ in 0..100 {
+    let deadline = tokio::time::Instant::now() + crate::common::WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         let titles = ctx
             .titles
             .list(Some(MediaFacet::Anime), None)
@@ -1234,10 +1237,7 @@ async fn library_anime_scan_relinks_existing_hydrated_titles_from_discovered_fol
         &ctx,
         "Existing Anime",
         MediaFacet::Anime,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "567890".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "567890".to_string())],
         vec![],
         false,
     )
@@ -1307,7 +1307,8 @@ async fn library_anime_scan_relinks_existing_hydrated_titles_from_discovered_fol
     assert_eq!(summary.skipped, 0);
 
     let mut linked_files = Vec::new();
-    for _ in 0..100 {
+    let deadline = tokio::time::Instant::now() + crate::common::WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         linked_files = ctx
             .media_files
             .list_media_files_for_title(&title.id)
@@ -1360,10 +1361,7 @@ async fn library_series_scan_relinks_existing_hydrated_titles_from_discovered_fo
         &ctx,
         "Existing Series",
         MediaFacet::Series,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "345678".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "345678".to_string())],
         vec![],
         false,
     )
@@ -1433,7 +1431,8 @@ async fn library_series_scan_relinks_existing_hydrated_titles_from_discovered_fo
     assert_eq!(summary.skipped, 0);
 
     let mut linked_files = Vec::new();
-    for _ in 0..100 {
+    let deadline = tokio::time::Instant::now() + crate::common::WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         linked_files = ctx
             .media_files
             .list_media_files_for_title(&title.id)
@@ -1492,10 +1491,7 @@ async fn library_series_scan_existing_unhydrated_title_without_episodes_complete
             monitored: false,
             tags: vec![],
             canonical_tags: vec![],
-            external_ids: vec![ExternalId {
-                source: "tvdb".to_string(),
-                value: "345679".to_string(),
-            }],
+            external_ids: vec![ExternalId::new("tvdb".to_string(), "345679".to_string())],
             root_folder_id: scryer_domain::root_folder_id_for_path("/data/series"),
             created_by: None,
             created_at: Utc::now(),
@@ -1731,10 +1727,7 @@ async fn library_movie_scan_records_owned_folder_conflict_without_rehoming_title
         &ctx,
         "Existing Movie",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "123456".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "123456".to_string())],
         vec![],
         false,
     )
@@ -1873,10 +1866,7 @@ async fn library_movie_scan_matches_existing_title_from_movie_nfo_when_folder_mi
         &ctx,
         "Existing Movie",
         MediaFacet::Movie,
-        vec![ExternalId {
-            source: "tvdb".to_string(),
-            value: "123456".to_string(),
-        }],
+        vec![ExternalId::new("tvdb".to_string(), "123456".to_string())],
         vec![],
         false,
     )
@@ -2022,7 +2012,8 @@ async fn library_movie_scan_creates_unmonitored_title_and_collection() {
     assert_eq!(summary.unmatched, 0);
 
     let mut hydrated_title = None;
-    for _ in 0..20 {
+    let deadline = tokio::time::Instant::now() + crate::common::WAIT_UNTIL_TIMEOUT;
+    while tokio::time::Instant::now() < deadline {
         let titles = ctx
             .titles
             .list(Some(MediaFacet::Movie), None)

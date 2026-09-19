@@ -452,13 +452,10 @@ async fn cancellation_preserves_completed_progress_and_retries_the_remaining_fil
             })
             .await
     });
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while hashed_ids(&media_files).await.is_empty() {
-            tokio::task::yield_now().await;
-        }
+    wait_until("the first file hash to be persisted", || async {
+        !hashed_ids(&media_files).await.is_empty()
     })
-    .await
-    .unwrap();
+    .await;
     assert!(
         app.run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
             .await
@@ -468,16 +465,14 @@ async fn cancellation_preserves_completed_progress_and_retries_the_remaining_fil
     );
     // Other scheduler work can run while the hash job is deliberately parked.
     app.runtime.acquisition.acquisition_wake.notify_one();
-    tokio::time::timeout(
-        Duration::from_secs(1),
+    within_deadline(
+        "the acquisition wake while the hash job is parked",
         app.runtime.acquisition.acquisition_wake.notified(),
     )
-    .await
-    .unwrap();
+    .await;
     app.runtime.jobs.full_hash_shutdown.cancel();
-    let summary = tokio::time::timeout(Duration::from_secs(5), task)
+    let summary = within_deadline("the cancelled hash run to drain", task)
         .await
-        .unwrap()
         .unwrap()
         .unwrap();
     assert!(summary.cancelled);
@@ -514,13 +509,10 @@ async fn dropping_a_hash_run_releases_its_guard_and_keeps_completed_hashes() {
             })
             .await
     });
-    tokio::time::timeout(Duration::from_secs(5), async {
-        while hashed_ids(&media_files).await.is_empty() {
-            tokio::task::yield_now().await;
-        }
+    wait_until("the first file hash to be persisted", || async {
+        !hashed_ids(&media_files).await.is_empty()
     })
-    .await
-    .unwrap();
+    .await;
     task.abort();
     assert!(task.await.unwrap_err().is_cancelled());
     let resumed = app

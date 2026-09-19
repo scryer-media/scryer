@@ -1,11 +1,17 @@
 use super::*;
 use chrono::{DateTime, Local, NaiveDate, TimeZone, Timelike, Utc};
 use serde::Serialize;
+use std::collections::VecDeque;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 const SCHEDULE_POLL: Duration = Duration::from_secs(60);
+
+/// How many refresh candidates one selection query fetches. Sized well above the
+/// encode concurrency so the `titles` scan is amortised across many encode groups,
+/// and small enough that a run abandoned mid-batch discards little work.
+const ARTWORK_SELECTION_BATCH: usize = 128;
 
 pub(crate) fn artwork_window_open<T: TimeZone>(now: &DateTime<T>) -> bool {
     (3..9).contains(&now.hour())
@@ -146,6 +152,12 @@ impl AppUseCase {
         };
         let mut skipped = Vec::new();
         let mut jpeg_cursor: Option<(String, String)> = None;
+        // Selection is decoupled from encode concurrency: the driving query scans
+        // `titles` in `created_at` order, so asking it for one worker-sized batch per
+        // group re-ran that scan thousands of times over a large catalog. One larger
+        // fetch feeds many groups from memory; each group still re-checks the window,
+        // the scan tracker and the maintenance lock before it spawns.
+        let mut pending: VecDeque<TitleImageSyncTask> = VecDeque::new();
         loop {
             if token.is_cancelled() {
                 summary.reason = "Stopped for shutdown; remaining artwork is pending".into();
@@ -181,12 +193,18 @@ impl AppUseCase {
             if token.is_cancelled() || (!manual && !artwork_window_open(&now())) {
                 continue;
             }
-            let batch = self
-                .services
-                .library
-                .title_images
-                .list_title_image_refresh_work(workers, &skipped)
-                .await?;
+            if pending.is_empty() {
+                pending.extend(
+                    self.services
+                        .library
+                        .title_images
+                        .list_title_image_refresh_work(ARTWORK_SELECTION_BATCH, &skipped)
+                        .await?,
+                );
+            }
+            let batch = pending
+                .drain(..workers.min(pending.len()))
+                .collect::<Vec<_>>();
             let jpegs = if batch.is_empty() {
                 self.services
                     .library

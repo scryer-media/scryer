@@ -363,22 +363,7 @@ impl ConsolidationFixture {
     }
 
     async fn settle(&self, operation_id: &str) -> LocationOperation {
-        timeout(Duration::from_secs(10), async {
-            loop {
-                let operation = self
-                    .app
-                    .location_operation(operation_id)
-                    .await
-                    .expect("read operation")
-                    .expect("operation row exists");
-                if operation.state.is_terminal() {
-                    return operation;
-                }
-                sleep(Duration::from_millis(5)).await;
-            }
-        })
-        .await
-        .expect("the operation reached a terminal state")
+        settle_location_operation(&self.app, operation_id).await
     }
 
     async fn roots(&self) -> Vec<scryer_domain::LibraryRoot> {
@@ -444,10 +429,7 @@ impl ConsolidationFixture {
 }
 
 fn external_id(source: &str, value: &str) -> ExternalId {
-    ExternalId {
-        source: source.to_string(),
-        value: value.to_string(),
-    }
+    ExternalId::new(source, value)
 }
 
 fn plan_items(

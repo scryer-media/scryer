@@ -195,11 +195,14 @@ mod tests {
         assert_eq!(probe_runs.load(Ordering::SeqCst), 1);
         assert_eq!(first, second);
 
-        let start = std::time::Instant::now();
         let cached =
             initialize_runtime_performance_snapshot(cell.as_ref(), config_dir, probe).await;
         assert_eq!(cached, first);
-        assert!(start.elapsed() < std::time::Duration::from_millis(20));
+        assert_eq!(
+            probe_runs.load(Ordering::SeqCst),
+            1,
+            "a cached snapshot must not run the probe again"
+        );
     }
 
     #[test]
@@ -496,19 +499,22 @@ mod tests {
         let guards = DownloadSubmissionGuardTable::default();
         let title_guard = guards.acquire_title("title-1").await;
 
-        let guards_clone = guards.clone();
-        let waiting_guard =
-            tokio::spawn(async move { guards_clone.acquire_title("title-1").await });
-
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-        assert!(!waiting_guard.is_finished());
+        // Unconstrained, so one poll can only park on the held title lock and
+        // never on an exhausted cooperative budget.
+        let mut waiting_guard =
+            std::pin::pin!(tokio::task::unconstrained(guards.acquire_title("title-1")));
+        assert!(
+            futures_util::poll!(waiting_guard.as_mut()).is_pending(),
+            "a second submission for the same title must wait for the first"
+        );
 
         drop(title_guard);
 
-        tokio::time::timeout(std::time::Duration::from_secs(1), waiting_guard)
-            .await
-            .expect("overlapping scope guard should acquire after release")
-            .expect("scope task should complete");
+        crate::test_wait::within_deadline(
+            "the overlapping scope guard to acquire after release",
+            waiting_guard,
+        )
+        .await;
     }
 
     #[tokio::test]
