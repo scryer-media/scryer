@@ -5215,6 +5215,20 @@ const en: LocaleDictionary = {
   "title.catalogFilters.selectThemes": "Select themes...",
   "title.catalogFilters.userTags": "Tags",
   "title.catalogFilters.selectUserTags": "Select tags...",
+  "title.catalogFilters.files": "Files",
+  "title.catalogFilters.incompleteFiles": "Missing or partial",
+  "title.catalogFilters.onDiskFiles": "Complete or needs attention",
+  "title.catalogFilters.presenceMissing": "Missing",
+  "title.catalogFilters.presenceMissingHint": "Nothing on disk at all.",
+  "title.catalogFilters.presencePartial": "Partial",
+  "title.catalogFilters.presencePartialHint":
+    "Some files on disk and some monitored episodes without one. Movies hold a single file, so they are never partial.",
+  "title.catalogFilters.presenceComplete": "Complete",
+  "title.catalogFilters.presenceCompleteHint":
+    "Everything monitored is on disk: every monitored episode has a file, or the movie's own file is present.",
+  "title.catalogFilters.needsAttention": "Needs attention",
+  "title.catalogFilters.needsAttentionHint":
+    "Holds a file whose scan failed or that needs review, so something has to be looked at before it is usable.",
 
   // Series-movie tags and the maintenance tag actions (WP4). The long-form
   // sentences carry the English string where no translation is available yet,

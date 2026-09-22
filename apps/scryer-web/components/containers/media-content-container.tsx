@@ -295,6 +295,8 @@ function titleCatalogFilterCountsFromPage(
   fallback: TitleQuickFilterCounts = emptyTitleCatalogState.filterCounts,
 ): TitleQuickFilterCounts {
   const counts = page.filterCounts;
+  const serverCount = (value: number | undefined, previous: number | undefined) =>
+    typeof value === "number" ? value : previous;
   return {
     all: typeof counts?.all === "number" ? counts.all : fallback.all,
     monitored:
@@ -310,6 +312,10 @@ function titleCatalogFilterCountsFromPage(
         ? counts.continuing
         : fallback.continuing,
     ended: typeof counts?.ended === "number" ? counts.ended : fallback.ended,
+    missing: serverCount(counts?.missing, fallback.missing),
+    partial: serverCount(counts?.partial, fallback.partial),
+    complete: serverCount(counts?.complete, fallback.complete),
+    needsAttention: serverCount(counts?.needsAttention, fallback.needsAttention),
   };
 }
 
@@ -824,7 +830,9 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
         updates.rootFolderIds !== undefined ||
         updates.genreTagKeys !== undefined ||
         updates.themeTagKeys !== undefined ||
-        updates.userTagLabels !== undefined
+        updates.userTagLabels !== undefined ||
+        updates.presences !== undefined ||
+        updates.needsAttention !== undefined
       ) {
         markCatalogTiming("filter-intent");
         reloadCatalogForAdvancedFiltersRef.current?.(nextFilters);

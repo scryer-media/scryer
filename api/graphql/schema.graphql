@@ -25718,6 +25718,22 @@ type TitleCatalogFilterCountsPayload {
 	Number of matching ended titles.
 	"""
 	ended: Int!
+	"""
+	Number of matching titles with nothing on disk.
+	"""
+	missing: Int!
+	"""
+	Number of matching titles with something on disk and a run unfinished.
+	"""
+	partial: Int!
+	"""
+	Number of matching titles with everything monitored on disk.
+	"""
+	complete: Int!
+	"""
+	Number of matching titles holding a file that needs a person.
+	"""
+	needsAttention: Int!
 }
 
 """
@@ -25760,6 +25776,14 @@ input TitleCatalogFilterInput {
 	Minimum combined rating on the catalog rating scale; null imposes no rating bound.
 	"""
 	minimumRating: Float
+	"""
+	Restrict results to these file-presence states, any-of; null or empty keeps every title.
+	"""
+	presences: [TitleCatalogPresenceValue!]
+	"""
+	Keep titles holding a file whose scan failed or that needs review when true, and titles holding none when false; null keeps both.
+	"""
+	needsAttention: Boolean
 }
 
 """
@@ -25808,6 +25832,24 @@ type TitleCatalogPayload {
 	Total managed media bytes represented by the matching catalog scope.
 	"""
 	managedBytes: Long!
+}
+
+"""
+How much of a title is on disk.
+"""
+enum TitleCatalogPresenceValue {
+	"""
+	Nothing usable is on disk.
+	"""
+	MISSING
+	"""
+	Something is on disk and the run is not finished.
+	"""
+	PARTIAL
+	"""
+	Everything monitored is on disk.
+	"""
+	COMPLETE
 }
 
 """

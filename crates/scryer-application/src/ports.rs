@@ -1936,6 +1936,13 @@ fn title_matches_catalog_filter(title: &Title, filter: &TitleCatalogFilter) -> b
         return false;
     }
 
+    // Presence and attention are read off `media_files`, which this surface does
+    // not carry at all. It cannot answer either one, and guessing would be worse
+    // than matching nothing: the production store applies both in SQL.
+    if !filter.presences.is_empty() || filter.needs_attention.is_some() {
+        return false;
+    }
+
     if let Some(monitored) = filter.monitored
         && title.monitored != monitored
     {
@@ -2019,6 +2026,13 @@ fn title_catalog_filter_counts(
             .iter()
             .filter(|title| title_matches_catalog_filter(title, &ended_filter))
             .count(),
+        // The fallback surface has no media files, so it cannot count any of these
+        // and reports zero rather than a number it made up. The production store
+        // computes them in SQL.
+        missing: 0,
+        partial: 0,
+        complete: 0,
+        needs_attention: 0,
     }
 }
 

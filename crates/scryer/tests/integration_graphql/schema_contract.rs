@@ -868,13 +868,17 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // MANAGE_SUBTITLES is a value on the existing `LibraryPermissionValue`.
     // Which import actions a download offers is now the server's answer rather
     // than something each surface re-derives, so `DownloadQueueItemPayload`
-    // carries a `DownloadImportActionsPayload`: OBJECT 460->461, public types
-    // 852->853. It is an additive field on a type that already existed, so no
-    // other count moves.
-    assert_eq!(public_types.len(), 853);
+    // carries a `DownloadImportActionsPayload`: OBJECT 460->461.
+    // The catalogue's file and attention filters add two fields to the existing
+    // `TitleCatalogFilterInput`, four counts to the existing
+    // `TitleCatalogFilterCountsPayload`, and the `TitleCatalogPresenceValue` enum
+    // the first of them needs: ENUM 159->160.
+    // The two changes land together, so the merged counts are OBJECT 461,
+    // ENUM 160, and public types 854.
+    assert_eq!(public_types.len(), 854);
     assert_eq!(kind_count("OBJECT"), 461);
     assert_eq!(kind_count("INPUT_OBJECT"), 221);
-    assert_eq!(kind_count("ENUM"), 159);
+    assert_eq!(kind_count("ENUM"), 160);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
