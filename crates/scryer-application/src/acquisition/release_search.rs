@@ -2162,9 +2162,39 @@ impl AppUseCase {
         &self,
         title: &Title,
         subject: &ResolvedReleaseSearchSubject,
-        mut results: Vec<IndexerSearchResult>,
+        results: Vec<IndexerSearchResult>,
         user_invoked: bool,
     ) -> AppResult<Vec<IndexerSearchResult>> {
+        let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+        self.evaluate_search_results_for_subject_with_reads(
+            title,
+            subject,
+            results,
+            user_invoked,
+            &reads,
+        )
+        .await
+    }
+
+    /// [`Self::evaluate_search_results_for_subject`] reading the title's
+    /// catalog and media files through the caller's per-operation memo. A title
+    /// walk evaluates every due scope of one title; each scope used to re-read
+    /// the whole episode list, the collections and the media files.
+    pub(crate) async fn evaluate_search_results_for_subject_with_reads(
+        &self,
+        title: &Title,
+        subject: &ResolvedReleaseSearchSubject,
+        mut results: Vec<IndexerSearchResult>,
+        user_invoked: bool,
+        reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    ) -> AppResult<Vec<IndexerSearchResult>> {
+        let fresh;
+        let reads = if reads.covers(&title.id) {
+            reads
+        } else {
+            fresh = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+            &fresh
+        };
         // The subject's evidence was built from the subject's own names. The
         // spelling lane also has to see what each *release* is named, or the
         // collision guard has no competitor to find and a rival spelling
@@ -2180,15 +2210,13 @@ impl AppUseCase {
             .await;
 
         let dl_snapshot = crate::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
-        let existing_files = self
-            .services
-            .library
-            .media_files
-            .list_media_files_for_title(&title.id)
+        let existing_files = reads
+            .media_files(self)
             .await
             .unwrap_or_default()
-            .into_iter()
+            .iter()
             .filter(|file| file.role.is_primary())
+            .cloned()
             .collect::<Vec<_>>();
         let delay_profiles = self.load_delay_profiles().await;
         let now = Utc::now();
@@ -2220,21 +2248,11 @@ impl AppUseCase {
         // One catalog read per scope, shared by the unmonitored-episode refusal
         // and by the queued pseudo-incumbents' runtime-basis calculation.
         let (catalog_episodes, catalog_collections) = if title.facet == MediaFacet::Movie {
-            (Vec::new(), Vec::new())
+            (Arc::default(), Arc::default())
         } else {
             (
-                self.services
-                    .catalog
-                    .shows
-                    .list_episodes_for_title(&title.id)
-                    .await
-                    .unwrap_or_default(),
-                self.services
-                    .catalog
-                    .shows
-                    .list_collections_for_title(&title.id)
-                    .await
-                    .unwrap_or_default(),
+                reads.episodes(self).await.unwrap_or_default(),
+                reads.collections(self).await.unwrap_or_default(),
             )
         };
         let unmonitored_episode_ids: HashSet<String> = catalog_episodes
@@ -2250,12 +2268,13 @@ impl AppUseCase {
             .resolve_canonical_scoring_context(title, &upgrade_context.profile)
             .await;
         let mut admission = self
-            .admission_subject_for_scope(
+            .admission_subject_for_scope_with_reads(
                 title,
                 &subject.submission_scope,
                 &scoring_context,
                 None,
                 crate::quality::canonical_context::SubjectIntent::Grab,
+                reads,
             )
             .await;
         // **What is already downloading counts too.** Sonarr's
@@ -2268,7 +2287,7 @@ impl AppUseCase {
         // lane; here it means the pseudo-incumbents would be built from a
         // snapshot that reports everything as active, so they are skipped.
         let membership = self
-            .scope_membership_for(title, &subject.submission_scope)
+            .scope_membership_for_with_reads(title, &subject.submission_scope, reads)
             .await;
         let mut queued = Vec::new();
         if !dl_snapshot.queue_listing_failed() {
