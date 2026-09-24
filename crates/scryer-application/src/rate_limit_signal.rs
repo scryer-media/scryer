@@ -10,8 +10,8 @@ use scryer_outbound_http::{DestinationKey, OutboundHttpError, RateLimitRegistry}
 /// `IndexerConfig::rate_limit_domain_key`, so a Prowlarr child answers for
 /// itself rather than for its parent.
 pub fn destination_cooldown_until(domain_key: &str) -> Option<DateTime<Utc>> {
-    let remaining =
-        RateLimitRegistry::new().active_destination_cooldown(&DestinationKey::from(domain_key))?;
+    let remaining = RateLimitRegistry::indexers()
+        .active_destination_cooldown(&DestinationKey::from(domain_key))?;
     chrono::Duration::from_std(remaining)
         .ok()
         .map(|remaining| Utc::now() + remaining)

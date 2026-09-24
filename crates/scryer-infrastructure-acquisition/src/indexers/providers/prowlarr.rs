@@ -579,7 +579,7 @@ impl ProwlarrManagementClient {
             parent_config_id: config.id.clone(),
             parent_indexer_name: config.name.clone(),
             config: ProwlarrConfig::from_indexer_config(config),
-            outbound_http: OutboundHttpClient::new(http_client, RateLimitRegistry::new()),
+            outbound_http: OutboundHttpClient::new(http_client, RateLimitRegistry::indexers()),
             api_state: Arc::new(RwLock::new(None)),
             indexer_errors,
             indexer_stats,

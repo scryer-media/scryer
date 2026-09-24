@@ -753,7 +753,7 @@ async fn observed_preflight_test_flight_url(
     .map_err(AppError::Validation)?;
     let outbound_http = scryer_outbound_http::OutboundHttpClient::new(
         client,
-        scryer_outbound_http::RateLimitRegistry::new(),
+        scryer_outbound_http::RateLimitRegistry::indexers(),
     );
 
     let tally = crate::IndexerRequestTally::new(
