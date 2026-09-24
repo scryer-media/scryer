@@ -614,20 +614,32 @@ mod tests {
     #[test]
     fn import_space_migration_is_registered_for_both_engines() {
         let bundle = compile_source_bundle(&source_db_root()).expect("compile migration catalog");
-        let migration = bundle
-            .catalog
-            .find_migration(256)
-            .expect("incident migration registered");
-        for (expected_engine, expected_file) in [
+        for (version, expected_engine, expected_file) in [
             (
+                256,
                 EngineScope::Sqlite,
                 "migrations/0256_import_space_incidents.sql",
             ),
             (
+                256,
                 EngineScope::Postgres,
                 "postgres/migrations/0256_import_space_incidents.sql",
             ),
+            (
+                257,
+                EngineScope::Sqlite,
+                "migrations/0257_import_space_attempts_and_member_age.sql",
+            ),
+            (
+                257,
+                EngineScope::Postgres,
+                "postgres/migrations/0257_import_space_attempts_and_member_age.sql",
+            ),
         ] {
+            let migration = bundle
+                .catalog
+                .find_migration(version)
+                .expect("incident migration registered");
             assert!(
                 migration.steps.iter().any(|step| matches!(step,
                     CompiledMigrationStep::Sql { engine, file, scope: StepScope::All, .. }

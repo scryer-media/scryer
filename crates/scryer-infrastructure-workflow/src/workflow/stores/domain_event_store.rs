@@ -48,6 +48,22 @@ impl DomainEventRepository for DomainEventStore {
         }).await
     }
 
+    async fn record_import_space_notification_attempt(&self, event_id: &str) -> AppResult<i64> {
+        let args = vec![
+            SqlArg::Text(event_id.into()),
+            SqlArg::Text(Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true)),
+        ];
+        SqlRuntime::run_in_transaction(&self.datastore, "record_import_space_notification_attempt", move |tx| {
+            let args = args.clone();
+            Box::pin(async move {
+                SqlRuntime::execute(SqlExec::Tx(tx), "INSERT INTO import_space_notification_attempts (event_id, attempts, first_attempt_at) VALUES ({}, 1, {}) ON CONFLICT(event_id) DO UPDATE SET attempts = import_space_notification_attempts.attempts + 1", &args).await?;
+                let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx), "SELECT attempts FROM import_space_notification_attempts WHERE event_id = {}", &args[..1]).await?
+                    .ok_or_else(|| AppError::Repository("import space notification attempt was not recorded".into()))?;
+                row.i64("attempts")
+            })
+        }).await
+    }
+
     async fn reconcile_import_space_incidents(&self) -> AppResult<()> {
         super::import_space_store::reconcile(&self.datastore).await
     }

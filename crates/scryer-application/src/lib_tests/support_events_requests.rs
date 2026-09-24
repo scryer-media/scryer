@@ -4,6 +4,7 @@ use std::sync::atomic::AtomicBool;
 #[derive(Default)]
 pub(super) struct MockDomainEventRepo {
     space_notification_receipts: Mutex<std::collections::BTreeSet<(String, String)>>,
+    space_notification_attempts: Mutex<HashMap<String, i64>>,
     pub(super) fail_append_many: AtomicBool,
     pub(super) events: Arc<Mutex<Vec<DomainEvent>>>,
     pub(super) subscriber_offsets: Arc<Mutex<HashMap<String, i64>>>,
@@ -151,6 +152,13 @@ pub(super) async fn append_series_monitor_snapshot_chunk(
 impl DomainEventRepository for MockDomainEventRepo {
     async fn reconcile_import_space_incidents(&self) -> AppResult<()> {
         Ok(())
+    }
+
+    async fn record_import_space_notification_attempt(&self, event_id: &str) -> AppResult<i64> {
+        let mut attempts = self.space_notification_attempts.lock().await;
+        let count = attempts.entry(event_id.into()).or_default();
+        *count += 1;
+        Ok(*count)
     }
 
     async fn import_space_notification_delivered(

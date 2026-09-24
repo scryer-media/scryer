@@ -19,7 +19,7 @@ use scryer_domain::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 const NOTIFICATION_SUBSCRIBER: &str = "notification_dispatcher";
 const NOTIFICATION_BATCH_LIMIT: usize = 100;
@@ -219,6 +219,12 @@ async fn reconcile_and_dispatch_space_events(app: &AppUseCase) -> crate::AppResu
     dispatch_pending_space_events(app).await
 }
 
+/// A disk-space notification that still fails after this many passes (about
+/// ten minutes at the 30 s retry tick), or this long after it happened, is
+/// abandoned so one broken channel cannot hold back every later one.
+const SPACE_NOTIFICATION_MAX_ATTEMPTS: i64 = 20;
+const SPACE_NOTIFICATION_MAX_AGE_HOURS: i64 = 24;
+
 async fn dispatch_pending_space_events(app: &AppUseCase) -> crate::AppResult<()> {
     const SUBSCRIBER: &str = "import_space_notifications";
     let repo = &app.services.events.domain_events;
@@ -235,7 +241,24 @@ async fn dispatch_pending_space_events(app: &AppUseCase) -> crate::AppResult<()>
         })
         .await?;
     for event in events {
-        try_dispatch_event(app, &event).await?;
+        if let Err(dispatch_error) = try_dispatch_event(app, &event).await {
+            // Targets that already succeeded hold receipts and are not re-sent.
+            let attempts = repo
+                .record_import_space_notification_attempt(&event.event_id)
+                .await?;
+            let expired = chrono::Utc::now() - event.occurred_at
+                > chrono::Duration::hours(SPACE_NOTIFICATION_MAX_AGE_HOURS);
+            if attempts < SPACE_NOTIFICATION_MAX_ATTEMPTS && !expired {
+                return Err(dispatch_error);
+            }
+            error!(
+                event_id = event.event_id.as_str(),
+                event_type = event.payload.event_type().as_str(),
+                attempts,
+                error = %dispatch_error,
+                "abandoning import space notification after {attempts} attempts"
+            );
+        }
         repo.set_subscriber_offset(SUBSCRIBER, event.sequence)
             .await?;
     }
@@ -2701,6 +2724,106 @@ mod file_delete_subscription_tests {
                 episode_ids: Vec::new(),
             }),
         }
+    }
+
+    fn space_blocked_event(incident_id: &str) -> scryer_domain::NewDomainEvent {
+        crate::domain_events::new_global_domain_event(
+            None,
+            DomainEventPayload::ImportSpaceBlocked(
+                scryer_domain::import_space::SpaceIncidentEvent {
+                    incident_id: incident_id.into(),
+                    measurement: scryer_domain::import_space::SpaceMeasurement {
+                        destination_key: format!("device:{incident_id}"),
+                        destination: "/library".into(),
+                        available_bytes: 5,
+                        required_bytes: 10,
+                    },
+                    affected_import_count: 1,
+                    recovered: false,
+                },
+            ),
+        )
+    }
+
+    async fn space_offset(app: &AppUseCase) -> i64 {
+        app.services
+            .events
+            .domain_events
+            .get_subscriber_offset("import_space_notifications")
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_permanently_failing_space_notification_is_abandoned_after_its_ceiling() {
+        let store = Arc::new(InMemoryNotificationStore::default());
+        let channel = store.seed_channel("space-channel");
+        store.seed_subscription("blocked", &channel.id, NotificationEventType::HealthIssue);
+        let provider = Arc::new(RecordingNotificationProvider::default());
+        let (app, _) = bootstrap();
+        let app = app.with_test_overrides(|services| {
+            services
+                .with_notification_store(store.clone())
+                .with_notification_provider(provider.clone())
+        });
+        let stuck = app
+            .append_domain_event(space_blocked_event("incident-stuck"))
+            .await
+            .unwrap();
+        let next = app
+            .append_domain_event(space_blocked_event("incident-next"))
+            .await
+            .unwrap();
+        provider
+            .fail
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        for tick in 1..SPACE_NOTIFICATION_MAX_ATTEMPTS {
+            assert!(
+                dispatch_pending_space_events(&app).await.is_err(),
+                "tick {tick} retries"
+            );
+            assert_eq!(space_offset(&app).await, 0, "tick {tick} holds the offset");
+        }
+        // The ceiling tick abandons the stuck event and moves on; the next
+        // event gets its own attempts.
+        assert!(dispatch_pending_space_events(&app).await.is_err());
+        assert_eq!(space_offset(&app).await, stuck.sequence);
+
+        provider
+            .fail
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        dispatch_pending_space_events(&app).await.unwrap();
+        assert_eq!(space_offset(&app).await, next.sequence);
+        assert_eq!(
+            provider.sent(),
+            vec![NotificationEventType::HealthIssue],
+            "only the event after the abandoned one is delivered"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_space_notification_older_than_a_day_is_abandoned_at_once() {
+        let store = Arc::new(InMemoryNotificationStore::default());
+        let channel = store.seed_channel("space-channel");
+        store.seed_subscription("blocked", &channel.id, NotificationEventType::HealthIssue);
+        let provider = Arc::new(RecordingNotificationProvider::default());
+        let (app, _) = bootstrap();
+        let app = app.with_test_overrides(|services| {
+            services
+                .with_notification_store(store.clone())
+                .with_notification_provider(provider.clone())
+        });
+        let mut aged = space_blocked_event("incident-aged");
+        aged.occurred_at =
+            Utc::now() - chrono::Duration::hours(SPACE_NOTIFICATION_MAX_AGE_HOURS + 1);
+        let aged = app.append_domain_event(aged).await.unwrap();
+        provider
+            .fail
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        dispatch_pending_space_events(&app).await.unwrap();
+        assert_eq!(space_offset(&app).await, aged.sequence);
     }
 
     #[tokio::test]

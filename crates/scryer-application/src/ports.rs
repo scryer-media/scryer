@@ -4192,6 +4192,15 @@ pub trait DomainEventRepository: Send + Sync {
         ))
     }
 
+    /// Count one failed delivery pass of a durable import space notification
+    /// and return the total so far. Survives restarts, so the retry ceiling
+    /// does too.
+    async fn record_import_space_notification_attempt(&self, _event_id: &str) -> AppResult<i64> {
+        Err(AppError::Repository(
+            "import space notification attempts are not configured".into(),
+        ))
+    }
+
     /// Retire incident membership for durably ignored or removed sources without claiming recovery.
     async fn reconcile_import_space_incidents(&self) -> AppResult<()> {
         Err(AppError::Repository(
