@@ -2430,6 +2430,38 @@ async fn record_series_pack_search_coverage(
     }
 }
 
+/// The coverage keys a title walk's gates will ask about: each stage's own
+/// scope, and the season collection its pack stage converges on.
+fn walk_coverage_scope_keys(
+    title_work: &BackgroundAcquisitionTitleWork,
+    targets: &[crate::acquisition::targets::AcquisitionTarget],
+    context: &BackgroundAcquisitionTitleContext,
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    for work in &title_work.ready {
+        let target = &targets[work.target_index];
+        keys.push(target.scope_key.clone());
+        let collection_id = target.collection_id.as_deref().or_else(|| {
+            target
+                .episode_id
+                .as_deref()
+                .and_then(|episode_id| context.episodes_by_id.get(episode_id))
+                .and_then(|episode| episode.collection_id.as_deref())
+        });
+        if let Some(key) = collection_id.and_then(|collection_id| {
+            crate::acquisition::convergence::convergence_scope_key(
+                &SubmissionScope::Collection {
+                    collection_id: collection_id.to_string(),
+                },
+                &target.title_id,
+            )
+        }) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
 struct BackgroundAcquisitionTitleContext {
     title: scryer_domain::Title,
     episodes_by_id: HashMap<String, scryer_domain::Episode>,
@@ -2555,6 +2587,15 @@ where
     let started = std::time::Instant::now();
     let intent = options.intent;
     let context = BackgroundAcquisitionTitleContext::load(app, title).await?;
+    if !intent.is_interactive() {
+        // Only the machine sweep reads coverage, and most of its stages stop at
+        // the gate: read every stage's receipts in one round-trip.
+        app.load_walk_coverage(
+            &context.convergence_inputs,
+            walk_coverage_scope_keys(&title_work, targets, &context),
+        )
+        .await;
+    }
     let mut session = TitleWalkSession::new(options);
 
     while let Some(work) = title_work.ready.pop_front() {
@@ -3189,21 +3230,26 @@ async fn process_single_target(
         };
 
     let search_title = app
-        .release_search_title_for_wanted_item(title, item, episode.as_ref())
+        .release_search_title_for_wanted_item(title, item, episode.as_ref(), Some(&context.reads))
         .await;
 
-    let subject = app
-        .resolve_release_search_subject_for_wanted_item(
+    // The title-match evidence is finished only once this stage is known to
+    // search: a covered stage never reads it.
+    let pending_subject = app
+        .resolve_pending_release_search_subject_for_wanted_item(
             title,
             &search_title,
             item,
             episode.as_ref(),
         )
-        .await?;
+        .await;
     // Season-pack shaping only, so season 0 is excluded: the specials season is
     // not a pack an indexer publishes, and `{title} S00` is not a query worth
     // spending. The subject keeps its `Some(0)` for the acceptance veto.
-    let search_season = subject.season.filter(|season| *season > 0);
+    let search_season = pending_subject
+        .for_convergence()
+        .season
+        .filter(|season| *season > 0);
 
     // Exhausting saved results is a recovery action, not a new search. Preserve
     // that contract before either the title or episode lane spends an indexer
@@ -3212,7 +3258,7 @@ async fn process_single_target(
         if let Some(convergence) = app
             .resolve_scope_convergence_memoized(
                 &search_title,
-                &subject,
+                pending_subject.for_convergence(),
                 &context.convergence_inputs,
             )
             .await
@@ -3287,7 +3333,7 @@ async fn process_single_target(
         let Some(convergence) = app
             .resolve_scope_convergence_memoized(
                 &search_title,
-                &subject,
+                pending_subject.for_convergence(),
                 &context.convergence_inputs,
             )
             .await
@@ -3300,12 +3346,7 @@ async fn process_single_target(
             return Ok(());
         };
         let uncovered = match app
-            .uncovered_indexers_for_scope(
-                &convergence.scope_key,
-                &convergence.facet,
-                &convergence.fingerprint,
-                &convergence.routed_indexer_ids,
-            )
+            .uncovered_indexers_for_scope_memoized(&convergence, &context.convergence_inputs)
             .await
         {
             Ok(uncovered) => uncovered,
@@ -3433,6 +3474,7 @@ async fn process_single_target(
                         episode.as_ref(),
                         season_num,
                         pack_runtime,
+                        Some(&context.reads),
                     )
                     .await?;
 
@@ -3442,17 +3484,15 @@ async fn process_single_target(
                 let pack_uncovered = match app
                     .resolve_scope_convergence_memoized(
                         &search_title,
-                        &pack_subject,
+                        pack_subject.for_convergence(),
                         &context.convergence_inputs,
                     )
                     .await
                 {
                     Some(pack_convergence) => app
-                        .uncovered_indexers_for_scope(
-                            &pack_convergence.scope_key,
-                            &pack_convergence.facet,
-                            &pack_convergence.fingerprint,
-                            &pack_convergence.routed_indexer_ids,
+                        .uncovered_indexers_for_scope_memoized(
+                            &pack_convergence,
+                            &context.convergence_inputs,
                         )
                         .await
                         .ok(),
@@ -3476,6 +3516,7 @@ async fn process_single_target(
                     );
                     Vec::new()
                 } else {
+                    let pack_subject = pack_subject.resolve(app).await?;
                     session.stats.queries += 1;
                     match app
                         .search_and_evaluate_subject_restricted(
@@ -3624,7 +3665,7 @@ async fn process_single_target(
     // explicit routing category overrides this inside the router.
     let download_cat = app.derive_download_category(&title.facet).await;
 
-    if subject.queries.is_empty() {
+    if pending_subject.for_convergence().queries.is_empty() {
         info!(
             title_id = title.id.as_str(),
             title_name = title.name.as_str(),
@@ -3633,6 +3674,7 @@ async fn process_single_target(
         );
         return Ok(());
     }
+    let subject = pending_subject.resolve(app).await?;
 
     debug!(
         title_id = title.id.as_str(),
@@ -4335,7 +4377,7 @@ async fn propose_covered_episode_evidence(
     }
 
     let search_title = app
-        .release_search_title_for_wanted_item(title, item, episode)
+        .release_search_title_for_wanted_item(title, item, episode, Some(&context.reads))
         .await;
     let subject = app
         .resolve_release_search_subject_for_wanted_item(title, &search_title, item, episode)

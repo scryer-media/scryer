@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 use scryer_domain::{Collection, Episode};
 use tokio::sync::OnceCell;
 
-use crate::{AppResult, AppUseCase, EpisodeScopedMediaFile, TitleMediaFile};
+use crate::{AppResult, AppUseCase, EpisodeScopedMediaFile, ScopedExternalId, TitleMediaFile};
 
 pub(crate) struct TitleCatalogReads {
     title_id: String,
@@ -30,6 +30,7 @@ pub(crate) struct TitleCatalogReads {
     collections: OnceCell<Arc<Vec<Collection>>>,
     media_files: OnceCell<Arc<Vec<TitleMediaFile>>>,
     collection_episodes: Mutex<HashMap<String, Arc<Vec<Episode>>>>,
+    collection_external_ids: Mutex<HashMap<String, Arc<Vec<ScopedExternalId>>>>,
     scoped_media_files: Mutex<HashMap<Vec<String>, Arc<Vec<EpisodeScopedMediaFile>>>>,
 }
 
@@ -41,6 +42,7 @@ impl TitleCatalogReads {
             collections: OnceCell::new(),
             media_files: OnceCell::new(),
             collection_episodes: Mutex::new(HashMap::new()),
+            collection_external_ids: Mutex::new(HashMap::new()),
             scoped_media_files: Mutex::new(HashMap::new()),
         }
     }
@@ -125,6 +127,29 @@ impl TitleCatalogReads {
             .entry(collection_id.to_string())
             .or_insert_with(|| Arc::clone(&episodes));
         Ok(episodes)
+    }
+
+    /// A collection's scoped external ids. Every episode stage of a season
+    /// asks for the same collection's AniDB mapping.
+    pub(crate) async fn collection_external_ids(
+        &self,
+        app: &AppUseCase,
+        collection_id: &str,
+    ) -> AppResult<Arc<Vec<ScopedExternalId>>> {
+        if let Some(hit) = lock(&self.collection_external_ids).get(collection_id) {
+            return Ok(Arc::clone(hit));
+        }
+        let ids = Arc::new(
+            app.services
+                .catalog
+                .shows
+                .list_collection_external_ids(collection_id)
+                .await?,
+        );
+        lock(&self.collection_external_ids)
+            .entry(collection_id.to_string())
+            .or_insert_with(|| Arc::clone(&ids));
+        Ok(ids)
     }
 
     /// `list_live_media_files_for_episode_ids` for this title, memoized per

@@ -4148,7 +4148,7 @@ async fn series_movie_wanted_subject_uses_parent_owner_when_title_facet_is_missi
     };
 
     let search_title = app
-        .release_search_title_for_wanted_item(&title, &wanted, None)
+        .release_search_title_for_wanted_item(&title, &wanted, None, None)
         .await;
     let subject = app
         .resolve_release_search_subject_for_wanted_item(&title, &search_title, &wanted, None)
@@ -4380,7 +4380,7 @@ async fn convergence_test_title_and_subject(
         updated_at: now,
     };
     let search_title = app
-        .release_search_title_for_wanted_item(&title, &wanted, None)
+        .release_search_title_for_wanted_item(&title, &wanted, None, None)
         .await;
     let subject = app
         .resolve_release_search_subject_for_wanted_item(&title, &search_title, &wanted, None)
@@ -4659,6 +4659,184 @@ async fn an_indexer_that_cannot_serve_a_scope_stays_covered_until_it_or_its_plug
 }
 
 #[tokio::test]
+async fn a_walk_coverage_snapshot_skips_covered_scopes_and_rereads_the_rest() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let configs = vec![
+        synthetic_direct_nab_indexer_config("indexer-a", "newznab"),
+        synthetic_direct_nab_indexer_config("indexer-b", "newznab"),
+    ];
+    let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        settings,
+        Arc::new(MockIndexerClient),
+        configs,
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    let (title, subject) = convergence_test_title_and_subject(&app, &user).await;
+    let covered = app
+        .resolve_scope_convergence(&title, &subject)
+        .await
+        .expect("routed convergence coordinates");
+    app.record_convergence_coverage(&covered, &covered.routed_indexer_ids, &[])
+        .await;
+    let mut later = covered.clone();
+    later.scope_key = "episode:snapshot-later".to_string();
+    let mut unloaded = covered.clone();
+    unloaded.scope_key = "episode:snapshot-unloaded".to_string();
+    app.record_convergence_coverage(&unloaded, &unloaded.routed_indexer_ids, &[])
+        .await;
+
+    let memo = crate::acquisition::convergence::ConvergenceInputMemo::default();
+    app.load_walk_coverage(
+        &memo,
+        vec![covered.scope_key.clone(), later.scope_key.clone()],
+    )
+    .await;
+    assert_eq!(coverage.list_calls(), 1, "one read loads the walk");
+
+    // Covered in the snapshot: skipped without a read, however often asked.
+    for _ in 0..3 {
+        assert!(
+            app.uncovered_indexers_for_scope_memoized(&covered, &memo)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+    assert_eq!(coverage.list_calls(), 1, "a covered scope costs no read");
+
+    // Uncovered in the snapshot: the store is asked again, so the answer is
+    // the unmemoized one.
+    assert_eq!(
+        app.uncovered_indexers_for_scope_memoized(&later, &memo)
+            .await
+            .unwrap(),
+        later.routed_indexer_ids
+    );
+    assert_eq!(coverage.list_calls(), 2);
+
+    // A receipt written after the snapshot, as a search earlier in the walk
+    // writes one, is seen.
+    app.record_convergence_coverage(&later, &later.routed_indexer_ids, &[])
+        .await;
+    assert!(
+        app.uncovered_indexers_for_scope_memoized(&later, &memo)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // A scope the walk never loaded reads its own rows.
+    let reads_before = coverage.list_calls();
+    assert!(
+        app.uncovered_indexers_for_scope_memoized(&unloaded, &memo)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(coverage.list_calls(), reads_before + 1);
+}
+
+#[tokio::test]
+async fn a_covered_background_walk_builds_no_title_match_evidence() {
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let indexer_client = Arc::new(
+        FixedReleaseIndexerClient::new("Evidence Budget Fixture.2024.1080p.WEB-DL")
+            .with_fired_indexers(["indexer-a", "indexer-b"])
+            .with_empty_response(),
+    );
+    let (app, user, _, repos) = bootstrap_with_acquisition_tracking_and_indexer_and_repos(
+        Arc::new(StubDownloadClient::default()),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted_items.clone(),
+        indexer_client.clone(),
+    );
+    app.services
+        .integrations
+        .indexer_configs
+        .delete("acquisition-indexer")
+        .await
+        .expect("remove bootstrap indexer");
+    for indexer_id in ["indexer-a", "indexer-b"] {
+        app.services
+            .integrations
+            .indexer_configs
+            .create(synthetic_direct_nab_indexer_config(indexer_id, "newznab"))
+            .await
+            .expect("create routed indexer");
+    }
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    let (title, wanted_id) = seed_movie_wanted_for_acquisition(
+        &app,
+        &user,
+        &wanted_items,
+        "Evidence Budget Fixture",
+        2024,
+    )
+    .await;
+    let wanted = wanted_items
+        .get_acquisition_scope_state_by_id(&wanted_id)
+        .await
+        .expect("read wanted")
+        .expect("seeded wanted row");
+    let search_title = app
+        .release_search_title_for_wanted_item(&title, &wanted, None, None)
+        .await;
+    let subject = app
+        .resolve_release_search_subject_for_wanted_item(&title, &search_title, &wanted, None)
+        .await
+        .expect("subject should resolve");
+    let convergence = app
+        .resolve_scope_convergence(&search_title, &subject)
+        .await
+        .expect("resolve live convergence coordinates");
+    app.record_convergence_coverage(&convergence, &convergence.routed_indexer_ids, &[])
+        .await;
+
+    let catalog_loads = || {
+        repos
+            .titles
+            .list_for_matching_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+    };
+    let loads_before = catalog_loads();
+    let coverage_reads_before = coverage.list_calls();
+    app.run_background_acquisition_cycle_once().await;
+
+    assert!(
+        indexer_client.requested_indexer_id_sets().await.is_empty(),
+        "a covered scope spends no indexer query"
+    );
+    assert_eq!(
+        catalog_loads(),
+        loads_before,
+        "a stage the gate skips builds no collision or spelling evidence"
+    );
+    assert_eq!(
+        coverage.list_calls() - coverage_reads_before,
+        1,
+        "the walk reads its coverage once"
+    );
+
+    // Uncovered, the same stage builds its evidence and searches.
+    app.prune_scope_key_coverage(&convergence.scope_key, None)
+        .await;
+    app.run_background_acquisition_cycle_once().await;
+    assert!(
+        !indexer_client.requested_indexer_id_sets().await.is_empty(),
+        "an uncovered scope searches"
+    );
+    assert!(
+        catalog_loads() > loads_before,
+        "a searched stage builds its title-match evidence"
+    );
+}
+
+#[tokio::test]
 async fn coverage_reopen_policies_preserve_the_required_indexers() {
     let settings = Arc::new(StoredSettingsRepo::default());
     let configs = vec![
@@ -4846,7 +5024,7 @@ async fn background_acquisition_requeries_only_the_pruned_indexer() {
         .await
         .expect("seed fileless wanted movie");
     let search_title = app
-        .release_search_title_for_wanted_item(&title, &wanted, None)
+        .release_search_title_for_wanted_item(&title, &wanted, None, None)
         .await;
     let subject = app
         .resolve_release_search_subject_for_wanted_item(&title, &search_title, &wanted, None)
@@ -5097,7 +5275,7 @@ async fn covered_background_walk_reads_no_persona_or_acquisition_thresholds() {
         .await
         .expect("seed fileless wanted movie");
     let search_title = app
-        .release_search_title_for_wanted_item(&title, &wanted, None)
+        .release_search_title_for_wanted_item(&title, &wanted, None, None)
         .await;
     let subject = app
         .resolve_release_search_subject_for_wanted_item(&title, &search_title, &wanted, None)
@@ -5252,7 +5430,7 @@ async fn a_failed_grab_walks_the_saved_search_results_without_querying_an_indexe
         .await
         .expect("seed grabbed wanted movie");
     let search_title = app
-        .release_search_title_for_wanted_item(&title, &wanted, None)
+        .release_search_title_for_wanted_item(&title, &wanted, None, None)
         .await;
     let subject = app
         .resolve_release_search_subject_for_wanted_item(&title, &search_title, &wanted, None)
@@ -6043,7 +6221,7 @@ async fn wanted_item_subject_evidence_carries_the_anime_bridge_cour_names() {
     };
 
     let search_title = app
-        .release_search_title_for_wanted_item(&title, &wanted, None)
+        .release_search_title_for_wanted_item(&title, &wanted, None, None)
         .await;
     let subject = app
         .resolve_release_search_subject_for_wanted_item(&title, &search_title, &wanted, None)

@@ -552,8 +552,144 @@ impl AppUseCase {
             .into_iter()
             .map(|config| (config.id.clone(), config))
             .collect::<std::collections::HashMap<_, _>>();
+        Ok(self.uncovered_among(
+            fingerprint,
+            routed_indexer_ids,
+            &coverage_rows,
+            &configs,
+            stale_before,
+        ))
+    }
+
+    /// [`Self::uncovered_indexers_for_scope`] for a title walk.
+    ///
+    /// The walk's coverage snapshot and indexer configs answer first. A scope
+    /// the snapshot shows as covered is skipped without a read; a receipt
+    /// pruned or an indexer edited elsewhere while the walk runs is seen by
+    /// the next walk, the same freshness bound as the rest of the memo. Any
+    /// other answer is re-asked of the store, so a stage that searches decides
+    /// exactly what the unmemoized gate decides, receipts written earlier in
+    /// this walk included.
+    pub(crate) async fn uncovered_indexers_for_scope_memoized(
+        &self,
+        convergence: &ScopeConvergence,
+        memo: &ConvergenceInputMemo,
+    ) -> AppResult<Vec<String>> {
+        let snapshot_rows = memo_lock(&memo.coverage_rows)
+            .as_ref()
+            .and_then(|rows| rows.get(&convergence.scope_key).cloned());
+        if !convergence.routed_indexer_ids.is_empty()
+            && let Some(rows) = snapshot_rows
+            && let Some(configs) = self.walk_indexer_configs(memo).await
+        {
+            let stale_before = self
+                .convergence_settings()
+                .await?
+                .long_tail_reconverge
+                .map(|window| chrono::Utc::now() - window);
+            if self
+                .uncovered_among(
+                    &convergence.fingerprint,
+                    &convergence.routed_indexer_ids,
+                    &rows,
+                    &configs,
+                    stale_before,
+                )
+                .is_empty()
+            {
+                return Ok(Vec::new());
+            }
+        }
+        self.uncovered_indexers_for_scope(
+            &convergence.scope_key,
+            &convergence.facet,
+            &convergence.fingerprint,
+            &convergence.routed_indexer_ids,
+        )
+        .await
+    }
+
+    /// Read the coverage rows of every scope `scope_keys` names into the walk's
+    /// memo, in one round-trip per chunk. A failed read leaves the snapshot
+    /// empty, and every stage falls back to its own read.
+    pub(crate) async fn load_walk_coverage(
+        &self,
+        memo: &ConvergenceInputMemo,
+        scope_keys: Vec<String>,
+    ) {
+        const CHUNK: usize = 500;
+        let mut scope_keys = scope_keys;
+        scope_keys.sort();
+        scope_keys.dedup();
+        let mut snapshot = std::collections::HashMap::<String, Vec<ScopeCoverageRow>>::new();
+        for chunk in scope_keys.chunks(CHUNK) {
+            match self
+                .services
+                .integrations
+                .scope_indexer_coverage
+                .list_coverage_for_scope_keys(chunk)
+                .await
+            {
+                Ok(rows) => {
+                    for key in chunk {
+                        snapshot.entry(key.clone()).or_default();
+                    }
+                    for row in rows {
+                        snapshot.entry(row.scope_key.clone()).or_default().push(row);
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        "convergence: walk coverage snapshot unavailable; stages read their own"
+                    );
+                    return;
+                }
+            }
+        }
+        *memo_lock(&memo.coverage_rows) = Some(snapshot);
+    }
+
+    /// The indexer configs keyed by id, read once per walk. A failed read is
+    /// not memoized.
+    async fn walk_indexer_configs(
+        &self,
+        memo: &ConvergenceInputMemo,
+    ) -> Option<std::sync::Arc<std::collections::HashMap<String, IndexerConfig>>> {
+        if let Some(configs) = memo_lock(&memo.indexer_configs).as_ref() {
+            return Some(configs.clone());
+        }
+        let configs = std::sync::Arc::new(
+            self.services
+                .integrations
+                .indexer_configs
+                .list(None)
+                .await
+                .ok()?
+                .into_iter()
+                .map(|config| (config.id.clone(), config))
+                .collect::<std::collections::HashMap<_, _>>(),
+        );
+        Some(
+            memo_lock(&memo.indexer_configs)
+                .get_or_insert(configs)
+                .clone(),
+        )
+    }
+
+    /// The routed indexers `coverage_rows` do not cover under `fingerprint`,
+    /// counting a receipt older than `stale_before` as missing. An indexer
+    /// with no config is uncovered.
+    fn uncovered_among(
+        &self,
+        fingerprint: &str,
+        routed_indexer_ids: &[String],
+        coverage_rows: &[ScopeCoverageRow],
+        configs: &std::collections::HashMap<String, IndexerConfig>,
+        stale_before: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Vec<String> {
         let provider = self.services.integrations.plugin_provider.available();
-        Ok(routed_indexer_ids
+        routed_indexer_ids
             .iter()
             .filter(|id| {
                 let Some(config) = configs.get(id.as_str()) else {
@@ -582,7 +718,7 @@ impl AppUseCase {
                 })
             })
             .cloned()
-            .collect())
+            .collect()
     }
 }
 
@@ -610,12 +746,21 @@ pub(crate) struct ScopeConvergence {
 /// Like [`crate::acquisition::title_reads::TitleCatalogReads`], nothing is kept
 /// past the walk, so the freshness bound is the walk's own length, and failed
 /// reads are not memoized.
+///
+/// The walk's coverage rows and indexer configs are held here too, for
+/// [`AppUseCase::uncovered_indexers_for_scope_memoized`].
 #[derive(Default)]
 pub(crate) struct ConvergenceInputMemo {
     required_audio_languages:
         std::sync::Mutex<std::collections::HashMap<RequiredAudioLanguagesKey, Vec<String>>>,
     routed_indexer_ids:
         std::sync::Mutex<std::collections::HashMap<(String, Option<String>), Vec<String>>>,
+    /// Coverage rows by scope key, read once when the walk starts. A key the
+    /// walk did not load is absent, never an empty list.
+    coverage_rows:
+        std::sync::Mutex<Option<std::collections::HashMap<String, Vec<ScopeCoverageRow>>>>,
+    indexer_configs:
+        std::sync::Mutex<Option<std::sync::Arc<std::collections::HashMap<String, IndexerConfig>>>>,
 }
 
 /// Every title field `resolve_required_audio_languages_for_title` reads.

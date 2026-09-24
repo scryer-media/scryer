@@ -2307,7 +2307,7 @@ impl AppUseCase {
             None => None,
         };
         let search_title = self
-            .release_search_title_for_wanted_item(title, &wanted, episode.as_ref())
+            .release_search_title_for_wanted_item(title, &wanted, episode.as_ref(), None)
             .await;
         let mut subject = match self
             .resolve_release_search_subject_for_wanted_item(
