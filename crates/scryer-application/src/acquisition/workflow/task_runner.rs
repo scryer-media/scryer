@@ -1655,6 +1655,7 @@ async fn plan_series_pack_for_title(
                 app,
                 &convergence,
                 &search_outcome.complete_indexer_ids,
+                &search_outcome.unsupported_indexer_ids,
                 &qualifying_collection_ids,
             )
             .await;
@@ -1669,6 +1670,7 @@ async fn plan_series_pack_for_title(
             app,
             &convergence,
             &search_outcome.complete_indexer_ids,
+            &search_outcome.unsupported_indexer_ids,
             &qualifying_collection_ids,
         )
         .await;
@@ -2406,9 +2408,10 @@ async fn record_series_pack_search_coverage(
     app: &AppUseCase,
     convergence: &crate::acquisition::convergence::ScopeConvergence,
     fired_indexer_ids: &[String],
+    unsupported_indexer_ids: &[String],
     collection_ids: &HashSet<String>,
 ) {
-    app.record_convergence_coverage(convergence, fired_indexer_ids)
+    app.record_convergence_coverage(convergence, fired_indexer_ids, unsupported_indexer_ids)
         .await;
     for collection_id in collection_ids {
         let Some(scope_key) =
@@ -2418,8 +2421,12 @@ async fn record_series_pack_search_coverage(
         };
         let mut collection_convergence = convergence.clone();
         collection_convergence.scope_key = scope_key;
-        app.record_convergence_coverage(&collection_convergence, fired_indexer_ids)
-            .await;
+        app.record_convergence_coverage(
+            &collection_convergence,
+            fired_indexer_ids,
+            unsupported_indexer_ids,
+        )
+        .await;
     }
 }
 
@@ -3711,6 +3718,7 @@ async fn process_single_target(
             &search_title,
             &subject,
             &search_outcome.complete_indexer_ids,
+            &search_outcome.unsupported_indexer_ids,
         )
         .await;
     }

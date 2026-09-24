@@ -162,7 +162,7 @@ impl AppUseCase {
             let Some(convergence) = self.resolve_scope_convergence(&title, &subject).await else {
                 continue;
             };
-            self.record_search_coverage(&title, &subject, &convergence.routed_indexer_ids)
+            self.record_search_coverage(&title, &subject, &convergence.routed_indexer_ids, &[])
                 .await;
             seeded_scopes += 1;
         }
@@ -450,6 +450,52 @@ fn indexer_coverage_fingerprint(
     )
 }
 
+/// Coverage fingerprint for an indexer that could not answer the scope at all
+/// ([`crate::IndexerSearchOutcome::Unsupported`]): the normal per-indexer
+/// fingerprint plus the capabilities its plugin declares for the provider.
+///
+/// Whether an indexer can search a facet comes from three places: its config
+/// and fetched caps (both already in [`crate::indexer_search_identity`]) and
+/// the plugin's static capabilities, which are not. Folding the last in means
+/// an edited indexer, refreshed caps, or a plugin update that adds the facet
+/// no longer matches the row, so every scope the indexer was recorded as
+/// unable to serve, whatever its facet, is searched again.
+fn unsupported_indexer_coverage_fingerprint(
+    scope_fingerprint: &str,
+    config: &IndexerConfig,
+    search_semantics_version: Option<u32>,
+    provider_capabilities: &scryer_domain::IndexerProviderCapabilities,
+) -> String {
+    let capabilities = serde_json::to_value(provider_capabilities).unwrap_or_default();
+    let mut identity = crate::indexer_search_identity(config, search_semantics_version);
+    if let Some(identity) = identity.as_object_mut() {
+        identity.insert(
+            "scope".to_string(),
+            serde_json::Value::String(scope_fingerprint.to_string()),
+        );
+        identity.insert(
+            "unsupported".to_string(),
+            serde_json::Value::String(canonical_json_string(&capabilities)),
+        );
+    }
+    crate::helpers::blake3_identity_hex(
+        crate::helpers::HashDomain::IndexerCoverage,
+        canonical_json_string(&identity),
+    )
+}
+
+/// The provider capabilities an unsupported receipt is fingerprinted with.
+/// Without a loaded plugin runtime this is the port's default, which is also
+/// what the search client resolved against.
+fn provider_capabilities(
+    provider: Option<&std::sync::Arc<dyn crate::IndexerPluginProvider>>,
+    provider_type: &str,
+) -> scryer_domain::IndexerProviderCapabilities {
+    provider
+        .map(|provider| provider.capabilities_for_provider(provider_type))
+        .unwrap_or_default()
+}
+
 /// Canonical identity of a scope's SMG match — its resolved external ids. A rematch
 /// re-maps the title to a different canonical subject, changing these ids, so folding
 /// them into the fingerprint re-opens convergence. Plain metadata edits
@@ -517,9 +563,15 @@ impl AppUseCase {
                     provider.search_semantics_version_for_provider(&config.provider_type)
                 });
                 let expected = indexer_coverage_fingerprint(fingerprint, config, semantics);
+                let expected_unsupported = unsupported_indexer_coverage_fingerprint(
+                    fingerprint,
+                    config,
+                    semantics,
+                    &provider_capabilities(provider, &config.provider_type),
+                );
                 !coverage_rows.iter().any(|row| {
                     row.indexer_id == **id
-                        && row.fingerprint == expected
+                        && (row.fingerprint == expected || row.fingerprint == expected_unsupported)
                         && stale_before.is_none_or(|cutoff| {
                             chrono::DateTime::parse_from_rfc3339(&row.searched_at)
                                 .map(|searched_at| {
@@ -977,27 +1029,37 @@ impl AppUseCase {
         title: &Title,
         subject: &ResolvedReleaseSearchSubject,
         fired_indexer_ids: &[String],
+        unsupported_indexer_ids: &[String],
     ) {
         let Some(convergence) = self.resolve_scope_convergence(title, subject).await else {
             return;
         };
-        self.record_convergence_coverage(&convergence, fired_indexer_ids)
+        self.record_convergence_coverage(&convergence, fired_indexer_ids, unsupported_indexer_ids)
             .await;
     }
 
     /// Write receipts for an already-resolved convergence unit. This lets the
     /// series-pack title lane use its membership and collection keys without
     /// changing the generic search coverage behavior.
+    ///
+    /// `unsupported_indexer_ids` are routed indexers that could not answer the
+    /// scope at all. They are recorded too, under
+    /// [`unsupported_indexer_coverage_fingerprint`], so a scope an indexer can
+    /// never serve stops re-entering the search walk every cycle, and any
+    /// change to that indexer or its plugin opens the scope again.
     pub(crate) async fn record_convergence_coverage(
         &self,
         convergence: &ScopeConvergence,
         fired_indexer_ids: &[String],
+        unsupported_indexer_ids: &[String],
     ) {
-        // Only routed indexers that actually fired are recorded as covered; a
-        // deferred/skipped/errored routed indexer stays uncovered so the cursor
-        // retries it.
+        // Only routed indexers that actually fired, or that cannot serve the
+        // scope, are recorded; a deferred/skipped/errored routed indexer stays
+        // uncovered so the cursor retries it.
         let fired: std::collections::HashSet<&str> =
             fired_indexer_ids.iter().map(String::as_str).collect();
+        let unsupported: std::collections::HashSet<&str> =
+            unsupported_indexer_ids.iter().map(String::as_str).collect();
         let configs = self
             .services
             .integrations
@@ -1010,7 +1072,8 @@ impl AppUseCase {
             .collect::<std::collections::HashMap<_, _>>();
         let provider = self.services.integrations.plugin_provider.available();
         for indexer_id in &convergence.routed_indexer_ids {
-            if !fired.contains(indexer_id.as_str()) {
+            let is_fired = fired.contains(indexer_id.as_str());
+            if !is_fired && !unsupported.contains(indexer_id.as_str()) {
                 continue;
             }
             let Some(config) = configs.get(indexer_id) else {
@@ -1019,8 +1082,16 @@ impl AppUseCase {
             let semantics = provider.as_ref().and_then(|provider| {
                 provider.search_semantics_version_for_provider(&config.provider_type)
             });
-            let fingerprint =
-                indexer_coverage_fingerprint(&convergence.fingerprint, config, semantics);
+            let fingerprint = if is_fired {
+                indexer_coverage_fingerprint(&convergence.fingerprint, config, semantics)
+            } else {
+                unsupported_indexer_coverage_fingerprint(
+                    &convergence.fingerprint,
+                    config,
+                    semantics,
+                    &provider_capabilities(provider, &config.provider_type),
+                )
+            };
             if let Err(error) = self
                 .services
                 .integrations
