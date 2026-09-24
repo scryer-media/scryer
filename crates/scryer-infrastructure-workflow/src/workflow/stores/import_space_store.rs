@@ -6,10 +6,54 @@ use scryer_domain::{
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, SqlTx, StoreDatastore, repo_err};
 
+/// A read-only gate: most observations are passing checks for files that
+/// never blocked, and must not queue behind the single SQLite writer. This
+/// asks exactly what the transaction would touch; `false` means it would
+/// change nothing.
+async fn update_may_change(
+    datastore: &StoreDatastore,
+    update: &SpaceIncidentUpdate,
+) -> AppResult<bool> {
+    let (sql, args) = match update {
+        SpaceIncidentUpdate::Observed { blocked: true, .. } => return Ok(true),
+        // An unblocked observation can clear its own member, or retire its
+        // job's members when the job turns out to be gone.
+        SpaceIncidentUpdate::Observed {
+            member_key,
+            job_key,
+            ..
+        } => (
+            "SELECT member_key FROM import_space_members WHERE member_key = {} OR job_key = {} LIMIT 1",
+            vec![
+                SqlArg::Text(member_key.clone()),
+                SqlArg::Text(job_key.clone()),
+            ],
+        ),
+        SpaceIncidentUpdate::Retired {
+            job_key,
+            download_id,
+        } => (
+            "SELECT member_key FROM import_space_members WHERE job_key = {} AND download_id = {} LIMIT 1",
+            vec![
+                SqlArg::Text(job_key.clone()),
+                SqlArg::Text(download_id.clone().unwrap_or_default()),
+            ],
+        ),
+    };
+    Ok(
+        SqlRuntime::fetch_optional(datastore.read_exec(), sql, &args)
+            .await?
+            .is_some(),
+    )
+}
+
 pub async fn update(
     datastore: &StoreDatastore,
     update: SpaceIncidentUpdate,
 ) -> AppResult<Vec<DomainEvent>> {
+    if !update_may_change(datastore, &update).await? {
+        return Ok(Vec::new());
+    }
     SqlRuntime::run_in_transaction(datastore, "update_import_space_incident", move |tx| {
         let update = update.clone();
         Box::pin(async move {
@@ -118,18 +162,42 @@ async fn retire_job(tx: &mut SqlTx<'_>, job: &str, download_id: Option<&str>) ->
 /// Repair observer state after a crash between authoritative cancellation/removal
 /// and its best-effort observer update. This never changes import workflow state.
 pub async fn reconcile(datastore: &StoreDatastore) -> AppResult<()> {
-    SqlRuntime::run_in_transaction(datastore, "reconcile_import_space_incidents", |tx| Box::pin(async move {
-        SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE import_space_incident_lock SET revision = 0 WHERE id = 1", &[]).await?;
-        let members = SqlRuntime::fetch_all(SqlExec::Tx(tx),
-            "SELECT m.member_key, m.destination_key FROM import_space_members m
-             WHERE m.download_id <> '' AND (
-                 NOT EXISTS (SELECT 1 FROM download_client_bindings b WHERE b.download_id = m.download_id AND b.ended_at IS NULL)
-                 OR EXISTS (SELECT 1 FROM download_submissions s WHERE s.id = m.download_id AND s.tracked_state = 'ignored'))", &[]).await?;
-        for member in members {
-            clear_member(tx, &member.text("destination_key")?, &member.text("member_key")?, None, &mut Vec::new()).await?;
-        }
-        Ok(())
-    })).await
+    // Runs every 30 s; with nothing to retire it must not take the writer.
+    if reconcile_candidates(datastore.read_exec())
+        .await?
+        .is_empty()
+    {
+        return Ok(());
+    }
+    SqlRuntime::run_in_transaction(datastore, "reconcile_import_space_incidents", |tx| {
+        Box::pin(async move {
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "UPDATE import_space_incident_lock SET revision = 0 WHERE id = 1",
+                &[],
+            )
+            .await?;
+            // The read above was only a gate; decide again under the lock.
+            for (member, destination) in reconcile_candidates(SqlExec::Tx(tx)).await? {
+                clear_member(tx, &destination, &member, None, &mut Vec::new()).await?;
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+/// `(member_key, destination_key)` of members whose download ended or was ignored.
+async fn reconcile_candidates(exec: SqlExec<'_, '_>) -> AppResult<Vec<(String, String)>> {
+    SqlRuntime::fetch_all(exec,
+        "SELECT m.member_key, m.destination_key FROM import_space_members m
+         WHERE m.download_id <> '' AND (
+             NOT EXISTS (SELECT 1 FROM download_client_bindings b WHERE b.download_id = m.download_id AND b.ended_at IS NULL)
+             OR EXISTS (SELECT 1 FROM download_submissions s WHERE s.id = m.download_id AND s.tracked_state = 'ignored'))",
+        &[]).await?
+    .into_iter()
+    .map(|row| Ok((row.text("member_key")?, row.text("destination_key")?)))
+    .collect()
 }
 
 async fn clear_member(
@@ -652,6 +720,70 @@ mod tests {
                 .len(),
             1
         );
+    }
+
+    const REJECT_WRITER: &str = "CREATE TRIGGER reject_writer BEFORE UPDATE ON import_space_incident_lock BEGIN SELECT RAISE(ABORT, 'writer transaction opened'); END;";
+
+    async fn member_and_incident_counts(pool: &sqlx::SqlitePool) -> (i64, i64) {
+        sqlx::query_as("SELECT (SELECT COUNT(*) FROM import_space_members), (SELECT COUNT(*) FROM import_space_incidents)")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// Every write path takes the incident lock first, so a trigger that
+    /// rejects the lock update is how a test sees a writer transaction open.
+    #[tokio::test]
+    async fn sqlite_import_space_passing_checks_and_idle_reconcile_take_no_writer() {
+        let datastore = sqlite().await;
+        let StoreDatastore::Sqlite { pool, .. } = &datastore else {
+            unreachable!()
+        };
+        sqlx::raw_sql(REJECT_WRITER).execute(pool).await.unwrap();
+        assert!(
+            update(&datastore, observed("job-a", "file", "a", false))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            update(
+                &datastore,
+                SpaceIncidentUpdate::Retired {
+                    job_key: "job-a".into(),
+                    download_id: None
+                }
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
+        reconcile(&datastore).await.unwrap();
+
+        sqlx::raw_sql("DROP TRIGGER reject_writer")
+            .execute(pool)
+            .await
+            .unwrap();
+        update(&datastore, observed("job-b", "file", "a", true))
+            .await
+            .unwrap();
+        sqlx::raw_sql(REJECT_WRITER).execute(pool).await.unwrap();
+        // An unrelated passing file still stays off the writer ...
+        assert!(
+            update(&datastore, observed("job-c", "file", "a", false))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        reconcile(&datastore).await.unwrap();
+        // ... while one that can clear a blocked member does reach it, which
+        // is what makes the rejection above meaningful.
+        assert!(
+            update(&datastore, observed("job-b", "file", "a", false))
+                .await
+                .is_err()
+        );
+        assert_eq!(member_and_incident_counts(pool).await, (1, 1));
     }
 
     #[tokio::test]
