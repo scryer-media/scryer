@@ -10,6 +10,7 @@ use scryer_application::location::merge::map::MergeBlockReason;
 use scryer_application::location::merge::roles::RoleChangeReason;
 use sqlx::sqlite::SqlitePoolOptions;
 
+mod bridge_cache;
 mod fuzzy_queue;
 
 const SOURCE: &str = "title-source";

@@ -31,6 +31,7 @@ use crate::media::canonical_tags::{
 use crate::media::monitor_selections::{
     OWNER_KIND_TITLE, load_monitor_selection, replace_monitor_selection_tx,
 };
+use crate::media::shows::bridge_cache::AnimeNumberingBridgeCache;
 use crate::media::title_credits::{load_title_credits, replace_title_credits_tx};
 use crate::queries::{
     common::parse_utc_datetime,
@@ -147,6 +148,10 @@ pub struct TitleStore {
     /// their own and a missing index costs typo tolerance, never a wrong
     /// answer.
     fuzzy: Option<Arc<scryer_infrastructure_library_search::TitleFuzzyIndex>>,
+    /// The show store's bridge cache. A title delete cascades the title's
+    /// bridge row away, so it has to reach the cache the reads are served
+    /// from. `None` only in stores built without a show store beside them.
+    anime_numbering_bridge_cache: Option<Arc<AnimeNumberingBridgeCache>>,
 }
 
 impl TitleStore {
@@ -154,6 +159,21 @@ impl TitleStore {
         Self {
             datastore,
             fuzzy: None,
+            anime_numbering_bridge_cache: None,
+        }
+    }
+
+    pub fn with_anime_numbering_bridge_cache(
+        mut self,
+        cache: Arc<AnimeNumberingBridgeCache>,
+    ) -> Self {
+        self.anime_numbering_bridge_cache = Some(cache);
+        self
+    }
+
+    fn invalidate_anime_numbering_bridge(&self, title_id: &str) {
+        if let Some(cache) = &self.anime_numbering_bridge_cache {
+            cache.invalidate(title_id);
         }
     }
 
@@ -2382,6 +2402,12 @@ impl TitleRepository for TitleStore {
             ));
         }
 
+        // A title edit restates the title's search projection from the stored
+        // bridge, so it drops the cached bridge as well. The e2e numbering
+        // fixture writes the bridge row from outside the process and then
+        // edits the title to make the app pick it up; this keeps the cache on
+        // the same contract as the projection.
+        self.invalidate_anime_numbering_bridge(id);
         let id = id.to_string();
         SqlRuntime::run_in_transaction(&self.datastore, "update_title_metadata", move |tx| {
             let id = id.clone();
@@ -2572,8 +2598,9 @@ impl TitleRepository for TitleStore {
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
+        let cache_key = id.to_string();
         let id = id.to_string();
-        SqlRuntime::run_in_transaction(&self.datastore, "delete_title", move |tx| {
+        let result = SqlRuntime::run_in_transaction(&self.datastore, "delete_title", move |tx| {
             let id = id.clone();
             Box::pin(async move {
                 delete_title_search_projection_sql_tx(tx, &id).await?;
@@ -2593,7 +2620,10 @@ impl TitleRepository for TitleStore {
                 Ok(())
             })
         })
-        .await
+        .await;
+        // `title_anime_numbering_bridges` cascades with the title row.
+        self.invalidate_anime_numbering_bridge(&cache_key);
+        result
     }
 
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
