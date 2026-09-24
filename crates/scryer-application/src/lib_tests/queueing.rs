@@ -1090,16 +1090,10 @@ async fn a_deleted_download_stops_conflicting_new_submissions_for_its_scope() {
         app.clone(),
         token.child_token(),
     ));
-    within_deadline("the queued delete", async {
-        loop {
-            if let Some(record) = download_queue_commands.get(&command_id).await
-                && record.status == scryer_domain::DownloadQueueDeleteStatus::Completed
-            {
-                break;
-            }
-            sleep(Duration::from_millis(10)).await;
-        }
-    })
+    within_deadline(
+        "the queued delete",
+        download_queue_commands.wait_completed(&command_id),
+    )
     .await;
     token.cancel();
     poller.await.expect("delete poller should stop cleanly");

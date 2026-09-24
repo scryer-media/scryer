@@ -2376,9 +2376,30 @@ impl DownloadClient for StubDownloadClient {
 pub(super) struct TrackingDownloadQueueCommandRepo {
     pub(super) queued: Arc<Mutex<Vec<DownloadQueueCommandRecord>>>,
     pub(super) recovered_count: Arc<Mutex<u64>>,
+    /// Signalled whenever a command's status changes, so tests wait on the
+    /// transition instead of polling.
+    status_changed: Arc<tokio::sync::Notify>,
 }
 
 impl TrackingDownloadQueueCommandRepo {
+    /// Resolve once the command reaches `Completed`. Callers bound this with a
+    /// deadline; a command that never completes fails the test there.
+    pub(super) async fn wait_completed(&self, id: &str) -> DownloadQueueCommandRecord {
+        loop {
+            // Register before checking, so a transition between the check and
+            // the await still wakes this waiter.
+            let notified = self.status_changed.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if let Some(record) = self.get(id).await
+                && record.status == scryer_domain::DownloadQueueDeleteStatus::Completed
+            {
+                return record;
+            }
+            notified.await;
+        }
+    }
+
     pub(super) async fn seed_pending(
         &self,
         client_id: Option<&str>,
@@ -2484,6 +2505,8 @@ impl DownloadQueueCommandRepository for TrackingDownloadQueueCommandRepo {
         record.status = scryer_domain::DownloadQueueDeleteStatus::Running;
         record.started_at = Some(Utc::now().to_rfc3339());
         record.updated_at = Utc::now().to_rfc3339();
+        drop(queued);
+        self.status_changed.notify_waiters();
         Ok(())
     }
 
@@ -2496,6 +2519,8 @@ impl DownloadQueueCommandRepository for TrackingDownloadQueueCommandRepo {
         record.status = scryer_domain::DownloadQueueDeleteStatus::Completed;
         record.finished_at = Some(Utc::now().to_rfc3339());
         record.updated_at = Utc::now().to_rfc3339();
+        drop(queued);
+        self.status_changed.notify_waiters();
         Ok(())
     }
 
@@ -2513,6 +2538,8 @@ impl DownloadQueueCommandRepository for TrackingDownloadQueueCommandRepo {
         record.error_text = error_text.map(str::to_string);
         record.finished_at = Some(Utc::now().to_rfc3339());
         record.updated_at = Utc::now().to_rfc3339();
+        drop(queued);
+        self.status_changed.notify_waiters();
         Ok(())
     }
 
