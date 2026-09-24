@@ -514,7 +514,7 @@ impl TitleRepository for TitleStore {
                 "COALESCE((SELECT json_group_array(name) FROM title_metadata_tags WHERE title_id = titles.id AND LOWER(category) = 'genre'), '[]')"
             }
             StoreDatastore::Postgres { .. } => {
-                "COALESCE((SELECT json_agg(name)::text FROM title_metadata_tags WHERE title_id = titles.id AND LOWER(category) = 'genre'), '[]')"
+                "COALESCE((SELECT jsonb_agg(name) FROM title_metadata_tags WHERE title_id = titles.id AND LOWER(category) = 'genre'), '[]'::jsonb)"
             }
         };
         let rows = SqlRuntime::fetch_all(
