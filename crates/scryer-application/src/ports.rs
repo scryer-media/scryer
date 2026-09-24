@@ -3090,6 +3090,17 @@ pub trait ShowRepository: Send + Sync {
         Ok(episodes)
     }
     async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>>;
+    /// Batch-load episodes for many titles. Returns a flat list (each episode
+    /// carries `title_id`), in `list_episodes_for_title` order within a title;
+    /// callers group by that field. The default fans out to
+    /// `list_episodes_for_title`; SQL stores override with a single `IN` query.
+    async fn list_episodes_for_titles(&self, title_ids: &[String]) -> AppResult<Vec<Episode>> {
+        let mut episodes = Vec::new();
+        for title_id in title_ids {
+            episodes.extend(self.list_episodes_for_title(title_id).await?);
+        }
+        Ok(episodes)
+    }
     /// The community season layout stored for an anime title, or `None` when
     /// SMG has never sent one.
     ///

@@ -551,12 +551,17 @@ impl AppUseCase {
         // — that function also backs the operator-facing "cutoff unmet" listing,
         // which is about quality tiers and would start reporting scopes whose
         // tier is fine.
+        //
+        // Scopes the quality sweep already nominated are handed down so the
+        // score pass never scores them: their target exists whatever the
+        // score says, and scoring them only to discard the result was pure
+        // cost on every cycle.
         let mut seen: HashSet<String> = targets
             .iter()
             .map(|target| target.scope_key.clone())
             .collect();
         for target in self
-            .derive_format_cutoff_targets(title_id, respect_title_monitoring)
+            .derive_format_cutoff_targets(title_id, respect_title_monitoring, &seen)
             .await?
         {
             if seen.insert(target.scope_key.clone()) {
@@ -576,14 +581,25 @@ impl AppUseCase {
     /// page uses and, since MA4, the same number the grab gate compares against
     /// — in pages, so a large library re-scores in bounded chunks rather than
     /// all at once.
+    ///
+    /// `already_targeted` holds scope keys that are targets regardless of
+    /// their score (the quality sweep's nominations). They are dropped before
+    /// scoring, so the pass never pays for a number nobody reads.
     async fn derive_format_cutoff_targets(
         &self,
         title_id: Option<&str>,
         respect_title_monitoring: bool,
+        already_targeted: &HashSet<String>,
     ) -> AppResult<Vec<AcquisitionTarget>> {
         /// How many scopes are re-scored per batch. Each page is one media-file
         /// query plus one scoring context per distinct title on it.
         const PAGE: usize = 200;
+
+        // A library-wide pass visits every memoised scope, so when it completes
+        // the memo can drop whatever it did not touch. A title-scoped pass
+        // reads and fills the memo but sweeps nothing.
+        let memo = &self.runtime.acquisition.landed_bar_memo;
+        let full_pass = title_id.is_none().then(|| memo.begin_pass());
 
         let libraries = self.services.catalog.libraries.list(None).await?;
         let library_ids: Vec<String> = libraries.iter().map(|library| library.id.clone()).collect();
@@ -601,6 +617,9 @@ impl AppUseCase {
             })
             .collect();
         if scored.is_empty() {
+            if let Some(pass) = full_pass {
+                memo.finish_pass(pass);
+            }
             return Ok(Vec::new());
         }
 
@@ -623,19 +642,42 @@ impl AppUseCase {
             .list_cutoff_unmet_quality_summaries(&title_ids)
             .await?;
 
+        // Resolve each scope's key before scoring so scopes that can never
+        // become a *new* target here are not scored at all: a series row with
+        // no episode is not a scope, and an already-targeted scope would be
+        // discarded by the caller's dedup.
+        let candidates: Vec<(&_, String)> = summaries
+            .iter()
+            .filter_map(|summary| {
+                let title = title_by_id.get(summary.title_id.as_str())?;
+                if summary.episode_id.is_none() && title.facet != MediaFacet::Movie {
+                    return None;
+                }
+                let scope = SubmissionScope::from_persisted(
+                    &title.id,
+                    summary.episode_id.clone(),
+                    None,
+                    None,
+                    None,
+                );
+                let scope_key = convergence_scope_key(&scope, &title.id)?;
+                (!already_targeted.contains(&scope_key)).then_some((summary, scope_key))
+            })
+            .collect();
+
         let mut targets = Vec::new();
-        for page in summaries.chunks(PAGE) {
+        for page in candidates.chunks(PAGE) {
             let scopes: Vec<crate::acquisition_workflow::LandedBarScope> = page
                 .iter()
-                .map(|summary| crate::acquisition_workflow::LandedBarScope {
+                .map(|(summary, _)| crate::acquisition_workflow::LandedBarScope {
                     title_id: summary.title_id.clone(),
                     episode_id: summary.episode_id.clone(),
                     collection_id: None,
                     series_movie_link_id: None,
                 })
                 .collect();
-            let bars = self.landed_bars_for_scopes(&scopes).await;
-            for (summary, bar) in page.iter().zip(bars) {
+            let bars = self.landed_bars_for_scopes_memoized(&scopes).await;
+            for ((summary, scope_key), bar) in page.iter().zip(bars) {
                 // No bar means nothing scored for this scope; a scope with no
                 // number is not evidence that the number is low.
                 let Some(bar) = bar else { continue };
@@ -649,22 +691,9 @@ impl AppUseCase {
                 let Some(title) = title_by_id.get(summary.title_id.as_str()) else {
                     continue;
                 };
-                if summary.episode_id.is_none() && title.facet != MediaFacet::Movie {
-                    continue;
-                }
-                let scope = SubmissionScope::from_persisted(
-                    &title.id,
-                    summary.episode_id.clone(),
-                    None,
-                    None,
-                    None,
-                );
-                let Some(scope_key) = convergence_scope_key(&scope, &title.id) else {
-                    continue;
-                };
                 targets.push(AcquisitionTarget {
                     occupied: true,
-                    scope_key,
+                    scope_key: scope_key.clone(),
                     title_id: title.id.clone(),
                     library_id: title.library_id.clone(),
                     facet: title.facet.clone(),
@@ -682,6 +711,17 @@ impl AppUseCase {
                     hot_by_air_date: false,
                 });
             }
+        }
+        if let Some(pass) = full_pass {
+            let stats = memo.finish_pass(pass);
+            tracing::debug!(
+                scopes = candidates.len(),
+                targets = targets.len(),
+                memo_hits = stats.hits,
+                memo_fills = stats.fills,
+                memo_entries = stats.entries,
+                "background cutoff pass: score-cutoff scopes derived"
+            );
         }
         Ok(targets)
     }

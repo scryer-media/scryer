@@ -1063,6 +1063,9 @@ pub(crate) fn evidence_from_media_file(file: &crate::TitleMediaFile) -> ReleaseE
 /// This is the incumbent's bar, always — the persisted `acquisition_score` is
 /// display and history, never a comparison input. It runs the same pipeline the
 /// import ran, which is what makes the two numbers comparable at all.
+///
+/// A change to what this returns for the same inputs must bump
+/// [`crate::quality::landed_bar_memo::SCORER_VERSION`].
 pub(crate) fn score_media_file(
     file: &crate::TitleMediaFile,
     ctx: &ScoringContext<'_>,

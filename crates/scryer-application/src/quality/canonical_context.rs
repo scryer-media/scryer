@@ -72,6 +72,46 @@ impl ResolvedScoringContext {
     pub(crate) fn default_runtime_minutes(&self) -> Option<i32> {
         self.default_runtime_minutes
     }
+
+    /// Hashes every scoring input this context carries, except the rules
+    /// engine, into a landed-bar memo key.
+    ///
+    /// The destructure is exhaustive on purpose: a field added to this struct
+    /// does not compile here until someone decides whether it belongs in the
+    /// key. Leaving a scoring input out would let the memo return a bar derived
+    /// under a different input. The engine is fenced by the memo's generation
+    /// instead (see [`crate::quality::landed_bar_memo`]).
+    pub(crate) fn hash_memo_inputs(&self, hasher: &mut blake3::Hasher) {
+        use crate::quality::landed_bar_memo::{SCORER_VERSION, hash_debug, hash_json};
+
+        let Self {
+            profile,
+            required_audio_languages,
+            category,
+            title_id,
+            library_name,
+            original_language,
+            original_country,
+            title_tags,
+            rules: _,
+            default_runtime_minutes,
+        } = self;
+        hasher.update(&SCORER_VERSION.to_le_bytes());
+        // The whole profile, ranking fields included, with the persona this
+        // context resolved already substituted into it.
+        hash_json(
+            hasher,
+            &serde_json::to_value(profile).unwrap_or(serde_json::Value::Null),
+        );
+        hash_debug(hasher, required_audio_languages);
+        hash_debug(hasher, category);
+        hash_debug(hasher, title_id);
+        hash_debug(hasher, library_name);
+        hash_debug(hasher, original_language);
+        hash_debug(hasher, original_country);
+        hash_debug(hasher, title_tags);
+        hash_debug(hasher, default_runtime_minutes);
+    }
 }
 
 /// The announced-evidence parse for a release against one title.
@@ -915,6 +955,10 @@ impl AppUseCase {
     /// All three facts come out of the same re-derivation because admission
     /// compares them in one ladder (tier → revision → score, I3/D9); splitting
     /// them across two derivations is how the sides drift.
+    ///
+    /// The background cutoff pass memoises this derivation's score by its
+    /// inputs; a change to how it scores the same inputs must bump
+    /// [`crate::quality::landed_bar_memo::SCORER_VERSION`].
     pub(crate) fn incumbent_bar(
         &self,
         file: &crate::TitleMediaFile,

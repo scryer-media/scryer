@@ -687,6 +687,30 @@ fn visit_module_references(module: &Module, mut sink: impl FnMut(StaticReference
     }
 }
 
+/// Whether `module` calls `time.now_ns`.
+///
+/// It is the only builtin the engine enables whose result does not follow from
+/// the evaluation input: regorus is built without `rand`, `uuid`, `http` and
+/// `opa.runtime`, and the `time.parse_*` functions are pure. Any call anywhere
+/// in the module counts, including inside a helper function another module
+/// calls, because the question is whether the engine as a whole is a pure
+/// function of its input.
+pub(crate) fn module_reads_clock(module: &Module) -> bool {
+    let mut reads_clock = false;
+    for rule in &module.policy {
+        visit_rule_expr_nodes(rule, |expr| {
+            if let Expr::Call { fcn, .. } = expr
+                && static_reference(fcn).is_some_and(|function| {
+                    function.components.len() == 2 && function.starts_with(&["time", "now_ns"])
+                })
+            {
+                reads_clock = true;
+            }
+        });
+    }
+    reads_clock
+}
+
 fn object_get_reference(
     expr: &Expr,
     aliases: &HashMap<String, StaticReference>,
@@ -1961,6 +1985,45 @@ mod tests {
         assert!(
             crate::UserRulesEngine::build(&[test_policy(rule_set_id, source)]).is_err(),
             "runtime unexpectedly accepted the source"
+        );
+    }
+
+    #[test]
+    fn an_engine_reads_the_clock_only_when_a_policy_calls_time_now_ns() {
+        let build = |rule_set_id: &str, body: &str| {
+            let source =
+                format!("package scryer.rules.user.{rule_set_id}\nimport rego.v1\n\n{body}\n");
+            crate::UserRulesEngine::build(&[test_policy(rule_set_id, &source)])
+                .expect("policy should compile")
+        };
+
+        assert!(!crate::UserRulesEngine::empty().reads_clock());
+        assert!(
+            !build("static_rule", "score_entry[\"bonus\"] := 100").reads_clock(),
+            "a rule without time builtins is a function of its input"
+        );
+        assert!(
+            !build(
+                "parse_rule",
+                "score_entry[\"dated\"] := 5 if {\n\ttime.parse_rfc3339_ns(\"2020-01-01T00:00:00Z\") > 0\n}"
+            )
+            .reads_clock(),
+            "time.parse_* is pure and must not disable input memoisation"
+        );
+        assert!(
+            build(
+                "direct_clock",
+                "score_entry[\"late\"] := 10 if {\n\ttime.now_ns() > 0\n}"
+            )
+            .reads_clock()
+        );
+        assert!(
+            build(
+                "helper_clock",
+                "now := time.now_ns()\n\nscore_entry[\"late\"] := 10 if {\n\tnow > 0\n}"
+            )
+            .reads_clock(),
+            "a clock read outside score_entry still makes the engine impure"
         );
     }
 
