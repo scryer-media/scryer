@@ -116,7 +116,7 @@ impl InMemoryUpstreamScheduler {
         let quota_by_account = quota_index_from_entries(&entries);
         let rss_cadence = store.load_rss_cadence().await?;
         let destination_cooldowns = store.load_destination_cooldowns().await?;
-        RateLimitRegistry::new().hydrate_destination_cooldowns(destination_cooldowns);
+        RateLimitRegistry::indexers().hydrate_destination_cooldowns(destination_cooldowns);
         let scheduler = Self {
             state: Arc::new(Mutex::new(SchedulerState {
                 entries,
@@ -332,7 +332,7 @@ impl UpstreamScheduler for InMemoryUpstreamScheduler {
             }
         }
         if let Some(retry_after) = cooldown_record {
-            let registry = RateLimitRegistry::new();
+            let registry = RateLimitRegistry::indexers();
             let _ = match retry_after {
                 Some(delay) => {
                     registry
@@ -1001,7 +1001,7 @@ async fn flush_dirty_state(
     state: &Arc<Mutex<SchedulerState>>,
 ) -> AppResult<()> {
     let (entries, rss_cadence) = drain_dirty_state(state);
-    let destination_cooldowns = RateLimitRegistry::new().drain_dirty_destination_cooldowns();
+    let destination_cooldowns = RateLimitRegistry::indexers().drain_dirty_destination_cooldowns();
     if entries.is_empty() && rss_cadence.is_empty() && destination_cooldowns.is_empty() {
         return Ok(());
     }
@@ -1018,19 +1018,19 @@ async fn flush_dirty_state(
     if let Err(error) = store.flush_entries(entries).await {
         requeue_dirty_entries(state, entry_keys);
         requeue_dirty_rss_cadence(state, rss_keys);
-        RateLimitRegistry::new().requeue_dirty_destination_cooldowns(destination_cooldowns);
+        RateLimitRegistry::indexers().requeue_dirty_destination_cooldowns(destination_cooldowns);
         return Err(error);
     }
     if let Err(error) = store.flush_rss_cadence(rss_cadence).await {
         requeue_dirty_rss_cadence(state, rss_keys);
-        RateLimitRegistry::new().requeue_dirty_destination_cooldowns(destination_cooldowns);
+        RateLimitRegistry::indexers().requeue_dirty_destination_cooldowns(destination_cooldowns);
         return Err(error);
     }
     if let Err(error) = store
         .flush_destination_cooldowns(destination_cooldowns.clone())
         .await
     {
-        RateLimitRegistry::new().requeue_dirty_destination_cooldowns(destination_cooldowns);
+        RateLimitRegistry::indexers().requeue_dirty_destination_cooldowns(destination_cooldowns);
         return Err(error);
     }
     Ok(())
@@ -1146,7 +1146,7 @@ fn decide_candidate(
     // the HTTP layer fails fast and the failure is surfaced per indexer.
     if candidate.intent != SchedulerIntent::InteractiveSearch
         && let Some(retry_after) =
-            RateLimitRegistry::new().active_destination_cooldown(&candidate.destination_key)
+            RateLimitRegistry::indexers().active_destination_cooldown(&candidate.destination_key)
     {
         return SchedulerAdmission::Skip {
             candidate_id: candidate.candidate_id,
@@ -1308,7 +1308,7 @@ fn destination_cooldown_until(
     destination: &DestinationKey,
     now: DateTime<Utc>,
 ) -> Option<DateTime<Utc>> {
-    let remaining = RateLimitRegistry::new().active_destination_cooldown(destination)?;
+    let remaining = RateLimitRegistry::indexers().active_destination_cooldown(destination)?;
     chrono::Duration::from_std(remaining)
         .ok()
         .map(|duration| now + duration)
@@ -1626,7 +1626,7 @@ mod tests {
         // Unique destination key: the rate-limit registry is process-global and
         // shared across tests.
         let dest = DestinationKey::from("interactive-cooldown-bypass.test");
-        RateLimitRegistry::new()
+        RateLimitRegistry::indexers()
             .record_destination_cooldown(&dest, Duration::from_secs(300), RetryAfterSource::Seconds)
             .await;
 
@@ -2215,7 +2215,7 @@ mod tests {
             .expect("feedback should persist");
 
         assert!(
-            RateLimitRegistry::new()
+            RateLimitRegistry::indexers()
                 .active_destination_cooldown(&candidate.destination_key)
                 .is_none(),
             "scheduler feedback must not duplicate cooldowns already recorded by outbound HTTP"
@@ -2257,7 +2257,7 @@ mod tests {
             .expect("feedback should persist");
 
         assert!(
-            RateLimitRegistry::new()
+            RateLimitRegistry::indexers()
                 .active_destination_cooldown(&candidate.destination_key)
                 .is_some(),
             "provider-only rate-limit feedback still needs a registry fallback cooldown"
@@ -2269,7 +2269,7 @@ mod tests {
         let scheduler = InMemoryUpstreamScheduler::new();
         let host = HostKey::from(format!("host-rps-{}.example.test", Uuid::new_v4()));
         let destination = DestinationKey::from(host.to_string());
-        let registry = RateLimitRegistry::new();
+        let registry = RateLimitRegistry::indexers();
         // A near-zero refill rate keeps the drained bucket empty for the rest
         // of the test, however slowly it runs.
         registry.register_host_profile(

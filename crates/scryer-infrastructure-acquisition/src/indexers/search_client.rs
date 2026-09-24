@@ -2495,7 +2495,7 @@ impl MultiIndexerSearchClient {
         if !is_managed_proxy {
             return;
         }
-        RateLimitRegistry::new().register_host_profile(
+        RateLimitRegistry::indexers().register_host_profile(
             host_key.clone(),
             HostRpsProfile::limited(LOCAL_MANAGED_HOST_RPS, LOCAL_MANAGED_HOST_RPS_BURST),
             HostRpsProfileSource::ExplicitRegistration,

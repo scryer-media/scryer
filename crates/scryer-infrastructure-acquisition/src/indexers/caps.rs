@@ -302,7 +302,7 @@ impl DirectNabCapsSnapshotRefresher {
         Self {
             outbound_http: OutboundHttpClient::new(
                 indexer_reqwest_client(),
-                RateLimitRegistry::new(),
+                RateLimitRegistry::indexers(),
             ),
             upstream_scheduler: Arc::new(NullUpstreamScheduler),
             indexer_stats: Arc::new(scryer_application::NullIndexerStatsTracker),

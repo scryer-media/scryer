@@ -508,13 +508,14 @@ impl HostRateLimiterEntry {
 /// How a registry answers a 429 that named no `Retry-After`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum FallbackCooldown {
-    /// Climb [`RATE_LIMIT_FALLBACK_COOLDOWN_LADDER`]. For third-party
-    /// destinations such as indexers, whose quotas Scryer cannot see.
+    /// Wait out the request policy's own retry backoff. A refusal from a
+    /// download client, image host or SMG should slow the caller down, not
+    /// stop it for twenty minutes.
     #[default]
-    Escalating,
-    /// Wait out the request policy's own retry backoff. For a first-party
-    /// service that paces itself and says how long to wait when it can.
     PolicyBackoff,
+    /// Climb [`RATE_LIMIT_FALLBACK_COOLDOWN_LADDER`]. Only indexers, whose
+    /// daily quotas Scryer cannot see and must not burn, get this.
+    Escalating,
 }
 
 #[derive(Default)]
@@ -535,9 +536,22 @@ pub struct RateLimitRegistry {
 }
 
 impl RateLimitRegistry {
+    /// The process-wide registry for general outbound traffic: download
+    /// clients, image hosts, plugin fetches and the like. A 429 without a
+    /// `Retry-After` waits out the request policy's backoff.
     pub fn new() -> Self {
         static SHARED: LazyLock<RateLimitRegistry> = LazyLock::new(RateLimitRegistry::isolated);
         SHARED.clone()
+    }
+
+    /// The process-wide registry for indexer traffic. It is the one whose
+    /// destination cooldowns the upstream scheduler persists and admits
+    /// against, and the only one that climbs
+    /// [`RATE_LIMIT_FALLBACK_COOLDOWN_LADDER`].
+    pub fn indexers() -> Self {
+        static INDEXERS: LazyLock<RateLimitRegistry> =
+            LazyLock::new(RateLimitRegistry::isolated_indexers);
+        INDEXERS.clone()
     }
 
     pub fn isolated() -> Self {
@@ -546,14 +560,12 @@ impl RateLimitRegistry {
         }
     }
 
-    /// A registry of its own for a first-party service. A 429 without a
-    /// `Retry-After` waits out the request policy's backoff instead of the
-    /// escalating ladder built for indexers. A refusal during a large library
-    /// scan should slow that scan down, not stop it for twenty minutes.
-    pub fn first_party() -> Self {
+    /// A fresh registry with indexer semantics, for tests and callers that
+    /// must not share [`RateLimitRegistry::indexers`].
+    pub fn isolated_indexers() -> Self {
         Self {
             state: Arc::new(RateLimitRegistryState {
-                fallback_cooldown: FallbackCooldown::PolicyBackoff,
+                fallback_cooldown: FallbackCooldown::Escalating,
                 ..RateLimitRegistryState::default()
             }),
         }
@@ -2211,11 +2223,11 @@ pub fn smg_reqwest_client() -> Client {
     CLIENT.clone()
 }
 
-/// SMG's own outbound client. It shares one [`RateLimitRegistry::first_party`]
-/// across every SMG caller in the process and nothing else, so SMG pacing and
-/// cooldowns never mix with the indexer and download-client registry.
+/// SMG's own outbound client. It shares one registry across every SMG caller
+/// in the process and nothing else, so SMG pacing and cooldowns never mix
+/// with the indexer or general registries.
 pub fn smg_outbound_http_client() -> OutboundHttpClient {
-    static RATE_LIMITS: LazyLock<RateLimitRegistry> = LazyLock::new(RateLimitRegistry::first_party);
+    static RATE_LIMITS: LazyLock<RateLimitRegistry> = LazyLock::new(RateLimitRegistry::isolated);
     OutboundHttpClient::new(smg_reqwest_client(), RATE_LIMITS.clone())
 }
 
@@ -4202,7 +4214,7 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn the_fallback_cooldown_ladder_escalates_and_resets_on_success() {
-        let registry = RateLimitRegistry::isolated();
+        let registry = RateLimitRegistry::isolated_indexers();
         let destination: DestinationKey = "indexer-a.example".into();
 
         let mut rungs = Vec::new();
@@ -4257,9 +4269,18 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_first_party_registry_never_climbs_the_indexer_ladder() {
-        let registry = RateLimitRegistry::first_party();
-        let destination: DestinationKey = "first-party.example".into();
+    async fn only_the_indexer_registry_climbs_the_ladder() {
+        let (indexer_delay, _) = RateLimitRegistry::isolated_indexers()
+            .record_destination_cooldown(
+                &"indexer.example".into(),
+                Duration::from_secs(2),
+                RetryAfterSource::FallbackBackoff,
+            )
+            .await;
+        assert_eq!(indexer_delay, Duration::from_secs(60));
+
+        let registry = RateLimitRegistry::isolated();
+        let destination: DestinationKey = "download-client.example".into();
 
         for _ in 0..6 {
             let (delay, source) = registry
@@ -4285,11 +4306,32 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn smg_has_its_own_first_party_client() {
+    async fn indexers_smg_and_general_traffic_have_separate_registries() {
+        let general = RateLimitRegistry::new();
+        let indexers = RateLimitRegistry::indexers();
+        assert!(Arc::ptr_eq(&general.state, &RateLimitRegistry::new().state));
+        assert!(Arc::ptr_eq(
+            &indexers.state,
+            &RateLimitRegistry::indexers().state
+        ));
+        assert!(
+            !Arc::ptr_eq(&general.state, &indexers.state),
+            "indexers must not share the general registry"
+        );
+        assert_eq!(
+            general.state.fallback_cooldown,
+            FallbackCooldown::PolicyBackoff
+        );
+        assert_eq!(
+            indexers.state.fallback_cooldown,
+            FallbackCooldown::Escalating
+        );
+
         let smg = smg_outbound_http_client();
         assert!(
-            !Arc::ptr_eq(&smg.registry().state, &RateLimitRegistry::new().state),
-            "SMG must not share the indexer and download-client registry"
+            !Arc::ptr_eq(&smg.registry().state, &general.state)
+                && !Arc::ptr_eq(&smg.registry().state, &indexers.state),
+            "SMG must not share the indexer or general registry"
         );
         assert!(
             Arc::ptr_eq(
@@ -4305,7 +4347,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_first_party_request_rides_out_delay_less_429s_on_its_backoff() {
+    async fn a_general_request_rides_out_delay_less_429s_on_its_backoff() {
         let rate_limited = || http_response(429, &[], "rate limited");
         let (url, hits) = spawn_http_server(vec![
             rate_limited(),
@@ -4315,15 +4357,15 @@ mod tests {
         ])
         .await;
         let client =
-            OutboundHttpClient::new(generic_reqwest_client(), RateLimitRegistry::first_party());
-        let policy = RequestPolicy::safe_read("first-party", "delay-less-429")
+            OutboundHttpClient::new(generic_reqwest_client(), RateLimitRegistry::isolated());
+        let policy = RequestPolicy::safe_read("general", "delay-less-429")
             .with_max_retries(3)
             .with_backoff(Duration::from_millis(10), Duration::from_millis(40));
 
         let response = client
             .send(policy, || client.client().get(&url))
             .await
-            .expect("a first-party request retries through delay-less 429s");
+            .expect("a general request retries through delay-less 429s");
 
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(hits.load(Ordering::SeqCst), 4);
@@ -4340,7 +4382,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_rate_limit_that_names_its_delay_does_not_move_the_ladder() {
-        let registry = RateLimitRegistry::isolated();
+        let registry = RateLimitRegistry::isolated_indexers();
         let destination: DestinationKey = "indexer-b.example".into();
 
         for _ in 0..3 {
@@ -4371,7 +4413,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_persisted_fallback_cooldown_resumes_its_ladder_rung() {
-        let registry = RateLimitRegistry::isolated();
+        let registry = RateLimitRegistry::isolated_indexers();
         let destination: DestinationKey = "indexer-c.example".into();
 
         registry.hydrate_destination_cooldowns(vec![PersistedDestinationCooldown {
@@ -4427,7 +4469,7 @@ mod tests {
 
     #[tokio::test]
     async fn requeue_dirty_destination_cooldowns_keeps_newer_dirty_state() {
-        let registry = RateLimitRegistry::isolated();
+        let registry = RateLimitRegistry::isolated_indexers();
         let destination: DestinationKey = "example.test".into();
 
         let _ = registry
@@ -4672,8 +4714,10 @@ mod tests {
         let (url, hits) =
             spawn_http_server(vec![http_response(429, &[("Retry-After", "bogus")], "")]).await;
 
-        let client =
-            OutboundHttpClient::new(generic_reqwest_client(), RateLimitRegistry::isolated());
+        let client = OutboundHttpClient::new(
+            generic_reqwest_client(),
+            RateLimitRegistry::isolated_indexers(),
+        );
         let policy = RequestPolicy::no_retry("test-server", "no-retry")
             .with_backoff(Duration::from_millis(5), Duration::from_millis(5));
 
