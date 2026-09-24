@@ -28,6 +28,8 @@ macro_rules! notification_event_mappings {
     ($macro:ident $(, $extra:expr)*) => {
         $macro! {
             $($extra,)*
+            import_space_blocked => DomainEventPayload::ImportSpaceBlocked(_) => DomainEventPayload::ImportSpaceBlocked(data) => DomainEventType::ImportSpaceBlocked => NotificationEventType::HealthIssue => build_import_space_notification(data),
+            import_space_restored => DomainEventPayload::ImportSpaceRestored(_) => DomainEventPayload::ImportSpaceRestored(data) => DomainEventType::ImportSpaceRestored => NotificationEventType::HealthRestored => build_import_space_notification(data),
             title_added => DomainEventPayload::TitleAdded(_) => DomainEventPayload::TitleAdded(data) => DomainEventType::TitleAdded => NotificationEventType::TitleAdded => build_title_added_notification(data),
             title_deleted => DomainEventPayload::TitleDeleted(_) => DomainEventPayload::TitleDeleted(data) => DomainEventType::TitleDeleted => NotificationEventType::TitleDeleted => build_title_deleted_notification(data),
             release_grabbed => DomainEventPayload::ReleaseGrabbed(_) => DomainEventPayload::ReleaseGrabbed(data) => DomainEventType::ReleaseGrabbed => NotificationEventType::Grab => build_release_grabbed_notification(data),
@@ -102,9 +104,18 @@ pub async fn start_notification_dispatcher(app: AppUseCase, cancel: Cancellation
     // filtered replay stays authoritative. The broadcast payload is only a high-water hint used
     // to avoid needless catch-up queries when we already processed that range.
     let mut should_poll = true;
+    let mut space_retry = tokio::time::interval(std::time::Duration::from_secs(30));
+    space_retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    space_retry.reset();
+    if let Err(error) = repo.reconcile_import_space_incidents().await {
+        warn!(%error, "import space incident reconciliation will retry");
+    }
 
     loop {
         if should_poll {
+            if let Err(error) = dispatch_pending_space_events(&app).await {
+                warn!(%error, "import space notification delivery will retry");
+            }
             match dispatch_pending_events(&app, last_sequence).await {
                 Ok(sequence) => last_sequence = sequence,
                 Err(error) => {
@@ -113,6 +124,12 @@ pub async fn start_notification_dispatcher(app: AppUseCase, cancel: Cancellation
             }
         }
         tokio::select! {
+            _ = space_retry.tick() => {
+                if let Err(error) = reconcile_and_dispatch_space_events(&app).await {
+                    warn!(%error, "import space notification delivery will retry");
+                }
+                should_poll = false;
+            }
             _ = cancel.cancelled() => {
                 info!("notification dispatcher shutting down");
                 break;
@@ -145,7 +162,13 @@ async fn dispatch_pending_events(
     loop {
         let events = repo
             .list(&DomainEventFilter {
-                event_types: Some(NOTIFICATION_DOMAIN_EVENT_TYPES.to_vec()),
+                event_types: Some(
+                    NOTIFICATION_DOMAIN_EVENT_TYPES
+                        .iter()
+                        .copied()
+                        .filter(|event_type| !is_import_space_event(*event_type))
+                        .collect(),
+                ),
                 after_sequence: Some(after_sequence),
                 limit: NOTIFICATION_BATCH_LIMIT,
                 ..DomainEventFilter::default()
@@ -177,21 +200,63 @@ pub(crate) fn supported_notification_event_types() -> &'static [NotificationEven
 }
 
 async fn dispatch_event(app: &AppUseCase, event: &DomainEvent) {
+    let _ = try_dispatch_event(app, event).await;
+}
+
+fn is_import_space_event(event_type: DomainEventType) -> bool {
+    matches!(
+        event_type,
+        DomainEventType::ImportSpaceBlocked | DomainEventType::ImportSpaceRestored
+    )
+}
+
+async fn reconcile_and_dispatch_space_events(app: &AppUseCase) -> crate::AppResult<()> {
+    app.services
+        .events
+        .domain_events
+        .reconcile_import_space_incidents()
+        .await?;
+    dispatch_pending_space_events(app).await
+}
+
+async fn dispatch_pending_space_events(app: &AppUseCase) -> crate::AppResult<()> {
+    const SUBSCRIBER: &str = "import_space_notifications";
+    let repo = &app.services.events.domain_events;
+    let offset = repo.get_subscriber_offset(SUBSCRIBER).await?;
+    let events = repo
+        .list(&DomainEventFilter {
+            event_types: Some(vec![
+                DomainEventType::ImportSpaceBlocked,
+                DomainEventType::ImportSpaceRestored,
+            ]),
+            after_sequence: Some(offset),
+            limit: NOTIFICATION_BATCH_LIMIT,
+            ..Default::default()
+        })
+        .await?;
+    for event in events {
+        try_dispatch_event(app, &event).await?;
+        repo.set_subscriber_offset(SUBSCRIBER, event.sequence)
+            .await?;
+    }
+    Ok(())
+}
+
+async fn try_dispatch_event(app: &AppUseCase, event: &DomainEvent) -> crate::AppResult<()> {
+    let durable = is_import_space_event(event.payload.event_type());
+    let mut delivery_error = None;
     let Some(notification) = build_notification(event) else {
-        return;
+        return Ok(());
     };
     let notification = enrich_notification(app, event, notification).await;
 
     let sub_repo = match app.notification_subscriptions_repo() {
         Ok(repo) => repo,
-        Err(_) => return,
+        Err(error) => return if durable { Err(error) } else { Ok(()) },
     };
     let ch_repo = match app.notification_channels_repo() {
         Ok(repo) => repo,
-        Err(_) => return,
-    };
-    let Some(provider) = app.services.notifications.notification_provider() else {
-        return;
+        Err(error) => return if durable { Err(error) } else { Ok(()) },
     };
 
     let event_type = event.payload.event_type();
@@ -219,7 +284,7 @@ async fn dispatch_event(app: &AppUseCase, event: &DomainEvent) {
                 event_type = notification.payload.event_type.as_str(),
                 "failed to list notification subscriptions"
             );
-            return;
+            return if durable { Err(error) } else { Ok(()) };
         }
     };
     subscriptions.sort_by(|left, right| left.id.cmp(&right.id));
@@ -247,6 +312,22 @@ async fn dispatch_event(app: &AppUseCase, event: &DomainEvent) {
             continue;
         }
 
+        let target_key = format!(
+            "{}:{}",
+            subscription.target_kind.as_str(),
+            subscription.target_id
+        );
+        if durable
+            && app
+                .services
+                .events
+                .domain_events
+                .import_space_notification_delivered(&event.event_id, &target_key)
+                .await?
+        {
+            continue;
+        }
+
         let channel = match subscription.target_kind {
             NotificationTargetKind::PluginChannel => {
                 let Some(channel_id) = subscription.channel_id.as_deref() else {
@@ -267,6 +348,9 @@ async fn dispatch_event(app: &AppUseCase, event: &DomainEvent) {
                             error = %error,
                             "failed to load notification channel"
                         );
+                        if durable {
+                            delivery_error = Some(error);
+                        }
                         continue;
                     }
                 }
@@ -284,6 +368,9 @@ async fn dispatch_event(app: &AppUseCase, event: &DomainEvent) {
                         error = %error,
                         "failed to resolve media server notification target"
                     );
+                    if durable {
+                        delivery_error = Some(error);
+                    }
                     continue;
                 }
             },
@@ -300,10 +387,22 @@ async fn dispatch_event(app: &AppUseCase, event: &DomainEvent) {
                     error = %error,
                     "failed to resolve notification target configuration"
                 );
+                if durable {
+                    delivery_error = Some(error);
+                }
                 continue;
             }
         };
 
+        let Some(provider) = app.services.notifications.notification_provider() else {
+            return if durable {
+                Err(crate::AppError::Repository(
+                    "notification provider unavailable".into(),
+                ))
+            } else {
+                Ok(())
+            };
+        };
         let supported_events =
             provider.supported_events_for_provider(channel.channel_type.as_str());
         if !supported_events.is_empty()
@@ -326,12 +425,24 @@ async fn dispatch_event(app: &AppUseCase, event: &DomainEvent) {
                     channel_name = channel.name.as_str(),
                     "no notification plugin available for channel type"
                 );
+                if durable {
+                    delivery_error = Some(crate::AppError::Repository(
+                        "notification plugin unavailable".into(),
+                    ));
+                }
                 continue;
             }
         };
 
         match client.send_notification(&notification.payload).await {
             Ok(()) => {
+                if durable {
+                    app.services
+                        .events
+                        .domain_events
+                        .mark_import_space_notification_delivered(&event.event_id, &target_key)
+                        .await?;
+                }
                 info!(
                     event_type = event_type.as_str(),
                     plugin_event_type = notification.payload.event_type.as_str(),
@@ -347,9 +458,13 @@ async fn dispatch_event(app: &AppUseCase, event: &DomainEvent) {
                     error = %error,
                     "notification dispatch failed"
                 );
+                if durable {
+                    delivery_error = Some(error);
+                }
             }
         }
     }
+    delivery_error.map_or(Ok(()), Err)
 }
 
 struct BuiltNotification {
@@ -358,6 +473,41 @@ struct BuiltNotification {
 
 fn build_notification(event: &DomainEvent) -> Option<BuiltNotification> {
     notification_event_mappings!(notification_build_match, &event.payload)
+}
+
+fn build_import_space_notification(
+    data: &scryer_domain::import_space::SpaceIncidentEvent,
+) -> BuiltNotification {
+    let (event_type, summary, status) = if data.recovered {
+        (
+            NotificationEventType::HealthRestored,
+            "Import disk space restored",
+            "restored",
+        )
+    } else {
+        (
+            NotificationEventType::HealthIssue,
+            "Imports waiting for disk space",
+            "blocked",
+        )
+    };
+    let message = format!(
+        "{}: {} bytes available, {} bytes required. {} imports waiting for disk space. Open Imports to inspect affected downloads.",
+        data.measurement.destination,
+        data.measurement.available_bytes,
+        data.measurement.required_bytes,
+        data.affected_import_count,
+    );
+    let mut payload =
+        base_notification_payload(event_type, summary.into(), message.clone(), None, &[], &[]);
+    payload.health = Some(crate::NotificationHealthPayload {
+        status: Some(status.into()),
+        message: Some(message),
+        severity: Some(if data.recovered { "info" } else { "warning" }.into()),
+        code: Some("import_disk_space".into()),
+        details: Some(format!("Incident {}", data.incident_id)),
+    });
+    BuiltNotification { payload }
 }
 
 fn build_title_added_notification(data: &TitleAddedEventData) -> BuiltNotification {
@@ -2086,7 +2236,27 @@ mod tests {
 
     #[test]
     fn notification_filter_list_matches_buildable_payloads() {
-        let supported_events = notification_sample_events();
+        let mut supported_events = notification_sample_events();
+        for recovered in [false, true] {
+            let mut event = supported_events[0].clone();
+            let data = scryer_domain::import_space::SpaceIncidentEvent {
+                incident_id: "fixture".into(),
+                measurement: scryer_domain::import_space::SpaceMeasurement {
+                    destination_key: "device:fixture".into(),
+                    destination: "/library".into(),
+                    available_bytes: 5,
+                    required_bytes: 10,
+                },
+                affected_import_count: usize::from(!recovered),
+                recovered,
+            };
+            event.payload = if recovered {
+                DomainEventPayload::ImportSpaceRestored(data)
+            } else {
+                DomainEventPayload::ImportSpaceBlocked(data)
+            };
+            supported_events.push(event);
+        }
         let configured_event_types = NOTIFICATION_DOMAIN_EVENT_TYPES
             .iter()
             .map(|event_type| event_type.as_str().to_string())
@@ -2294,11 +2464,17 @@ mod file_delete_subscription_tests {
     #[derive(Default)]
     struct RecordingNotificationClient {
         sent: Arc<Mutex<Vec<NotificationEventType>>>,
+        fail: Arc<std::sync::atomic::AtomicBool>,
     }
 
     #[async_trait]
     impl NotificationClient for RecordingNotificationClient {
         async fn send_notification(&self, payload: &NotificationPayload) -> AppResult<()> {
+            if self.fail.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(crate::AppError::Repository(
+                    "injected notification failure".into(),
+                ));
+            }
             self.sent.lock().expect("sent log").push(payload.event_type);
             Ok(())
         }
@@ -2307,6 +2483,7 @@ mod file_delete_subscription_tests {
     #[derive(Default)]
     struct RecordingNotificationProvider {
         sent: Arc<Mutex<Vec<NotificationEventType>>>,
+        fail: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl RecordingNotificationProvider {
@@ -2323,6 +2500,7 @@ mod file_delete_subscription_tests {
             (config.channel_type.as_str() == FIXTURE_CHANNEL_TYPE).then(|| {
                 Arc::new(RecordingNotificationClient {
                     sent: Arc::clone(&self.sent),
+                    fail: Arc::clone(&self.fail),
                 }) as Arc<dyn NotificationClient>
             })
         }
@@ -2523,6 +2701,105 @@ mod file_delete_subscription_tests {
                 episode_ids: Vec::new(),
             }),
         }
+    }
+
+    #[tokio::test]
+    async fn import_space_notifications_respect_subscriptions_and_deduplicate_delivery() {
+        use scryer_domain::import_space::{SpaceIncidentEvent, SpaceMeasurement};
+        let store = Arc::new(InMemoryNotificationStore::default());
+        let channel = store.seed_channel("space-channel");
+        store.seed_subscription("blocked", &channel.id, NotificationEventType::HealthIssue);
+        store.seed_subscription("duplicate", &channel.id, NotificationEventType::HealthIssue);
+        let provider = Arc::new(RecordingNotificationProvider::default());
+        let (app, _) = bootstrap();
+        let app =
+            app.with_test_overrides(|services| services.with_notification_store(store.clone()));
+        let data = SpaceIncidentEvent {
+            incident_id: "incident-fixture".into(),
+            measurement: SpaceMeasurement {
+                destination_key: "device:fixture".into(),
+                destination: "/library".into(),
+                available_bytes: 5,
+                required_bytes: 10,
+            },
+            affected_import_count: 4,
+            recovered: false,
+        };
+        let event = app
+            .append_domain_event(crate::domain_events::new_global_domain_event(
+                None,
+                DomainEventPayload::ImportSpaceBlocked(data.clone()),
+            ))
+            .await
+            .unwrap();
+        assert!(app.services.notifications.notification_provider().is_none());
+        assert!(dispatch_pending_space_events(&app).await.is_err());
+        assert_eq!(
+            app.services
+                .events
+                .domain_events
+                .get_subscriber_offset("import_space_notifications")
+                .await
+                .unwrap(),
+            0
+        );
+        let unavailable_app = app.clone();
+        let app = app
+            .with_test_overrides(|services| services.with_notification_provider(provider.clone()));
+        provider
+            .fail
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        assert!(dispatch_pending_space_events(&app).await.is_err());
+        assert_eq!(
+            app.services
+                .events
+                .domain_events
+                .get_subscriber_offset("import_space_notifications")
+                .await
+                .unwrap(),
+            0
+        );
+        provider
+            .fail
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        dispatch_pending_space_events(&app).await.unwrap();
+        dispatch_pending_space_events(&app).await.unwrap();
+        try_dispatch_event(&app, &event).await.unwrap();
+        try_dispatch_event(&app, &event).await.unwrap();
+        try_dispatch_event(&unavailable_app, &event).await.unwrap();
+        assert_eq!(provider.sent(), vec![NotificationEventType::HealthIssue]);
+        let mut restored = data;
+        restored.recovered = true;
+        restored.affected_import_count = 0;
+        let event = app
+            .append_domain_event(crate::domain_events::new_global_domain_event(
+                None,
+                DomainEventPayload::ImportSpaceRestored(restored),
+            ))
+            .await
+            .unwrap();
+        try_dispatch_event(&app, &event).await.unwrap();
+        assert_eq!(
+            provider.sent(),
+            vec![NotificationEventType::HealthIssue],
+            "recovery requires its own subscription"
+        );
+        store.seed_subscription(
+            "restored",
+            &channel.id,
+            NotificationEventType::HealthRestored,
+        );
+        try_dispatch_event(&app, &event).await.unwrap();
+        try_dispatch_event(&app, &event).await.unwrap();
+        assert_eq!(
+            provider.sent(),
+            vec![
+                NotificationEventType::HealthIssue,
+                NotificationEventType::HealthRestored
+            ]
+        );
+        let payload = build_notification(&event).unwrap().payload;
+        assert_eq!(payload.health.unwrap().status.as_deref(), Some("restored"));
     }
 
     async fn dispatched_event_types(

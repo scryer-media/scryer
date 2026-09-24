@@ -37,6 +37,7 @@ import {
 import { sameDownloadQueueItem } from "@/lib/utils/download-queue";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { diskSpaceReason, importTitleHref, isWaitingForDiskSpace } from "@/lib/utils/import-row";
 
 export type QueueTableRowProps = {
   queueItem: DownloadQueueItem;
@@ -205,6 +206,7 @@ export const QueueTableRow = memo(function QueueTableRow({
         ) : null}
         <TableCell className="w-[32%]">
           <ActivityQueueTitleContent
+            titleHref={importTitleHref(queueItem)}
             displayTitle={row.displayTitle}
             releaseTitle={row.releaseTitle}
           />
@@ -232,13 +234,13 @@ export const QueueTableRow = memo(function QueueTableRow({
             className="mt-1"
             t={t}
           />
-          {(queueItem.deleteErrorMessage || queueItem.importErrorMessage) &&
-            !row.hasStatusDetails && (
+          {(isWaitingForDiskSpace(queueItem) ||
+            ((queueItem.deleteErrorMessage || queueItem.importErrorMessage) && !row.hasStatusDetails)) && (
             <p
               className="mt-1 max-w-full break-words whitespace-normal text-xs text-[var(--scry-danger-text-soft)]"
               title={queueItem.deleteErrorMessage ?? queueItem.importErrorMessage ?? ""}
             >
-              {queueItem.deleteErrorMessage ?? queueItem.importErrorMessage}
+              {isWaitingForDiskSpace(queueItem) ? diskSpaceReason(queueItem) : queueItem.deleteErrorMessage ?? queueItem.importErrorMessage}
             </p>
           )}
         </TableCell>
@@ -416,7 +418,7 @@ export const QueueTableRow = memo(function QueueTableRow({
               detailId={detailId}
               releaseTitle={row.releaseTitle}
               errorCode={queueItem.importErrorCode}
-              failureReason={row.failureReason}
+              failureReason={isWaitingForDiskSpace(queueItem) ? "" : row.failureReason}
               t={t}
             />
           </TableCell>

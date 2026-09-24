@@ -529,13 +529,24 @@ pub(crate) async fn finalize_scryer_download_ignored_for_download(
     if submission.title_id.trim().is_empty() {
         return Ok(FinalizeIgnoredOutcome::NoSubmission);
     }
+    let incident_download_id = canonical_download_id
+        .cloned()
+        .or_else(|| Some(submission.download_id.clone()));
 
     match submission_repository
         .get_tracked_state(&source_identity)
         .await?
         .as_deref()
     {
-        Some(state) if state == ignored => return Ok(FinalizeIgnoredOutcome::Finalized),
+        Some(state) if state == ignored => {
+            crate::import_checks::retire_space_blocks(
+                app,
+                &source_identity,
+                incident_download_id.as_ref(),
+            )
+            .await;
+            return Ok(FinalizeIgnoredOutcome::Finalized);
+        }
         Some(state) if preserved_states.contains(&state) => {
             return Ok(FinalizeIgnoredOutcome::PreservedTerminal(state.to_string()));
         }
@@ -594,6 +605,8 @@ pub(crate) async fn finalize_scryer_download_ignored_for_download(
         .update_tracked_state(&source_identity, ignored)
         .await?;
 
+    crate::import_checks::retire_space_blocks(app, &source_identity, incident_download_id.as_ref())
+        .await;
     if identity_already_ignored {
         // Healed the submission row for an identity that was already ignored;
         // the audit event was emitted when the identity row transitioned.
@@ -1324,6 +1337,12 @@ pub(crate) async fn drop_source_removed_from_client(
         return;
     }
 
+    crate::import_checks::retire_space_blocks(
+        app,
+        locator,
+        binding.as_ref().map(|binding| &binding.download_id),
+    )
+    .await;
     let Some(binding) = binding else {
         return;
     };

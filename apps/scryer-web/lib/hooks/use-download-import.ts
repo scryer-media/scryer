@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useClient } from "urql";
 
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -9,6 +9,10 @@ import type {
   DownloadQueueItem,
 } from "@/lib/types";
 import { downloadQueueItemIdentityKey } from "@/lib/utils/download-queue";
+import { boundedQuery, QueryTimeoutError } from "@/lib/graphql/bounded-query";
+import { useQueryAuthScope } from "@/lib/hooks/use-query-auth-scope";
+import { getAuthToken } from "@/lib/hooks/use-auth";
+import { useTranslate } from "@/lib/context/translate-context";
 
 const IMPORT_PAGE_SIZE = 50;
 
@@ -53,6 +57,8 @@ export function useDownloadImport({
   filter,
 }: UseDownloadImportArgs): UseDownloadImportResult {
   const client = useClient();
+  const authScope = useQueryAuthScope();
+  const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
   const [importItems, setImportItems] = useState<DownloadQueueItem[]>([]);
   const [importLoading, setImportLoading] = useState(false);
@@ -61,91 +67,102 @@ export function useDownloadImport({
   const [importHasMore, setImportHasMore] = useState(false);
   const [importTotalCount, setImportTotalCount] = useState(0);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
-  const importItemCountRef = useRef(0);
+  const nextOffsetRef = useRef(0);
+  const hasMoreRef = useRef(false);
+  const activeRequestRef = useRef<AbortController | null>(null);
+  const pendingRefreshRef = useRef(false);
+  const epochRef = useRef(0);
+  const [loadedScope, setLoadedScope] = useState<{ filter: DownloadImportFilter; auth: string | null } | null>(null);
+  const sameScope = loadedScope?.filter === filter && loadedScope.auth === authScope;
 
-  useEffect(() => {
-    importItemCountRef.current = importItems.length;
-  }, [importItems.length]);
-
-  const fetchImportPage = useCallback(
-    async (limit: number, offset: number): Promise<DownloadImportPage> => {
-      const { data, error } = await client
-        .query(downloadImportQuery, { limit, offset, filter })
-        .toPromise();
-      if (error) {
-        throw error;
-      }
-      return (
-        data?.downloadImport ?? {
-          items: [],
-          hasMore: false,
-          totalCount: 0,
+  const runRequest = useCallback(async (loadMore: boolean) => {
+    if (!enabled) return;
+    if (activeRequestRef.current) {
+      if (!loadMore) pendingRefreshRef.current = true;
+      return;
+    }
+    if (loadMore && !hasMoreRef.current) return;
+    const epoch = epochRef.current;
+    const current = () => epoch === epochRef.current && authScope === getAuthToken();
+    // One queued refresh is consumed after a successful request. A failure waits
+    // for the regular poll or an explicit retry, avoiding immediate retry loops.
+    let more = loadMore;
+    do {
+      pendingRefreshRef.current = false;
+      const controller = new AbortController();
+      activeRequestRef.current = controller;
+      if (more) setImportLoadingMore(true);
+      else setImportLoading(true);
+      let succeeded = false;
+      try {
+        const offset = more ? nextOffsetRef.current : 0;
+        const limit = more ? IMPORT_PAGE_SIZE : Math.max(nextOffsetRef.current, IMPORT_PAGE_SIZE);
+        const { data, error } = await boundedQuery(
+          client.query<{ downloadImport: DownloadImportPage }>(downloadImportQuery, { limit, offset, filter }),
+          controller.signal,
+        );
+        if (!current()) return;
+        if (error) throw error;
+        const page = data?.downloadImport;
+        if (!page || !Array.isArray(page.items) || typeof page.hasMore !== "boolean" ||
+            !Number.isSafeInteger(page.totalCount) || page.totalCount < 0) {
+          throw new Error("Invalid import activity response.");
         }
-      );
-    },
-    [client, filter],
-  );
+        const append = more;
+        setImportItems((items) => mergeImportItems(append ? items : [], page.items));
+        nextOffsetRef.current = offset + page.items.length;
+        hasMoreRef.current = page.hasMore;
+        setImportHasMore(page.hasMore);
+        setImportTotalCount(page.totalCount);
+        setLoadedScope({ filter, auth: authScope });
+        setImportError(null);
+        setLastRefreshedAt(new Date());
+        succeeded = true;
+      } catch (error) {
+        if (!current()) return;
+        const message = error instanceof QueryTimeoutError ? t("activity.refreshTimedOut") :
+          error instanceof Error ? error.message : "Failed to load import activity.";
+        setImportError(message);
+        setGlobalStatus(message);
+      } finally {
+        if (current()) {
+          activeRequestRef.current = null;
+          setImportLoading(false);
+          setImportLoadingMore(false);
+        }
+      }
+      if (!succeeded || !current()) break;
+      more = false;
+    } while (pendingRefreshRef.current);
+  }, [authScope, client, enabled, filter, setGlobalStatus, t]);
 
-  const refreshImport = useCallback(async () => {
-    if (!enabled) {
-      return;
-    }
+  const refreshImport = useCallback(() => runRequest(false), [runRequest]);
+  const loadMoreImport = useCallback(() => runRequest(true), [runRequest]);
 
-    setImportLoading(true);
-    try {
-      const limit = Math.max(importItemCountRef.current, IMPORT_PAGE_SIZE);
-      const page = await fetchImportPage(limit, 0);
-      setImportItems(page.items);
-      setImportHasMore(page.hasMore);
-      setImportTotalCount(page.totalCount);
-      setImportError(null);
-      setLastRefreshedAt(new Date());
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to load import activity.";
-      setImportError(message);
-      setGlobalStatus(message);
-    } finally {
-      setImportLoading(false);
-    }
-  }, [enabled, fetchImportPage, setGlobalStatus]);
-
-  const loadMoreImport = useCallback(async () => {
-    if (!enabled || importLoadingMore || !importHasMore) {
-      return;
-    }
-
-    setImportLoadingMore(true);
-    try {
-      const page = await fetchImportPage(IMPORT_PAGE_SIZE, importItems.length);
-      setImportItems((current) => mergeImportItems(current, page.items));
-      setImportHasMore(page.hasMore);
-      setImportTotalCount(page.totalCount);
-      setImportError(null);
-      setLastRefreshedAt(new Date());
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to load more import activity.";
-      setImportError(message);
-      setGlobalStatus(message);
-    } finally {
-      setImportLoadingMore(false);
-    }
-  }, [
-    enabled,
-    fetchImportPage,
-    importHasMore,
-    importItems.length,
-    importLoadingMore,
-    setGlobalStatus,
-  ]);
-
-  useEffect(() => {
+  useLayoutEffect(() => {
+    epochRef.current += 1;
+    nextOffsetRef.current = 0;
+    hasMoreRef.current = false;
+    pendingRefreshRef.current = false;
+    setLoadedScope({ filter, auth: authScope });
+    setImportItems([]);
+    setImportHasMore(false);
+    setImportTotalCount(0);
+    setLastRefreshedAt(null);
+    setImportError(null);
+    setImportLoading(false);
+    setImportLoadingMore(false);
     if (!enabled) {
       return;
     }
     void refreshImport();
-  }, [enabled, refreshImport]);
+    return () => {
+      epochRef.current += 1;
+      activeRequestRef.current?.abort();
+      activeRequestRef.current = null;
+      pendingRefreshRef.current = false;
+    };
+  }, [authScope, enabled, filter, refreshImport]);
 
   useEffect(() => {
     if (!enabled) {
@@ -160,13 +177,13 @@ export function useDownloadImport({
   }, [enabled, refreshImport]);
 
   return {
-    importItems,
-    importLoading,
-    importLoadingMore,
-    importError,
-    importHasMore,
-    importTotalCount,
-    lastRefreshedAt,
+    importItems: sameScope ? importItems : [],
+    importLoading: enabled && (!sameScope || importLoading),
+    importLoadingMore: sameScope && importLoadingMore,
+    importError: sameScope ? importError : null,
+    importHasMore: sameScope && importHasMore,
+    importTotalCount: sameScope ? importTotalCount : 0,
+    lastRefreshedAt: sameScope ? lastRefreshedAt : null,
     refreshImport,
     loadMoreImport,
   };

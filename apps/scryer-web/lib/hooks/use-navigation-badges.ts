@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { backendClient } from "@/lib/graphql/urql-client";
 import {
@@ -13,6 +13,9 @@ import {
   type NavigationBadgesRefreshDetail,
 } from "@/lib/events/navigation-badges";
 import type { PendingImportCounts } from "@/lib/types";
+import { boundedQuery } from "@/lib/graphql/bounded-query";
+import { useQueryAuthScope } from "@/lib/hooks/use-query-auth-scope";
+import { getAuthToken } from "@/lib/hooks/use-auth";
 
 type NavigationBadgeCountsPayload = {
   pendingImportCounts?: PendingImportCounts | null;
@@ -51,6 +54,15 @@ export function useNavigationBadges({
   canManageTitle: boolean;
   canRequestMedia: boolean;
 }) {
+  const authScope = useQueryAuthScope();
+  const scope = JSON.stringify([authScope, canManageTitle, canRequestMedia]);
+  const scopeRef = useRef(scope);
+  useLayoutEffect(() => { scopeRef.current = scope; }, [scope]);
+  const activeRequestRef = useRef<AbortController | null>(null);
+  const epochRef = useRef(0);
+  const pendingRef = useRef(false);
+  const [loadedAuth, setLoadedAuth] = useState<string | null>(null);
+  const [manualImportCountStale, setManualImportCountStale] = useState(false);
   const [pendingImportCounts, setPendingImportCounts] =
     useState<PendingImportCounts | null>(null);
   const [pendingMediaRequestCounts, setPendingMediaRequestCounts] =
@@ -89,6 +101,10 @@ export function useNavigationBadges({
   // up to a second apart. Triggers inside the window ride the earlier fetch;
   // the delayed delta confirmation forces through.
   const refreshNavigationBadges = useCallback(async (options?: { force?: boolean }) => {
+    if (activeRequestRef.current) {
+      pendingRef.current = true;
+      return;
+    }
     const now = Date.now();
     if (
       !options?.force &&
@@ -97,10 +113,17 @@ export function useNavigationBadges({
       return;
     }
     lastBadgeRefreshStartedAtRef.current = now;
+    const epoch = epochRef.current;
+    const current = () => epochRef.current === epoch && getAuthToken() === authScope && scopeRef.current === scope;
+    do {
+    pendingRef.current = false;
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+    let succeeded = false;
     try {
-      const badgeCountsResult = await backendClient
-        .query(navigationBadgeCountsQuery, {})
-        .toPromise();
+      const badgeCountsResult = await boundedQuery(backendClient
+        .query(navigationBadgeCountsQuery, {}), controller.signal);
+      if (!current()) return;
 
       if (badgeCountsResult.error) {
         throw badgeCountsResult.error;
@@ -109,6 +132,10 @@ export function useNavigationBadges({
       const badgeCounts = badgeCountsResult.data?.navigationBadgeCounts as
         | NavigationBadgeCountsPayload
         | undefined;
+      if (!badgeCounts || !Number.isSafeInteger(badgeCounts.activityImportCount) ||
+          (badgeCounts.activityImportCount ?? -1) < 0) {
+        throw new Error("Invalid navigation badge response.");
+      }
       const nextPendingImportCounts =
         badgeCounts?.pendingImportCounts ?? EMPTY_PENDING_IMPORT_COUNTS;
       const nextPendingMediaRequestCounts =
@@ -128,18 +155,42 @@ export function useNavigationBadges({
       );
       setPluginUpdateCount(Number(badgeCounts?.pluginUpdateCount ?? 0));
       setPluginBlockedCount(Number(badgeCounts?.pluginBlockedCount ?? 0));
+      setLoadedAuth(scope);
+      setManualImportCountStale(false);
+      succeeded = true;
     } catch (error) {
+      if (!current()) return;
+      setManualImportCountStale(true);
       console.warn("Failed to refresh navigation badges", error);
+    } finally {
+      if (current()) activeRequestRef.current = null;
     }
-  }, []);
+    if (!current() || !succeeded) break;
+    } while (pendingRef.current);
+  }, [authScope, scope]);
 
   useEffect(() => {
-    return scheduleAfterFirstPaint(() => {
+    epochRef.current += 1;
+    lastBadgeRefreshStartedAtRef.current = 0;
+    setLoadedAuth(null);
+    setPendingImportCounts(null);
+    setPendingMediaRequestCounts(null);
+    setManualImportRequiredCount(0);
+    setManualImportCountStale(false);
+    const cancelScheduled = scheduleAfterFirstPaint(() => {
       void refreshNavigationBadges();
     });
+    return () => {
+      epochRef.current += 1;
+      activeRequestRef.current?.abort();
+      activeRequestRef.current = null;
+      pendingRef.current = false;
+      cancelScheduled();
+    };
   }, [refreshNavigationBadges]);
 
   useEffect(() => {
+    let confirmationTimer: ReturnType<typeof setTimeout> | undefined;
     const refreshFromPulse = () => {
       dispatchNavigationBadgesRefresh({ source: "poll" });
     };
@@ -162,8 +213,8 @@ export function useNavigationBadges({
             )
           : 0;
       if (delta !== 0) {
-        setManualImportRequiredCount((current) => Math.max(0, current + delta));
-        window.setTimeout(() => {
+        clearTimeout(confirmationTimer);
+        confirmationTimer = setTimeout(() => {
           void refreshNavigationBadges({ force: true });
         }, 2_000);
         return;
@@ -187,6 +238,7 @@ export function useNavigationBadges({
       window.removeEventListener("focus", refreshFromFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.clearInterval(intervalId);
+      clearTimeout(confirmationTimer);
     };
   }, [refreshNavigationBadges]);
 
@@ -198,11 +250,13 @@ export function useNavigationBadges({
   );
 
   return {
-    pendingImportCounts,
-    pendingMediaRequestCounts,
-    manualImportRequiredCount,
-    pluginUpdateCount,
-    pluginBlockedCount,
+    pendingImportCounts: loadedAuth === scope ? pendingImportCounts : null,
+    pendingMediaRequestCounts: loadedAuth === scope ? pendingMediaRequestCounts : null,
+    manualImportRequiredCount: loadedAuth === scope ? manualImportRequiredCount : 0,
+    manualImportCountKnown: loadedAuth === scope,
+    manualImportCountStale: loadedAuth === scope && manualImportCountStale,
+    pluginUpdateCount: loadedAuth === scope ? pluginUpdateCount : 0,
+    pluginBlockedCount: loadedAuth === scope ? pluginBlockedCount : 0,
     scryerVersion,
   };
 }

@@ -630,6 +630,10 @@ pub enum SortDirectionValue {
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum DomainEventTypeValue {
+    /// Imports on a destination became blocked by insufficient disk space.
+    ImportSpaceBlocked,
+    /// All remaining blocked imports passed their normal space checks.
+    ImportSpaceRestored,
     /// A media request was submitted.
     MediaRequestSubmitted,
     /// A media request changed.
@@ -729,6 +733,8 @@ pub enum DomainEventTypeValue {
 impl DomainEventTypeValue {
     pub fn from_domain(value: DomainEventType) -> Self {
         match value {
+            DomainEventType::ImportSpaceBlocked => Self::ImportSpaceBlocked,
+            DomainEventType::ImportSpaceRestored => Self::ImportSpaceRestored,
             DomainEventType::MediaRequestSubmitted => Self::MediaRequestSubmitted,
             DomainEventType::MediaRequestUpdated => Self::MediaRequestUpdated,
             DomainEventType::MediaRequestApproved => Self::MediaRequestApproved,
@@ -781,6 +787,8 @@ impl DomainEventTypeValue {
 
     pub fn into_domain(self) -> DomainEventType {
         match self {
+            Self::ImportSpaceBlocked => DomainEventType::ImportSpaceBlocked,
+            Self::ImportSpaceRestored => DomainEventType::ImportSpaceRestored,
             Self::MediaRequestSubmitted => DomainEventType::MediaRequestSubmitted,
             Self::MediaRequestUpdated => DomainEventType::MediaRequestUpdated,
             Self::MediaRequestApproved => DomainEventType::MediaRequestApproved,

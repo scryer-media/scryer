@@ -29,6 +29,7 @@ import {
 } from "@/lib/utils/activity-utils";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { LoadingMark } from "@/components/common/loading-mark";
+import { diskSpaceReason, importTitleHref, isWaitingForDiskSpace } from "@/lib/utils/import-row";
 
 export type QueueRowItemProps = {
   queueItem: DownloadQueueItem;
@@ -109,6 +110,7 @@ export const QueueRowItem = memo(function QueueRowItem({
           ) : null}
           <div className="min-w-0 flex-1">
             <ActivityQueueTitleContent
+              titleHref={importTitleHref(queueItem)}
               displayTitle={row.displayTitle}
               releaseTitle={row.releaseTitle}
             />
@@ -137,10 +139,10 @@ export const QueueRowItem = memo(function QueueRowItem({
           />
         </div>
       </div>
-      {(queueItem.deleteErrorMessage || queueItem.importErrorMessage) &&
-      !row.hasStatusDetails ? (
+      {(isWaitingForDiskSpace(queueItem) ||
+        ((queueItem.deleteErrorMessage || queueItem.importErrorMessage) && !row.hasStatusDetails)) ? (
         <p className="mt-2 break-words text-xs text-[var(--scry-danger-text-soft)]">
-          {queueItem.deleteErrorMessage ?? queueItem.importErrorMessage}
+          {isWaitingForDiskSpace(queueItem) ? diskSpaceReason(queueItem) : queueItem.deleteErrorMessage ?? queueItem.importErrorMessage}
         </p>
       ) : null}
       {row.hasExpandableDetails && isExpanded ? (
@@ -149,7 +151,7 @@ export const QueueRowItem = memo(function QueueRowItem({
             detailId={detailId}
             releaseTitle={row.releaseTitle}
             errorCode={queueItem.importErrorCode}
-            failureReason={row.failureReason}
+            failureReason={isWaitingForDiskSpace(queueItem) ? "" : row.failureReason}
             t={t}
           />
         </div>

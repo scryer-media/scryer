@@ -185,7 +185,8 @@ async fn execute_resolved_episode_import(
             content_qualified_video: content_qualified.is_some(),
         };
         if let crate::import_checks::ImportVerdict::Reject { reason, code } =
-            crate::import_checks::run_import_checks(&check_ctx)
+            crate::import_checks::run_import_checks_and_report(app, &check_ctx, completed, title)
+                .await
         {
             return Ok(EpisodeImportOutcome::Skipped {
                 message: reason,
@@ -343,7 +344,7 @@ async fn execute_resolved_episode_import(
         content_qualified_video: content_qualified.is_some(),
     };
     if let crate::import_checks::ImportVerdict::Reject { reason, code } =
-        crate::import_checks::run_import_checks(&check_ctx)
+        crate::import_checks::run_import_checks_and_report(app, &check_ctx, completed, title).await
     {
         tracing::debug!(file = %precheck_dest_path.display(), %code, %reason, "skipping episode file");
         return Ok(EpisodeImportOutcome::Skipped {

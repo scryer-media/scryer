@@ -663,9 +663,11 @@ export const ActivityContainer = memo(function ActivityContainer({
         state={{
           queueItems: visibleItems,
           queueLoading: visibleLoading,
+          queueRefreshing: activeTab === "import" ? importLoading : queueLoading,
+          requestRefresh: activeTab === "import" ? refreshImport : refreshQueue,
           queueLoadingMore: visibleLoadingMore,
           queueError: visibleError,
-          queueStale: activeTab === "activity" && queueStale,
+          queueStale: activeTab === "activity" ? queueStale : Boolean(importError && importLastRefreshedAt),
           activeImportStreams,
           onVisibleQueueOffsetChange:
             activeTab === "activity" ? setVisibleQueueOffset : undefined,

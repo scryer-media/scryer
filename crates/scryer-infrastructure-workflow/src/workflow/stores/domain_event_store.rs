@@ -25,6 +25,40 @@ impl DomainEventStore {
 
 #[async_trait]
 impl DomainEventRepository for DomainEventStore {
+    async fn import_space_notification_delivered(
+        &self,
+        event_id: &str,
+        target: &str,
+    ) -> AppResult<bool> {
+        Ok(SqlRuntime::fetch_optional(self.datastore.read_exec(), "SELECT event_id FROM import_space_notification_receipts WHERE event_id = {} AND target_key = {}", &[SqlArg::Text(event_id.into()), SqlArg::Text(target.into())]).await?.is_some())
+    }
+
+    async fn mark_import_space_notification_delivered(
+        &self,
+        event_id: &str,
+        target: &str,
+    ) -> AppResult<()> {
+        let args = vec![SqlArg::Text(event_id.into()), SqlArg::Text(target.into())];
+        SqlRuntime::run_in_transaction(&self.datastore, "mark_import_space_notification_delivered", move |tx| {
+            let args = args.clone();
+            Box::pin(async move {
+                SqlRuntime::execute(SqlExec::Tx(tx), "INSERT INTO import_space_notification_receipts (event_id, target_key) VALUES ({}, {}) ON CONFLICT(event_id, target_key) DO NOTHING", &args).await?;
+                Ok(())
+            })
+        }).await
+    }
+
+    async fn reconcile_import_space_incidents(&self) -> AppResult<()> {
+        super::import_space_store::reconcile(&self.datastore).await
+    }
+
+    async fn update_import_space_incident(
+        &self,
+        update: scryer_domain::import_space::SpaceIncidentUpdate,
+    ) -> AppResult<Vec<DomainEvent>> {
+        super::import_space_store::update(&self.datastore, update).await
+    }
+
     async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
         append_domain_events(&self.datastore, vec![event])
             .await?

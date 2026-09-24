@@ -1171,7 +1171,8 @@ async fn import_additional_movie_download(
         content_qualified_video: content_qualified.is_some(),
     };
     if let crate::import_checks::ImportVerdict::Reject { reason, code } =
-        crate::import_checks::run_import_checks(&check_ctx)
+        crate::import_checks::run_import_checks_and_report(app, &check_ctx, Some(completed), title)
+            .await
     {
         let artifact_result = if code.is_duplicate_file() {
             "already_present"
@@ -1580,7 +1581,8 @@ async fn import_movie_download(
         content_qualified_video: largest.content_qualified.is_some(),
     };
     if let crate::import_checks::ImportVerdict::Reject { reason, code } =
-        crate::import_checks::run_import_checks(&check_ctx)
+        crate::import_checks::run_import_checks_and_report(app, &check_ctx, Some(completed), title)
+            .await
     {
         let artifact_result = if code.is_duplicate_file() {
             "already_present"

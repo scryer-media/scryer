@@ -4173,6 +4173,42 @@ const UNFINISHED_LIBRARY_SCAN_REPLAY_BATCH_LIMIT: usize = 500;
 
 #[async_trait]
 pub trait DomainEventRepository: Send + Sync {
+    async fn import_space_notification_delivered(
+        &self,
+        _event_id: &str,
+        _target: &str,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "import space notification receipts are not configured".into(),
+        ))
+    }
+    async fn mark_import_space_notification_delivered(
+        &self,
+        _event_id: &str,
+        _target: &str,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "import space notification receipts are not configured".into(),
+        ))
+    }
+
+    /// Retire incident membership for durably ignored or removed sources without claiming recovery.
+    async fn reconcile_import_space_incidents(&self) -> AppResult<()> {
+        Err(AppError::Repository(
+            "import space reconciliation is not configured".into(),
+        ))
+    }
+
+    /// Persist an observed admission outcome and its notification intent atomically.
+    async fn update_import_space_incident(
+        &self,
+        _update: scryer_domain::import_space::SpaceIncidentUpdate,
+    ) -> AppResult<Vec<DomainEvent>> {
+        Err(AppError::Repository(
+            "import space incidents are not configured".into(),
+        ))
+    }
+
     /// A library-scoped, count-free page of import facts, newest sequence first.
     async fn recent_import_events(
         &self,

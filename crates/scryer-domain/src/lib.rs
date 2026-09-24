@@ -5,6 +5,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 pub mod download_identity;
+pub mod import_space;
 mod title_sort;
 pub mod title_spelling;
 pub use title_sort::{
@@ -3641,6 +3642,8 @@ pub enum EventType {
 #[serde(rename_all = "snake_case")]
 #[derive(strum::EnumIter)]
 pub enum DomainEventType {
+    ImportSpaceBlocked,
+    ImportSpaceRestored,
     MediaRequestSubmitted,
     MediaRequestUpdated,
     MediaRequestApproved,
@@ -3693,6 +3696,8 @@ pub enum DomainEventType {
 impl DomainEventType {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::ImportSpaceBlocked => "import_space_blocked",
+            Self::ImportSpaceRestored => "import_space_restored",
             Self::MediaRequestSubmitted => "media_request_submitted",
             Self::MediaRequestUpdated => "media_request_updated",
             Self::MediaRequestApproved => "media_request_approved",
@@ -3745,6 +3750,8 @@ impl DomainEventType {
 
     pub fn parse(value: &str) -> Option<Self> {
         match value {
+            "import_space_blocked" => Some(Self::ImportSpaceBlocked),
+            "import_space_restored" => Some(Self::ImportSpaceRestored),
             "media_request_submitted" => Some(Self::MediaRequestSubmitted),
             "media_request_updated" => Some(Self::MediaRequestUpdated),
             "media_request_approved" => Some(Self::MediaRequestApproved),
@@ -4473,6 +4480,8 @@ pub struct SeedingCompletedEventData {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case")]
 pub enum DomainEventPayload {
+    ImportSpaceBlocked(import_space::SpaceIncidentEvent),
+    ImportSpaceRestored(import_space::SpaceIncidentEvent),
     MediaRequestSubmitted(MediaRequestSubmittedEventData),
     MediaRequestUpdated(MediaRequestSubmittedEventData),
     MediaRequestApproved(MediaRequestResolvedEventData),
@@ -4527,6 +4536,8 @@ pub enum DomainEventPayload {
 impl DomainEventPayload {
     pub fn event_type(&self) -> DomainEventType {
         match self {
+            Self::ImportSpaceBlocked(_) => DomainEventType::ImportSpaceBlocked,
+            Self::ImportSpaceRestored(_) => DomainEventType::ImportSpaceRestored,
             Self::MediaRequestSubmitted(_) => DomainEventType::MediaRequestSubmitted,
             Self::MediaRequestUpdated(_) => DomainEventType::MediaRequestUpdated,
             Self::MediaRequestApproved(_) => DomainEventType::MediaRequestApproved,
