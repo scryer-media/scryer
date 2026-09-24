@@ -714,6 +714,35 @@ async fn ui_search_keeps_one_snapshot_without_blocking_rebuilds() {
     assert!(current.iter().any(|hit| hit.title_id == "new-title"));
 }
 
+/// The UI typo lane counts edits in characters, not UTF-8 bytes: one
+/// substituted Han character (three bytes) is one edit, so a wide-script token
+/// is not reduced to an exact-only lookup.
+#[tokio::test]
+async fn ui_typo_lane_finds_a_han_token_one_character_away() {
+    let dir = tempfile::tempdir().unwrap();
+    let services = SqliteServices::new(dir.path().join("fixture.db").to_string_lossy())
+        .await
+        .unwrap();
+    let catalog = title_store(&services);
+    anime_title(&catalog, "han-title", "青雲灯籠").await;
+    let index = open_index(&services, dir.path()).await;
+
+    let tokens = vec!["青雨灯籠".to_string()];
+    let hits = index
+        .ui_candidates(
+            &tokens,
+            &["anime"],
+            scryer_infrastructure_library_search::fuzzy_typo_distance,
+            64,
+        )
+        .await
+        .expect("ui lookup must succeed");
+    assert!(
+        hits.iter().any(|hit| hit.title_id == "han-title"),
+        "one substituted Han character must stay within the typo distance: {hits:?}"
+    );
+}
+
 async fn index_stamp(services: &SqliteServices) -> ProjectionStamp {
     use scryer_infrastructure_library_search::fuzzy::TitleTermSource;
     DatastoreTitleTermSource::new(services.datastore())
