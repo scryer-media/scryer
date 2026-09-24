@@ -1206,8 +1206,13 @@ impl AppUseCase {
         download_url: &str,
         title_id: Option<&str>,
     ) -> AppResult<Vec<crate::IndexerGrabClient>> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
-            .await?;
+        // Gate like the grab each branch leads to: an assigned grab needs
+        // `ManageTitles` on the title's library (checked below), a title-less
+        // grab bypasses every library and needs `ManageSystemSettings` (D13).
+        if title_id.is_none() {
+            self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+        }
         let (result, kind) = self
             .find_interactive_search_result(actor, search_id, download_url)
             .await?;
