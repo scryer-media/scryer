@@ -30,6 +30,7 @@ mod import_rejection_reopen;
 mod indexer_backoff_reset;
 mod indexer_download_client_mappings;
 mod interactive_release_search;
+mod landed_bar_memo;
 mod libraries;
 mod library_scan;
 mod maintenance_action_sequences;

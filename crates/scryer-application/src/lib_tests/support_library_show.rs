@@ -296,6 +296,7 @@ pub(super) struct MockShowRepo {
     pub(super) title_episode_reads: std::sync::atomic::AtomicUsize,
     pub(super) title_collection_reads: std::sync::atomic::AtomicUsize,
     pub(super) collection_episode_reads: std::sync::atomic::AtomicUsize,
+    pub(super) titles_episode_reads: std::sync::atomic::AtomicUsize,
 }
 
 #[async_trait]
@@ -660,6 +661,17 @@ impl ShowRepository for MockShowRepo {
         Ok(episodes
             .iter()
             .filter(|item| item.title_id == title_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn list_episodes_for_titles(&self, title_ids: &[String]) -> AppResult<Vec<Episode>> {
+        self.titles_episode_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let episodes = self.episodes.lock().await;
+        Ok(episodes
+            .iter()
+            .filter(|item| title_ids.contains(&item.title_id))
             .cloned()
             .collect())
     }
