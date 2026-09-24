@@ -1467,6 +1467,100 @@ async fn an_unlinked_grab_refuses_unknown_releases_unusable_clients_and_unprivil
     assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
 }
 
+/// Listing grab clients follows the gate of the grab it leads to: a title
+/// manager may list clients for a release assigned to a title they manage,
+/// while the title-less (unlinked) listing still needs system settings.
+#[tokio::test]
+async fn grab_clients_for_an_assigned_title_need_only_title_management() {
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-a",
+            vec![nzb_release("Paperman.2012.1080p.WEB-DL", "c1")],
+        )
+        .await;
+    let (app, admin) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let (_, manager) = create_authenticated_user(
+        &app,
+        &admin,
+        "title_manager",
+        "password123",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::TitleManagement,
+        ],
+    )
+    .await;
+    let title = app
+        .add_title(
+            &admin,
+            NewTitle {
+                name: "Paperman".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                year: Some(2012),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+    // Title searches keep only releases some enabled client can take.
+    create_enabled_download_client_config(&app, &admin, "Primary", "nzbget").await;
+    let start = app
+        .start_interactive_release_search(&manager, title_request(&title.id))
+        .await
+        .expect("a title manager may search their title");
+    let done = await_completion(&app, &manager, &start.id).await;
+    let download_url = done
+        .results
+        .first()
+        .unwrap_or_else(|| panic!("one result: {done:?}"))
+        .download_url
+        .clone()
+        .expect("release download url");
+
+    struct ListedClient;
+    #[async_trait]
+    impl DownloadClient for ListedClient {
+        async fn indexer_grab_clients(
+            &self,
+            _: &Title,
+            _: Option<&str>,
+            _: DownloadSourceKind,
+        ) -> AppResult<Vec<crate::IndexerGrabClient>> {
+            Ok(vec![crate::IndexerGrabClient {
+                id: "fixture-client".into(),
+                name: "Fixture".into(),
+                category: Some("routed".into()),
+                mapped: true,
+            }])
+        }
+        async fn submit_download(
+            &self,
+            _: &DownloadClientAddRequest,
+        ) -> AppResult<DownloadGrabResult> {
+            Err(AppError::Repository("listing never submits".into()))
+        }
+    }
+    let app =
+        app.with_test_overrides(|services| services.with_download_client(Arc::new(ListedClient)));
+
+    let clients = app
+        .indexer_grab_clients(&manager, &start.id, &download_url, Some(&title.id))
+        .await
+        .expect("assigned grab clients need only ManageTitles");
+    assert_eq!(clients.len(), 1);
+    assert_eq!(clients[0].id, "fixture-client");
+    let denied = app
+        .indexer_grab_clients(&manager, &start.id, &download_url, None)
+        .await
+        .expect_err("title-less grab clients need ManageSystemSettings");
+    assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
+}
+
 // ── Download to browser (D17, FR-028) ───────────────────────────────────────
 
 /// Answers `fetch_release_artifact` from a scripted table keyed by download

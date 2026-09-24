@@ -6,10 +6,64 @@ use scryer_domain::{
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, SqlTx, StoreDatastore, repo_err};
 
+/// Blocked members nothing else retires age out after this long without a
+/// fresh observation. A client-bound member is retired by its download's
+/// lifecycle instead; this only reaches members with no download identity.
+const UNBOUND_MEMBER_TTL_DAYS: i64 = 7;
+
+fn observed_at_text(at: chrono::DateTime<chrono::Utc>) -> String {
+    // Fixed width and UTC, so text order is time order on both engines.
+    at.to_rfc3339_opts(chrono::SecondsFormat::Micros, true)
+}
+
+/// A read-only gate: most observations are passing checks for files that
+/// never blocked, and must not queue behind the single SQLite writer. This
+/// asks exactly what the transaction would touch; `false` means it would
+/// change nothing.
+async fn update_may_change(
+    datastore: &StoreDatastore,
+    update: &SpaceIncidentUpdate,
+) -> AppResult<bool> {
+    let (sql, args) = match update {
+        SpaceIncidentUpdate::Observed { blocked: true, .. } => return Ok(true),
+        // An unblocked observation can clear its own member, or retire its
+        // job's members when the job turns out to be gone.
+        SpaceIncidentUpdate::Observed {
+            member_key,
+            job_key,
+            ..
+        } => (
+            "SELECT member_key FROM import_space_members WHERE member_key = {} OR job_key = {} LIMIT 1",
+            vec![
+                SqlArg::Text(member_key.clone()),
+                SqlArg::Text(job_key.clone()),
+            ],
+        ),
+        SpaceIncidentUpdate::Retired {
+            job_key,
+            download_id,
+        } => (
+            "SELECT member_key FROM import_space_members WHERE job_key = {} AND download_id = {} LIMIT 1",
+            vec![
+                SqlArg::Text(job_key.clone()),
+                SqlArg::Text(download_id.clone().unwrap_or_default()),
+            ],
+        ),
+    };
+    Ok(
+        SqlRuntime::fetch_optional(datastore.read_exec(), sql, &args)
+            .await?
+            .is_some(),
+    )
+}
+
 pub async fn update(
     datastore: &StoreDatastore,
     update: SpaceIncidentUpdate,
 ) -> AppResult<Vec<DomainEvent>> {
+    if !update_may_change(datastore, &update).await? {
+        return Ok(Vec::new());
+    }
     SqlRuntime::run_in_transaction(datastore, "update_import_space_incident", move |tx| {
         let update = update.clone();
         Box::pin(async move {
@@ -45,7 +99,7 @@ pub async fn update(
                         }
                         // Update only this file's evidence; a retry must not read or
                         // rewrite every other blocked file on the destination.
-                        SqlRuntime::execute(SqlExec::Tx(tx), "INSERT INTO import_space_members (member_key, job_key, destination_key, measurement_json, download_id) VALUES ({}, {}, {}, {}, {}) ON CONFLICT(member_key) DO UPDATE SET job_key = excluded.job_key, destination_key = excluded.destination_key, measurement_json = excluded.measurement_json, download_id = excluded.download_id", &[SqlArg::Text(member_key), SqlArg::Text(job_key), SqlArg::Text(key.clone()), SqlArg::Text(serde_json::to_string(&measurement).map_err(repo_err)?), SqlArg::Text(download_id)]).await?;
+                        SqlRuntime::execute(SqlExec::Tx(tx), "INSERT INTO import_space_members (member_key, job_key, destination_key, measurement_json, download_id, observed_at) VALUES ({}, {}, {}, {}, {}, {}) ON CONFLICT(member_key) DO UPDATE SET job_key = excluded.job_key, destination_key = excluded.destination_key, measurement_json = excluded.measurement_json, download_id = excluded.download_id, observed_at = excluded.observed_at", &[SqlArg::Text(member_key), SqlArg::Text(job_key), SqlArg::Text(key.clone()), SqlArg::Text(serde_json::to_string(&measurement).map_err(repo_err)?), SqlArg::Text(download_id), SqlArg::Text(observed_at_text(chrono::Utc::now()))]).await?;
                         if opening {
                             events.push(append(tx, SpaceIncidentEvent { incident_id, measurement, affected_import_count: 1, recovered: false }).await?);
                         }
@@ -118,18 +172,56 @@ async fn retire_job(tx: &mut SqlTx<'_>, job: &str, download_id: Option<&str>) ->
 /// Repair observer state after a crash between authoritative cancellation/removal
 /// and its best-effort observer update. This never changes import workflow state.
 pub async fn reconcile(datastore: &StoreDatastore) -> AppResult<()> {
-    SqlRuntime::run_in_transaction(datastore, "reconcile_import_space_incidents", |tx| Box::pin(async move {
-        SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE import_space_incident_lock SET revision = 0 WHERE id = 1", &[]).await?;
-        let members = SqlRuntime::fetch_all(SqlExec::Tx(tx),
-            "SELECT m.member_key, m.destination_key FROM import_space_members m
-             WHERE m.download_id <> '' AND (
+    reconcile_at(datastore, chrono::Utc::now()).await
+}
+
+async fn reconcile_at(
+    datastore: &StoreDatastore,
+    now: chrono::DateTime<chrono::Utc>,
+) -> AppResult<()> {
+    let cutoff = observed_at_text(now - chrono::Duration::days(UNBOUND_MEMBER_TTL_DAYS));
+    // Runs every 30 s; with nothing to retire it must not take the writer.
+    if reconcile_candidates(datastore.read_exec(), &cutoff)
+        .await?
+        .is_empty()
+    {
+        return Ok(());
+    }
+    SqlRuntime::run_in_transaction(datastore, "reconcile_import_space_incidents", move |tx| {
+        let cutoff = cutoff.clone();
+        Box::pin(async move {
+            SqlRuntime::execute(
+                SqlExec::Tx(tx),
+                "UPDATE import_space_incident_lock SET revision = 0 WHERE id = 1",
+                &[],
+            )
+            .await?;
+            // The read above was only a gate; decide again under the lock.
+            for (member, destination) in reconcile_candidates(SqlExec::Tx(tx), &cutoff).await? {
+                clear_member(tx, &destination, &member, None, &mut Vec::new()).await?;
+            }
+            Ok(())
+        })
+    })
+    .await
+}
+
+/// `(member_key, destination_key)` of members whose source is gone: a download
+/// that ended or was ignored, or an unbound member not observed since `cutoff`.
+async fn reconcile_candidates(
+    exec: SqlExec<'_, '_>,
+    cutoff: &str,
+) -> AppResult<Vec<(String, String)>> {
+    SqlRuntime::fetch_all(exec,
+        "SELECT m.member_key, m.destination_key FROM import_space_members m
+         WHERE (m.download_id <> '' AND (
                  NOT EXISTS (SELECT 1 FROM download_client_bindings b WHERE b.download_id = m.download_id AND b.ended_at IS NULL)
-                 OR EXISTS (SELECT 1 FROM download_submissions s WHERE s.id = m.download_id AND s.tracked_state = 'ignored'))", &[]).await?;
-        for member in members {
-            clear_member(tx, &member.text("destination_key")?, &member.text("member_key")?, None, &mut Vec::new()).await?;
-        }
-        Ok(())
-    })).await
+                 OR EXISTS (SELECT 1 FROM download_submissions s WHERE s.id = m.download_id AND s.tracked_state = 'ignored')))
+            OR (m.download_id = '' AND m.observed_at < {})",
+        &[SqlArg::Text(cutoff.into())]).await?
+    .into_iter()
+    .map(|row| Ok((row.text("member_key")?, row.text("destination_key")?)))
+    .collect()
 }
 
 async fn clear_member(
@@ -222,6 +314,12 @@ mod tests {
     const POSTGRES_MIGRATION: &str = include_str!(
         "../../../../scryer/src/db/postgres/migrations/0256_import_space_incidents.sql"
     );
+    const SQLITE_AGE_MIGRATION: &str = include_str!(
+        "../../../../scryer/src/db/migrations/0257_import_space_attempts_and_member_age.sql"
+    );
+    const POSTGRES_AGE_MIGRATION: &str = include_str!(
+        "../../../../scryer/src/db/postgres/migrations/0257_import_space_attempts_and_member_age.sql"
+    );
     const EVENT_COLUMNS: &str = "event_id TEXT NOT NULL UNIQUE, occurred_at TEXT NOT NULL, actor_kind TEXT NOT NULL, actor_user_id TEXT, actor_display_name TEXT NOT NULL, title_id TEXT, facet TEXT, correlation_id TEXT, causation_id TEXT, schema_version INTEGER NOT NULL, stream_kind TEXT NOT NULL, stream_id TEXT, event_type TEXT NOT NULL, payload_json BLOB NOT NULL, import_status TEXT, media_file_delete_reason TEXT, download_id TEXT";
 
     async fn sqlite() -> StoreDatastore {
@@ -231,6 +329,10 @@ mod tests {
             .await
             .unwrap();
         sqlx::raw_sql(SQLITE_MIGRATION)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(SQLITE_AGE_MIGRATION)
             .execute(&pool)
             .await
             .unwrap();
@@ -654,6 +756,189 @@ mod tests {
         );
     }
 
+    const REJECT_WRITER: &str = "CREATE TRIGGER reject_writer BEFORE UPDATE ON import_space_incident_lock BEGIN SELECT RAISE(ABORT, 'writer transaction opened'); END;";
+
+    async fn member_and_incident_counts(pool: &sqlx::SqlitePool) -> (i64, i64) {
+        sqlx::query_as("SELECT (SELECT COUNT(*) FROM import_space_members), (SELECT COUNT(*) FROM import_space_incidents)")
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// Every write path takes the incident lock first, so a trigger that
+    /// rejects the lock update is how a test sees a writer transaction open.
+    #[tokio::test]
+    async fn sqlite_import_space_passing_checks_and_idle_reconcile_take_no_writer() {
+        let datastore = sqlite().await;
+        let StoreDatastore::Sqlite { pool, .. } = &datastore else {
+            unreachable!()
+        };
+        sqlx::raw_sql(REJECT_WRITER).execute(pool).await.unwrap();
+        assert!(
+            update(&datastore, observed("job-a", "file", "a", false))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            update(
+                &datastore,
+                SpaceIncidentUpdate::Retired {
+                    job_key: "job-a".into(),
+                    download_id: None
+                }
+            )
+            .await
+            .unwrap()
+            .is_empty()
+        );
+        reconcile(&datastore).await.unwrap();
+
+        sqlx::raw_sql("DROP TRIGGER reject_writer")
+            .execute(pool)
+            .await
+            .unwrap();
+        update(&datastore, observed("job-b", "file", "a", true))
+            .await
+            .unwrap();
+        sqlx::raw_sql(REJECT_WRITER).execute(pool).await.unwrap();
+        // An unrelated passing file still stays off the writer ...
+        assert!(
+            update(&datastore, observed("job-c", "file", "a", false))
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        reconcile(&datastore).await.unwrap();
+        // ... while one that can clear a blocked member does reach it, which
+        // is what makes the rejection above meaningful.
+        assert!(
+            update(&datastore, observed("job-b", "file", "a", false))
+                .await
+                .is_err()
+        );
+        assert_eq!(member_and_incident_counts(pool).await, (1, 1));
+    }
+
+    #[tokio::test]
+    async fn sqlite_import_space_retiring_an_unbound_job_closes_its_incident_silently() {
+        let datastore = sqlite().await;
+        let StoreDatastore::Sqlite { pool, .. } = &datastore else {
+            unreachable!()
+        };
+        let job = "manual:[102,105,120,116,117,114,101]";
+        assert_eq!(
+            update(&datastore, observed(job, "file", "m", true))
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let retired = update(
+            &datastore,
+            SpaceIncidentUpdate::Retired {
+                job_key: job.into(),
+                download_id: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert!(retired.is_empty(), "retirement is not a recovery");
+        assert_eq!(member_and_incident_counts(pool).await, (0, 0));
+        assert_eq!(
+            update(&datastore, observed(job, "file", "m", true))
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "a later block on the destination opens a new incident"
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_import_space_reconcile_ages_out_only_stale_unbound_members() {
+        let datastore = sqlite().await;
+        let StoreDatastore::Sqlite { pool, .. } = &datastore else {
+            unreachable!()
+        };
+        sqlx::raw_sql("INSERT INTO download_client_bindings VALUES ('download1', 'client', 'sabnzbd', 'item', '2026-01-01', NULL); INSERT INTO download_submissions VALUES ('download1', 'import_pending');").execute(pool).await.unwrap();
+        let bound = r#"["sabnzbd","client","item"]"#;
+        update(
+            &datastore,
+            observed("manual:[115,116,97,108,101]", "file", "stale", true),
+        )
+        .await
+        .unwrap();
+        update(
+            &datastore,
+            observed("manual:[102,114,101,115,104]", "file", "fresh", true),
+        )
+        .await
+        .unwrap();
+        update(&datastore, observed(bound, "file", "bound", true))
+            .await
+            .unwrap();
+        // Age the stale member and the bound one; only the unbound one may
+        // age out, a bound member follows its download's lifecycle.
+        sqlx::raw_sql("UPDATE import_space_members SET observed_at = '2026-01-01T00:00:00.000000Z' WHERE destination_key IN ('stale', 'bound')")
+            .execute(pool)
+            .await
+            .unwrap();
+
+        reconcile(&datastore).await.unwrap();
+        let mut remaining: Vec<(String,)> =
+            sqlx::query_as("SELECT destination_key FROM import_space_incidents")
+                .fetch_all(pool)
+                .await
+                .unwrap();
+        remaining.sort();
+        assert_eq!(remaining, vec![("bound".into(),), ("fresh".into(),)]);
+
+        let later = chrono::Utc::now() + chrono::Duration::days(UNBOUND_MEMBER_TTL_DAYS + 1);
+        reconcile_at(&datastore, later).await.unwrap();
+        let events: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM domain_events")
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            member_and_incident_counts(pool).await,
+            (1, 1),
+            "only the bound member survives"
+        );
+        assert_eq!(events.0, 3, "aging out never claims recovery");
+    }
+
+    #[tokio::test]
+    async fn sqlite_import_space_notification_attempts_count_per_event() {
+        let datastore = sqlite().await;
+        let store = DomainEventStore::new(datastore.clone());
+        for expected in 1..=3 {
+            assert_eq!(
+                store
+                    .record_import_space_notification_attempt("event-a")
+                    .await
+                    .unwrap(),
+                expected
+            );
+        }
+        assert_eq!(
+            store
+                .record_import_space_notification_attempt("event-b")
+                .await
+                .unwrap(),
+            1
+        );
+        let restarted = DomainEventStore::new(datastore);
+        assert_eq!(
+            restarted
+                .record_import_space_notification_attempt("event-a")
+                .await
+                .unwrap(),
+            4,
+            "the count is durable, so the ceiling survives a restart"
+        );
+    }
+
     #[tokio::test]
     #[ignore = "requires SCRYER_TEST_POSTGRES_URL pointing to an isolated fixture database"]
     async fn postgres_import_space_lifecycle() {
@@ -671,6 +956,10 @@ mod tests {
         .await
         .unwrap();
         sqlx::raw_sql(POSTGRES_MIGRATION)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::raw_sql(POSTGRES_AGE_MIGRATION)
             .execute(&pool)
             .await
             .unwrap();

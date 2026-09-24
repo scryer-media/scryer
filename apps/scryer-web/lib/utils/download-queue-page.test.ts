@@ -12,6 +12,7 @@ import {
   retainedDownloadQueuePageNeedsRefresh,
   shouldApplyDownloadQueuePageResponse,
   shouldRefreshDownloadQueueSync,
+  shouldSurfaceRefreshBehind,
 } from "./download-queue-page.ts";
 
 function item(id: string, clientId = "client-1"): DownloadQueueItem {
@@ -132,4 +133,8 @@ test("old or pre-sync queue responses cannot overwrite newer pages", () => {
   assert.equal(shouldApplyDownloadQueuePageResponse(4, 5, 5), false);
   assert.equal(shouldApplyDownloadQueuePageResponse(5, 5, 6), false);
   assert.equal(shouldApplyDownloadQueuePageResponse(6, 5, 6), true);
+});
+
+test("a queue refresh that is briefly behind stays quiet until it keeps happening", () => {
+  assert.deepEqual([1, 2, 3, 4, 5, 6].map(shouldSurfaceRefreshBehind), [false, false, false, false, true, true]);
 });

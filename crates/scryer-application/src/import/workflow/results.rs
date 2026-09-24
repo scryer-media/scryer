@@ -184,7 +184,7 @@ pub async fn retry_failed_import(
             if let Some(handle) = handle.as_ref() {
                 handle.publish_history_retry(tracked_id.clone()).await?;
             }
-            let result = execute_history_retry(
+            let (result, refusal) = execute_history_retry(
                 &app,
                 &actor,
                 &import_id,
@@ -207,7 +207,10 @@ pub async fn retry_failed_import(
             )
             .await?;
             finished = tracked.take().map(Box::new);
-            Ok(result)
+            match refusal {
+                Some(refusal) => Err(refusal),
+                None => Ok(result),
+            }
         }
         .await;
         // An execution or reconciliation failure leaves the durable claim for recovery.
@@ -228,7 +231,7 @@ async fn execute_history_retry(
     release_evidence: &ReleaseEvidence,
     target_title_id: Option<&str>,
     password: Option<&str>,
-) -> AppResult<ImportResult> {
+) -> AppResult<(ImportResult, Option<AppError>)> {
     // The repository claim already persisted Processing and retained the previous result.
     app.refresh_import_record_queue_snapshot(import_id).await;
     let started_at = Utc::now();
@@ -242,11 +245,20 @@ async fn execute_history_retry(
         started_at,
         password,
         None,
+        // A titleless retry is admitted before its title is known; the
+        // resolved title's library must also allow this actor to resolve.
+        Some(actor),
     )
     .await
     {
-        Ok(result) => Ok(result),
+        Ok(result) => Ok((result, None)),
         Err(error) => {
+            // A refusal is recorded like any failed attempt so the claim is
+            // reconciled, then surfaced to the requester instead of a result.
+            let refusal = match &error {
+                AppError::Unauthorized(message) => Some(AppError::Unauthorized(message.clone())),
+                _ => None,
+            };
             let skip_reason = if crate::archive_extractor::is_password_required_error(&error) {
                 Some(ImportSkipReason::PasswordRequired)
             } else if crate::archive_extractor::is_timeout_error(&error) {
@@ -264,7 +276,7 @@ async fn execute_history_retry(
             let result_json = serde_json::to_string(&result).ok();
             app.update_import_status_and_notify(import_id, ImportStatus::Failed, result_json)
                 .await?;
-            Ok(result)
+            Ok((result, refusal))
         }
     }
 }

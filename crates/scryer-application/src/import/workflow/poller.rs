@@ -608,6 +608,7 @@ async fn execute_completed_import(
         request.started_at,
         None,
         preparation_permit,
+        None,
     ))
     .await
     {

@@ -28,6 +28,7 @@ import {
   retainedDownloadQueuePageNeedsRefresh,
   shouldApplyDownloadQueuePageResponse,
   shouldRefreshDownloadQueueSync,
+  shouldSurfaceRefreshBehind,
 } from "@/lib/utils/download-queue-page";
 
 const SYNC_DEBOUNCE_MS = 300;
@@ -102,6 +103,8 @@ export function useDownloadQueuePage({
   const [queueSnapshotStale, setQueueSnapshotStale] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const nextOffsetRef = useRef(0);
+  // Refreshes in a row that came back older than the page needs.
+  const consecutiveBehindRef = useRef(0);
   const visibleOffsetRef = useRef(0);
   const revisionRef = useRef(0);
   const targetRevisionRef = useRef(0);
@@ -132,6 +135,7 @@ export function useDownloadQueuePage({
       limit: number,
       options: QueryPageOptions,
     ) => {
+      consecutiveBehindRef.current = 0;
       const next = mergeDownloadQueuePageRange(
         pagesRef.current,
         payload.items,
@@ -218,7 +222,12 @@ export function useDownloadQueuePage({
           if (payload.revision < minimumRevision && attempt === 0) {
             continue;
           }
-          throw new Error(t("activity.refreshBehind"));
+          // Keep the last good page; the next poll asks again.
+          consecutiveBehindRef.current += 1;
+          if (shouldSurfaceRefreshBehind(consecutiveBehindRef.current)) {
+            throw new Error(t("activity.refreshBehind"));
+          }
+          return null;
         }
         return payload;
       }

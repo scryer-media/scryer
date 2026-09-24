@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Release } from "@/lib/types/releases";
 import type { TitleRecord } from "@/lib/types/titles";
-import { grabSubjects, rankGrabSuggestions, groupGrabRouting, grabGroupAllows, pendingGrabRows, type GrabClient } from "./indexer-grab.ts";
+import { grabSubjects, rankGrabSuggestions, groupGrabRouting, grabGroupAllows, pendingGrabRows, canSubmitGrab, grabClientKey, selectedGrabClientKey, type GrabClient } from "./indexer-grab.ts";
 
 const client = (id: string, mapped = false): GrabClient => ({ id, name: id, category: "movies", mapped });
 
@@ -43,4 +43,26 @@ test("assignment routing failures do not disable plain grabs", () => {
 test("retry selection includes only unsuccessful rows", () => {
   const releases = [{ title: "a" }, { title: "b" }] as Release[];
   assert.deepEqual(pendingGrabRows(releases, new Set(["a"]), (release) => release.title), [releases[1]]);
+});
+
+test("one client routed under two categories keeps both choices", () => {
+  const plain = { id: "one", name: "one", category: "movies", mapped: false };
+  const assigned = { id: "one", name: "one", category: "anime-movies", mapped: false };
+  const [group] = groupGrabRouting([{ rowKey: "a", plain: [plain], assigned: [assigned] }]);
+  assert.deepEqual(group.clients.map(grabClientKey), ["one::movies", "one::anime-movies"]);
+  assert.equal(group.category, "movies");
+  assert.equal(selectedGrabClientKey({ ...group, category: "anime-movies" }), "one::anime-movies");
+  assert.equal(selectedGrabClientKey({ ...group, category: "hand-typed" }), "one::movies");
+  assert.equal(grabGroupAllows(group, false), true);
+  assert.equal(grabGroupAllows(group, true), true);
+});
+
+test("plain and assigned grabs both require acknowledged rejections", () => {
+  const groups = groupGrabRouting([{ rowKey: "a", plain: [client("one")], assigned: [client("one")] }]);
+  for (const assign of [false, true]) {
+    assert.equal(canSubmitGrab({ groups, assign, ready: true, rejectionCount: 1, acknowledged: false }), false);
+    assert.equal(canSubmitGrab({ groups, assign, ready: true, rejectionCount: 1, acknowledged: true }), true);
+    assert.equal(canSubmitGrab({ groups, assign, ready: true, rejectionCount: 0, acknowledged: false }), true);
+    assert.equal(canSubmitGrab({ groups, assign, ready: false, rejectionCount: 0, acknowledged: false }), false);
+  }
 });

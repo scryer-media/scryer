@@ -12,6 +12,7 @@ async fn run_import(
     started_at: chrono::DateTime<Utc>,
     archive_password: Option<&str>,
     preparation_permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    resolved_title_authorization: Option<&User>,
 ) -> AppResult<ImportResult> {
     let mut preparation_permit = Some(match preparation_permit {
         Some(permit) => permit,
@@ -32,6 +33,7 @@ async fn run_import(
         started_at,
         archive_password,
         &mut preparation_permit,
+        resolved_title_authorization,
     ))
     .await?
     {
@@ -225,6 +227,30 @@ pub(super) async fn archive_extraction_destination_for_title(
     )
 }
 
+/// Require `ResolveImports` on the library of the title an import resolved to.
+///
+/// History retries of a titleless import are admitted when the actor can
+/// resolve imports in *some* library; the concrete title (and so its library)
+/// is only known once target resolution matches one. `None` means the import
+/// runs on the system's behalf and was already authorized by its trigger.
+async fn authorize_resolved_import_title(
+    app: &AppUseCase,
+    actor: Option<&User>,
+    title: &scryer_domain::Title,
+) -> AppResult<()> {
+    match actor {
+        Some(actor) => {
+            app.require_library_permission(
+                actor,
+                &title.library_id,
+                scryer_domain::LibraryPermission::ResolveImports,
+            )
+            .await
+        }
+        None => Ok(()),
+    }
+}
+
 struct TitlelessArchiveMatch {
     title: scryer_domain::Title,
     extracted_dir: PathBuf,
@@ -366,6 +392,7 @@ async fn try_match_titleless_archive_from_inner_video(
     completed: &CompletedDownload,
     dest_dir: &Path,
     archive_password: Option<&str>,
+    resolved_title_authorization: Option<&User>,
 ) -> AppResult<Option<TitlelessArchiveMatch>> {
     if !archive_extraction_would_be_needed_best_effort(dest_dir) {
         return Ok(None);
@@ -431,6 +458,10 @@ async fn try_match_titleless_archive_from_inner_video(
         )
         .await
         {
+            // Refuse before the workspace moves under (and records a folder
+            // for) a title the actor cannot resolve imports for. The probe
+            // workspace is left in the facet root rather than removed here.
+            authorize_resolved_import_title(app, resolved_title_authorization, &title).await?;
             let destination =
                 match archive_extraction_destination_for_title(app, import_id, &title).await {
                     Ok(destination) => destination,
@@ -495,6 +526,7 @@ async fn resolve_completed_import_target(
     started_at: chrono::DateTime<Utc>,
     archive_password: Option<&str>,
     preparation_permit: &mut Option<tokio::sync::OwnedSemaphorePermit>,
+    resolved_title_authorization: Option<&User>,
 ) -> AppResult<CompletedImportTargetResolution> {
     // 2. TITLE MATCHING
     let mut title = None;
@@ -553,6 +585,7 @@ async fn resolve_completed_import_target(
             completed,
             dest_dir,
             archive_password,
+            resolved_title_authorization,
         )
         .await;
         *preparation_permit = Some(
@@ -640,6 +673,8 @@ async fn resolve_completed_import_target(
             return Ok(CompletedImportTargetResolution::Finished(Box::new(result)));
         }
     };
+
+    authorize_resolved_import_title(app, resolved_title_authorization, &title).await?;
 
     // Validate supported facets
     if !matches!(
