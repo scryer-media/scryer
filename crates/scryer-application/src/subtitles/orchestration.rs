@@ -10,7 +10,8 @@ use crate::media::release_labels::resolve_release_labels_from_analysis;
 use crate::normalize::normalize_imdb_id;
 use crate::stored_paths::{path_to_stored_string, stored_path_to_path_buf};
 use crate::subtitles::provider::{
-    SubtitleFile, SubtitleMatch, SubtitleMediaKind, SubtitleProvider, SubtitleQuery,
+    SubtitleCommunityEntry, SubtitleFile, SubtitleMatch, SubtitleMediaKind, SubtitleProvider,
+    SubtitleQuery,
 };
 use crate::subtitles::scoring::{
     SubtitleScoreKind, normalized_score_percent, percent_to_raw_threshold,
@@ -27,8 +28,8 @@ use crate::{
     SubtitleSettings as AppSubtitleSettings, TitleMediaFile, parse_release_metadata,
 };
 use scryer_domain::{
-    ExternalSubtitleSourceKind, SubtitleBlocklistEntry, SubtitleDownload, SubtitleProviderConfig,
-    Title, User,
+    AnimeNumberingBridge, ExternalSubtitleSourceKind, NumberingBridgeSource,
+    SubtitleBlocklistEntry, SubtitleDownload, SubtitleProviderConfig, Title, User,
 };
 use scryer_outbound_http::{DestinationKey, HostKey};
 use scryer_plugin_sdk::{
@@ -858,7 +859,7 @@ impl AppUseCase {
         };
 
         let languages = vec![language.clone()];
-        let episode_context = media_file_episode_context(self, &media_file).await;
+        let episode_context = media_file_episode_context(self, &title, &media_file).await;
         let query = build_subtitle_query(
             &title,
             &media_file,
@@ -960,7 +961,7 @@ impl AppUseCase {
         };
 
         let file_path = stored_path_to_path_buf(&media_file.file_path);
-        let episode_context = media_file_episode_context(self, &media_file).await;
+        let episode_context = media_file_episode_context(self, &title, &media_file).await;
         let download_result = crate::subtitles::download::download_and_save_with_selection(
             &provider,
             &provider_file_id,
@@ -971,6 +972,10 @@ impl AppUseCase {
             crate::subtitles::download::SubtitleDownloadSelection {
                 episode: episode_context.episode,
                 absolute_episode: episode_context.absolute_episode,
+                community_episode: episode_context
+                    .community_entry
+                    .as_ref()
+                    .map(|entry| entry.episode),
                 archive_provider: self
                     .services
                     .integrations
@@ -1199,6 +1204,7 @@ struct SubtitleEpisodeContext {
     season: Option<i32>,
     episode: Option<i32>,
     absolute_episode: Option<i32>,
+    community_entry: Option<SubtitleCommunityEntry>,
     external_ids: BTreeMap<String, Vec<String>>,
 }
 
@@ -1586,12 +1592,14 @@ fn parsed_episode_context(parsed: &ParsedReleaseMetadata) -> SubtitleEpisodeCont
             .and_then(|episode| episode.season.map(|season| season as i32)),
         episode,
         absolute_episode: None,
+        community_entry: None,
         external_ids: BTreeMap::new(),
     }
 }
 
 async fn media_file_episode_context(
     app: &AppUseCase,
+    title: &Title,
     media_file: &crate::TitleMediaFile,
 ) -> SubtitleEpisodeContext {
     let Some(episode_id) = media_file.episode_id.as_deref() else {
@@ -1607,24 +1615,76 @@ async fn media_file_episode_context(
     {
         Ok(Some(episode)) => {
             let external_ids = subtitle_episode_external_ids(app, &episode).await;
+            let season = episode
+                .season_number
+                .as_deref()
+                .and_then(|value| value.parse::<i32>().ok());
+            let episode_number = episode
+                .episode_number
+                .as_deref()
+                .and_then(|value| value.parse::<i32>().ok());
+            let community_entry = match (season, episode_number) {
+                (Some(season), Some(episode_number)) => app
+                    .services
+                    .catalog
+                    .shows
+                    .get_anime_numbering_bridge(&title.id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|bridge| {
+                        subtitle_community_entry(title, &bridge, season, episode_number)
+                    }),
+                _ => None,
+            };
             SubtitleEpisodeContext {
-                season: episode
-                    .season_number
-                    .as_deref()
-                    .and_then(|value| value.parse::<i32>().ok()),
-                episode: episode
-                    .episode_number
-                    .as_deref()
-                    .and_then(|value| value.parse::<i32>().ok()),
+                season,
+                episode: episode_number,
                 absolute_episode: episode
                     .absolute_number
                     .as_deref()
                     .and_then(|value| value.parse::<i32>().ok()),
+                community_entry,
                 external_ids,
             }
         }
         _ => SubtitleEpisodeContext::default(),
     }
+}
+
+/// The anime community entry a TVDB episode belongs to, read from the title's
+/// numbering bridge.
+///
+/// Only the anime community bridge names AniList/AniDB/MAL entries; a bridge
+/// Scryer built from a TVDB alternate or DVD order has no entries to name. A
+/// bridge the title's current numbering setting does not admit is stale and is
+/// never read.
+fn subtitle_community_entry(
+    title: &Title,
+    bridge: &AnimeNumberingBridge,
+    season: i32,
+    episode: i32,
+) -> Option<SubtitleCommunityEntry> {
+    if bridge.source != NumberingBridgeSource::AnimeCommunity
+        || !crate::anime_numbering::title_admits_bridge(title, bridge)
+    {
+        return None;
+    }
+    let (entry, community_episode) = bridge.community_season_for_tvdb_episode(season, episode)?;
+    Some(SubtitleCommunityEntry {
+        season: entry.index,
+        episode: community_episode,
+        anilist_id: entry.anilist_id,
+        anidb_id: entry.anidb_id,
+        mal_id: entry.mal_id,
+        titles: entry
+            .titles
+            .iter()
+            .map(|title| title.trim())
+            .filter(|title| !title.is_empty())
+            .map(str::to_string)
+            .collect(),
+    })
 }
 
 async fn subtitle_episode_external_ids(
@@ -1780,6 +1840,7 @@ fn build_subtitle_query(
         absolute_episode: episode_context
             .absolute_episode
             .or(fallback_episode_context.absolute_episode),
+        community_entry: episode_context.community_entry.clone(),
         external_ids: episode_context.external_ids.clone(),
     };
 
@@ -1822,6 +1883,7 @@ fn build_subtitle_query(
         season: episode_context.season,
         episode: episode_context.episode,
         absolute_episode: episode_context.absolute_episode,
+        community_entry: episode_context.community_entry.clone(),
         external_ids: subtitle_external_ids(title, &episode_context),
         languages: languages.to_vec(),
         release_group: preferred_release
@@ -1935,7 +1997,7 @@ async fn run_subtitle_search_for_file(
     let embedded = embedded_subtitle_streams(&mf);
     let missing = compute_missing_subtitles_from_streams(&wanted_languages, &existing, &embedded);
 
-    let episode_context = media_file_episode_context(app, &mf).await;
+    let episode_context = media_file_episode_context(app, &title, &mf).await;
     let file_path = stored_path_to_path_buf(&mf.file_path);
 
     for lang_pref in &missing {
@@ -2025,6 +2087,7 @@ async fn run_subtitle_search_for_file(
             crate::subtitles::download::SubtitleDownloadSelection {
                 episode: query.episode,
                 absolute_episode: query.absolute_episode,
+                community_episode: query.community_entry.as_ref().map(|entry| entry.episode),
                 archive_provider: app
                     .services
                     .integrations
@@ -2194,7 +2257,7 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                 subtitle_minimum_raw_score(media_kind, min_score_series, min_score_movie);
 
             let file_path = stored_path_to_path_buf(&mf.file_path);
-            let episode_context = media_file_episode_context(app, mf).await;
+            let episode_context = media_file_episode_context(app, title, mf).await;
 
             for lang_pref in &missing {
                 searched += 1;
@@ -2304,6 +2367,10 @@ async fn run_subtitle_search_cycle(app: &AppUseCase) -> AppResult<()> {
                     crate::subtitles::download::SubtitleDownloadSelection {
                         episode: query.episode,
                         absolute_episode: query.absolute_episode,
+                        community_episode: query
+                            .community_entry
+                            .as_ref()
+                            .map(|entry| entry.episode),
                         archive_provider: app
                             .services
                             .integrations
@@ -2597,6 +2664,83 @@ mod tests {
         }
     }
 
+    /// Two cours TVDB files as one 24-episode season, then a second TVDB
+    /// season that is one community entry numbered on from 1.
+    fn split_cour_bridge(source: NumberingBridgeSource) -> AnimeNumberingBridge {
+        let season = |index: i32,
+                      anilist_id: i64,
+                      title: &str,
+                      tvdb_season: i32,
+                      tvdb_start: i32,
+                      tvdb_end: i32| scryer_domain::AnimeCommunitySeason {
+            index,
+            anidb_id: Some(anilist_id + 1000),
+            anilist_id: Some(anilist_id),
+            mal_id: Some(anilist_id + 2000),
+            titles: vec![title.to_string(), "  ".to_string()],
+            ranges: vec![scryer_domain::AnimeCommunitySeasonRange {
+                community_episode_start: 1,
+                community_episode_end: Some(tvdb_end - tvdb_start + 1),
+                tvdb_season,
+                tvdb_episode_start: tvdb_start,
+                tvdb_episode_end: Some(tvdb_end),
+            }],
+            absolute_start: None,
+            episode_count: Some(tvdb_end - tvdb_start + 1),
+        };
+        AnimeNumberingBridge {
+            generated_on: "2026-09-01".to_string(),
+            corroborating_order: None,
+            source,
+            seasons: vec![
+                season(1, 101, "Synthetic Cour", 1, 1, 12),
+                season(2, 102, "Synthetic Cour Part 2", 1, 13, 24),
+                season(3, 103, "Synthetic Cour Second Season", 2, 1, 12),
+            ],
+        }
+    }
+
+    #[test]
+    fn subtitle_community_entry_numbers_the_episode_inside_its_cour() {
+        let title = sample_title(MediaFacet::Anime, None);
+        let bridge = split_cour_bridge(NumberingBridgeSource::AnimeCommunity);
+
+        let entry = subtitle_community_entry(&title, &bridge, 1, 13).expect("covered episode");
+
+        assert_eq!(
+            entry,
+            SubtitleCommunityEntry {
+                season: 2,
+                episode: 1,
+                anilist_id: Some(102),
+                anidb_id: Some(1102),
+                mal_id: Some(2102),
+                titles: vec!["Synthetic Cour Part 2".to_string()],
+            }
+        );
+        assert_eq!(
+            subtitle_community_entry(&title, &bridge, 2, 5)
+                .map(|entry| (entry.season, entry.episode)),
+            Some((3, 5))
+        );
+        assert_eq!(subtitle_community_entry(&title, &bridge, 3, 1), None);
+    }
+
+    #[test]
+    fn subtitle_community_entry_ignores_tvdb_order_and_unadmitted_bridges() {
+        let title = sample_title(MediaFacet::Anime, None);
+        let alternate = split_cour_bridge(NumberingBridgeSource::TvdbAlternate);
+        assert_eq!(subtitle_community_entry(&title, &alternate, 1, 13), None);
+
+        let mut official = sample_title(MediaFacet::Anime, None);
+        official.tags.push(format!(
+            "{}official",
+            scryer_domain::RELEASE_NUMBERING_TAG_PREFIX
+        ));
+        let community = split_cour_bridge(NumberingBridgeSource::AnimeCommunity);
+        assert_eq!(subtitle_community_entry(&official, &community, 1, 13), None);
+    }
+
     #[test]
     fn subtitle_external_ids_prefers_scoped_anime_ids_over_title_level_ids() {
         let mut title = sample_title(MediaFacet::Anime, None);
@@ -2609,6 +2753,7 @@ mod tests {
             season: Some(2),
             episode: Some(23),
             absolute_episode: Some(47),
+            community_entry: None,
             external_ids: BTreeMap::from([
                 ("anilist".into(), vec!["176301".into()]),
                 ("mal".into(), vec!["58514".into()]),
@@ -2647,6 +2792,7 @@ mod tests {
             season: Some(2),
             episode: Some(5),
             absolute_episode: Some(17),
+            community_entry: None,
             external_ids: BTreeMap::new(),
         };
 

@@ -13,6 +13,7 @@ use crate::{AppError, AppResult, ArchiveExtractorPluginProvider};
 pub struct SubtitleDownloadSelection {
     pub episode: Option<i32>,
     pub absolute_episode: Option<i32>,
+    pub community_episode: Option<i32>,
     pub archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 }
 
@@ -21,6 +22,7 @@ impl std::fmt::Debug for SubtitleDownloadSelection {
         f.debug_struct("SubtitleDownloadSelection")
             .field("episode", &self.episode)
             .field("absolute_episode", &self.absolute_episode)
+            .field("community_episode", &self.community_episode)
             .field("archive_provider", &self.archive_provider.is_some())
             .finish()
     }
@@ -123,6 +125,7 @@ pub async fn download_and_save_with_selection(
             language: Some(language.clone()),
             episode: selection.episode,
             absolute_episode: selection.absolute_episode,
+            community_episode: selection.community_episode,
         },
         selection.archive_provider,
     )

@@ -1639,22 +1639,17 @@ pub(crate) fn community_coordinates_for_tvdb_episode(
     tvdb_season: i32,
     tvdb_episode: i32,
 ) -> Option<CommunityCoordinates> {
-    for season in &bridge.seasons {
-        if let Some(community_episode) =
-            season.community_for_tvdb_episode(tvdb_season, tvdb_episode)
-        {
-            return Some(CommunityCoordinates {
-                season: season.index,
-                episode: community_episode,
-                season_title: season
-                    .titles
-                    .first()
-                    .map(|title| title.trim().to_string())
-                    .filter(|title| !title.is_empty()),
-            });
-        }
-    }
-    None
+    let (season, community_episode) =
+        bridge.community_season_for_tvdb_episode(tvdb_season, tvdb_episode)?;
+    Some(CommunityCoordinates {
+        season: season.index,
+        episode: community_episode,
+        season_title: season
+            .titles
+            .first()
+            .map(|title| title.trim().to_string())
+            .filter(|title| !title.is_empty()),
+    })
 }
 
 #[cfg(test)]
