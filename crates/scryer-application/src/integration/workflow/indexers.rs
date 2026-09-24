@@ -1094,7 +1094,12 @@ impl AppUseCase {
                     preview_config.config_json.as_deref().unwrap_or("{}"),
                 )?;
         }
-        let should_validate_connection = preview_config.is_enabled && connection_changed;
+        // Re-enabling is a "try again" even with an unchanged connection: the
+        // indexer may have been disabled while failing, so probe it, refresh
+        // its caps and clear the stale backoff/health below.
+        let enabling = preview_config.is_enabled && !existing.is_enabled;
+        let should_validate_connection =
+            preview_config.is_enabled && (connection_changed || enabling);
         let caps_snapshot_update = if should_validate_connection {
             Some(
                 self.probe_indexer_connection(

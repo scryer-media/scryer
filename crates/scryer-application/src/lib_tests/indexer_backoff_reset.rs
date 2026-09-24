@@ -165,3 +165,52 @@ async fn saving_validated_indexer_changes_clears_its_backoff() {
         "the search client forgets its in-memory backoff for that indexer"
     );
 }
+
+/// Re-enabling a disabled indexer is also a "try again", even when its
+/// connection is unchanged: it validates the connection and clears the
+/// backoff it was disabled with. Saving `is_enabled: true` on an indexer that
+/// is already enabled with an unchanged connection stays a no-op.
+#[tokio::test]
+async fn re_enabling_an_unchanged_indexer_validates_and_clears_its_backoff() {
+    let mut config = synthetic_direct_nab_indexer_config("idx", "nzbgeek");
+    config.config_json = Some(credentials("unchanged"));
+    config.is_enabled = false;
+    config.disabled_until = Some(Utc::now() + chrono::Duration::hours(1));
+    let client = Arc::new(BackoffRecordingIndexerClient::default());
+    let (app, admin) = bootstrap_with_search_settings_indexer_and_configs(
+        Arc::new(StoredSettingsRepo::default()),
+        client.clone(),
+        vec![config],
+    );
+
+    let enabled = app
+        .update_indexer_config(
+            &admin,
+            IndexerConfigUpdate {
+                id: "idx".to_string(),
+                is_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("re-enabling validates and saves");
+    assert!(enabled.is_enabled);
+    assert_eq!(enabled.disabled_until, None, "the stale backoff is cleared");
+    assert_eq!(*client.resets.lock().await, vec!["idx".to_string()]);
+
+    app.update_indexer_config(
+        &admin,
+        IndexerConfigUpdate {
+            id: "idx".to_string(),
+            is_enabled: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("an unchanged enabled save succeeds");
+    assert_eq!(
+        *client.resets.lock().await,
+        vec!["idx".to_string()],
+        "an already-enabled, unchanged indexer is not revalidated"
+    );
+}
