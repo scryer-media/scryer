@@ -454,7 +454,7 @@ fn indexer_coverage_fingerprint(
 /// re-maps the title to a different canonical subject, changing these ids, so folding
 /// them into the fingerprint re-opens convergence. Plain metadata edits
 /// that leave the match unchanged do not.
-fn scope_match_identity(subject: &ResolvedReleaseSearchSubject) -> String {
+pub(crate) fn scope_match_identity(subject: &ResolvedReleaseSearchSubject) -> String {
     fn part(label: &str, value: &Option<String>) -> String {
         format!(
             "{label}={}",
@@ -545,6 +545,56 @@ pub(crate) struct ScopeConvergence {
     pub facet: String,
     pub fingerprint: String,
     pub routed_indexer_ids: Vec<String>,
+}
+
+/// The title-level inputs of [`ScopeConvergence`], memoized for one title walk.
+///
+/// A walk resolves convergence for every stage of one title, and most stages
+/// are then skipped as covered. The required audio languages and the routed
+/// indexer set are the same for every stage that shares their inputs, so they
+/// are read once per walk. The quality profile is deliberately *not* memoized:
+/// it is resolved per stage through the same helper the grab path uses.
+///
+/// Like [`crate::acquisition::title_reads::TitleCatalogReads`], nothing is kept
+/// past the walk, so the freshness bound is the walk's own length, and failed
+/// reads are not memoized.
+#[derive(Default)]
+pub(crate) struct ConvergenceInputMemo {
+    required_audio_languages:
+        std::sync::Mutex<std::collections::HashMap<RequiredAudioLanguagesKey, Vec<String>>>,
+    routed_indexer_ids:
+        std::sync::Mutex<std::collections::HashMap<(String, Option<String>), Vec<String>>>,
+}
+
+/// Every title field `resolve_required_audio_languages_for_title` reads.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct RequiredAudioLanguagesKey {
+    title_id: String,
+    library_id: String,
+    facet: String,
+    language: Option<String>,
+    country: Option<String>,
+    tags: Vec<String>,
+}
+
+impl RequiredAudioLanguagesKey {
+    fn for_title(title: &Title) -> Self {
+        Self {
+            title_id: title.id.clone(),
+            library_id: title.library_id.clone(),
+            facet: title.facet.as_str().to_string(),
+            language: title.language.clone(),
+            country: title.country.clone(),
+            tags: title.tags.clone(),
+        }
+    }
+}
+
+/// The memo holds plain data, so a poisoned lock is still a consistent map.
+fn memo_lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Coverage invalidation policy used when an acquisition scope is re-opened.
@@ -710,7 +760,22 @@ impl AppUseCase {
         subject: &ResolvedReleaseSearchSubject,
     ) -> Option<ScopeConvergence> {
         let scope_key = convergence_scope_key(&subject.submission_scope, &subject.title_id)?;
-        self.resolve_scope_convergence_for_key(title, subject, scope_key)
+        self.resolve_scope_convergence_for_key(title, subject, scope_key, None)
+            .await
+    }
+
+    /// [`Self::resolve_scope_convergence`] for a title walk, reusing the walk's
+    /// memo of the title-level inputs (required audio languages, routed
+    /// indexers). The answer is the one the unmemoized call gives for the same
+    /// stored state; only repeated reads within the walk are saved.
+    pub(crate) async fn resolve_scope_convergence_memoized(
+        &self,
+        title: &Title,
+        subject: &ResolvedReleaseSearchSubject,
+        memo: &ConvergenceInputMemo,
+    ) -> Option<ScopeConvergence> {
+        let scope_key = convergence_scope_key(&subject.submission_scope, &subject.title_id)?;
+        self.resolve_scope_convergence_for_key(title, subject, scope_key, Some(memo))
             .await
     }
 
@@ -723,27 +788,29 @@ impl AppUseCase {
         collection_ids: &[String],
     ) -> Option<ScopeConvergence> {
         let scope_key = series_pack_set_scope_key(collection_ids)?;
-        self.resolve_scope_convergence_for_key(title, subject, scope_key)
+        self.resolve_scope_convergence_for_key(title, subject, scope_key, None)
             .await
     }
 
+    /// Only the quality *profile* feeds the fingerprint, so this resolves the
+    /// profile alone — through the same helper, category and precedence the
+    /// full upgrade context uses — and never the scoring persona or the
+    /// acquisition thresholds. A stage the coverage gate then skips has paid
+    /// for nothing it does not read.
     async fn resolve_scope_convergence_for_key(
         &self,
         title: &Title,
         subject: &ResolvedReleaseSearchSubject,
         scope_key: String,
+        memo: Option<&ConvergenceInputMemo>,
     ) -> Option<ScopeConvergence> {
         let facet = subject.owner_facet.as_str().to_string();
 
-        let context = match self
-            .resolve_upgrade_context_for_title_with_category_and_quality(
-                title,
-                Some(subject.category.as_str()),
-                None,
-            )
+        let profile = match self
+            .resolve_quality_profile_for_title_with_category(title, Some(subject.category.as_str()))
             .await
         {
-            Ok(context) => context,
+            Ok(profile) => profile,
             Err(error) => {
                 tracing::warn!(
                     title_id = subject.title_id.as_str(),
@@ -754,7 +821,7 @@ impl AppUseCase {
             }
         };
         let required_audio_languages = match self
-            .resolve_required_audio_languages_for_title(title)
+            .required_audio_languages_for_convergence(title, memo)
             .await
         {
             Ok(languages) => languages,
@@ -768,13 +835,15 @@ impl AppUseCase {
             }
         };
         let fingerprint = compute_search_fingerprint(
-            &context.profile.id,
-            &profile_criteria_version(&context.profile.criteria),
+            &profile.id,
+            &profile_criteria_version(&profile.criteria),
             &required_audio_languages,
             &scope_match_identity(subject),
         );
 
-        let routed_indexer_ids = self.routed_indexer_ids_for_search(title, subject).await;
+        let routed_indexer_ids = self
+            .routed_indexer_ids_for_search(title, subject, memo)
+            .await;
         if routed_indexer_ids.is_empty() {
             return None;
         }
@@ -787,14 +856,46 @@ impl AppUseCase {
         })
     }
 
+    /// `resolve_required_audio_languages_for_title`, answered from the walk's
+    /// memo when one is supplied. The memo is keyed on every title field the
+    /// resolver reads, so a series-movie stage (searched under a movie-facet
+    /// record of the same title) never reuses the series' answer.
+    async fn required_audio_languages_for_convergence(
+        &self,
+        title: &Title,
+        memo: Option<&ConvergenceInputMemo>,
+    ) -> AppResult<Vec<String>> {
+        let Some(memo) = memo else {
+            return self.resolve_required_audio_languages_for_title(title).await;
+        };
+        let key = RequiredAudioLanguagesKey::for_title(title);
+        if let Some(hit) = memo_lock(&memo.required_audio_languages).get(&key) {
+            return Ok(hit.clone());
+        }
+        // Failed reads are not memoized; the next stage retries the store.
+        let languages = self
+            .resolve_required_audio_languages_for_title(title)
+            .await?;
+        memo_lock(&memo.required_audio_languages)
+            .entry(key)
+            .or_insert_with(|| languages.clone());
+        Ok(languages)
+    }
+
     /// The indexer ids an active search of `subject` targets — the enabled routing
     /// entries for the scope, or every configured indexer when no routing is set.
     /// Mirrors the indexer selection in `search_and_score_releases` so coverage is
     /// recorded for exactly the indexers a search would query.
+    ///
+    /// The answer depends on the title's library and on the routing scope the
+    /// subject's owner facet selects — which a scope row can override — so the
+    /// walk memo is keyed on that `(library, routing scope)` pair, never on the
+    /// title alone.
     async fn routed_indexer_ids_for_search(
         &self,
         title: &Title,
         subject: &ResolvedReleaseSearchSubject,
+        memo: Option<&ConvergenceInputMemo>,
     ) -> Vec<String> {
         let lookup = QualityProfileLookup {
             title_tags: &subject.title_tags,
@@ -804,27 +905,59 @@ impl AppUseCase {
             category_hint: Some(subject.owner_facet.as_str()),
         };
         let scope_id = self.quality_profile_scope_id(lookup);
-        match self
-            .resolve_indexer_routing(Some(title.library_id.as_str()), scope_id.as_deref())
-            .await
-        {
-            Some(plan) => plan
-                .entries
-                .into_iter()
-                .filter(|(_, entry)| entry.enabled)
-                .map(|(indexer_id, _)| indexer_id)
-                .collect(),
-            None => self
-                .services
-                .integrations
-                .indexer_configs
-                .list(None)
+        let Some(memo) = memo else {
+            return self
+                .routed_indexer_ids_for_routing_scope(&title.library_id, scope_id.as_deref())
                 .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|config| config.is_enabled)
-                .map(|config| config.id)
-                .collect(),
+                .0;
+        };
+        let key = (title.library_id.clone(), scope_id);
+        if let Some(hit) = memo_lock(&memo.routed_indexer_ids).get(&key) {
+            return hit.clone();
+        }
+        let (routed, complete) = self
+            .routed_indexer_ids_for_routing_scope(&title.library_id, key.1.as_deref())
+            .await;
+        // An answer built on a failed read is a fallback, not the stored
+        // routing; keep it for this stage only, as the unmemoized path would.
+        if complete {
+            memo_lock(&memo.routed_indexer_ids)
+                .entry(key)
+                .or_insert_with(|| routed.clone());
+        }
+        routed
+    }
+
+    /// The routed indexer ids for `(library_id, scope_id)`, and whether every
+    /// read behind them succeeded.
+    async fn routed_indexer_ids_for_routing_scope(
+        &self,
+        library_id: &str,
+        scope_id: Option<&str>,
+    ) -> (Vec<String>, bool) {
+        let routing = self
+            .resolve_indexer_routing_observed(Some(library_id), scope_id)
+            .await;
+        match routing.plan {
+            Some(plan) => (
+                plan.entries
+                    .into_iter()
+                    .filter(|(_, entry)| entry.enabled)
+                    .map(|(indexer_id, _)| indexer_id)
+                    .collect(),
+                !routing.read_failed,
+            ),
+            None => match self.services.integrations.indexer_configs.list(None).await {
+                Ok(configs) => (
+                    configs
+                        .into_iter()
+                        .filter(|config| config.is_enabled)
+                        .map(|config| config.id)
+                        .collect(),
+                    !routing.read_failed,
+                ),
+                Err(_) => (Vec::new(), false),
+            },
         }
     }
 
