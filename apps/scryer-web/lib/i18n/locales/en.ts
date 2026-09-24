@@ -2829,6 +2829,7 @@ const en: LocaleDictionary = {
   "status.editingDownloadClient": "Editing download client {{name}}",
   "status.editingSubtitleProvider": "Editing subtitle provider {{name}}",
   "status.deletingUser": "Delete user {{name}}?",
+  "status.userDeleted": "Deleted user {{name}}.",
   "status.userLoginEnabled": "Enabled login for {{name}}.",
   "status.userLoginDisabled": "Disabled login for {{name}}.",
   "status.deletingIndexer": "Delete indexer {{name}}?",
