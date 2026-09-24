@@ -88,6 +88,9 @@ impl DownloadMutations {
     async fn submit_external_release(
         &self,
         ctx: &Context<'_>,
+        #[graphql(
+            desc = "Release identity, source, and advertised attributes to evaluate without adding a title."
+        )]
         input: crate::external::SubmitExternalReleaseInput,
     ) -> GqlResult<crate::external::ExternalReleasePayload> {
         let app = app_from_ctx(ctx)?;
