@@ -10,6 +10,9 @@
 //! `-1` out-of-bounds statuses have no counterpart; every other status and
 //! every numeric result is bit-for-bit what the core ABI produced.
 //!
+//! `crc` is the 1.1.0 catalog function: any named `crc-fast` algorithm,
+//! started fresh or resumed from a previous finalized result.
+//!
 //! `archive_component_host` is the only consumer: it wires these functions
 //! straight into the generated WIT `Host` implementation.
 
@@ -17,6 +20,7 @@ use aws_lc_rs::{
     cipher::{AES_128, AES_256, DecryptingKey, DecryptionContext, UnboundCipherKey},
     iv::{FixedLength, IV_LEN_128_BIT},
 };
+use crc_fast::{CrcAlgorithm, Digest};
 
 pub(crate) const AES_BLOCK_LEN: usize = 16;
 const AES_128_KEY_LEN: usize = 16;
@@ -29,12 +33,62 @@ const AES_256_KEY_LEN: usize = 32;
 pub(crate) fn crc32(seed: u32, buf: &[u8]) -> u32 {
     // `new_with_init_state` accepts the unfinalized state; invert the finalized
     // IEEE CRC seed to preserve the guest ABI's streaming verification contract.
-    let mut hasher = crc_fast::Digest::new_with_init_state(
-        crc_fast::CrcAlgorithm::Crc32IsoHdlc,
-        u64::from(seed ^ u32::MAX),
-    );
+    let mut hasher =
+        Digest::new_with_init_state(CrcAlgorithm::Crc32IsoHdlc, u64::from(seed ^ u32::MAX));
     hasher.update(buf);
     hasher.finalize() as u32
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CrcError {
+    /// A custom-parameter variant; only named catalog algorithms are served.
+    UnsupportedAlgorithm,
+    /// The resume seed has bits set above the algorithm's width.
+    SeedOutOfRange,
+}
+
+/// Register width in bits of a named `crc-fast` catalog algorithm.
+#[allow(deprecated)]
+const fn crc_width(algorithm: CrcAlgorithm) -> Option<u32> {
+    use CrcAlgorithm::*;
+    match algorithm {
+        Crc16Arc | Crc16Cdma2000 | Crc16Cms | Crc16Dds110 | Crc16DectR | Crc16DectX | Crc16Dnp
+        | Crc16En13757 | Crc16Genibus | Crc16Gsm | Crc16Ibm3740 | Crc16IbmSdlc
+        | Crc16IsoIec144433A | Crc16Kermit | Crc16Lj1200 | Crc16M17 | Crc16MaximDow
+        | Crc16Mcrf4xx | Crc16Modbus | Crc16Nrsc5 | Crc16OpensafetyA | Crc16OpensafetyB
+        | Crc16Profibus | Crc16Riello | Crc16SpiFujitsu | Crc16T10Dif | Crc16Teledisk
+        | Crc16Tms37157 | Crc16Umts | Crc16Usb | Crc16Xmodem => Some(16),
+        Crc32Aixm | Crc32Autosar | Crc32Base91D | Crc32Bzip2 | Crc32CdRomEdc | Crc32Cksum
+        | Crc32Iscsi | Crc32IsoHdlc | Crc32Jamcrc | Crc32Mef | Crc32Mpeg2 | Crc32Xfer => Some(32),
+        Crc64Ecma182 | Crc64GoIso | Crc64Ms | Crc64Nvme | Crc64Redis | Crc64We | Crc64Xz => {
+            Some(64)
+        }
+        // Custom variants carry no catalog parameters; crc-fast panics on them.
+        CrcCustom | Crc32Custom | Crc64Custom => None,
+    }
+}
+
+/// `algorithm` over `buf`, finalized and zero-extended to 64 bits.
+///
+/// `None` starts from the algorithm's initial value. `Some(previous)` resumes
+/// from a finalized result of an earlier call: crc-fast finalizes as
+/// `state ^ xorout`, so the running state is `previous ^ xorout` exactly, and
+/// the resumed result equals the one-shot checksum of the concatenated input.
+pub(crate) fn crc(algorithm: CrcAlgorithm, seed: Option<u64>, buf: &[u8]) -> Result<u64, CrcError> {
+    let width = crc_width(algorithm).ok_or(CrcError::UnsupportedAlgorithm)?;
+    let mut digest = match seed {
+        None => Digest::new(algorithm),
+        Some(previous) => {
+            if width < u64::BITS && previous >> width != 0 {
+                return Err(CrcError::SeedOutOfRange);
+            }
+            // A zero-state digest finalizes to the algorithm's xorout.
+            let xorout = Digest::new_with_init_state(algorithm, 0).finalize();
+            Digest::new_with_init_state(algorithm, previous ^ xorout)
+        }
+    };
+    digest.update(buf);
+    Ok(digest.finalize())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,6 +243,164 @@ mod tests {
     #[test]
     fn crc32_of_an_empty_buffer_returns_the_seed() {
         assert_eq!(crc32(0x1234_5678, b""), 0x1234_5678);
+    }
+
+    /// Every named catalog algorithm the 1.1.0 `crc-algorithm` enum maps to.
+    const CATALOG: [CrcAlgorithm; 50] = {
+        use CrcAlgorithm::*;
+        [
+            Crc16Arc,
+            Crc16Cdma2000,
+            Crc16Cms,
+            Crc16Dds110,
+            Crc16DectR,
+            Crc16DectX,
+            Crc16Dnp,
+            Crc16En13757,
+            Crc16Genibus,
+            Crc16Gsm,
+            Crc16Ibm3740,
+            Crc16IbmSdlc,
+            Crc16IsoIec144433A,
+            Crc16Kermit,
+            Crc16Lj1200,
+            Crc16M17,
+            Crc16MaximDow,
+            Crc16Mcrf4xx,
+            Crc16Modbus,
+            Crc16Nrsc5,
+            Crc16OpensafetyA,
+            Crc16OpensafetyB,
+            Crc16Profibus,
+            Crc16Riello,
+            Crc16SpiFujitsu,
+            Crc16T10Dif,
+            Crc16Teledisk,
+            Crc16Tms37157,
+            Crc16Umts,
+            Crc16Usb,
+            Crc16Xmodem,
+            Crc32Aixm,
+            Crc32Autosar,
+            Crc32Base91D,
+            Crc32Bzip2,
+            Crc32CdRomEdc,
+            Crc32Cksum,
+            Crc32Iscsi,
+            Crc32IsoHdlc,
+            Crc32Jamcrc,
+            Crc32Mef,
+            Crc32Mpeg2,
+            Crc32Xfer,
+            Crc64Ecma182,
+            Crc64GoIso,
+            Crc64Ms,
+            Crc64Nvme,
+            Crc64Redis,
+            Crc64We,
+            Crc64Xz,
+        ]
+    };
+
+    /// Long enough to cross crc-fast's SIMD folding thresholds, with a
+    /// non-repeating byte pattern.
+    fn crc_payload() -> Vec<u8> {
+        (0..600u32)
+            .map(|i| (i.wrapping_mul(131) >> 3) as u8)
+            .collect()
+    }
+
+    #[test]
+    fn crc_from_none_matches_the_one_shot_checksum() {
+        for algorithm in CATALOG {
+            for input in [&b""[..], b"123456789", &crc_payload()] {
+                assert_eq!(
+                    crc(algorithm, None, input),
+                    Ok(crc_fast::checksum(algorithm, input)),
+                    "{algorithm:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn crc_results_fit_the_algorithm_width() {
+        for algorithm in CATALOG {
+            let width = crc_width(algorithm).expect("catalog algorithm has a width");
+            let result = crc(algorithm, None, &crc_payload()).unwrap();
+            assert!(width == 64 || result >> width == 0, "{algorithm:?}");
+        }
+    }
+
+    /// Resuming from any split point reproduces the one-shot checksum, which
+    /// is the whole streaming contract.
+    #[test]
+    fn crc_resumed_at_every_split_matches_the_one_shot_checksum() {
+        let payload = crc_payload();
+        for algorithm in CATALOG {
+            let whole = crc_fast::checksum(algorithm, &payload);
+            for split in [0, 1, 7, 16, 63, 64, 65, 255, 256, 300, 599, 600] {
+                let (head, tail) = payload.split_at(split);
+                let first = crc(algorithm, None, head).unwrap();
+                assert_eq!(
+                    crc(algorithm, Some(first), tail),
+                    Ok(whole),
+                    "{algorithm:?} split at {split}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn crc_of_an_empty_buffer_returns_the_seed() {
+        for algorithm in CATALOG {
+            let seed = crc(algorithm, None, b"123456789").unwrap();
+            assert_eq!(crc(algorithm, Some(seed), b""), Ok(seed), "{algorithm:?}");
+        }
+    }
+
+    #[test]
+    fn crc_iso_hdlc_matches_the_frozen_crc32() {
+        let payload = crc_payload();
+        let seed = crc32(0, b"archive ");
+        assert_eq!(
+            crc(CrcAlgorithm::Crc32IsoHdlc, Some(u64::from(seed)), &payload),
+            Ok(u64::from(crc32(seed, &payload)))
+        );
+        assert_eq!(
+            crc(CrcAlgorithm::Crc32IsoHdlc, Some(0), &payload),
+            crc(CrcAlgorithm::Crc32IsoHdlc, None, &payload)
+        );
+    }
+
+    #[test]
+    fn crc64_xz_matches_the_catalog_check_value() {
+        assert_eq!(
+            crc(CrcAlgorithm::Crc64Xz, None, b"123456789"),
+            Ok(0x995d_c9bb_df19_39fa)
+        );
+    }
+
+    #[test]
+    fn crc_rejects_a_seed_wider_than_the_algorithm() {
+        assert_eq!(
+            crc(CrcAlgorithm::Crc16Arc, Some(0x1_0000), b"x"),
+            Err(CrcError::SeedOutOfRange)
+        );
+        assert_eq!(
+            crc(CrcAlgorithm::Crc32IsoHdlc, Some(1 << 32), b"x"),
+            Err(CrcError::SeedOutOfRange)
+        );
+        assert!(crc(CrcAlgorithm::Crc16Arc, Some(0xffff), b"x").is_ok());
+        assert!(crc(CrcAlgorithm::Crc64Xz, Some(u64::MAX), b"x").is_ok());
+    }
+
+    #[test]
+    fn crc_rejects_custom_variants_instead_of_panicking() {
+        assert_eq!(
+            crc(CrcAlgorithm::CrcCustom, None, b"x"),
+            Err(CrcError::UnsupportedAlgorithm)
+        );
     }
 
     fn hex_bytes(input: &str) -> Vec<u8> {
