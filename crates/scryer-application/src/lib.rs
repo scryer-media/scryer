@@ -537,6 +537,9 @@ pub use null_repositories::NullMediaServerPlaybackProbe;
 /// The RSS cadence knob lives beside the RSS lane it governs, but the upstream
 /// scheduler in the acquisition infrastructure crate has to honour the very same
 /// value — so it is resolved once, here, rather than parsed on both sides.
+pub use acquisition::rss::external::{
+    ExternalReleaseInput, ExternalReleaseOutcome, ExternalReleaseProtocol, ExternalReleaseStatus,
+};
 pub use acquisition::rss::{
     DEFAULT_RSS_SYNC_TICK, DEFAULT_RSS_TARGET_INTERVAL, MINIMUM_RSS_TARGET_INTERVAL,
     RSS_SYNC_TICK_ENV, RSS_TARGET_INTERVAL_ENV, parse_rss_sync_tick, parse_rss_target_interval,

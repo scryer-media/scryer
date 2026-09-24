@@ -9868,6 +9868,356 @@ async fn completing_absent_acquisition_state_row_does_not_materialize_completed_
     );
 }
 
+#[tokio::test]
+async fn external_intake_delay_survives_reconstruction_without_indexer_polling() {
+    let pending = Arc::new(TrackingPendingReleaseRepo::default());
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        submissions.clone(),
+        pending.clone(),
+        wanted.clone(),
+        Arc::new(MockIndexerClient),
+    );
+    let title = add_rss_target_movie(&app, &user, &wanted, "Convergent Skyline").await;
+    app.services.config.settings.upsert_setting_json(SETTINGS_SCOPE_SYSTEM, DELAY_PROFILE_CATALOG_KEY, None,
+        serde_json::json!([{"id":"external-delay", "name":"Hold announcements", "usenet_delay_minutes":120}]).to_string(), "test", None).await.unwrap();
+    let mut input = external_test_input();
+    input.published_at = Some(Utc::now());
+    input.flags = vec!["freeleech".into()];
+    let first = app
+        .submit_external_release(&user, input.clone(), &[])
+        .await
+        .unwrap();
+    assert_eq!(
+        first.status,
+        crate::ExternalReleaseStatus::Held,
+        "{first:?}"
+    );
+    let second = app
+        .submit_external_release(&user, input, &[])
+        .await
+        .unwrap();
+    assert_eq!(second.pending_id, first.pending_id);
+    assert!(submissions.store.lock().await.is_empty());
+    let rows = pending.store.lock().await.clone();
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].title_id, title.id);
+    let explanation: serde_json::Value =
+        serde_json::from_str(rows[0].scoring_log_json.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        explanation["external_announcement"]["flags"],
+        serde_json::json!(["freeleech"])
+    );
+    let mut better = external_test_input();
+    better.name = "Convergent.Skyline.2024.1080p.WEB-DL.PROPER-GRP".into();
+    better.download_url = "https://releases.invalid/convergent-proper.nzb".into();
+    better.published_at = Some(Utc::now());
+    better.flags = vec!["freeleech".into()];
+    let better_name = better.name.clone();
+    assert_eq!(
+        app.submit_external_release(&user, better, &[])
+            .await
+            .unwrap()
+            .status,
+        crate::ExternalReleaseStatus::Held
+    );
+    assert_eq!(pending.store.lock().await.len(), 2);
+    // A policy edit makes the ordinary delay admission check eligible;
+    // no wall-clock sleep and no RSS/indexer request is needed.
+    app.services
+        .config
+        .settings
+        .upsert_setting_json(
+            SETTINGS_SCOPE_SYSTEM,
+            DELAY_PROFILE_CATALOG_KEY,
+            None,
+            "[]".into(),
+            "test",
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(app.process_external_pending_releases().await.unwrap(), 1);
+    assert_eq!(submissions.store.lock().await.len(), 1);
+    assert_eq!(
+        submissions.store.lock().await[0].source_title.as_deref(),
+        Some(better_name.as_str())
+    );
+    assert_eq!(app.process_external_pending_releases().await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn external_intake_series_and_anime_packs_preserve_scope_and_permissions() {
+    tokio::time::timeout(std::time::Duration::from_secs(120), async {
+        for facet in [MediaFacet::Series, MediaFacet::Anime] {
+            let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+            let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+            let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+                Arc::new(StubDownloadClient::default()),
+                submissions.clone(),
+                Arc::new(TrackingPendingReleaseRepo::default()),
+                wanted.clone(),
+                Arc::new(MockIndexerClient),
+            );
+            let title = app
+                .add_title(
+                    &user,
+                    NewTitle {
+                        name: "Cascade Falls".into(),
+                        facet: facet.clone(),
+                        monitored: true,
+                        ..Default::default()
+                    },
+                )
+                .await
+                .unwrap();
+            wanted.remember_title_facet(&title.id, facet).await;
+            let season = app
+                .create_collection(
+                    &user,
+                    title.id.clone(),
+                    "season".into(),
+                    "1".into(),
+                    Some("Season 1".into()),
+                    None,
+                    Some("1".into()),
+                    Some("2".into()),
+                )
+                .await
+                .unwrap();
+            for episode in 1..=2 {
+                app.create_episode(
+                    &user,
+                    title.id.clone(),
+                    Some(season.id.clone()),
+                    "standard".into(),
+                    Some("1".into()),
+                    Some(episode.to_string()),
+                    Some(format!("S01E{episode:02}")),
+                    Some(format!("S01E{episode:02}")),
+                    Some("2024-01-01".into()),
+                    Some(1440),
+                    false,
+                    false,
+                )
+                .await
+                .unwrap();
+            }
+            let mut input = external_test_input();
+            input.name = "Cascade.Falls.S01.COMPLETE.1080p.WEB-DL-GRP".into();
+            let mut restricted = user.clone();
+            restricted.authorization = scryer_domain::UserAuthorization {
+                loaded: true,
+                ..Default::default()
+            };
+            let denied = app
+                .submit_external_release(&restricted, input.clone(), &[])
+                .await
+                .unwrap();
+            assert_eq!(denied.status, crate::ExternalReleaseStatus::Rejected);
+            assert!(denied.title_id.is_none());
+            assert!(submissions.store.lock().await.is_empty());
+            let outcome = app
+                .submit_external_release(&user, input, &[])
+                .await
+                .unwrap();
+            assert_eq!(
+                outcome.status,
+                crate::ExternalReleaseStatus::Queued,
+                "{outcome:?}"
+            );
+            let rows = submissions.store.lock().await;
+            assert_eq!(rows.len(), 1);
+            assert!(matches!(
+                rows[0].scope,
+                SubmissionScope::Collection { .. } | SubmissionScope::EpisodeSet { .. }
+            ));
+        }
+    })
+    .await
+    .expect("bounded external pack fixture");
+}
+
+fn external_test_input() -> crate::ExternalReleaseInput {
+    crate::ExternalReleaseInput {
+        name: "Convergent.Skyline.2024.1080p.WEB-DL-GRP".into(),
+        download_url: "https://releases.invalid/convergent.nzb".into(),
+        protocol: crate::ExternalReleaseProtocol::Usenet,
+        source: "External feed".into(),
+        size_bytes: Some(2_000_000_000),
+        published_at: Some(Utc::now() - chrono::Duration::days(1)),
+        external_ids: Default::default(),
+        flags: vec![],
+    }
+}
+
+#[tokio::test]
+async fn external_intake_failed_or_removed_history_does_not_report_duplicate() {
+    for failed in [true, false] {
+        let client = Arc::new(StubDownloadClient::default().with_unique_job_ids());
+        let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+        let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+        let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+            client.clone(),
+            submissions.clone(),
+            Arc::new(TrackingPendingReleaseRepo::default()),
+            wanted.clone(),
+            Arc::new(MockIndexerClient),
+        );
+        let title = add_rss_target_movie(&app, &user, &wanted, "Convergent Skyline").await;
+        assert_eq!(
+            app.submit_external_release(&user, external_test_input(), &[])
+                .await
+                .unwrap()
+                .status,
+            crate::ExternalReleaseStatus::Queued
+        );
+        if failed {
+            client.queue_items.lock().await[0].state = DownloadQueueState::Failed;
+        } else {
+            client.queue_items.lock().await.clear();
+        }
+        let previous = submissions.store.lock().await[0].clone();
+        submissions
+            .update_tracked_state(
+                &ClientJobLocator::from_submission(&previous),
+                if failed { "failed" } else { "ignored" },
+            )
+            .await
+            .unwrap();
+        // Model a settled failure/removal whose acquisition claim was released,
+        // leaving the title missing and policy-eligible while history remains.
+        wanted.store.lock().await.clear();
+        app.runtime
+            .acquisition
+            .download_submission_guards
+            .forget_settled_download(&title.id);
+        assert_eq!(
+            submissions.store.lock().await.len(),
+            1,
+            "retain the historical submission"
+        );
+        let outcome = app
+            .submit_external_release(&user, external_test_input(), &[])
+            .await
+            .unwrap();
+        assert_eq!(
+            outcome.status,
+            crate::ExternalReleaseStatus::Queued,
+            "settled failed/removed history must permit normal reacquisition: {outcome:?}"
+        );
+        assert_ne!(
+            outcome.download_id.expect("replacement download identity"),
+            previous.download_id.to_string()
+        );
+        assert_eq!(client.submitted_release_titles.lock().await.len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn external_intake_concurrent_and_repeated_pushes_share_one_submission() {
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let wanted = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        wanted.clone(),
+        Arc::new(MockIndexerClient),
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Convergent Skyline".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                year: Some(2024),
+                min_availability: Some("announced".into()),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    wanted
+        .remember_title_facet(&title.id, MediaFacet::Movie)
+        .await;
+    let (first, second) = tokio::join!(
+        app.submit_external_release(&user, external_test_input(), &[]),
+        app.submit_external_release(&user, external_test_input(), &[]),
+    );
+    let statuses = [first.unwrap().status, second.unwrap().status];
+    assert!(
+        statuses.contains(&crate::ExternalReleaseStatus::Queued),
+        "{statuses:?}"
+    );
+    assert!(
+        statuses.contains(&crate::ExternalReleaseStatus::Duplicate),
+        "{statuses:?}"
+    );
+    let again = app
+        .submit_external_release(&user, external_test_input(), &[])
+        .await
+        .unwrap();
+    assert_eq!(again.status, crate::ExternalReleaseStatus::Duplicate);
+    assert!(again.download_id.is_some());
+    let rows = submissions.store.lock().await;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].source_provider_id, None);
+    assert_eq!(
+        rows[0].source_provider_name.as_deref(),
+        Some("External feed")
+    );
+}
+
+#[tokio::test]
+async fn external_intake_rejects_unmatched_unmonitored_and_wrong_facet() {
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        Arc::new(StubDownloadClient::default()),
+        submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        Arc::new(TrackingAcquisitionScopeStateRepo::default()),
+        Arc::new(MockIndexerClient),
+    );
+    assert_eq!(
+        app.submit_external_release(&user, external_test_input(), &[])
+            .await
+            .unwrap()
+            .status,
+        crate::ExternalReleaseStatus::Rejected
+    );
+    app.add_title(
+        &user,
+        NewTitle {
+            name: "Convergent Skyline".into(),
+            facet: MediaFacet::Movie,
+            monitored: false,
+            year: Some(2024),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        app.submit_external_release(&user, external_test_input(), &[])
+            .await
+            .unwrap()
+            .status,
+        crate::ExternalReleaseStatus::Rejected
+    );
+    assert_eq!(
+        app.submit_external_release(&user, external_test_input(), &[MediaFacet::Series])
+            .await
+            .unwrap()
+            .status,
+        crate::ExternalReleaseStatus::Rejected
+    );
+    assert!(submissions.store.lock().await.is_empty());
+}
+
 /// A missing, monitored movie with NO acquisition-state row is upgraded from a
 /// matching RSS release: the wanted-row gate is gone (§D5), and the grab
 /// materializes the state row and transitions it to grabbed.
