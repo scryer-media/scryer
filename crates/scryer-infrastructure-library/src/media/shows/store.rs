@@ -10,7 +10,9 @@ use scryer_domain::{
     Episode, EpisodeType, Id, MovieEntity, SeriesMovieLink,
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
+use super::bridge_cache::AnimeNumberingBridgeCache;
 use crate::media::canonical_tags::{
     load_movie_entity_metadata_ratings, replace_movie_entity_metadata_ratings_tx,
 };
@@ -98,11 +100,31 @@ WHERE id = {}";
 #[derive(Clone)]
 pub struct ShowStore {
     datastore: StoreDatastore,
+    /// Shared with every other store that can change or remove a bridge row;
+    /// see `bridge_cache` for the invalidation contract.
+    bridge_cache: Arc<AnimeNumberingBridgeCache>,
 }
 
 impl ShowStore {
     pub fn new(datastore: StoreDatastore) -> Self {
-        Self { datastore }
+        Self {
+            datastore,
+            bridge_cache: Arc::new(AnimeNumberingBridgeCache::new()),
+        }
+    }
+
+    /// Use `cache` for bridge reads. The assembly hands the same cache to the
+    /// title and merge stores so their deletes reach it.
+    pub fn with_anime_numbering_bridge_cache(
+        mut self,
+        cache: Arc<AnimeNumberingBridgeCache>,
+    ) -> Self {
+        self.bridge_cache = cache;
+        self
+    }
+
+    pub fn anime_numbering_bridge_cache(&self) -> Arc<AnimeNumberingBridgeCache> {
+        self.bridge_cache.clone()
     }
 
     fn read_target(&self) -> SqlTarget<'_> {
@@ -397,7 +419,11 @@ impl ShowRepository for ShowStore {
         &self,
         title_id: &str,
     ) -> AppResult<Option<AnimeNumberingBridge>> {
-        get_anime_numbering_bridge_query(self.read_target(), title_id).await
+        self.bridge_cache
+            .get_or_load(title_id, || {
+                get_anime_numbering_bridge_query(self.read_target(), title_id)
+            })
+            .await
     }
 
     async fn replace_anime_numbering_bridge(
@@ -405,9 +431,10 @@ impl ShowRepository for ShowStore {
         title_id: &str,
         bridge: Option<&AnimeNumberingBridge>,
     ) -> AppResult<()> {
+        let cache_key = title_id.to_string();
         let title_id = title_id.to_string();
         let bridge = bridge.cloned();
-        SqlRuntime::run_in_transaction(
+        let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "replace_anime_numbering_bridge",
             move |tx| {
@@ -424,7 +451,11 @@ impl ShowRepository for ShowStore {
                 })
             },
         )
-        .await
+        .await;
+        // After the transaction, committed or not: a failed commit whose
+        // outcome is unknown must not leave the old value cached.
+        self.bridge_cache.invalidate(&cache_key);
+        result
     }
 
     async fn list_episode_external_ids(
@@ -2548,3 +2579,6 @@ mod collection_ordered_path_tests {
         assert!(batched.is_empty());
     }
 }
+
+#[cfg(test)]
+mod bridge_cache_tests;
