@@ -122,9 +122,10 @@ mod tests {
     /// call must return, not abort, and must not panic.
     #[test]
     fn dump_without_profiling_enabled_returns_instead_of_aborting() {
-        let path = std::env::temp_dir().join("scryer-jemalloc-prof-smoke.heap");
+        // An owned directory: whatever a dump writes goes away with it.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("smoke.heap");
         let _ = super::dump(path.to_string_lossy().as_ref());
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
