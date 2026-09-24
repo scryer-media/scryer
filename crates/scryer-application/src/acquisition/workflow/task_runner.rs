@@ -2433,6 +2433,11 @@ struct BackgroundAcquisitionTitleContext {
     submissions: Vec<DownloadSubmission>,
     tracked_states:
         HashMap<crate::contracts::ClientJobLocator, scryer_domain::TrackedDownloadState>,
+    /// The title-level convergence inputs (required audio languages, routed
+    /// indexers) for the length of this walk. Every stage resolves its
+    /// convergence coordinates before the coverage gate, and most stages stop
+    /// there, so these are read once per walk rather than once per stage.
+    convergence_inputs: crate::acquisition::convergence::ConvergenceInputMemo,
 }
 
 impl BackgroundAcquisitionTitleContext {
@@ -2505,6 +2510,7 @@ impl BackgroundAcquisitionTitleContext {
             reads,
             submissions,
             tracked_states,
+            convergence_inputs: Default::default(),
         })
     }
 }
@@ -3196,7 +3202,14 @@ async fn process_single_target(
     // that contract before either the title or episode lane spends an indexer
     // query.
     if !stale_standby_indexer_ids.is_empty() {
-        if let Some(convergence) = app.resolve_scope_convergence(&search_title, &subject).await {
+        if let Some(convergence) = app
+            .resolve_scope_convergence_memoized(
+                &search_title,
+                &subject,
+                &context.convergence_inputs,
+            )
+            .await
+        {
             info!(
                 title_id = title.id.as_str(),
                 scope_key = convergence.scope_key.as_str(),
@@ -3264,7 +3277,14 @@ async fn process_single_target(
     let (uncovered, convergence_scope_key) = if pack_stage_only {
         (HashSet::new(), None)
     } else {
-        let Some(convergence) = app.resolve_scope_convergence(&search_title, &subject).await else {
+        let Some(convergence) = app
+            .resolve_scope_convergence_memoized(
+                &search_title,
+                &subject,
+                &context.convergence_inputs,
+            )
+            .await
+        else {
             debug!(
                 title_id = title.id.as_str(),
                 scope_key = target.scope_key.as_str(),
@@ -3413,7 +3433,11 @@ async fn process_single_target(
                 // converged pack scope rides RSS, an unconverged one is searched
                 // against its uncovered subset.
                 let pack_uncovered = match app
-                    .resolve_scope_convergence(&search_title, &pack_subject)
+                    .resolve_scope_convergence_memoized(
+                        &search_title,
+                        &pack_subject,
+                        &context.convergence_inputs,
+                    )
                     .await
                 {
                     Some(pack_convergence) => app

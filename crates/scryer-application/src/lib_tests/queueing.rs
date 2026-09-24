@@ -4746,6 +4746,272 @@ async fn background_acquisition_requeries_only_the_pruned_indexer() {
     );
 }
 
+/// Convergence resolves only the quality profile — not the whole upgrade
+/// context — and a title walk memoizes the per-title inputs. Neither may move
+/// the fingerprint: coverage rows written under the full-context resolution
+/// must stay valid, including under a category profile override and
+/// non-default required audio languages.
+#[tokio::test]
+async fn convergence_fingerprint_matches_the_full_upgrade_context_resolution() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_SYSTEM,
+            QUALITY_PROFILE_ID_KEY,
+            "\"global-profile\"",
+        )
+        .await;
+    for category in ["movie", "series", "anime"] {
+        settings
+            .set_scoped_value(
+                SETTINGS_SCOPE_SYSTEM,
+                QUALITY_PROFILE_ID_KEY,
+                category,
+                "\"category-profile\"",
+            )
+            .await;
+    }
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            REQUIRED_AUDIO_LANGUAGES_KEY,
+            "anime",
+            "[\"ja\"]",
+        )
+        .await;
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            REQUIRED_AUDIO_LANGUAGES_KEY,
+            "movie",
+            "[\"en\",\"ja\"]",
+        )
+        .await;
+    let mut category_profile = test_quality_profile("category-profile");
+    category_profile.criteria.cutoff_tier = Some("1080p".to_string());
+    let quality_profiles = Arc::new(StoredQualityProfileRepo::default());
+    quality_profiles
+        .set_profiles(vec![
+            test_quality_profile("global-profile"),
+            category_profile,
+        ])
+        .await;
+    let (app, user) = bootstrap_with_settings_repo_and_profiles(
+        settings,
+        quality_profiles,
+        Arc::new(MockIndexerClient),
+    );
+    for indexer_id in ["indexer-a", "indexer-b"] {
+        app.services
+            .integrations
+            .indexer_configs
+            .create(synthetic_direct_nab_indexer_config(indexer_id, "newznab"))
+            .await
+            .expect("create routed indexer");
+    }
+    let (title, subject) = convergence_test_title_and_subject(&app, &user).await;
+    // A series-movie stage searches under a movie-facet record of the same
+    // title, whose required audio languages differ. One memo serves both, as
+    // it does within a walk.
+    let mut movie_record = title.clone();
+    movie_record.facet = MediaFacet::Movie;
+    let memo = crate::acquisition::convergence::ConvergenceInputMemo::default();
+
+    let mut fingerprints = Vec::new();
+    for record in [&title, &movie_record] {
+        let context = app
+            .resolve_upgrade_context_for_title_with_category_and_quality(
+                record,
+                Some(subject.category.as_str()),
+                None,
+            )
+            .await
+            .expect("full upgrade context resolves");
+        assert_eq!(
+            context.profile.id, "category-profile",
+            "fixture: the category override governs the scope"
+        );
+        let audio = app
+            .resolve_required_audio_languages_for_title(record)
+            .await
+            .expect("required audio languages resolve");
+        assert!(!audio.is_empty(), "fixture: required audio is non-default");
+        let full_context_fingerprint = crate::acquisition::convergence::compute_search_fingerprint(
+            &context.profile.id,
+            &crate::acquisition::convergence::profile_criteria_version(&context.profile.criteria),
+            &audio,
+            &crate::acquisition::convergence::scope_match_identity(&subject),
+        );
+
+        let unmemoized = app
+            .resolve_scope_convergence(record, &subject)
+            .await
+            .expect("routed convergence coordinates");
+        assert_eq!(unmemoized.fingerprint, full_context_fingerprint);
+        // Twice: the first call fills the memo, the second answers from it.
+        for _ in 0..2 {
+            let memoized = app
+                .resolve_scope_convergence_memoized(record, &subject, &memo)
+                .await
+                .expect("routed convergence coordinates");
+            assert_eq!(memoized.fingerprint, full_context_fingerprint);
+            let mut routed = memoized.routed_indexer_ids.clone();
+            routed.sort();
+            assert_eq!(
+                routed,
+                vec!["indexer-a".to_string(), "indexer-b".to_string()]
+            );
+        }
+        fingerprints.push(full_context_fingerprint);
+    }
+    assert_ne!(
+        fingerprints[0], fingerprints[1],
+        "the memo must not hand the movie-facet record the series' audio languages"
+    );
+}
+
+/// A background stage skipped as covered pays only for its convergence
+/// coordinates. The scoring persona and the acquisition thresholds belong to
+/// candidate evaluation, which a covered stage never reaches.
+#[tokio::test]
+async fn covered_background_walk_reads_no_persona_or_acquisition_thresholds() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let indexer_client = Arc::new(
+        FixedReleaseIndexerClient::new("Covered Walk Fixture.2024.1080p.WEB-DL")
+            .with_fired_indexers(["indexer-a", "indexer-b"])
+            .with_empty_response(),
+    );
+    let (app, user) = bootstrap_with_acquisition_tracking_and_indexer(
+        download_client,
+        download_submissions,
+        pending_releases,
+        wanted_items.clone(),
+        indexer_client.clone(),
+    );
+    app.services
+        .integrations
+        .indexer_configs
+        .delete("acquisition-indexer")
+        .await
+        .expect("remove bootstrap indexer");
+    for indexer_id in ["indexer-a", "indexer-b"] {
+        app.services
+            .integrations
+            .indexer_configs
+            .create(synthetic_direct_nab_indexer_config(indexer_id, "newznab"))
+            .await
+            .expect("create routed indexer");
+    }
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app.with_test_overrides(|builder| {
+        builder
+            .with_scope_indexer_coverage_store(coverage.clone())
+            .with_settings(settings.clone())
+    });
+
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Covered Walk Fixture".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create monitored movie");
+    let wanted = AcquisitionScopeState {
+        id: Id::new().0,
+        title_id: title.id.clone(),
+        title_name: Some(title.name.clone()),
+        title_slug: title.slug.clone(),
+        title_facet: Some("movie".to_string()),
+        library_id: Some(title.library_id.clone()),
+        library_name: None,
+        library_slug: None,
+        episode_id: None,
+        collection_id: None,
+        series_movie_link_id: None,
+        season_number: None,
+        episode_number: None,
+        media_type: "movie".to_string(),
+        last_search_at: None,
+        status: AcquisitionScopeStatus::Wanted,
+        grabbed_release: None,
+        landed_bar: None,
+        latest_release_decision: None,
+        mismatch_recovery_eligible: false,
+        created_at: Utc::now().to_rfc3339(),
+        updated_at: Utc::now().to_rfc3339(),
+    };
+    wanted_items
+        .upsert_acquisition_scope_state(&wanted)
+        .await
+        .expect("seed fileless wanted movie");
+    let search_title = app
+        .release_search_title_for_wanted_item(&title, &wanted, None)
+        .await;
+    let subject = app
+        .resolve_release_search_subject_for_wanted_item(&title, &search_title, &wanted, None)
+        .await
+        .expect("subject should resolve");
+    let convergence = app
+        .resolve_scope_convergence(&search_title, &subject)
+        .await
+        .expect("resolve live convergence coordinates");
+    app.record_search_coverage(&search_title, &subject, &convergence.routed_indexer_ids)
+        .await;
+    assert!(
+        scope_is_converged(&app, &search_title, &subject).await,
+        "fixture: every routed indexer is covered"
+    );
+
+    settings.reset_read_log();
+    app.run_background_acquisition_cycle_once().await;
+
+    assert!(
+        indexer_client.requested_indexer_id_sets().await.is_empty(),
+        "a covered scope spends no indexer query"
+    );
+    // Target derivation reads the persona once per cycle, however many stages
+    // follow. The cycle reads its rotation cursor after derivation and before
+    // the first title walk, so everything after that read is the walk's.
+    let reads = settings.read_log();
+    let walk_start = reads
+        .iter()
+        .position(|key| {
+            key == crate::acquisition::convergence::BACKGROUND_ACQUISITION_RESUME_AFTER_KEY
+        })
+        .expect("the cycle reads its rotation cursor before walking");
+    let walk_reads = &reads[walk_start..];
+    assert!(
+        walk_reads
+            .iter()
+            .any(|key| key == INDEXER_ROUTING_SETTINGS_KEY),
+        "the stage reached the convergence gate: {walk_reads:?}"
+    );
+    // The acquisition thresholds are the only reader of the last three keys.
+    for key in [
+        SCORING_PERSONA_KEY,
+        "acquisition.upgrade_cooldown_hours",
+        "acquisition.same_tier_min_delta",
+        "acquisition.forced_upgrade_delta_bypass",
+    ] {
+        assert!(
+            !walk_reads.iter().any(|read| read == key),
+            "a covered stage never resolves the persona or the acquisition thresholds ({key}): {walk_reads:?}"
+        );
+    }
+}
+
 /// The failure loop never costs an indexer query. A grab that fails is
 /// blocklisted and its scope re-opened under its existing coverage; the cursor
 /// then walks the scope's saved search results in order, and once they are

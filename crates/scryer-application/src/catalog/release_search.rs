@@ -2313,6 +2313,12 @@ pub(crate) struct QualityProfileResolution {
     pub(crate) source: QualityProfileResolutionSource,
 }
 
+/// An indexer routing plan and whether any settings read behind it failed.
+pub(crate) struct ObservedIndexerRouting {
+    pub(crate) plan: Option<IndexerRoutingPlan>,
+    pub(crate) read_failed: bool,
+}
+
 impl AppUseCase {
     pub(crate) async fn resolve_quality_profile(
         &self,
@@ -2557,6 +2563,21 @@ impl AppUseCase {
         library_id: Option<&str>,
         scope_id: Option<&str>,
     ) -> Option<IndexerRoutingPlan> {
+        self.resolve_indexer_routing_observed(library_id, scope_id)
+            .await
+            .plan
+    }
+
+    /// [`Self::resolve_indexer_routing`], also reporting whether a settings
+    /// read failed along the way. The plan is the same either way; the flag
+    /// lets a memoizing caller decline to keep an answer that came from a
+    /// fallback rather than from the stored settings.
+    pub(crate) async fn resolve_indexer_routing_observed(
+        &self,
+        library_id: Option<&str>,
+        scope_id: Option<&str>,
+    ) -> ObservedIndexerRouting {
+        let mut read_failed = false;
         if let Some(library_id) = library_id {
             match self
                 .read_setting_string_value(INDEXER_ROUTING_SETTINGS_KEY, Some(library_id))
@@ -2564,11 +2585,15 @@ impl AppUseCase {
             {
                 Ok(Some(value)) => {
                     if let Some(plan) = self.parse_indexer_routing_plan(library_id, &value) {
-                        return Some(plan);
+                        return ObservedIndexerRouting {
+                            plan: Some(plan),
+                            read_failed,
+                        };
                     }
                 }
                 Ok(None) => {}
                 Err(err) => {
+                    read_failed = true;
                     warn!(
                         error = %err,
                         library_id = library_id,
@@ -2578,25 +2603,41 @@ impl AppUseCase {
             }
         }
 
-        let scope_id = scope_id?;
+        let Some(scope_id) = scope_id else {
+            return ObservedIndexerRouting {
+                plan: None,
+                read_failed,
+            };
+        };
 
         let raw_json = match self
             .read_setting_string_value(INDEXER_ROUTING_SETTINGS_KEY, Some(scope_id))
             .await
         {
             Ok(Some(value)) => value,
-            Ok(None) => return None,
+            Ok(None) => {
+                return ObservedIndexerRouting {
+                    plan: None,
+                    read_failed,
+                };
+            }
             Err(err) => {
                 warn!(
                     error = %err,
                     scope_id = scope_id,
                     "failed to read indexer routing setting, falling back to defaults"
                 );
-                return None;
+                return ObservedIndexerRouting {
+                    plan: None,
+                    read_failed: true,
+                };
             }
         };
 
-        self.parse_indexer_routing_plan(scope_id, &raw_json)
+        ObservedIndexerRouting {
+            plan: self.parse_indexer_routing_plan(scope_id, &raw_json),
+            read_failed,
+        }
     }
 
     pub(crate) fn parse_indexer_routing_plan(

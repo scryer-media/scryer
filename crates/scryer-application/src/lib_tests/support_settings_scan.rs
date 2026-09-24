@@ -59,11 +59,28 @@ impl SettingsRepository for MockSettingsRepo {
 pub(super) struct StoredSettingsRepo {
     pub(super) values: StoredSettingValues,
     pub(super) read_error_key: Arc<Mutex<Option<String>>>,
+    /// Every key read, in order, across every scope id. Shared by clones.
+    read_log: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 pub(super) type StoredSettingValues = Arc<Mutex<HashMap<(String, String, Option<String>), String>>>;
 
 impl StoredSettingsRepo {
+    /// The keys read since the last reset, in read order.
+    pub(super) fn read_log(&self) -> Vec<String> {
+        self.read_log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    pub(super) fn reset_read_log(&self) {
+        self.read_log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+
     pub(super) async fn set_value(&self, scope: &str, key_name: &str, value: &str) {
         self.values.lock().await.insert(
             (scope.to_string(), key_name.to_string(), None),
@@ -122,6 +139,10 @@ impl SettingsRepository for StoredSettingsRepo {
         key_name: &str,
         scope_id: Option<String>,
     ) -> AppResult<Option<String>> {
+        self.read_log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(key_name.to_string());
         if self.read_error_key.lock().await.as_deref() == Some(key_name) {
             return Err(AppError::Repository("settings read unavailable".into()));
         }
