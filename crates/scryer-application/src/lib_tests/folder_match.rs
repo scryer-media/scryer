@@ -1730,3 +1730,75 @@ async fn folder_reconciliation_does_not_reuse_analysis_for_changed_bytes() {
         .unwrap();
     assert_eq!(fixture.analyzer.calls.load(Ordering::SeqCst), 1);
 }
+
+/// Reconciling a title's own, unchanged folder keeps every analysis-derived
+/// value: rows whose bytes still match their snapshot are neither re-probed
+/// nor overwritten with an empty analysis, and layout inference does not run.
+#[tokio::test]
+async fn folder_reconciliation_of_an_unchanged_folder_keeps_analysis_and_layout_tags() {
+    let fixture = FolderMatchFixture::new_series().await;
+    let folder = fixture.folder("Owned");
+    let season = folder.join("Season 01");
+    std::fs::create_dir_all(&season).unwrap();
+    let file = fixture.write_media(&season, "Owned.S01E01.1080p.mkv");
+    fixture.scanner.set_files(&[&file]).await;
+    let title = fixture.create_title_with_folder("Owned", &folder).await;
+    fixture.seed_season_with_episodes(&title.id, &[1]).await;
+    fixture
+        .app
+        .scan_title_library(&fixture.user, &title.id)
+        .await
+        .unwrap();
+    let analyzed = fixture
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .unwrap();
+    assert_eq!(analyzed.len(), 1);
+    assert_eq!(analyzed[0].video_width, Some(1920));
+    let tags_before = fixture
+        .titles
+        .store
+        .lock()
+        .await
+        .iter()
+        .find(|row| row.id == title.id)
+        .unwrap()
+        .tags
+        .clone();
+    fixture.analyzer.calls.store(0, Ordering::SeqCst);
+
+    fixture
+        .app
+        .reconcile_title_folder(&fixture.user, &title.id)
+        .await
+        .unwrap();
+
+    let reconciled = fixture
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .unwrap();
+    assert_eq!(reconciled.len(), 1);
+    assert_eq!(reconciled[0].id, analyzed[0].id);
+    assert_eq!(reconciled[0].video_width, Some(1920));
+    assert_eq!(reconciled[0].video_height, analyzed[0].video_height);
+    assert_eq!(reconciled[0].video_codec, analyzed[0].video_codec);
+    assert_eq!(reconciled[0].scan_status, analyzed[0].scan_status);
+    assert_eq!(fixture.analyzer.calls.load(Ordering::SeqCst), 0);
+    let tags_after = fixture
+        .titles
+        .store
+        .lock()
+        .await
+        .iter()
+        .find(|row| row.id == title.id)
+        .unwrap()
+        .tags
+        .clone();
+    assert_eq!(tags_after, tags_before);
+    assert_eq!(
+        fixture.folder_path_of(&title.id).await.as_deref(),
+        folder.to_str()
+    );
+}
