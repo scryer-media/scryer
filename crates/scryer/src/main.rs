@@ -80,6 +80,7 @@ fn configure_mimalloc() {
 
 mod application_upgrade_evidence;
 mod application_upgrade_helper;
+mod arr_compat;
 mod backup_routes;
 mod base_path;
 /// The exit status this binary uses to ask `scryer-tray` to relaunch the
@@ -2156,6 +2157,7 @@ async fn bootstrap_application(
                 .with_state(authless_web_client_proof_route_state),
         )
         .merge(oauth_router(oauth_route_state))
+        .merge(arr_compat::router(auth_state.clone()))
         .route("/oauth/authorize", get(ui_fallback))
         .route(
             "/graphql",

@@ -2984,7 +2984,12 @@ fn classify_http_rate_limit(_method: &Method, path: &str) -> Option<HttpRateLimi
     if path == "/oauth/token" || path == "/oauth/authorize/decision" {
         return Some(HttpRateLimitClass::OAuth);
     }
-    if path.starts_with("/backups/") || path == "/api" || path.starts_with("/api/") {
+    if path.starts_with("/backups/")
+        || path == "/api"
+        || path.starts_with("/api/")
+        || path.starts_with("/compat/sonarr/api/")
+        || path.starts_with("/compat/radarr/api/")
+    {
         return Some(HttpRateLimitClass::Api);
     }
     None
@@ -5465,6 +5470,17 @@ mod tests {
             "/backups/scryer.scryer-backup.enc/download"
         ));
         assert!(!skip_http_rate_limit(&Method::GET, "/api/system/jobs"));
+        for flavor in ["sonarr", "radarr"] {
+            for endpoint in ["system/status", "release/push", "series", "movie", "tag"] {
+                assert_eq!(
+                    classify_http_rate_limit(
+                        &Method::POST,
+                        &format!("/compat/{flavor}/api/v3/{endpoint}"),
+                    ),
+                    Some(HttpRateLimitClass::Api),
+                );
+            }
+        }
     }
 
     #[test]
