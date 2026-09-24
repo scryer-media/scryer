@@ -180,8 +180,14 @@ async fn verify_import_with_mode(
         _ => current_visible_video_file_count(app, td, completed).await,
     };
     let source_video_units = visible_source_episode_units(app, td, &artifacts, completed).await;
-    let visible_sources_terminal =
-        visible_source_files_have_terminal_dispositions(app, td, &artifacts, completed).await;
+    let visible_sources_terminal = visible_source_files_have_terminal_dispositions(
+        app,
+        td,
+        &artifacts,
+        completed,
+        matches!(mode, ImportVerificationMode::Manual { .. }),
+    )
+    .await;
     if visible_sources_terminal == Some(false) {
         return Ok(false);
     }
@@ -584,6 +590,7 @@ pub(super) async fn visible_source_files_have_terminal_dispositions(
     td: &TrackedDownload,
     artifacts: &[crate::ImportArtifact],
     completed: Option<&CompletedDownload>,
+    skip_unrecorded_episode_sources: bool,
 ) -> Option<bool> {
     let completed_lookup;
     let completed = match completed {
@@ -618,6 +625,17 @@ pub(super) async fn visible_source_files_have_terminal_dispositions(
         );
     }
 
+    // A manual import records rows only for the files the operator mapped.
+    // Featurettes, alternate cuts, and files left unselected beside them never
+    // get a disposition, so demanding one can never be satisfied and left the
+    // download blocked after every mapping landed. Those unrecorded leftovers
+    // are not part of what was imported; the mapping count and expected-episode
+    // coverage in the caller still decide completeness. A file that does have
+    // rows (a rejected or failed mapping) must still be terminal. Automatic and
+    // retry passes keep demanding a disposition: the automatic importer skips
+    // unparseable files without a row, and there that missing row is the only
+    // evidence an episode was never imported.
+    let skip_unrecorded = skip_unrecorded_episode_sources && !is_movie;
     let mut visible_file_name_counts: HashMap<String, usize> = HashMap::new();
     for file in &files {
         *visible_file_name_counts
@@ -637,6 +655,9 @@ pub(super) async fn visible_source_files_have_terminal_dispositions(
             artifacts,
             allow_filename_fallback,
         ) else {
+            if skip_unrecorded {
+                continue;
+            }
             return Some(false);
         };
         if !artifact_source_is_terminal(&rows, td) {

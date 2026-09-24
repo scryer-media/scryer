@@ -323,6 +323,177 @@ async fn verify_manual_import_does_not_credit_an_ignored_source_as_successful_co
     assert!(!verify_manual_import(&app, &td, 1, Some(2)).await);
 }
 
+/// Writes full-size (sparse) videos so the series sample filter keeps them visible.
+fn write_fixture_videos(dir: &std::path::Path, file_names: &[&str]) {
+    for file_name in file_names {
+        std::fs::File::create(dir.join(file_name))
+            .expect("create fixture video")
+            .set_len(60 * 1024 * 1024)
+            .expect("size fixture video");
+    }
+}
+
+fn fixture_show_manual_app(
+    dest_dir: &std::path::Path,
+    release_title: &str,
+    artifacts: Vec<ImportArtifact>,
+) -> (AppUseCase, CompletedDownload) {
+    let title = build_title("title-1", "Fixture Show", MediaFacet::Series);
+    let collection = build_collection("season-1", "title-1", "1");
+    let episodes = vec![
+        build_episode("ep-1", "title-1", "season-1", "1", "1", None),
+        build_episode("ep-2", "title-1", "season-1", "1", "2", None),
+    ];
+    let completed = build_completed_download(
+        release_title,
+        dest_dir.to_string_lossy().as_ref(),
+        Some("series"),
+    );
+    let download_client = test_download_client_with_completed(completed.clone());
+    let app = build_app_with_download_client(
+        vec![title],
+        vec![collection],
+        episodes,
+        artifacts,
+        download_client,
+    );
+    (app, completed)
+}
+
+/// Manual import records rows only for the files the operator mapped. A
+/// featurette left in the job folder has no row and must not keep the
+/// download from verifying once every mapping landed.
+#[tokio::test]
+async fn verify_manual_import_ignores_unrecorded_leftover_series_video() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    write_fixture_videos(
+        temp_dir.path(),
+        &[
+            "Fixture.Show.S01E01.mkv",
+            "Fixture.Show.S01E02.mkv",
+            "Fixture.Show.S01.Featurette.mkv",
+        ],
+    );
+    let artifacts = vec![
+        build_artifact("dl-1", "ep-1", "Fixture.Show.S01E01.mkv"),
+        build_artifact("dl-1", "ep-2", "Fixture.Show.S01E02.mkv"),
+    ];
+    let release_title = "Fixture.Show.S01.1080p.WEB-DL";
+    let (app, completed) = fixture_show_manual_app(temp_dir.path(), release_title, artifacts);
+    let td = build_tracked_download("title-1", "series", release_title);
+
+    assert!(verify_manual_import(&app, &td, 2, Some(2)).await);
+
+    // Automatic verification is unchanged: the importer skips unparseable
+    // files without a row, so an unrecorded video still blocks there.
+    let loaded = import_artifacts_for_completed_download(&app, &td, Some(&completed))
+        .await
+        .expect("load import artifacts");
+    assert_eq!(
+        visible_source_files_have_terminal_dispositions(
+            &app,
+            &td,
+            &loaded,
+            Some(&completed),
+            false,
+        )
+        .await,
+        Some(false)
+    );
+    assert!(!verify_import_inner(&app, &td, 2, Some(&completed)).await);
+}
+
+/// A visible source that does carry rows still needs a terminal disposition:
+/// a rejected mapping keeps the manual import blocked.
+#[tokio::test]
+async fn verify_manual_import_keeps_rejected_mapping_blocked() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    write_fixture_videos(
+        temp_dir.path(),
+        &["Fixture.Show.S01E01.mkv", "Fixture.Show.S01E02.mkv"],
+    );
+    let artifacts = vec![
+        build_artifact("dl-1", "ep-1", "Fixture.Show.S01E01.mkv"),
+        build_artifact_with_result("dl-1", Some("ep-2"), "Fixture.Show.S01E02.mkv", "rejected"),
+    ];
+    let release_title = "Fixture.Show.S01.1080p.WEB-DL";
+    let (app, completed) = fixture_show_manual_app(temp_dir.path(), release_title, artifacts);
+    let td = build_tracked_download("title-1", "series", release_title);
+
+    let loaded = import_artifacts_for_completed_download(&app, &td, Some(&completed))
+        .await
+        .expect("load import artifacts");
+    assert_eq!(
+        visible_source_files_have_terminal_dispositions(
+            &app,
+            &td,
+            &loaded,
+            Some(&completed),
+            true,
+        )
+        .await,
+        Some(false)
+    );
+    assert!(!verify_manual_import(&app, &td, 1, Some(2)).await);
+}
+
+/// An alternate cut that parses to an episode another file already imported
+/// adds no uncovered episode, so it must not block the manual import.
+#[tokio::test]
+async fn verify_manual_import_ignores_leftover_for_already_imported_episode() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    write_fixture_videos(
+        temp_dir.path(),
+        &["Fixture.Show.S01E01.mkv", "Fixture.Show.S01E01.Alt.mkv"],
+    );
+    let artifacts = vec![build_artifact("dl-1", "ep-1", "Fixture.Show.S01E01.mkv")];
+    let release_title = "Fixture.Show.S01E01.1080p.WEB-DL";
+    let (app, completed) = fixture_show_manual_app(temp_dir.path(), release_title, artifacts);
+    let td = build_tracked_download("title-1", "series", release_title);
+
+    let loaded = import_artifacts_for_completed_download(&app, &td, Some(&completed))
+        .await
+        .expect("load import artifacts");
+    assert!(matches!(
+        visible_source_episode_units(&app, &td, &loaded, Some(&completed)).await,
+        SourceVideoEpisodeResolution::Resolved(ref units)
+            if *units == HashSet::from(["ep-1".to_string()])
+    ));
+    assert!(verify_manual_import(&app, &td, 1, Some(1)).await);
+}
+
+/// The leftover relaxation is series-only: a manual movie import still needs
+/// its largest visible video to carry a successful disposition.
+#[tokio::test]
+async fn verify_manual_import_keeps_movie_largest_video_rule() {
+    let temp_dir = tempfile::tempdir().expect("temp dir");
+    std::fs::File::create(temp_dir.path().join("Fixture.Film.2012.1080p.mkv"))
+        .expect("create feature")
+        .set_len(60 * 1024 * 1024)
+        .expect("size feature");
+    std::fs::File::create(temp_dir.path().join("Fixture.Film.2012.Featurette.mkv"))
+        .expect("create featurette")
+        .set_len(5 * 1024 * 1024)
+        .expect("size featurette");
+    let title = build_title("title-1", "Fixture Film", MediaFacet::Movie);
+    let artifacts = vec![build_artifact(
+        "dl-1",
+        "movie-file",
+        "Fixture.Film.2012.Featurette.mkv",
+    )];
+    let completed = build_completed_download(
+        "Fixture.Film.2012.1080p",
+        temp_dir.path().to_string_lossy().as_ref(),
+        Some("movie"),
+    );
+    let download_client = test_download_client_with_completed(completed);
+    let app =
+        build_app_with_download_client(vec![title], vec![], vec![], artifacts, download_client);
+    let td = build_tracked_download("title-1", "movie", "Fixture.Film.2012.1080p");
+
+    assert!(!verify_manual_import(&app, &td, 1, Some(1)).await);
+}
+
 #[tokio::test]
 async fn verify_import_excludes_only_currently_unmonitored_ignored_episodes_from_wanted_coverage() {
     let title = build_title("title-1", "Show", MediaFacet::Series);
@@ -464,8 +635,14 @@ async fn verify_import_accepts_resolved_season_pack_when_visible_source_units_ar
         .await
         .expect("load import artifacts");
     assert_eq!(
-        visible_source_files_have_terminal_dispositions(&app, &td, &artifacts, Some(&completed),)
-            .await,
+        visible_source_files_have_terminal_dispositions(
+            &app,
+            &td,
+            &artifacts,
+            Some(&completed),
+            false,
+        )
+        .await,
         Some(true)
     );
     assert!(matches!(
