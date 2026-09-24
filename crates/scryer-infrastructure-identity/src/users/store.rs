@@ -689,7 +689,8 @@ impl UserExternalAccountRepository for UserStore {
                         "DELETE FROM user_external_accounts
                          WHERE id = {}
                            AND (
-                                EXISTS (SELECT 1 FROM users
+                                status = 'pending_claim'
+                                OR EXISTS (SELECT 1 FROM users
                                         WHERE id = {} AND password_hash IS NOT NULL)
                                 OR EXISTS (SELECT 1 FROM webauthn_credentials WHERE user_id = {})
                                 OR EXISTS (SELECT 1 FROM user_external_accounts
@@ -1386,6 +1387,229 @@ mod tests {
             created_at: now,
             updated_at: now,
         }
+    }
+
+    async fn assert_external_account_cancellation_guards(datastore: StoreDatastore) {
+        // Only the columns read by the atomic delete guard are needed here.
+        // Temporary tables isolate the PostgreSQL fixture from persisted accounts.
+        SqlRuntime::run_in_transaction(&datastore, "seed_cancellation_tables", |tx| {
+            Box::pin(async move {
+                for statement in [
+                    "CREATE TEMP TABLE users (id TEXT PRIMARY KEY NOT NULL, password_hash TEXT, auth_session_version TEXT)",
+                    "CREATE TEMP TABLE user_external_accounts (id TEXT PRIMARY KEY NOT NULL, user_id TEXT NOT NULL, status TEXT NOT NULL, external_user_id TEXT)",
+                    "CREATE TEMP TABLE webauthn_credentials (id TEXT PRIMARY KEY NOT NULL, user_id TEXT NOT NULL)",
+                ] {
+                    tx.execute(statement, &[]).await?;
+                }
+                Ok(())
+            })
+        })
+        .await
+        .expect("create isolated cancellation tables");
+        let store = UserStore::new(datastore);
+
+        // (account id, account status, user has password, user has passkey,
+        //  sibling account status, account external user id, delete allowed)
+        for (id, status, password, passkey, other_status, external_id, allowed) in [
+            (
+                "pending_named",
+                "pending_claim",
+                false,
+                false,
+                None,
+                None,
+                true,
+            ),
+            (
+                "pending_identified",
+                "pending_claim",
+                false,
+                false,
+                None,
+                Some("provider-user"),
+                true,
+            ),
+            (
+                "active_only",
+                "active",
+                false,
+                false,
+                None,
+                Some("provider-user"),
+                false,
+            ),
+            (
+                "active_with_pending",
+                "active",
+                false,
+                false,
+                Some("pending_claim"),
+                Some("provider-user"),
+                false,
+            ),
+            (
+                "active_with_disabled",
+                "active",
+                false,
+                false,
+                Some("disabled"),
+                Some("provider-user"),
+                false,
+            ),
+            (
+                "active_with_password",
+                "active",
+                true,
+                false,
+                None,
+                Some("provider-user"),
+                true,
+            ),
+            (
+                "active_with_passkey",
+                "active",
+                false,
+                true,
+                None,
+                Some("provider-user"),
+                true,
+            ),
+            (
+                "active_with_active",
+                "active",
+                false,
+                false,
+                Some("active"),
+                Some("provider-user"),
+                true,
+            ),
+        ] {
+            SqlRuntime::run_in_transaction(&store.datastore, "seed_cancellation_case", move |tx| {
+                Box::pin(async move {
+                    tx.execute(
+                        "INSERT INTO users (id, password_hash) VALUES ({}, {})",
+                        &[
+                            SqlArg::Text(id.into()),
+                            SqlArg::OptText(password.then(|| "hash".into())),
+                        ],
+                    )
+                    .await?;
+                    // Start pending, then activate when requested: cancellation must
+                    // use the current persisted status, not an earlier UI snapshot.
+                    tx.execute(
+                        "INSERT INTO user_external_accounts (id, user_id, status, external_user_id) VALUES ({}, {}, 'pending_claim', {})",
+                        &[
+                            SqlArg::Text(id.into()),
+                            SqlArg::Text(id.into()),
+                            SqlArg::OptText(external_id.map(str::to_owned)),
+                        ],
+                    )
+                    .await?;
+                    tx.execute(
+                        "UPDATE user_external_accounts SET status = {} WHERE id = {}",
+                        &[SqlArg::Text(status.into()), SqlArg::Text(id.into())],
+                    )
+                    .await?;
+                    if passkey {
+                        tx.execute(
+                            "INSERT INTO webauthn_credentials (id, user_id) VALUES ({}, {})",
+                            &[SqlArg::Text(id.into()), SqlArg::Text(id.into())],
+                        )
+                        .await?;
+                    }
+                    if let Some(other_status) = other_status {
+                        tx.execute(
+                            "INSERT INTO user_external_accounts (id, user_id, status) VALUES ({}, {}, {})",
+                            &[
+                                SqlArg::Text(format!("{id}_other")),
+                                SqlArg::Text(id.into()),
+                                SqlArg::Text(other_status.into()),
+                            ],
+                        )
+                        .await?;
+                    }
+                    Ok(())
+                })
+            })
+            .await
+            .expect("seed cancellation case");
+
+            let result = UserExternalAccountRepository::delete(&store, id).await;
+            if allowed {
+                result.expect("cancel pending invite or unlink with a fallback");
+            } else {
+                assert!(
+                    matches!(result, Err(AppError::Validation(ref message))
+                        if message == "cannot remove the last available sign-in method"),
+                    "{id}: {result:?}"
+                );
+            }
+            let remaining = SqlRuntime::fetch_optional(
+                store.datastore.read_exec(),
+                "SELECT id FROM user_external_accounts WHERE id = {}",
+                &[SqlArg::Text(id.into())],
+            )
+            .await
+            .expect("read account after cancellation");
+            assert_eq!(remaining.is_none(), allowed, "{id}");
+            assert!(
+                SqlRuntime::fetch_optional(
+                    store.datastore.read_exec(),
+                    "SELECT id FROM users WHERE id = {}",
+                    &[SqlArg::Text(id.into())],
+                )
+                .await
+                .expect("read preserved user")
+                .is_some(),
+                "{id}: user row must survive"
+            );
+            if other_status.is_some() {
+                assert!(
+                    SqlRuntime::fetch_optional(
+                        store.datastore.read_exec(),
+                        "SELECT id FROM user_external_accounts WHERE id = {}",
+                        &[SqlArg::Text(format!("{id}_other"))],
+                    )
+                    .await
+                    .expect("read preserved alternative account")
+                    .is_some(),
+                    "{id}: sibling account must survive"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_pending_invite_cancellation_preserves_active_login_guard() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("create SQLite cancellation fixture");
+        assert_external_account_cancellation_guards(StoreDatastore::Sqlite {
+            pool,
+            writer_gate: Arc::new(Mutex::new(())),
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn postgres_pending_invite_cancellation_preserves_active_login_guard_from_env() {
+        let Some(database_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            eprintln!(
+                "skipping PostgreSQL cancellation parity test; SCRYER_TEST_POSTGRES_URL is not set"
+            );
+            return;
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .expect("create PostgreSQL cancellation fixture");
+        assert_external_account_cancellation_guards(StoreDatastore::Postgres { pool }).await;
     }
 
     #[tokio::test]

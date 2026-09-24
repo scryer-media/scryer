@@ -2857,6 +2857,73 @@ mod tests {
         );
     }
 
+    fn pending_jellyfin_invite(user_id: &str) -> UserExternalAccount {
+        let now = Utc::now();
+        UserExternalAccount {
+            id: format!("{user_id}-invite"),
+            user_id: user_id.to_string(),
+            provider: ExternalAccountProvider::Jellyfin,
+            connection_id: "jellyfin-main".to_string(),
+            external_user_id: None,
+            username: "invited-remote-user".to_string(),
+            display_name: None,
+            avatar_url: None,
+            status: ExternalAccountStatus::PendingClaim,
+            verified_at: None,
+            last_login_at: None,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[tokio::test]
+    async fn pending_invite_can_be_cancelled_for_user_without_local_credentials() {
+        let admin = admin_user();
+        let target = regular_user("invited-passwordless-user");
+        assert!(target.password_hash.is_none());
+        let invite = pending_jellyfin_invite(&target.id);
+        let external_accounts = Arc::new(TestExternalAccountRepository::new(vec![invite.clone()]));
+        let app = test_app_with_identity(
+            Arc::new(TestSettingsRepository::default()),
+            Arc::new(TestUserRepository::new(vec![target.clone()])),
+            external_accounts.clone(),
+        );
+
+        app.unlink_external_account(&admin, &invite.id)
+            .await
+            .expect("an unclaimed invite is not a sign-in method and can always be cancelled");
+
+        assert!(external_accounts.accounts.lock().await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn last_active_external_login_cannot_be_unlinked_without_local_credentials() {
+        let admin = admin_user();
+        let target = regular_user("linked-passwordless-user");
+        let account = active_jellyfin_account(&target.id);
+        let external_accounts = Arc::new(TestExternalAccountRepository::new(vec![account.clone()]));
+        let app = test_app_with_identity(
+            Arc::new(TestSettingsRepository::default()),
+            Arc::new(TestUserRepository::new(vec![target.clone()])),
+            external_accounts.clone(),
+        );
+
+        let result = app.unlink_external_account(&admin, &account.id).await;
+
+        assert!(
+            matches!(
+                result,
+                Err(AppError::Validation(ref message))
+                    if message
+                        == "cannot unlink the last external login without a local password or passkey"
+            ),
+            "expected last-login validation, got {result:?}"
+        );
+        let accounts = external_accounts.accounts.lock().await;
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(accounts[0].id, account.id);
+    }
+
     #[tokio::test]
     async fn passwordless_linked_local_user_can_be_given_initial_password() {
         let admin = admin_user();
