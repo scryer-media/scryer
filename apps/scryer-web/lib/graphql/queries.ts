@@ -3064,9 +3064,6 @@ export const indexerRoutingInitQuery = `query IndexerRoutingInit($scopeId: Conte
 }`;
 
 export const indexerRoutingAllScopesQuery = `query IndexerRoutingAllScopes {
-  indexers {
-    id
-  }
   movie: indexerRouting(scope: MOVIE) {${indexerRoutingFieldSelection}
   }
   series: indexerRouting(scope: SERIES) {${indexerRoutingFieldSelection}

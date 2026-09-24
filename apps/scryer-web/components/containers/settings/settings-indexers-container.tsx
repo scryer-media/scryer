@@ -301,9 +301,6 @@ export function SettingsIndexersContainer({
   const [proxyConfigs, setProxyConfigs] = useState<ProxyRecord[]>([]);
   const [indexerRoutingByScope, setIndexerRoutingByScope] =
     useState<IndexerRoutingSettingsByScope>(emptyIndexerRoutingByScope);
-  const [indexerRoutingIndexerIds, setIndexerRoutingIndexerIds] = useState<
-    string[]
-  >([]);
   const [indexerRoutingLoaded, setIndexerRoutingLoaded] = useState(false);
   const [indexerRoutingLoading, setIndexerRoutingLoading] = useState(false);
   const [mutatingIndexerRoutingScopes, setMutatingIndexerRoutingScopes] =
@@ -428,9 +425,6 @@ export function SettingsIndexersContainer({
           SERIES: indexerRoutingEntriesToMap(data?.series),
           ANIME: indexerRoutingEntriesToMap(data?.anime),
         });
-        setIndexerRoutingIndexerIds(
-          (data?.indexers ?? []).map((indexer: { id: string }) => indexer.id),
-        );
         setIndexerRoutingLoaded(true);
       } catch (error) {
         setGlobalStatus(
@@ -471,10 +465,8 @@ export function SettingsIndexersContainer({
       });
 
       try {
-        const indexerIds = new Set([
-          ...indexerRoutingIndexerIds,
-          ...settingsIndexers.map((indexer) => indexer.id),
-        ]);
+        // Only indexers that still exist; a deleted one must not be resubmitted.
+        const indexerIds = new Set(settingsIndexers.map((indexer) => indexer.id));
         const { data, error } = await client
           .mutation(updateIndexerRoutingMutation, {
             input: {
@@ -521,7 +513,6 @@ export function SettingsIndexersContainer({
     [
       client,
       indexerRoutingByScope,
-      indexerRoutingIndexerIds,
       setGlobalStatus,
       settingsIndexers,
       t,
