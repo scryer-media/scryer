@@ -407,18 +407,81 @@ fn folder_path_owner_predicate(
         return (format!("folder_path IN ({exact_placeholders})"), args);
     }
 
+    let mut non_ascii_patterns = Vec::<String>::new();
+    for candidate in match_candidates {
+        if scryer_application::stored_paths::is_escaped_stored_path(candidate)
+            || candidate.is_ascii()
+        {
+            continue;
+        }
+        let pattern = folder_path_non_ascii_owner_pattern(candidate);
+        if !non_ascii_patterns.contains(&pattern) {
+            non_ascii_patterns.push(pattern);
+        }
+    }
+
     let folded_placeholders = std::iter::repeat_n("{}", folded.len())
         .collect::<Vec<_>>()
         .join(", ");
     args.extend(folded.into_iter().map(SqlArg::Text));
+    let non_ascii_arm = if non_ascii_patterns.is_empty() {
+        String::new()
+    } else {
+        let likes = std::iter::repeat_n(
+            "lower(replace(folder_path, '/', '\\')) LIKE {} ESCAPE '!'",
+            non_ascii_patterns.len(),
+        )
+        .collect::<Vec<_>>()
+        .join(" OR ");
+        args.extend(non_ascii_patterns.into_iter().map(SqlArg::Text));
+        format!(" OR {likes}")
+    };
     (
         format!(
             "(folder_path IN ({exact_placeholders}) OR (\
              folder_path NOT LIKE 'scryer-path-v1:%' \
-             AND lower(replace(folder_path, '/', '\\')) IN ({folded_placeholders})))"
+             AND (lower(replace(folder_path, '/', '\\')) IN ({folded_placeholders}){non_ascii_arm})))"
         ),
         args,
     )
+}
+
+/// A `LIKE ... ESCAPE '!'` pattern that keeps the Windows narrowing a superset
+/// of `folder_paths_match` for a candidate with non-ASCII characters.
+///
+/// The matcher folds case with full Unicode rules, but SQL `lower()` does not
+/// agree with it: sqlite's built-in `lower()` folds ASCII only, and postgres
+/// folds by the database locale. A stored `C:\MÉDIA\Show` therefore folds to
+/// `c:\mÉdia\show` in sqlite while the candidate `c:/média/show` folds to
+/// `c:\média\show`, and the equality arm misses an owner the matcher accepts.
+/// Both engines do agree on ASCII, so this pattern pins every ASCII character
+/// (lowercased, separators as `\`) and lets each run of non-ASCII characters
+/// match any run (`%`), whatever either engine's `lower()` made of it. It can
+/// admit extra rows; the caller's `folder_paths_match` still decides. The
+/// equality arm stays for ASCII candidates, which is the indexed common case.
+fn folder_path_non_ascii_owner_pattern(candidate: &str) -> String {
+    let mut pattern = String::with_capacity(candidate.len());
+    let mut in_non_ascii_run = false;
+    for character in candidate.chars() {
+        if !character.is_ascii() {
+            if !in_non_ascii_run {
+                pattern.push('%');
+            }
+            in_non_ascii_run = true;
+            continue;
+        }
+        in_non_ascii_run = false;
+        let character = if character == '/' {
+            '\\'
+        } else {
+            character.to_ascii_lowercase()
+        };
+        if matches!(character, '!' | '%' | '_') {
+            pattern.push('!');
+        }
+        pattern.push(character);
+    }
+    pattern
 }
 
 #[async_trait]
@@ -5404,6 +5467,68 @@ mod tests {
             found,
             vec!["owner".to_string()],
             "the folded lookup must find the owner and only the owner"
+        );
+    }
+
+    /// sqlite's `lower()` folds ASCII only, so `C:\MÉDIA\Show` folds to
+    /// `c:\mÉdia\show` in SQL while the Windows matcher (full Unicode case
+    /// folding, NFC) treats it as `c:/média/show`. The narrowing must still
+    /// return every stored spelling the matcher accepts, including the other
+    /// Unicode normal form, and keep excluding unrelated folders.
+    #[tokio::test]
+    async fn folder_owner_lookup_finds_a_windows_folder_differing_in_non_ascii_case() {
+        let candidates =
+            scryer_application::stored_paths::folder_path_match_candidates("c:/m\u{e9}dia/show");
+        let (predicate, args) = folder_path_owner_predicate(&candidates, true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE titles (id TEXT PRIMARY KEY, folder_path TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (id, folder_path) in [
+            ("upper-accent", "C:\\M\u{c9}DIA\\Show"),
+            ("decomposed", "C:\\Me\u{301}dia\\Show"),
+            ("other-folder", "C:\\M\u{e9}dia\\Show 2"),
+            ("other-root", "C:\\Other\\Show"),
+        ] {
+            sqlx::query("INSERT INTO titles VALUES (?, ?)")
+                .bind(id)
+                .bind(folder_path)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let datastore =
+            StoreDatastore::sqlite(pool, std::sync::Arc::new(tokio::sync::Mutex::new(())));
+        let rows = SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            &format!("SELECT id FROM titles WHERE {predicate} ORDER BY id"),
+            &args,
+        )
+        .await
+        .unwrap();
+        let found = rows
+            .iter()
+            .map(|row| row.text("id").unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            found,
+            vec!["decomposed".to_string(), "upper-accent".to_string()],
+            "the narrowing must reach every spelling the matcher accepts"
+        );
+    }
+
+    #[test]
+    fn non_ascii_owner_pattern_pins_ascii_and_escapes_like_metacharacters() {
+        assert_eq!(
+            folder_path_non_ascii_owner_pattern("C:/M\u{c9}\u{c9}dia/100%_Show!"),
+            "c:\\m%dia\\100!%!_show!!"
         );
     }
 
