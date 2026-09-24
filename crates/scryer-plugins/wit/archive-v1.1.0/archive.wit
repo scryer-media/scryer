@@ -1,0 +1,138 @@
+package scryer:archive@1.1.0;
+
+/// Host crypto/CRC services for archive extractors.
+///
+/// 1.1.0 is 1.0.0 plus the catalog `crc` function. `aes-cbc-decrypt` and
+/// `crc32` are unchanged, so a guest moving from 1.0.0 only has to rebuild
+/// against this package; 1.0.0 guests keep linking unmodified.
+interface crypto {
+  /// Length/alignment rejections, in the frozen validation order: key length
+  /// first, then block alignment.
+  enum aes-error {
+    /// `key` was neither 16 nor 32 bytes.
+    bad-key-length,
+    /// `data` was not a whole number of 16-byte AES blocks.
+    bad-block-length,
+    /// `iv` was not exactly 16 bytes.
+    bad-iv-length,
+  }
+
+  /// AES-CBC decrypt `data` under `key`/`iv`, stateless per call. `iv` must be
+  /// 16 bytes. An empty `data` decrypts to an empty list. The returned list has
+  /// the same length as `data`.
+  aes-cbc-decrypt: func(
+    key: list<u8>,
+    iv: list<u8>,
+    data: list<u8>,
+  ) -> result<list<u8>, aes-error>;
+
+  /// Reflected IEEE CRC-32 resumed from `seed` over `data`. An empty `data`
+  /// returns `seed` unchanged, so a guest can stream a member in chunks.
+  ///
+  /// Equivalent to `crc(crc32-iso-hdlc, some(seed), data)`; kept so 1.0.0
+  /// guests migrate without touching their CRC-32 call sites.
+  crc32: func(seed: u32, data: list<u8>) -> u32;
+
+  /// The named CRC catalog the host serves, one case per algorithm the
+  /// host's `crc-fast` backend implements. Case names follow that crate's
+  /// variant names (`crc16-iso-iec144433-a` is CRC-16/ISO-IEC-14443-3-A,
+  /// `crc32-iso-hdlc` is the zip/PNG/Ethernet CRC-32, `crc32-iscsi` is
+  /// CRC-32C, `crc64-xz` is the xz/7-Zip CRC-64). Parameters are the
+  /// reveng catalog entries of the same name.
+  enum crc-algorithm {
+    crc16-arc,
+    crc16-cdma2000,
+    crc16-cms,
+    crc16-dds110,
+    crc16-dect-r,
+    crc16-dect-x,
+    crc16-dnp,
+    crc16-en13757,
+    crc16-genibus,
+    crc16-gsm,
+    crc16-ibm3740,
+    crc16-ibm-sdlc,
+    crc16-iso-iec144433-a,
+    crc16-kermit,
+    crc16-lj1200,
+    crc16-m17,
+    crc16-maxim-dow,
+    crc16-mcrf4xx,
+    crc16-modbus,
+    crc16-nrsc5,
+    crc16-opensafety-a,
+    crc16-opensafety-b,
+    crc16-profibus,
+    crc16-riello,
+    crc16-spi-fujitsu,
+    crc16-t10-dif,
+    crc16-teledisk,
+    crc16-tms37157,
+    crc16-umts,
+    crc16-usb,
+    crc16-xmodem,
+    crc32-aixm,
+    crc32-autosar,
+    crc32-base91-d,
+    crc32-bzip2,
+    crc32-cd-rom-edc,
+    crc32-cksum,
+    crc32-iscsi,
+    crc32-iso-hdlc,
+    crc32-jamcrc,
+    crc32-mef,
+    crc32-mpeg2,
+    crc32-xfer,
+    crc64-ecma182,
+    crc64-go-iso,
+    crc64-ms,
+    crc64-nvme,
+    crc64-redis,
+    crc64-we,
+    crc64-xz,
+  }
+
+  enum crc-error {
+    /// `seed` had bits set above the algorithm's width, so it cannot be a
+    /// result this function returned for that algorithm.
+    seed-out-of-range,
+  }
+
+  /// `algorithm` over `data`, returned finalized and zero-extended to 64 bits.
+  ///
+  /// `seed` is `none` to start a checksum from the algorithm's initial value,
+  /// or `some(previous)` to continue one: pass the value an earlier call
+  /// returned for the same algorithm and the result is the checksum of the
+  /// concatenated input. An empty `data` returns the seed unchanged (or the
+  /// checksum of the empty string for `none`), so a guest can stream a member
+  /// in chunks of any size.
+  ///
+  /// For algorithms whose initial value equals their final XOR (for example
+  /// `crc32-iso-hdlc`, `crc32-iscsi`, `crc64-xz`), `some(0)` is the same as
+  /// `none`; for the others it is not, so start with `none`.
+  crc: func(
+    algorithm: crc-algorithm,
+    seed: option<u64>,
+    data: list<u8>,
+  ) -> result<u64, crc-error>;
+}
+
+/// The archive-extractor contract.
+///
+/// Unchanged from 1.0.0: both payloads are UTF-8 JSON (`describe` returns a
+/// `PluginDescriptor`, `process` exchanges an `ArchivePluginProcessRequest`
+/// for an `ArchivePluginProcessResponse`), and WASI Preview 2 is linked
+/// implicitly with the same read-only source, writable output, and private
+/// `TMPDIR` preopens.
+world archive-extractor {
+  import crypto;
+
+  enum invocation-error {
+    failed,
+    cancelled,
+    invalid-response,
+  }
+
+  export describe: func() -> list<u8>;
+  export process: func(request: list<u8>) -> result<list<u8>, invocation-error>;
+}
