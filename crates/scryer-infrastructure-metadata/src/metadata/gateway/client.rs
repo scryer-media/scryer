@@ -28,8 +28,8 @@ use scryer_domain::{
     EpisodeOrderEntry, EpisodeOrderSet, ExternalId,
 };
 use scryer_outbound_http::{
-    OutboundHttpClient, OutboundHttpError, OutboundRequestError, RateLimitRegistry, RequestPolicy,
-    smg_reqwest_client,
+    OutboundHttpClient, OutboundHttpError, OutboundRequestError, RequestPolicy,
+    smg_outbound_http_client, smg_reqwest_client,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -586,7 +586,7 @@ impl MetadataGatewayClient {
         let http = smg_reqwest_client();
 
         Self {
-            outbound_http: OutboundHttpClient::new(http.clone(), RateLimitRegistry::new()),
+            outbound_http: smg_outbound_http_client(),
             http,
             endpoint,
             registration_url,
@@ -661,7 +661,7 @@ impl MetadataGatewayClient {
         let http = smg_reqwest_client();
 
         Self {
-            outbound_http: OutboundHttpClient::new(http.clone(), RateLimitRegistry::new()),
+            outbound_http: smg_outbound_http_client(),
             http,
             endpoint,
             registration_url,

@@ -505,8 +505,21 @@ impl HostRateLimiterEntry {
     }
 }
 
+/// How a registry answers a 429 that named no `Retry-After`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum FallbackCooldown {
+    /// Climb [`RATE_LIMIT_FALLBACK_COOLDOWN_LADDER`]. For third-party
+    /// destinations such as indexers, whose quotas Scryer cannot see.
+    #[default]
+    Escalating,
+    /// Wait out the request policy's own retry backoff. For a first-party
+    /// service that paces itself and says how long to wait when it can.
+    PolicyBackoff,
+}
+
 #[derive(Default)]
 struct RateLimitRegistryState {
+    fallback_cooldown: FallbackCooldown,
     host_rps: Mutex<HostRateLimitState>,
     destination_deadlines: Mutex<HashMap<DestinationKey, Instant>>,
     destination_cooldowns: Mutex<HashMap<DestinationKey, PersistedDestinationCooldown>>,
@@ -530,6 +543,19 @@ impl RateLimitRegistry {
     pub fn isolated() -> Self {
         Self {
             state: Arc::new(RateLimitRegistryState::default()),
+        }
+    }
+
+    /// A registry of its own for a first-party service. A 429 without a
+    /// `Retry-After` waits out the request policy's backoff instead of the
+    /// escalating ladder built for indexers. A refusal during a large library
+    /// scan should slow that scan down, not stop it for twenty minutes.
+    pub fn first_party() -> Self {
+        Self {
+            state: Arc::new(RateLimitRegistryState {
+                fallback_cooldown: FallbackCooldown::PolicyBackoff,
+                ..RateLimitRegistryState::default()
+            }),
         }
     }
 
@@ -982,7 +1008,9 @@ impl RateLimitRegistry {
             .copied()
             .filter(|deadline| *deadline > now_instant);
 
-        let delay = if source == RetryAfterSource::FallbackBackoff {
+        let delay = if source == RetryAfterSource::FallbackBackoff
+            && self.state.fallback_cooldown == FallbackCooldown::Escalating
+        {
             self.escalated_fallback_cooldown(destination, existing_deadline.is_some())
         } else {
             delay
@@ -2181,6 +2209,14 @@ pub fn smg_reqwest_client() -> Client {
             .expect("SMG reqwest client should build")
     });
     CLIENT.clone()
+}
+
+/// SMG's own outbound client. It shares one [`RateLimitRegistry::first_party`]
+/// across every SMG caller in the process and nothing else, so SMG pacing and
+/// cooldowns never mix with the indexer and download-client registry.
+pub fn smg_outbound_http_client() -> OutboundHttpClient {
+    static RATE_LIMITS: LazyLock<RateLimitRegistry> = LazyLock::new(RateLimitRegistry::first_party);
+    OutboundHttpClient::new(smg_reqwest_client(), RATE_LIMITS.clone())
 }
 
 pub fn blocking_plugin_host_client(extra_ca_bundle_pem: &str) -> Result<BlockingClient, String> {
@@ -4218,6 +4254,88 @@ mod tests {
             .record_destination_fallback_cooldown(&destination)
             .await;
         assert_eq!(after_recovery, Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn a_first_party_registry_never_climbs_the_indexer_ladder() {
+        let registry = RateLimitRegistry::first_party();
+        let destination: DestinationKey = "first-party.example".into();
+
+        for _ in 0..6 {
+            let (delay, source) = registry
+                .record_destination_cooldown(
+                    &destination,
+                    Duration::from_secs(2),
+                    RetryAfterSource::FallbackBackoff,
+                )
+                .await;
+            assert_eq!(
+                delay,
+                Duration::from_secs(2),
+                "a delay-less 429 waits out the policy backoff, not a ladder rung"
+            );
+            assert_eq!(source, RetryAfterSource::FallbackBackoff);
+            registry
+                .state
+                .destination_deadlines
+                .lock()
+                .unwrap()
+                .remove(&destination);
+        }
+    }
+
+    #[tokio::test]
+    async fn smg_has_its_own_first_party_client() {
+        let smg = smg_outbound_http_client();
+        assert!(
+            !Arc::ptr_eq(&smg.registry().state, &RateLimitRegistry::new().state),
+            "SMG must not share the indexer and download-client registry"
+        );
+        assert!(
+            Arc::ptr_eq(
+                &smg.registry().state,
+                &smg_outbound_http_client().registry().state
+            ),
+            "every SMG caller paces against the same registry"
+        );
+        assert_eq!(
+            smg.registry().state.fallback_cooldown,
+            FallbackCooldown::PolicyBackoff
+        );
+    }
+
+    #[tokio::test]
+    async fn a_first_party_request_rides_out_delay_less_429s_on_its_backoff() {
+        let rate_limited = || http_response(429, &[], "rate limited");
+        let (url, hits) = spawn_http_server(vec![
+            rate_limited(),
+            rate_limited(),
+            rate_limited(),
+            http_response(200, &[], "ok"),
+        ])
+        .await;
+        let client =
+            OutboundHttpClient::new(generic_reqwest_client(), RateLimitRegistry::first_party());
+        let policy = RequestPolicy::safe_read("first-party", "delay-less-429")
+            .with_max_retries(3)
+            .with_backoff(Duration::from_millis(10), Duration::from_millis(40));
+
+        let response = client
+            .send(policy, || client.client().get(&url))
+            .await
+            .expect("a first-party request retries through delay-less 429s");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(hits.load(Ordering::SeqCst), 4);
+        let destination = destination_key_from_url(&reqwest::Url::parse(&url).unwrap())
+            .expect("server URL has a destination key");
+        assert!(
+            client
+                .registry()
+                .active_destination_cooldown(&destination)
+                .is_none_or(|remaining| remaining <= Duration::from_millis(40)),
+            "no cooldown outlasts the policy's own backoff"
+        );
     }
 
     #[tokio::test]
