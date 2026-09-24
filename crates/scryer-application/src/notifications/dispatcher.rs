@@ -498,6 +498,21 @@ fn build_notification(event: &DomainEvent) -> Option<BuiltNotification> {
     notification_event_mappings!(notification_build_match, &event.payload)
 }
 
+/// Binary units with one decimal, as a person reads a disk: `512 B`, `1.5 KiB`, `3.4 GiB`.
+fn format_bytes(bytes: u128) -> String {
+    const UNITS: [&str; 6] = ["KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64 / 1024.0;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    format!("{value:.1} {}", UNITS[unit])
+}
+
 fn build_import_space_notification(
     data: &scryer_domain::import_space::SpaceIncidentEvent,
 ) -> BuiltNotification {
@@ -515,11 +530,16 @@ fn build_import_space_notification(
         )
     };
     let message = format!(
-        "{}: {} bytes available, {} bytes required. {} imports waiting for disk space. Open Imports to inspect affected downloads.",
+        "{}: {} available, {} required. {} {} waiting for disk space. Open Imports to inspect affected downloads.",
         data.measurement.destination,
-        data.measurement.available_bytes,
-        data.measurement.required_bytes,
+        format_bytes(u128::from(data.measurement.available_bytes)),
+        format_bytes(data.measurement.required_bytes),
         data.affected_import_count,
+        if data.affected_import_count == 1 {
+            "import"
+        } else {
+            "imports"
+        },
     );
     let mut payload =
         base_notification_payload(event_type, summary.into(), message.clone(), None, &[], &[]);
@@ -2255,6 +2275,41 @@ mod tests {
             .await
             .expect("offset should load");
         assert_eq!(offset, 2);
+    }
+
+    #[test]
+    fn space_notification_sizes_read_in_binary_units() {
+        assert_eq!(format_bytes(512), "512 B");
+        assert_eq!(format_bytes(1536), "1.5 KiB");
+        assert_eq!(format_bytes(2 * 1024 * 1024), "2.0 MiB");
+        assert_eq!(format_bytes(3_650_722_202), "3.4 GiB");
+    }
+
+    #[test]
+    fn space_notification_counts_its_waiting_imports_in_words() {
+        let event = |count: usize| scryer_domain::import_space::SpaceIncidentEvent {
+            incident_id: "fixture".into(),
+            measurement: scryer_domain::import_space::SpaceMeasurement {
+                destination_key: "device:fixture".into(),
+                destination: "/library".into(),
+                available_bytes: 1536,
+                required_bytes: 3_650_722_202,
+            },
+            affected_import_count: count,
+            recovered: false,
+        };
+        let message = |count| {
+            build_import_space_notification(&event(count))
+                .payload
+                .health
+                .and_then(|health| health.message)
+                .expect("health message")
+        };
+        assert_eq!(
+            message(1),
+            "/library: 1.5 KiB available, 3.4 GiB required. 1 import waiting for disk space. Open Imports to inspect affected downloads."
+        );
+        assert!(message(4).contains("4 imports waiting"));
     }
 
     #[test]
