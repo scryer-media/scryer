@@ -1443,6 +1443,7 @@ async fn try_series_pack_for_title(
     claimed_episode_ids: &HashSet<String>,
     cycle: &BackgroundAcquisitionCycleCoordinator,
     session: &mut TitleWalkSession,
+    reads: &crate::acquisition::title_reads::TitleCatalogReads,
 ) -> AppResult<Option<Vec<String>>> {
     let Some(proposal) = plan_series_pack_for_title(
         app,
@@ -1456,6 +1457,7 @@ async fn try_series_pack_for_title(
         tracked_states,
         claimed_episode_ids,
         session,
+        reads,
     )
     .await?
     else {
@@ -1506,18 +1508,13 @@ async fn plan_series_pack_for_title(
     >,
     claimed_episode_ids: &HashSet<String>,
     session: &mut TitleWalkSession,
+    reads: &crate::acquisition::title_reads::TitleCatalogReads,
 ) -> AppResult<Option<GrabProposal>> {
     let mut title_subject = app
         .resolve_release_search_subject_for_title(search_title)
         .await?;
     title_subject.submission_scope = SubmissionScope::Title;
-    let episodes = match app
-        .services
-        .catalog
-        .shows
-        .list_episodes_for_title(&title.id)
-        .await
-    {
+    let episodes = match reads.episodes(app).await {
         Ok(episodes) => episodes,
         Err(error) => {
             warn!(
@@ -1641,6 +1638,7 @@ async fn plan_series_pack_for_title(
         &episodes,
         &owned_episode_ids,
         claimed_episode_ids,
+        reads,
     )
     .await?;
     let session_finalized = app
@@ -1712,7 +1710,7 @@ async fn plan_series_pack_for_title(
         eligible,
         commit: GrabProposalCommit::SeriesPack(Box::new(SeriesPackCommit {
             anchors,
-            episodes,
+            episodes: episodes.to_vec(),
             blocklist,
         })),
     }))
@@ -2194,6 +2192,7 @@ async fn evaluate_series_pack_candidates(
     episodes: &[Episode],
     owned_episode_ids: &HashSet<String>,
     claimed_episode_ids: &HashSet<String>,
+    reads: &crate::acquisition::title_reads::TitleCatalogReads,
 ) -> AppResult<(Vec<IndexerSearchResult>, HashSet<String>)> {
     let mut groups = HashMap::<Vec<String>, Vec<(usize, IndexerSearchResult)>>::new();
     let mut collection_ids = HashSet::new();
@@ -2251,7 +2250,13 @@ async fn evaluate_series_pack_candidates(
         let mut scoped_subject = title_subject.clone();
         scoped_subject.submission_scope = SubmissionScope::EpisodeSet { episode_ids };
         for candidate in app
-            .evaluate_search_results_for_subject(title, &scoped_subject, candidates, false)
+            .evaluate_search_results_for_subject_with_reads(
+                title,
+                &scoped_subject,
+                candidates,
+                false,
+                reads,
+            )
             .await?
         {
             let key = crate::app_usecase_discovery::release_search_key(&candidate);
@@ -2421,6 +2426,10 @@ async fn record_series_pack_search_coverage(
 struct BackgroundAcquisitionTitleContext {
     title: scryer_domain::Title,
     episodes_by_id: HashMap<String, scryer_domain::Episode>,
+    /// The title's catalog and media-file reads for the length of this walk.
+    /// Every due scope of the title is evaluated against the same rows, so
+    /// they are read once per walk rather than once per scope.
+    reads: crate::acquisition::title_reads::TitleCatalogReads,
     submissions: Vec<DownloadSubmission>,
     tracked_states:
         HashMap<crate::contracts::ClientJobLocator, scryer_domain::TrackedDownloadState>,
@@ -2482,12 +2491,18 @@ impl BackgroundAcquisitionTitleContext {
             })
             .collect();
 
+        let reads =
+            crate::acquisition::title_reads::TitleCatalogReads::with_episodes(&title.id, episodes);
+        let episodes_by_id = reads
+            .episodes(app)
+            .await?
+            .iter()
+            .map(|episode| (episode.id.clone(), episode.clone()))
+            .collect();
         Ok(Self {
             title,
-            episodes_by_id: episodes
-                .into_iter()
-                .map(|episode| (episode.id.clone(), episode))
-                .collect(),
+            episodes_by_id,
+            reads,
             submissions,
             tracked_states,
         })
@@ -3099,14 +3114,14 @@ async fn process_single_target(
                         cycle.claim_episode_ids(episode_ids.iter().cloned());
                     }
                     if let SubmissionScope::Collection { collection_id } = &scope {
-                        if let Ok(episodes) = app
-                            .services
-                            .catalog
-                            .shows
-                            .list_episodes_for_collection(collection_id)
+                        if let Ok(episodes) = context
+                            .reads
+                            .episodes_for_collection(app, collection_id)
                             .await
                         {
-                            cycle.claim_episode_ids(episodes.into_iter().map(|episode| episode.id));
+                            cycle.claim_episode_ids(
+                                episodes.iter().map(|episode| episode.id.clone()),
+                            );
                         }
                         if let Some(season) = target
                             .season_number
@@ -3221,6 +3236,7 @@ async fn process_single_target(
             &claimed_episode_ids,
             cycle,
             session,
+            &context.reads,
         )
         .await
         {
@@ -3364,14 +3380,13 @@ async fn process_single_target(
             } else {
                 // Load season episodes for runtime scoring and upgrade checking.
                 let season_episodes = if let Some(ref coll_id) = effective_collection_id {
-                    app.services
-                        .catalog
-                        .shows
-                        .list_episodes_for_collection(coll_id)
+                    context
+                        .reads
+                        .episodes_for_collection(app, coll_id)
                         .await
                         .unwrap_or_default()
                 } else {
-                    Vec::new()
+                    Arc::default()
                 };
 
                 // Calculate total season runtime for accurate size scoring.
@@ -3649,7 +3664,13 @@ async fn process_single_target(
     // One evaluation over the union, so the merged rows are ranked by the same
     // comparator as the rest rather than appended past it.
     let results = app
-        .evaluate_search_results_for_subject(&search_title, &subject, scored, false)
+        .evaluate_search_results_for_subject_with_reads(
+            &search_title,
+            &subject,
+            scored,
+            false,
+            &context.reads,
+        )
         .await?;
     // A finalize failure withholds coverage (the scope re-searches next cycle)
     // but never the grab walk below: these are live results in hand, and
@@ -3699,15 +3720,14 @@ async fn process_single_target(
     // files, in addition to the download-client snapshot checked below). It is the
     // single, removable exclusion source; the failed-attempt log never gates.
     let db_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
-    let existing_files = app
-        .services
-        .library
-        .media_files
-        .list_media_files_for_title(&title.id)
+    let existing_files = context
+        .reads
+        .media_files(app)
         .await
         .unwrap_or_default()
-        .into_iter()
+        .iter()
         .filter(|file| file.role.is_primary())
+        .cloned()
         .collect::<Vec<_>>();
     let cutoff_scope = app.cutoff_scope_for(&subject.submission_scope).await;
     let analyzed_cutoff_quality =
@@ -3742,12 +3762,13 @@ async fn process_single_target(
     // can ask about the *score* half of the cutoff, not just the quality half.
     let admission = {
         let scoring_context = app.resolve_canonical_scoring_context(title, profile).await;
-        app.admission_subject_for_scope(
+        app.admission_subject_for_scope_with_reads(
             title,
             &item.submission_scope(),
             &scoring_context,
             title.runtime_minutes,
             crate::quality::canonical_context::SubjectIntent::Grab,
+            &context.reads,
         )
         .await
     };
@@ -4290,7 +4311,13 @@ async fn propose_covered_episode_evidence(
     // One evaluation, the same one the live path runs, so a pack and an episode
     // are compared on scores produced by the same comparator.
     let results = app
-        .evaluate_search_results_for_subject(&search_title, &subject, extras, false)
+        .evaluate_search_results_for_subject_with_reads(
+            &search_title,
+            &subject,
+            extras,
+            false,
+            &context.reads,
+        )
         .await?;
 
     let failed_routes = cycle.failed_routes();
@@ -4317,13 +4344,7 @@ async fn propose_covered_episode_evidence(
         .values()
         .cloned()
         .collect::<Vec<Episode>>();
-    let catalog_collections = app
-        .services
-        .catalog
-        .shows
-        .list_collections_for_title(&title.id)
-        .await
-        .unwrap_or_default();
+    let catalog_collections = context.reads.collections(app).await.unwrap_or_default();
     let mut episode_ids = Vec::new();
     for index in &eligible {
         let candidate = &results[*index];

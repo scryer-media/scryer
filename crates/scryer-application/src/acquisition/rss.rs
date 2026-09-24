@@ -2324,15 +2324,17 @@ impl AppUseCase {
         if let Some(scope) = scope_override.as_ref() {
             subject.submission_scope = scope.clone();
         }
-        let existing_files = self
-            .services
-            .library
-            .media_files
-            .list_media_files_for_title(&title.id)
+        // The episode list, collections and media files are read by the gate,
+        // the admission subject, the scope membership and the submit block
+        // below; one memo serves all of them for this release.
+        let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+        let existing_files = reads
+            .media_files(self)
             .await
             .unwrap_or_default()
-            .into_iter()
+            .iter()
             .filter(|file| file.role.is_primary())
+            .cloned()
             .collect::<Vec<_>>();
         let cutoff_scope = self.cutoff_scope_for(&subject.submission_scope).await;
         let analyzed_cutoff_quality =
@@ -2385,21 +2387,11 @@ impl AppUseCase {
         // One catalog read per scope, shared by the unmonitored-episode refusal
         // (D21) and by the queued pseudo-incumbents' D4 runtime basis (D18).
         let (catalog_episodes, catalog_collections) = if title.facet == MediaFacet::Movie {
-            (Vec::new(), Vec::new())
+            (Arc::default(), Arc::default())
         } else {
             (
-                self.services
-                    .catalog
-                    .shows
-                    .list_episodes_for_title(&title.id)
-                    .await
-                    .unwrap_or_default(),
-                self.services
-                    .catalog
-                    .shows
-                    .list_collections_for_title(&title.id)
-                    .await
-                    .unwrap_or_default(),
+                reads.episodes(self).await.unwrap_or_default(),
+                reads.collections(self).await.unwrap_or_default(),
             )
         };
         let unmonitored_episode_ids: HashSet<String> = catalog_episodes
@@ -2413,18 +2405,19 @@ impl AppUseCase {
             .resolve_canonical_scoring_context(title, &upgrade_context.profile)
             .await;
         let mut admission = self
-            .admission_subject_for_scope(
+            .admission_subject_for_scope_with_reads(
                 title,
                 &subject.submission_scope,
                 &scoring_context,
                 None,
                 crate::quality::canonical_context::SubjectIntent::Grab,
+                &reads,
             )
             .await;
         // D18: whatever this title already has in flight, compared on the same
         // ladder as a file on disk. `queue` was read once for the whole title.
         let membership = self
-            .scope_membership_for(title, &subject.submission_scope)
+            .scope_membership_for_with_reads(title, &subject.submission_scope, &reads)
             .await;
         let mut queued = Vec::new();
         if let Some(queue) = queue {
@@ -2823,20 +2816,8 @@ impl AppUseCase {
         // submitting: a multi-episode/season pack grabs once with the pack scope
         // and `season_pack: true` (§D5 #3), never per member episode.
         let submission_scope = if let Some(parsed) = best.parsed_release_metadata.as_ref() {
-            let catalog_episodes = self
-                .services
-                .catalog
-                .shows
-                .list_episodes_for_title(&title.id)
-                .await
-                .unwrap_or_default();
-            let catalog_collections = self
-                .services
-                .catalog
-                .shows
-                .list_collections_for_title(&title.id)
-                .await
-                .unwrap_or_default();
+            let catalog_episodes = reads.episodes(self).await.unwrap_or_default();
+            let catalog_collections = reads.collections(self).await.unwrap_or_default();
             crate::acquisition_coverage::resolve_release_coverage(
                 parsed,
                 &catalog_episodes,

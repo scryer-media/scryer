@@ -62,6 +62,7 @@ mod seeding_gate;
 mod seeding_profiles;
 mod series_metadata;
 mod subtitle_permissions;
+mod title_catalog_reads;
 mod title_hydration;
 mod title_image_cache;
 mod title_matcher_invalidation;
