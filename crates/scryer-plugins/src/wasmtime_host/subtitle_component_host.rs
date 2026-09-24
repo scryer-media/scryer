@@ -1581,6 +1581,7 @@ pub(crate) mod tests {
                 season: None,
                 episode: None,
                 absolute_episode: None,
+                community_entry: None,
                 external_ids: Default::default(),
                 languages: vec!["eng".to_string()],
                 release_group: None,

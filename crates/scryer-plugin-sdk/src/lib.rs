@@ -1385,6 +1385,31 @@ pub enum SubtitleQueryMediaKind {
     Episode,
 }
 
+/// The anime community entry (one AniList/AniDB/MAL entry, usually a single
+/// cour) that the requested episode belongs to.
+///
+/// Community entries number their episodes from 1 on their own, so an episode
+/// that TVDB files as season 2 episode 1 may be episode 59 of one long entry,
+/// or episode 1 of a second-cour entry that TVDB folds into season 1.
+/// `season`, `episode`, `absolute_episode` on the request keep TVDB numbering;
+/// this carries the entry's own numbering alongside it.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct SubtitleCommunityEntry {
+    /// 1-based community season, in air order.
+    pub season: i32,
+    /// The requested episode's number within this entry.
+    pub episode: i32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anilist_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anidb_id: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mal_id: Option<i64>,
+    /// The entry's titles, most canonical first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub titles: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SubtitlePluginSearchRequest {
     pub media_kind: SubtitleQueryMediaKind,
@@ -1409,6 +1434,9 @@ pub struct SubtitlePluginSearchRequest {
     pub episode: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub absolute_episode: Option<i32>,
+    /// Set for an episode the title's anime numbering bridge covers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub community_entry: Option<SubtitleCommunityEntry>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub external_ids: BTreeMap<String, Vec<String>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

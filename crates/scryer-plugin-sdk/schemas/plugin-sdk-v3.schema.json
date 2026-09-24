@@ -4299,6 +4299,17 @@
           ],
           "format": "int32"
         },
+        "community_entry": {
+          "description": "Set for an episode the title's anime numbering bridge covers.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SubtitleCommunityEntry"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
         "external_ids": {
           "type": "object",
           "additionalProperties": {
@@ -4362,6 +4373,54 @@
       "required": [
         "media_kind",
         "title"
+      ]
+    },
+    "SubtitleCommunityEntry": {
+      "description": "The anime community entry (one AniList/AniDB/MAL entry, usually a single\ncour) that the requested episode belongs to.\n\nCommunity entries number their episodes from 1 on their own, so an episode\nthat TVDB files as season 2 episode 1 may be episode 59 of one long entry,\nor episode 1 of a second-cour entry that TVDB folds into season 1.\n`season`, `episode`, `absolute_episode` on the request keep TVDB numbering;\nthis carries the entry's own numbering alongside it.",
+      "type": "object",
+      "properties": {
+        "season": {
+          "description": "1-based community season, in air order.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "episode": {
+          "description": "The requested episode's number within this entry.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "anilist_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "anidb_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "mal_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        },
+        "titles": {
+          "description": "The entry's titles, most canonical first.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "season",
+        "episode"
       ]
     },
     "SubtitlePluginDownloadRequest": {

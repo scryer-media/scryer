@@ -1134,6 +1134,20 @@ impl AnimeNumberingBridge {
         self.seasons.iter().find(|season| season.index == index)
     }
 
+    /// The community season covering a TVDB (season, episode), with the
+    /// episode's number inside that season. `None` when no season covers it.
+    pub fn community_season_for_tvdb_episode(
+        &self,
+        tvdb_season: i32,
+        tvdb_episode: i32,
+    ) -> Option<(&AnimeCommunitySeason, i32)> {
+        self.seasons.iter().find_map(|season| {
+            season
+                .community_for_tvdb_episode(tvdb_season, tvdb_episode)
+                .map(|community_episode| (season, community_episode))
+        })
+    }
+
     /// Every cour name the bridge carries, as tagged aliases of the title the
     /// bridge belongs to.
     ///

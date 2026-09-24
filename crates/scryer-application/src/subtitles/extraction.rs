@@ -25,6 +25,9 @@ pub struct SubtitleExtractionContext {
     pub language: Option<String>,
     pub episode: Option<i32>,
     pub absolute_episode: Option<i32>,
+    /// The episode's number inside its anime community entry, which is how a
+    /// cour's subtitle archive usually numbers its members.
+    pub community_episode: Option<i32>,
 }
 
 struct ArchiveCandidate {
@@ -302,6 +305,14 @@ fn candidate_rank(
     let mut episode_score = 0;
     if let Some(episode) = context.episode
         && filename_matches_number(filename, episode)
+    {
+        episode_score += 2;
+    }
+    // A cour archive numbers its members from the cour's own episode 1, so the
+    // community number weighs the same as the TVDB one: where they disagree,
+    // the absolute number (or a tie, which refuses the archive) decides.
+    if let Some(community_episode) = context.community_episode
+        && filename_matches_number(filename, community_episode)
     {
         episode_score += 2;
     }
@@ -624,12 +635,14 @@ fn filename_matches_number(filename: &str, number: i32) -> bool {
     let lower = filename.to_ascii_lowercase();
     let plain = number.to_string();
     let padded = format!("{number:02}");
+    // Long-running shows number their files `001`..`500`.
+    let padded3 = format!("{number:03}");
     lower.contains(&format!("e{padded}"))
         || lower.contains(&format!("ep{padded}"))
         || lower.contains(&format!("episode {number}"))
         || split_filename_tokens(&lower)
             .iter()
-            .any(|token| token == &plain || token == &padded)
+            .any(|token| token == &plain || token == &padded || token == &padded3)
 }
 
 fn filename_matches_language(filename: &str, language: &str) -> bool {
@@ -728,7 +741,64 @@ mod tests {
             language: Some("eng".to_string()),
             episode: Some(17),
             absolute_episode: Some(17),
+            community_episode: None,
         }
+    }
+
+    fn rank(filename: &str, context: &SubtitleExtractionContext) -> (i32, i32, i32, usize) {
+        candidate_rank(
+            filename,
+            &subtitle_file(filename, SRT_CONTENT.to_vec()),
+            context,
+        )
+    }
+
+    #[test]
+    fn second_cour_archive_selects_the_cour_numbered_member() {
+        // TVDB files the second cour's first episode as S01E13 (absolute 13);
+        // the cour's own archive numbers it 01.
+        let context = SubtitleExtractionContext {
+            language: Some("eng".to_string()),
+            episode: Some(13),
+            absolute_episode: Some(13),
+            community_episode: Some(1),
+        };
+
+        assert!(
+            rank("[Group] Synthetic Show Part 2 - 01.ass", &context)
+                > rank("[Group] Synthetic Show Part 2 - 02.ass", &context)
+        );
+    }
+
+    #[test]
+    fn whole_series_archive_still_prefers_the_tvdb_numbered_member() {
+        let context = SubtitleExtractionContext {
+            language: Some("eng".to_string()),
+            episode: Some(13),
+            absolute_episode: Some(13),
+            community_episode: Some(1),
+        };
+
+        assert!(
+            rank("[Group] Synthetic Show - 13.ass", &context)
+                > rank("[Group] Synthetic Show - 01.ass", &context)
+        );
+    }
+
+    #[test]
+    fn long_entry_archive_matches_three_digit_member_numbers() {
+        // TVDB S02E01 is episode 59 of one long community entry.
+        let context = SubtitleExtractionContext {
+            language: Some("eng".to_string()),
+            episode: Some(1),
+            absolute_episode: Some(59),
+            community_episode: Some(59),
+        };
+
+        assert!(
+            rank("[Group] Synthetic Show - 059.ass", &context)
+                > rank("[Group] Synthetic Show - 001.ass", &context)
+        );
     }
 
     struct RecordingArchiveClient {
