@@ -604,6 +604,93 @@ async fn retry_after_tracked_download_is_gone_lands_in_the_persisted_target() {
     assert_lands_in(&import_repo, "title-b").await;
 }
 
+/// An actor who may resolve imports only in `library_id`.
+fn resolve_imports_actor_for(library_id: &str) -> User {
+    let mut actor = User::new_admin("resolver");
+    actor.authorization = scryer_domain::UserAuthorization {
+        libraries: std::collections::HashMap::from([(
+            library_id.to_string(),
+            scryer_domain::LibraryPermissionMask::from_permissions([
+                scryer_domain::LibraryPermission::View,
+                scryer_domain::LibraryPermission::ResolveImports,
+            ]),
+        )]),
+        actor_capabilities: scryer_domain::ActorCapabilityMask::MANAGE_OWN_ACCOUNT,
+        loaded: true,
+        ..Default::default()
+    };
+    actor
+}
+
+fn titleless_failed_import_app() -> (tempfile::TempDir, Arc<TestImportRepo>, AppUseCase) {
+    // No persisted target and no Scryer submission: the retry learns the
+    // title (title-a, a movie) only by parsing the release name.
+    let (dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
+    let import_repo = Arc::new(TestImportRepo::with_records(vec![test_import_record(
+        "import-1",
+        &source_identity(),
+        ImportStatus::Failed,
+        completed_request_payload(
+            &completed,
+            observation_evidence_json(PAPER_LANTERN_RELEASE),
+            None,
+        ),
+    )]));
+    let app = app_for_import(
+        Arc::new(TestDownloadSubmissionRepo::default()),
+        import_repo.clone(),
+    );
+    (dir, import_repo, app)
+}
+
+#[tokio::test]
+async fn titleless_retry_is_refused_when_the_resolved_title_is_in_another_library() {
+    let (_dir, import_repo, app) = titleless_failed_import_app();
+    let actor = resolve_imports_actor_for(&scryer_domain::default_library_id_for_facet(
+        &MediaFacet::Series,
+    ));
+
+    let error = crate::import_workflow::retry_failed_import(&app, &actor, "import-1", None)
+        .await
+        .expect_err("the resolved movie title is outside the actor's library");
+
+    assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+    let recorded = import_repo
+        .last_import_result()
+        .await
+        .expect("the refused attempt is recorded");
+    assert_eq!(recorded.decision, ImportDecision::Failed, "{recorded:?}");
+    assert_ne!(
+        recorded.skip_reason,
+        Some(ImportSkipReason::NoVideoFiles),
+        "the import must stop before scanning the matched title's files: {recorded:?}"
+    );
+    assert_eq!(
+        import_repo
+            .get_import_by_id("import-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        ImportStatus::Failed
+    );
+}
+
+#[tokio::test]
+async fn titleless_retry_runs_when_the_resolved_title_is_in_the_actors_library() {
+    let (_dir, import_repo, app) = titleless_failed_import_app();
+    let actor = resolve_imports_actor_for(&scryer_domain::default_library_id_for_facet(
+        &MediaFacet::Movie,
+    ));
+
+    let result = crate::import_workflow::retry_failed_import(&app, &actor, "import-1", None)
+        .await
+        .expect("the actor may resolve imports for the matched title");
+
+    assert_eq!(result.title_id.as_deref(), Some("title-a"), "{result:?}");
+    assert_lands_in(&import_repo, "title-a").await;
+}
+
 // ── A3: a live submission row is authoritative over persisted evidence ──
 
 #[tokio::test]
