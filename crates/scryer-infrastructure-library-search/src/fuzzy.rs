@@ -467,6 +467,8 @@ impl TitleFuzzyIndex {
     }
 
     fn write_meta(&self, stamp: &ProjectionStamp) -> AppResult<()> {
+        // `fs::write` follows a symlink; never let the stamp land elsewhere.
+        reject_symlink(&self.meta_path())?;
         let payload = serde_json::json!({
             "schema_version": FUZZY_SCHEMA_VERSION,
             "stamp": stamp,
@@ -925,4 +927,104 @@ pub fn group_terms_by_title(terms: Vec<IndexedTerm>) -> HashMap<String, Vec<Inde
         grouped.entry(term.title_id.clone()).or_default().push(term);
     }
     grouped
+}
+
+#[cfg(test)]
+mod remove_meta_tests {
+    use super::*;
+
+    struct EmptySource;
+
+    #[async_trait]
+    impl TitleTermSource for EmptySource {
+        async fn page_terms(&self, _after: i64, _limit: i64) -> AppResult<Vec<IndexedTerm>> {
+            Ok(Vec::new())
+        }
+        async fn terms_for_titles(&self, _title_ids: &[String]) -> AppResult<Vec<IndexedTerm>> {
+            Ok(Vec::new())
+        }
+        async fn queued_titles(&self, _limit: i64) -> AppResult<Vec<QueuedTitle>> {
+            Ok(Vec::new())
+        }
+        async fn clear_queued(&self, _seqs: &[i64]) -> AppResult<()> {
+            Ok(())
+        }
+        async fn projection_stamp(&self) -> AppResult<ProjectionStamp> {
+            Ok(stamp())
+        }
+    }
+
+    fn stamp() -> ProjectionStamp {
+        ProjectionStamp {
+            collation_version: "fixture-collation".into(),
+            projection_generation: 7,
+        }
+    }
+
+    async fn open_fixture(data_dir: &Path) -> Arc<TitleFuzzyIndex> {
+        let index = TitleFuzzyIndex::open(data_dir, Arc::new(EmptySource))
+            .await
+            .expect("fixture index opens");
+        assert!(index.meta_path().exists(), "open writes the stamp file");
+        assert!(index.stamp_matches(&stamp()));
+        index
+    }
+
+    #[tokio::test]
+    async fn removes_only_the_stamp_file_and_tolerates_it_already_gone() {
+        let data = tempfile::tempdir().unwrap();
+        let index = open_fixture(data.path()).await;
+        let index_sibling = index.dir.join("fixture-sibling.txt");
+        let parent_sibling = data.path().join("fixture-parent-sibling.txt");
+        std::fs::write(&index_sibling, b"keep").unwrap();
+        std::fs::write(&parent_sibling, b"keep").unwrap();
+
+        index.remove_meta().expect("stamp file removed");
+        assert!(!index.meta_path().exists());
+        assert!(!index.stamp_matches(&stamp()));
+        assert!(index_sibling.exists(), "a file beside the stamp survives");
+        assert!(parent_sibling.exists(), "a file in the data dir survives");
+        assert!(
+            index.dir.join("meta.json").exists(),
+            "tantivy's own meta survives"
+        );
+
+        index
+            .remove_meta()
+            .expect("an already-missing stamp is not an error");
+        assert!(index_sibling.exists() && parent_sibling.exists());
+    }
+
+    #[tokio::test]
+    async fn a_failed_remove_still_clears_the_cached_stamp() {
+        let data = tempfile::tempdir().unwrap();
+        let index = open_fixture(data.path()).await;
+        std::fs::remove_file(index.meta_path()).unwrap();
+        // A directory in the stamp's place makes `remove_file` fail with
+        // something other than NotFound.
+        std::fs::create_dir(index.meta_path()).unwrap();
+        assert!(index.stamp_matches(&stamp()), "cache still holds the stamp");
+
+        assert!(index.remove_meta().is_err());
+        assert!(!index.stamp_matches(&stamp()));
+        assert!(
+            index.meta_path().is_dir(),
+            "the blocking directory is left alone"
+        );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn write_meta_refuses_a_symlinked_stamp_path() {
+        let data = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("fixture-target.json");
+        std::fs::write(&target, b"untouched").unwrap();
+        let index = open_fixture(data.path()).await;
+        std::fs::remove_file(index.meta_path()).unwrap();
+        std::os::unix::fs::symlink(&target, index.meta_path()).unwrap();
+
+        assert!(index.write_meta(&stamp()).is_err());
+        assert_eq!(std::fs::read(&target).unwrap(), b"untouched");
+    }
 }

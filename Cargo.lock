@@ -5722,6 +5722,7 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tantivy",
+ "tempfile",
  "tokio",
  "tracing",
  "unicode-normalization",
