@@ -162,7 +162,7 @@ impl AppUseCase {
             let Some(convergence) = self.resolve_scope_convergence(&title, &subject).await else {
                 continue;
             };
-            self.record_search_coverage(&title, &subject, &convergence.routed_indexer_ids)
+            self.record_search_coverage(&title, &subject, &convergence.routed_indexer_ids, &[])
                 .await;
             seeded_scopes += 1;
         }
@@ -450,6 +450,52 @@ fn indexer_coverage_fingerprint(
     )
 }
 
+/// Coverage fingerprint for an indexer that could not answer the scope at all
+/// ([`crate::IndexerSearchOutcome::Unsupported`]): the normal per-indexer
+/// fingerprint plus the capabilities its plugin declares for the provider.
+///
+/// Whether an indexer can search a facet comes from three places: its config
+/// and fetched caps (both already in [`crate::indexer_search_identity`]) and
+/// the plugin's static capabilities, which are not. Folding the last in means
+/// an edited indexer, refreshed caps, or a plugin update that adds the facet
+/// no longer matches the row, so every scope the indexer was recorded as
+/// unable to serve, whatever its facet, is searched again.
+fn unsupported_indexer_coverage_fingerprint(
+    scope_fingerprint: &str,
+    config: &IndexerConfig,
+    search_semantics_version: Option<u32>,
+    provider_capabilities: &scryer_domain::IndexerProviderCapabilities,
+) -> String {
+    let capabilities = serde_json::to_value(provider_capabilities).unwrap_or_default();
+    let mut identity = crate::indexer_search_identity(config, search_semantics_version);
+    if let Some(identity) = identity.as_object_mut() {
+        identity.insert(
+            "scope".to_string(),
+            serde_json::Value::String(scope_fingerprint.to_string()),
+        );
+        identity.insert(
+            "unsupported".to_string(),
+            serde_json::Value::String(canonical_json_string(&capabilities)),
+        );
+    }
+    crate::helpers::blake3_identity_hex(
+        crate::helpers::HashDomain::IndexerCoverage,
+        canonical_json_string(&identity),
+    )
+}
+
+/// The provider capabilities an unsupported receipt is fingerprinted with.
+/// Without a loaded plugin runtime this is the port's default, which is also
+/// what the search client resolved against.
+fn provider_capabilities(
+    provider: Option<&std::sync::Arc<dyn crate::IndexerPluginProvider>>,
+    provider_type: &str,
+) -> scryer_domain::IndexerProviderCapabilities {
+    provider
+        .map(|provider| provider.capabilities_for_provider(provider_type))
+        .unwrap_or_default()
+}
+
 /// Canonical identity of a scope's SMG match — its resolved external ids. A rematch
 /// re-maps the title to a different canonical subject, changing these ids, so folding
 /// them into the fingerprint re-opens convergence. Plain metadata edits
@@ -506,8 +552,144 @@ impl AppUseCase {
             .into_iter()
             .map(|config| (config.id.clone(), config))
             .collect::<std::collections::HashMap<_, _>>();
+        Ok(self.uncovered_among(
+            fingerprint,
+            routed_indexer_ids,
+            &coverage_rows,
+            &configs,
+            stale_before,
+        ))
+    }
+
+    /// [`Self::uncovered_indexers_for_scope`] for a title walk.
+    ///
+    /// The walk's coverage snapshot and indexer configs answer first. A scope
+    /// the snapshot shows as covered is skipped without a read; a receipt
+    /// pruned or an indexer edited elsewhere while the walk runs is seen by
+    /// the next walk, the same freshness bound as the rest of the memo. Any
+    /// other answer is re-asked of the store, so a stage that searches decides
+    /// exactly what the unmemoized gate decides, receipts written earlier in
+    /// this walk included.
+    pub(crate) async fn uncovered_indexers_for_scope_memoized(
+        &self,
+        convergence: &ScopeConvergence,
+        memo: &ConvergenceInputMemo,
+    ) -> AppResult<Vec<String>> {
+        let snapshot_rows = memo_lock(&memo.coverage_rows)
+            .as_ref()
+            .and_then(|rows| rows.get(&convergence.scope_key).cloned());
+        if !convergence.routed_indexer_ids.is_empty()
+            && let Some(rows) = snapshot_rows
+            && let Some(configs) = self.walk_indexer_configs(memo).await
+        {
+            let stale_before = self
+                .convergence_settings()
+                .await?
+                .long_tail_reconverge
+                .map(|window| chrono::Utc::now() - window);
+            if self
+                .uncovered_among(
+                    &convergence.fingerprint,
+                    &convergence.routed_indexer_ids,
+                    &rows,
+                    &configs,
+                    stale_before,
+                )
+                .is_empty()
+            {
+                return Ok(Vec::new());
+            }
+        }
+        self.uncovered_indexers_for_scope(
+            &convergence.scope_key,
+            &convergence.facet,
+            &convergence.fingerprint,
+            &convergence.routed_indexer_ids,
+        )
+        .await
+    }
+
+    /// Read the coverage rows of every scope `scope_keys` names into the walk's
+    /// memo, in one round-trip per chunk. A failed read leaves the snapshot
+    /// empty, and every stage falls back to its own read.
+    pub(crate) async fn load_walk_coverage(
+        &self,
+        memo: &ConvergenceInputMemo,
+        scope_keys: Vec<String>,
+    ) {
+        const CHUNK: usize = 500;
+        let mut scope_keys = scope_keys;
+        scope_keys.sort();
+        scope_keys.dedup();
+        let mut snapshot = std::collections::HashMap::<String, Vec<ScopeCoverageRow>>::new();
+        for chunk in scope_keys.chunks(CHUNK) {
+            match self
+                .services
+                .integrations
+                .scope_indexer_coverage
+                .list_coverage_for_scope_keys(chunk)
+                .await
+            {
+                Ok(rows) => {
+                    for key in chunk {
+                        snapshot.entry(key.clone()).or_default();
+                    }
+                    for row in rows {
+                        snapshot.entry(row.scope_key.clone()).or_default().push(row);
+                    }
+                }
+                Err(error) => {
+                    tracing::debug!(
+                        error = %error,
+                        "convergence: walk coverage snapshot unavailable; stages read their own"
+                    );
+                    return;
+                }
+            }
+        }
+        *memo_lock(&memo.coverage_rows) = Some(snapshot);
+    }
+
+    /// The indexer configs keyed by id, read once per walk. A failed read is
+    /// not memoized.
+    async fn walk_indexer_configs(
+        &self,
+        memo: &ConvergenceInputMemo,
+    ) -> Option<std::sync::Arc<std::collections::HashMap<String, IndexerConfig>>> {
+        if let Some(configs) = memo_lock(&memo.indexer_configs).as_ref() {
+            return Some(configs.clone());
+        }
+        let configs = std::sync::Arc::new(
+            self.services
+                .integrations
+                .indexer_configs
+                .list(None)
+                .await
+                .ok()?
+                .into_iter()
+                .map(|config| (config.id.clone(), config))
+                .collect::<std::collections::HashMap<_, _>>(),
+        );
+        Some(
+            memo_lock(&memo.indexer_configs)
+                .get_or_insert(configs)
+                .clone(),
+        )
+    }
+
+    /// The routed indexers `coverage_rows` do not cover under `fingerprint`,
+    /// counting a receipt older than `stale_before` as missing. An indexer
+    /// with no config is uncovered.
+    fn uncovered_among(
+        &self,
+        fingerprint: &str,
+        routed_indexer_ids: &[String],
+        coverage_rows: &[ScopeCoverageRow],
+        configs: &std::collections::HashMap<String, IndexerConfig>,
+        stale_before: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Vec<String> {
         let provider = self.services.integrations.plugin_provider.available();
-        Ok(routed_indexer_ids
+        routed_indexer_ids
             .iter()
             .filter(|id| {
                 let Some(config) = configs.get(id.as_str()) else {
@@ -517,9 +699,15 @@ impl AppUseCase {
                     provider.search_semantics_version_for_provider(&config.provider_type)
                 });
                 let expected = indexer_coverage_fingerprint(fingerprint, config, semantics);
+                let expected_unsupported = unsupported_indexer_coverage_fingerprint(
+                    fingerprint,
+                    config,
+                    semantics,
+                    &provider_capabilities(provider, &config.provider_type),
+                );
                 !coverage_rows.iter().any(|row| {
                     row.indexer_id == **id
-                        && row.fingerprint == expected
+                        && (row.fingerprint == expected || row.fingerprint == expected_unsupported)
                         && stale_before.is_none_or(|cutoff| {
                             chrono::DateTime::parse_from_rfc3339(&row.searched_at)
                                 .map(|searched_at| {
@@ -530,7 +718,7 @@ impl AppUseCase {
                 })
             })
             .cloned()
-            .collect())
+            .collect()
     }
 }
 
@@ -558,12 +746,21 @@ pub(crate) struct ScopeConvergence {
 /// Like [`crate::acquisition::title_reads::TitleCatalogReads`], nothing is kept
 /// past the walk, so the freshness bound is the walk's own length, and failed
 /// reads are not memoized.
+///
+/// The walk's coverage rows and indexer configs are held here too, for
+/// [`AppUseCase::uncovered_indexers_for_scope_memoized`].
 #[derive(Default)]
 pub(crate) struct ConvergenceInputMemo {
     required_audio_languages:
         std::sync::Mutex<std::collections::HashMap<RequiredAudioLanguagesKey, Vec<String>>>,
     routed_indexer_ids:
         std::sync::Mutex<std::collections::HashMap<(String, Option<String>), Vec<String>>>,
+    /// Coverage rows by scope key, read once when the walk starts. A key the
+    /// walk did not load is absent, never an empty list.
+    coverage_rows:
+        std::sync::Mutex<Option<std::collections::HashMap<String, Vec<ScopeCoverageRow>>>>,
+    indexer_configs:
+        std::sync::Mutex<Option<std::sync::Arc<std::collections::HashMap<String, IndexerConfig>>>>,
 }
 
 /// Every title field `resolve_required_audio_languages_for_title` reads.
@@ -977,27 +1174,37 @@ impl AppUseCase {
         title: &Title,
         subject: &ResolvedReleaseSearchSubject,
         fired_indexer_ids: &[String],
+        unsupported_indexer_ids: &[String],
     ) {
         let Some(convergence) = self.resolve_scope_convergence(title, subject).await else {
             return;
         };
-        self.record_convergence_coverage(&convergence, fired_indexer_ids)
+        self.record_convergence_coverage(&convergence, fired_indexer_ids, unsupported_indexer_ids)
             .await;
     }
 
     /// Write receipts for an already-resolved convergence unit. This lets the
     /// series-pack title lane use its membership and collection keys without
     /// changing the generic search coverage behavior.
+    ///
+    /// `unsupported_indexer_ids` are routed indexers that could not answer the
+    /// scope at all. They are recorded too, under
+    /// [`unsupported_indexer_coverage_fingerprint`], so a scope an indexer can
+    /// never serve stops re-entering the search walk every cycle, and any
+    /// change to that indexer or its plugin opens the scope again.
     pub(crate) async fn record_convergence_coverage(
         &self,
         convergence: &ScopeConvergence,
         fired_indexer_ids: &[String],
+        unsupported_indexer_ids: &[String],
     ) {
-        // Only routed indexers that actually fired are recorded as covered; a
-        // deferred/skipped/errored routed indexer stays uncovered so the cursor
-        // retries it.
+        // Only routed indexers that actually fired, or that cannot serve the
+        // scope, are recorded; a deferred/skipped/errored routed indexer stays
+        // uncovered so the cursor retries it.
         let fired: std::collections::HashSet<&str> =
             fired_indexer_ids.iter().map(String::as_str).collect();
+        let unsupported: std::collections::HashSet<&str> =
+            unsupported_indexer_ids.iter().map(String::as_str).collect();
         let configs = self
             .services
             .integrations
@@ -1010,7 +1217,8 @@ impl AppUseCase {
             .collect::<std::collections::HashMap<_, _>>();
         let provider = self.services.integrations.plugin_provider.available();
         for indexer_id in &convergence.routed_indexer_ids {
-            if !fired.contains(indexer_id.as_str()) {
+            let is_fired = fired.contains(indexer_id.as_str());
+            if !is_fired && !unsupported.contains(indexer_id.as_str()) {
                 continue;
             }
             let Some(config) = configs.get(indexer_id) else {
@@ -1019,8 +1227,16 @@ impl AppUseCase {
             let semantics = provider.as_ref().and_then(|provider| {
                 provider.search_semantics_version_for_provider(&config.provider_type)
             });
-            let fingerprint =
-                indexer_coverage_fingerprint(&convergence.fingerprint, config, semantics);
+            let fingerprint = if is_fired {
+                indexer_coverage_fingerprint(&convergence.fingerprint, config, semantics)
+            } else {
+                unsupported_indexer_coverage_fingerprint(
+                    &convergence.fingerprint,
+                    config,
+                    semantics,
+                    &provider_capabilities(provider, &config.provider_type),
+                )
+            };
             if let Err(error) = self
                 .services
                 .integrations

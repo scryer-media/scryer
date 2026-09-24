@@ -38,6 +38,9 @@ struct PreparedReleaseScoringInputs {
 pub(crate) struct ScoredSearchOutcome {
     pub results: Vec<IndexerSearchResult>,
     pub complete_indexer_ids: Vec<String>,
+    /// Indexers that could not answer any of the search's queries: no id they
+    /// can search the facet by and no usable text query. Nothing was sent.
+    pub unsupported_indexer_ids: Vec<String>,
     pub incomplete_indexer_reasons: HashMap<String, String>,
     pub search_session_id: String,
 }
@@ -413,6 +416,7 @@ fn dedupe_structured_dispatch_queries(
 struct QueryCoverageAggregate {
     completed_queries: usize,
     all_complete: bool,
+    all_unsupported: bool,
 }
 
 fn record_query_coverage_outcomes(
@@ -422,23 +426,30 @@ fn record_query_coverage_outcomes(
     // A provider may contribute more than one internal outcome for a query.
     // Collapse those first so duplicate rows cannot masquerade as completing
     // multiple effective title/alias queries.
-    let mut per_query = HashMap::<String, bool>::new();
+    let mut per_query = HashMap::<String, (bool, bool)>::new();
     for outcome in outcomes {
+        let complete = outcome.outcome.coverage_eligible();
+        let unsupported = outcome.outcome.is_unsupported();
         per_query
             .entry(outcome.indexer_id.clone())
-            .and_modify(|complete| *complete &= outcome.outcome.coverage_eligible())
-            .or_insert_with(|| outcome.outcome.coverage_eligible());
+            .and_modify(|state| {
+                state.0 &= complete;
+                state.1 &= unsupported;
+            })
+            .or_insert((complete, unsupported));
     }
-    for (indexer_id, query_complete) in per_query {
+    for (indexer_id, (query_complete, query_unsupported)) in per_query {
         aggregate
             .entry(indexer_id)
             .and_modify(|state| {
                 state.completed_queries = state.completed_queries.saturating_add(1);
                 state.all_complete &= query_complete;
+                state.all_unsupported &= query_unsupported;
             })
             .or_insert(QueryCoverageAggregate {
                 completed_queries: 1,
                 all_complete: query_complete,
+                all_unsupported: query_unsupported,
             });
     }
 }
@@ -484,6 +495,8 @@ pub(crate) fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option
         IndexerSearchOutcome::Skipped { retry_after } => {
             ("indexer search was skipped", retry_after)
         }
+        // Never asked: an indexer that cannot serve the facet is not a failure.
+        IndexerSearchOutcome::Unsupported => return None,
         IndexerSearchOutcome::Errored => ("indexer search failed", None),
     };
     Some(match retry_after {
@@ -496,18 +509,36 @@ fn completely_covered_indexers(
     aggregate: HashMap<String, QueryCoverageAggregate>,
     required_query_count: usize,
 ) -> Vec<String> {
+    indexers_answering_every_query(&aggregate, required_query_count, |state| state.all_complete)
+}
+
+/// Indexers that reported `Unsupported` for every query of the search.
+fn unsupported_indexers(
+    aggregate: &HashMap<String, QueryCoverageAggregate>,
+    required_query_count: usize,
+) -> Vec<String> {
+    indexers_answering_every_query(aggregate, required_query_count, |state| {
+        state.all_unsupported
+    })
+}
+
+fn indexers_answering_every_query(
+    aggregate: &HashMap<String, QueryCoverageAggregate>,
+    required_query_count: usize,
+    answered: impl Fn(&QueryCoverageAggregate) -> bool,
+) -> Vec<String> {
     if required_query_count == 0 {
         return Vec::new();
     }
-    let mut covered = aggregate
-        .into_iter()
+    let mut indexers = aggregate
+        .iter()
         .filter_map(|(indexer_id, state)| {
-            (state.completed_queries == required_query_count && state.all_complete)
-                .then_some(indexer_id)
+            (state.completed_queries == required_query_count && answered(state))
+                .then(|| indexer_id.clone())
         })
         .collect::<Vec<_>>();
-    covered.sort();
-    covered
+    indexers.sort();
+    indexers
 }
 
 fn dedupe_text_safe_structured_dispatch_queries(
@@ -1371,6 +1402,7 @@ impl AppUseCase {
             return Ok(ScoredSearchOutcome {
                 results: Vec::new(),
                 complete_indexer_ids: Vec::new(),
+                unsupported_indexer_ids: Vec::new(),
                 incomplete_indexer_reasons: HashMap::new(),
                 search_session_id: Uuid::new_v4().to_string(),
             });
@@ -1627,12 +1659,15 @@ impl AppUseCase {
             return Err(AppError::Repository(details));
         }
 
+        let unsupported_indexer_ids =
+            unsupported_indexers(&coverage_by_indexer, required_query_count);
         Ok(ScoredSearchOutcome {
             results: scored_results,
             complete_indexer_ids: completely_covered_indexers(
                 coverage_by_indexer,
                 required_query_count,
             ),
+            unsupported_indexer_ids,
             incomplete_indexer_reasons,
             search_session_id,
         })
@@ -1734,8 +1769,13 @@ impl AppUseCase {
             )
             .await
         {
-            self.record_search_coverage(title, subject, &outcome.complete_indexer_ids)
-                .await;
+            self.record_search_coverage(
+                title,
+                subject,
+                &outcome.complete_indexer_ids,
+                &outcome.unsupported_indexer_ids,
+            )
+            .await;
         }
         Ok(outcome)
     }
@@ -2817,6 +2857,7 @@ mod structured_dispatch_query_tests {
             },
             IndexerSearchOutcome::Deferred { retry_after: None },
             IndexerSearchOutcome::Skipped { retry_after: None },
+            IndexerSearchOutcome::Unsupported,
             IndexerSearchOutcome::Errored,
         ];
 
@@ -2833,6 +2874,40 @@ mod structured_dispatch_query_tests {
 
             assert!(completely_covered_indexers(aggregate, 2).is_empty());
         }
+    }
+
+    #[test]
+    fn an_indexer_is_unsupported_only_when_it_could_answer_no_query() {
+        let mut aggregate = HashMap::new();
+        record_query_coverage_outcomes(
+            &mut aggregate,
+            &[
+                outcome("unsupported", IndexerSearchOutcome::Unsupported),
+                outcome("mixed", IndexerSearchOutcome::Unsupported),
+                outcome("once", IndexerSearchOutcome::Unsupported),
+                outcome("complete", IndexerSearchOutcome::Complete { empty: true }),
+            ],
+        );
+        record_query_coverage_outcomes(
+            &mut aggregate,
+            &[
+                outcome("unsupported", IndexerSearchOutcome::Unsupported),
+                outcome(
+                    "mixed",
+                    IndexerSearchOutcome::Deferred { retry_after: None },
+                ),
+                outcome("complete", IndexerSearchOutcome::Complete { empty: true }),
+            ],
+        );
+
+        assert_eq!(
+            unsupported_indexers(&aggregate, 2),
+            vec!["unsupported".to_string()]
+        );
+        assert_eq!(
+            completely_covered_indexers(aggregate, 2),
+            vec!["complete".to_string()]
+        );
     }
 }
 

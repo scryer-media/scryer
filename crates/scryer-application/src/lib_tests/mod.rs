@@ -117,6 +117,8 @@ async fn settle_location_operation(
 #[derive(Default)]
 pub(super) struct RecordingScopeIndexerCoverageRepo {
     rows: Mutex<Vec<(String, String, String, String)>>,
+    /// How many times `list_coverage_for_scope_keys` was called.
+    list_calls: AtomicUsize,
 }
 
 impl RecordingScopeIndexerCoverageRepo {
@@ -126,6 +128,10 @@ impl RecordingScopeIndexerCoverageRepo {
 
     pub(super) async fn recorded(&self) -> Vec<(String, String, String, String)> {
         self.rows.lock().await.clone()
+    }
+
+    pub(super) fn list_calls(&self) -> usize {
+        self.list_calls.load(Ordering::SeqCst)
     }
 
     pub(super) async fn indexers_for_scope(&self, scope_key: &str) -> Vec<String> {
@@ -196,6 +202,7 @@ impl ScopeIndexerCoverageRepository for RecordingScopeIndexerCoverageRepo {
         &self,
         scope_keys: &[String],
     ) -> AppResult<Vec<ScopeCoverageRow>> {
+        self.list_calls.fetch_add(1, Ordering::SeqCst);
         let wanted: HashSet<&str> = scope_keys.iter().map(String::as_str).collect();
         Ok(self
             .rows
