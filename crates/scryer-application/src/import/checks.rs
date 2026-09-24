@@ -315,7 +315,11 @@ fn run_checks_with_measurement(
     (check_not_already_imported(ctx), measurement)
 }
 
+/// Observation and retirement read `client_type` from different records, so
+/// fold its casing and padding here; otherwise a retire keyed `"NZBGet"` would
+/// miss an incident observed as `"nzbget"`.
 pub(crate) fn space_job_key(client_type: &str, client_id: &str, item_id: &str) -> String {
+    let client_type = client_type.trim().to_ascii_lowercase();
     serde_json::to_string(&(client_type, client_id, item_id)).expect("string tuple serializes")
 }
 
@@ -462,6 +466,14 @@ mod tests {
     use super::*;
     use crate::release_parser::parse_release_metadata;
     use std::path::PathBuf;
+
+    #[test]
+    fn space_job_key_folds_client_type_case_and_padding() {
+        let observed = space_job_key("nzbget", "client-1", "item-7");
+        assert_eq!(space_job_key(" NZBGet ", "client-1", "item-7"), observed);
+        assert_ne!(space_job_key("nzbget", "client-1", "ITEM-7"), observed);
+        assert_ne!(space_job_key("nzbget", "Client-1", "item-7"), observed);
+    }
 
     fn dummy_ctx<'a>(
         source: &'a Path,
