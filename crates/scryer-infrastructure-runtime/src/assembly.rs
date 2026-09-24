@@ -1229,16 +1229,22 @@ impl DatastoreAssembly {
                 indexer_config_store,
                 pending_release_store,
                 release_store,
+                settings_store,
                 ..
             } => {
                 let encryption_key = crate::encryption::ensure_encryption_key(
                     db,
                     Some(self.config.data_dir.clone()),
                 )
-                .await?;
+                .await;
+                // The legacy key migration rewrites settings_values directly.
+                settings_store.invalidate_cache();
+                let encryption_key = encryption_key?;
                 db.set_encryption_key(encryption_key)
                     .await
                     .map_err(|error| error.to_string())?;
+                // Values cached before the key loaded were read undecrypted.
+                settings_store.invalidate_cache();
                 let migrated_indexer_configs = indexer_config_store
                     .migrate_legacy_indexer_config_sources()
                     .await
@@ -1261,6 +1267,7 @@ impl DatastoreAssembly {
                 db,
                 pending_release_store,
                 release_store,
+                settings_store,
                 ..
             } => {
                 let encryption_key = crate::encryption::ensure_encryption_key_without_legacy(Some(
@@ -1270,6 +1277,8 @@ impl DatastoreAssembly {
                 db.set_encryption_key(encryption_key)
                     .await
                     .map_err(|error| error.to_string())?;
+                // Values cached before the key loaded were read undecrypted.
+                settings_store.invalidate_cache();
                 let encrypted_release_attempt_source_passwords = release_store
                     .backfill_source_passwords()
                     .await

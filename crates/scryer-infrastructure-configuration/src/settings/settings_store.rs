@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Arc, RwLock};
 
 use async_trait::async_trait;
@@ -13,12 +14,141 @@ use crate::encryption::{EncryptionKey, decrypt_value, encrypt_value, is_encrypte
 use crate::queries::sql_runtime::{
     SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTarget, SqlTx, StoreDatastore, repo_err,
 };
+use crate::settings::read_cache::{CacheLookup, GenerationCache};
 use crate::types::{SettingDefinitionSeed, SettingsValueRecord};
+
+/// Point reads with defaults are keyed per scope id, and some callers pass a
+/// title id, so this key space grows with the library. The bound keeps it to
+/// a few megabytes; the hot global keys are read back after a reset.
+const WITH_DEFAULTS_CACHE_MAX_ENTRIES: usize = 8_192;
+/// One entry per `(scope, key_name)`, a space bounded by the definitions.
+const EXPLICIT_CACHE_MAX_ENTRIES: usize = 4_096;
+
+/// Identifies the encryption key cached values were decrypted with, without
+/// keeping another copy of the key material. `None` when no key is loaded.
+type KeyFingerprint = Option<u64>;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct WithDefaultsKey {
+    scope: String,
+    key_name: String,
+    scope_id: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct SettingKey {
+    scope: String,
+    key_name: String,
+}
+
+/// Every explicit value stored for one `(scope, key_name)`, by scope id, in
+/// the order the database returned them.
+#[derive(Debug, Default)]
+struct ExplicitRows {
+    unscoped: Vec<String>,
+    scoped: HashMap<String, Vec<String>>,
+}
+
+impl ExplicitRows {
+    fn first_for(&self, scope_id: Option<&str>) -> Option<String> {
+        match scope_id {
+            None => self.unscoped.first().cloned(),
+            Some(scope_id) => self
+                .scoped
+                .get(scope_id)
+                .and_then(|values| values.first().cloned()),
+        }
+    }
+}
+
+/// Reads served from memory until a write through this store invalidates
+/// them. See [`crate::settings::read_cache`] for the fill fence.
+struct SettingsReadCache {
+    /// `get_setting_with_defaults` / `get_setting_json` results, negative
+    /// results included.
+    with_defaults:
+        GenerationCache<WithDefaultsKey, Option<Arc<SettingsValueRecord>>, KeyFingerprint>,
+    /// Explicit rows per key, serving both `get_setting_json_explicit` and
+    /// `list_setting_json_explicit_for_scope_ids`. Holding the rows that exist
+    /// (rather than one entry per requested scope id) keeps per-title lookups
+    /// from growing the cache with the library.
+    explicit: GenerationCache<SettingKey, Arc<ExplicitRows>, KeyFingerprint>,
+}
+
+impl SettingsReadCache {
+    fn new() -> Self {
+        Self {
+            with_defaults: GenerationCache::new(WITH_DEFAULTS_CACHE_MAX_ENTRIES),
+            explicit: GenerationCache::new(EXPLICIT_CACHE_MAX_ENTRIES),
+        }
+    }
+
+    fn invalidate_all(&self) {
+        self.with_defaults.invalidate_all();
+        self.explicit.invalidate_all();
+    }
+
+    fn invalidate_keys(&self, keys: &[SettingKey]) {
+        self.with_defaults.invalidate_where(|cached| {
+            keys.iter()
+                .any(|key| key.scope == cached.scope && key.key_name == cached.key_name)
+        });
+        self.explicit
+            .invalidate_where(|cached| keys.contains(cached));
+    }
+}
+
+/// Invalidates on drop, so a write invalidates after it settles, and also
+/// when its future is dropped mid-flight, where the commit may already have
+/// landed.
+struct InvalidateOnDrop<'a> {
+    cache: &'a SettingsReadCache,
+    /// `None` invalidates everything.
+    keys: Option<Vec<SettingKey>>,
+}
+
+impl<'a> InvalidateOnDrop<'a> {
+    fn all(cache: &'a SettingsReadCache) -> Self {
+        Self { cache, keys: None }
+    }
+
+    fn keys(cache: &'a SettingsReadCache, keys: Vec<SettingKey>) -> Self {
+        Self {
+            cache,
+            keys: Some(keys),
+        }
+    }
+}
+
+impl Drop for InvalidateOnDrop<'_> {
+    fn drop(&mut self) {
+        match &self.keys {
+            None => self.cache.invalidate_all(),
+            Some(keys) => self.cache.invalidate_keys(keys),
+        }
+    }
+}
+
+fn setting_key(scope: &str, key_name: &str) -> SettingKey {
+    SettingKey {
+        scope: scope.trim().to_string(),
+        key_name: key_name.trim().to_string(),
+    }
+}
+
+fn key_fingerprint(key: Option<&EncryptionKey>) -> KeyFingerprint {
+    key.map(|key| {
+        let mut hasher = DefaultHasher::new();
+        key.to_base64().hash(&mut hasher);
+        hasher.finish()
+    })
+}
 
 #[derive(Clone)]
 pub struct SettingsStore {
     datastore: StoreDatastore,
     encryption_key: Arc<RwLock<Option<EncryptionKey>>>,
+    cache: Arc<SettingsReadCache>,
 }
 
 impl SettingsStore {
@@ -29,11 +159,99 @@ impl SettingsStore {
         Self {
             datastore,
             encryption_key,
+            cache: Arc::new(SettingsReadCache::new()),
         }
+    }
+
+    /// Drop every cached read. Writes through this store invalidate on their
+    /// own; this is for code that changes `settings_values` or
+    /// `settings_definitions` without going through the store.
+    pub fn invalidate_cache(&self) {
+        self.cache.invalidate_all();
     }
 
     fn encryption_key(&self) -> AppResult<Option<EncryptionKey>> {
         current_encryption_key(&self.encryption_key)
+    }
+
+    async fn cached_setting_with_defaults(
+        &self,
+        scope: &str,
+        key_name: &str,
+        scope_id: Option<String>,
+    ) -> AppResult<Option<Arc<SettingsValueRecord>>> {
+        let encryption_key = self.encryption_key()?;
+        let key = WithDefaultsKey {
+            scope: scope.trim().to_string(),
+            key_name: key_name.trim().to_string(),
+            scope_id: normalize_scope_id(scope_id),
+        };
+        if key.scope.is_empty() || key.key_name.is_empty() {
+            // The read reports the validation error.
+            return get_setting_with_defaults_exec(
+                self.datastore.read_exec(),
+                &key.scope,
+                &key.key_name,
+                key.scope_id,
+                encryption_key.as_ref(),
+            )
+            .await
+            .map(|record| record.map(Arc::new));
+        }
+
+        let tag = key_fingerprint(encryption_key.as_ref());
+        let ticket = match self.cache.with_defaults.lookup(&tag, &key) {
+            CacheLookup::Hit(record) => return Ok(record),
+            CacheLookup::Miss(ticket) => ticket,
+        };
+        let record = get_setting_with_defaults_exec(
+            self.datastore.read_exec(),
+            &key.scope,
+            &key.key_name,
+            key.scope_id.clone(),
+            encryption_key.as_ref(),
+        )
+        .await?
+        .map(Arc::new);
+        #[cfg(test)]
+        self.cache.with_defaults.before_fill().await;
+        self.cache
+            .with_defaults
+            .fill(ticket, tag, key, record.clone());
+        Ok(record)
+    }
+
+    /// The explicit rows of one key, from the cache or one query. `None` when
+    /// a stored row cannot be decoded: the caller then falls back to its own
+    /// narrower query, so one bad row keeps failing only the reads that touch
+    /// it, as before the cache.
+    async fn cached_explicit_rows(
+        &self,
+        scope: &str,
+        key_name: &str,
+        encryption_key: Option<&EncryptionKey>,
+    ) -> AppResult<Option<Arc<ExplicitRows>>> {
+        let key = setting_key(scope, key_name);
+        let tag = key_fingerprint(encryption_key);
+        let ticket = match self.cache.explicit.lookup(&tag, &key) {
+            CacheLookup::Hit(rows) => return Ok(Some(rows)),
+            CacheLookup::Miss(ticket) => ticket,
+        };
+        let Some(rows) = list_explicit_setting_rows_exec(
+            self.datastore.read_exec(),
+            &key.scope,
+            &key.key_name,
+            encryption_key,
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        let rows = Arc::new(rows);
+        #[cfg(test)]
+        self.cache.explicit.before_fill().await;
+        self.cache.explicit.fill(ticket, tag, key, rows.clone());
+        Ok(Some(rows))
     }
 
     fn engine_name(&self) -> &'static str {
@@ -47,6 +265,7 @@ impl SettingsStore {
         &self,
         definitions: Vec<SettingDefinitionSeed>,
     ) -> AppResult<()> {
+        let _invalidate = InvalidateOnDrop::all(&self.cache);
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "batch_ensure_setting_definitions",
@@ -108,6 +327,7 @@ impl SettingsStore {
         }
 
         let encryption_key = self.encryption_key()?;
+        let _invalidate = InvalidateOnDrop::all(&self.cache);
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "batch_upsert_settings_if_not_overridden",
@@ -182,15 +402,10 @@ impl SettingsStore {
         key_name: impl Into<String>,
         scope_id: Option<String>,
     ) -> AppResult<Option<SettingsValueRecord>> {
-        let encryption_key = self.encryption_key()?;
-        get_setting_with_defaults_exec(
-            self.datastore.read_exec(),
-            &scope.into(),
-            &key_name.into(),
-            scope_id,
-            encryption_key.as_ref(),
-        )
-        .await
+        Ok(self
+            .cached_setting_with_defaults(&scope.into(), &key_name.into(), scope_id)
+            .await?
+            .map(Arc::unwrap_or_clone))
     }
 
     pub async fn upsert_setting_value(
@@ -207,6 +422,7 @@ impl SettingsStore {
         let value_json = value_json.into();
         let source = source.into();
         let encryption_key = self.encryption_key()?;
+        let _invalidate = InvalidateOnDrop::keys(&self.cache, vec![setting_key(&scope, &key_name)]);
         SqlRuntime::run_in_transaction(&self.datastore, "upsert_setting_value", move |tx| {
             let scope = scope.clone();
             let key_name = key_name.clone();
@@ -240,6 +456,7 @@ impl SettingsStore {
     ) -> AppResult<()> {
         let scope = scope.into();
         let key_name = key_name.into();
+        let _invalidate = InvalidateOnDrop::keys(&self.cache, vec![setting_key(&scope, &key_name)]);
         SqlRuntime::run_in_transaction(&self.datastore, "delete_setting_value", move |tx| {
             let scope = scope.clone();
             let key_name = key_name.clone();
@@ -251,6 +468,7 @@ impl SettingsStore {
 
     pub async fn delete_values_for_scope_id(&self, scope_id: &str) -> AppResult<u32> {
         let scope_id = scope_id.to_string();
+        let _invalidate = InvalidateOnDrop::all(&self.cache);
         SqlRuntime::run_in_transaction(
             &self.datastore,
             "delete_settings_values_for_scope_id",
@@ -280,9 +498,9 @@ impl SettingsRepository for SettingsStore {
         scope_id: Option<String>,
     ) -> AppResult<Option<String>> {
         Ok(self
-            .get_setting_with_defaults(scope, key_name, scope_id)
+            .cached_setting_with_defaults(scope, key_name, scope_id)
             .await?
-            .map(|record| record.effective_value_json))
+            .map(|record| record.effective_value_json.clone()))
     }
 
     async fn get_setting_json_explicit(
@@ -292,6 +510,14 @@ impl SettingsRepository for SettingsStore {
         scope_id: Option<String>,
     ) -> AppResult<Option<String>> {
         let encryption_key = self.encryption_key()?;
+        if !scope.trim().is_empty()
+            && !key_name.trim().is_empty()
+            && let Some(rows) = self
+                .cached_explicit_rows(scope, key_name, encryption_key.as_ref())
+                .await?
+        {
+            return Ok(rows.first_for(normalize_scope_id(scope_id).as_deref()));
+        }
         Ok(get_setting_explicit_exec(
             self.datastore.read_exec(),
             scope,
@@ -321,6 +547,24 @@ impl SettingsRepository for SettingsStore {
         }
 
         let encryption_key = self.encryption_key()?;
+        if let Some(rows) = self
+            .cached_explicit_rows(scope, key_name, encryption_key.as_ref())
+            .await?
+        {
+            // `IN` semantics: exact scope id match, each requested id once.
+            let mut seen = HashSet::with_capacity(scope_ids.len());
+            let mut values = Vec::new();
+            for scope_id in scope_ids {
+                if !seen.insert(scope_id.as_str()) {
+                    continue;
+                }
+                if let Some(stored) = rows.scoped.get(scope_id) {
+                    values.extend(stored.iter().map(|value| (scope_id.clone(), value.clone())));
+                }
+            }
+            return Ok(values);
+        }
+
         let exec = self.datastore.read_exec();
         let postgres_timestamps = exec_is_postgres(&exec);
         let created_at = if postgres_timestamps {
@@ -412,6 +656,13 @@ impl SettingsRepository for SettingsStore {
         let values = values.to_vec();
         let source = source.to_string();
         let encryption_key = self.encryption_key()?;
+        let _invalidate = InvalidateOnDrop::keys(
+            &self.cache,
+            values
+                .iter()
+                .map(|(key_name, _)| setting_key(&scope, key_name))
+                .collect(),
+        );
         SqlRuntime::run_in_transaction(&self.datastore, "upsert_global_settings_json", move |tx| {
             let scope = scope.clone();
             let values = values.clone();
@@ -695,6 +946,78 @@ async fn get_setting_explicit_exec(
         .as_ref()
         .map(|row| decode_settings_row(row, encryption_key))
         .transpose()
+}
+
+/// Every explicit value of one `(scope, key_name)`, grouped by scope id.
+/// `Ok(None)` when any row fails to decode, so the caller can fall back to
+/// the narrow query that fails only for the row it asked about.
+async fn list_explicit_setting_rows_exec(
+    exec: SqlExec<'_, '_>,
+    scope: &str,
+    key_name: &str,
+    encryption_key: Option<&EncryptionKey>,
+) -> AppResult<Option<ExplicitRows>> {
+    let sql = explicit_setting_rows_sql(exec_is_postgres(&exec));
+    let args = [
+        SqlArg::Text(scope.to_string()),
+        SqlArg::Text(key_name.to_string()),
+        SqlArg::Text(scope.to_string()),
+    ];
+    let rows = SqlRuntime::fetch_all(exec, &sql, &args).await?;
+    let mut explicit = ExplicitRows::default();
+    for row in rows.iter() {
+        let Ok(record) = decode_settings_row(row, encryption_key) else {
+            return Ok(None);
+        };
+        match record.scope_id {
+            None => explicit.unscoped.push(record.effective_value_json),
+            Some(scope_id) => explicit
+                .scoped
+                .entry(scope_id)
+                .or_default()
+                .push(record.effective_value_json),
+        }
+    }
+    Ok(Some(explicit))
+}
+
+fn explicit_setting_rows_sql(postgres_timestamps: bool) -> String {
+    let created_at = if postgres_timestamps {
+        "sv.created_at::TEXT"
+    } else {
+        "sv.created_at"
+    };
+    let updated_at = if postgres_timestamps {
+        "sv.updated_at::TEXT"
+    } else {
+        "sv.updated_at"
+    };
+
+    format!(
+        "SELECT
+            d.id AS definition_id,
+            d.category,
+            d.scope,
+            d.key_name,
+            d.data_type,
+            d.default_value_json,
+            d.is_sensitive,
+            d.validation_json,
+            sv.value_json AS effective_value_json,
+            sv.value_json,
+            sv.source,
+            sv.scope_id,
+            sv.updated_by_user_id,
+            {created_at} AS created_at,
+            {updated_at} AS updated_at
+         FROM settings_definitions d
+         JOIN settings_values sv
+           ON sv.setting_definition_id = d.id
+          AND sv.scope = d.scope
+         WHERE d.scope = {{}}
+           AND d.key_name = {{}}
+           AND sv.scope = {{}}"
+    )
 }
 
 async fn upsert_setting_definition_tx(
@@ -1084,5 +1407,488 @@ mod tests {
                 assert_eq!(point.matches("{}").count(), 3 + usize::from(has_scope_id));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use std::sync::{Arc, RwLock};
+
+    use sqlx::sqlite::{SqlitePool, SqlitePoolOptions};
+
+    use super::*;
+
+    const SCOPE: &str = "system";
+    const ALPHA: &str = "fixture.alpha";
+    const BETA: &str = "fixture.beta";
+    const GAMMA: &str = "fixture.gamma";
+    const DELTA: &str = "fixture.delta";
+    const SECRET: &str = "fixture.secret";
+
+    const SETTINGS_DDL: &[&str] = &[
+        "CREATE TABLE settings_definitions (
+            id TEXT PRIMARY KEY,
+            category TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            key_name TEXT NOT NULL,
+            data_type TEXT NOT NULL,
+            default_value_json TEXT,
+            is_sensitive INTEGER NOT NULL DEFAULT 0,
+            validation_json TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE (category, scope, key_name)
+        )",
+        "CREATE TABLE settings_values (
+            id TEXT PRIMARY KEY,
+            setting_definition_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            scope_id TEXT,
+            value_json TEXT NOT NULL,
+            source TEXT NOT NULL,
+            updated_by_user_id TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (setting_definition_id) REFERENCES settings_definitions(id)
+                ON DELETE CASCADE
+        )",
+    ];
+
+    struct Fixture {
+        store: SettingsStore,
+        pool: SqlitePool,
+        key: Arc<RwLock<Option<EncryptionKey>>>,
+    }
+
+    fn seed(key_name: &str, default_value_json: &str, is_sensitive: bool) -> SettingDefinitionSeed {
+        SettingDefinitionSeed {
+            category: "fixture".to_string(),
+            scope: SCOPE.to_string(),
+            key_name: key_name.to_string(),
+            data_type: "string".to_string(),
+            default_value_json: default_value_json.to_string(),
+            is_sensitive,
+            validation_json: None,
+        }
+    }
+
+    async fn fixture() -> Fixture {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        for ddl in SETTINGS_DDL {
+            sqlx::query(*ddl)
+                .execute(&pool)
+                .await
+                .expect("settings ddl");
+        }
+        let key = Arc::new(RwLock::new(None));
+        let store = SettingsStore::new(
+            StoreDatastore::sqlite(pool.clone(), Arc::new(tokio::sync::Mutex::new(()))),
+            key.clone(),
+        );
+        store
+            .batch_ensure_setting_definitions(vec![
+                seed(ALPHA, "\"alpha-default\"", false),
+                seed(BETA, "\"beta-default\"", false),
+                seed(GAMMA, "\"gamma-1\"", false),
+                seed(DELTA, "\"delta-default\"", false),
+                seed(SECRET, "\"\"", true),
+            ])
+            .await
+            .expect("seed definitions");
+        Fixture { store, pool, key }
+    }
+
+    /// Rewrites one stored value behind the store's back, as an external
+    /// writer would.
+    async fn write_behind(pool: &SqlitePool, key_name: &str, scope_id: Option<&str>, json: &str) {
+        let updated = sqlx::query(
+            "UPDATE settings_values
+                SET value_json = ?1
+              WHERE setting_definition_id =
+                    (SELECT id FROM settings_definitions WHERE key_name = ?2)
+                AND COALESCE(scope_id, '') = ?3",
+        )
+        .bind(json)
+        .bind(key_name)
+        .bind(scope_id.unwrap_or(""))
+        .execute(pool)
+        .await
+        .expect("write behind the store");
+        assert_eq!(updated.rows_affected(), 1);
+    }
+
+    async fn upsert(store: &SettingsStore, key_name: &str, scope_id: Option<&str>, json: &str) {
+        store
+            .upsert_setting_json(
+                SCOPE,
+                key_name,
+                scope_id.map(str::to_string),
+                json.to_string(),
+                "test",
+                None,
+            )
+            .await
+            .expect("upsert setting");
+    }
+
+    async fn get(store: &SettingsStore, key_name: &str) -> Option<String> {
+        store
+            .get_setting_json(SCOPE, key_name, None)
+            .await
+            .expect("read setting")
+    }
+
+    async fn explicit(
+        store: &SettingsStore,
+        key_name: &str,
+        scope_id: Option<&str>,
+    ) -> Option<String> {
+        store
+            .get_setting_json_explicit(SCOPE, key_name, scope_id.map(str::to_string))
+            .await
+            .expect("read explicit setting")
+    }
+
+    async fn list(
+        store: &SettingsStore,
+        key_name: &str,
+        scope_ids: &[&str],
+    ) -> Vec<(String, String)> {
+        let scope_ids = scope_ids
+            .iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>();
+        let mut values = store
+            .list_setting_json_explicit_for_scope_ids(SCOPE, key_name, &scope_ids)
+            .await
+            .expect("list explicit settings");
+        values.sort();
+        values
+    }
+
+    fn pairs(values: &[(&str, &str)]) -> Vec<(String, String)> {
+        values
+            .iter()
+            .map(|(id, value)| (id.to_string(), value.to_string()))
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn repeated_reads_are_served_from_memory_until_invalidated() {
+        let Fixture { store, pool, .. } = fixture().await;
+        upsert(&store, ALPHA, None, "\"one\"").await;
+        upsert(&store, BETA, Some("title-a"), "\"a-one\"").await;
+        upsert(&store, BETA, Some("title-b"), "\"b-one\"").await;
+
+        assert_eq!(get(&store, ALPHA).await.as_deref(), Some("\"one\""));
+        assert_eq!(
+            explicit(&store, ALPHA, None).await.as_deref(),
+            Some("\"one\"")
+        );
+        assert_eq!(
+            explicit(&store, BETA, Some("title-a")).await.as_deref(),
+            Some("\"a-one\"")
+        );
+        let listed = list(
+            &store,
+            BETA,
+            &["title-a", "title-b", "title-a", "title-none"],
+        )
+        .await;
+        assert_eq!(
+            listed,
+            pairs(&[("title-a", "\"a-one\""), ("title-b", "\"b-one\"")])
+        );
+
+        write_behind(&pool, ALPHA, None, "\"two\"").await;
+        write_behind(&pool, BETA, Some("title-a"), "\"a-two\"").await;
+        assert_eq!(get(&store, ALPHA).await.as_deref(), Some("\"one\""));
+        assert_eq!(
+            explicit(&store, ALPHA, None).await.as_deref(),
+            Some("\"one\"")
+        );
+        assert_eq!(
+            explicit(&store, BETA, Some(" title-a ")).await.as_deref(),
+            Some("\"a-one\"")
+        );
+        assert_eq!(list(&store, BETA, &["title-a", "title-b"]).await, listed);
+
+        store.invalidate_cache();
+        assert_eq!(get(&store, ALPHA).await.as_deref(), Some("\"two\""));
+        assert_eq!(
+            explicit(&store, ALPHA, None).await.as_deref(),
+            Some("\"two\"")
+        );
+        assert_eq!(
+            list(&store, BETA, &["title-a"]).await,
+            pairs(&[("title-a", "\"a-two\"")])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_absent_setting_is_cached_as_absent() {
+        let Fixture { store, pool, .. } = fixture().await;
+        assert_eq!(get(&store, "fixture.late").await, None);
+        assert_eq!(explicit(&store, BETA, Some("title-a")).await, None);
+
+        sqlx::query(
+            "INSERT INTO settings_definitions
+                (id, category, scope, key_name, data_type, default_value_json, is_sensitive,
+                 created_at, updated_at)
+             VALUES ('fixture:system:fixture.late', 'fixture', 'system', 'fixture.late',
+                     'string', '\"late-default\"', 0,
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(get(&store, "fixture.late").await, None);
+
+        store.invalidate_cache();
+        assert_eq!(
+            get(&store, "fixture.late").await.as_deref(),
+            Some("\"late-default\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn every_store_write_invalidates_what_it_changed() {
+        let Fixture { store, .. } = fixture().await;
+
+        // upsert_setting_json, for point and explicit reads.
+        assert_eq!(
+            get(&store, ALPHA).await.as_deref(),
+            Some("\"alpha-default\"")
+        );
+        assert_eq!(explicit(&store, BETA, Some("title-a")).await, None);
+        assert!(list(&store, BETA, &["title-a"]).await.is_empty());
+        upsert(&store, ALPHA, None, "\"upserted\"").await;
+        upsert(&store, BETA, Some("title-a"), "\"a-upserted\"").await;
+        upsert(&store, BETA, Some("title-b"), "\"b-upserted\"").await;
+        assert_eq!(get(&store, ALPHA).await.as_deref(), Some("\"upserted\""));
+        assert_eq!(
+            explicit(&store, BETA, Some("title-a")).await.as_deref(),
+            Some("\"a-upserted\"")
+        );
+        assert_eq!(
+            list(&store, BETA, &["title-a", "title-b"]).await,
+            pairs(&[("title-a", "\"a-upserted\""), ("title-b", "\"b-upserted\"")])
+        );
+
+        // upsert_global_settings_json.
+        store
+            .upsert_global_settings_json(
+                SCOPE,
+                &[(ALPHA.to_string(), "\"global\"".to_string())],
+                "test",
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(get(&store, ALPHA).await.as_deref(), Some("\"global\""));
+        assert_eq!(
+            explicit(&store, ALPHA, None).await.as_deref(),
+            Some("\"global\"")
+        );
+
+        // delete_setting_value.
+        SettingsRepository::delete_setting_value(&store, SCOPE, ALPHA, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            get(&store, ALPHA).await.as_deref(),
+            Some("\"alpha-default\"")
+        );
+        assert_eq!(explicit(&store, ALPHA, None).await, None);
+
+        // delete_values_for_scope_id.
+        assert_eq!(
+            SettingsRepository::delete_values_for_scope_id(&store, "title-a")
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(explicit(&store, BETA, Some("title-a")).await, None);
+        assert_eq!(
+            list(&store, BETA, &["title-a", "title-b"]).await,
+            pairs(&[("title-b", "\"b-upserted\"")])
+        );
+
+        // batch_ensure_setting_definitions changes a default.
+        assert_eq!(get(&store, GAMMA).await.as_deref(), Some("\"gamma-1\""));
+        store
+            .batch_ensure_setting_definitions(vec![seed(GAMMA, "\"gamma-2\"", false)])
+            .await
+            .unwrap();
+        assert_eq!(get(&store, GAMMA).await.as_deref(), Some("\"gamma-2\""));
+
+        // batch_upsert_settings_if_not_overridden.
+        assert_eq!(
+            get(&store, DELTA).await.as_deref(),
+            Some("\"delta-default\"")
+        );
+        store
+            .batch_upsert_settings_if_not_overridden(vec![(
+                SCOPE.to_string(),
+                DELTA.to_string(),
+                "\"seeded\"".to_string(),
+                "test".to_string(),
+            )])
+            .await
+            .unwrap();
+        assert_eq!(get(&store, DELTA).await.as_deref(), Some("\"seeded\""));
+    }
+
+    #[tokio::test]
+    async fn a_write_to_one_key_leaves_other_keys_cached() {
+        // Background jobs write cursor keys constantly; that must not flush
+        // the hot keys everything else reads.
+        let Fixture { store, pool, .. } = fixture().await;
+        upsert(&store, ALPHA, None, "\"one\"").await;
+        assert_eq!(get(&store, ALPHA).await.as_deref(), Some("\"one\""));
+        write_behind(&pool, ALPHA, None, "\"behind\"").await;
+
+        upsert(&store, BETA, None, "\"cursor\"").await;
+        assert_eq!(get(&store, ALPHA).await.as_deref(), Some("\"one\""));
+        assert_eq!(get(&store, BETA).await.as_deref(), Some("\"cursor\""));
+    }
+
+    #[tokio::test]
+    async fn a_point_read_that_raced_a_write_does_not_cache_what_it_read() {
+        let Fixture { store, .. } = fixture().await;
+        upsert(&store, ALPHA, None, "\"before\"").await;
+
+        let pause = store.cache.with_defaults.arm_fill_pause();
+        let reader = tokio::spawn({
+            let store = store.clone();
+            async move { store.get_setting_json(SCOPE, ALPHA, None).await }
+        });
+        // The reader has read "before" and is parked before its fill.
+        pause.reached.await.expect("reader reached its fill");
+        upsert(&store, ALPHA, None, "\"after\"").await;
+        pause.release.send(()).expect("reader is waiting");
+        assert_eq!(
+            reader.await.unwrap().unwrap().as_deref(),
+            Some("\"before\"")
+        );
+
+        assert_eq!(store.cache.with_defaults.len(), 0);
+        assert_eq!(get(&store, ALPHA).await.as_deref(), Some("\"after\""));
+    }
+
+    #[tokio::test]
+    async fn an_explicit_read_that_raced_a_write_does_not_cache_what_it_read() {
+        let Fixture { store, .. } = fixture().await;
+        upsert(&store, BETA, Some("title-a"), "\"before\"").await;
+
+        let pause = store.cache.explicit.arm_fill_pause();
+        let reader = tokio::spawn({
+            let store = store.clone();
+            async move {
+                store
+                    .list_setting_json_explicit_for_scope_ids(SCOPE, BETA, &["title-a".to_string()])
+                    .await
+            }
+        });
+        pause.reached.await.expect("reader reached its fill");
+        upsert(&store, BETA, Some("title-a"), "\"after\"").await;
+        pause.release.send(()).expect("reader is waiting");
+        assert_eq!(
+            reader.await.unwrap().unwrap(),
+            pairs(&[("title-a", "\"before\"")])
+        );
+
+        assert_eq!(store.cache.explicit.len(), 0);
+        assert_eq!(
+            explicit(&store, BETA, Some("title-a")).await.as_deref(),
+            Some("\"after\"")
+        );
+    }
+
+    #[tokio::test]
+    async fn changing_the_encryption_key_drops_values_decrypted_under_the_old_key() {
+        let Fixture { store, key, .. } = fixture().await;
+        *key.write().unwrap() = Some(EncryptionKey::generate());
+        upsert(&store, SECRET, None, "\"hunter-fixture\"").await;
+        assert_eq!(
+            get(&store, SECRET).await.as_deref(),
+            Some("\"hunter-fixture\"")
+        );
+        assert_eq!(
+            explicit(&store, SECRET, None).await.as_deref(),
+            Some("\"hunter-fixture\"")
+        );
+
+        // Without the key the stored ciphertext comes back, not the plaintext
+        // cached under the old key.
+        *key.write().unwrap() = None;
+        let point = get(&store, SECRET).await.expect("stored value");
+        assert_ne!(point, "\"hunter-fixture\"");
+        assert!(is_encrypted(&point), "{point}");
+        let explicit_value = explicit(&store, SECRET, None).await.expect("stored value");
+        assert!(is_encrypted(&explicit_value), "{explicit_value}");
+    }
+
+    #[tokio::test]
+    async fn an_undecodable_row_fails_only_the_reads_that_touch_it() {
+        let Fixture { store, pool, key } = fixture().await;
+        let current = EncryptionKey::generate();
+        *key.write().unwrap() = Some(current);
+        upsert(&store, SECRET, Some("title-a"), "\"a-secret\"").await;
+        upsert(&store, SECRET, Some("title-b"), "\"b-secret\"").await;
+        // title-b now holds a value encrypted under some other key.
+        let foreign = encrypt_value(&EncryptionKey::generate(), "\"b-foreign\"").unwrap();
+        write_behind(
+            &pool,
+            SECRET,
+            Some("title-b"),
+            &serde_json::to_string(&foreign).unwrap(),
+        )
+        .await;
+        store.invalidate_cache();
+
+        assert_eq!(
+            explicit(&store, SECRET, Some("title-a")).await.as_deref(),
+            Some("\"a-secret\"")
+        );
+        assert_eq!(
+            list(&store, SECRET, &["title-a"]).await,
+            pairs(&[("title-a", "\"a-secret\"")])
+        );
+        assert!(
+            store
+                .get_setting_json_explicit(SCOPE, SECRET, Some("title-b".to_string()))
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .list_setting_json_explicit_for_scope_ids(SCOPE, SECRET, &["title-b".to_string()])
+                .await
+                .is_err()
+        );
+        assert_eq!(store.cache.explicit.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn blank_scope_or_key_still_reports_the_validation_error() {
+        let Fixture { store, .. } = fixture().await;
+        assert!(store.get_setting_json(" ", ALPHA, None).await.is_err());
+        assert!(
+            store
+                .get_setting_json_explicit(SCOPE, " ", None)
+                .await
+                .is_err()
+        );
+        assert!(
+            store
+                .list_setting_json_explicit_for_scope_ids(SCOPE, "", &["title-a".to_string()])
+                .await
+                .is_err()
+        );
     }
 }

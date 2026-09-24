@@ -277,7 +277,11 @@ impl ApplicationMigrator {
                 }
                 "0013_indexer_request_accounting" => {
                     let started = Instant::now();
-                    migration_0013::migrate(&self.ledger.datastore).await?;
+                    let migrated = migration_0013::migrate(&self.ledger.datastore).await;
+                    // It writes settings_values directly, after earlier
+                    // startup reads may have filled the settings cache.
+                    self.settings.invalidate_cache();
+                    migrated?;
                     self.record_success(spec, started).await?;
                 }
                 migration_0016::ID => {
@@ -632,6 +636,40 @@ mod tests {
                 .unwrap()
                 .contains("0013_indexer_request_accounting")
         );
+    }
+
+    #[tokio::test]
+    async fn accounting_epoch_write_is_visible_through_a_warm_settings_cache() {
+        use scryer_application::SettingsRepository;
+
+        let (_temp, settings, mut migrator) = test_migrator().await;
+        let datastore = migrator.ledger.datastore.clone();
+        let indexers = Arc::new(
+            scryer_infrastructure_acquisition::indexers::config_store::IndexerConfigStore::new(
+                datastore.clone(),
+                Arc::new(std::sync::RwLock::new(None)),
+            ),
+        );
+        let plugins = DatastoreCustomizationStore::new(datastore);
+        let read_epoch = || {
+            settings.get_setting_json(
+                SETTINGS_SCOPE_SYSTEM,
+                migration_0013::INDEXER_REQUEST_ACCOUNTING_V2_STARTED_AT_KEY,
+                None,
+            )
+        };
+        // Cache the unset epoch before the migration writes it behind the
+        // settings store.
+        let before = read_epoch().await.expect("read epoch before migration");
+        migrator
+            .run_early(indexers, &plugins)
+            .await
+            .expect("early migrations");
+        let after = read_epoch().await.expect("read epoch after migration");
+        assert_ne!(after, before);
+        let epoch = serde_json::from_str::<Option<String>>(after.as_deref().expect("epoch row"))
+            .expect("epoch json");
+        assert!(epoch.is_some(), "{after:?}");
     }
 
     #[tokio::test]
