@@ -1,5 +1,8 @@
 use super::*;
 
+#[path = "arr_compat_bridge.rs"]
+mod arr_compat_bridge;
+
 pub(super) fn pending_explanation(candidate: &IndexerSearchResult) -> Option<String> {
     let explanation = serialize_decision_explanation(candidate);
     let Some(announcement) = candidate.extra.get("external_announcement") else {
