@@ -596,8 +596,8 @@ impl AppUseCase {
         );
         run.summary_text = Some(summary_text);
         run.summary_json = serde_json::to_string(&summary).ok();
-        run.error_text = (status == JobRunStatus::Failed)
-            .then(|| "all title deletions failed".to_string());
+        run.error_text =
+            (status == JobRunStatus::Failed).then(|| "all title deletions failed".to_string());
         run.completed_at = Some(completed_at);
         run.updated_at = completed_at;
         let updated = self.services.events.job_runs.update_job_run(&run).await?;
@@ -981,10 +981,8 @@ impl AppUseCase {
         let owned_file_id = media_file.id.clone();
         let file_id = owned_file_id.as_str();
         let delete_from_disk = !matches!(&disk_deletion, MediaFileDiskDeletion::Keep);
-        let preserve_parent_records = matches!(
-            &disk_deletion,
-            MediaFileDiskDeletion::DeleteByPolicy { .. }
-        );
+        let preserve_parent_records =
+            matches!(&disk_deletion, MediaFileDiskDeletion::DeleteByPolicy { .. });
         // Removing a file (or its disk copy) under an in-flight move would
         // invalidate the plan the operation is executing (FR-084). The bulk
         // deletion job routes through here too.
@@ -1029,15 +1027,20 @@ impl AppUseCase {
                 )
                 .await?;
             }
-            MediaFileDiskDeletion::DeleteByPolicy { plan, authorization } => {
-                self.execute_delete_media_file_by_policy(file_id, &plan, &authorization).await?;
+            MediaFileDiskDeletion::DeleteByPolicy {
+                plan,
+                authorization,
+            } => {
+                self.execute_delete_media_file_by_policy(file_id, &plan, &authorization)
+                    .await?;
             }
             MediaFileDiskDeletion::DeletePreapproved => {
                 self.execute_delete_media_file_preapproved(file_id).await?;
             }
         }
 
-        self.delete_media_file_record_with_dependents(file_id).await?;
+        self.delete_media_file_record_with_dependents(file_id)
+            .await?;
         for collection_id in matching_movie_collection_ids {
             if let Err(error) = self
                 .services

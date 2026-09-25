@@ -68,7 +68,10 @@ impl AppUseCase {
                 .await?
                 .unwrap_or(60) as i32,
             long_tail_backfill_max_scopes_per_cycle: self
-                .read_setting_i64_value(ACQUISITION_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE_KEY, None)
+                .read_setting_i64_value(
+                    ACQUISITION_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE_KEY,
+                    None,
+                )
                 .await?
                 .unwrap_or(DEFAULT_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE)
                 as i32,

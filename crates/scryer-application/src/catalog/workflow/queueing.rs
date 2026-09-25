@@ -340,19 +340,45 @@ impl AppUseCase {
         replacement: bool,
         mut routing: crate::IndexerGrabSelection,
     ) -> AppResult<QueueDownloadOutcome> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings).await?;
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
         routing.validate()?;
-        let (queued_release, scope) = self.verify_release_candidate_token_for_signed_scope(actor, title_id, candidate_token).await?;
+        let (queued_release, scope) = self
+            .verify_release_candidate_token_for_signed_scope(actor, title_id, candidate_token)
+            .await?;
         if announced_size_bytes.is_some_and(|size| queued_release.size_bytes != Some(size)) {
-            return Err(AppError::Validation("release size does not match the signed candidate".into()));
+            return Err(AppError::Validation(
+                "release size does not match the signed candidate".into(),
+            ));
         }
-        let title = self.services.catalog.titles.get_by_id(title_id).await?
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
             .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
-        self.require_library_permission(actor, &title.library_id, scryer_domain::LibraryPermission::ManageTitles).await?;
-        let source_kind = queued_release.source_kind.ok_or_else(|| AppError::Validation("release has no protocol".into()))?;
-        let clients = self.services.integrations.download_client.indexer_grab_clients(&title, queued_release.indexer_id.as_deref(), source_kind).await?;
-        let selected = clients.iter().find(|client| client.id == routing.client_id)
-            .ok_or_else(|| AppError::Validation("selected download client is not eligible".into()))?;
+        self.require_library_permission(
+            actor,
+            &title.library_id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+        let source_kind = queued_release
+            .source_kind
+            .ok_or_else(|| AppError::Validation("release has no protocol".into()))?;
+        let clients = self
+            .services
+            .integrations
+            .download_client
+            .indexer_grab_clients(&title, queued_release.indexer_id.as_deref(), source_kind)
+            .await?;
+        let selected = clients
+            .iter()
+            .find(|client| client.id == routing.client_id)
+            .ok_or_else(|| {
+                AppError::Validation("selected download client is not eligible".into())
+            })?;
         if routing.category.is_none() {
             routing.category = Some(match &selected.category {
                 Some(category) => category.clone(),
@@ -360,10 +386,25 @@ impl AppUseCase {
             });
         }
         if replacement {
-            self.blocklist_replaced_primary_release(&title, &scope).await;
+            self.blocklist_replaced_primary_release(&title, &scope)
+                .await;
         }
-        let purpose = if replacement { DownloadSubmissionPurpose::ManualReplacement } else { DownloadSubmissionPurpose::Standard };
-        let outcome = self.queue_manual_release_for_title_with_routing(actor, &title, queued_release.clone(), scope, conflict_policy, purpose, Some(routing)).await?;
+        let purpose = if replacement {
+            DownloadSubmissionPurpose::ManualReplacement
+        } else {
+            DownloadSubmissionPurpose::Standard
+        };
+        let outcome = self
+            .queue_manual_release_for_title_with_routing(
+                actor,
+                &title,
+                queued_release.clone(),
+                scope,
+                conflict_policy,
+                purpose,
+                Some(routing),
+            )
+            .await?;
         Ok(match outcome {
             QueueDownloadOutcome::Queued(mut queued) => {
                 queued.queued_release = queued_release;
@@ -382,7 +423,16 @@ impl AppUseCase {
         conflict_policy: SubmissionConflictPolicy,
         purpose: DownloadSubmissionPurpose,
     ) -> AppResult<QueueDownloadOutcome> {
-        self.queue_manual_release_for_title_with_routing(actor, title, queued_release, scope, conflict_policy, purpose, None).await
+        self.queue_manual_release_for_title_with_routing(
+            actor,
+            title,
+            queued_release,
+            scope,
+            conflict_policy,
+            purpose,
+            None,
+        )
+        .await
     }
 
     #[expect(
@@ -464,7 +514,10 @@ impl AppUseCase {
                     source_kind,
                     source_title: source_title_for_attempt.clone(),
                     source_password: source_password.clone(),
-                    category: routing.as_ref().map(|value| value.category.clone()).unwrap_or(Some(category)),
+                    category: routing
+                        .as_ref()
+                        .map(|value| value.category.clone())
+                        .unwrap_or(Some(category)),
                     queue_priority: None,
                     download_directory: None,
                     release_title: None,
@@ -486,7 +539,9 @@ impl AppUseCase {
                         SubmissionScope::EpisodeSet { .. } | SubmissionScope::Collection { .. }
                     )
                     .then_some(true),
-                    pinned_download_client_id: routing.as_ref().map(|value| value.client_id.clone()),
+                    pinned_download_client_id: routing
+                        .as_ref()
+                        .map(|value| value.client_id.clone()),
                 },
                 scope: scope.clone(),
                 conflict_policy,
@@ -1345,14 +1400,26 @@ mod auto_eligibility_reason_tests {
     fn quality_blocked_candidates_group_by_block_codes() {
         let quality = "quality profile blocked this release";
         let reasons = summarize_auto_eligibility_reasons(&[
-            rejected("quality_blocked", quality, &["managed_required_audio_missing"]),
+            rejected(
+                "quality_blocked",
+                quality,
+                &["managed_required_audio_missing"],
+            ),
             rejected(
                 "quality_blocked",
                 quality,
                 &["resolution_not_allowed", "managed_required_audio_missing"],
             ),
-            rejected("quality_blocked", quality, &["managed_required_audio_missing"]),
-            rejected("title_mismatch", "release title does not match the target title", &[]),
+            rejected(
+                "quality_blocked",
+                quality,
+                &["managed_required_audio_missing"],
+            ),
+            rejected(
+                "title_mismatch",
+                "release title does not match the target title",
+                &[],
+            ),
         ]);
 
         assert_eq!(

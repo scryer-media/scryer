@@ -90,7 +90,8 @@ impl AppUseCase {
         )
         .await?;
         let client_type = self.normalize_download_client_type(client_type)?;
-        let locator = crate::ClientJobLocator::new(client_id, &client_type, download_client_item_id);
+        let locator =
+            crate::ClientJobLocator::new(client_id, &client_type, download_client_item_id);
         let canonical_download_id = match self
             .services
             .workflow

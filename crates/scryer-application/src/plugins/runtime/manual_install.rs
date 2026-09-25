@@ -141,8 +141,8 @@ impl AppUseCase {
                 "manual plugin catalog",
             )
             .await?;
-        let catalog_raw = decode_catalog_json(catalog_raw, &actual_url, "manual plugin catalog")
-            .await?;
+        let catalog_raw =
+            decode_catalog_json(catalog_raw, &actual_url, "manual plugin catalog").await?;
         let catalog = parse_and_validate_catalog_v3(&catalog_raw)?;
         let plugin = single_manual_catalog_plugin(&catalog, &repo)?;
         let cpu_class = self.runtime_performance().await.cpu_class;

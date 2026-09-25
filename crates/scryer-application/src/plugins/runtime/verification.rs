@@ -247,8 +247,7 @@ fn ensure_host_process_capability_allowed(
         &descriptor.provider,
         ProviderDescriptor::Notification(notification)
             if notification.capabilities.requires_host_process
-    )
-        && !support_tier_permits_host_process(support_tier)
+    ) && !support_tier_permits_host_process(support_tier)
     {
         warn!(
             plugin = descriptor.id.as_str(),

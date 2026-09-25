@@ -232,14 +232,9 @@ impl AppUseCase {
         if let Err(error) = self.refresh_navigation_badge_import_attention().await {
             tracing::warn!("navigation badge attention count is unavailable: {error}");
         }
-        cache
-            .current
-            .read()
-            .await
-            .clone()
-            .unwrap_or_else(|| {
-                std::sync::Arc::new(crate::services::NavigationBadgeFacts::default())
-            })
+        cache.current.read().await.clone().unwrap_or_else(|| {
+            std::sync::Arc::new(crate::services::NavigationBadgeFacts::default())
+        })
     }
 
     /// The navigation badge counts this actor may see.

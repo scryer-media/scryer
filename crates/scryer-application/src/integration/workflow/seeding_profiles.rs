@@ -78,7 +78,9 @@ impl AppUseCase {
             .await?;
         let id = update.id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation("seeding profile id is required".into()));
+            return Err(AppError::Validation(
+                "seeding profile id is required".into(),
+            ));
         }
         if !update.has_changes() {
             return Err(AppError::Validation(
@@ -150,7 +152,9 @@ impl AppUseCase {
             .await?;
         let id = id.trim();
         if id.is_empty() {
-            return Err(AppError::Validation("seeding profile id is required".into()));
+            return Err(AppError::Validation(
+                "seeding profile id is required".into(),
+            ));
         }
         if self.seeding_profile(id).await?.is_none() {
             return Err(AppError::NotFound(format!(
@@ -364,9 +368,7 @@ impl AppUseCase {
 
 impl AppUseCase {
     /// Read API for the grab-time resolver: no permission gate, no precedence.
-    pub(crate) async fn seeding_profiles(
-        &self,
-    ) -> AppResult<Vec<scryer_domain::SeedingProfile>> {
+    pub(crate) async fn seeding_profiles(&self) -> AppResult<Vec<scryer_domain::SeedingProfile>> {
         self.services.integrations.seeding_profiles.list().await
     }
 
@@ -499,7 +501,13 @@ impl AppUseCase {
     async fn seeding_profile_referrers(&self, profile_id: &str) -> AppResult<Vec<String>> {
         let mut referrers = Vec::new();
 
-        for indexer in self.services.integrations.indexer_configs.list(None).await? {
+        for indexer in self
+            .services
+            .integrations
+            .indexer_configs
+            .list(None)
+            .await?
+        {
             if indexer.seeding_profile_id.as_deref() == Some(profile_id) {
                 referrers.push(format!("indexer '{}'", indexer.name));
             }
@@ -523,7 +531,8 @@ impl AppUseCase {
             )
             .await?;
         for (scope_id, raw_json) in routing_values {
-            let Some(entries) = crate::catalog_helpers::parse_download_client_routing_map(&raw_json)
+            let Some(entries) =
+                crate::catalog_helpers::parse_download_client_routing_map(&raw_json)
             else {
                 continue;
             };

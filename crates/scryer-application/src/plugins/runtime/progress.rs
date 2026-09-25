@@ -79,13 +79,11 @@ async fn decode_catalog_wasm_artifact(
             )
             .await
         }
-        PluginWasmEncoding::Identity => {
-            bound_uncompressed_bytes(
-                compressed_artifact,
-                expected_bytes,
-                &format!("plugin '{plugin_id}' WASM artifact"),
-            )
-        }
+        PluginWasmEncoding::Identity => bound_uncompressed_bytes(
+            compressed_artifact,
+            expected_bytes,
+            &format!("plugin '{plugin_id}' WASM artifact"),
+        ),
     }
 }
 

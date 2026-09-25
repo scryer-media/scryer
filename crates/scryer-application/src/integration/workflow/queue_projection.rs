@@ -294,19 +294,20 @@ pub fn derive_download_seeding_state(item: &DownloadQueueItem) -> Option<Downloa
         return Some(DownloadSeedingState::None);
     }
 
-    let decision = crate::seeding_gate::evaluate_seeding_gate(&crate::seeding_gate::SeedingGateInput {
-        is_torrent: true,
-        client_type: item.client_type.clone(),
-        present_in_client: true,
-        observation: crate::seeding_gate::observation_from_queue_item(item),
-        goals: Some(crate::PersistedSeedGoals {
-            seed_goal_ratio: snapshot.seed_goal_ratio,
-            seed_goal_seconds: snapshot.seed_goal_seconds,
-            never_remove: snapshot.never_remove,
-            ..crate::PersistedSeedGoals::default()
-        }),
-        now: chrono::Utc::now(),
-    });
+    let decision =
+        crate::seeding_gate::evaluate_seeding_gate(&crate::seeding_gate::SeedingGateInput {
+            is_torrent: true,
+            client_type: item.client_type.clone(),
+            present_in_client: true,
+            observation: crate::seeding_gate::observation_from_queue_item(item),
+            goals: Some(crate::PersistedSeedGoals {
+                seed_goal_ratio: snapshot.seed_goal_ratio,
+                seed_goal_seconds: snapshot.seed_goal_seconds,
+                never_remove: snapshot.never_remove,
+                ..crate::PersistedSeedGoals::default()
+            }),
+            now: chrono::Utc::now(),
+        });
 
     use crate::seeding_gate::reason;
     Some(match decision.reason {

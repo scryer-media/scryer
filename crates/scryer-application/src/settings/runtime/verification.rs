@@ -41,10 +41,7 @@ impl AppUseCase {
             .has_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?
             && !self
-                .has_any_library_permission(
-                    actor,
-                    scryer_domain::LibraryPermission::ManageTitles,
-                )
+                .has_any_library_permission(actor, scryer_domain::LibraryPermission::ManageTitles)
                 .await?
         {
             return Err(AppError::Unauthorized(

@@ -62,7 +62,9 @@ impl AppUseCase {
 
         let mismatch_recovery_eligible_count = wanted_items
             .iter()
-            .filter(|item| item.status == AcquisitionScopeStatus::Wanted && item.mismatch_recovery_eligible)
+            .filter(|item| {
+                item.status == AcquisitionScopeStatus::Wanted && item.mismatch_recovery_eligible
+            })
             .count() as i64;
 
         let mut decision_counts = decision_counts

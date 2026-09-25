@@ -78,9 +78,7 @@ pub(crate) fn direct_download_submission_scope_for_wanted_item(
 ) -> SubmissionScope {
     match item.media_type.as_str() {
         "episode" => episode_submission_scope(item.episode_id.clone()),
-        "series_movie" => {
-            series_movie_submission_scope(item.series_movie_link_id.clone())
-        }
+        "series_movie" => series_movie_submission_scope(item.series_movie_link_id.clone()),
         _ => SubmissionScope::Title,
     }
 }
@@ -92,9 +90,7 @@ pub(crate) fn collection_download_submission_scope_for_wanted_item(
         "episode" => {
             collection_submission_scope(episode_collection_id_for_wanted_item(item, episode))
         }
-        "series_movie" => {
-            series_movie_submission_scope(item.series_movie_link_id.clone())
-        }
+        "series_movie" => series_movie_submission_scope(item.series_movie_link_id.clone()),
         _ => SubmissionScope::Title,
     }
 }
