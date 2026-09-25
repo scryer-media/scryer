@@ -1026,7 +1026,9 @@ async fn hold_replacement_for_manual_resolution(
     let result = ImportResult {
         import_id: import_id.to_string(),
         decision: ImportDecision::Skipped,
-        skip_reason: Some(ImportSkipReason::PolicyMismatch),
+        skip_reason: Some(crate::post_download_gate::review_hold_skip_reason_for_code(
+            code,
+        )),
         title_id: Some(title.id.clone()),
         source_system: Some(completed.client_type.clone()),
         source_ref: Some(completed.download_client_item_id.clone()),

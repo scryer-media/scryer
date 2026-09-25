@@ -1333,6 +1333,65 @@ mod tests {
     }
 
     #[test]
+    fn post_download_rule_error_hold_is_never_retried_by_message_text() {
+        // The hold message quotes operator-authored rule names and engine text.
+        // Words the transient-failure allowlist looks for must not turn the
+        // hold into an automatic retry loop or a Pending record the operator's
+        // Retry refuses.
+        let source = tempfile::tempdir().expect("source tempdir");
+        let mut result = ImportResult {
+            import_id: "import-1".to_string(),
+            decision: ImportDecision::Skipped,
+            skip_reason: Some(ImportSkipReason::PostDownloadRuleBlocked),
+            title_id: Some("title-1".to_string()),
+            source_system: Some("nzbget".to_string()),
+            source_ref: Some("item-1".to_string()),
+            source_title: Some("Release".to_string()),
+            source_path: source.path().to_string_lossy().into_owned(),
+            dest_path: None,
+            quality: None,
+            episode_ids: Vec::new(),
+            file_size_bytes: None,
+            link_type: None,
+            error_message: None,
+            release_burned: false,
+            started_at: Utc::now(),
+            completed_at: Utc::now(),
+            upgrade: false,
+            upgrade_previous_path: None,
+        };
+
+        for message in [
+            "post-download rule failed to evaluate; import held for review: Locked audio (rs-locked): score_entry[\"locked_audio\"] := lower(input.file.video_width)",
+            "post-download rule failed to evaluate; import held for review: Sample rule (rs-sample): destination temporarily unavailable",
+            "post-download rule failed to evaluate; import held for review: Sample rule (rs-sample): source changed during copy",
+            "post-download rules could not be evaluated; import held for review: path not found or inaccessible",
+        ] {
+            assert!(
+                completed_import_error_message_is_retryable(message),
+                "fixture must contain allowlisted text: {message}"
+            );
+            result.error_message = Some(message.to_string());
+            for fallback in [ImportStatus::Skipped, ImportStatus::Failed] {
+                assert_eq!(
+                    completed_import_status_for_result(&result, fallback),
+                    fallback,
+                    "{message}"
+                );
+            }
+        }
+
+        // The same text under the source-changed review hold keeps its
+        // automatic retry.
+        result.skip_reason = Some(ImportSkipReason::PolicyMismatch);
+        result.error_message = Some("source changed during copy".to_string());
+        assert_eq!(
+            completed_import_status_for_result(&result, ImportStatus::Skipped),
+            ImportStatus::Pending
+        );
+    }
+
+    #[test]
     fn manual_import_source_validation_rejects_files_outside_trusted_root() {
         let source = tempfile::tempdir().expect("source tempdir");
         let other = tempfile::tempdir().expect("other tempdir");

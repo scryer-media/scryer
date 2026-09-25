@@ -2379,7 +2379,11 @@ fn manual_import_error_from_skip_reason(skip_reason: Option<ImportSkipReason>) -
     match skip_reason {
         Some(ImportSkipReason::DiskFull) => ImportErrorCode::DiskFull,
         Some(ImportSkipReason::PermissionDenied) => ImportErrorCode::PermissionDenied,
-        Some(ImportSkipReason::PolicyMismatch) => ImportErrorCode::PolicyMismatch,
+        // A rule-error hold reports its own skip reason for routing; to the
+        // operator it is the same policy refusal a review hold always was.
+        Some(ImportSkipReason::PolicyMismatch | ImportSkipReason::PostDownloadRuleBlocked) => {
+            ImportErrorCode::PolicyMismatch
+        }
         _ => ImportErrorCode::Unknown,
     }
 }
