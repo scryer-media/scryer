@@ -532,10 +532,8 @@ fn indexers_answering_every_query(
     }
     let mut indexers = aggregate
         .iter()
-        .filter_map(|(indexer_id, state)| {
-            (state.completed_queries == required_query_count && answered(state))
-                .then(|| indexer_id.clone())
-        })
+        .filter(|(_, state)| state.completed_queries == required_query_count && answered(state))
+        .map(|(indexer_id, _)| indexer_id.clone())
         .collect::<Vec<_>>();
     indexers.sort();
     indexers

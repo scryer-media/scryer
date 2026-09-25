@@ -2186,6 +2186,7 @@ async fn commit_season_pack_proposal(
     Ok(Vec::new())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn evaluate_series_pack_candidates(
     app: &AppUseCase,
     title: &Title,
@@ -3150,84 +3151,83 @@ async fn process_single_target(
     // exhausted list (or a scope that never saved one) reaches the convergence
     // gate below.
     let claimed_episode_ids = cycle.claimed_episode_ids();
-    let stale_standby_indexer_ids =
-        if item.status == AcquisitionScopeStatus::Wanted && !item.id.is_empty() {
-            match try_saved_candidates(
-                app,
-                item,
-                None,
-                Some(&claimed_episode_ids),
-                dl_snapshot,
-                now,
-            )
-            .await
-            {
-                StandbyRecoveryOutcome::Recovered { scope }
-                | StandbyRecoveryOutcome::Active { scope } => {
-                    if let Some(episode_ids) = episode_ids_for_scope(&scope) {
-                        cycle.claim_episode_ids(episode_ids.iter().cloned());
-                    }
-                    if let SubmissionScope::Collection { collection_id } = &scope {
-                        if let Ok(episodes) = context
-                            .reads
-                            .episodes_for_collection(app, collection_id)
-                            .await
-                        {
-                            cycle.claim_episode_ids(
-                                episodes.iter().map(|episode| episode.id.clone()),
-                            );
-                        }
-                        if let Some(season) = target
-                            .season_number
-                            .as_deref()
-                            .or(episode
-                                .as_ref()
-                                .and_then(|episode| episode.season_number.as_deref()))
-                            .and_then(|season| season.parse::<u32>().ok())
-                        {
-                            cycle.mark_season_pack_grabbed(&(title.id.clone(), season));
-                        }
-                    }
-                    session.stats.inline_grabs += 1;
-                    info!(
-                        title = title.name.as_str(),
-                        scope_key = target.scope_key.as_str(),
-                        "grabbed the next saved search result; no indexer query spent"
-                    );
-                    return Ok(());
+    let stale_standby_indexer_ids = if item.status == AcquisitionScopeStatus::Wanted
+        && !item.id.is_empty()
+    {
+        match try_saved_candidates(
+            app,
+            item,
+            None,
+            Some(&claimed_episode_ids),
+            dl_snapshot,
+            now,
+        )
+        .await
+        {
+            StandbyRecoveryOutcome::Recovered { scope }
+            | StandbyRecoveryOutcome::Active { scope } => {
+                if let Some(episode_ids) = episode_ids_for_scope(&scope) {
+                    cycle.claim_episode_ids(episode_ids.iter().cloned());
                 }
-                StandbyRecoveryOutcome::Deferred { refused, .. } => {
-                    info!(
-                        title = title.name.as_str(),
-                        scope_key = target.scope_key.as_str(),
-                        "saved search result kept pending until the download client recovers"
-                    );
-                    // A refused saved result is a failed submission, counted like
-                    // the same refusal on the search lane. Only the episode's own
-                    // `Scope` stage counts it: every pack stage's anchor has one,
-                    // so the scope counts once however many stages walked it.
-                    if let Some(refused) = refused
-                        && !pack_stage_only
+                if let SubmissionScope::Collection { collection_id } = &scope {
+                    if let Ok(episodes) = context
+                        .reads
+                        .episodes_for_collection(app, collection_id)
+                        .await
                     {
-                        let mut tally = GrabFailureTally::default();
-                        tally.record_refused_submission(refused);
-                        session.stats.record_grab_failures(tally);
+                        cycle.claim_episode_ids(episodes.iter().map(|episode| episode.id.clone()));
                     }
-                    return Ok(());
+                    if let Some(season) = target
+                        .season_number
+                        .as_deref()
+                        .or(episode
+                            .as_ref()
+                            .and_then(|episode| episode.season_number.as_deref()))
+                        .and_then(|season| season.parse::<u32>().ok())
+                    {
+                        cycle.mark_season_pack_grabbed(&(title.id.clone(), season));
+                    }
                 }
-                StandbyRecoveryOutcome::Parked { .. } => {
-                    info!(
-                        title = title.name.as_str(),
-                        scope_key = target.scope_key.as_str(),
-                        "best saved search result is held by its delay profile"
-                    );
-                    return Ok(());
-                }
-                StandbyRecoveryOutcome::Exhausted { stale_indexer_ids } => stale_indexer_ids,
+                session.stats.inline_grabs += 1;
+                info!(
+                    title = title.name.as_str(),
+                    scope_key = target.scope_key.as_str(),
+                    "grabbed the next saved search result; no indexer query spent"
+                );
+                return Ok(());
             }
-        } else {
-            Vec::new()
-        };
+            StandbyRecoveryOutcome::Deferred { refused, .. } => {
+                info!(
+                    title = title.name.as_str(),
+                    scope_key = target.scope_key.as_str(),
+                    "saved search result kept pending until the download client recovers"
+                );
+                // A refused saved result is a failed submission, counted like
+                // the same refusal on the search lane. Only the episode's own
+                // `Scope` stage counts it: every pack stage's anchor has one,
+                // so the scope counts once however many stages walked it.
+                if let Some(refused) = refused
+                    && !pack_stage_only
+                {
+                    let mut tally = GrabFailureTally::default();
+                    tally.record_refused_submission(refused);
+                    session.stats.record_grab_failures(tally);
+                }
+                return Ok(());
+            }
+            StandbyRecoveryOutcome::Parked { .. } => {
+                info!(
+                    title = title.name.as_str(),
+                    scope_key = target.scope_key.as_str(),
+                    "best saved search result is held by its delay profile"
+                );
+                return Ok(());
+            }
+            StandbyRecoveryOutcome::Exhausted { stale_indexer_ids } => stale_indexer_ids,
+        }
+    } else {
+        Vec::new()
+    };
 
     let search_title = app
         .release_search_title_for_wanted_item(title, item, episode.as_ref(), Some(&context.reads))
@@ -5089,8 +5089,11 @@ pub async fn start_background_acquisition_poller(
     // here made the jobs view promise a sweep four minutes before the worker
     // would actually wake for it.
     let rss_sync_tick = crate::acquisition::rss::rss_sync_tick_period();
-    app.advertise_job_next_run_at(JobKey::RssSync, Utc::now() + rss_sync_next_run_delta(rss_sync_tick))
-        .await;
+    app.advertise_job_next_run_at(
+        JobKey::RssSync,
+        Utc::now() + rss_sync_next_run_delta(rss_sync_tick),
+    )
+    .await;
     app.advertise_job_next_run_at(
         JobKey::PendingReleaseProcessing,
         Utc::now() + chrono::Duration::minutes(1),

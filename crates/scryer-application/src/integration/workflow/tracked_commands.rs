@@ -35,7 +35,6 @@ fn parse_poll_secs(raw: Option<&str>, default: Duration) -> Duration {
         .unwrap_or(default)
 }
 
-
 #[derive(Clone, Debug)]
 pub struct DownloadQueuePollerOptions {
     pub interval: Duration,
@@ -531,7 +530,7 @@ pub(crate) async fn finalize_scryer_download_ignored_for_download(
     }
     let incident_download_id = canonical_download_id
         .cloned()
-        .or_else(|| Some(submission.download_id.clone()));
+        .or(Some(submission.download_id));
 
     match submission_repository
         .get_tracked_state(&source_identity)
@@ -1033,8 +1032,10 @@ async fn process_tracked_download_snapshot(
     // transaction rather than one per row inside a resolution transaction.
     crate::download_identity::flush_shared_observation_touches(app).await;
 
-    let full_authoritative_listing =
-        matches!(prune, TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes);
+    let full_authoritative_listing = matches!(
+        prune,
+        TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes
+    );
     let unavailable_sources = match prune {
         TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes => runtime
             .tracker
@@ -1057,8 +1058,7 @@ async fn process_tracked_download_snapshot(
         drop_source_removed_from_client(app, &source_identity).await;
     }
 
-    if full_authoritative_listing && let Some(authoritative_client_ids) = authoritative_client_ids
-    {
+    if full_authoritative_listing && let Some(authoritative_client_ids) = authoritative_client_ids {
         drop_submissions_never_listed_by_client(
             app,
             &items,
@@ -1166,7 +1166,8 @@ async fn process_tracked_download_snapshot(
             "warning",
         ];
         for (label, &count) in labels.iter().zip(&counts) {
-            metrics::gauge!(crate::services::DOWNLOAD_QUEUE_ITEMS, "state" => *label).set(count as f64);
+            metrics::gauge!(crate::services::DOWNLOAD_QUEUE_ITEMS, "state" => *label)
+                .set(count as f64);
         }
     }
 
@@ -3284,7 +3285,8 @@ pub(crate) async fn reconcile_terminal_tracked_downloads(
         }).buffer_unordered(4);
         // One line per tick that did work, instead of one per row: an upgrade
         // backfills every historical terminal download through here.
-        let mut settled: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+        let mut settled: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
         let mut pending = 0usize;
         while let Some(result) = work.next().await {
             if result.is_none() {

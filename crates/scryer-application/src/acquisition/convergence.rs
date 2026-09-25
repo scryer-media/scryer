@@ -753,8 +753,7 @@ pub(crate) struct ScopeConvergence {
 pub(crate) struct ConvergenceInputMemo {
     required_audio_languages:
         std::sync::Mutex<std::collections::HashMap<RequiredAudioLanguagesKey, Vec<String>>>,
-    routed_indexer_ids:
-        std::sync::Mutex<std::collections::HashMap<(String, Option<String>), Vec<String>>>,
+    routed_indexer_ids: std::sync::Mutex<std::collections::HashMap<RoutedIndexersKey, Vec<String>>>,
     /// Coverage rows by scope key, read once when the walk starts. A key the
     /// walk did not load is absent, never an empty list.
     coverage_rows:
@@ -762,6 +761,9 @@ pub(crate) struct ConvergenceInputMemo {
     indexer_configs:
         std::sync::Mutex<Option<std::sync::Arc<std::collections::HashMap<String, IndexerConfig>>>>,
 }
+
+/// The routing inputs a walk's routed-indexer answer depends on.
+type RoutedIndexersKey = (String, Option<String>);
 
 /// Every title field `resolve_required_audio_languages_for_title` reads.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
