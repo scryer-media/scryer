@@ -1206,6 +1206,42 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
         row.map(|row| row.text("tracked_state")).transpose()
     }
 
+    async fn delete_identity_tracked_states_for_downloads(
+        &self,
+        download_ids: &[DownloadId],
+    ) -> AppResult<u32> {
+        let mut seen = std::collections::HashSet::with_capacity(download_ids.len());
+        let download_ids: Vec<String> = download_ids
+            .iter()
+            .filter(|download_id| seen.insert(**download_id))
+            .map(ToString::to_string)
+            .collect();
+        if download_ids.is_empty() {
+            return Ok(0);
+        }
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "delete_download_identity_states_for_downloads",
+            move |tx| {
+                let download_ids = download_ids.clone();
+                Box::pin(async move {
+                    let mut deleted = 0u64;
+                    for chunk in download_ids.chunks(DOWNLOAD_SUBMISSION_BATCH_LOOKUP_CHUNK_SIZE) {
+                        let sql = format!(
+                            "DELETE FROM download_identity_states
+                             WHERE canonical_download_id IN ({})",
+                            placeholders(chunk.len())
+                        );
+                        let args: Vec<SqlArg> = chunk.iter().cloned().map(SqlArg::Text).collect();
+                        deleted += SqlRuntime::execute(SqlExec::Tx(tx), &sql, &args).await?;
+                    }
+                    Ok(u32::try_from(deleted).unwrap_or(u32::MAX))
+                })
+            },
+        )
+        .await
+    }
+
     async fn get_identity_tracked_state_reason(
         &self,
         _identity: &DownloadSubmissionIdentity,
@@ -3017,6 +3053,61 @@ mod seed_goal_tests {
         );
     }
 
+    #[tokio::test]
+    async fn deleting_identity_states_for_downloads_removes_only_those_downloads_rows() {
+        let store = store().await;
+        let retired = DownloadId::new();
+        let kept = DownloadId::new();
+        for (download_id, item_id) in [(retired, "retired-job"), (kept, "kept-job")] {
+            store
+                .record_identity_tracked_state_for_download(
+                    Some(&download_id),
+                    &submission_identity(download_id),
+                    Some(&ClientJobLocator::new(
+                        Some("primary"),
+                        "qbittorrent",
+                        item_id,
+                    )),
+                    "imported",
+                    None,
+                    None,
+                )
+                .await
+                .expect("identity state should persist");
+        }
+        let state_for = |download_id: DownloadId| {
+            let store = store.clone();
+            async move {
+                store
+                    .get_identity_tracked_state_for_download(
+                        Some(&download_id),
+                        &submission_identity(download_id),
+                        None,
+                    )
+                    .await
+                    .expect("identity state should read")
+            }
+        };
+        assert_eq!(state_for(retired).await.as_deref(), Some("imported"));
+
+        let deleted = store
+            .delete_identity_tracked_states_for_downloads(&[retired, retired])
+            .await
+            .expect("identity states should delete");
+
+        assert_eq!(deleted, 1);
+        assert_eq!(state_for(retired).await, None);
+        assert_eq!(state_for(kept).await.as_deref(), Some("imported"));
+        assert_eq!(count_rows(&store, "download_identity_states").await, 1);
+        assert_eq!(
+            store
+                .delete_identity_tracked_states_for_downloads(&[])
+                .await
+                .expect("an empty set deletes nothing"),
+            0
+        );
+    }
+
     /// Verbatim sqlite text for the 0180 active-locator index, as `repo_err`
     /// flattens sqlx failures into `AppError::Repository`.
     const ACTIVE_LOCATOR_VIOLATION: &str = "error returned from database: (code: 2067) UNIQUE \
@@ -3389,6 +3480,52 @@ mod seed_goal_tests {
                 };
                 assert_eq!(recovered.client_id, "client-0");
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn abandoned_seeding_cleanup_is_never_due_or_claimed_again() {
+        let store = store().await;
+        let id = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(id, "seeding-job", "title-1"),
+                submission_identity(id),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&id),
+                &submission_identity(id),
+                Some(&identity()),
+                "imported_seeding",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(store.has_pending_download_cleanup(&id).await.unwrap());
+        assert_eq!(store.list_due_download_cleanup(100).await.unwrap().len(), 1);
+
+        store
+            .finish_download_cleanup(&id, "cleanup_abandoned", true, 0, 0, Some("title deleted"))
+            .await
+            .unwrap();
+
+        assert!(!store.has_pending_download_cleanup(&id).await.unwrap());
+        store.seed_download_cleanup(100).await.unwrap();
+        assert!(
+            store
+                .list_due_download_cleanup(100)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        match store.claim_download_cleanup(&id).await.unwrap() {
+            DownloadCleanupClaim::Settled { outcome } => assert_eq!(outcome, "cleanup_abandoned"),
+            _ => panic!("a settled cleanup row must not be claimed again"),
         }
     }
 

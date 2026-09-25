@@ -1918,6 +1918,32 @@ mod tests {
         .await;
     }
 
+    #[tokio::test]
+    async fn forget_for_title_command_drops_the_deleted_titles_row_and_keeps_the_regrab() {
+        use crate::tracked_downloads::TrackedDownloadCommand;
+        let (app, actor) = crate::lib_tests::bootstrap();
+        for _ in 0..16 {
+            let (mut tracker, settled, live) = settled_and_live_siblings();
+            let live_before = row_debug(&tracker, live);
+            let (reply, response) = tokio::sync::oneshot::channel();
+            run_tracked_command(
+                &app,
+                &actor,
+                &mut tracker,
+                TrackedDownloadCommand::ForgetForTitle {
+                    title_id: "title-1".to_string(),
+                    download_ids: Vec::new(),
+                    reply,
+                },
+            )
+            .await;
+            let removed = response.await.expect("reply").expect("forget for title");
+            assert_eq!(removed, vec![settled]);
+            assert!(tracker.get_by_download_id(settled).is_none());
+            assert_eq!(row_debug(&tracker, live), live_before);
+        }
+    }
+
     #[test]
     fn resolve_tracked_command_target_never_falls_back_past_a_canonical_id() {
         for _ in 0..16 {

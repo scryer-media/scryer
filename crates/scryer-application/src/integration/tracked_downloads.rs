@@ -1038,6 +1038,31 @@ impl TrackedDownloadService {
             .retain(|_, current| *current != download_id);
     }
 
+    /// Remove every row resolved to `title_id` and every row cached under one
+    /// of `download_ids`, returning the removed keys in ascending order. A
+    /// deleted title's downloads leave the cache this way, so a re-grab of the
+    /// same client item starts from a fresh row. `download_ids` covers a row
+    /// of the title that resolved no title (its client item lost its token).
+    pub fn forget_for_title(
+        &mut self,
+        title_id: &str,
+        download_ids: &[DownloadId],
+    ) -> Vec<DownloadId> {
+        let mut removed: Vec<DownloadId> = self
+            .cache
+            .iter()
+            .filter(|(download_id, tracked)| {
+                tracked.title_id.as_deref() == Some(title_id) || download_ids.contains(download_id)
+            })
+            .map(|(download_id, _)| *download_id)
+            .collect();
+        removed.sort_unstable();
+        for download_id in &removed {
+            self.stop_tracking_download(*download_id);
+        }
+        removed
+    }
+
     fn clear_untracked_warning_clocks(&mut self) {
         self.warning_since.retain(|id, _| {
             self.cache
@@ -1790,6 +1815,13 @@ pub enum TrackedDownloadCommand {
         id: String,
         reply: oneshot::Sender<AppResult<()>>,
     },
+    /// Drop every cached row of a deleted title, and the rows cached under
+    /// `download_ids`; replies with the removed rows.
+    ForgetForTitle {
+        title_id: String,
+        download_ids: Vec<DownloadId>,
+        reply: oneshot::Sender<AppResult<Vec<DownloadId>>>,
+    },
     MarkFailed {
         id: String,
         skip_reacquire: bool,
@@ -1962,6 +1994,31 @@ impl TrackedDownloadHandle {
         self.tx
             .send(TrackedDownloadCommand::Forget {
                 id,
+                reply: reply_tx,
+            })
+            .await
+            .map_err(|_| {
+                crate::AppError::Repository("tracked download service unavailable".into())
+            })?;
+        reply_rx.await.map_err(|_| {
+            crate::AppError::Repository("tracked download service dropped reply".into())
+        })?
+    }
+
+    /// Stop tracking every cached row of `title_id`, plus the rows cached
+    /// under `download_ids` whatever title they resolved to (a row whose
+    /// client item lost its token may carry no title). Replies with the
+    /// removed rows.
+    pub async fn forget_for_title(
+        &self,
+        title_id: String,
+        download_ids: Vec<DownloadId>,
+    ) -> AppResult<Vec<DownloadId>> {
+        let (reply_tx, reply_rx) = oneshot::channel();
+        self.tx
+            .send(TrackedDownloadCommand::ForgetForTitle {
+                title_id,
+                download_ids,
                 reply: reply_tx,
             })
             .await
@@ -4724,6 +4781,70 @@ mod tests {
                 tracker.resolve_cached_download_id("shared-torrent"),
                 Some(blocked)
             );
+        }
+    }
+
+    #[test]
+    fn forget_for_title_removes_exactly_that_titles_rows_and_the_named_downloads() {
+        let mut tracker = TrackedDownloadService::new();
+        let mut row_for = |title_id: Option<&str>| {
+            let mut tracked = build_tracked_download("shared-torrent");
+            tracked.title_id = title_id.map(str::to_owned);
+            let download_id = tracked.download_id;
+            tracker.cache.insert(download_id, tracked);
+            tracker.last_seen_at.insert(download_id, Utc::now());
+            download_id
+        };
+        let first = row_for(Some("title-1"));
+        let second = row_for(Some("title-1"));
+        let other_title = row_for(Some("title-2"));
+        let untitled = row_for(None);
+        let unrelated_untitled = row_for(None);
+        tracker
+            .current_download_for_id
+            .insert("shared-torrent".to_string(), second);
+
+        let mut expected = vec![first, second];
+        expected.sort_unstable();
+        assert_eq!(tracker.forget_for_title("title-1", &[]), expected);
+        assert!(tracker.get_by_download_id(first).is_none());
+        assert!(tracker.get_by_download_id(second).is_none());
+        assert!(!tracker.last_seen_at.contains_key(&first));
+        assert!(
+            !tracker
+                .current_download_for_id
+                .contains_key("shared-torrent")
+        );
+        assert!(tracker.get_by_download_id(other_title).is_some());
+
+        // A named download goes whatever title it resolved to; nothing else does.
+        assert_eq!(
+            tracker.forget_for_title("title-1", &[untitled, first]),
+            vec![untitled]
+        );
+        assert!(tracker.get_by_download_id(untitled).is_none());
+        assert!(tracker.get_by_download_id(unrelated_untitled).is_some());
+        assert!(tracker.get_by_download_id(other_title).is_some());
+        assert_eq!(tracker.get_all().len(), 2);
+    }
+
+    #[test]
+    fn stop_tracking_download_removes_only_its_row_when_another_shares_the_id_string() {
+        for _ in 0..16 {
+            let (mut tracker, settled, live) = shared_string_siblings(
+                TrackedDownloadState::Imported,
+                TrackedDownloadState::Downloading,
+            );
+            tracker.last_seen_at.insert(settled, Utc::now());
+            tracker.last_seen_at.insert(live, Utc::now());
+
+            tracker.stop_tracking_download(settled);
+
+            assert!(tracker.get_by_download_id(settled).is_none());
+            assert!(!tracker.last_seen_at.contains_key(&settled));
+            let live_row = tracker.get_by_download_id(live).expect("sibling row stays");
+            assert_eq!(live_row.state, TrackedDownloadState::Downloading);
+            assert!(tracker.last_seen_at.contains_key(&live));
         }
     }
 

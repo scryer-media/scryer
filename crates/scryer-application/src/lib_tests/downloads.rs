@@ -61,6 +61,13 @@ impl RecordingDownloadRegistry {
             .insert(download_id, (created_at, last_seen_at));
     }
 
+    pub(super) async fn is_ended(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> bool {
+        self.ended.lock().await.contains(download_id)
+    }
+
     async fn fail_binding_lookup(&self, locator: ClientJobLocator) {
         self.failing_bindings.lock().await.insert(locator);
     }

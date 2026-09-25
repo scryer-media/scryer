@@ -5280,3 +5280,107 @@ async fn a_download_without_a_handoff_profile_still_parks() {
     assert_eq!(cleanup, TerminalDownloadCleanupOutcome::HeldForSeeding);
     assert!(download_client.deleted_requests.lock().await.is_empty());
 }
+
+#[tokio::test]
+async fn delete_title_settles_the_pending_cleanup_of_its_seeding_download() {
+    let client = Arc::new(StubDownloadClient::default());
+    let (base_app, user, repository) = bootstrap_with_torrent_clients(client.clone());
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let (tracked_tx, mut tracked_rx) = tokio::sync::mpsc::channel(4);
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_tracked_download_handle(crate::tracked_downloads::TrackedDownloadHandle::new(
+                tracked_tx,
+            ))
+    });
+    let config = create_enabled_download_client_config(&app, &user, "Primary", "qbittorrent").await;
+    let title = movie_title(&app, &user, "Synthetic Seeding Movie").await;
+    let tracked = tracked_for(
+        &config.id,
+        "qbittorrent",
+        "89abcdef0123456789abcdef0123456789abcdef",
+        &title,
+        TrackedDownloadState::ImportedSeeding,
+        false,
+    );
+    let download_id = tracked.download_id;
+    let submission = DownloadSubmission {
+        download_id,
+        title_id: title.id.clone(),
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        facet: "movie".to_string(),
+        download_client_id: Some(config.id.clone()),
+        download_client_type: "qbittorrent".to_string(),
+        download_client_item_id: tracked.client_item.download_client_item_id.clone(),
+        source_hint: None,
+        source_provider_id: None,
+        source_provider_name: None,
+        source_kind: None,
+        source_title: Some("Synthetic.Seeding.Movie.2031.1080p".to_string()),
+        info_hash: None,
+        release_size_bytes: None,
+        request_signature: None,
+        scope: SubmissionScope::Title,
+    };
+    let locator = ClientJobLocator::from_submission(&submission);
+    repository
+        .record_submission(submission)
+        .await
+        .expect("record seeding submission");
+    repository
+        .update_tracked_state(&locator, "imported_seeding")
+        .await
+        .expect("record seeding state");
+    registry.bind(locator, download_id).await;
+    repository.pending_cleanup.lock().await.insert(download_id);
+
+    let tracked_responder = tokio::spawn(async move {
+        match tracked_rx.recv().await.expect("forget-for-title command") {
+            crate::tracked_downloads::TrackedDownloadCommand::ForgetForTitle {
+                download_ids,
+                reply,
+                ..
+            } => {
+                let _ = reply.send(Ok(download_ids));
+            }
+            _ => panic!("unexpected tracked-download command"),
+        }
+    });
+    app.delete_title(&user, &title.id, false, None)
+        .await
+        .expect("delete title");
+    crate::test_wait::within_deadline("the forget-for-title command", tracked_responder)
+        .await
+        .expect("responder task");
+
+    assert!(registry.is_ended(&download_id).await);
+    let finished = repository.finished_cleanup.lock().await.clone();
+    assert_eq!(
+        finished,
+        vec![(download_id, "cleanup_abandoned".to_string(), true)],
+        "the pending cleanup row is settled, not left to fail its identity checks"
+    );
+
+    // The next cleanup tick finds the row settled, as the store reports a
+    // completed row, and replays the outcome without reaching the client.
+    repository.pending_cleanup.lock().await.remove(&download_id);
+    repository
+        .settled_cleanup
+        .lock()
+        .await
+        .insert(download_id, finished[0].1.clone());
+    let result = crate::import::import::reconcile_terminal_download_cleanup_for_tracked(
+        &app,
+        &tracked,
+        tracked.state,
+        None,
+    )
+    .await;
+    assert_eq!(
+        result.outcome,
+        TerminalDownloadCleanupOutcome::NotConfigured
+    );
+    assert!(crate::import::import::terminal_download_cleanup_is_complete(result.outcome));
+    assert!(client.deleted_requests.lock().await.is_empty());
+}

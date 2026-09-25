@@ -2322,6 +2322,15 @@ async fn handle_tracked_download_command(
             publish_runtime_tracked_download_snapshot_cache(app, tracker).await;
             let _ = reply.send(Ok(()));
         }
+        TrackedDownloadCommand::ForgetForTitle {
+            title_id,
+            download_ids,
+            reply,
+        } => {
+            let removed = tracker.forget_for_title(&title_id, &download_ids);
+            publish_runtime_tracked_download_snapshot_cache(app, tracker).await;
+            let _ = reply.send(Ok(removed));
+        }
         TrackedDownloadCommand::MarkFailed {
             id,
             skip_reacquire,
