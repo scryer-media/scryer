@@ -18,7 +18,8 @@ use scryer_application::{
     POST_PROCESSING_SCRIPT_ANIME_KEY, POST_PROCESSING_SCRIPT_MOVIE_KEY,
     POST_PROCESSING_SCRIPT_SERIES_KEY, POST_PROCESSING_TIMEOUT_KEY, QUALITY_PROFILE_CATALOG_KEY,
     QUALITY_PROFILE_ID_KEY, QUALITY_PROFILE_INHERIT_VALUE, QualityProfile,
-    QualityProfileRepository, RECYCLE_BIN_ENABLED_KEY, RENAME_COLLISION_POLICY_GLOBAL_KEY,
+    QualityProfileRepository, RECYCLE_BIN_ENABLED_KEY, RECYCLE_BIN_PATH_KEY,
+    RECYCLE_BIN_RETENTION_DAYS_KEY, RENAME_COLLISION_POLICY_GLOBAL_KEY,
     RENAME_COLLISION_POLICY_KEY, RENAME_COLLISION_POLICY_MOVIE_GLOBAL_KEY, RENAME_ENABLED_KEY,
     RENAME_MISSING_METADATA_POLICY_GLOBAL_KEY, RENAME_MISSING_METADATA_POLICY_KEY,
     RENAME_MISSING_METADATA_POLICY_MOVIE_GLOBAL_KEY, RENAME_TEMPLATE_ANIME_GLOBAL_KEY,
@@ -161,6 +162,25 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             key_name: RECYCLE_BIN_ENABLED_KEY,
             data_type: "boolean",
             default_value_json: "true",
+            is_sensitive: false,
+        },
+        // Null keeps the per-root `.scryer-recycle` default and 7 is the
+        // retention the reader already falls back to, so seeding changes
+        // nothing until an operator saves a value.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_MEDIA,
+            key_name: RECYCLE_BIN_PATH_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_MEDIA,
+            key_name: RECYCLE_BIN_RETENTION_DAYS_KEY,
+            data_type: "number",
+            default_value_json: "7",
             is_sensitive: false,
         },
         // Import-copy verification depth (FR-042). Without a definition the
@@ -2954,6 +2974,18 @@ mod tests {
                 && seed.key_name == RECYCLE_BIN_ENABLED_KEY
                 && seed.data_type == "boolean"
                 && seed.default_value_json == "true"
+        }));
+        assert!(service_setting_seeds().iter().any(|seed| {
+            seed.scope == SETTINGS_SCOPE_MEDIA
+                && seed.key_name == RECYCLE_BIN_PATH_KEY
+                && seed.data_type == "string"
+                && seed.default_value_json == "null"
+        }));
+        assert!(service_setting_seeds().iter().any(|seed| {
+            seed.scope == SETTINGS_SCOPE_MEDIA
+                && seed.key_name == RECYCLE_BIN_RETENTION_DAYS_KEY
+                && seed.data_type == "number"
+                && seed.default_value_json == "7"
         }));
     }
 

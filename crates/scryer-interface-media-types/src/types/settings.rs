@@ -48,10 +48,18 @@ pub struct SubtitleSettingsPayload {
 }
 
 #[derive(SimpleObject, Clone)]
-/// Recycle-bin enablement setting.
+/// Recycle-bin settings and the bin locations they resolve to.
 pub struct RecycleBinSettingsPayload {
     /// Whether deleted media is moved to the recycle bin.
     pub enabled: bool,
+    /// Custom recycle-bin directory; null means `.scryer-recycle` under each library root.
+    pub path: Option<String>,
+    /// Days a recycled item is kept before it is purged.
+    pub retention_days: i32,
+    /// Directories deleted media is currently moved to, one per distinct bin.
+    pub effective_paths: Vec<String>,
+    /// Why the configured bin is never purged, when the path is invalid for the current library roots.
+    pub validation_error: Option<String>,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1052,10 +1060,14 @@ pub struct UpdateSubtitleSettingsInput {
 }
 
 #[derive(InputObject, Clone)]
-/// Recycle-bin enablement setting.
+/// Recycle-bin settings to save. Omitted fields keep their stored value.
 pub struct UpdateRecycleBinSettingsInput {
-    /// Whether deleted media is retained in the recycle bin.
-    pub enabled: bool,
+    /// Whether deleted media is retained in the recycle bin; omit to keep the current value.
+    pub enabled: Option<bool>,
+    /// Absolute recycle-bin directory outside every library root; null or blank restores `.scryer-recycle` under each library root, omit to keep the current value.
+    pub path: MaybeUndefined<String>,
+    /// Days a recycled item is kept before it is purged, from 1 to 3650; omit to keep the current value.
+    pub retention_days: Option<i32>,
 }
 
 #[derive(InputObject, Clone)]

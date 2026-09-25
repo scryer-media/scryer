@@ -54,3 +54,52 @@ export function groupRecycleBinItems<TItem extends RecycleBinFilterItem>(
     .filter((group) => group.items.length > 0)
     .sort((a, b) => b.items[0].recycledAt.localeCompare(a.items[0].recycledAt));
 }
+
+/** Retention bounds the server accepts for recycled items, in days. */
+export const RECYCLE_BIN_MIN_RETENTION_DAYS = 1;
+export const RECYCLE_BIN_MAX_RETENTION_DAYS = 3650;
+
+/** Fields to change; an omitted field keeps the stored value on the server. */
+export type RecycleBinSettingsChanges = {
+  enabled?: boolean;
+  path?: string | null;
+  retentionDays?: number;
+};
+
+export type RecycleBinSettingsInput = {
+  enabled?: boolean;
+  path?: string | null;
+  retentionDays?: number;
+};
+
+/**
+ * Parses the retention field. Returns null for anything the server would
+ * reject, so the form can refuse to save it.
+ */
+export function parseRecycleBinRetentionDays(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const days = Number(trimmed);
+  return days >= RECYCLE_BIN_MIN_RETENTION_DAYS && days <= RECYCLE_BIN_MAX_RETENTION_DAYS
+    ? days
+    : null;
+}
+
+/**
+ * Builds a partial update input carrying only the fields being changed, so a
+ * toggle never overwrites the stored path or retention. A blank path is sent
+ * as null, which restores the default `.scryer-recycle` folder under each
+ * library root.
+ */
+export function buildRecycleBinSettingsInput(
+  changes: RecycleBinSettingsChanges,
+): RecycleBinSettingsInput {
+  const input: RecycleBinSettingsInput = {};
+  if (changes.enabled !== undefined) input.enabled = changes.enabled;
+  if (changes.path !== undefined) {
+    const trimmedPath = changes.path?.trim() ?? "";
+    input.path = trimmedPath === "" ? null : trimmedPath;
+  }
+  if (changes.retentionDays !== undefined) input.retentionDays = changes.retentionDays;
+  return input;
+}

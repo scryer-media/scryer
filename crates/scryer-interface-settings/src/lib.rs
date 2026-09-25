@@ -62,6 +62,10 @@ fn from_recycle_bin_settings(
 ) -> RecycleBinSettingsPayload {
     RecycleBinSettingsPayload {
         enabled: settings.enabled,
+        path: settings.path,
+        retention_days: i32::try_from(settings.retention_days).unwrap_or(i32::MAX),
+        effective_paths: settings.effective_paths,
+        validation_error: settings.validation_error,
     }
 }
 
@@ -703,7 +707,7 @@ impl SettingsQueries {
         Ok(from_general_settings(settings))
     }
 
-    /// Returns whether the recycle bin is enabled for the authenticated actor.
+    /// Returns the recycle-bin settings and the bin locations they resolve to.
     async fn recycle_bin_settings(
         &self,
         ctx: &Context<'_>,

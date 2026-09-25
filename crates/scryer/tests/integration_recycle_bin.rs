@@ -9,9 +9,10 @@ use chrono::Utc;
 use common::TestContext;
 use scryer_application::recycle_bin::{RecycleBinConfig, RecycleManifest, recycle_file};
 use scryer_application::{
-    InsertMediaFileInput, JobKey, JobRunStatus, LibraryRootDraft, MediaFileRepository,
-    MediaFileRole, RECYCLE_BIN_ENABLED_KEY, RECYCLE_BIN_PATH_KEY, SETTINGS_SCOPE_MEDIA,
-    SETTINGS_SOURCE_TYPED_GRAPHQL, ShowRepository, TitleRepository, UpdateRecycleBinSettings,
+    AppError, InsertMediaFileInput, JobKey, JobRunStatus, LibraryRootDraft, MediaFileRepository,
+    MediaFileRole, RECYCLE_BIN_ENABLED_KEY, RECYCLE_BIN_PATH_KEY, RECYCLE_BIN_RETENTION_DAYS_KEY,
+    SETTINGS_SCOPE_MEDIA, SETTINGS_SOURCE_TYPED_GRAPHQL, ShowRepository, TitleRepository,
+    UpdateRecycleBinSettings,
 };
 use scryer_domain::{
     AppPermission, AppPermissionMask, Collection, CollectionType, Id, Library, LibraryGrant,
@@ -145,9 +146,25 @@ async fn seed_recycle_bin_setting_definition(ctx: &TestContext) {
                 is_sensitive: false,
                 validation_json: None,
             },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: SETTINGS_SCOPE_MEDIA.into(),
+                key_name: RECYCLE_BIN_RETENTION_DAYS_KEY.into(),
+                data_type: "number".into(),
+                default_value_json: "7".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
         ])
         .await
         .expect("seed recycle bin setting definition");
+}
+
+fn disabled_settings() -> UpdateRecycleBinSettings {
+    UpdateRecycleBinSettings {
+        enabled: Some(false),
+        ..Default::default()
+    }
 }
 
 async fn set_custom_recycle_bin_path(ctx: &TestContext, path: &Path) {
@@ -321,10 +338,7 @@ async fn recycle_bin_settings_permissions_are_split_between_read_and_update() {
     );
     assert!(
         ctx.app
-            .update_recycle_bin_settings(
-                &manage_actor,
-                UpdateRecycleBinSettings { enabled: false },
-            )
+            .update_recycle_bin_settings(&manage_actor, disabled_settings(),)
             .await
             .is_err(),
         "manage-title users cannot update the setting"
@@ -332,10 +346,269 @@ async fn recycle_bin_settings_permissions_are_split_between_read_and_update() {
 
     let updated = ctx
         .app
-        .update_recycle_bin_settings(&config_actor, UpdateRecycleBinSettings { enabled: false })
+        .update_recycle_bin_settings(&config_actor, disabled_settings())
         .await
         .expect("config user updates setting");
     assert!(!updated.enabled);
+}
+
+fn default_bin_for(library: &Library) -> String {
+    Path::new(&library.roots[0].path)
+        .join(".scryer-recycle")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn bin_settings(path: Option<&str>, retention_days: i64) -> UpdateRecycleBinSettings {
+    UpdateRecycleBinSettings {
+        enabled: None,
+        path: path.map(|path| Some(path.to_string())),
+        retention_days: Some(retention_days),
+    }
+}
+
+#[tokio::test]
+async fn recycle_bin_settings_round_trip_custom_path_and_retention() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let bin = tempfile::tempdir().expect("custom bin");
+    let bin_path = bin.path().to_string_lossy().into_owned();
+    let library = seed_library(&ctx, "Movies A", root.path()).await;
+    let config_actor = config_actor();
+
+    let defaults = ctx
+        .app
+        .get_recycle_bin_settings(&config_actor)
+        .await
+        .expect("read defaults");
+    assert_eq!(defaults.path, None);
+    assert_eq!(defaults.retention_days, 7);
+    // The test context seeds libraries of its own; only this library's bin is asserted.
+    assert!(
+        defaults
+            .effective_paths
+            .contains(&default_bin_for(&library))
+    );
+    assert_eq!(defaults.validation_error, None);
+
+    let updated = ctx
+        .app
+        .update_recycle_bin_settings(
+            &config_actor,
+            bin_settings(Some(&format!("  {bin_path}  ")), 14),
+        )
+        .await
+        .expect("save custom path");
+    assert_eq!(updated.path.as_deref(), Some(bin_path.as_str()));
+    assert_eq!(updated.retention_days, 14);
+    assert_eq!(updated.effective_paths, vec![bin_path.clone()]);
+    assert_eq!(updated.validation_error, None);
+    assert_eq!(
+        ctx.app
+            .get_recycle_bin_settings(&config_actor)
+            .await
+            .expect("read back"),
+        updated
+    );
+
+    // The bin itself resolves to the saved values.
+    let configs = ctx
+        .app
+        .recycle_bin_configs_for_media_roots(vec![library.roots[0].path.clone()])
+        .await;
+    assert_eq!(configs.len(), 1);
+    assert_eq!(configs[0].1.base_path, bin.path());
+    assert_eq!(configs[0].1.retention_days, 14);
+    assert!(configs[0].1.cleanup_enabled);
+
+    let cleared = ctx
+        .app
+        .update_recycle_bin_settings(&config_actor, bin_settings(Some("   "), 14))
+        .await
+        .expect("blank path clears the custom bin");
+    assert_eq!(cleared.path, None);
+    assert!(cleared.effective_paths.contains(&default_bin_for(&library)));
+    assert!(!cleared.effective_paths.contains(&bin_path));
+    let configs = ctx
+        .app
+        .recycle_bin_configs_for_media_roots(vec![library.roots[0].path.clone()])
+        .await;
+    assert_eq!(
+        configs[0].1.base_path.to_string_lossy(),
+        default_bin_for(&library)
+    );
+}
+
+#[tokio::test]
+async fn recycle_bin_settings_partial_updates_keep_omitted_values() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let bin = tempfile::tempdir().expect("custom bin");
+    let bin_path = bin.path().to_string_lossy().into_owned();
+    let library = seed_library(&ctx, "Movies A", root.path()).await;
+    let manager = manage_titles_actor("manager", std::slice::from_ref(&library.id));
+    let config_actor = config_actor();
+
+    ctx.app
+        .update_recycle_bin_settings(&config_actor, bin_settings(Some(&bin_path), 30))
+        .await
+        .expect("save custom bin");
+
+    let toggled = ctx
+        .app
+        .update_recycle_bin_settings(&config_actor, disabled_settings())
+        .await
+        .expect("toggle alone");
+    assert!(!toggled.enabled);
+    assert_eq!(toggled.path.as_deref(), Some(bin_path.as_str()));
+    assert_eq!(toggled.retention_days, 30);
+
+    let retention_only = ctx
+        .app
+        .update_recycle_bin_settings(
+            &config_actor,
+            UpdateRecycleBinSettings {
+                retention_days: Some(20),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("retention alone");
+    assert!(!retention_only.enabled);
+    assert_eq!(retention_only.path.as_deref(), Some(bin_path.as_str()));
+    assert_eq!(retention_only.retention_days, 20);
+
+    // A root added later inside the stored bin invalidates it, but an update
+    // that does not touch the path still succeeds.
+    let nested_root = bin.path().join("nested-library");
+    std::fs::create_dir(&nested_root).expect("nested root");
+    seed_library(&ctx, "Movies Nested", &nested_root).await;
+    let admin_view = ctx
+        .app
+        .get_recycle_bin_settings(&config_actor)
+        .await
+        .expect("admin read");
+    let admin_error = admin_view
+        .validation_error
+        .expect("stored bin now conflicts");
+    assert!(admin_error.contains("nested-library"), "{admin_error}");
+
+    let reenabled = ctx
+        .app
+        .update_recycle_bin_settings(
+            &config_actor,
+            UpdateRecycleBinSettings {
+                enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("toggle is not blocked by the stored path");
+    assert!(reenabled.enabled);
+    assert_eq!(reenabled.path.as_deref(), Some(bin_path.as_str()));
+
+    let manager_view = ctx
+        .app
+        .get_recycle_bin_settings(&manager)
+        .await
+        .expect("manager read");
+    assert_eq!(
+        manager_view.validation_error.as_deref(),
+        Some("recycle bin path conflicts with a library root")
+    );
+}
+
+#[tokio::test]
+async fn recycle_bin_settings_reject_invalid_path_and_retention_without_writing() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root = tempfile::tempdir().expect("library root");
+    let library = seed_library(&ctx, "Movies A", root.path()).await;
+    let root_path = library.roots[0].path.clone();
+    let config_actor = config_actor();
+    let before = ctx
+        .app
+        .get_recycle_bin_settings(&config_actor)
+        .await
+        .expect("read defaults");
+
+    let inside_root = Path::new(&root_path)
+        .join("bin")
+        .to_string_lossy()
+        .into_owned();
+    let containing_root = Path::new(&root_path)
+        .parent()
+        .expect("root has a parent")
+        .to_string_lossy()
+        .into_owned();
+    for (path, expected) in [
+        ("relative/bin".to_string(), "must be absolute"),
+        (inside_root, root_path.as_str()),
+        (root_path.clone(), root_path.as_str()),
+        (containing_root, root_path.as_str()),
+    ] {
+        match ctx
+            .app
+            .update_recycle_bin_settings(&config_actor, bin_settings(Some(&path), 7))
+            .await
+        {
+            Err(AppError::Validation(message)) => assert!(
+                message.contains(expected),
+                "error for {path} should mention {expected}: {message}"
+            ),
+            other => panic!("path {path} should be rejected, got {other:?}"),
+        }
+    }
+
+    for retention_days in [-1, 0, 3651] {
+        assert!(
+            matches!(
+                ctx.app
+                    .update_recycle_bin_settings(&config_actor, bin_settings(None, retention_days))
+                    .await,
+                Err(AppError::Validation(_))
+            ),
+            "retention {retention_days} should be rejected"
+        );
+    }
+
+    assert_eq!(
+        ctx.app
+            .get_recycle_bin_settings(&config_actor)
+            .await
+            .expect("read after rejections"),
+        before,
+        "rejected updates must not write anything"
+    );
+}
+
+#[tokio::test]
+async fn recycle_bin_settings_list_only_bins_of_manageable_libraries() {
+    let ctx = TestContext::new().await;
+    seed_recycle_bin_setting_definition(&ctx).await;
+    let root_a = tempfile::tempdir().expect("library root a");
+    let root_b = tempfile::tempdir().expect("library root b");
+    let library_a = seed_library(&ctx, "Movies A", root_a.path()).await;
+    let library_b = seed_library(&ctx, "Movies B", root_b.path()).await;
+    let manager = manage_titles_actor("manager", std::slice::from_ref(&library_a.id));
+
+    let all = ctx
+        .app
+        .get_recycle_bin_settings(&config_actor())
+        .await
+        .expect("config read")
+        .effective_paths;
+    assert!(all.contains(&default_bin_for(&library_a)));
+    assert!(all.contains(&default_bin_for(&library_b)));
+
+    let scoped = ctx
+        .app
+        .get_recycle_bin_settings(&manager)
+        .await
+        .expect("manager read");
+    assert_eq!(scoped.effective_paths, vec![default_bin_for(&library_a)]);
 }
 
 #[tokio::test]
@@ -343,20 +616,86 @@ async fn graphql_recycle_bin_settings_and_scoped_item_args_work() {
     let ctx = TestContext::new().await;
     seed_recycle_bin_setting_definition(&ctx).await;
 
-    let body = gql(&ctx, "query { recycleBinSettings { enabled } }", json!({})).await;
-    assert_no_errors(&body);
-    assert_eq!(body["data"]["recycleBinSettings"]["enabled"], true);
+    let root = tempfile::tempdir().expect("library root");
+    let bin = tempfile::tempdir().expect("custom bin");
+    let bin_path = bin.path().to_string_lossy().into_owned();
+    let library = seed_library(&ctx, "Movies A", root.path()).await;
 
     let body = gql(
         &ctx,
-        r#"mutation($input: UpdateRecycleBinSettingsInput!) {
-            updateRecycleBinSettings(input: $input) { enabled }
-        }"#,
-        json!({ "input": { "enabled": false } }),
+        "query { recycleBinSettings { enabled path retentionDays effectivePaths validationError } }",
+        json!({}),
     )
     .await;
     assert_no_errors(&body);
-    assert_eq!(body["data"]["updateRecycleBinSettings"]["enabled"], false);
+    let settings = &body["data"]["recycleBinSettings"];
+    assert_eq!(settings["enabled"], true);
+    assert_eq!(settings["path"], Value::Null);
+    assert_eq!(settings["retentionDays"], 7);
+    assert!(
+        settings["effectivePaths"]
+            .as_array()
+            .expect("effective paths")
+            .contains(&json!(default_bin_for(&library)))
+    );
+    assert_eq!(settings["validationError"], Value::Null);
+
+    let update = r#"mutation($input: UpdateRecycleBinSettingsInput!) {
+            updateRecycleBinSettings(input: $input) {
+                enabled path retentionDays effectivePaths validationError
+            }
+        }"#;
+    let body = gql(
+        &ctx,
+        update,
+        json!({ "input": { "enabled": false, "path": bin_path, "retentionDays": 30 } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let settings = &body["data"]["updateRecycleBinSettings"];
+    assert_eq!(settings["enabled"], false);
+    assert_eq!(settings["path"], json!(bin_path));
+    assert_eq!(settings["retentionDays"], 30);
+    assert_eq!(settings["effectivePaths"], json!([bin_path]));
+
+    // Omitted fields keep their stored values.
+    let body = gql(&ctx, update, json!({ "input": { "enabled": true } })).await;
+    assert_no_errors(&body);
+    let settings = &body["data"]["updateRecycleBinSettings"];
+    assert_eq!(settings["enabled"], true);
+    assert_eq!(settings["path"], json!(bin_path));
+    assert_eq!(settings["retentionDays"], 30);
+
+    let inside_root = Path::new(&library.roots[0].path)
+        .join("bin")
+        .to_string_lossy()
+        .into_owned();
+    for input in [
+        json!({ "enabled": false, "path": inside_root, "retentionDays": 30 }),
+        json!({ "enabled": false, "path": null, "retentionDays": -1 }),
+    ] {
+        let body = gql(&ctx, update, json!({ "input": input })).await;
+        assert!(
+            body.get("errors").is_some(),
+            "invalid input {input} should be rejected: {body}"
+        );
+    }
+
+    let body = gql(
+        &ctx,
+        update,
+        json!({ "input": { "enabled": false, "path": null, "retentionDays": 30 } }),
+    )
+    .await;
+    assert_no_errors(&body);
+    let settings = &body["data"]["updateRecycleBinSettings"];
+    assert_eq!(settings["path"], Value::Null);
+    assert!(
+        settings["effectivePaths"]
+            .as_array()
+            .expect("effective paths")
+            .contains(&json!(default_bin_for(&library)))
+    );
 
     let body = gql(
         &ctx,
@@ -1201,7 +1540,7 @@ async fn disabled_recycle_bin_paths_are_inert_and_direct_delete_new_files() {
     let config_actor = config_actor();
 
     ctx.app
-        .update_recycle_bin_settings(&config_actor, UpdateRecycleBinSettings { enabled: false })
+        .update_recycle_bin_settings(&config_actor, disabled_settings())
         .await
         .expect("disable recycle bin");
 

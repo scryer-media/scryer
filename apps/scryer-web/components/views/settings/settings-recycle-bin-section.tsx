@@ -23,7 +23,12 @@ import { selectorId } from "@/lib/utils/dom-ids";
 import type { LibraryRecord } from "@/lib/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDateTime } from "@/lib/utils/date-format";
-import { groupRecycleBinItems } from "@/lib/utils/recycle-bin";
+import {
+  RECYCLE_BIN_MAX_RETENTION_DAYS,
+  RECYCLE_BIN_MIN_RETENTION_DAYS,
+  groupRecycleBinItems,
+  parseRecycleBinRetentionDays,
+} from "@/lib/utils/recycle-bin";
 import { LoadingMark } from "@/components/common/loading-mark";
 
 export type RecycledItem = {
@@ -43,6 +48,10 @@ export type RecycledItem = {
 
 type Props = {
   enabled: boolean;
+  path: string | null;
+  retentionDays: number;
+  effectivePaths: string[];
+  validationError: string | null;
   settingsLoading: boolean;
   settingsSaving: boolean;
   canManageConfig: boolean;
@@ -57,6 +66,7 @@ type Props = {
   pendingItemIds: ReadonlySet<string>;
   selectedItemIds: ReadonlySet<string>;
   onEnabledChange: (enabled: boolean) => void;
+  onLocationSave: (path: string | null, retentionDays: number) => void;
   onSelectedLibraryIdsChange: (libraryIds: string[]) => void;
   onSelectedItemIdsChange: (itemIds: string[]) => void;
   onRestoreItems: (items: RecycledItem[]) => void;
@@ -89,8 +99,124 @@ function ReasonBadge({ reason }: { reason: string }) {
   return <span className={`rounded px-1.5 py-0.5 text-xs ${info.className}`}>{info.label}</span>;
 }
 
+type LocationFormProps = {
+  enabled: boolean;
+  path: string | null;
+  retentionDays: number;
+  effectivePaths: string[];
+  validationError: string | null;
+  canManageConfig: boolean;
+  saving: boolean;
+  onSave: (path: string | null, retentionDays: number) => void;
+};
+
+function RecycleBinLocationForm({
+  enabled,
+  path,
+  retentionDays,
+  effectivePaths,
+  validationError,
+  canManageConfig,
+  saving,
+  onSave,
+}: LocationFormProps) {
+  const t = useTranslate();
+  const [pathDraft, setPathDraft] = useState(path ?? "");
+  const [retentionDraft, setRetentionDraft] = useState(String(retentionDays));
+  const parsedRetention = parseRecycleBinRetentionDays(retentionDraft);
+  const dirty = pathDraft.trim() !== (path ?? "") || parsedRetention !== retentionDays;
+  const disabled = !canManageConfig || saving;
+
+  return (
+    <form
+      id="settings-recycle-bin-location"
+      className="space-y-3 border-b border-border pb-4"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (parsedRetention !== null && dirty) onSave(pathDraft, parsedRetention);
+      }}
+    >
+      <div className="space-y-1">
+        <Label htmlFor="settings-recycle-bin-path">{t("settings.recycleBinPath")}</Label>
+        <Input
+          id="settings-recycle-bin-path"
+          value={pathDraft}
+          onChange={(event) => setPathDraft(event.target.value)}
+          placeholder={t("settings.recycleBinPathPlaceholder")}
+          disabled={disabled}
+          className="max-w-xl font-mono"
+        />
+        <p className="text-xs text-muted-foreground">{t("settings.recycleBinPathHelp")}</p>
+        <p className="text-xs text-[var(--scry-warning-text)]">
+          {t("settings.recycleBinPathFilesystemWarning")}
+        </p>
+        <p className="text-xs text-muted-foreground">{t("settings.recycleBinPathExistingItems")}</p>
+      </div>
+      <div className="space-y-1">
+        <Label htmlFor="settings-recycle-bin-retention-days">{t("settings.recycleBinRetentionDays")}</Label>
+        <Input
+          id="settings-recycle-bin-retention-days"
+          type="number"
+          inputMode="numeric"
+          min={RECYCLE_BIN_MIN_RETENTION_DAYS}
+          max={RECYCLE_BIN_MAX_RETENTION_DAYS}
+          step={1}
+          value={retentionDraft}
+          onChange={(event) => setRetentionDraft(event.target.value)}
+          disabled={disabled}
+          aria-invalid={parsedRetention === null}
+          className="w-32"
+        />
+        <p className="text-xs text-muted-foreground">
+          {parsedRetention === null
+            ? t("settings.recycleBinRetentionDaysInvalid", {
+                min: RECYCLE_BIN_MIN_RETENTION_DAYS,
+                max: RECYCLE_BIN_MAX_RETENTION_DAYS,
+              })
+            : t("settings.recycleBinRetentionDaysHelp")}
+        </p>
+      </div>
+      {enabled ? (
+        <div id="settings-recycle-bin-effective-paths" className="space-y-1 text-xs">
+          <p className="text-muted-foreground">{t("settings.recycleBinEffectivePaths")}</p>
+          {effectivePaths.length === 0 ? (
+            <p className="text-muted-foreground">{t("settings.recycleBinNoEffectivePaths")}</p>
+          ) : (
+            <ul className="space-y-0.5">
+              {effectivePaths.map((effectivePath) => (
+                <li key={effectivePath} className="break-all font-mono">
+                  {effectivePath}
+                </li>
+              ))}
+            </ul>
+          )}
+          {validationError ? (
+            <p role="alert" className="text-[var(--scry-danger-text)]">
+              {t("settings.recycleBinValidationError", { error: validationError })}
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+      {canManageConfig ? (
+        <Button
+          id="settings-recycle-bin-location-save"
+          type="submit"
+          size="sm"
+          disabled={disabled || !dirty || parsedRetention === null}
+        >
+          {saving ? t("label.saving") : t("label.save")}
+        </Button>
+      ) : null}
+    </form>
+  );
+}
+
 export function SettingsRecycleBinSection({
   enabled,
+  path,
+  retentionDays,
+  effectivePaths,
+  validationError,
   settingsLoading,
   settingsSaving,
   canManageConfig,
@@ -105,6 +231,7 @@ export function SettingsRecycleBinSection({
   pendingItemIds,
   selectedItemIds,
   onEnabledChange,
+  onLocationSave,
   onSelectedLibraryIdsChange,
   onSelectedItemIdsChange,
   onRestoreItems,
@@ -178,6 +305,18 @@ export function SettingsRecycleBinSection({
           />
         </div>
       </div>
+
+      <RecycleBinLocationForm
+        key={JSON.stringify([path, retentionDays])}
+        enabled={enabled}
+        path={path}
+        retentionDays={retentionDays}
+        effectivePaths={effectivePaths}
+        validationError={validationError}
+        canManageConfig={canManageConfig}
+        saving={settingsSaving}
+        onSave={onLocationSave}
+      />
 
       {!enabled ? null : !canManageItems ? (
         <p className="py-2 text-sm text-muted-foreground">{t("settings.recycleBinNoManageableLibraries")}</p>

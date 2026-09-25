@@ -21461,7 +21461,7 @@ type QueryRoot {
 	"""
 	generalSettings: GeneralSettingsPayload!
 	"""
-	Returns whether the recycle bin is enabled for the authenticated actor.
+	Returns the recycle-bin settings and the bin locations they resolve to.
 	"""
 	recycleBinSettings: RecycleBinSettingsPayload!
 	"""
@@ -22563,13 +22563,29 @@ enum RecencyLaneValue {
 }
 
 """
-Recycle-bin enablement setting.
+Recycle-bin settings and the bin locations they resolve to.
 """
 type RecycleBinSettingsPayload {
 	"""
 	Whether deleted media is moved to the recycle bin.
 	"""
 	enabled: Boolean!
+	"""
+	Custom recycle-bin directory; null means `.scryer-recycle` under each library root.
+	"""
+	path: String
+	"""
+	Days a recycled item is kept before it is purged.
+	"""
+	retentionDays: Int!
+	"""
+	Directories deleted media is currently moved to, one per distinct bin.
+	"""
+	effectivePaths: [String!]!
+	"""
+	Why the configured bin is never purged, when the path is invalid for the current library roots.
+	"""
+	validationError: String
 }
 
 """
@@ -28984,13 +29000,21 @@ input UpdateProxyConfigInput {
 }
 
 """
-Recycle-bin enablement setting.
+Recycle-bin settings to save. Omitted fields keep their stored value.
 """
 input UpdateRecycleBinSettingsInput {
 	"""
-	Whether deleted media is retained in the recycle bin.
+	Whether deleted media is retained in the recycle bin; omit to keep the current value.
 	"""
-	enabled: Boolean!
+	enabled: Boolean
+	"""
+	Absolute recycle-bin directory outside every library root; null or blank restores `.scryer-recycle` under each library root, omit to keep the current value.
+	"""
+	path: String
+	"""
+	Days a recycled item is kept before it is purged, from 1 to 3650; omit to keep the current value.
+	"""
+	retentionDays: Int
 }
 
 """

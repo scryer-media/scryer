@@ -2216,6 +2216,10 @@ export const emptyRecycleBinMutation = `mutation EmptyRecycleBin($libraryIds: [I
 export const updateRecycleBinSettingsMutation = `mutation UpdateRecycleBinSettings($input: UpdateRecycleBinSettingsInput!) {
   updateRecycleBinSettings(input: $input) {
     enabled
+    path
+    retentionDays
+    effectivePaths
+    validationError
   }
 }`;
 

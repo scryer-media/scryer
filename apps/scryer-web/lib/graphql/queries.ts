@@ -3522,6 +3522,10 @@ export const backupsQuery = `query Backups {
 export const recycleBinSettingsQuery = `query RecycleBinSettings {
   recycleBinSettings {
     enabled
+    path
+    retentionDays
+    effectivePaths
+    validationError
   }
 }`;
 
