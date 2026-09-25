@@ -523,6 +523,177 @@ async fn dropping_a_hash_run_releases_its_guard_and_keeps_completed_hashes() {
     assert_eq!(hashed_ids(&media_files).await.len(), 2);
 }
 
+/// A file that cannot be hashed is named in the summary with its reason, stays
+/// queued, and turns the run into a warning.
+#[tokio::test]
+async fn a_file_that_cannot_be_hashed_is_recorded_and_warns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    let seeded = seed_unhashed_files(&media_files, dir.path(), 2).await;
+
+    // The catalog believes row 000 is larger than the bytes on disk. The file
+    // holds still while it is read, so this is a stale row, not a mid-read
+    // change.
+    let failing_path = {
+        let mut rows = media_files.store.lock().await;
+        rows[0].size_bytes += 1;
+        rows[0].file_path.clone()
+    };
+
+    let app = bootstrap_backfill(media_files.clone());
+    let summary = app
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
+        .await
+        .expect("backfill run");
+
+    assert_eq!(summary.failed, 1);
+    assert_eq!(summary.hashed, 1);
+    assert_eq!(summary.failures.len(), 1);
+    assert!(!summary.failures_truncated);
+    let failure = &summary.failures[0];
+    assert_eq!(failure.media_file_id, seeded[0].id);
+    assert_eq!(failure.path, failing_path);
+    assert!(
+        failure.reason.contains("differs from the catalog")
+            && failure.reason.contains("rescan the title"),
+        "a stale catalog size must not read as a mid-hash change: {}",
+        failure.reason
+    );
+    assert!(!failure.reason.contains("changed while hashing"));
+    assert_eq!(
+        summary.run_status_override(),
+        Some(crate::JobRunStatus::Warning)
+    );
+    assert_eq!(hashed_ids(&media_files).await, vec![seeded[1].id.clone()]);
+
+    let json: serde_json::Value = serde_json::to_value(&summary).expect("summary serializes");
+    assert_eq!(json["failures"][0]["mediaFileId"], seeded[0].id.as_str());
+    assert_eq!(json["failures"][0]["path"], failing_path.as_str());
+    assert_eq!(json["failuresTruncated"], false);
+}
+
+/// Runs the backfill job through the job runner over one seeded file and
+/// returns the persisted run once it reaches a terminal status.
+async fn run_backfill_job_over_one_file(stale_catalog_size: bool) -> JobRunRecord {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    seed_unhashed_files(&media_files, dir.path(), 1).await;
+    if stale_catalog_size {
+        media_files.store.lock().await[0].size_bytes += 1;
+    }
+
+    let (app, admin) = bootstrap();
+    let jobs = Arc::new(RecordingJobRunRepo::default());
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_media_files(media_files.clone())
+            .with_job_runs(jobs.clone())
+    });
+    let started = app
+        .trigger_job(&admin, JobKey::FullHashBackfill)
+        .await
+        .expect("trigger the backfill job");
+
+    wait_for(
+        "the backfill job run to reach a terminal status",
+        || async {
+            jobs.runs
+                .lock()
+                .await
+                .iter()
+                .find(|run| run.id == started.id && run.status.is_terminal())
+                .cloned()
+        },
+    )
+    .await
+}
+
+/// The job runner persists a run with an unhashable file as a warning.
+#[tokio::test(start_paused = true)]
+async fn a_backfill_job_run_with_a_failing_file_is_persisted_as_a_warning() {
+    let run = run_backfill_job_over_one_file(true).await;
+
+    assert_eq!(run.status, JobRunStatus::Warning, "run: {run:?}");
+    let summary: crate::location::backfill::FullHashBackfillSummary =
+        serde_json::from_str(run.summary_json.as_deref().expect("summary json"))
+            .expect("summary json parses");
+    assert_eq!(summary.failed, 1);
+    assert_eq!(summary.failures.len(), 1);
+}
+
+/// The same job over a healthy file completes without a warning.
+#[tokio::test(start_paused = true)]
+async fn a_clean_backfill_job_run_is_persisted_as_completed() {
+    let run = run_backfill_job_over_one_file(false).await;
+
+    assert_eq!(run.status, JobRunStatus::Completed, "run: {run:?}");
+}
+
+/// A clean run carries no failures and no warning.
+#[tokio::test]
+async fn a_clean_run_records_no_failures_and_does_not_warn() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let media_files = Arc::new(MockMediaFileRepo::default());
+    seed_unhashed_files(&media_files, dir.path(), 1).await;
+
+    let app = bootstrap_backfill(media_files.clone());
+    let summary = app
+        .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
+        .await
+        .expect("backfill run");
+
+    assert!(summary.failures.is_empty());
+    assert!(!summary.failures_truncated);
+    assert_eq!(summary.run_status_override(), None);
+}
+
+/// One run names at most the cap; every failure past it still counts and sets
+/// the truncation flag.
+#[test]
+fn recorded_failures_are_capped_and_flag_truncation() {
+    use crate::location::backfill::{
+        FULL_HASH_BACKFILL_MAX_RECORDED_FAILURES, FullHashBackfillSummary,
+    };
+
+    let mut summary = FullHashBackfillSummary::default();
+    let total = FULL_HASH_BACKFILL_MAX_RECORDED_FAILURES + 1;
+    for index in 0..total {
+        summary.record_failure(
+            &format!("file-{index:03}"),
+            &format!("/synthetic/library/file-{index:03}.mkv"),
+            "synthetic read failure",
+        );
+    }
+
+    assert_eq!(summary.failed, total);
+    assert_eq!(
+        summary.failures.len(),
+        FULL_HASH_BACKFILL_MAX_RECORDED_FAILURES
+    );
+    assert!(summary.failures_truncated);
+    assert_eq!(summary.failures[0].media_file_id, "file-000");
+    assert_eq!(
+        summary.failures.last().expect("last failure").media_file_id,
+        format!("file-{:03}", FULL_HASH_BACKFILL_MAX_RECORDED_FAILURES - 1)
+    );
+}
+
+/// Run rows written before failures were recorded still read back.
+#[test]
+fn a_summary_without_failure_fields_deserializes() {
+    let summary: crate::location::backfill::FullHashBackfillSummary = serde_json::from_str(
+        r#"{"examined":3,"hashed":2,"bytesHashed":42,"skippedUnavailable":0,
+                "skippedOwned":0,"skippedAlreadyHashed":0,"failed":1,
+                "completedSweep":true,"resumeAfterId":null}"#,
+    )
+    .expect("legacy summary deserializes");
+
+    assert_eq!(summary.failed, 1);
+    assert!(summary.failures.is_empty());
+    assert!(!summary.failures_truncated);
+    assert!(!summary.cancelled);
+}
+
 /// Seeds a scanned movie file with persisted full hashes and returns
 /// (app, user, title, path, file id).
 async fn seed_scanned_movie_with_hashes(

@@ -391,6 +391,8 @@ const ko: LocaleDictionary = {
   "jobs.loadingRecentRuns": "최근 실행 로드 중…",
   "jobs.noRunsYet": "아직 기록된 실행이 없습니다.",
   "jobs.healthCheckIssues": "상태 점검 문제",
+  "jobs.fullHashBackfillFailures": "해시를 계산할 수 없는 파일",
+  "jobs.fullHashBackfillFailuresMore": "…외 {{count}}개 (표시 안 됨)",
   "jobs.nextRunPrefix": "다음 실행: {{value}}",
   "jobs.startedAt": "시작 {{value}}",
   "jobs.completedAt": "완료 {{value}}",

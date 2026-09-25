@@ -265,9 +265,49 @@ pub struct FullHashBackfillSummary {
     pub resume_after_id: Option<String>,
     #[serde(default)]
     pub cancelled: bool,
+    /// The files behind `failed`, in the order they failed, capped at
+    /// [`FULL_HASH_BACKFILL_MAX_RECORDED_FAILURES`] so one pathological run
+    /// cannot bloat the job row.
+    #[serde(default)]
+    pub failures: Vec<FullHashBackfillFailure>,
+    /// True when more files failed than `failures` lists.
+    #[serde(default)]
+    pub failures_truncated: bool,
+}
+
+/// Most failures one run records by name. `failed` still counts every one.
+pub(crate) const FULL_HASH_BACKFILL_MAX_RECORDED_FAILURES: usize = 100;
+
+/// One file the run could not hash. It stays queued for the next sweep.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FullHashBackfillFailure {
+    pub media_file_id: String,
+    pub path: String,
+    pub reason: String,
 }
 
 impl FullHashBackfillSummary {
+    /// Counts a failed file and records it by name while there is room.
+    pub(crate) fn record_failure(&mut self, media_file_id: &str, path: &str, reason: &str) {
+        self.failed += 1;
+        if self.failures.len() < FULL_HASH_BACKFILL_MAX_RECORDED_FAILURES {
+            self.failures.push(FullHashBackfillFailure {
+                media_file_id: media_file_id.to_string(),
+                path: path.to_string(),
+                reason: reason.to_string(),
+            });
+        } else {
+            self.failures_truncated = true;
+        }
+    }
+
+    /// The job run status this summary forces, if any: a cancelled run or a
+    /// run with unhashable files finishes as a warning.
+    pub(crate) fn run_status_override(&self) -> Option<crate::JobRunStatus> {
+        (self.cancelled || self.failed > 0).then_some(crate::JobRunStatus::Warning)
+    }
+
     /// One line for the job run row.
     pub fn summary_text(&self) -> String {
         let skipped = self.skipped_unavailable + self.skipped_owned + self.skipped_already_hashed;
@@ -399,8 +439,8 @@ impl AppUseCase {
                             summary.cancelled = true;
                             break 'sweep;
                         }
-                        summary.failed += 1;
-                        tracing::debug!(
+                        summary.record_failure(&candidate.id, &candidate.file_path, &reason);
+                        tracing::warn!(
                             media_file_id = %candidate.id,
                             path = %candidate.file_path,
                             reason = %reason,
@@ -495,8 +535,16 @@ impl AppUseCase {
         let after = tokio::fs::metadata(&path)
             .await
             .map_err(|error| BackfillOutcome::Failed(error.to_string()))?;
-        if !same_file_version(&before, &after) || bytes != current.size_bytes as u64 {
+        if !same_file_version(&before, &after) || bytes != after.len() {
             return Err(BackfillOutcome::Failed("file changed while hashing".into()));
+        }
+        // The file held still, but it is not the size the catalog recorded:
+        // the row is stale (an external re-tag, say), not the read.
+        if bytes != current.size_bytes as u64 {
+            return Err(BackfillOutcome::Failed(format!(
+                "size on disk ({bytes} bytes) differs from the catalog ({} bytes); rescan the title",
+                current.size_bytes
+            )));
         }
 
         let published = self

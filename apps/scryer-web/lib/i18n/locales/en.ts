@@ -603,6 +603,8 @@ const en: LocaleDictionary = {
   "jobs.loadingRecentRuns": "Loading recent runs…",
   "jobs.noRunsYet": "No runs recorded yet.",
   "jobs.healthCheckIssues": "Health check issues",
+  "jobs.fullHashBackfillFailures": "Files that could not be hashed",
+  "jobs.fullHashBackfillFailuresMore": "…and {{count}} more not listed",
   "jobs.nextRunPrefix": "Next run: {{value}}",
   "jobs.startedAt": "Started {{value}}",
   "jobs.completedAt": "Completed {{value}}",

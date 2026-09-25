@@ -398,6 +398,8 @@ const pt_BR: LocaleDictionary = {
   "jobs.loadingRecentRuns": "Carregando execuções recentes…",
   "jobs.noRunsYet": "Ainda não há execuções registradas.",
   "jobs.healthCheckIssues": "Problemas na verificação de integridade",
+  "jobs.fullHashBackfillFailures": "Arquivos que não puderam ser processados pelo hash",
+  "jobs.fullHashBackfillFailuresMore": "…e mais {{count}} não listados",
   "jobs.nextRunPrefix": "Próxima execução: {{value}}",
   "jobs.startedAt": "Iniciado {{value}}",
   "jobs.completedAt": "Concluído {{value}}",

@@ -1983,9 +1983,7 @@ impl AppUseCase {
                     Some(summary.summary_text()),
                     serde_json::to_string(&summary).ok(),
                 );
-                if summary.cancelled {
-                    outcome.status_override = Some(JobRunStatus::Warning);
-                }
+                outcome.status_override = summary.run_status_override();
                 Ok(outcome)
             }
             JobKey::DiscoverySync => self.run_discovery_sync_job(run.trigger_source).await,

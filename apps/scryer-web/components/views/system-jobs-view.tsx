@@ -16,7 +16,7 @@ import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import type { Facet, JobDefinition, JobKey, JobRun, LibraryScanStatus } from "@/lib/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDate, formatUiDateTime, formatUiTime } from "@/lib/utils/date-format";
-import { isTerminalJobRunStatus } from "@/lib/utils/job-runs";
+import { isTerminalJobRunStatus, parseFullHashBackfillFailures } from "@/lib/utils/job-runs";
 import { defaultLibraryIdForFacet } from "@/lib/utils/library-scan-sessions";
 import { cn } from "@/lib/utils";
 
@@ -799,6 +799,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                     <div className="space-y-2">
                       {selectedJobHistory.map((run) => {
                         const healthCheckIssues = parseHealthCheckIssues(run);
+                        const hashFailures = parseFullHashBackfillFailures(run);
 
                         return (
                           <div
@@ -867,6 +868,36 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                                     </div>
                                   ))}
                                 </div>
+                              </div>
+                            ) : null}
+
+                            {hashFailures.failures.length > 0 ? (
+                              <div className="mt-3 rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-3">
+                                <p className={`text-xs uppercase tracking-wide ${JOBS_MUTED_TEXT_CLASS}`}>
+                                  {t("jobs.fullHashBackfillFailures")}
+                                </p>
+                                <div className="mt-2 space-y-2">
+                                  {hashFailures.failures.map((failure, index) => (
+                                    <div
+                                      key={`${run.id}-${failure.mediaFileId}-${index}`}
+                                      className="rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-card2)] p-2"
+                                    >
+                                      <p className="break-all text-sm font-medium text-[var(--scry-ink2)]">
+                                        {failure.path}
+                                      </p>
+                                      <p className={`mt-1 text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
+                                        {failure.reason}
+                                      </p>
+                                    </div>
+                                  ))}
+                                </div>
+                                {hashFailures.notListed > 0 ? (
+                                  <p className={`mt-2 text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+                                    {t("jobs.fullHashBackfillFailuresMore", {
+                                      count: hashFailures.notListed,
+                                    })}
+                                  </p>
+                                ) : null}
                               </div>
                             ) : null}
                           </div>
