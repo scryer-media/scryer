@@ -147,9 +147,8 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 &engine.get_modules()[policy_module_index],
             )
             .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
-            reads_clock |= crate::validation::module_reads_clock(
-                &engine.get_modules()[policy_module_index],
-            );
+            reads_clock |=
+                crate::validation::module_reads_clock(&engine.get_modules()[policy_module_index]);
 
             rules.push(RuleHandle {
                 id: policy.id().to_string(),
