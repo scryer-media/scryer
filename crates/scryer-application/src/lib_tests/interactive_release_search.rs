@@ -454,7 +454,7 @@ async fn requested_indexer_ids_restrict_a_title_subject_fan_out() {
     );
 }
 
-// ── Query subject: context-free rejections (D6) ─────────────────────────────
+// ── Query subject: context-free rejections ─────────────────────────────
 
 #[tokio::test]
 async fn a_faceted_query_judges_releases_while_raw_leaves_them_unjudged() {
@@ -492,7 +492,7 @@ async fn a_faceted_query_judges_releases_while_raw_leaves_them_unjudged() {
         "a telesync is blocked by the facet's default profile: {decision:?}"
     );
 
-    // Raw has no facet, therefore no default profile to judge against (D6).
+    // Raw has no facet, therefore no default profile to judge against.
     let raw = app
         .start_interactive_release_search(&user, query_request("movie", InteractiveSearchKind::Raw))
         .await
@@ -575,7 +575,7 @@ async fn recoverable_scores_faceted_queries_include_all_rules_before_finalizing(
     }
 }
 
-// ── Health fields (D15) ─────────────────────────────────────────────────────
+// ── Health fields ─────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn indexer_views_carry_routing_priority_and_call_timing() {
@@ -686,7 +686,7 @@ async fn a_query_subject_search_requires_manage_system_settings() {
     assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
 }
 
-// ── Candidate tokens at grab time (D4) ──────────────────────────────────────
+// ── Candidate tokens at grab time ──────────────────────────────────────
 
 #[tokio::test]
 async fn a_token_is_issued_for_a_release_still_held_by_the_search() {
@@ -863,7 +863,7 @@ async fn a_token_is_issued_for_a_release_still_held_by_the_search() {
     assert!(matches!(missing, AppError::NotFound(_)), "{missing:?}");
 }
 
-// ── Unlinked grab (D8) ──────────────────────────────────────────────────────
+// ── Unlinked grab ──────────────────────────────────────────────────────
 
 #[tokio::test]
 async fn an_unlinked_grab_records_an_orphan_scoped_submission_and_history() {
@@ -1467,11 +1467,12 @@ async fn an_unlinked_grab_refuses_unknown_releases_unusable_clients_and_unprivil
     assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
 }
 
-/// Listing grab clients follows the gate of the grab it leads to: a title
-/// manager may list clients for a release assigned to a title they manage,
-/// while the title-less (unlinked) listing still needs system settings.
+/// An assigned grab is gated like any other grab for the title: a title
+/// manager may list clients for a release assigned to a title they manage and
+/// submit it, while the title-less (unlinked) listing still needs system
+/// settings.
 #[tokio::test]
-async fn grab_clients_for_an_assigned_title_need_only_title_management() {
+async fn an_assigned_grab_needs_only_title_management() {
     let client = ScriptedIndexerClient::default()
         .with_releases(
             "idx-a",
@@ -1514,15 +1515,17 @@ async fn grab_clients_for_an_assigned_title_need_only_title_management() {
         .await
         .expect("a title manager may search their title");
     let done = await_completion(&app, &manager, &start.id).await;
-    let download_url = done
+    let release = done
         .results
         .first()
         .unwrap_or_else(|| panic!("one result: {done:?}"))
-        .download_url
-        .clone()
-        .expect("release download url");
+        .clone();
+    let download_url = release.download_url.clone().expect("release download url");
 
-    struct ListedClient;
+    struct ListedClient {
+        inner: Arc<dyn DownloadClient>,
+        requests: Arc<Mutex<Vec<DownloadClientAddRequest>>>,
+    }
     #[async_trait]
     impl DownloadClient for ListedClient {
         async fn indexer_grab_clients(
@@ -1540,13 +1543,22 @@ async fn grab_clients_for_an_assigned_title_need_only_title_management() {
         }
         async fn submit_download(
             &self,
-            _: &DownloadClientAddRequest,
+            request: &DownloadClientAddRequest,
         ) -> AppResult<DownloadGrabResult> {
-            Err(AppError::Repository("listing never submits".into()))
+            self.requests.lock().await.push(request.clone());
+            self.inner.submit_download(request).await
         }
     }
-    let app =
-        app.with_test_overrides(|services| services.with_download_client(Arc::new(ListedClient)));
+    let requests = Arc::new(Mutex::new(Vec::new()));
+    let listed = Arc::new(ListedClient {
+        inner: app.services.integrations.download_client.clone(),
+        requests: requests.clone(),
+    });
+    let app = app.with_test_overrides(|services| {
+        services
+            .with_download_client(listed)
+            .with_download_submissions(Arc::new(TrackingDownloadSubmissionRepo::default()))
+    });
 
     let clients = app
         .indexer_grab_clients(&manager, &start.id, &download_url, Some(&title.id))
@@ -1559,9 +1571,31 @@ async fn grab_clients_for_an_assigned_title_need_only_title_management() {
         .await
         .expect_err("title-less grab clients need ManageSystemSettings");
     assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
+
+    // The grab the listing led to completes under the same gate.
+    let outcome = app
+        .queue_indexer_search_assignment(
+            &manager,
+            &title.id,
+            release
+                .candidate_token
+                .as_deref()
+                .expect("a title search result carries a candidate token"),
+            release.size_bytes,
+            SubmissionConflictPolicy::from_replace_flag(false),
+            false,
+            crate::IndexerGrabSelection {
+                client_id: "fixture-client".into(),
+                category: None,
+            },
+        )
+        .await
+        .expect("an assigned grab needs only ManageTitles");
+    assert!(matches!(outcome, QueueDownloadOutcome::Queued(_)));
+    assert_eq!(requests.lock().await.len(), 1);
 }
 
-// ── Download to browser (D17, FR-028) ───────────────────────────────────────
+// ── Download to browser ───────────────────────────────────────
 
 /// Answers `fetch_release_artifact` from a scripted table keyed by download
 /// URL; a URL with no entry fails the way an unreachable indexer would.

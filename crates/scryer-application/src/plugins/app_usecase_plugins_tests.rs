@@ -4652,7 +4652,10 @@ async fn recover_restored_plugins_skips_local_uploads_and_persists_warning() {
     // The skip has three consequences and the operator needs all three: the
     // row is gone, the configuration is not, and it is still switched on.
     let warning = payload["restoreWarnings"][0].as_str().unwrap();
-    assert!(warning.contains("installation has been removed"), "{warning}");
+    assert!(
+        warning.contains("installation has been removed"),
+        "{warning}"
+    );
     assert!(warning.contains("configuration remains"), "{warning}");
     assert!(warning.contains("still enabled"), "{warning}");
 }

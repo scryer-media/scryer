@@ -101,11 +101,11 @@ fn batch_anchors(releases: &[&str]) -> Vec<(String, String)> {
     crate::title_matching::relaxed::release_batch_anchors(releases.iter().copied())
 }
 
-fn outcome(
-    raw: &str,
-    subject: &Title,
-    index: SpellingCandidates,
-) -> Option<(String, Option<(String, usize, bool)>)> {
+/// The matched key, and the spelling lane's (observed, distance, exact) when
+/// that lane made the match.
+type Outcome = Option<(String, Option<(String, usize, bool)>)>;
+
+fn outcome(raw: &str, subject: &Title, index: SpellingCandidates) -> Outcome {
     let evidence = canonical_title_evidence(subject).with_ambiguity(
         TitleIdentityAmbiguity::default().with_spelling_candidates(Arc::new(index)),
     );

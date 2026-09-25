@@ -13,8 +13,8 @@ fn effective_image_cache_limit(image_cache_max_size_mb: i32) -> (u64, f64, bool)
     let env_override = std::env::var(IMAGE_CACHE_MAX_BYTES_ENV)
         .ok()
         .and_then(|value| value.parse::<u64>().ok());
-    let effective_bytes = env_override
-        .unwrap_or_else(|| configured_image_cache_max_bytes(image_cache_max_size_mb));
+    let effective_bytes =
+        env_override.unwrap_or_else(|| configured_image_cache_max_bytes(image_cache_max_size_mb));
     (
         effective_bytes,
         effective_bytes as f64 / BYTES_PER_MIB as f64,
@@ -124,7 +124,8 @@ fn parse_pem_certificate_der(block_pem: &str) -> AppResult<Vec<u8>> {
         .next()
         .ok_or_else(|| {
             AppError::Validation(
-            "trusted certificate bundle did not contain a readable X.509 certificate".to_string(),
+                "trusted certificate bundle did not contain a readable X.509 certificate"
+                    .to_string(),
             )
         })?
         .map_err(|error| {

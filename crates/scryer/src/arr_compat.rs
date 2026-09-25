@@ -199,22 +199,25 @@ fn validation(property: &str, message: impl Into<String>) -> Response {
 }
 
 impl PushInput {
-    fn into_release(self, flavor: Flavor) -> Result<ExternalReleaseInput, Response> {
+    fn into_release(self, flavor: Flavor) -> Result<ExternalReleaseInput, Box<Response>> {
         if self.download_client_id.is_some_and(|id| id != 0)
             || self
                 .download_client
                 .as_deref()
                 .is_some_and(|name| !name.trim().is_empty())
         {
-            return Err(validation(
+            return Err(Box::new(validation(
                 "downloadClientId",
                 "Download-client overrides are unsupported; Scryer uses its configured routing",
-            ));
+            )));
         }
         let parse_protocol = |value: &str| match value.to_ascii_lowercase().as_str() {
             "usenet" => Ok(ExternalReleaseProtocol::Usenet),
             "torrent" => Ok(ExternalReleaseProtocol::Torrent),
-            _ => Err(validation("protocol", "Protocol must be usenet or torrent")),
+            _ => Err(Box::new(validation(
+                "protocol",
+                "Protocol must be usenet or torrent",
+            ))),
         };
         let protocol = parse_protocol(
             self.protocol
@@ -225,7 +228,10 @@ impl PushInput {
         if let Some(other) = self.download_protocol.as_deref()
             && parse_protocol(other)? != protocol
         {
-            return Err(validation("downloadProtocol", "Protocol fields disagree"));
+            return Err(Box::new(validation(
+                "downloadProtocol",
+                "Protocol fields disagree",
+            )));
         }
         let download_url = if protocol == ExternalReleaseProtocol::Torrent {
             self.magnet_url
@@ -234,7 +240,12 @@ impl PushInput {
         } else {
             self.download_url
         }
-        .ok_or_else(|| validation("downloadUrl", "A download URL or magnet is required"))?;
+        .ok_or_else(|| {
+            Box::new(validation(
+                "downloadUrl",
+                "A download URL or magnet is required",
+            ))
+        })?;
         let imdb_id = match (flavor, self.imdb_id) {
             (_, None | Some(Value::Null)) => None,
             (Flavor::Sonarr, Some(Value::String(value))) if value.is_empty() => None,
@@ -250,10 +261,10 @@ impl PushInput {
                 .filter(|value| *value > 0)
                 .map(|value| format!("tt{value:07}")),
             _ => {
-                return Err(validation(
+                return Err(Box::new(validation(
                     "imdbId",
                     "IMDb identity has the wrong format for this adapter",
-                ));
+                )));
             }
         };
         let flag_bits: &[(u32, &str)] = match flavor {
@@ -283,7 +294,10 @@ impl PushInput {
         };
         let supported = flag_bits.iter().fold(0, |mask, (bit, _)| mask | bit);
         if self.indexer_flags & !supported != 0 {
-            return Err(validation("indexerFlags", "Unsupported release flags"));
+            return Err(Box::new(validation(
+                "indexerFlags",
+                "Unsupported release flags",
+            )));
         }
         Ok(ExternalReleaseInput {
             name: self.title,
@@ -323,7 +337,7 @@ async fn push(
     };
     let input = match body.into_release(state.flavor) {
         Ok(input) => input,
-        Err(error) => return error,
+        Err(error) => return *error,
     };
     let library_id = match library_scope(
         &state,

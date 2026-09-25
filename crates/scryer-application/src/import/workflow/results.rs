@@ -788,7 +788,9 @@ async fn reconcile_terminal_download_cleanup(
                     // deletion retry budget.
                     let mut checkpoint = record
                         .and_then(|record| record.payload_checkpoint.as_deref())
-                        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+                        .and_then(|checkpoint| {
+                            serde_json::from_str::<serde_json::Value>(checkpoint).ok()
+                        })
                         .filter(serde_json::Value::is_object)
                         .unwrap_or_else(|| serde_json::json!({}));
                     let failures = checkpoint
@@ -803,7 +805,10 @@ async fn reconcile_terminal_download_cleanup(
                             .services
                             .workflow
                             .download_submissions
-                            .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint.to_string())
+                            .checkpoint_download_cleanup_payload(
+                                &record.download_id,
+                                &checkpoint.to_string(),
+                            )
                             .await
                         {
                             tracing::warn!(client_id, download_client_item_id, error = %error,
@@ -889,7 +894,9 @@ async fn reconcile_terminal_download_cleanup(
             {
                 tracing::warn!(client_id, download_client_item_id, error = %error,
                     "failed to checkpoint native removal intent");
-                return TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::RetryableFailure);
+                return TerminalDownloadCleanup::bare(
+                    TerminalDownloadCleanupOutcome::RetryableFailure,
+                );
             }
             intent_record = Some(crate::DownloadCleanupRecord {
                 payload_checkpoint: Some(checkpoint),
@@ -933,7 +940,9 @@ async fn reconcile_terminal_download_cleanup(
                 TerminalDownloadCleanupOutcome::Removed
             }
             Err(AppError::Unauthorized(error))
-                if client_remove_data && client_type.trim() == "weaver" && !native_payload_refused =>
+                if client_remove_data
+                    && client_type.trim() == "weaver"
+                    && !native_payload_refused =>
             {
                 // Weaver kept the entry and refused only the files. Delete the
                 // payload from the host and come back for the entry; remember
@@ -951,7 +960,9 @@ async fn reconcile_terminal_download_cleanup(
                     let mut checkpoint = record
                         .payload_checkpoint
                         .as_deref()
-                        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+                        .and_then(|checkpoint| {
+                            serde_json::from_str::<serde_json::Value>(checkpoint).ok()
+                        })
                         .filter(serde_json::Value::is_object)
                         .unwrap_or_else(|| serde_json::json!({}));
                     checkpoint[CLIENT_REFUSED_PAYLOAD_DELETION_KEY] = serde_json::json!(true);
@@ -985,7 +996,9 @@ async fn reconcile_terminal_download_cleanup(
                     let mut checkpoint = record
                         .payload_checkpoint
                         .as_deref()
-                        .and_then(|checkpoint| serde_json::from_str::<serde_json::Value>(checkpoint).ok())
+                        .and_then(|checkpoint| {
+                            serde_json::from_str::<serde_json::Value>(checkpoint).ok()
+                        })
                         .filter(serde_json::Value::is_object)
                         .unwrap_or_else(|| serde_json::json!({}));
                     checkpoint[NATIVE_REMOVE_ATTEMPTED_KEY] = serde_json::json!(true);
@@ -993,7 +1006,10 @@ async fn reconcile_terminal_download_cleanup(
                         .services
                         .workflow
                         .download_submissions
-                        .checkpoint_download_cleanup_payload(&record.download_id, &checkpoint.to_string())
+                        .checkpoint_download_cleanup_payload(
+                            &record.download_id,
+                            &checkpoint.to_string(),
+                        )
                         .await
                     {
                         tracing::warn!(client_id, download_client_item_id, error = %error,
@@ -1248,7 +1264,9 @@ fn sample_file_proof(path: &std::path::Path, len: u64) -> std::io::Result<(u64, 
     Ok((sampled, hasher.finalize().to_hex().to_string()))
 }
 
-pub(crate) fn inventory_payload_directory_blocking(target: &std::path::Path) -> AppResult<PayloadInventory> {
+pub(crate) fn inventory_payload_directory_blocking(
+    target: &std::path::Path,
+) -> AppResult<PayloadInventory> {
     let mut inventory = PayloadInventory {
         target: target.to_string_lossy().into_owned(),
         ..PayloadInventory::default()
@@ -1365,9 +1383,9 @@ fn payload_file_location_is_verified(
         return false;
     }
     let canonical_parent = canonical_parent.to_string_lossy();
-    !protected_roots.iter().any(|root| {
-        crate::catalog_workflow::library_root_paths_overlap(&canonical_parent, root)
-    })
+    !protected_roots
+        .iter()
+        .any(|root| crate::catalog_workflow::library_root_paths_overlap(&canonical_parent, root))
 }
 
 fn canonical_payload_directory(target: &std::path::Path) -> AppResult<std::path::PathBuf> {
@@ -1478,7 +1496,9 @@ fn remove_inventoried_payload_blocking(
         .iter()
         .filter(|directory| relative_payload_path_is_safe(directory))
         .collect();
-    directories.sort_by_key(|directory| std::cmp::Reverse(directory.matches(std::path::MAIN_SEPARATOR).count()));
+    directories.sort_by_key(|directory| {
+        std::cmp::Reverse(directory.matches(std::path::MAIN_SEPARATOR).count())
+    });
     for directory in directories {
         let _ = std::fs::remove_dir(target.join(directory));
     }
@@ -1740,7 +1760,9 @@ async fn remove_host_payload_before_entry_cleanup(
         if recycle_roots.iter().any(|root| {
             crate::catalog_workflow::library_root_paths_overlap(candidate, &root.to_string_lossy())
         }) {
-            return Err(AppError::Validation("payload overlaps a recycle root".into()));
+            return Err(AppError::Validation(
+                "payload overlaps a recycle root".into(),
+            ));
         }
         if library_roots
             .iter()
@@ -1822,20 +1844,20 @@ async fn remove_host_payload_before_entry_cleanup(
     let persist_plan = |mut plan: serde_json::Value| {
         let prior_failures = prior_failures.clone();
         async move {
-        if let Some(failures) = prior_failures {
-            plan["host_payload_failures"] = failures;
-        }
-        if client_refused {
-            plan[CLIENT_REFUSED_PAYLOAD_DELETION_KEY] = serde_json::json!(true);
-        }
-        if let Some(record) = record {
-            app.services
-                .workflow
-                .download_submissions
-                .checkpoint_download_cleanup_payload(&record.download_id, &plan.to_string())
-                .await?;
-        }
-        AppResult::Ok(())
+            if let Some(failures) = prior_failures {
+                plan["host_payload_failures"] = failures;
+            }
+            if client_refused {
+                plan[CLIENT_REFUSED_PAYLOAD_DELETION_KEY] = serde_json::json!(true);
+            }
+            if let Some(record) = record {
+                app.services
+                    .workflow
+                    .download_submissions
+                    .checkpoint_download_cleanup_payload(&record.download_id, &plan.to_string())
+                    .await?;
+            }
+            AppResult::Ok(())
         }
     };
 
@@ -1862,7 +1884,10 @@ async fn remove_host_payload_before_entry_cleanup(
             // name while cleanup waited on seeding or a retry) is not the one
             // Scryer imported: its recorded size must still match.
             let current_size = if metadata.file_type().is_symlink() {
-                tokio::fs::metadata(&target).await.ok().map(|resolved| resolved.len())
+                tokio::fs::metadata(&target)
+                    .await
+                    .ok()
+                    .map(|resolved| resolved.len())
             } else {
                 Some(metadata.len())
             };
@@ -1936,9 +1961,8 @@ async fn remove_host_payload_before_entry_cleanup(
                     .as_ref()
                     .and_then(|checkpoint| checkpoint.get("inventory").cloned())
                     .and_then(|value| serde_json::from_value::<PayloadInventory>(value).ok())
-                    .filter(|inventory| {
-                        std::path::Path::new(&inventory.target) == target.as_path()
-                    }) {
+                    .filter(|inventory| std::path::Path::new(&inventory.target) == target.as_path())
+                {
                     Some(inventory) => inventory,
                     None => {
                         let walk_target = target.clone();
@@ -1947,7 +1971,9 @@ async fn remove_host_payload_before_entry_cleanup(
                         })
                         .await
                         .map_err(|error| {
-                            AppError::Repository(format!("payload inventory task panicked: {error}"))
+                            AppError::Repository(format!(
+                                "payload inventory task panicked: {error}"
+                            ))
                         })??;
                         persist_plan(serde_json::json!({
                             "completed": authoritative_completed, "payload_removed": false,
@@ -1960,7 +1986,11 @@ async fn remove_host_payload_before_entry_cleanup(
                 let remove_target = target.clone();
                 let remove_protected = protected_roots.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    remove_inventoried_payload_blocking(&remove_target, &inventory, &remove_protected)
+                    remove_inventoried_payload_blocking(
+                        &remove_target,
+                        &inventory,
+                        &remove_protected,
+                    )
                 })
                 .await
                 .map_err(|error| {
@@ -2045,7 +2075,9 @@ async fn remove_host_payload_before_entry_cleanup(
                 target.display()
             )));
         }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => HostPayloadDisposition::Removed,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            HostPayloadDisposition::Removed
+        }
         Err(error) => {
             return Err(AppError::Repository(format!(
                 "failed to inspect download client payload {}: {error}",

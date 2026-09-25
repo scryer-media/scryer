@@ -617,15 +617,14 @@ impl AppUseCase {
         library_id: &str,
         profiles: &[crate::QualityProfile],
     ) -> AppResult<Option<Vec<String>>> {
-        self
-            .read_setting_json_value::<Vec<String>>(
-                REQUEST_QUALITY_PROFILE_IDS_KEY,
-                Some(library_id),
-            )
-            .await?
-            .map(|profile_ids| configured_request_quality_profile_ids(profile_ids, profiles))
-            .transpose()
-            .map(Option::flatten)
+        self.read_setting_json_value::<Vec<String>>(
+            REQUEST_QUALITY_PROFILE_IDS_KEY,
+            Some(library_id),
+        )
+        .await?
+        .map(|profile_ids| configured_request_quality_profile_ids(profile_ids, profiles))
+        .transpose()
+        .map(Option::flatten)
     }
 
     pub(crate) async fn effective_request_quality_profile_settings_for_library(
@@ -765,13 +764,15 @@ impl AppUseCase {
             Some(language) => language,
             None => self.metadata_language().await,
         };
-        let use_season_folders_override = if matches!(library.facet, MediaFacet::Series | MediaFacet::Anime) {
-            self.read_setting_bool_value_explicit(USE_SEASON_FOLDERS_KEY, Some(&library.id))
-                .await?
-        } else {
-            None
-        };
-        let use_season_folders = if matches!(library.facet, MediaFacet::Series | MediaFacet::Anime) {
+        let use_season_folders_override =
+            if matches!(library.facet, MediaFacet::Series | MediaFacet::Anime) {
+                self.read_setting_bool_value_explicit(USE_SEASON_FOLDERS_KEY, Some(&library.id))
+                    .await?
+            } else {
+                None
+            };
+        let use_season_folders = if matches!(library.facet, MediaFacet::Series | MediaFacet::Anime)
+        {
             self.resolve_library_bool_setting(
                 USE_SEASON_FOLDERS_KEY,
                 Some(&library.id),

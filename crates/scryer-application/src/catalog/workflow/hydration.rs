@@ -299,9 +299,8 @@ mod title_id_capability_tests {
             "searchTitlesBatch",
             "title_id",
         ] {
-            let error = AppError::Repository(format!(
-                "Cannot query field \"{field}\" on type \"Query\"."
-            ));
+            let error =
+                AppError::Repository(format!("Cannot query field \"{field}\" on type \"Query\"."));
             assert!(
                 movie_title_queries_not_supported(&error),
                 "unknown field {field} should be read as a capability error"
@@ -500,7 +499,7 @@ impl AppUseCase {
             library_id,
             options_patch,
         )
-            .await
+        .await
     }
 }
 impl AppUseCase {
@@ -514,12 +513,16 @@ impl AppUseCase {
             return Err(AppError::Validation("title name is required".into()));
         }
         let root_folder_id = self
-            .resolve_title_root_folder_id_for_library(&library_id, request.root_folder_id.as_deref())
+            .resolve_title_root_folder_id_for_library(
+                &library_id,
+                request.root_folder_id.as_deref(),
+            )
             .await?;
 
         let name = request.name.trim().to_string();
         let mut tags = normalize_tags(&request.tags);
-        self.canonicalize_title_quality_profile_tags(&mut tags).await?;
+        self.canonicalize_title_quality_profile_tags(&mut tags)
+            .await?;
         Ok(Title {
             id: Id::new().0,
             library_id: library_id.clone(),
@@ -607,7 +610,9 @@ impl AppUseCase {
         library_id: String,
         options_patch: TitleOptionsPatch,
     ) -> AppResult<CreateTitleOutcome> {
-        let title = self.new_title_for_library(actor, request, library_id).await?;
+        let title = self
+            .new_title_for_library(actor, request, library_id)
+            .await?;
 
         let created = self
             .services
@@ -656,7 +661,9 @@ impl AppUseCase {
             .quality_profile_reference_lock
             .lock()
             .await;
-        let title = self.new_title_for_library(actor, request, library_id).await?;
+        let title = self
+            .new_title_for_library(actor, request, library_id)
+            .await?;
         let created = self
             .services
             .catalog
@@ -815,9 +822,9 @@ impl AppUseCase {
         let movie_smg_id = movie.smg_id;
         let redirected_from = extract_smg_id(&target.title).filter(|stored_smg_id| {
             movie_smg_id.is_some_and(|movie_smg_id| movie_smg_id != *stored_smg_id)
-                && redirects.iter().any(|(from, to)| {
-                    *from == *stored_smg_id && Some(*to) == movie_smg_id
-                })
+                && redirects
+                    .iter()
+                    .any(|(from, to)| *from == *stored_smg_id && Some(*to) == movie_smg_id)
         });
         let result = super::movie_to_hydration_result(movie, language);
         let hydrated = self
@@ -878,7 +885,10 @@ impl AppUseCase {
                 .get(&target.title.id)
                 .cloned()
                 .unwrap_or_else(|| "eng".to_string());
-            targets_by_language.entry(language).or_default().push(target);
+            targets_by_language
+                .entry(language)
+                .or_default()
+                .push(target);
         }
         let mut outcome = HydrationBatchOutcome::default();
         let hydration_started_at = Instant::now();
@@ -961,8 +971,9 @@ impl AppUseCase {
                     match movie_result {
                         Ok(movie_result) => {
                             for (ref_index, (target, _)) in movie_targets.iter().enumerate() {
-                                if crate::library::library::library_scan_cancel_requested(cancel_token)
-                                {
+                                if crate::library::library::library_scan_cancel_requested(
+                                    cancel_token,
+                                ) {
                                     break 'languages;
                                 }
                                 let title_id = target.title.id.clone();
@@ -1029,8 +1040,10 @@ impl AppUseCase {
                                     Ok(legacy_result) => {
                                         for (target, movie_ref) in fallback_targets {
                                             let title_id = target.title.id.clone();
-                                            let tvdb_id = movie_ref.tvdb_id.expect("filtered above");
-                                            let Some(movie) = legacy_result.movies.get(&tvdb_id) else {
+                                            let tvdb_id =
+                                                movie_ref.tvdb_id.expect("filtered above");
+                                            let Some(movie) = legacy_result.movies.get(&tvdb_id)
+                                            else {
                                                 self.emit_hydration_failed(
                                                     &target.title,
                                                     "bulk metadata response missing title",
@@ -1038,7 +1051,8 @@ impl AppUseCase {
                                                 .await;
                                                 outcome.failed_titles.insert(
                                                     title_id,
-                                                    "bulk metadata response missing title".to_string(),
+                                                    "bulk metadata response missing title"
+                                                        .to_string(),
                                                 );
                                                 continue;
                                             };
@@ -1065,7 +1079,8 @@ impl AppUseCase {
                                     Err(error) => {
                                         let reason = error.to_string();
                                         for (target, _) in fallback_targets {
-                                            self.emit_hydration_failed(&target.title, &reason).await;
+                                            self.emit_hydration_failed(&target.title, &reason)
+                                                .await;
                                             outcome
                                                 .failed_titles
                                                 .insert(target.title.id.clone(), reason.clone());
@@ -1124,16 +1139,19 @@ impl AppUseCase {
                                 })
                                 .unwrap_or_default();
                             for (target, tvdb_id) in series_targets {
-                                if crate::library::library::library_scan_cancel_requested(cancel_token)
-                                {
+                                if crate::library::library::library_scan_cancel_requested(
+                                    cancel_token,
+                                ) {
                                     break 'languages;
                                 }
                                 let title_id = target.title.id.clone();
                                 let title_facet = target.title.facet.clone();
                                 let title_source = target.source;
                                 if let Some(series) = series_result.series.get(&tvdb_id) {
-                                    let mut result =
-                                        super::series_to_hydration_result(series.clone(), &language);
+                                    let mut result = super::series_to_hydration_result(
+                                        series.clone(),
+                                        &language,
+                                    );
                                     result.movie_metadata = movie_metadata.clone();
                                     let refreshed =
                                         match self.persist_series_hydration(target, result).await {
@@ -1207,7 +1225,9 @@ impl AppUseCase {
         &self,
         target: HydrationTarget,
     ) -> AppResult<Title> {
-        let language = self.resolve_metadata_language_for_title(&target.title).await;
+        let language = self
+            .resolve_metadata_language_for_title(&target.title)
+            .await;
         self.hydrate_title_single_apq_with_language(target, &language)
             .await
     }
@@ -1937,8 +1957,7 @@ impl AppUseCase {
             "outcome" => if outcome.is_ok() { "ok" } else { "error" },
         )
         .record(write_started_at.elapsed().as_secs_f64());
-        metrics::histogram!("scryer_title_recommendations_card_count")
-            .record(records.len() as f64);
+        metrics::histogram!("scryer_title_recommendations_card_count").record(records.len() as f64);
         outcome?;
 
         Ok(())
@@ -2169,8 +2188,8 @@ mod numbering_bridge_from_orders_tests {
 mod numbering_bridge_replacement_tests {
     use crate::lib_tests::bootstrap;
     use scryer_domain::{
-        AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, MediaFacet, NewTitle,
-        NumberingBridgeSource, RELEASE_NUMBERING_TAG_PREFIX,
+        AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, MediaFacet,
+        NewTitle, NumberingBridgeSource, RELEASE_NUMBERING_TAG_PREFIX,
     };
 
     fn bridge(source: NumberingBridgeSource) -> AnimeNumberingBridge {

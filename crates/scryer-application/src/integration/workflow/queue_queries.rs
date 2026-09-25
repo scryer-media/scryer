@@ -498,7 +498,11 @@ fn apply_submission_to_queue_item(item: &mut DownloadQueueItem, submission: &Dow
         }
         // The name belongs to the config, not the submission; clear a
         // type-derived stand-in so canonicalization fills the configured name.
-        if item.client_name.trim().eq_ignore_ascii_case(item.client_type.trim()) {
+        if item
+            .client_name
+            .trim()
+            .eq_ignore_ascii_case(item.client_type.trim())
+        {
             item.client_name = String::new();
         }
     }
@@ -802,7 +806,9 @@ async fn find_submission_for_queue_item_by_download_id(
             Some(download_id)
         }
         crate::download_identity::ObservedClientJobResolution::Conflict
-        | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => return None,
+        | crate::download_identity::ObservedClientJobResolution::BindingAlreadyEnded => {
+            return None;
+        }
         crate::download_identity::ObservedClientJobResolution::Unavailable => None,
     };
     // This row's by-id lookup already came back empty against this registry

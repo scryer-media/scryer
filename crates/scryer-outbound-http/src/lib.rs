@@ -2402,6 +2402,7 @@ where
     F: FnOnce() -> Result<(), BlockingOutboundHttpError>,
 {
     send_blocking_reqwest_request_with_cooldown_policy_inner(
+        &RateLimitRegistry::new(),
         request,
         max_cooldown_wait,
         None,
@@ -2416,6 +2417,7 @@ pub fn send_blocking_reqwest_request_with_cooldown_policy(
     destination_cooldown_override: Option<DestinationKey>,
 ) -> Result<reqwest::blocking::Response, BlockingOutboundHttpError> {
     send_blocking_reqwest_request_with_cooldown_policy_inner(
+        &RateLimitRegistry::new(),
         request,
         max_cooldown_wait,
         destination_cooldown_override,
@@ -2426,8 +2428,12 @@ pub fn send_blocking_reqwest_request_with_cooldown_policy(
 
 /// Calls `observe_dispatch` after local admission, cooldown, and pacing gates
 /// and immediately before the request leaves the process. An observer error
-/// prevents the request from reaching the network.
+/// prevents the request from reaching the network. `registry` owns those gates
+/// and records any 429, so indexer traffic passes
+/// [`RateLimitRegistry::indexers`] to honour the cooldowns the scheduler
+/// persists and admits against.
 pub fn send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer<F>(
+    registry: &RateLimitRegistry,
     request: reqwest::blocking::RequestBuilder,
     max_cooldown_wait: Option<Duration>,
     destination_cooldown_override: Option<DestinationKey>,
@@ -2437,6 +2443,7 @@ where
     F: FnOnce() -> Result<(), BlockingOutboundHttpError>,
 {
     send_blocking_reqwest_request_with_cooldown_policy_inner(
+        registry,
         request,
         max_cooldown_wait,
         destination_cooldown_override,
@@ -2446,13 +2453,13 @@ where
 }
 
 fn send_blocking_reqwest_request_with_cooldown_policy_inner(
+    registry: &RateLimitRegistry,
     request: reqwest::blocking::RequestBuilder,
     max_cooldown_wait: Option<Duration>,
     destination_cooldown_override: Option<DestinationKey>,
     deadline: Option<std::time::Instant>,
     observe_dispatch: impl FnOnce() -> Result<(), BlockingOutboundHttpError>,
 ) -> Result<reqwest::blocking::Response, BlockingOutboundHttpError> {
-    let registry = RateLimitRegistry::new();
     let (request_client, request) = request.build_split();
     let mut request = request?;
     let has_destination_override = destination_cooldown_override.is_some();
@@ -4862,6 +4869,7 @@ mod tests {
         let error = tokio::task::spawn_blocking(move || {
             let client = blocking_reqwest_client_builder().build().unwrap();
             send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer(
+                &RateLimitRegistry::new(),
                 client.get(url),
                 Some(Duration::ZERO),
                 Some(destination),
@@ -4893,6 +4901,7 @@ mod tests {
         let error = tokio::task::spawn_blocking(move || {
             let client = blocking_reqwest_client_builder().build().unwrap();
             send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer(
+                &RateLimitRegistry::new(),
                 client.get(url).header("invalid\nheader", "value"),
                 Some(Duration::ZERO),
                 None,
