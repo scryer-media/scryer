@@ -219,9 +219,11 @@ mod tests {
         let mut tracked = tracked_for_dispatch(id);
         tracked.no_video_import_retry =
             Some(no_video_retry_state(Utc::now() + Duration::seconds(30)));
-        tracker.insert_for_tests(tracked);
+        let download_id = tracker.insert_for_tests(tracked);
 
-        assert!(prepare_tracked_download_background_work_dispatch(&mut tracker, id).is_none());
+        assert!(
+            prepare_tracked_download_background_work_dispatch(&mut tracker, download_id).is_none()
+        );
         assert_eq!(
             tracker.find(id).map(|tracked| tracked.state),
             Some(TrackedDownloadState::ImportPending)
@@ -232,7 +234,8 @@ mod tests {
             .expect("tracked download should remain cached")
             .no_video_import_retry = Some(no_video_retry_state(Utc::now() - Duration::seconds(1)));
 
-        let dispatched = prepare_tracked_download_background_work_dispatch(&mut tracker, id);
+        let dispatched =
+            prepare_tracked_download_background_work_dispatch(&mut tracker, download_id);
 
         assert!(dispatched.is_some());
         assert_eq!(
@@ -251,9 +254,11 @@ mod tests {
                 attempts: 1,
                 next_retry_at: Utc::now() + Duration::seconds(30),
             });
-        tracker.insert_for_tests(tracked);
+        let download_id = tracker.insert_for_tests(tracked);
 
-        assert!(prepare_tracked_download_background_work_dispatch(&mut tracker, id).is_none());
+        assert!(
+            prepare_tracked_download_background_work_dispatch(&mut tracker, download_id).is_none()
+        );
         assert_eq!(
             tracker.find(id).map(|tracked| tracked.state),
             Some(TrackedDownloadState::ImportPending)
@@ -267,7 +272,8 @@ mod tests {
             next_retry_at: Utc::now() - Duration::seconds(1),
         });
 
-        let dispatched = prepare_tracked_download_background_work_dispatch(&mut tracker, id);
+        let dispatched =
+            prepare_tracked_download_background_work_dispatch(&mut tracker, download_id);
 
         assert!(dispatched.is_some());
         assert_eq!(
@@ -284,10 +290,10 @@ mod tests {
         let mut delayed = tracked_for_dispatch(delayed_id);
         delayed.no_video_import_retry =
             Some(no_video_retry_state(Utc::now() + Duration::seconds(30)));
-        tracker.insert_for_tests(delayed);
-        tracker.insert_for_tests(tracked_for_dispatch(ready_id));
+        let delayed_download_id = tracker.insert_for_tests(delayed);
+        let ready_download_id = tracker.insert_for_tests(tracked_for_dispatch(ready_id));
         let mut drain = TrackedDownloadWorkDrain::new(
-            vec![delayed_id.to_string(), ready_id.to_string()],
+            vec![delayed_download_id, ready_download_id],
             crate::completed_download_handler::CompletedDownloadLookup::default(),
         );
         let in_flight = std::collections::HashSet::new();
@@ -299,7 +305,7 @@ mod tests {
         )
         .expect("ready item should dispatch");
 
-        assert_eq!(id, ready_id);
+        assert_eq!(id, ready_download_id);
         assert_eq!(kind, TrackedDownloadBackgroundWorkKind::Import);
         assert_eq!(
             tracker.find(delayed_id).map(|tracked| tracked.state),
@@ -316,10 +322,10 @@ mod tests {
         let first_id = "nzbget:first";
         let second_id = "nzbget:second";
         let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
-        tracker.insert_for_tests(tracked_for_dispatch(first_id));
-        tracker.insert_for_tests(tracked_for_dispatch(second_id));
+        let first_download_id = tracker.insert_for_tests(tracked_for_dispatch(first_id));
+        let second_download_id = tracker.insert_for_tests(tracked_for_dispatch(second_id));
         let mut drain = TrackedDownloadWorkDrain::new(
-            vec![first_id.to_string(), second_id.to_string()],
+            vec![first_download_id, second_download_id],
             crate::completed_download_handler::CompletedDownloadLookup::default(),
         );
         let in_flight = std::collections::HashSet::new();
@@ -330,7 +336,7 @@ mod tests {
             &mut drain,
         )
         .expect("first item should dispatch");
-        assert_eq!(id, first_id);
+        assert_eq!(id, first_download_id);
         tracker
             .find_mut(first_id)
             .expect("first tracked download")
@@ -343,7 +349,7 @@ mod tests {
         )
         .expect("second item should dispatch in the same drain");
 
-        assert_eq!(id, second_id);
+        assert_eq!(id, second_download_id);
         assert_eq!(kind, TrackedDownloadBackgroundWorkKind::Import);
         assert_eq!(
             tracker.find(second_id).map(|tracked| tracked.state),
@@ -356,22 +362,22 @@ mod tests {
         let first_id = "nzbget:first";
         let second_id = "nzbget:second";
         let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
-        tracker.insert_for_tests(tracked_for_dispatch(first_id));
-        tracker.insert_for_tests(tracked_for_dispatch(second_id));
+        let first_download_id = tracker.insert_for_tests(tracked_for_dispatch(first_id));
+        let second_download_id = tracker.insert_for_tests(tracked_for_dispatch(second_id));
         let mut drain = TrackedDownloadWorkDrain::new(
-            vec![first_id.to_string(), second_id.to_string()],
+            vec![first_download_id, second_download_id],
             crate::completed_download_handler::CompletedDownloadLookup::default(),
         );
         let mut in_flight = std::collections::HashSet::new();
 
-        let (id, _, _) = prepare_next_tracked_download_background_work_dispatch(
+        let (id, _, tracked) = prepare_next_tracked_download_background_work_dispatch(
             &mut tracker,
             &in_flight,
             &mut drain,
         )
         .expect("first item should dispatch");
-        assert_eq!(id, first_id);
-        in_flight.insert(id);
+        assert_eq!(id, first_download_id);
+        in_flight.insert(tracked.id);
 
         let (id, kind, _) = prepare_next_tracked_download_background_work_dispatch(
             &mut tracker,
@@ -380,7 +386,7 @@ mod tests {
         )
         .expect("second import should dispatch while the first remains in flight");
 
-        assert_eq!(id, second_id);
+        assert_eq!(id, second_download_id);
         assert_eq!(kind, TrackedDownloadBackgroundWorkKind::Import);
         assert_eq!(
             tracker.find(second_id).map(|tracked| tracked.state),
@@ -394,16 +400,19 @@ mod tests {
         let failed_ids = (0..5)
             .map(|index| format!("nzbget:failed-{index}"))
             .collect::<Vec<_>>();
-        for id in &failed_ids {
-            let mut tracked = tracked_for_dispatch(id);
-            tracked.state = TrackedDownloadState::FailedPending;
-            tracker.insert_for_tests(tracked);
-        }
+        let failed_download_ids = failed_ids
+            .iter()
+            .map(|id| {
+                let mut tracked = tracked_for_dispatch(id);
+                tracked.state = TrackedDownloadState::FailedPending;
+                tracker.insert_for_tests(tracked)
+            })
+            .collect::<Vec<_>>();
         let import_id = "nzbget:import";
-        tracker.insert_for_tests(tracked_for_dispatch(import_id));
+        let import_download_id = tracker.insert_for_tests(tracked_for_dispatch(import_id));
         let in_flight = failed_ids[..4].iter().cloned().collect();
         let mut drain = TrackedDownloadWorkDrain::new(
-            vec![failed_ids[4].clone(), import_id.to_string()],
+            vec![failed_download_ids[4], import_download_id],
             crate::completed_download_handler::CompletedDownloadLookup::default(),
         );
 
@@ -414,7 +423,7 @@ mod tests {
         )
         .expect("import should pass the saturated failed-work lane");
 
-        assert_eq!(id, import_id);
+        assert_eq!(id, import_download_id);
         assert_eq!(kind, TrackedDownloadBackgroundWorkKind::Import);
         assert!(
             drain.has_pending(),
@@ -429,10 +438,10 @@ mod tests {
         let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
         let mut blocked = tracked_for_dispatch(blocked_id);
         blocked.state = TrackedDownloadState::ImportBlocked;
-        tracker.insert_for_tests(blocked);
-        tracker.insert_for_tests(tracked_for_dispatch(ready_id));
+        let blocked_download_id = tracker.insert_for_tests(blocked);
+        let ready_download_id = tracker.insert_for_tests(tracked_for_dispatch(ready_id));
         let mut drain = TrackedDownloadWorkDrain::new(
-            vec![blocked_id.to_string(), ready_id.to_string()],
+            vec![blocked_download_id, ready_download_id],
             crate::completed_download_handler::CompletedDownloadLookup::default(),
         );
         let in_flight = std::collections::HashSet::new();
@@ -444,7 +453,7 @@ mod tests {
         )
         .expect("ready item should dispatch after blocked item");
 
-        assert_eq!(id, ready_id);
+        assert_eq!(id, ready_download_id);
         assert_eq!(kind, TrackedDownloadBackgroundWorkKind::Import);
         assert_eq!(
             tracker.find(blocked_id).map(|tracked| tracked.state),
@@ -467,7 +476,7 @@ mod tests {
         duplicate.state = TrackedDownloadState::ImportPending;
         duplicate.status = TrackedDownloadStatus::Warning;
         duplicate.status_messages = vec!["waiting for import".to_string()];
-        tracker.insert_for_tests(duplicate);
+        let duplicate_download_id = tracker.insert_for_tests(duplicate);
 
         reconcile_duplicate_terminal_source_states(&mut tracker);
 
@@ -478,8 +487,262 @@ mod tests {
         assert_eq!(duplicate.status, TrackedDownloadStatus::Ok);
         assert!(duplicate.status_messages.is_empty());
         assert!(
-            prepare_tracked_download_background_work_dispatch(&mut tracker, duplicate_id).is_none()
+            prepare_tracked_download_background_work_dispatch(&mut tracker, duplicate_download_id)
+                .is_none()
         );
+    }
+
+    /// Rows of one torrent share an info-hash id string. The reconcile is keyed
+    /// by `DownloadId` and so is deterministic; the loops in these tests guard
+    /// against a regression to string lookups, whose outcome depended on the
+    /// layout of a freshly seeded `HashMap` and so varied from run to run.
+    const SHARED_TORRENT_ID: &str = "download:client-a:qbittorrent:0123456789abcdef";
+
+    fn reconcile_row(
+        title_id: Option<&str>,
+        state: TrackedDownloadState,
+    ) -> crate::tracked_downloads::TrackedDownload {
+        let mut tracked = tracked_for_dispatch(SHARED_TORRENT_ID);
+        tracked.title_id = title_id.map(str::to_owned);
+        tracked.state = state;
+        tracked.status = TrackedDownloadStatus::Ok;
+        tracked.status_messages.clear();
+        tracked
+    }
+
+    fn reconciled_state(
+        tracker: &crate::tracked_downloads::TrackedDownloadService,
+        download_id: scryer_domain::download_identity::DownloadId,
+    ) -> TrackedDownloadState {
+        tracker
+            .get_by_download_id(download_id)
+            .expect("tracked download should remain cached")
+            .state
+    }
+
+    #[test]
+    fn reconcile_settles_the_collected_row_when_two_rows_share_an_id_string() {
+        let shared_id = SHARED_TORRENT_ID;
+
+        for _ in 0..64 {
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            let mut imported = tracked_for_dispatch(shared_id);
+            imported.state = TrackedDownloadState::Imported;
+            imported.status = TrackedDownloadStatus::Ok;
+            imported.status_messages.clear();
+            tracker.insert_for_tests(imported);
+
+            let mut live = tracked_for_dispatch(shared_id);
+            live.state = TrackedDownloadState::Downloading;
+            live.status = TrackedDownloadStatus::Ok;
+            live.status_messages.clear();
+            let live_download_id = tracker.insert_for_tests(live);
+
+            let applied = reconcile_duplicate_terminal_source_states(&mut tracker);
+
+            let live = tracker
+                .get_all()
+                .into_iter()
+                .find(|tracked| tracked.download_id == live_download_id)
+                .expect("live tracked download should remain cached");
+            assert_eq!(live.state, TrackedDownloadState::Imported);
+            assert_eq!(
+                applied,
+                vec![(live_download_id, TrackedDownloadState::Imported)]
+            );
+        }
+    }
+
+    #[test]
+    fn reconcile_never_settles_a_live_row_for_a_different_title() {
+        let shared_id = SHARED_TORRENT_ID;
+
+        for (terminal_title_id, live_title_id) in [
+            (Some("title-2"), Some("title-1")),
+            (None, Some("title-1")),
+            (Some("title-1"), None),
+        ] {
+            for _ in 0..64 {
+                let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+                let mut imported = tracked_for_dispatch(shared_id);
+                imported.title_id = terminal_title_id.map(str::to_owned);
+                imported.state = TrackedDownloadState::Imported;
+                imported.status = TrackedDownloadStatus::Ok;
+                imported.status_messages.clear();
+                tracker.insert_for_tests(imported);
+
+                let mut live = tracked_for_dispatch(shared_id);
+                live.title_id = live_title_id.map(str::to_owned);
+                live.state = TrackedDownloadState::Downloading;
+                live.status = TrackedDownloadStatus::Ok;
+                live.status_messages.clear();
+                let live_download_id = tracker.insert_for_tests(live);
+
+                let applied = reconcile_duplicate_terminal_source_states(&mut tracker);
+
+                let live = tracker
+                    .get_all()
+                    .into_iter()
+                    .find(|tracked| tracked.download_id == live_download_id)
+                    .expect("live tracked download should remain cached");
+                assert_eq!(live.state, TrackedDownloadState::Downloading);
+                assert!(applied.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn tracked_work_drain_dispatches_the_queued_row_when_two_rows_share_an_id_string() {
+        for _ in 0..64 {
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            let mut sibling = tracked_for_dispatch(SHARED_TORRENT_ID);
+            sibling.title_id = Some("title-2".to_string());
+            sibling.state = TrackedDownloadState::FailedPending;
+            tracker.insert_for_tests(sibling);
+            let live = tracker.insert_for_tests(tracked_for_dispatch(SHARED_TORRENT_ID));
+            let mut drain = TrackedDownloadWorkDrain::new(
+                vec![live],
+                crate::completed_download_handler::CompletedDownloadLookup::default(),
+            );
+
+            let (download_id, kind, tracked) =
+                prepare_next_tracked_download_background_work_dispatch(
+                    &mut tracker,
+                    &std::collections::HashSet::new(),
+                    &mut drain,
+                )
+                .expect("the queued row should dispatch");
+
+            assert_eq!(download_id, live);
+            assert_eq!(tracked.download_id, live);
+            assert_eq!(kind, TrackedDownloadBackgroundWorkKind::Import);
+        }
+    }
+
+    #[test]
+    fn reconcile_takes_the_strongest_terminal_state_of_the_same_title() {
+        for _ in 0..64 {
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            tracker.insert_for_tests(reconcile_row(Some("title-1"), TrackedDownloadState::Failed));
+            let imported = tracker.insert_for_tests(reconcile_row(
+                Some("title-1"),
+                TrackedDownloadState::Imported,
+            ));
+            let failed = tracker
+                .insert_for_tests(reconcile_row(Some("title-1"), TrackedDownloadState::Failed));
+            let live = tracker.insert_for_tests(reconcile_row(
+                Some("title-1"),
+                TrackedDownloadState::Downloading,
+            ));
+
+            let applied = reconcile_duplicate_terminal_source_states(&mut tracker);
+
+            assert_eq!(applied, vec![(live, TrackedDownloadState::Imported)]);
+            assert_eq!(
+                reconciled_state(&tracker, live),
+                TrackedDownloadState::Imported
+            );
+            assert_eq!(
+                reconciled_state(&tracker, imported),
+                TrackedDownloadState::Imported
+            );
+            assert_eq!(
+                reconciled_state(&tracker, failed),
+                TrackedDownloadState::Failed
+            );
+        }
+    }
+
+    #[test]
+    fn reconcile_leaves_an_imported_seeding_row_parked() {
+        for _ in 0..64 {
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            tracker.insert_for_tests(reconcile_row(
+                Some("title-1"),
+                TrackedDownloadState::Imported,
+            ));
+            let seeding = tracker.insert_for_tests(reconcile_row(
+                Some("title-1"),
+                TrackedDownloadState::ImportedSeeding,
+            ));
+
+            let applied = reconcile_duplicate_terminal_source_states(&mut tracker);
+
+            assert!(applied.is_empty());
+            assert_eq!(
+                reconciled_state(&tracker, seeding),
+                TrackedDownloadState::ImportedSeeding
+            );
+        }
+    }
+
+    /// Pins today's behaviour: `Importing` is not import-settled, so an
+    /// importing row of the same title is settled by its imported sibling.
+    #[test]
+    fn reconcile_settles_an_importing_row_next_to_an_imported_sibling_of_the_same_title() {
+        for _ in 0..64 {
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            tracker.insert_for_tests(reconcile_row(
+                Some("title-1"),
+                TrackedDownloadState::Imported,
+            ));
+            let importing = tracker.insert_for_tests(reconcile_row(
+                Some("title-1"),
+                TrackedDownloadState::Importing,
+            ));
+
+            let applied = reconcile_duplicate_terminal_source_states(&mut tracker);
+
+            assert_eq!(applied, vec![(importing, TrackedDownloadState::Imported)]);
+            assert_eq!(
+                reconciled_state(&tracker, importing),
+                TrackedDownloadState::Imported
+            );
+        }
+    }
+
+    #[test]
+    fn reconcile_never_crosses_download_clients_for_the_same_item_id() {
+        for _ in 0..64 {
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            let mut imported = reconcile_row(Some("title-1"), TrackedDownloadState::Imported);
+            imported.client_id = "client-b".to_string();
+            imported.client_item.client_id = "client-b".to_string();
+            tracker.insert_for_tests(imported);
+            let mut live = reconcile_row(Some("title-1"), TrackedDownloadState::Downloading);
+            live.client_id = "client-a".to_string();
+            live.client_item.client_id = "client-a".to_string();
+            let live = tracker.insert_for_tests(live);
+
+            let applied = reconcile_duplicate_terminal_source_states(&mut tracker);
+
+            assert!(applied.is_empty());
+            assert_eq!(
+                reconciled_state(&tracker, live),
+                TrackedDownloadState::Downloading
+            );
+        }
+    }
+
+    #[test]
+    fn reconcile_applies_nothing_on_a_second_pass() {
+        for _ in 0..64 {
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            tracker.insert_for_tests(reconcile_row(
+                Some("title-1"),
+                TrackedDownloadState::Imported,
+            ));
+            let live = tracker.insert_for_tests(reconcile_row(
+                Some("title-1"),
+                TrackedDownloadState::Downloading,
+            ));
+
+            assert_eq!(
+                reconcile_duplicate_terminal_source_states(&mut tracker),
+                vec![(live, TrackedDownloadState::Imported)]
+            );
+            assert!(reconcile_duplicate_terminal_source_states(&mut tracker).is_empty());
+        }
     }
 
     #[test]
@@ -1603,5 +1866,352 @@ mod tests {
             crate::derive_download_seeding_state(&item),
             Some(crate::DownloadSeedingState::Seeding)
         );
+    }
+
+    /// A deleted title's settled row and the live row of a re-grab of the same
+    /// torrent, sharing one id string. Returns the tracker and both cache keys.
+    fn settled_and_live_siblings() -> (
+        crate::tracked_downloads::TrackedDownloadService,
+        scryer_domain::download_identity::DownloadId,
+        scryer_domain::download_identity::DownloadId,
+    ) {
+        let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+        let settled = tracker.insert_for_tests(reconcile_row(
+            Some("title-1"),
+            TrackedDownloadState::Imported,
+        ));
+        let live = tracker.insert_for_tests(reconcile_row(
+            Some("title-2"),
+            TrackedDownloadState::Downloading,
+        ));
+        (tracker, settled, live)
+    }
+
+    fn row_debug(
+        tracker: &crate::tracked_downloads::TrackedDownloadService,
+        download_id: scryer_domain::download_identity::DownloadId,
+    ) -> String {
+        format!(
+            "{:?}",
+            tracker
+                .get_by_download_id(download_id)
+                .expect("tracked download should remain cached")
+        )
+    }
+
+    async fn run_tracked_command(
+        app: &crate::AppUseCase,
+        actor: &scryer_domain::User,
+        tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+        command: crate::tracked_downloads::TrackedDownloadCommand,
+    ) {
+        let mut in_flight = std::collections::HashSet::new();
+        let (work_tx, _work_rx) = tokio::sync::mpsc::unbounded_channel();
+        super::handle_tracked_download_command(
+            app,
+            actor,
+            tracker,
+            &mut in_flight,
+            &work_tx,
+            command,
+        )
+        .await;
+    }
+
+    #[test]
+    fn resolve_tracked_command_target_never_falls_back_past_a_canonical_id() {
+        for _ in 0..16 {
+            let (tracker, settled, live) = settled_and_live_siblings();
+
+            // A cached canonical id names its own row, whichever shares the string.
+            assert_eq!(
+                super::resolve_tracked_command_target_for_download(
+                    &tracker,
+                    Some(&settled),
+                    SHARED_TORRENT_ID,
+                ),
+                (SHARED_TORRENT_ID.to_string(), Some(settled))
+            );
+            assert_eq!(
+                super::resolve_tracked_command_target_for_download(
+                    &tracker,
+                    Some(&live),
+                    SHARED_TORRENT_ID,
+                ),
+                (SHARED_TORRENT_ID.to_string(), Some(live))
+            );
+
+            // An uncached canonical id has no target, even though the id string
+            // it came with matches two cached rows.
+            assert_eq!(
+                super::resolve_tracked_command_target_for_download(
+                    &tracker,
+                    Some(&scryer_domain::download_identity::DownloadId::new()),
+                    SHARED_TORRENT_ID,
+                ),
+                (SHARED_TORRENT_ID.to_string(), None)
+            );
+
+            // Without a canonical id the string path runs, and prefers the row
+            // that is not import-settled.
+            assert_eq!(
+                super::resolve_tracked_command_target_for_download(
+                    &tracker,
+                    None,
+                    SHARED_TORRENT_ID,
+                ),
+                (SHARED_TORRENT_ID.to_string(), Some(live))
+            );
+            assert_eq!(
+                super::resolve_tracked_command_target_for_download(
+                    &tracker,
+                    None,
+                    "download:client-a:qbittorrent:unknown",
+                ),
+                ("download:client-a:qbittorrent:unknown".to_string(), None)
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_cached_download_id_prefers_the_row_that_is_not_import_settled() {
+        for settled_state in [
+            TrackedDownloadState::Imported,
+            TrackedDownloadState::ImportedSeeding,
+            TrackedDownloadState::Failed,
+            TrackedDownloadState::Ignored,
+        ] {
+            for _ in 0..16 {
+                let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+                tracker.insert_for_tests(reconcile_row(Some("title-1"), settled_state));
+                let live = tracker.insert_for_tests(reconcile_row(
+                    Some("title-2"),
+                    TrackedDownloadState::Downloading,
+                ));
+                assert_eq!(
+                    tracker.resolve_cached_download_id(SHARED_TORRENT_ID),
+                    Some(live)
+                );
+                assert_eq!(
+                    tracker.resolve_cached_id(SHARED_TORRENT_ID).as_deref(),
+                    Some(SHARED_TORRENT_ID)
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn background_work_result_merges_into_its_own_row_and_leaves_the_sibling_untouched() {
+        let (app, _) = crate::lib_tests::bootstrap();
+        for _ in 0..16 {
+            let (mut tracker, settled, live) = settled_and_live_siblings();
+            let settled_before = row_debug(&tracker, settled);
+
+            let mut finished = tracker.get_by_download_id(live).expect("live row").clone();
+            finished.state = TrackedDownloadState::ImportPending;
+            finished.status = TrackedDownloadStatus::Warning;
+            finished.status_messages = vec!["worker finished".to_string()];
+
+            let mut in_flight = std::collections::HashSet::from([SHARED_TORRENT_ID.to_string()]);
+            super::handle_tracked_download_background_work_result(
+                &app,
+                &mut tracker,
+                &mut in_flight,
+                super::TrackedDownloadBackgroundWorkResult {
+                    download_id: live,
+                    id: SHARED_TORRENT_ID.to_string(),
+                    kind: TrackedDownloadBackgroundWorkKind::Import,
+                    outcome: Ok(finished),
+                    elapsed: std::time::Duration::ZERO,
+                },
+            )
+            .await;
+
+            assert!(in_flight.is_empty());
+            let merged = tracker.get_by_download_id(live).expect("live row");
+            assert_eq!(merged.state, TrackedDownloadState::ImportPending);
+            assert_eq!(merged.status_messages, vec!["worker finished".to_string()]);
+            assert_eq!(merged.title_id.as_deref(), Some("title-2"));
+            assert_eq!(row_debug(&tracker, settled), settled_before);
+        }
+    }
+
+    #[tokio::test]
+    async fn history_retry_addresses_the_row_of_the_claimed_download_id() {
+        use crate::tracked_downloads::TrackedDownloadCommand;
+        let (app, actor) = crate::lib_tests::bootstrap();
+        for _ in 0..8 {
+            // The retry claimed the settled row's download, while the id
+            // string alone would prefer its unsettled sibling.
+            let (mut tracker, settled, live) = settled_and_live_siblings();
+            let live_before = row_debug(&tracker, live);
+            let mut in_flight = std::collections::HashSet::new();
+            let (work_tx, _work_rx) = tokio::sync::mpsc::unbounded_channel();
+
+            let (reply, response) = tokio::sync::oneshot::channel();
+            super::handle_tracked_download_command(
+                &app,
+                &actor,
+                &mut tracker,
+                &mut in_flight,
+                &work_tx,
+                TrackedDownloadCommand::BeginHistoryRetry {
+                    id: SHARED_TORRENT_ID.to_string(),
+                    download_id: settled,
+                    reply,
+                },
+            )
+            .await;
+            let snapshot = response
+                .await
+                .expect("reply")
+                .expect("begin")
+                .expect("snapshot of the claimed row");
+            assert_eq!(snapshot.download_id, settled);
+            assert!(in_flight.contains(SHARED_TORRENT_ID));
+
+            let (reply, response) = tokio::sync::oneshot::channel();
+            super::handle_tracked_download_command(
+                &app,
+                &actor,
+                &mut tracker,
+                &mut in_flight,
+                &work_tx,
+                TrackedDownloadCommand::PublishHistoryRetry {
+                    id: SHARED_TORRENT_ID.to_string(),
+                    download_id: settled,
+                    reply,
+                },
+            )
+            .await;
+            response.await.expect("reply").expect("publish");
+            assert_eq!(
+                reconciled_state(&tracker, settled),
+                TrackedDownloadState::Importing
+            );
+            assert_eq!(row_debug(&tracker, live), live_before);
+
+            let mut finished = snapshot;
+            finished.state = TrackedDownloadState::Imported;
+            finished.status_messages = vec!["retry finished".to_string()];
+            let (reply, response) = tokio::sync::oneshot::channel();
+            super::handle_tracked_download_command(
+                &app,
+                &actor,
+                &mut tracker,
+                &mut in_flight,
+                &work_tx,
+                TrackedDownloadCommand::FinishHistoryRetry {
+                    id: SHARED_TORRENT_ID.to_string(),
+                    download_id: settled,
+                    finished: Some(Box::new(finished)),
+                    reply,
+                },
+            )
+            .await;
+            response.await.expect("reply").expect("finish");
+            assert!(in_flight.is_empty());
+            assert_eq!(
+                tracker
+                    .get_by_download_id(settled)
+                    .expect("claimed row")
+                    .status_messages,
+                vec!["retry finished".to_string()]
+            );
+            assert_eq!(row_debug(&tracker, live), live_before);
+        }
+    }
+
+    #[tokio::test]
+    async fn operator_commands_act_on_the_live_row_when_a_settled_sibling_shares_its_id_string() {
+        use crate::tracked_downloads::TrackedDownloadCommand;
+        let (app, actor) = crate::lib_tests::bootstrap();
+        for _ in 0..8 {
+            // Mark failed. Nothing grabbed this synthetic torrent, so the arm
+            // warns the row it resolved instead of failing it.
+            let (mut tracker, settled, live) = settled_and_live_siblings();
+            let settled_before = row_debug(&tracker, settled);
+            let (reply, response) = tokio::sync::oneshot::channel();
+            run_tracked_command(
+                &app,
+                &actor,
+                &mut tracker,
+                TrackedDownloadCommand::MarkFailed {
+                    id: SHARED_TORRENT_ID.to_string(),
+                    skip_reacquire: false,
+                    reply,
+                },
+            )
+            .await;
+            response.await.expect("reply").expect("mark failed");
+            let warned = tracker.get_by_download_id(live).expect("live row");
+            assert_eq!(warned.status, TrackedDownloadStatus::Warning);
+            assert!(
+                warned
+                    .status_messages
+                    .iter()
+                    .any(|message| message.contains("wasn't grabbed"))
+            );
+            assert_eq!(row_debug(&tracker, settled), settled_before);
+
+            // Ignore.
+            let (mut tracker, settled, live) = settled_and_live_siblings();
+            let settled_before = row_debug(&tracker, settled);
+            let (reply, response) = tokio::sync::oneshot::channel();
+            run_tracked_command(
+                &app,
+                &actor,
+                &mut tracker,
+                TrackedDownloadCommand::Ignore {
+                    id: SHARED_TORRENT_ID.to_string(),
+                    reply,
+                },
+            )
+            .await;
+            response.await.expect("reply").expect("ignore");
+            // Finalize either keeps an ignored row cached as Ignored or stops
+            // tracking it; with this fixture it stops tracking it.
+            assert!(
+                tracker.get_by_download_id(live).is_none(),
+                "the live row must be the one ignored"
+            );
+            assert_eq!(row_debug(&tracker, settled), settled_before);
+
+            // Forget.
+            let (mut tracker, settled, live) = settled_and_live_siblings();
+            let settled_before = row_debug(&tracker, settled);
+            let (reply, response) = tokio::sync::oneshot::channel();
+            run_tracked_command(
+                &app,
+                &actor,
+                &mut tracker,
+                TrackedDownloadCommand::Forget {
+                    id: SHARED_TORRENT_ID.to_string(),
+                    reply,
+                },
+            )
+            .await;
+            response.await.expect("reply").expect("forget");
+            assert!(tracker.get_by_download_id(live).is_none());
+            assert_eq!(row_debug(&tracker, settled), settled_before);
+
+            // Snapshot reports the live row.
+            let (mut tracker, _, _) = settled_and_live_siblings();
+            let (reply, response) = tokio::sync::oneshot::channel();
+            run_tracked_command(
+                &app,
+                &actor,
+                &mut tracker,
+                TrackedDownloadCommand::Snapshot {
+                    ids: vec![SHARED_TORRENT_ID.to_string()],
+                    reply,
+                },
+            )
+            .await;
+            let snapshot = response.await.expect("reply");
+            let reported = snapshot.get(SHARED_TORRENT_ID).expect("snapshot row");
+            assert_eq!(reported.state, TrackedDownloadState::Downloading);
+            assert_eq!(reported.title_id.as_deref(), Some("title-2"));
+        }
     }
 }
