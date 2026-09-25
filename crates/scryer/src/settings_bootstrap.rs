@@ -967,7 +967,7 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "acquisition.long_tail_reconverge_days",
             data_type: "number",
-            default_value_json: "30",
+            default_value_json: "0",
             is_sensitive: false,
         },
         ServiceSettingSeed {
