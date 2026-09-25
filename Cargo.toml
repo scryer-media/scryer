@@ -85,7 +85,7 @@ security-framework-sys = "2"
 keyring-core = "1"
 windows-native-keyring-store = "1"
 wiremock = "0.6"
-strum = { version = "0.28", features = ["derive"] }
+strum = { version = "0.27", features = ["derive"] }
 governor = "0.10.4"
 fixedbitset = "0.5"
 # SIMD-accelerated CRC used as the streaming move-corruption check during
