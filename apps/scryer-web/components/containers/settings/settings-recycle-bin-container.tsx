@@ -34,6 +34,11 @@ import {
   normalizeLibraryFilterSelection,
   selectedLibraryIdsToQueryValue,
 } from "@/lib/utils/library-filter";
+import {
+  buildRecycleBinSettingsInput,
+  type RecycleBinSettingsChanges,
+} from "@/lib/utils/recycle-bin";
+import { LoadingMark } from "@/components/common/loading-mark";
 
 const RECYCLE_BATCH_MAX_ITEMS = 250;
 
@@ -51,7 +56,12 @@ type PendingAction =
 
 type RecycleBinSettings = {
   enabled: boolean;
+  path: string | null;
+  retentionDays: number;
+  effectivePaths: string[];
+  validationError: string | null;
 };
+
 
 type RecycleBinSettingsQueryResult = {
   recycleBinSettings?: RecycleBinSettings | null;
@@ -99,7 +109,7 @@ export function SettingsRecycleBinContainer() {
   const [items, setItems] = useState<RecycledItem[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [itemsRefreshRevision, setItemsRefreshRevision] = useState(0);
-  const [settings, setSettings] = useState<RecycleBinSettings>({ enabled: true });
+  const [settings, setSettings] = useState<RecycleBinSettings | null>(null);
   const [settingsLoading, setSettingsLoading] = useState(true);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [itemsLoading, setItemsLoading] = useState(false);
@@ -120,8 +130,12 @@ export function SettingsRecycleBinContainer() {
         .query<RecycleBinSettingsQueryResult>(recycleBinSettingsQuery, {})
         .toPromise();
       if (error) throw error;
-      setSettings(data?.recycleBinSettings ?? { enabled: true });
+      // No controls render until the stored settings are known, so a failed
+      // load can never be saved back as defaults.
+      if (!data?.recycleBinSettings) throw new Error(t("status.apiError"));
+      setSettings(data.recycleBinSettings);
     } catch (error) {
+      setSettings(null);
       setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
     } finally {
       setSettingsLoading(false);
@@ -171,7 +185,7 @@ export function SettingsRecycleBinContainer() {
   }, [canManageItems, canManageLibraryItems, client, setGlobalStatus, t]);
 
   const fetchItems = useCallback(async () => {
-    if (settingsLoading || !settings.enabled || !canManageItems) {
+    if (settingsLoading || !settings?.enabled || !canManageItems) {
       setItems([]);
       setTotalCount(0);
       setItemsLoading(false);
@@ -198,22 +212,26 @@ export function SettingsRecycleBinContainer() {
     } finally {
       setItemsLoading(false);
     }
-  }, [canManageItems, client, selectedLibraryIds, setGlobalStatus, settings.enabled, settingsLoading, t]);
+  }, [canManageItems, client, selectedLibraryIds, setGlobalStatus, settings?.enabled, settingsLoading, t]);
 
   useEffect(() => {
     void fetchItems();
   }, [fetchItems, itemsRefreshRevision]);
 
-  const updateEnabled = async (enabled: boolean) => {
-    if (!canManageConfig) return;
+  const saveSettings = async (changes: RecycleBinSettingsChanges) => {
+    if (!canManageConfig || !settings) return;
     setSettingsSaving(true);
     try {
       const { data, error } = await client
-        .mutation<UpdateRecycleBinSettingsResult>(updateRecycleBinSettingsMutation, { input: { enabled } })
+        .mutation<UpdateRecycleBinSettingsResult>(updateRecycleBinSettingsMutation, {
+          input: buildRecycleBinSettingsInput(changes),
+        })
         .toPromise();
       if (error) throw error;
-      setSettings(data?.updateRecycleBinSettings ?? { enabled });
-      if (!enabled) {
+      const saved = data?.updateRecycleBinSettings;
+      if (!saved) throw new Error(t("status.apiError"));
+      setSettings(saved);
+      if (!saved.enabled) {
         setItems([]);
         setTotalCount(0);
         setSelectedItemIds(new Set());
@@ -432,10 +450,27 @@ export function SettingsRecycleBinContainer() {
             { count: pendingAction?.items.length ?? 0 },
           );
 
+  if (!settings) {
+    return settingsLoading ? (
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <LoadingMark className="h-4 w-4" />
+        {t("label.loading")}
+      </div>
+    ) : (
+      <p id="settings-recycle-bin-load-error" role="alert" className="text-sm text-[var(--scry-danger-text)]">
+        {t("status.failedToLoad")}
+      </p>
+    );
+  }
+
   return (
     <>
       <SettingsRecycleBinSection
         enabled={settings.enabled}
+        path={settings.path}
+        retentionDays={settings.retentionDays}
+        effectivePaths={settings.effectivePaths}
+        validationError={settings.validationError}
         settingsLoading={settingsLoading}
         settingsSaving={settingsSaving}
         canManageConfig={canManageConfig}
@@ -449,7 +484,8 @@ export function SettingsRecycleBinContainer() {
         mutatingId={mutatingId}
         pendingItemIds={pendingItemIds}
         selectedItemIds={selectedItemIds}
-        onEnabledChange={updateEnabled}
+        onEnabledChange={(enabled) => void saveSettings({ enabled })}
+        onLocationSave={(path, retentionDays) => void saveSettings({ path, retentionDays })}
         onSelectedLibraryIdsChange={setSelectedLibraryIds}
         onSelectedItemIdsChange={(ids) => setSelectedItemIds(new Set(ids))}
         onRestoreItems={requestRestore}

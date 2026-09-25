@@ -3762,6 +3762,23 @@ const en: LocaleDictionary = {
     "Deleted and replaced media files move into the recycle bin before permanent removal.",
   "settings.recycleBinEnabledReadonly":
     "Recycle bin status is controlled by users who can manage configuration.",
+  "settings.recycleBinPath": "Recycle bin folder",
+  "settings.recycleBinPathPlaceholder": ".scryer-recycle in each library root",
+  "settings.recycleBinPathHelp":
+    "Leave blank to use a .scryer-recycle folder inside each library root. A custom folder must be an absolute path outside every library root.",
+  "settings.recycleBinPathFilesystemWarning":
+    "Keep the folder on the same filesystem as your media. On a different filesystem, recycling copies each file and then deletes the original, which is slower and breaks hardlinks shared with your download client.",
+  "settings.recycleBinPathExistingItems":
+    "Changing the folder does not move items that are already recycled. They stay in the previous folder and are no longer listed or cleaned up here.",
+  "settings.recycleBinRetentionDays": "Keep recycled files for (days)",
+  "settings.recycleBinRetentionDaysHelp":
+    "Recycled files are permanently deleted after this many days.",
+  "settings.recycleBinRetentionDaysInvalid":
+    "Enter a whole number of days from {{min}} to {{max}}.",
+  "settings.recycleBinEffectivePaths": "Deleted files currently go to:",
+  "settings.recycleBinNoEffectivePaths": "No library roots are configured yet.",
+  "settings.recycleBinValidationError":
+    "Automatic cleanup is paused until this is fixed: {{error}}",
   "settings.recycleBinSection": "Manage recycled media files",
   "settings.recycleBinLibraryFilter": "Libraries",
   "settings.recycleBinEmpty": "The recycle bin is empty.",

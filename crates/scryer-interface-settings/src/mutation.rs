@@ -20,8 +20,8 @@ use scryer_application::{
 
 use super::{
     from_api_key, from_oauth_client_registration, from_plugin_auto_update_settings,
-    from_title_tag_definition, from_title_tag_rewrite_counts, from_ui_settings,
-    from_verification_settings, into_oauth_client_kind, to_verification_depth,
+    from_recycle_bin_settings, from_title_tag_definition, from_title_tag_rewrite_counts,
+    from_ui_settings, from_verification_settings, into_oauth_client_kind, to_verification_depth,
     ui_settings_update_from_input,
 };
 use scryer_interface_core::{
@@ -86,14 +86,6 @@ fn from_subtitle_settings(
         sync_threshold_series: settings.sync_threshold_series,
         sync_threshold_movie: settings.sync_threshold_movie,
         sync_max_offset_seconds: settings.sync_max_offset_seconds,
-    }
-}
-
-fn from_recycle_bin_settings(
-    settings: scryer_application::RecycleBinSettings,
-) -> RecycleBinSettingsPayload {
-    RecycleBinSettingsPayload {
-        enabled: settings.enabled,
     }
 }
 
@@ -944,6 +936,12 @@ impl SettingsMutations {
                 &actor,
                 AppUpdateRecycleBinSettings {
                     enabled: input.enabled,
+                    path: match input.path {
+                        MaybeUndefined::Undefined => None,
+                        MaybeUndefined::Null => Some(None),
+                        MaybeUndefined::Value(path) => Some(Some(path)),
+                    },
+                    retention_days: input.retention_days.map(i64::from),
                 },
             )
             .await

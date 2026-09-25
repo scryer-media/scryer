@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { groupRecycleBinItems } from "./recycle-bin.ts";
+import {
+  buildRecycleBinSettingsInput,
+  groupRecycleBinItems,
+  parseRecycleBinRetentionDays,
+} from "./recycle-bin.ts";
 
 const items = [
   {
@@ -59,4 +63,29 @@ test("recycle-bin file filtering narrows only matching files and supports unasso
   assert.equal(unassociated.length, 1);
   assert.equal(unassociated[0]?.titleName, "Unassociated files");
   assert.deepEqual(unassociated[0]?.items.map((item) => item.id), ["unassociated"]);
+});
+
+test("recycle bin settings input carries only the changed fields", () => {
+  assert.deepEqual(buildRecycleBinSettingsInput({ enabled: false }), { enabled: false });
+  assert.equal("path" in buildRecycleBinSettingsInput({ enabled: true }), false);
+  assert.equal("retentionDays" in buildRecycleBinSettingsInput({ enabled: true }), false);
+  assert.deepEqual(buildRecycleBinSettingsInput({ path: "  /srv/bin  ", retentionDays: 14 }), {
+    path: "/srv/bin",
+    retentionDays: 14,
+  });
+  assert.deepEqual(buildRecycleBinSettingsInput({ path: "   ", retentionDays: 7 }), {
+    path: null,
+    retentionDays: 7,
+  });
+  assert.deepEqual(buildRecycleBinSettingsInput({ path: null }), { path: null });
+  assert.deepEqual(buildRecycleBinSettingsInput({}), {});
+});
+
+test("recycle bin retention accepts only whole days in the server range", () => {
+  assert.equal(parseRecycleBinRetentionDays(" 30 "), 30);
+  assert.equal(parseRecycleBinRetentionDays("1"), 1);
+  assert.equal(parseRecycleBinRetentionDays("3650"), 3650);
+  for (const rejected of ["", "0", "3651", "-1", "1.5", "7 days"]) {
+    assert.equal(parseRecycleBinRetentionDays(rejected), null, rejected);
+  }
 });
