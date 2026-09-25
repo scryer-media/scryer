@@ -1161,6 +1161,9 @@ async fn notification_event_types_query_returns_only_dispatchable_subscription_e
     assert_eq!(
         event_types,
         vec![
+            // Disk-space import blocks notify as health issues.
+            "health_issue",
+            "health_restored",
             "title_added",
             "title_deleted",
             "grab",

@@ -5610,10 +5610,8 @@ mod tests {
                 name: Some("Renamed".into()),
                 ..Default::default()
             },
-            IndexerConfigUpdate {
-                is_enabled: Some(false),
-                ..Default::default()
-            },
+            // Already enabled, so this is not a re-enable: re-enabling a
+            // disabled indexer probes it on purpose.
             IndexerConfigUpdate {
                 is_enabled: Some(true),
                 ..Default::default()
@@ -5638,6 +5636,10 @@ mod tests {
                     r#"{"api_key":"********","base_url":" https://indexer.example.test "}"#.into(),
                 ),
                 proxy_config_id: Some(None),
+                ..Default::default()
+            },
+            IndexerConfigUpdate {
+                is_enabled: Some(false),
                 ..Default::default()
             },
         ];
@@ -5686,7 +5688,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn disabled_connection_edit_invalidates_caps_without_testing_then_enable_stays_local() {
+    async fn disabled_connection_edit_invalidates_caps_without_testing_then_enable_probes() {
         let repo = Arc::new(RecordingIndexerConfigRepo::new());
         let mut config = cache_config();
         config.is_enabled = false;
@@ -5715,18 +5717,34 @@ mod tests {
             .await
             .unwrap();
         assert!(saved.caps_snapshot_json.is_none());
-        app.update_indexer_config(
-            &test_admin(),
-            IndexerConfigUpdate {
-                id: config.id,
-                is_enabled: Some(true),
-                ..Default::default()
-            },
-        )
-        .await
-        .unwrap();
-        assert!(refresher.requested_ids().is_empty());
         assert!(client.calls.lock().unwrap().is_empty());
+
+        // Re-enabling is a "try again": it probes the saved connection, and a
+        // failed probe refuses the enable instead of saving it.
+        let error = app
+            .update_indexer_config(
+                &test_admin(),
+                IndexerConfigUpdate {
+                    id: config.id.clone(),
+                    is_enabled: Some(true),
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "validation: indexer connection test failed: forced failure"
+        );
+        assert_eq!(client.calls.lock().unwrap().len(), 1);
+        assert!(
+            !repo
+                .get_by_id(&config.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_enabled
+        );
     }
 
     #[tokio::test]
