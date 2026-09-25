@@ -1806,7 +1806,9 @@ async fn commit_series_pack_proposal(
         .await;
         let (scope, standby_start, recovered) = match outcome {
             StandbyRecoveryOutcome::Recovered { scope } => (Some(scope), candidate_index + 1, true),
-            StandbyRecoveryOutcome::Active { scope } => (Some(scope), candidate_index + 1, false),
+            StandbyRecoveryOutcome::Active { scope, .. } => {
+                (Some(scope), candidate_index + 1, false)
+            }
             StandbyRecoveryOutcome::Deferred { scope, .. } => (scope, candidate_index, false),
             StandbyRecoveryOutcome::Parked { scope } => {
                 let candidate_is_parked = scope.as_ref() == Some(&candidate_scope);
@@ -2990,6 +2992,50 @@ where
     .await
 }
 
+/// A saved result whose source vanished was expired by the walk, and no later
+/// walk reports it again. Drop that indexer's coverage for the scope so the next
+/// cycle re-queries it, whatever else the walk concluded.
+async fn prune_stale_standby_coverage(
+    app: &AppUseCase,
+    title: &Title,
+    item: &AcquisitionScopeState,
+    episode: Option<&Episode>,
+    context: &BackgroundAcquisitionTitleContext,
+    stale_indexer_ids: &[String],
+) {
+    let search_title = app
+        .release_search_title_for_wanted_item(title, item, episode, Some(&context.reads))
+        .await;
+    let pending_subject = app
+        .resolve_pending_release_search_subject_for_wanted_item(
+            title,
+            &search_title,
+            item,
+            episode,
+        )
+        .await;
+    let Some(convergence) = app
+        .resolve_scope_convergence_memoized(
+            &search_title,
+            pending_subject.for_convergence(),
+            &context.convergence_inputs,
+        )
+        .await
+    else {
+        return;
+    };
+    info!(
+        title_id = title.id.as_str(),
+        scope_key = convergence.scope_key.as_str(),
+        stale_indexer_ids = ?stale_indexer_ids,
+        "background acquisition: pruned stale standby coverage; the next cycle will refresh these indexers"
+    );
+    for indexer_id in stale_indexer_ids {
+        app.prune_scope_key_coverage(&convergence.scope_key, Some(indexer_id))
+            .await;
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "target processing coordinates shared acquisition state across a title pass"
@@ -3167,12 +3213,31 @@ async fn process_single_target(
         )
         .await
         {
-            StandbyRecoveryOutcome::Recovered { scope }
-            | StandbyRecoveryOutcome::Active { scope } => {
-                if let Some(episode_ids) = episode_ids_for_scope(&scope) {
+            ref outcome @ (StandbyRecoveryOutcome::Recovered { ref scope }
+            | StandbyRecoveryOutcome::Active { ref scope, .. }) => {
+                if let StandbyRecoveryOutcome::Active {
+                    stale_indexer_ids, ..
+                } = outcome
+                    && !stale_indexer_ids.is_empty()
+                {
+                    prune_stale_standby_coverage(
+                        app,
+                        title,
+                        item,
+                        episode.as_ref(),
+                        context,
+                        stale_indexer_ids,
+                    )
+                    .await;
+                }
+                // Both leave the scope covered for this cycle, so both claim its
+                // episodes and skip the indexer query. Only `Recovered` is a grab:
+                // `Active` means a release already in the client (or queued for
+                // the scope and at least as good) covers it.
+                if let Some(episode_ids) = episode_ids_for_scope(scope) {
                     cycle.claim_episode_ids(episode_ids.iter().cloned());
                 }
-                if let SubmissionScope::Collection { collection_id } = &scope {
+                if let SubmissionScope::Collection { collection_id } = scope {
                     if let Ok(episodes) = context
                         .reads
                         .episodes_for_collection(app, collection_id)
@@ -3191,12 +3256,20 @@ async fn process_single_target(
                         cycle.mark_season_pack_grabbed(&(title.id.clone(), season));
                     }
                 }
-                session.stats.inline_grabs += 1;
-                info!(
-                    title = title.name.as_str(),
-                    scope_key = target.scope_key.as_str(),
-                    "grabbed the next saved search result; no indexer query spent"
-                );
+                if matches!(outcome, StandbyRecoveryOutcome::Recovered { .. }) {
+                    session.stats.inline_grabs += 1;
+                    info!(
+                        title = title.name.as_str(),
+                        scope_key = target.scope_key.as_str(),
+                        "grabbed the next saved search result; no indexer query spent"
+                    );
+                } else {
+                    debug!(
+                        title = title.name.as_str(),
+                        scope_key = target.scope_key.as_str(),
+                        "saved search results kept: a release in the download client already covers this scope"
+                    );
+                }
                 return Ok(());
             }
             StandbyRecoveryOutcome::Deferred { refused, .. } => {
@@ -3232,6 +3305,22 @@ async fn process_single_target(
         Vec::new()
     };
 
+    // Exhausting saved results is a recovery action, not a new search. Preserve
+    // that contract before either the title or episode lane spends an indexer
+    // query.
+    if !stale_standby_indexer_ids.is_empty() {
+        prune_stale_standby_coverage(
+            app,
+            title,
+            item,
+            episode.as_ref(),
+            context,
+            &stale_standby_indexer_ids,
+        )
+        .await;
+        return Ok(());
+    }
+
     let search_title = app
         .release_search_title_for_wanted_item(title, item, episode.as_ref(), Some(&context.reads))
         .await;
@@ -3253,32 +3342,6 @@ async fn process_single_target(
         .for_convergence()
         .season
         .filter(|season| *season > 0);
-
-    // Exhausting saved results is a recovery action, not a new search. Preserve
-    // that contract before either the title or episode lane spends an indexer
-    // query.
-    if !stale_standby_indexer_ids.is_empty() {
-        if let Some(convergence) = app
-            .resolve_scope_convergence_memoized(
-                &search_title,
-                pending_subject.for_convergence(),
-                &context.convergence_inputs,
-            )
-            .await
-        {
-            info!(
-                title_id = title.id.as_str(),
-                scope_key = convergence.scope_key.as_str(),
-                stale_indexer_ids = ?stale_standby_indexer_ids,
-                "background acquisition: pruned stale standby coverage; the next cycle will refresh these indexers"
-            );
-            for indexer_id in stale_standby_indexer_ids {
-                app.prune_scope_key_coverage(&convergence.scope_key, Some(&indexer_id))
-                    .await;
-            }
-        }
-        return Ok(());
-    }
 
     // One title lookup per cycle discovers a qualifying whole-series or
     // multi-season release before the established season and episode paths.

@@ -14478,3 +14478,683 @@ async fn seed_monitored_movie_for_cycle(
         .expect("seed the wanted scope");
     title
 }
+
+// ── Saved results against a pack already downloading ────────────────────────
+
+/// Grab the first of `season_pack_titles` through the real season-pack lane,
+/// then leave it downloading: tracked `Downloading` and listed by the client
+/// under its release name. Any further season-pack titles the indexer answered with are saved as
+/// standby by that same grab.
+async fn season_pack_downloading_fixture(
+    season_pack_titles: Vec<String>,
+) -> (AppUseCase, Title, Arc<StubDownloadClient>) {
+    let queued_pack = season_pack_titles[0].clone();
+    let indexer_client =
+        Arc::new(TrackingIndexerClient::default().with_season_pack_titles(season_pack_titles));
+    let (app, title, _indexer_client, download_client) =
+        seed_recent_failed_season_pack_fixture_with_indexer(indexer_client).await;
+
+    app.run_background_acquisition_cycle_once().await;
+    assert_eq!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .clone(),
+        vec![queued_pack.clone()],
+        "fixture precondition: the season-pack lane grabbed the first pack"
+    );
+
+    set_queued_pack_state(
+        &app,
+        &title,
+        &download_client,
+        &queued_pack,
+        DownloadQueueState::Downloading,
+        TrackedDownloadState::Downloading,
+    )
+    .await;
+
+    (app, title, download_client)
+}
+
+/// Put the one pack submission in `client_state` as the client lists it and
+/// `tracked_state` as the download tracker records it.
+async fn set_queued_pack_state(
+    app: &AppUseCase,
+    title: &Title,
+    download_client: &StubDownloadClient,
+    queued_pack: &str,
+    client_state: DownloadQueueState,
+    tracked_state: TrackedDownloadState,
+) {
+    let submissions = app
+        .services
+        .workflow
+        .download_submissions
+        .list_for_title(&title.id)
+        .await
+        .expect("list pack submissions");
+    assert_eq!(submissions.len(), 1, "one pack submission recorded");
+    app.services
+        .workflow
+        .download_submissions
+        .update_tracked_state(
+            &ClientJobLocator::from_submission(&submissions[0]),
+            tracked_state.as_str(),
+        )
+        .await
+        .expect("track the pack");
+    for queue_item in download_client.queue_items.lock().await.iter_mut() {
+        queue_item.state = client_state;
+        queue_item.title_name = queued_pack.to_string();
+    }
+    // The submission guard's in-process caches of the client and of the grab it
+    // just accepted age out after seconds; drop them rather than wait, so the
+    // next submission reads the client state set above.
+    app.runtime
+        .acquisition
+        .download_submission_guards
+        .forget_settled_download(&title.id);
+}
+
+/// Save `release_title` as a standby row against the season's first episode
+/// scope, the way a season-pack grab keys its runner-ups.
+async fn save_season_standby(
+    app: &AppUseCase,
+    title: &Title,
+    release_title: &str,
+    stored_score: i32,
+) -> String {
+    let anchor = season_scope_states(app, title, "7")
+        .await
+        .into_iter()
+        .next()
+        .expect("season scope exists");
+    let mut standby = pending_movie_release(
+        &anchor.id,
+        title,
+        release_title,
+        PendingReleaseStatus::Standby,
+    );
+    standby.release_size_bytes = None;
+    standby.release_score = stored_score;
+    app.services
+        .workflow
+        .pending_releases
+        .insert_pending_release(&standby)
+        .await
+        .expect("seed standby pack");
+    standby.id
+}
+
+async fn season_scope_states(
+    app: &AppUseCase,
+    title: &Title,
+    season: &str,
+) -> Vec<AcquisitionScopeState> {
+    let mut states = app
+        .services
+        .workflow
+        .acquisition_scope_states
+        .list_acquisition_scope_states_for_title_ids(std::slice::from_ref(&title.id))
+        .await
+        .expect("list scope states")
+        .into_iter()
+        .filter(|state| state.season_number.as_deref() == Some(season))
+        .collect::<Vec<_>>();
+    states.sort_by(|left, right| left.id.cmp(&right.id));
+    states
+}
+
+/// Walk every scope of `season` exactly as the acquisition cycle does, against
+/// one fresh client snapshot.
+async fn walk_season_saved_results(
+    app: &AppUseCase,
+    title: &Title,
+    season: &str,
+) -> Vec<crate::acquisition_workflow::StandbyRecoveryOutcome> {
+    let snapshot = crate::acquisition_workflow::DownloadClientSnapshot::fetch(app).await;
+    let mut outcomes = Vec::new();
+    for state in season_scope_states(app, title, season).await {
+        outcomes.push(
+            crate::acquisition_workflow::try_saved_candidates(
+                app,
+                &state,
+                None,
+                None,
+                &snapshot,
+                &Utc::now(),
+            )
+            .await,
+        );
+    }
+    outcomes
+}
+
+async fn pending_status(app: &AppUseCase, pending_id: &str) -> PendingReleaseStatus {
+    app.services
+        .workflow
+        .pending_releases
+        .get_pending_release(pending_id)
+        .await
+        .expect("load standby")
+        .expect("standby exists")
+        .status
+}
+
+/// A season pack is downloading and the same grab saved an equal-rank pack
+/// from another group as its runner-up. Walking the saved results must neither
+/// submit that second pack nor burn it: it is the corpus the next failure of
+/// the downloading pack walks.
+#[tokio::test]
+async fn saved_equal_pack_is_kept_standby_while_an_equal_pack_downloads() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let standby_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupB".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone(), standby_pack.clone()]).await;
+    let standby = app
+        .services
+        .workflow
+        .pending_releases
+        .list_all_standby_pending_releases()
+        .await
+        .expect("list standby");
+    assert_eq!(standby.len(), 1, "the grab saved its runner-up pack");
+    assert_eq!(standby[0].release_title, standby_pack);
+    let standby_id = standby[0].id.clone();
+
+    let outcomes = walk_season_saved_results(&app, &title, "7").await;
+
+    assert_eq!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .clone(),
+        vec![queued_pack],
+        "an equal pack must not be fetched beside the one downloading: {outcomes:?}"
+    );
+    assert_eq!(
+        pending_status(&app, &standby_id).await,
+        PendingReleaseStatus::Standby,
+        "the runner-up must survive for the downloading pack's failure: {outcomes:?}"
+    );
+    assert!(
+        outcomes.iter().all(|outcome| matches!(
+            outcome,
+            crate::acquisition_workflow::StandbyRecoveryOutcome::Active { .. }
+        )),
+        "the downloading pack covers every scope of the season: {outcomes:?}"
+    );
+}
+
+/// Once the client has finished the pack and it waits for import, the client
+/// queue no longer holds the scope; the queued comparison is the only guard
+/// left, and an equal pack must still not be fetched beside it.
+#[tokio::test]
+async fn saved_equal_pack_is_kept_standby_while_an_equal_pack_awaits_import() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let standby_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupB".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone(), standby_pack.clone()]).await;
+    set_queued_pack_state(
+        &app,
+        &title,
+        &download_client,
+        &queued_pack,
+        DownloadQueueState::Completed,
+        TrackedDownloadState::ImportPending,
+    )
+    .await;
+    let standby = app
+        .services
+        .workflow
+        .pending_releases
+        .list_all_standby_pending_releases()
+        .await
+        .expect("list standby");
+    assert_eq!(standby.len(), 1, "the grab saved its runner-up pack");
+    let standby_id = standby[0].id.clone();
+
+    let outcomes = walk_season_saved_results(&app, &title, "7").await;
+
+    assert_eq!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .clone(),
+        vec![queued_pack],
+        "an equal pack must not be fetched beside one awaiting import: {outcomes:?}"
+    );
+    assert_eq!(
+        pending_status(&app, &standby_id).await,
+        PendingReleaseStatus::Standby,
+        "the runner-up must survive for the queued pack's failure: {outcomes:?}"
+    );
+}
+
+#[tokio::test]
+async fn saved_pack_one_tier_above_the_downloading_pack_is_grabbed() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.720p.WEB-DL-GroupA".to_string();
+    let better_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupB".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone()]).await;
+    let standby_id = save_season_standby(&app, &title, &better_pack, 1_000).await;
+    assert_upgrade_waits_for_the_client_queue_then_grabs(
+        &app,
+        &title,
+        &download_client,
+        &queued_pack,
+        &better_pack,
+        &standby_id,
+    )
+    .await;
+}
+
+/// A strict upgrade passes the queued comparison. While the queued pack still
+/// sits in the client queue the submission guard defers it without burning the
+/// row; once that pack has left the queue and only awaits import, it is
+/// grabbed.
+async fn assert_upgrade_waits_for_the_client_queue_then_grabs(
+    app: &AppUseCase,
+    title: &Title,
+    download_client: &StubDownloadClient,
+    queued_pack: &str,
+    upgrade_pack: &str,
+    standby_id: &str,
+) {
+    let outcomes = walk_season_saved_results(app, title, "7").await;
+    assert!(
+        outcomes.iter().all(|outcome| matches!(
+            outcome,
+            crate::acquisition_workflow::StandbyRecoveryOutcome::Deferred { .. }
+        )),
+        "the queued comparison admits the upgrade; only the client queue defers it: {outcomes:?}"
+    );
+    assert_eq!(
+        pending_status(app, standby_id).await,
+        PendingReleaseStatus::Standby
+    );
+
+    set_queued_pack_state(
+        app,
+        title,
+        download_client,
+        queued_pack,
+        DownloadQueueState::Completed,
+        TrackedDownloadState::ImportPending,
+    )
+    .await;
+    let outcomes = walk_season_saved_results(app, title, "7").await;
+
+    assert!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .iter()
+            .any(|submitted| submitted == upgrade_pack),
+        "a strict upgrade over the queued pack is grabbed: {outcomes:?}"
+    );
+    assert_eq!(
+        pending_status(app, standby_id).await,
+        PendingReleaseStatus::Grabbed
+    );
+}
+
+#[tokio::test]
+async fn saved_proper_of_the_downloading_pack_is_grabbed() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let proper_pack = "Recent.Failed.Season.Pack.S07.PROPER.1080p.WEB-DL-GroupA".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone()]).await;
+    let standby_id = save_season_standby(&app, &title, &proper_pack, 1_000).await;
+    assert_upgrade_waits_for_the_client_queue_then_grabs(
+        &app,
+        &title,
+        &download_client,
+        &queued_pack,
+        &proper_pack,
+        &standby_id,
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_pack_downloading_for_another_season_does_not_block_a_saved_pack() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let other_season_pack = "Recent.Failed.Season.Pack.S08.1080p.WEB-DL-GroupB".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone()]).await;
+
+    let season_eight = app
+        .services
+        .catalog
+        .shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "8".to_string(),
+            label: Some("Season 8".to_string()),
+            ordered_path: None,
+            narrative_order: Some("8".to_string()),
+            first_episode_number: Some("25".to_string()),
+            last_episode_number: Some("26".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("create season eight");
+    let mut season_eight_state_ids = Vec::new();
+    for (episode_number, label) in [("25", "S08E25"), ("26", "S08E26")] {
+        let episode = app
+            .services
+            .catalog
+            .shows
+            .create_episode(Episode {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_id: Some(season_eight.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some(episode_number.to_string()),
+                season_number: Some("8".to_string()),
+                episode_label: Some(label.to_string()),
+                title: Some(label.to_string()),
+                air_date: Some("2024-02-01".to_string()),
+                duration_seconds: Some(1_440),
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                image_url: None,
+                monitored: true,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create season eight episode");
+        let state_id = Id::new().0;
+        app.services
+            .workflow
+            .acquisition_scope_states
+            .upsert_acquisition_scope_state(&AcquisitionScopeState {
+                id: state_id.clone(),
+                title_id: title.id.clone(),
+                title_name: Some(title.name.clone()),
+                title_slug: None,
+                title_facet: None,
+                library_id: None,
+                library_name: None,
+                library_slug: None,
+                episode_id: Some(episode.id.clone()),
+                collection_id: None,
+                series_movie_link_id: None,
+                season_number: Some("8".to_string()),
+                episode_number: None,
+                media_type: "episode".to_string(),
+                last_search_at: None,
+                status: AcquisitionScopeStatus::Wanted,
+                grabbed_release: None,
+                landed_bar: None,
+                latest_release_decision: None,
+                mismatch_recovery_eligible: false,
+                created_at: Utc::now().to_rfc3339(),
+                updated_at: Utc::now().to_rfc3339(),
+            })
+            .await
+            .expect("seed season eight scope");
+        season_eight_state_ids.push(state_id);
+    }
+    let mut standby = pending_movie_release(
+        &season_eight_state_ids[0],
+        &title,
+        &other_season_pack,
+        PendingReleaseStatus::Standby,
+    );
+    standby.release_size_bytes = None;
+    app.services
+        .workflow
+        .pending_releases
+        .insert_pending_release(&standby)
+        .await
+        .expect("seed season eight standby pack");
+
+    let outcomes = walk_season_saved_results(&app, &title, "8").await;
+
+    assert!(
+        download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .contains(&other_season_pack),
+        "a pack downloading for season seven covers nothing in season eight: {outcomes:?}"
+    );
+    assert_eq!(
+        pending_status(&app, &standby.id).await,
+        PendingReleaseStatus::Grabbed
+    );
+}
+
+/// Saved rows are ordered by the score stored when they were saved, and each is
+/// re-scored when walked. A row the queued pack covers must not stop the walk:
+/// a real upgrade saved below it is still tried, and grabbed once the queued
+/// pack no longer holds the client queue.
+#[tokio::test]
+async fn a_queue_covered_saved_pack_does_not_hide_an_upgrade_saved_below_it() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let equal_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupB".to_string();
+    let proper_pack = "Recent.Failed.Season.Pack.S07.PROPER.1080p.WEB-DL-GroupA".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone()]).await;
+    let equal_id = save_season_standby(&app, &title, &equal_pack, 5_000).await;
+    let proper_id = save_season_standby(&app, &title, &proper_pack, 1_000).await;
+
+    let outcomes = walk_season_saved_results(&app, &title, "7").await;
+    assert!(
+        outcomes.iter().all(|outcome| matches!(
+            outcome,
+            crate::acquisition_workflow::StandbyRecoveryOutcome::Deferred { .. }
+        )),
+        "the walk passes the covered row and reaches the PROPER, which only the client queue holds back: {outcomes:?}"
+    );
+    assert_eq!(
+        pending_status(&app, &equal_id).await,
+        PendingReleaseStatus::Standby
+    );
+    assert_eq!(
+        pending_status(&app, &proper_id).await,
+        PendingReleaseStatus::Standby
+    );
+
+    set_queued_pack_state(
+        &app,
+        &title,
+        &download_client,
+        &queued_pack,
+        DownloadQueueState::Completed,
+        TrackedDownloadState::ImportPending,
+    )
+    .await;
+    let outcomes = walk_season_saved_results(&app, &title, "7").await;
+
+    let submitted = download_client
+        .submitted_release_titles
+        .lock()
+        .await
+        .clone();
+    assert!(
+        submitted.contains(&proper_pack),
+        "the PROPER below the covered row is grabbed: {outcomes:?}"
+    );
+    assert!(
+        !submitted.contains(&equal_pack),
+        "the covered row is never fetched: {submitted:?}"
+    );
+    assert_eq!(
+        pending_status(&app, &proper_id).await,
+        PendingReleaseStatus::Grabbed
+    );
+    assert_eq!(
+        pending_status(&app, &equal_id).await,
+        PendingReleaseStatus::Standby,
+        "the covered row stays walkable for a later failure"
+    );
+}
+
+/// A saved row whose source vanished is expired as the walk passes it, so no
+/// later walk reports it again. The walk that then finds the scope covered by
+/// a queued release must still hand that source back for a coverage refresh.
+#[tokio::test]
+async fn a_queue_covered_walk_still_reports_a_source_gone_row() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let gone_pack = "Recent.Failed.Season.Pack.S07.PROPER.1080p.WEB-DL-GroupA".to_string();
+    let equal_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupB".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone()]).await;
+    set_queued_pack_state(
+        &app,
+        &title,
+        &download_client,
+        &queued_pack,
+        DownloadQueueState::Completed,
+        TrackedDownloadState::ImportPending,
+    )
+    .await;
+    let anchor = season_scope_states(&app, &title, "7")
+        .await
+        .into_iter()
+        .next()
+        .expect("season scope exists");
+    let mut gone = pending_movie_release(
+        &anchor.id,
+        &title,
+        &gone_pack,
+        PendingReleaseStatus::Standby,
+    );
+    gone.release_size_bytes = None;
+    gone.release_score = 5_000;
+    gone.indexer_id = Some("gone-indexer".to_string());
+    app.services
+        .workflow
+        .pending_releases
+        .insert_pending_release(&gone)
+        .await
+        .expect("seed gone row");
+    let equal_id = save_season_standby(&app, &title, &equal_pack, 1_000).await;
+    download_client
+        .set_submit_errors([StubSubmitError::SourceGone("HTTP 404: gone".to_string())])
+        .await;
+
+    let snapshot = crate::acquisition_workflow::DownloadClientSnapshot::fetch(&app).await;
+    let outcome = crate::acquisition_workflow::try_saved_candidates(
+        &app,
+        &anchor,
+        None,
+        None,
+        &snapshot,
+        &Utc::now(),
+    )
+    .await;
+
+    assert_eq!(
+        outcome,
+        crate::acquisition_workflow::StandbyRecoveryOutcome::Active {
+            scope: match &outcome {
+                crate::acquisition_workflow::StandbyRecoveryOutcome::Active { scope, .. } => {
+                    scope.clone()
+                }
+                other => panic!("the queued pack covers the scope: {other:?}"),
+            },
+            stale_indexer_ids: vec!["gone-indexer".to_string()],
+        }
+    );
+    assert_eq!(
+        pending_status(&app, &gone.id).await,
+        PendingReleaseStatus::Expired
+    );
+    assert_eq!(
+        pending_status(&app, &equal_id).await,
+        PendingReleaseStatus::Standby
+    );
+}
+
+/// The cycle refreshes the coverage of a source whose saved row vanished even
+/// when the walk ends on a scope already covered, not only when it runs dry.
+#[tokio::test]
+async fn a_covered_walk_prunes_the_coverage_of_a_source_gone_row() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    download_client
+        .set_submit_errors([StubSubmitError::SourceGone("HTTP 404: gone".to_string())])
+        .await;
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking(
+        download_client.clone(),
+        Arc::new(TrackingDownloadSubmissionRepo::default()),
+        pending_releases.clone(),
+        wanted_items.clone(),
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::default());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    let (title, wanted_id) =
+        seed_movie_wanted_for_acquisition(&app, &user, &wanted_items, "Covered Walk", 2024).await;
+    let scope_key = format!("title:{}", title.id);
+    for indexer_id in ["gone-indexer", "kept-indexer"] {
+        coverage
+            .record_coverage(&scope_key, "movie", indexer_id, "fp")
+            .await
+            .expect("seed coverage");
+    }
+
+    let mut gone = pending_movie_release(
+        &wanted_id,
+        &title,
+        "Covered.Walk.2024.1080p.WEB-DL-GONE",
+        PendingReleaseStatus::Standby,
+    );
+    gone.release_score = 2_000;
+    gone.indexer_id = Some("gone-indexer".to_string());
+    let active_title = "Covered.Walk.2024.1080p.WEB-DL-ACTIVE";
+    let mut active = pending_movie_release(
+        &wanted_id,
+        &title,
+        active_title,
+        PendingReleaseStatus::Standby,
+    );
+    active.release_score = 1_000;
+    for row in [&gone, &active] {
+        pending_releases
+            .insert_pending_release(row)
+            .await
+            .expect("seed standby row");
+    }
+    let mut queue_item =
+        queue_history_fixture_item("covered-walk-job", DownloadQueueState::Downloading, 0);
+    queue_item.title_id = Some(title.id.clone());
+    queue_item.title_name = active_title.to_string();
+    download_client.queue_items.lock().await.push(queue_item);
+
+    app.run_background_acquisition_cycle_once().await;
+
+    assert_eq!(
+        pending_status(&app, &gone.id).await,
+        PendingReleaseStatus::Expired,
+        "fixture precondition: the walk reached the gone row"
+    );
+    assert_eq!(
+        pending_status(&app, &active.id).await,
+        PendingReleaseStatus::Standby,
+        "the walk ended on the active row"
+    );
+    assert_eq!(
+        coverage.indexers_for_scope(&scope_key).await,
+        vec!["kept-indexer".to_string()],
+        "the gone source's coverage is pruned so the next cycle re-queries it"
+    );
+}

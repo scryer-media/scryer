@@ -29,6 +29,15 @@ pub(crate) enum PendingGrabOutcome {
     /// blocklist entry.
     SourceGone,
     Rejected,
+    /// Admission refused the release because a release already queued or
+    /// grabbed for the same scope is equal or better. Nothing is wrong with the
+    /// release itself: the standby walk keeps it for the queued release's
+    /// failure, while the delay-expiry promoter treats it as `Rejected`.
+    QueueCovered {
+        queued_release: String,
+        reason: crate::admission::AdmissionRejectionReason,
+        message: String,
+    },
     Deferred,
     /// The submission was made and refused in a way that must not burn the
     /// release — an unavailable client, an ambiguous submit, a title briefly
@@ -463,7 +472,7 @@ impl AppUseCase {
                         grabbed_count += 1;
                         break;
                     }
-                    Ok(PendingGrabOutcome::Rejected) => {
+                    Ok(PendingGrabOutcome::Rejected | PendingGrabOutcome::QueueCovered { .. }) => {
                         // This release couldn't be grabbed (blocklisted, etc) — try next
                         let _ = self
                             .services
@@ -1316,9 +1325,22 @@ impl AppUseCase {
             return Ok(PendingGrabOutcome::Rejected);
         }
 
-        if !crate::admission::evaluate_admission(&admission, candidate_facts, &policy).is_admitted()
-        {
-            return Ok(PendingGrabOutcome::Rejected);
+        let verdict = crate::admission::evaluate_admission(&admission, candidate_facts, &policy);
+        if let Some(rejection) = verdict.rejection() {
+            return Ok(match &rejection.reason {
+                crate::admission::AdmissionRejectionReason::QueuedEqualOrBetter {
+                    queued_title,
+                    ..
+                }
+                | crate::admission::AdmissionRejectionReason::QueuedSameRelease { queued_title } => {
+                    PendingGrabOutcome::QueueCovered {
+                        queued_release: queued_title.clone(),
+                        reason: rejection.reason.clone(),
+                        message: rejection.message.clone(),
+                    }
+                }
+                _ => PendingGrabOutcome::Rejected,
+            });
         }
         let source_hint = pr.release_url.clone();
         let source_kind = pr

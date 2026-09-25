@@ -137,8 +137,17 @@ pub(crate) enum StandbyRecoveryOutcome {
     /// again. Returning the submitted scope lets the cursor suppress exactly
     /// the recovered pack's coverage without reparsing the saved release.
     Recovered { scope: SubmissionScope },
-    /// The saved release is already active in a download client.
-    Active { scope: SubmissionScope },
+    /// Nothing was grabbed because the scope is already covered: a saved
+    /// release is already active in a download client, or a release queued or
+    /// grabbed for the scope is equal or better than every saved result still
+    /// eligible. The covering rows stay `Standby` for that release's failure.
+    /// Not a grab, and not counted as one. Sources whose artifact vanished
+    /// earlier in the same walk are returned, as for `Exhausted`: their rows
+    /// are expired and no later walk reports them again.
+    Active {
+        scope: SubmissionScope,
+        stale_indexer_ids: Vec<String>,
+    },
     /// The download client could not be consulted; the list is left intact for
     /// the next cycle. `refused` is set when a saved result was actually
     /// submitted and refused — an acquisition job counts that as a failed
@@ -1715,6 +1724,7 @@ pub(crate) async fn try_saved_candidates(
         .load_title_release_blocklist_signatures(&item.title_id)
         .await;
     let mut stale_indexer_ids = HashSet::new();
+    let mut queue_covered_scope = None;
 
     for standby in standby_releases {
         let standby_scope = standby_scopes
@@ -1816,6 +1826,7 @@ pub(crate) async fn try_saved_candidates(
                 .await;
             return StandbyRecoveryOutcome::Active {
                 scope: standby_scope,
+                stale_indexer_ids: stale_indexer_ids.into_iter().collect(),
             };
         }
 
@@ -1897,6 +1908,32 @@ pub(crate) async fn try_saved_candidates(
                     refused,
                 };
             }
+            Ok(super::pending::PendingGrabOutcome::QueueCovered {
+                queued_release,
+                reason,
+                message,
+            }) => {
+                // Only a strict upgrade is fetched beside a queued release. This
+                // one is not, but it stays walkable: if the queued release fails,
+                // it is the next saved result for the scope. The walk goes on —
+                // rows are ordered by their saved score and re-scored here, so a
+                // real upgrade (a PROPER, say) can sit below this one.
+                debug!(
+                    title_id = item.title_id.as_str(),
+                    standby_release = standby.release_title.as_str(),
+                    queued_release = queued_release.as_str(),
+                    reason = ?reason,
+                    detail = message.as_str(),
+                    "saved search result not grabbed: a queued release already covers this scope"
+                );
+                let _ = app
+                    .services
+                    .workflow
+                    .pending_releases
+                    .update_pending_release_status(&standby.id, PendingReleaseStatus::Standby, None)
+                    .await;
+                queue_covered_scope.get_or_insert(standby_scope);
+            }
             Ok(super::pending::PendingGrabOutcome::Parked) => {
                 return StandbyRecoveryOutcome::Parked {
                     scope: Some(standby_scope),
@@ -1924,8 +1961,13 @@ pub(crate) async fn try_saved_candidates(
         }
     }
 
-    StandbyRecoveryOutcome::Exhausted {
-        stale_indexer_ids: stale_indexer_ids.into_iter().collect(),
+    let stale_indexer_ids = stale_indexer_ids.into_iter().collect();
+    match queue_covered_scope {
+        Some(scope) => StandbyRecoveryOutcome::Active {
+            scope,
+            stale_indexer_ids,
+        },
+        None => StandbyRecoveryOutcome::Exhausted { stale_indexer_ids },
     }
 }
 
