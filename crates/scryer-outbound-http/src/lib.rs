@@ -968,6 +968,27 @@ impl RateLimitRegistry {
         }
     }
 
+    /// Whether a destination has served its fallback cooldown but has not yet
+    /// answered normally for long enough to clear its ladder rung.
+    ///
+    /// A sliding-window quota lets a request or two through as soon as the
+    /// wait ends and then refuses again, so callers that pace their own
+    /// requests slow down for this stretch instead of resuming at full speed.
+    /// False while the cooldown itself is still running: nothing goes out then.
+    pub fn destination_recovering(&self, destination: &DestinationKey) -> bool {
+        let proven_at = self
+            .state
+            .destination_fallback_levels
+            .lock()
+            .expect("destination fallback level lock poisoned")
+            .get(destination)
+            .map(|rung| rung.proven_at);
+        let Some(proven_at) = proven_at else {
+            return false;
+        };
+        Instant::now() < proven_at && self.active_destination_cooldown(destination).is_none()
+    }
+
     /// The next fallback cooldown for this destination.
     ///
     /// Escalation is per *run* of rate limits, not per recorded 429: while a
@@ -4275,6 +4296,49 @@ mod tests {
             .record_destination_fallback_cooldown(&destination)
             .await;
         assert_eq!(after_recovery, Duration::from_secs(60));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_destination_recovers_between_its_cooldown_and_its_proven_rung() {
+        let registry = RateLimitRegistry::isolated_indexers();
+        let destination: DestinationKey = "indexer-a.example".into();
+        assert!(!registry.destination_recovering(&destination));
+
+        let (cooldown, _) = registry
+            .record_destination_fallback_cooldown(&destination)
+            .await;
+        assert_eq!(cooldown, Duration::from_secs(60));
+        assert!(
+            !registry.destination_recovering(&destination),
+            "nothing goes out while the cooldown itself is running"
+        );
+
+        tokio::time::advance(cooldown).await;
+        assert!(registry.destination_recovering(&destination));
+        registry.note_destination_success(&destination);
+        assert!(
+            registry.destination_recovering(&destination),
+            "an early success does not prove the rung"
+        );
+
+        tokio::time::advance(cooldown).await;
+        assert!(!registry.destination_recovering(&destination));
+        registry.note_destination_success(&destination);
+        assert!(!registry.destination_recovering(&destination));
+
+        let delay_named_by_server: DestinationKey = "indexer-b.example".into();
+        registry
+            .record_destination_cooldown(
+                &delay_named_by_server,
+                Duration::from_secs(30),
+                RetryAfterSource::Seconds,
+            )
+            .await;
+        tokio::time::advance(Duration::from_secs(30)).await;
+        assert!(
+            !registry.destination_recovering(&delay_named_by_server),
+            "a server-named delay puts the destination on no ladder rung"
+        );
     }
 
     #[tokio::test]

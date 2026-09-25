@@ -399,6 +399,7 @@ impl AppUseCase {
                     enable_auto_search: true,
                     rate_limit_seconds: provider.rate_limit_seconds_for_provider(&pt),
                     rate_limit_burst: None,
+                    max_queries_per_minute: None,
                     disabled_until: None,
                     proxy_config_id: None,
                     download_client_id: None,

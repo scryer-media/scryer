@@ -24,6 +24,8 @@ mod external_import_finalize;
 mod external_import_secret_drafts;
 #[path = "integration_graphql/folder_match.rs"]
 mod folder_match;
+#[path = "integration_graphql/indexer_configs.rs"]
+mod indexer_configs;
 #[path = "integration_graphql/library_scan.rs"]
 mod library_scan;
 #[path = "integration_graphql/location_operations.rs"]

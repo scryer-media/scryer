@@ -22,7 +22,7 @@ const INDEXER_COLUMNS: &str =
     managed_child_key,
     managed_metadata_json,
     caps_snapshot_json, last_health_status, last_error_message, last_error_at, config_json,
-    created_at, updated_at";
+    created_at, updated_at, max_queries_per_minute";
 
 const INDEXER_INSERT_SQL: &str = "INSERT INTO indexers (
     id, name, provider_type, base_url, api_key_encrypted, rate_limit_seconds,
@@ -30,10 +30,10 @@ const INDEXER_INSERT_SQL: &str = "INSERT INTO indexers (
     enable_auto_search, proxy_config_id, download_client_id, seeding_profile_id,
     managed_parent_config_id, managed_child_key,
     managed_metadata_json, caps_snapshot_json, last_health_status, last_error_message,
-    last_error_at, config_json, created_at, updated_at
+    last_error_at, config_json, created_at, updated_at, max_queries_per_minute
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
+    {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
 )";
 
 #[derive(Clone)]
@@ -195,6 +195,10 @@ impl IndexerConfigStore {
         if let Some(rate_limit_burst) = update.rate_limit_burst {
             assignments.push("rate_limit_burst = {}".to_string());
             args.push(SqlArg::I64(rate_limit_burst));
+        }
+        if let Some(max_queries_per_minute) = update.max_queries_per_minute {
+            assignments.push("max_queries_per_minute = {}".to_string());
+            args.push(SqlArg::OptI64(max_queries_per_minute));
         }
         if let Some(is_enabled) = update.is_enabled {
             assignments.push("is_enabled = {}".to_string());
@@ -629,6 +633,7 @@ fn indexer_insert_args(
         SqlArg::OptText(stored_config_json),
         SqlArg::Timestamp(config.created_at),
         SqlArg::Timestamp(config.updated_at),
+        SqlArg::OptI64(config.max_queries_per_minute),
     ])
 }
 
@@ -674,6 +679,7 @@ fn row_to_indexer_config(
         )?,
         rate_limit_seconds: row.opt_i64("rate_limit_seconds")?,
         rate_limit_burst: row.opt_i64("rate_limit_burst")?,
+        max_queries_per_minute: row.opt_i64("max_queries_per_minute")?,
         disabled_until: row.opt_timestamp("disabled_until")?,
         is_enabled: row.bool("is_enabled")?,
         enable_interactive_search: row.bool("enable_interactive_search")?,
@@ -749,7 +755,8 @@ mod tests {
                 last_error_at TEXT,
                 config_json TEXT,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                max_queries_per_minute INTEGER
             )",
         )
         .execute(pool)
@@ -1128,6 +1135,78 @@ mod tests {
             .await
             .expect("mapping clear should succeed");
         assert_eq!(cleared.download_client_id, None);
+    }
+
+    #[tokio::test]
+    async fn query_budget_round_trips_through_create_and_update() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("in-memory sqlite should open");
+        create_test_indexers_table(&pool).await;
+        let store = IndexerConfigStore::new(
+            StoreDatastore::Sqlite {
+                pool,
+                writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+            },
+            Arc::new(RwLock::new(None)),
+        );
+        let mut config: IndexerConfig = serde_json::from_value(serde_json::json!({
+            "id": "budgeted", "name": "Synthetic indexer", "provider_type": "newznab",
+            "base_url": "https://indexer.example.test", "config_json": "{}",
+            "is_enabled": true, "enable_interactive_search": true, "enable_auto_search": true,
+            "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z"
+        }))
+        .expect("config without a budget should deserialize");
+        assert_eq!(config.max_queries_per_minute, None);
+        config.max_queries_per_minute = Some(12);
+        store.create(config).await.expect("create should succeed");
+        let created = store
+            .get_by_id("budgeted")
+            .await
+            .expect("query should succeed")
+            .expect("config should exist");
+        assert_eq!(created.max_queries_per_minute, Some(12));
+
+        let preserved = store
+            .update(IndexerConfigUpdate {
+                id: "budgeted".to_string(),
+                name: Some("Renamed indexer".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("unrelated update should succeed");
+        assert_eq!(preserved.max_queries_per_minute, Some(12));
+
+        let replaced = store
+            .update(IndexerConfigUpdate {
+                id: "budgeted".to_string(),
+                max_queries_per_minute: Some(Some(30)),
+                ..Default::default()
+            })
+            .await
+            .expect("budget update should succeed");
+        assert_eq!(replaced.max_queries_per_minute, Some(30));
+        assert_eq!(
+            store
+                .get_by_id("budgeted")
+                .await
+                .expect("query should succeed")
+                .expect("config should exist")
+                .max_queries_per_minute,
+            Some(30)
+        );
+
+        let cleared = store
+            .update(IndexerConfigUpdate {
+                id: "budgeted".to_string(),
+                max_queries_per_minute: Some(None),
+                ..Default::default()
+            })
+            .await
+            .expect("budget clear should succeed");
+        assert_eq!(cleared.max_queries_per_minute, None);
     }
     #[tokio::test]
     async fn caps_health_compare_and_swap_preserves_newer_failures_and_settings() {

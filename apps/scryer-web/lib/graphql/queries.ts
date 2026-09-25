@@ -2236,6 +2236,7 @@ export const indexersQuery = `query Indexers($providerType: String) {
     storedSecretKeys
     rateLimitSeconds
     rateLimitBurst
+    maxQueriesPerMinute
     disabledUntil
     rateLimitedUntil
     isEnabled
@@ -2456,6 +2457,7 @@ const indexerFieldSelection = `
     storedSecretKeys
     rateLimitSeconds
     rateLimitBurst
+    maxQueriesPerMinute
     disabledUntil
     rateLimitedUntil
     isEnabled

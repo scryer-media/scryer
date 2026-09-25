@@ -119,6 +119,7 @@ fn indexer_config(
         caps_snapshot_json: None,
         rate_limit_seconds: Some(0),
         rate_limit_burst: None,
+        max_queries_per_minute: None,
         disabled_until: None,
         last_health_status: None,
         last_error_message: None,

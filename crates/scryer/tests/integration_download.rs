@@ -161,6 +161,7 @@ async fn assert_host_nab_artifacts(use_solver: bool) {
                 api_key_encrypted: Some("fixture-key".into()),
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
+                max_queries_per_minute: None,
                 disabled_until: None,
                 is_enabled: true,
                 enable_interactive_search: true,

@@ -2105,6 +2105,9 @@ const BACKGROUND_INDEXER_REQUEST_INTERVAL: std::time::Duration = std::time::Dura
 struct IndexerPacing {
     domain_key: String,
     interval: std::time::Duration,
+    /// The provider's sustained query budget. It belongs to the provider, not
+    /// to a lane, so every intent draws on it.
+    max_queries_per_minute: Option<u32>,
 }
 
 impl IndexerPacing {
@@ -2123,6 +2126,87 @@ impl IndexerPacing {
         Self {
             domain_key: config.rate_limit_domain_key(),
             interval,
+            max_queries_per_minute: config
+                .max_queries_per_minute
+                .filter(|budget| *budget >= 1)
+                .map(|budget| u32::try_from(budget).unwrap_or(u32::MAX)),
+        }
+    }
+}
+
+/// The span a query budget counts over.
+const QUERY_BUDGET_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// One domain's query budget as a log of the dispatch instants it has
+/// promised, oldest first.
+///
+/// A new request goes no earlier than 60 s after the budget-th most recent
+/// promised dispatch, so no 60 s window ever holds more requests than the
+/// budget, however they arrive. Slots are promised before the request sleeps;
+/// a request dropped before its slot comes takes its entry back out.
+#[derive(Debug, Default)]
+struct QueryBudgetLog {
+    /// `(dispatch instant, reservation id)`, sorted by instant.
+    promised: std::collections::VecDeque<(tokio::time::Instant, u64)>,
+}
+
+impl QueryBudgetLog {
+    /// The earliest instant at or after `now` that keeps every 60 s window at
+    /// or under `budget`. Entries a request at `now` can no longer share a
+    /// window with are forgotten first.
+    fn earliest_slot(&mut self, budget: usize, now: tokio::time::Instant) -> tokio::time::Instant {
+        while self
+            .promised
+            .front()
+            .is_some_and(|(at, _)| *at + QUERY_BUDGET_WINDOW <= now)
+        {
+            self.promised.pop_front();
+        }
+        match self.promised.len().checked_sub(budget) {
+            Some(index) => (self.promised[index].0 + QUERY_BUDGET_WINDOW).max(now),
+            None => now,
+        }
+    }
+
+    fn promise(&mut self, at: tokio::time::Instant, id: u64) {
+        let position = self
+            .promised
+            .partition_point(|(existing, _)| *existing <= at);
+        self.promised.insert(position, (at, id));
+    }
+
+    fn release(&mut self, id: u64) {
+        self.promised.retain(|(_, existing)| *existing != id);
+    }
+}
+
+#[derive(Default)]
+struct IndexerRateLimiterState {
+    next_request: HashMap<String, tokio::time::Instant>,
+    budgets: HashMap<String, QueryBudgetLog>,
+    next_reservation_id: u64,
+}
+
+/// Releases a promised budget slot if the request that holds it is dropped
+/// before the slot comes, so a cancelled search does not spend the budget.
+struct QueryBudgetReservation {
+    state: Arc<std::sync::Mutex<IndexerRateLimiterState>>,
+    domain_key: String,
+    id: u64,
+    dispatched: bool,
+}
+
+impl Drop for QueryBudgetReservation {
+    fn drop(&mut self) {
+        if self.dispatched {
+            return;
+        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(log) = state.budgets.get_mut(&self.domain_key) {
+            log.release(self.id);
         }
     }
 }
@@ -2130,36 +2214,110 @@ impl IndexerPacing {
 /// Per-rate-limit-domain request spacing.
 ///
 /// Host-level default pacing is owned by scryer-outbound-http; this limiter
-/// carries the per-indexer intervals that sit below it — the provider's own
-/// declared limit and the background trickle floor.
+/// carries the per-indexer limits that sit below it — the provider's own
+/// declared interval, its query budget, and the background trickle floor —
+/// and slows a domain to half pace while it recovers from a rate limit.
 #[derive(Clone)]
 struct IndexerRateLimiter {
-    next_request: Arc<Mutex<HashMap<String, tokio::time::Instant>>>,
+    state: Arc<std::sync::Mutex<IndexerRateLimiterState>>,
+    registry: RateLimitRegistry,
 }
 
 impl IndexerRateLimiter {
     fn new() -> Self {
+        Self::with_registry(RateLimitRegistry::indexers())
+    }
+
+    fn with_registry(registry: RateLimitRegistry) -> Self {
         Self {
-            next_request: Arc::new(Mutex::new(HashMap::new())),
+            state: Arc::new(std::sync::Mutex::new(IndexerRateLimiterState::default())),
+            registry,
         }
     }
 
-    /// Wait until this domain's next slot. A zero interval is ignored so the
-    /// shared outbound host RPS limiter stays the sole pacing owner for
-    /// interactive work against an indexer that declares no limit.
+    /// Wait until this domain's next slot: the later of its interval slot and
+    /// the first moment its query budget has room in every 60 s window.
+    ///
+    /// A zero interval with no budget is ignored so the shared outbound host
+    /// RPS limiter stays the sole pacing owner for interactive work against an
+    /// indexer that declares no limit. While the domain has served a fallback
+    /// rate-limit cooldown but not yet proven its ladder rung, the interval
+    /// doubles (a zero one becomes the background trickle) and the budget is
+    /// halved.
     async fn acquire(&self, pacing: &IndexerPacing) {
-        if pacing.interval.is_zero() {
+        let recovering = self
+            .registry
+            .destination_recovering(&DestinationKey::from(pacing.domain_key.as_str()));
+        let interval = match (recovering, pacing.interval.is_zero()) {
+            (false, _) => pacing.interval,
+            (true, true) => BACKGROUND_INDEXER_REQUEST_INTERVAL,
+            (true, false) => pacing.interval.saturating_mul(2),
+        };
+        if recovering {
+            debug!(
+                indexer_domain = %pacing.domain_key,
+                interval_ms = interval.as_millis() as u64,
+                "indexer is recovering from a rate limit; pacing at half speed"
+            );
+        }
+        if interval.is_zero() && pacing.max_queries_per_minute.is_none() {
             return;
         }
 
-        let scheduled_at = {
+        // The guard is built only after the lock is released: its `Drop`
+        // relocks the same mutex, so an unwind inside the block must not drop it.
+        let (dispatch_at, reservation_id) = {
             let now = tokio::time::Instant::now();
-            let mut map = self.next_request.lock().await;
-            let scheduled_at = map.get(&pacing.domain_key).copied().unwrap_or(now).max(now);
-            map.insert(pacing.domain_key.clone(), scheduled_at + pacing.interval);
-            scheduled_at
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let mut dispatch_at = if interval.is_zero() {
+                now
+            } else {
+                state
+                    .next_request
+                    .get(&pacing.domain_key)
+                    .copied()
+                    .unwrap_or(now)
+                    .max(now)
+            };
+            let reservation_id = match pacing.max_queries_per_minute {
+                Some(budget) => {
+                    let mut budget = budget as usize;
+                    if recovering {
+                        budget = (budget / 2).max(1);
+                    }
+                    let id = state.next_reservation_id;
+                    state.next_reservation_id += 1;
+                    let log = state.budgets.entry(pacing.domain_key.clone()).or_default();
+                    dispatch_at = dispatch_at.max(log.earliest_slot(budget, now));
+                    log.promise(dispatch_at, id);
+                    Some(id)
+                }
+                None => {
+                    state.budgets.remove(&pacing.domain_key);
+                    None
+                }
+            };
+            if !interval.is_zero() {
+                let next_slot = dispatch_at.checked_add(interval).unwrap_or(dispatch_at);
+                state
+                    .next_request
+                    .insert(pacing.domain_key.clone(), next_slot);
+            }
+            (dispatch_at, reservation_id)
         };
-        tokio::time::sleep_until(scheduled_at).await;
+        let mut reservation = reservation_id.map(|id| QueryBudgetReservation {
+            state: self.state.clone(),
+            domain_key: pacing.domain_key.clone(),
+            id,
+            dispatched: false,
+        });
+        tokio::time::sleep_until(dispatch_at).await;
+        if let Some(reservation) = reservation.as_mut() {
+            reservation.dispatched = true;
+        }
     }
 }
 
@@ -7464,6 +7622,7 @@ mod tests {
             api_key_encrypted: None,
             rate_limit_seconds: Some(0),
             rate_limit_burst: None,
+            max_queries_per_minute: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,
@@ -13535,6 +13694,7 @@ mod tests {
         IndexerPacing {
             domain_key: "indexer-1".into(),
             interval: std::time::Duration::ZERO,
+            max_queries_per_minute: None,
         }
     }
 
@@ -13542,6 +13702,14 @@ mod tests {
         IndexerPacing {
             domain_key: domain_key.into(),
             interval: std::time::Duration::from_secs(interval_secs),
+            max_queries_per_minute: None,
+        }
+    }
+
+    fn budgeted_pacing(domain_key: &str, interval_secs: u64, per_minute: u32) -> IndexerPacing {
+        IndexerPacing {
+            max_queries_per_minute: Some(per_minute),
+            ..test_pacing(domain_key, interval_secs)
         }
     }
 
@@ -13666,6 +13834,238 @@ mod tests {
             IndexerPacing::resolve(&parent, intent).domain_key,
             parent.rate_limit_domain_key(),
         );
+    }
+
+    /// Acquire `count` slots one after another and return each dispatch time
+    /// in seconds since `since`. On the paused clock these are exact.
+    async fn sequential_dispatches(
+        limiter: &IndexerRateLimiter,
+        pacing: &IndexerPacing,
+        count: usize,
+        since: tokio::time::Instant,
+    ) -> Vec<f64> {
+        let mut dispatches = Vec::with_capacity(count);
+        for _ in 0..count {
+            limiter.acquire(pacing).await;
+            dispatches.push(since.elapsed().as_secs_f64());
+        }
+        dispatches
+    }
+
+    fn assert_dispatches(actual: &[f64], expected: &[f64]) {
+        assert_eq!(actual.len(), expected.len(), "{actual:?} vs {expected:?}");
+        for (actual_at, expected_at) in actual.iter().zip(expected) {
+            assert!(
+                (actual_at - expected_at).abs() < 0.001,
+                "dispatched at {actual:?}, expected {expected:?}"
+            );
+        }
+    }
+
+    async fn is_ready<F: Future + Unpin>(future: &mut F) -> bool {
+        std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(std::pin::Pin::new(&mut *future).poll(cx).is_ready())
+        })
+        .await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacing_query_budget_slides_over_the_last_minute() {
+        let limiter = IndexerRateLimiter::with_registry(RateLimitRegistry::isolated_indexers());
+        let pacing = budgeted_pacing("budget-idx", 0, 3);
+        let started_at = tokio::time::Instant::now();
+
+        let first = sequential_dispatches(&limiter, &pacing, 1, started_at).await;
+        assert_dispatches(&first, &[0.0]);
+        tokio::time::advance(std::time::Duration::from_secs(30)).await;
+        let rest = sequential_dispatches(&limiter, &pacing, 2, started_at).await;
+        assert_dispatches(&rest, &[30.0, 30.0]);
+
+        // The window slides: the fourth waits for the first to leave it, not
+        // for the top of the next minute and not for the 30 s pair.
+        let mut fourth = Box::pin(limiter.acquire(&pacing));
+        assert!(!is_ready(&mut fourth).await, "the budget is spent");
+        tokio::time::advance(std::time::Duration::from_millis(29_900)).await;
+        assert!(
+            !is_ready(&mut fourth).await,
+            "the first request is still in the window"
+        );
+        tokio::time::advance(std::time::Duration::from_millis(100)).await;
+        assert!(is_ready(&mut fourth).await);
+
+        let fifth = sequential_dispatches(&limiter, &pacing, 1, started_at).await;
+        assert_dispatches(&fifth, &[90.0]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacing_query_budgets_are_per_rate_limit_domain() {
+        let limiter = IndexerRateLimiter::with_registry(RateLimitRegistry::isolated_indexers());
+        let started_at = tokio::time::Instant::now();
+
+        let spent =
+            sequential_dispatches(&limiter, &budgeted_pacing("budget-a", 0, 2), 2, started_at)
+                .await;
+        assert_dispatches(&spent, &[0.0, 0.0]);
+
+        let other =
+            sequential_dispatches(&limiter, &budgeted_pacing("budget-b", 0, 2), 2, started_at)
+                .await;
+        assert_dispatches(&other, &[0.0, 0.0]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacing_without_a_budget_is_the_interval_alone() {
+        let limiter = IndexerRateLimiter::with_registry(RateLimitRegistry::isolated_indexers());
+        let started_at = tokio::time::Instant::now();
+
+        let unpaced =
+            sequential_dispatches(&limiter, &test_pacing("free-idx", 0), 10, started_at).await;
+        assert_dispatches(&unpaced, &[0.0; 10]);
+
+        let paced =
+            sequential_dispatches(&limiter, &test_pacing("paced-idx", 2), 4, started_at).await;
+        assert_dispatches(&paced, &[0.0, 2.0, 4.0, 6.0]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacing_waits_for_the_later_of_interval_and_budget() {
+        let limiter = IndexerRateLimiter::with_registry(RateLimitRegistry::isolated_indexers());
+        let started_at = tokio::time::Instant::now();
+
+        // Ten a minute: the 2 s interval sets the pace for the first ten, then
+        // the eleventh waits for the first to leave the window, and the
+        // interval takes over again from that dispatch.
+        let dispatches = sequential_dispatches(
+            &limiter,
+            &budgeted_pacing("combined-idx", 2, 10),
+            12,
+            started_at,
+        )
+        .await;
+        assert_dispatches(
+            &dispatches,
+            &[
+                0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 60.0, 62.0,
+            ],
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacing_never_exceeds_the_budget_in_any_minute() {
+        const BUDGET: u32 = 4;
+        let limiter = IndexerRateLimiter::with_registry(RateLimitRegistry::isolated_indexers());
+        let started_at = tokio::time::Instant::now();
+        let interactive = budgeted_pacing("window-idx", 0, BUDGET);
+        let background = budgeted_pacing("window-idx", 2, BUDGET);
+
+        let requests = (0..3 * BUDGET).map(|index| {
+            let limiter = limiter.clone();
+            let pacing = if index % 2 == 0 {
+                interactive.clone()
+            } else {
+                background.clone()
+            };
+            async move {
+                limiter.acquire(&pacing).await;
+                started_at.elapsed().as_secs_f64()
+            }
+        });
+        let mut dispatches = futures_util::future::join_all(requests).await;
+        dispatches.sort_by(f64::total_cmp);
+
+        assert!(
+            *dispatches.last().unwrap() <= 180.0,
+            "the burst drains within three minutes: {dispatches:?}"
+        );
+        for window_start in &dispatches {
+            let in_window = dispatches
+                .iter()
+                .filter(|at| **at >= *window_start && **at < *window_start + 60.0 - 1e-9)
+                .count();
+            assert!(
+                in_window <= BUDGET as usize,
+                "{in_window} dispatches in the minute from {window_start}: {dispatches:?}"
+            );
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacing_releases_the_slot_of_a_dropped_request() {
+        let limiter = IndexerRateLimiter::with_registry(RateLimitRegistry::isolated_indexers());
+        let pacing = budgeted_pacing("dropped-idx", 0, 2);
+        let started_at = tokio::time::Instant::now();
+
+        let first = sequential_dispatches(&limiter, &pacing, 1, started_at).await;
+        tokio::time::advance(std::time::Duration::from_secs(10)).await;
+        let second = sequential_dispatches(&limiter, &pacing, 1, started_at).await;
+        assert_dispatches(&[first[0], second[0]], &[0.0, 10.0]);
+
+        // Promised the 60 s slot, then cancelled before it came.
+        let mut cancelled = Box::pin(limiter.acquire(&pacing));
+        assert!(!is_ready(&mut cancelled).await);
+        drop(cancelled);
+
+        // Had the cancelled request kept its slot this one would wait until 70 s.
+        let next = sequential_dispatches(&limiter, &pacing, 1, started_at).await;
+        assert_dispatches(&next, &[60.0]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn pacing_halves_while_a_domain_recovers_from_a_rate_limit() {
+        let registry = RateLimitRegistry::isolated_indexers();
+        let limiter = IndexerRateLimiter::with_registry(registry.clone());
+        let interval_domain = "recovering-a";
+        let budget_domain = "recovering-b";
+        for domain in [interval_domain, budget_domain] {
+            let (cooldown, _) = registry
+                .record_destination_fallback_cooldown(&DestinationKey::from(domain))
+                .await;
+            assert_eq!(cooldown, std::time::Duration::from_secs(60));
+            assert!(
+                !registry.destination_recovering(&DestinationKey::from(domain)),
+                "the cooldown itself is not recovery"
+            );
+        }
+
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        let recovering_from = tokio::time::Instant::now();
+        assert!(registry.destination_recovering(&DestinationKey::from(interval_domain)));
+
+        let doubled = sequential_dispatches(
+            &limiter,
+            &test_pacing(interval_domain, 2),
+            2,
+            recovering_from,
+        )
+        .await;
+        assert_dispatches(&doubled, &[0.0, 4.0]);
+
+        // An interactive search with no interval and a 3/min budget is slowed
+        // too: it trickles at 2 s, and the budget halves to one a minute.
+        let budget_from = tokio::time::Instant::now();
+        let halved = sequential_dispatches(
+            &limiter,
+            &budgeted_pacing(budget_domain, 0, 3),
+            2,
+            budget_from,
+        )
+        .await;
+        assert_dispatches(&halved, &[0.0, 60.0]);
+
+        // Past the rung's proving point a success clears it and the domain is
+        // back to its own pace.
+        tokio::time::advance(std::time::Duration::from_secs(60)).await;
+        registry.note_destination_success(&DestinationKey::from(interval_domain));
+        assert!(!registry.destination_recovering(&DestinationKey::from(interval_domain)));
+        let recovered_from = tokio::time::Instant::now();
+        let normal = sequential_dispatches(
+            &limiter,
+            &test_pacing(interval_domain, 2),
+            2,
+            recovered_from,
+        )
+        .await;
+        assert_dispatches(&normal, &[0.0, 2.0]);
     }
 
     #[test]
