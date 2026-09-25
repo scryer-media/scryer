@@ -36,6 +36,7 @@ import type {
   DownloadQueueItem,
   SortConfig,
 } from "@/lib/types";
+import { reconcileActivityClientSelection } from "@/lib/utils/activity-client-selection";
 import {
   downloadQueueItemIdentityKey,
   IMPORT_ATTENTION_STATUSES,
@@ -59,10 +60,6 @@ const DEFAULT_SORT_CONFIG_BY_TAB: SortConfigByTab = {
   import: { key: "STATUS", direction: "ASC" },
   activity: ACTIVITY_QUEUE_SORT,
 };
-
-function arraysEqual<T>(left: T[], right: T[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index]);
-}
 
 function toggleSelectedValue<T extends string>(current: T[], nextValue: T): T[] {
   return current.includes(nextValue)
@@ -263,19 +260,9 @@ export const ActivityContainer = memo(function ActivityContainer({
 
   useEffect(() => {
     const availableClientIds = activityAvailableClients.map((client) => client.clientId);
-    setSelectedActivityClientIds((current) => {
-      if (availableClientIds.length === 0) {
-        if (current === null || current.length === 0) {
-          return current;
-        }
-        return [];
-      }
-      if (current === null) {
-        return availableClientIds;
-      }
-      const next = current.filter((clientId) => availableClientIds.includes(clientId));
-      return arraysEqual(current, next) ? current : next;
-    });
+    setSelectedActivityClientIds((current) =>
+      reconcileActivityClientSelection(current, availableClientIds),
+    );
   }, [activityAvailableClients]);
 
   const refreshVisibleTab = useCallback(async () => {
