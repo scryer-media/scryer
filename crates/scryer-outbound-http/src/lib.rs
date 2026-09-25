@@ -2431,7 +2431,9 @@ pub fn send_blocking_reqwest_request_with_cooldown_policy(
 /// prevents the request from reaching the network. `registry` owns those gates
 /// and records any 429, so indexer traffic passes
 /// [`RateLimitRegistry::indexers`] to honour the cooldowns the scheduler
-/// persists and admits against.
+/// persists and admits against. The wrappers without a registry argument stay
+/// on the general registry on purpose: none of their callers send indexer
+/// traffic.
 pub fn send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer<F>(
     registry: &RateLimitRegistry,
     request: reqwest::blocking::RequestBuilder,
