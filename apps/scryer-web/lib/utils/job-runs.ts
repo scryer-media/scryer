@@ -187,6 +187,61 @@ export function normalizeJobRun(value: unknown): JobRun | null {
   };
 }
 
+export type FullHashBackfillFailure = {
+  mediaFileId: string;
+  path: string;
+  reason: string;
+};
+
+export type FullHashBackfillFailures = {
+  failures: FullHashBackfillFailure[];
+  /** Failures the run counted but did not list. */
+  notListed: number;
+};
+
+/** Reads the files a full-hash backfill run could not hash from its summary. */
+export function parseFullHashBackfillFailures(
+  run: Pick<JobRun, "jobKey" | "summaryJson">,
+): FullHashBackfillFailures {
+  const empty = { failures: [], notListed: 0 };
+  if (run.jobKey !== "FULL_HASH_BACKFILL" || run.summaryJson == null) {
+    return empty;
+  }
+
+  let parsed: unknown = run.summaryJson;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return empty;
+    }
+  }
+  if (!isRecord(parsed) || !Array.isArray(parsed.failures)) {
+    return empty;
+  }
+
+  const failures = parsed.failures.flatMap((failure): FullHashBackfillFailure[] => {
+    if (
+      !isRecord(failure) ||
+      typeof failure.path !== "string" ||
+      typeof failure.reason !== "string"
+    ) {
+      return [];
+    }
+    return [
+      {
+        mediaFileId: typeof failure.mediaFileId === "string" ? failure.mediaFileId : "",
+        path: failure.path,
+        reason: failure.reason,
+      },
+    ];
+  });
+  const failed = normalizeNumber(parsed.failed);
+  const notListed =
+    parsed.failuresTruncated === true ? Math.max(failed - failures.length, 0) : 0;
+  return { failures, notListed };
+}
+
 export function isTerminalJobRunStatus(status: JobRunStatus): boolean {
   return status === "COMPLETED" || status === "WARNING" || status === "FAILED";
 }

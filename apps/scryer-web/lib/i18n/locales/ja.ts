@@ -397,6 +397,8 @@ const ja: LocaleDictionary = {
   "jobs.loadingRecentRuns": "最近のランを読み込み中…",
   "jobs.noRunsYet": "まだ実行履歴はありません。",
   "jobs.healthCheckIssues": "ヘルスチェックの問題",
+  "jobs.fullHashBackfillFailures": "ハッシュを計算できなかったファイル",
+  "jobs.fullHashBackfillFailuresMore": "…ほか {{count}} 件（非表示）",
   "jobs.nextRunPrefix": "次回実行: {{value}}",
   "jobs.startedAt": "開始 {{value}}",
   "jobs.completedAt": "完了 {{value}}",

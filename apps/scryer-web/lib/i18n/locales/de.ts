@@ -396,6 +396,8 @@ const de: LocaleDictionary = {
   "jobs.loadingRecentRuns": "Letzte Läufe werden geladen…",
   "jobs.noRunsYet": "Noch keine Ausführungen protokolliert.",
   "jobs.healthCheckIssues": "Probleme bei der Gesundheitsprüfung",
+  "jobs.fullHashBackfillFailures": "Dateien, die nicht gehasht werden konnten",
+  "jobs.fullHashBackfillFailuresMore": "…und {{count}} weitere, nicht aufgeführt",
   "jobs.nextRunPrefix": "Nächste Ausführung: {{value}}",
   "jobs.startedAt": "Gestartet {{value}}",
   "jobs.completedAt": "Abgeschlossen {{value}}",

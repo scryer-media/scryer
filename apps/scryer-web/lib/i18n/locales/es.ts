@@ -400,6 +400,8 @@ const es: LocaleDictionary = {
   "jobs.loadingRecentRuns": "Cargando ejecuciones recientes...",
   "jobs.noRunsYet": "Aún no se han registrado ejecuciones.",
   "jobs.healthCheckIssues": "Problemas de comprobación de estado",
+  "jobs.fullHashBackfillFailures": "Archivos que no se pudieron hashear",
+  "jobs.fullHashBackfillFailuresMore": "…y {{count}} más sin listar",
   "jobs.nextRunPrefix": "Próxima ejecución: {{value}}",
   "jobs.startedAt": "Iniciado {{value}}",
   "jobs.completedAt": "Completado {{value}}",

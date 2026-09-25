@@ -384,6 +384,8 @@ const zh_CN: LocaleDictionary = {
   "jobs.loadingRecentRuns": "正在加载最近的运行...",
   "jobs.noRunsYet": "尚无运行记录。",
   "jobs.healthCheckIssues": "健康检查问题",
+  "jobs.fullHashBackfillFailures": "无法计算哈希的文件",
+  "jobs.fullHashBackfillFailuresMore": "…另有 {{count}} 个未列出",
   "jobs.nextRunPrefix": "下次运行：{{value}}",
   "jobs.startedAt": "开始于 {{value}}",
   "jobs.completedAt": "完成于 {{value}}",

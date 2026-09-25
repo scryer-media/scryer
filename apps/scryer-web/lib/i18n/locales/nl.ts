@@ -466,6 +466,8 @@ const nl: LocaleDictionary = {
   "jobs.loadingRecentRuns": "Recente runs laden…",
   "jobs.noRunsYet": "Nog geen runs geregistreerd.",
   "jobs.healthCheckIssues": "Problemen met controle",
+  "jobs.fullHashBackfillFailures": "Bestanden die niet gehasht konden worden",
+  "jobs.fullHashBackfillFailuresMore": "…en nog {{count}} niet vermeld",
   "jobs.nextRunPrefix": "Volgende run: {{value}}",
   "jobs.startedAt": "Gestart {{value}}",
   "jobs.completedAt": "Voltooid {{value}}",

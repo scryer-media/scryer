@@ -578,6 +578,8 @@ const ru: LocaleDictionary = {
     "jobs.loadingRecentRuns": "Загрузка недавних запусков…",
     "jobs.noRunsYet": "Запуски пока не зарегистрированы.",
     "jobs.healthCheckIssues": "Проблемы проверки состояния",
+    "jobs.fullHashBackfillFailures": "Файлы, для которых не удалось вычислить хеш",
+    "jobs.fullHashBackfillFailuresMore": "…и ещё {{count}} не показано",
     "jobs.nextRunPrefix": "Следующий запуск: {{value}}",
     "jobs.startedAt": "Запущено {{value}}",
     "jobs.completedAt": "Завершено {{value}}",

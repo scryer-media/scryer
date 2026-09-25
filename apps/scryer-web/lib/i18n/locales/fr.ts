@@ -402,6 +402,8 @@ const fr: LocaleDictionary = {
   "jobs.loadingRecentRuns": "Chargement des exécutions récentes…",
   "jobs.noRunsYet": "Aucune exécution n’a encore été enregistrée.",
   "jobs.healthCheckIssues": "Problèmes de vérification d’état",
+  "jobs.fullHashBackfillFailures": "Fichiers impossibles à hacher",
+  "jobs.fullHashBackfillFailuresMore": "…et {{count}} autres non listés",
   "jobs.nextRunPrefix": "Prochaine exécution : {{value}}",
   "jobs.startedAt": "Démarré {{value}}",
   "jobs.completedAt": "Complété {{value}}",
