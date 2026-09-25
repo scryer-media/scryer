@@ -171,6 +171,8 @@ async fn carry_out_import_rejection(
         release_burned,
         started_at,
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -1039,6 +1041,8 @@ async fn hold_replacement_for_manual_resolution(
         release_burned: false,
         started_at,
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
     let result_json = serde_json::to_string(&result).ok();
     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1247,6 +1251,8 @@ async fn import_additional_movie_download(
             release_burned: false,
             started_at,
             completed_at: Utc::now(),
+            upgrade: false,
+            upgrade_previous_path: None,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1362,6 +1368,8 @@ async fn import_additional_movie_download(
         release_burned: false,
         started_at,
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -1385,6 +1393,7 @@ async fn import_additional_movie_download(
                 episode_ids: linked_episode_ids,
                 // Single-file import, so the file's size is also the total.
                 size_bytes: Some(file_result.size_bytes as i64),
+                upgrade: false,
             }),
         ))
         .await;
@@ -1576,6 +1585,8 @@ async fn import_movie_download(
                 release_burned: true,
                 started_at,
                 completed_at: Utc::now(),
+                upgrade: false,
+                upgrade_previous_path: None,
             };
             let result_json = serde_json::to_string(&result).ok();
             let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1657,6 +1668,8 @@ async fn import_movie_download(
             release_burned: false,
             started_at,
             completed_at: Utc::now(),
+            upgrade: false,
+            upgrade_previous_path: None,
         };
         let result_json = serde_json::to_string(&result).ok();
         let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -1833,6 +1846,8 @@ async fn import_movie_download(
                     release_burned: false,
                     started_at,
                     completed_at: Utc::now(),
+                    upgrade: true,
+                    upgrade_previous_path: outcome.previous_path.clone(),
                 };
                 tracing::info!(
                     title = %title.name,
@@ -1848,6 +1863,31 @@ async fn import_movie_download(
                     result_json,
                 )
                 .await?;
+                let _ = app
+                    .append_domain_event(new_title_domain_event(
+                        actor,
+                        title,
+                        DomainEventPayload::ImportCompleted(ImportCompletedEventData {
+                            title: title_context_snapshot(title),
+                            media_updates: crate::upgrade::upgrade_media_updates(
+                                outcome.previous_path.as_deref(),
+                                &outcome.final_path_string,
+                            ),
+                            imported_count: 1,
+                            import_id: Some(import_id.to_string()),
+                            source_system: Some(completed.client_type.clone()),
+                            source_ref: Some(completed.download_client_item_id.clone()),
+                            source_title,
+                            source_path: Some(path_to_stored_string(&source_video)),
+                            dest_path: Some(path_to_stored_string(&dest_path)),
+                            quality: prepared.parsed.quality.clone(),
+                            episode_ids: Vec::new(),
+                            // Single-file import, so the file's size is also the total.
+                            size_bytes: Some(outcome.new_size_bytes),
+                            upgrade: true,
+                        }),
+                    ))
+                    .await;
                 return Ok(result);
             }
             Ok(crate::upgrade::UpgradeResult::Rejected(rejection)) => {
@@ -2084,6 +2124,8 @@ async fn import_movie_download(
         release_burned: false,
         started_at,
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -2107,6 +2149,7 @@ async fn import_movie_download(
                 episode_ids: Vec::new(),
                 // Single-file import, so the file's size is also the total.
                 size_bytes: Some(file_result.size_bytes as i64),
+                upgrade: false,
             }),
         ))
         .await;
@@ -2422,6 +2465,8 @@ async fn import_series_movie_download(
                 release_burned: true,
                 started_at,
                 completed_at: Utc::now(),
+                upgrade: false,
+                upgrade_previous_path: None,
             };
             let result_json = serde_json::to_string(&result).ok();
             app.update_import_status_and_notify(import_id, ImportStatus::Skipped, result_json)
@@ -2643,6 +2688,8 @@ async fn import_series_movie_download(
                         release_burned: false,
                         started_at,
                         completed_at: Utc::now(),
+                        upgrade: false,
+                        upgrade_previous_path: None,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     app.update_import_status_and_notify(
@@ -2685,6 +2732,8 @@ async fn import_series_movie_download(
                         release_burned: false,
                         started_at,
                         completed_at: Utc::now(),
+                        upgrade: false,
+                        upgrade_previous_path: None,
                     };
                     let result_json = serde_json::to_string(&result).ok();
                     let status = completed_import_status_for_result(&result, ImportStatus::Skipped);
@@ -2913,6 +2962,8 @@ async fn import_series_movie_download(
         release_burned: false,
         started_at,
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
     let result_json = serde_json::to_string(&result).ok();
     app.update_import_status_and_notify(import_id, ImportStatus::Completed, result_json)
@@ -2935,6 +2986,7 @@ async fn import_series_movie_download(
             episode_ids: linked_episode_ids.clone(),
             // Single-file import, so the file's size is also the total.
             size_bytes: Some(file_result.size_bytes as i64),
+            upgrade: false,
         }),
     ))
     .await?;

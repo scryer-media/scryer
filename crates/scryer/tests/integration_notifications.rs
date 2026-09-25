@@ -640,6 +640,7 @@ fn import_completed_event_data(
         quality: None,
         episode_ids,
         size_bytes: None,
+        upgrade: false,
     }
 }
 
@@ -2061,15 +2062,23 @@ async fn notification_dispatcher_delivers_structured_lifecycle_metadata() {
             "rename",
             "Renamed: Example Show".to_string(),
             "Renamed 1 file(s) for 'Example Show'.".to_string(),
-            lifecycle_metadata(
-                "Example Show",
-                "series",
-                vec![
-                    ("/data/TV/Example Show/Old Name.mkv", "deleted"),
-                    ("/data/TV/Example Show/New Name.mkv", "created"),
-                ],
-                json!({ "tvdb_id": "123", "imdb_id": "tt456" }),
-            ),
+            {
+                let mut metadata = lifecycle_metadata(
+                    "Example Show",
+                    "series",
+                    vec![
+                        ("/data/TV/Example Show/Old Name.mkv", "deleted"),
+                        ("/data/TV/Example Show/New Name.mkv", "created"),
+                    ],
+                    json!({ "tvdb_id": "123", "imdb_id": "tt456" }),
+                );
+                // The primary path is the file that exists after the rename.
+                metadata.insert(
+                    "file_path".to_string(),
+                    json!("/data/TV/Example Show/New Name.mkv"),
+                );
+                metadata
+            },
             new_event(
                 "evt-rename",
                 "title-1",

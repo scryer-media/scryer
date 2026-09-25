@@ -112,6 +112,8 @@ async fn apply_result_marks_verified_already_present_skip_imported() {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(apply_import_result(&app, &mut td, result, 0).await);
@@ -175,6 +177,8 @@ async fn unavailable_artifact_evidence_keeps_already_present_import_retryable() 
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -218,6 +222,8 @@ async fn apply_result_backs_off_unverified_import_until_progress() {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     // First pass imported one file: pending, behind the first backoff step.
@@ -312,6 +318,8 @@ async fn verified_import_mark_retries_without_rolling_back_import() {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(apply_import_result(&app, &mut td, result, 0).await);
@@ -356,6 +364,8 @@ async fn verified_import_mark_stops_after_bounded_permanent_failures() {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     schedule_non_destructive_import_mark(&app, &td, &result, None);
@@ -424,6 +434,8 @@ async fn verified_import_mark_uses_completed_client_identity() {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(
@@ -563,6 +575,8 @@ async fn apply_result_keeps_rejected_already_imported_result_blocked() {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -814,6 +828,8 @@ async fn apply_result_does_not_verify_unresolved_identity_rejection_as_imported(
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -843,6 +859,8 @@ async fn apply_result_blocks_cancelled_import_for_manual_review() {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -880,6 +898,8 @@ async fn apply_result_keeps_ambiguous_obfuscated_episode_blocked_with_actionable
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(!apply_import_result(&app, &mut td, result, 0).await);
@@ -911,6 +931,8 @@ async fn apply_result_backs_off_no_video_import_before_blocking() {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
@@ -954,6 +976,8 @@ async fn apply_result_resets_no_video_retry_when_source_signature_changes() {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
 
     assert!(!apply_import_result(&app, &mut td, result.clone(), 0).await);
@@ -984,6 +1008,8 @@ fn failed_execution_result(error_message: &str) -> ImportResult {
         release_burned: false,
         started_at: Utc::now(),
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     }
 }
 

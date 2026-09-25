@@ -5313,6 +5313,124 @@ async fn automatic_episode_upgrade_rejection_is_not_burned() {
     );
 }
 
+async fn import_completed_events_for_title(
+    app: &AppUseCase,
+    title_id: &str,
+) -> Vec<scryer_domain::ImportCompletedEventData> {
+    app.services
+        .events
+        .domain_events
+        .list(&DomainEventFilter {
+            event_types: Some(vec![DomainEventType::ImportCompleted]),
+            title_id: Some(title_id.to_string()),
+            facet: None,
+            stream_id: None,
+            after_sequence: Some(0),
+            before_sequence: None,
+            limit: 100,
+        })
+        .await
+        .expect("list import completed events")
+        .into_iter()
+        .map(|event| match event.payload {
+            DomainEventPayload::ImportCompleted(data) => data,
+            other => panic!("expected an import_completed event, got {other:?}"),
+        })
+        .collect()
+}
+
+/// An automatic episode upgrade reports itself on `import_completed`: the
+/// event says it was an upgrade and names the file it replaced, so webhook
+/// receivers do not have to infer it from a separate `upgrade` event.
+#[tokio::test]
+async fn automatic_episode_upgrade_marks_import_completed_as_upgrade() {
+    let (
+        FailClosedPackFixture {
+            app,
+            user,
+            title,
+            library_dir: _library_dir,
+            ..
+        },
+        _submissions,
+    ) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        ..Default::default()
+    })
+    .await;
+
+    let initial_source = tempfile::tempdir().expect("initial source tempdir");
+    write_pack_video(
+        initial_source.path(),
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL.mkv",
+    );
+    let initial = series_pack_completed_download(
+        "event-upgrade-initial",
+        &title.id,
+        "Fail.Closed.Pack.S01E01.720p.WEB-DL",
+        initial_source.path(),
+    );
+    let initial_result = {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        crate::import::import::import_completed_download(&app, &user, &initial)
+            .await
+            .expect("initial completed import should run")
+    };
+    assert_eq!(
+        initial_result.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{initial_result:?}"
+    );
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    assert!(!events[0].upgrade, "a first import is not an upgrade");
+    let initial_path = events[0].media_updates[0].path.clone();
+
+    let upgrade_source = tempfile::tempdir().expect("upgrade source tempdir");
+    write_pack_video(
+        upgrade_source.path(),
+        "Fail.Closed.Pack.S01E01.1080p.WEB-DL.mkv",
+    );
+    let upgrade = series_pack_completed_download(
+        "event-upgrade-better",
+        &title.id,
+        "Fail.Closed.Pack.S01E01.1080p.WEB-DL",
+        upgrade_source.path(),
+    );
+    let result = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import::import::import_completed_download(&app, &user, &upgrade)
+            .await
+            .expect("upgrade completed import should run")
+    };
+    assert_eq!(
+        result.decision,
+        scryer_domain::ImportDecision::Imported,
+        "{result:?}"
+    );
+
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert_eq!(events.len(), 2, "{events:?}");
+    let upgraded = events
+        .iter()
+        .find(|event| event.upgrade)
+        .expect("the upgrade import must be marked as an upgrade");
+    assert!(
+        upgraded.media_updates.iter().any(|update| {
+            update.path == initial_path
+                && update.update_type == scryer_domain::MediaUpdateType::Deleted
+        }),
+        "the replaced file must be reported as deleted: {upgraded:?}"
+    );
+    assert!(
+        upgraded.media_updates.iter().any(|update| {
+            update.path != initial_path
+                && update.update_type == scryer_domain::MediaUpdateType::Created
+        }),
+        "the replacement must be reported as created: {upgraded:?}"
+    );
+}
+
 #[tokio::test]
 async fn automatic_multi_file_import_prefers_rejection_over_another_import() {
     let (
@@ -12479,6 +12597,119 @@ async fn a_movie_upgrade_finds_its_incumbent_at_another_path() {
         fixture.blocklisted_titles().await.is_empty(),
         "an honest upgrade burns nothing"
     );
+
+    // The upgrade reports itself on `import_completed`, naming the file it
+    // replaced and the one that replaced it.
+    let incumbent_path = fixture
+        .title_folder
+        .join("preserved.original.name.720p.mp4")
+        .to_string_lossy()
+        .into_owned();
+    let events = import_completed_events_for_title(&fixture.app, &fixture.title.id).await;
+    assert_eq!(events.len(), 1, "{events:?}");
+    let completed = &events[0];
+    assert!(completed.upgrade, "{completed:?}");
+    assert_eq!(completed.imported_count, 1);
+    assert_eq!(
+        completed.media_updates,
+        vec![
+            scryer_domain::MediaPathUpdate {
+                path: incumbent_path,
+                update_type: scryer_domain::MediaUpdateType::Deleted,
+            },
+            scryer_domain::MediaPathUpdate {
+                path: primaries[0].file_path.clone(),
+                update_type: scryer_domain::MediaUpdateType::Created,
+            },
+        ]
+    );
+    assert_eq!(completed.dest_path.as_deref(), result.dest_path.as_deref());
+    assert!(completed.episode_ids.is_empty());
+}
+
+/// A manual movie upgrade reports itself on every `import_completed` it
+/// produces: the manual aggregate must agree with the canonical movie import
+/// it wraps that a file was replaced, and name the replaced file.
+#[tokio::test]
+async fn manual_movie_upgrade_marks_every_import_completed_as_upgrade() {
+    let release_title = "Manual Upgrade Movie.2026.1080p.WEB-DL-GRP";
+    let fixture = disposition_fixture("Manual Upgrade Movie", release_title).await;
+    seed_primary_movie_file(&fixture, "manual.upgrade.incumbent.720p.mp4", "720p").await;
+    let incumbent_path = fixture
+        .title_folder
+        .join("manual.upgrade.incumbent.720p.mp4")
+        .to_string_lossy()
+        .into_owned();
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    let source_file = write_pack_video(source_dir.path(), &format!("{release_title}.mkv"));
+    let import_id = fixture
+        .app
+        .services
+        .workflow
+        .imports
+        .queue_import_request(
+            ClientJobLocator::for_import_artifact(
+                Some(&fixture.completed.client_id),
+                &fixture.completed.client_type,
+                &fixture.completed.download_client_item_id,
+            ),
+            ImportType::ManualImport.as_str().to_string(),
+            "{}".to_string(),
+        )
+        .await
+        .expect("queue manual import record");
+
+    let results = {
+        let _probe = probe_agrees_with_the_name(1920, 1080);
+        crate::import_workflow::execute_manual_import(
+            &fixture.app,
+            &fixture.user,
+            &import_id,
+            &fixture.title.id,
+            Some(&fixture.completed),
+            vec![ManualImportFileMapping {
+                disc_selection: None,
+                file_path: source_file.to_string_lossy().into_owned(),
+                episode_id: None,
+                episode_ids: Vec::new(),
+                series_movie_link_id: None,
+            }],
+            Some(std::fs::canonicalize(source_dir.path()).expect("canonical source root")),
+        )
+        .await
+        .expect("execute manual movie import")
+    };
+    assert_eq!(results.len(), 1, "{results:?}");
+    assert!(results[0].success, "{results:?}");
+    let dest_path = results[0].dest_path.clone().expect("dest path");
+    assert_ne!(dest_path, incumbent_path, "the upgrade lands at a new path");
+
+    // Two events for one file: the canonical movie import emits one and the
+    // manual aggregate emits another. That double predates upgrade reporting
+    // and is left as is; what matters here is that they agree.
+    let events = import_completed_events_for_title(&fixture.app, &fixture.title.id).await;
+    assert_eq!(events.len(), 2, "{events:?}");
+    for event in &events {
+        assert!(event.upgrade, "{event:?}");
+        assert!(
+            event
+                .media_updates
+                .contains(&scryer_domain::MediaPathUpdate {
+                    path: incumbent_path.clone(),
+                    update_type: scryer_domain::MediaUpdateType::Deleted,
+                }),
+            "the replaced file must be reported as deleted: {event:?}"
+        );
+        assert!(
+            event
+                .media_updates
+                .contains(&scryer_domain::MediaPathUpdate {
+                    path: dest_path.clone(),
+                    update_type: scryer_domain::MediaUpdateType::Created,
+                }),
+            "the replacement must be reported as created: {event:?}"
+        );
+    }
 }
 
 /// **A1 through the link path, end to end.** The clone of

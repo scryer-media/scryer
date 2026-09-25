@@ -1150,6 +1150,8 @@ mod tests {
             release_burned: false,
             started_at: Utc::now(),
             completed_at: Utc::now(),
+            upgrade: false,
+            upgrade_previous_path: None,
         };
 
         assert_eq!(
@@ -1320,6 +1322,8 @@ mod tests {
             release_burned: false,
             started_at: Utc::now(),
             completed_at: Utc::now(),
+            upgrade: false,
+            upgrade_previous_path: None,
         };
 
         assert_eq!(

@@ -274,6 +274,7 @@ async fn execute_resolved_episode_import(
             source_cleanup: file_result.source_cleanup.clone().map(Box::new),
             destination_permit: file_result.destination_permit(),
             size_bytes: Some(file_result.size_bytes as i64),
+            previous_path: None,
             // An additional file never reaches the gate, so it never earns one.
             blocklist_after_import: None,
         });
@@ -657,6 +658,7 @@ async fn execute_resolved_episode_import(
                     source_cleanup: outcome.source_cleanup.clone(),
                     destination_permit: outcome.destination_permit.clone(),
                     size_bytes: Some(outcome.new_size_bytes),
+                    previous_path: outcome.previous_path.clone(),
                     blocklist_after_import,
                 });
             }
@@ -802,6 +804,7 @@ async fn execute_resolved_episode_import(
         source_cleanup: file_result.source_cleanup.clone().map(Box::new),
         destination_permit: file_result.destination_permit(),
         size_bytes: Some(file_result.size_bytes as i64),
+        previous_path: None,
         blocklist_after_import,
     })
 }

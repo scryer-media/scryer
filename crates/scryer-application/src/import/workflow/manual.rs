@@ -3057,6 +3057,11 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
     // Total bytes across every file this manual import brought in; stays `None`
     // until at least one file reports a size.
     let mut imported_size_bytes: Option<i64> = None;
+    // Files this manual import landed as upgrades: the paths they
+    // replaced elsewhere, and the destinations that were replaced in place.
+    let mut upgrade_imported = false;
+    let mut upgrade_deleted_paths: Vec<String> = Vec::new();
+    let mut upgrade_in_place_paths: HashSet<String> = HashSet::new();
 
     for (mapping_index, mapping) in files.iter().enumerate() {
         let source = stored_path_to_path_buf(&mapping.file_path);
@@ -3181,6 +3186,17 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                     Ok(import_result) => {
                         let success = import_result.dest_path.is_some()
                             && import_result.error_message.is_none();
+                        if success && import_result.upgrade {
+                            upgrade_imported = true;
+                            match import_result.upgrade_previous_path {
+                                Some(previous_path) => upgrade_deleted_paths.push(previous_path),
+                                None => {
+                                    if let Some(dest_path) = import_result.dest_path.clone() {
+                                        upgrade_in_place_paths.insert(dest_path);
+                                    }
+                                }
+                            }
+                        }
                         manual_import_file_result(
                             mapping,
                             success,
@@ -3384,9 +3400,19 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                 reason_code,
                 size_bytes,
                 source_cleanup,
+                previous_path,
                 destination_permit: _destination_permit,
                 ..
             }) => {
+                if reason_code.as_deref() == Some("upgrade") {
+                    upgrade_imported = true;
+                    match previous_path {
+                        Some(previous_path) => upgrade_deleted_paths.push(previous_path),
+                        None => {
+                            upgrade_in_place_paths.insert(dest_path.clone());
+                        }
+                    }
+                }
                 if let Some(completed) = completed {
                     persist_file_import_artifact(
                         app,
@@ -3513,15 +3539,22 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
         }
     }
 
-    let imported_updates: Vec<NotificationMediaUpdate> = results
-        .iter()
-        .filter(|result| result.success)
-        .filter_map(|result| {
-            result
-                .dest_path
-                .as_ref()
-                .map(|path| NotificationMediaUpdate::created(path.clone()))
-        })
+    let imported_updates: Vec<scryer_domain::MediaPathUpdate> = upgrade_deleted_paths
+        .into_iter()
+        .map(deleted_media_update)
+        .chain(
+            results
+                .iter()
+                .filter(|result| result.success)
+                .filter_map(|result| result.dest_path.clone())
+                .map(|path| {
+                    if upgrade_in_place_paths.contains(&path) {
+                        modified_media_update(path)
+                    } else {
+                        created_media_update(path)
+                    }
+                }),
+        )
         .collect();
 
     let success_count = results.iter().filter(|r| r.success).count();
@@ -3562,10 +3595,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             &title,
             DomainEventPayload::ImportCompleted(ImportCompletedEventData {
                 title: title_context_snapshot(&title),
-                media_updates: imported_updates
-                    .into_iter()
-                    .map(|update| created_media_update(update.path))
-                    .collect(),
+                media_updates: imported_updates,
                 imported_count: success_count as i32,
                 import_id: None,
                 source_system: completed.map(|download| download.client_type.clone()),
@@ -3583,6 +3613,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                 quality: None,
                 episode_ids,
                 size_bytes: imported_size_bytes,
+                upgrade: upgrade_imported,
             }),
         ))
         .await?;
@@ -3842,6 +3873,8 @@ impl QueuedManualImportOutcome {
             release_burned: false,
             started_at: now,
             completed_at: now,
+            upgrade: false,
+            upgrade_previous_path: None,
         };
         Self {
             status: ImportStatus::Skipped,

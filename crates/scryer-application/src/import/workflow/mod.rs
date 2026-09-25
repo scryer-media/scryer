@@ -7,11 +7,11 @@ use crate::{
     AcquisitionScopeCompleteTransition, AcquisitionScopeStatesQuery, AppError, AppResult,
     AppUseCase, ClientJobLocator, DownloadSubmission, DownloadSubmissionIdentity, ImportArtifact,
     ParsedReleaseMetadata, SubmissionScope,
-    activity::NotificationMediaUpdate,
     app_usecase_post_processing::{PostProcessingContext, spawn_post_processing},
     apply_remote_path_mappings_to_completed_download,
     domain_events::{
-        created_media_update, deleted_media_update, new_title_domain_event, title_context_snapshot,
+        created_media_update, deleted_media_update, modified_media_update, new_title_domain_event,
+        title_context_snapshot,
     },
     effective_title_folder_path,
     helpers::{has_usable_release_title_signal, normalize_release_title_signal},
