@@ -3060,6 +3060,16 @@ pub struct ImportResult {
     pub release_burned: bool,
     pub started_at: DateTime<Utc>,
     pub completed_at: DateTime<Utc>,
+    /// The import replaced an existing media file. Only the canonical movie
+    /// import sets this; series and series-movie results leave it `false`
+    /// even when the batch upgraded something. In-process only: never
+    /// persisted with the result, so stored result JSON is unchanged.
+    #[serde(skip)]
+    pub upgrade: bool,
+    /// For an upgrade that landed at a different path, the replaced file's
+    /// path; `None` for an in-place upgrade or a first import. In-process only.
+    #[serde(skip)]
+    pub upgrade_previous_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -4080,6 +4090,10 @@ pub struct ImportCompletedEventData {
     /// `None`.
     #[serde(default)]
     pub size_bytes: Option<i64>,
+    /// True when this import replaced an existing media file (an upgrade).
+    /// Events persisted before this field existed read back as `false`.
+    #[serde(default)]
+    pub upgrade: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -7404,6 +7418,51 @@ pub fn normalize_tags(tags: &[String]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn import_completed_event_data_without_upgrade_field_reads_as_not_upgrade() {
+        let data = ImportCompletedEventData {
+            title: TitleContextSnapshot {
+                title_name: "Synthetic Movie".to_string(),
+                facet: MediaFacet::Movie,
+                external_ids: DomainExternalIds::default(),
+                poster_url: None,
+                year: Some(2001),
+            },
+            media_updates: vec![MediaPathUpdate {
+                path: "/library/Synthetic Movie (2001)/movie.mkv".to_string(),
+                update_type: MediaUpdateType::Created,
+            }],
+            imported_count: 1,
+            import_id: None,
+            source_system: None,
+            source_ref: None,
+            source_title: None,
+            source_path: None,
+            dest_path: None,
+            quality: None,
+            episode_ids: Vec::new(),
+            size_bytes: None,
+            upgrade: true,
+        };
+        let mut legacy = serde_json::to_value(&data).expect("event data should serialize");
+        legacy
+            .as_object_mut()
+            .expect("event data serializes as an object")
+            .remove("upgrade")
+            .expect("upgrade field is serialized");
+
+        let parsed: ImportCompletedEventData =
+            serde_json::from_value(legacy).expect("legacy row should parse");
+        assert!(!parsed.upgrade);
+        assert_eq!(
+            parsed,
+            ImportCompletedEventData {
+                upgrade: false,
+                ..data
+            }
+        );
+    }
 
     #[test]
     fn external_id_key_includes_the_kind_only_when_there_is_one() {

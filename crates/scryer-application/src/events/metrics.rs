@@ -472,6 +472,7 @@ mod tests {
             quality: None,
             episode_ids: Vec::new(),
             size_bytes,
+            upgrade: false,
         }
     }
 

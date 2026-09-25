@@ -672,6 +672,9 @@ fn build_import_completed_notification(data: &ImportCompletedEventData) -> Built
         dest_path: data.dest_path.clone(),
         imported_count: Some(data.imported_count),
         status: Some("completed".to_string()),
+        upgrade: data.upgrade,
+        deleted_paths: media_update_paths(&data.media_updates, MediaUpdateType::Deleted),
+        replaced_paths: media_update_paths(&data.media_updates, MediaUpdateType::Modified),
         ..Default::default()
     });
     BuiltNotification { payload }
@@ -718,7 +721,7 @@ fn build_media_file_upgraded_notification(data: &MediaFileUpgradedEventData) -> 
             format!("Upgraded: {}", data.title.title_name),
             format!("Upgraded file for '{}'.", data.title.title_name),
             Some(&data.title),
-            &[],
+            &data.episode_ids,
             &data.media_updates,
         ),
     }
@@ -1048,13 +1051,33 @@ fn episode_payload(episode_ids: &[String]) -> Option<NotificationEpisodePayload>
     })
 }
 
+fn media_update_paths(updates: &[MediaPathUpdate], update_type: MediaUpdateType) -> Vec<String> {
+    updates
+        .iter()
+        .filter(|update| update.update_type == update_type)
+        .map(|update| update.path.clone())
+        .collect()
+}
+
 fn file_payload(updates: &[MediaPathUpdate]) -> Option<NotificationFilePayload> {
     if updates.is_empty() {
         return None;
     }
 
+    // The primary file is the one that now exists: a replacement's new file,
+    // not the old one it deleted. Delete-only events fall back to the first.
+    let primary = updates
+        .iter()
+        .find(|update| update.update_type == MediaUpdateType::Created)
+        .or_else(|| {
+            updates
+                .iter()
+                .find(|update| update.update_type == MediaUpdateType::Modified)
+        })
+        .or_else(|| updates.first());
+
     Some(NotificationFilePayload {
-        primary_path: updates.first().map(|update| update.path.clone()),
+        primary_path: primary.map(|update| update.path.clone()),
         media_updates: updates
             .iter()
             .map(|update| NotificationMediaUpdatePayload {
@@ -1894,6 +1917,7 @@ mod tests {
                     quality: Some("1080p".to_string()),
                     episode_ids: vec!["episode-1".to_string()],
                     size_bytes: Some(3_221_225_472),
+                    upgrade: false,
                 }),
             },
             DomainEvent {
@@ -2231,6 +2255,134 @@ mod tests {
 
         assert!(!payload.by_source.contains_key("smg"));
         assert_eq!(payload.tmdb_id.as_deref(), Some("603"));
+    }
+
+    fn sample_event(event_id: &str) -> DomainEvent {
+        notification_sample_events()
+            .into_iter()
+            .find(|event| event.event_id == event_id)
+            .expect("sample event should exist")
+    }
+
+    #[test]
+    fn import_completed_upgrade_reports_replaced_file_and_new_primary_path() {
+        let mut event = sample_event("evt-import-completed");
+        let DomainEventPayload::ImportCompleted(data) = &mut event.payload else {
+            panic!("sample should be an import completed event");
+        };
+        data.upgrade = true;
+        data.media_updates = vec![
+            MediaPathUpdate {
+                path: "/library/Imported Show/S01E01 - 720p.mkv".to_string(),
+                update_type: MediaUpdateType::Deleted,
+            },
+            MediaPathUpdate {
+                path: "/library/Imported Show/S01E01 - 1080p.mkv".to_string(),
+                update_type: MediaUpdateType::Created,
+            },
+        ];
+
+        let payload = build_notification(&event)
+            .expect("import completed should build a notification")
+            .payload;
+        let import = payload.import.expect("import payload");
+        assert!(import.upgrade);
+        assert_eq!(
+            import.deleted_paths,
+            vec!["/library/Imported Show/S01E01 - 720p.mkv".to_string()]
+        );
+        assert!(import.replaced_paths.is_empty());
+        assert_eq!(
+            payload.file.expect("file payload").primary_path.as_deref(),
+            Some("/library/Imported Show/S01E01 - 1080p.mkv")
+        );
+    }
+
+    #[test]
+    fn import_completed_in_place_upgrade_reports_replaced_path() {
+        let mut event = sample_event("evt-import-completed");
+        let DomainEventPayload::ImportCompleted(data) = &mut event.payload else {
+            panic!("sample should be an import completed event");
+        };
+        data.upgrade = true;
+        data.media_updates = vec![MediaPathUpdate {
+            path: "/library/Imported Show/S01E01.mkv".to_string(),
+            update_type: MediaUpdateType::Modified,
+        }];
+
+        let payload = build_notification(&event)
+            .expect("import completed should build a notification")
+            .payload;
+        let import = payload.import.expect("import payload");
+        assert!(import.upgrade);
+        assert!(import.deleted_paths.is_empty());
+        assert_eq!(
+            import.replaced_paths,
+            vec!["/library/Imported Show/S01E01.mkv".to_string()]
+        );
+    }
+
+    #[test]
+    fn plain_import_completed_is_not_an_upgrade() {
+        let payload = build_notification(&sample_event("evt-import-completed"))
+            .expect("import completed should build a notification")
+            .payload;
+        let import = payload.import.expect("import payload");
+        assert!(!import.upgrade);
+        assert!(import.deleted_paths.is_empty());
+        assert!(import.replaced_paths.is_empty());
+    }
+
+    #[test]
+    fn media_file_upgraded_uses_new_file_as_primary_path_and_carries_episodes() {
+        let mut event = sample_event("evt-media-upgraded");
+        let DomainEventPayload::MediaFileUpgraded(data) = &mut event.payload else {
+            panic!("sample should be a media file upgraded event");
+        };
+        data.media_updates = vec![
+            MediaPathUpdate {
+                path: "/library/Upgraded Show/S01E02 - 720p.mkv".to_string(),
+                update_type: MediaUpdateType::Deleted,
+            },
+            MediaPathUpdate {
+                path: "/library/Upgraded Show/S01E02 - 1080p.mkv".to_string(),
+                update_type: MediaUpdateType::Created,
+            },
+        ];
+        data.episode_ids = vec!["episode-2".to_string()];
+
+        let payload = build_notification(&event)
+            .expect("upgrade should build a notification")
+            .payload;
+        let file = payload.file.expect("file payload");
+        assert_eq!(
+            file.primary_path.as_deref(),
+            Some("/library/Upgraded Show/S01E02 - 1080p.mkv")
+        );
+        assert_eq!(file.media_updates.len(), 2);
+        assert_eq!(
+            payload.episode.expect("episode payload").episode_ids,
+            vec!["episode-2".to_string()]
+        );
+    }
+
+    #[test]
+    fn delete_only_file_payload_keeps_first_path_as_primary() {
+        let file = file_payload(&[
+            MediaPathUpdate {
+                path: "/library/Deleted Movie/first.mkv".to_string(),
+                update_type: MediaUpdateType::Deleted,
+            },
+            MediaPathUpdate {
+                path: "/library/Deleted Movie/second.mkv".to_string(),
+                update_type: MediaUpdateType::Deleted,
+            },
+        ])
+        .expect("file payload");
+        assert_eq!(
+            file.primary_path.as_deref(),
+            Some("/library/Deleted Movie/first.mkv")
+        );
     }
 
     #[tokio::test]

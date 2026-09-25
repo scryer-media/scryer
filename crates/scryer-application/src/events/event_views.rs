@@ -1459,8 +1459,9 @@ mod tests {
                     quality: Some("1080p".to_string()),
                     episode_ids: vec!["episode-1".to_string()],
                     size_bytes: Some(1024),
+                    upgrade: false,
                 }),
-                r#"{"type":"import_completed","data":{"title":{"title_name":"Fixture","facet":"series","external_ids":{"imdb_id":null,"tmdb_id":null,"tvdb_id":null,"anidb_id":null},"poster_url":null,"year":2024},"media_updates":[{"path":"/library/Fixture.mkv","update_type":"created"}],"imported_count":1,"import_id":"import-1","source_system":"nzbget","source_ref":"queue-1","source_title":"Imported.Release","source_path":"/downloads/Fixture.mkv","dest_path":"/library/Fixture.mkv","quality":"1080p","episode_ids":["episode-1"],"size_bytes":1024}}"#,
+                r#"{"type":"import_completed","data":{"title":{"title_name":"Fixture","facet":"series","external_ids":{"imdb_id":null,"tmdb_id":null,"tvdb_id":null,"anidb_id":null},"poster_url":null,"year":2024},"media_updates":[{"path":"/library/Fixture.mkv","update_type":"created"}],"imported_count":1,"import_id":"import-1","source_system":"nzbget","source_ref":"queue-1","source_title":"Imported.Release","source_path":"/downloads/Fixture.mkv","dest_path":"/library/Fixture.mkv","quality":"1080p","episode_ids":["episode-1"],"size_bytes":1024,"upgrade":false}}"#,
                 ActivityKind::SeriesEpisodeImported,
                 ActivitySeverity::Success,
                 "Imported 1 file for 'Fixture'.",
@@ -1823,6 +1824,7 @@ mod tests {
                     quality: Some("1080p".to_string()),
                     episode_ids: vec!["ep-1".to_string()],
                     size_bytes: Some(1_024),
+                    upgrade: false,
                 }),
             ),
             event(
@@ -1844,6 +1846,7 @@ mod tests {
                     quality: Some("2160p".to_string()),
                     episode_ids: vec!["ep-1".to_string()],
                     size_bytes: Some(4_096),
+                    upgrade: false,
                 }),
             ),
         ];

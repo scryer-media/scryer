@@ -33,7 +33,26 @@ pub struct UpgradeOutcome {
     pub recycle_entry_committed: bool,
     pub source_cleanup: Option<Box<ImportSourceCleanupGuard>>,
     pub final_path_string: String,
+    /// Path of the replaced file when the replacement landed at a different
+    /// path; `None` when the old file was replaced in place.
+    pub previous_path: Option<String>,
     pub(crate) destination_permit: crate::import_workflow::ImportDestinationPermit,
+}
+
+/// Media path updates describing a replacement: the old file deleted and the
+/// new one created when the path changed, or a single in-place modification
+/// when `previous_path` is `None`.
+pub(crate) fn upgrade_media_updates(
+    previous_path: Option<&str>,
+    dest_path: &str,
+) -> Vec<scryer_domain::MediaPathUpdate> {
+    match previous_path {
+        Some(previous_path) => vec![
+            deleted_media_update(previous_path.to_string()),
+            created_media_update(dest_path.to_string()),
+        ],
+        None => vec![modified_media_update(dest_path.to_string())],
+    }
 }
 
 pub enum UpgradeResult {
@@ -228,6 +247,9 @@ pub(crate) async fn execute_upgrade(
         .await;
     }
 
+    let previous_path = (existing_file.file_path != replacement.final_path_string)
+        .then(|| existing_file.file_path.clone());
+
     Ok(UpgradeResult::Upgraded(UpgradeOutcome {
         old_score,
         new_score: final_score,
@@ -236,6 +258,7 @@ pub(crate) async fn execute_upgrade(
         recycle_entry_committed,
         source_cleanup: replacement.source_cleanup.map(Box::new),
         final_path_string: replacement.final_path_string,
+        previous_path,
         destination_permit: replacement.destination_permit,
     }))
 }
@@ -1915,14 +1938,11 @@ async fn append_upgrade_event(
     existing_file: &TitleMediaFile,
     details: UpgradeEventDetails<'_>,
 ) -> AppResult<()> {
-    let media_updates = if existing_file.file_path == details.dest_path_string {
-        vec![modified_media_update(details.dest_path_string.to_string())]
-    } else {
-        vec![
-            deleted_media_update(existing_file.file_path.clone()),
-            created_media_update(details.dest_path_string.to_string()),
-        ]
-    };
+    let media_updates = upgrade_media_updates(
+        (existing_file.file_path != details.dest_path_string)
+            .then_some(existing_file.file_path.as_str()),
+        details.dest_path_string,
+    );
     let mut episode_ids = details.episode_ids.to_vec();
     if episode_ids.is_empty()
         && let Some(episode_id) = existing_file.episode_id.clone()

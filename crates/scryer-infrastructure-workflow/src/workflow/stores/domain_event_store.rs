@@ -534,6 +534,7 @@ mod title_history_filter_tests {
                     quality: None,
                     episode_ids: vec![],
                     size_bytes: None,
+                    upgrade: false,
                 })
             };
             let mut event = event_with_payload(id, payload);

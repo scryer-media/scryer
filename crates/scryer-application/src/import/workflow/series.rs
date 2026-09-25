@@ -22,6 +22,8 @@ fn base_completed_import_result(
         release_burned: false,
         started_at,
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     }
 }
 fn facet_for_completed_download(completed: &CompletedDownload) -> Option<MediaFacet> {
@@ -104,7 +106,8 @@ async fn import_series_download(
     let mut last_rejection_skip_reason: Option<ImportSkipReason> = None;
     let mut last_skipped_message: Option<String> = None;
     let mut last_skipped_skip_reason: Option<ImportSkipReason> = None;
-    let mut imported_updates: Vec<NotificationMediaUpdate> = Vec::new();
+    let mut imported_updates: Vec<scryer_domain::MediaPathUpdate> = Vec::new();
+    let mut imported_upgrade = false;
     // Total bytes across every file this import brought in. Stays `None` until
     // at least one file reports a size, so a legacy-shaped import that knows no
     // sizes reports null rather than a misleading zero.
@@ -160,6 +163,8 @@ async fn import_series_download(
                 episode_ids,
                 link_type,
                 size_bytes,
+                reason_code,
+                previous_path,
                 ..
             }) => {
                 imported_count += 1;
@@ -167,7 +172,15 @@ async fn import_series_download(
                     imported_size_bytes =
                         Some(imported_size_bytes.unwrap_or(0).saturating_add(size_bytes));
                 }
-                imported_updates.push(NotificationMediaUpdate::created(dest_path));
+                if reason_code.as_deref() == Some("upgrade") {
+                    imported_upgrade = true;
+                    imported_updates.extend(crate::upgrade::upgrade_media_updates(
+                        previous_path.as_deref(),
+                        &dest_path,
+                    ));
+                } else {
+                    imported_updates.push(created_media_update(dest_path));
+                }
                 append_unique_episode_ids(&mut imported_episode_ids, &episode_ids);
                 append_unique_episode_ids(&mut attributed_episode_ids, &episode_ids);
                 if link_type == Some(scryer_domain::ImportStrategy::Move) {
@@ -276,6 +289,8 @@ async fn import_series_download(
         release_burned,
         started_at,
         completed_at: Utc::now(),
+        upgrade: false,
+        upgrade_previous_path: None,
     };
     let result_json = serde_json::to_string(&result).ok();
     let status = completed_import_status_for_result(&result, status);
@@ -288,10 +303,7 @@ async fn import_series_download(
             title,
             DomainEventPayload::ImportCompleted(ImportCompletedEventData {
                 title: title_context_snapshot(title),
-                media_updates: imported_updates
-                    .into_iter()
-                    .map(|update| created_media_update(update.path))
-                    .collect(),
+                media_updates: imported_updates,
                 imported_count: imported_count as i32,
                 import_id: Some(import_id.to_string()),
                 source_system: Some(completed.client_type.clone()),
@@ -302,6 +314,7 @@ async fn import_series_download(
                 quality: None,
                 episode_ids: imported_episode_ids,
                 size_bytes: imported_size_bytes,
+                upgrade: imported_upgrade,
             }),
         ))
         .await?;
@@ -321,6 +334,9 @@ enum EpisodeImportOutcome {
         /// Bytes written for this file, so multi-file imports can report a
         /// total without re-stating the destination paths.
         size_bytes: Option<i64>,
+        /// Path of the file this import replaced at a different location
+        /// (upgrade only); `None` for a first import or an in-place upgrade.
+        previous_path: Option<String>,
         /// The file was imported *and* its release must be burned (D2: an
         /// honest 720p fills an empty scope, but must never come back as an
         /// "upgrade" to the 1080p it advertised).
