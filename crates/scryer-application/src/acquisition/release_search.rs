@@ -2214,8 +2214,8 @@ impl AppUseCase {
         // spelling lane also has to see what each *release* is named, or the
         // collision guard has no competitor to find and a rival spelling
         // silently becomes a confident match. One fetch for every release
-        // name in this batch, at the same distance and through the same port
-        // method the release-anchored paths use.
+        // name in this batch that can reach that guard, at the same distance
+        // and through the same port method the release-anchored paths use.
         let extended_subject = self.subject_with_release_anchors(subject, &results).await?;
         let subject = extended_subject.as_ref().unwrap_or(subject);
         // `DbBlocklisted` reads the per-title blocklist (the single, removable
@@ -2474,8 +2474,10 @@ impl AppUseCase {
         Ok(results)
     }
 
-    /// The subject again, with every candidate's release name folded into its
-    /// spelling evidence.
+    /// The subject again, with the candidates' release names folded into its
+    /// spelling evidence — only those that can reach the subject's collision
+    /// check, in the subject's facet. The index is selective afterwards: a
+    /// collision check for a name this skipped is refused.
     ///
     /// `None` when there is nothing to add — no evidence index, or no result
     /// carries a name — and the caller then keeps the subject as it stands.
@@ -2487,17 +2489,9 @@ impl AppUseCase {
         let Some(existing) = subject.title_evidence.ambiguity.spelling_index.as_ref() else {
             return Ok(None);
         };
-        let mut anchors = Vec::new();
-        let mut seen = HashSet::new();
-        for candidate in results {
-            let (forms, _) =
-                crate::title_matching::relaxed::neutral_spelling_forms(&candidate.title);
-            for (key, raw) in forms {
-                if seen.insert(key.clone()) {
-                    anchors.push((key, raw));
-                }
-            }
-        }
+        let anchors = crate::title_matching::relaxed::release_batch_anchors(
+            results.iter().map(|candidate| candidate.title.as_str()),
+        );
         if anchors.is_empty() {
             return Ok(None);
         }
@@ -2505,7 +2499,11 @@ impl AppUseCase {
         let matcher = self.monitored_title_matcher().await?;
         let mut index = existing.as_ref().clone();
         matcher
-            .extend_spelling_candidates(&mut index, &anchors)
+            .extend_spelling_candidates_for_collisions(
+                &mut index,
+                &anchors,
+                &subject.title_evidence.spelling_identity,
+            )
             .await?;
 
         let mut subject = subject.clone();

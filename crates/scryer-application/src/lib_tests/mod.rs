@@ -51,6 +51,7 @@ mod media_server_signals;
 mod metadata_search;
 mod multilingual_title_matching;
 mod queueing;
+mod release_anchor_prefetch;
 mod request_rules;
 mod request_rules_facts;
 mod romaji_release_matching;

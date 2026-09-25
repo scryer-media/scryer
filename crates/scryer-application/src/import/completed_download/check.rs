@@ -573,16 +573,11 @@ pub(super) async fn completed_download_proves_assigned_title(
     // the collision guard has no competitor to find and a rival spelling
     // passes the gate as a confident match.
     {
-        let mut anchors = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        for raw_title in &completion_sources {
-            let (forms, _) = crate::title_matching::relaxed::neutral_spelling_forms(raw_title);
-            for (key, raw) in forms {
-                if seen.insert(key.clone()) {
-                    anchors.push((key, raw));
-                }
-            }
-        }
+        let anchors = crate::title_matching::relaxed::release_batch_anchors(
+            completion_sources
+                .iter()
+                .map(|raw_title| raw_title.as_ref()),
+        );
         if !anchors.is_empty() {
             for (_, evidence) in proof_subjects.iter_mut() {
                 let Some(existing) = evidence.ambiguity.spelling_index.as_ref() else {
@@ -590,7 +585,11 @@ pub(super) async fn completed_download_proves_assigned_title(
                 };
                 let mut index = existing.as_ref().clone();
                 match matcher
-                    .extend_spelling_candidates(&mut index, &anchors)
+                    .extend_spelling_candidates(
+                        &mut index,
+                        &anchors,
+                        &evidence.spelling_identity.facet,
+                    )
                     .await
                 {
                     Ok(()) => {
