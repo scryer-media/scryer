@@ -713,6 +713,30 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "image_proxy_sources",
         classification: BackupTableClassification::Export,
     },
+    // Disk-space import blocks: the open incidents, their blocked members and
+    // the notification receipts and retry counts for their events. Exported
+    // with `domain_events` and `event_subscriber_offsets` so a restore keeps
+    // the incident, its events and their delivery state consistent.
+    BackupTableCatalogEntry {
+        table: "import_space_incident_lock",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "import_space_incidents",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "import_space_members",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "import_space_notification_attempts",
+        classification: BackupTableClassification::Export,
+    },
+    BackupTableCatalogEntry {
+        table: "import_space_notification_receipts",
+        classification: BackupTableClassification::Export,
+    },
     BackupTableCatalogEntry {
         table: "imports",
         classification: BackupTableClassification::Export,
