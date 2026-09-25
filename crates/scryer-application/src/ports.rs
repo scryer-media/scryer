@@ -1840,6 +1840,20 @@ pub trait TitleRepository: Send + Sync {
         ))
     }
 
+    /// [`Self::find_title_name_candidates`] for several buckets, answered in
+    /// order. A store with a fuzzy index checks that index's freshness once
+    /// for the whole batch instead of once per bucket.
+    async fn find_title_name_candidates_batch(
+        &self,
+        queries: &[TitleNameBucketQuery<'_>],
+    ) -> AppResult<Vec<Vec<TitleNameCandidate>>> {
+        let mut results = Vec::with_capacity(queries.len());
+        for query in queries {
+            results.push(self.find_title_name_candidates(query.clone()).await?);
+        }
+        Ok(results)
+    }
+
     /// Every name the persisted index holds for one title.
     ///
     /// The index is the whole of what a title answers to: its catalog names

@@ -391,53 +391,73 @@ impl SpellingCandidates {
         anchors: &[(String, String)],
         facet: Option<&str>,
     ) -> crate::AppResult<Self> {
-        let mut index = Self::default();
-        for (anchor, observed_raw) in anchors {
-            if anchor.is_empty() {
-                continue;
-            }
-            let numbers_key = scryer_domain::title_spelling::title_numbers_key(observed_raw);
-            let collation_keys = scryer_domain::title_spelling::COLLATION_PROFILES
-                .iter()
-                .filter_map(|profile| {
-                    title_spelling_key(anchor, profile).map(|key| (*profile, key))
-                })
-                .collect::<Vec<_>>();
+        struct AnchorKeys<'a> {
+            anchor: &'a String,
+            script: TitleScript,
+            numbers_key: String,
+            romanization_key: Option<String>,
+            collation_keys: Vec<(&'static str, Vec<u8>)>,
+        }
+        let keys = anchors
+            .iter()
+            .filter(|(anchor, _)| !anchor.is_empty())
+            .map(|(anchor, observed_raw)| AnchorKeys {
+                anchor,
+                script: title_script(anchor),
+                numbers_key: scryer_domain::title_spelling::title_numbers_key(observed_raw),
+                romanization_key: japanese_romanization_key(anchor, Some("ja")),
+                collation_keys: scryer_domain::title_spelling::COLLATION_PROFILES
+                    .iter()
+                    .filter_map(|profile| {
+                        title_spelling_key(anchor, profile).map(|key| (*profile, key))
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let mut buckets = Vec::new();
+        let mut queries = Vec::new();
+        for anchor in &keys {
             for candidate_facet in ["movie", "series", "anime"] {
                 if facet.is_some_and(|facet| facet != candidate_facet) {
                     continue;
                 }
-                let rows = titles
-                    .find_title_name_candidates(crate::ports::TitleNameBucketQuery {
-                        facet: Some(candidate_facet),
-                        script: title_script(anchor).as_str(),
-                        numbers_key: &numbers_key,
-                        typo_distance: Some(anchor_fetch_distance(anchor)),
-                        match_term: anchor,
-                        romanization_key: japanese_romanization_key(anchor, Some("ja")).as_deref(),
-                        collation_keys: &collation_keys,
-                        limit: BUCKET_FETCH_LIMIT,
-                    })
-                    .await?;
-                for row in rows {
-                    index.insert(
-                        &row.facet,
-                        &row.title_id,
-                        SpellingName {
-                            key: row.literal_term,
-                            text: row.match_term,
-                            raw: row.raw_term,
-                            language: row.language_tag,
-                            year: row.match_year,
-                        },
-                    );
-                }
-                index.fetched.insert((
-                    candidate_facet.to_string(),
-                    anchor.clone(),
-                    numbers_key.clone(),
-                ));
+                buckets.push((candidate_facet, anchor));
+                queries.push(crate::ports::TitleNameBucketQuery {
+                    facet: Some(candidate_facet),
+                    script: anchor.script.as_str(),
+                    numbers_key: &anchor.numbers_key,
+                    typo_distance: Some(anchor_fetch_distance(anchor.anchor)),
+                    match_term: anchor.anchor,
+                    romanization_key: anchor.romanization_key.as_deref(),
+                    collation_keys: &anchor.collation_keys,
+                    limit: BUCKET_FETCH_LIMIT,
+                });
             }
+        }
+        // One call for the whole batch: a store backed by the fuzzy index
+        // checks its freshness once, not once per anchor and facet.
+        let fetched = titles.find_title_name_candidates_batch(&queries).await?;
+
+        let mut index = Self::default();
+        for ((candidate_facet, anchor), rows) in buckets.into_iter().zip(fetched) {
+            for row in rows {
+                index.insert(
+                    &row.facet,
+                    &row.title_id,
+                    SpellingName {
+                        key: row.literal_term,
+                        text: row.match_term,
+                        raw: row.raw_term,
+                        language: row.language_tag,
+                        year: row.match_year,
+                    },
+                );
+            }
+            index.fetched.insert((
+                candidate_facet.to_string(),
+                anchor.anchor.clone(),
+                anchor.numbers_key.clone(),
+            ));
         }
         Ok(index)
     }

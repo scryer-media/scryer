@@ -507,15 +507,45 @@ impl TitleFuzzyIndex {
     /// the candidate columns from `title_search_terms` — one source of truth
     /// for what a candidate *is*, whichever lane found it.
     pub async fn resolver_candidates(&self, query: ResolverFuzzyQuery<'_>) -> AppResult<Vec<i64>> {
+        Ok(self
+            .resolver_candidates_batch(std::slice::from_ref(&query))
+            .await?
+            .pop()
+            .unwrap_or_default())
+    }
+
+    /// [`Self::resolver_candidates`] for several buckets at once, answered in
+    /// order.
+    ///
+    /// The queue drain and the stamp check run once for the whole batch, and
+    /// every query searches the same pinned generation. One release's anchors
+    /// used to pay that check — two stamp reads and a queue poll — per anchor
+    /// per facet, which was most of the index's statement count.
+    pub async fn resolver_candidates_batch(
+        &self,
+        queries: &[ResolverFuzzyQuery<'_>],
+    ) -> AppResult<Vec<Vec<i64>>> {
         let guard = self.write_guard().await;
         self.sync_locked(&guard).await?;
+        // Pin a complete generation before allowing another rebuild to start.
+        let searcher = self.reader.searcher();
+        drop(guard);
+        let mut results = Vec::with_capacity(queries.len());
+        for query in queries {
+            results.push(self.search_resolver(&searcher, query).await?);
+        }
+        Ok(results)
+    }
+
+    async fn search_resolver(
+        &self,
+        searcher: &tantivy::Searcher,
+        query: &ResolverFuzzyQuery<'_>,
+    ) -> AppResult<Vec<i64>> {
         if query.match_term.is_empty() {
             return Ok(Vec::new());
         }
         let fields = self.fields;
-        // Pin a complete generation before allowing another rebuild to start.
-        let searcher = self.reader.searcher();
-        drop(guard);
         let mut clauses: Vec<(Occur, Box<dyn Query>)> = vec![
             (Occur::Must, term_clause(fields.script, query.script)),
             (

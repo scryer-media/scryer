@@ -855,3 +855,117 @@ async fn fuzzy_lookup_timing_over_a_library_sized_catalog() {
 
     let _ = std::fs::remove_file(db);
 }
+
+/// Counts the freshness reads a fuzzy lookup pays, passing everything through.
+struct CountingTermSource {
+    inner: DatastoreTitleTermSource,
+    stamps: std::sync::atomic::AtomicUsize,
+    queue_polls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl scryer_infrastructure_library_search::fuzzy::TitleTermSource for CountingTermSource {
+    async fn page_terms(
+        &self,
+        after: i64,
+        limit: i64,
+    ) -> AppResult<Vec<scryer_infrastructure_library_search::fuzzy::IndexedTerm>> {
+        self.inner.page_terms(after, limit).await
+    }
+    async fn terms_for_titles(
+        &self,
+        ids: &[String],
+    ) -> AppResult<Vec<scryer_infrastructure_library_search::fuzzy::IndexedTerm>> {
+        self.inner.terms_for_titles(ids).await
+    }
+    async fn queued_titles(
+        &self,
+        limit: i64,
+    ) -> AppResult<Vec<scryer_infrastructure_library_search::fuzzy::QueuedTitle>> {
+        self.queue_polls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.queued_titles(limit).await
+    }
+    async fn clear_queued(&self, seqs: &[i64]) -> AppResult<()> {
+        self.inner.clear_queued(seqs).await
+    }
+    async fn projection_stamp(&self) -> AppResult<ProjectionStamp> {
+        self.stamps
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.inner.projection_stamp().await
+    }
+}
+
+/// A batch of buckets pays one freshness check, not one per bucket, and
+/// answers each bucket exactly as a lone lookup would.
+///
+/// One release's anchors used to pay the stamp reads and queue poll per anchor
+/// per facet, which was most of the index's statement count on an idle walk.
+#[tokio::test]
+async fn a_batched_lookup_checks_freshness_once_and_answers_like_single_lookups() {
+    let (services, _db) = temp_services("scryer_fuzzy_index_batch").await;
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = title_store(&services);
+    anime_title(&catalog, "batch-aokumo", "Aokumo").await;
+    anime_title(&catalog, "batch-velmora", "Velmora").await;
+    anime_title(&catalog, "batch-quistral", "Quistral").await;
+    let source = Arc::new(CountingTermSource {
+        inner: DatastoreTitleTermSource::new(services.datastore()),
+        stamps: 0.into(),
+        queue_polls: 0.into(),
+    });
+    let index = TitleFuzzyIndex::open(dir.path(), source.clone())
+        .await
+        .expect("index must open ready");
+    index
+        .rebuild(index_stamp(&services).await)
+        .await
+        .expect("the initial rebuild must succeed");
+
+    let names = ["Akumo", "Velmore", "Quistrel", "Zzyzxq"].map(observed);
+    let queries = names
+        .iter()
+        .map(|name| resolver_query(name, 1))
+        .collect::<Vec<_>>();
+
+    let reads = |source: &CountingTermSource| {
+        (
+            source.stamps.load(std::sync::atomic::Ordering::SeqCst),
+            source.queue_polls.load(std::sync::atomic::Ordering::SeqCst),
+        )
+    };
+    let before = reads(&source);
+    let batched = index
+        .resolver_candidates_batch(&queries)
+        .await
+        .expect("the batch must answer");
+    let after_batch = reads(&source);
+    let one_check = (after_batch.0 - before.0, after_batch.1 - before.1);
+
+    let mut singles = Vec::new();
+    for query in &queries {
+        singles.push(
+            index
+                .resolver_candidates(query.clone())
+                .await
+                .expect("a lone lookup must answer"),
+        );
+    }
+    let after_singles = reads(&source);
+
+    assert_eq!(batched, singles);
+    assert!(
+        batched[..3].iter().all(|hits| !hits.is_empty()),
+        "each near spelling must find its title: {batched:?}"
+    );
+    assert!(batched[3].is_empty(), "{batched:?}");
+    assert!(one_check.0 >= 1, "a batch must still check freshness");
+    assert_eq!(
+        (
+            after_singles.0 - after_batch.0,
+            after_singles.1 - after_batch.1
+        ),
+        (one_check.0 * queries.len(), one_check.1 * queries.len()),
+        "lone lookups pay one check each; the batch paid one in total"
+    );
+}

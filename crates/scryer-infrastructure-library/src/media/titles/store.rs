@@ -1521,37 +1521,66 @@ impl TitleRepository for TitleStore {
         &self,
         query: scryer_application::TitleNameBucketQuery<'_>,
     ) -> AppResult<Vec<scryer_application::TitleNameCandidate>> {
+        Ok(self
+            .find_title_name_candidates_batch(std::slice::from_ref(&query))
+            .await?
+            .pop()
+            .unwrap_or_default())
+    }
+
+    async fn find_title_name_candidates_batch(
+        &self,
+        queries: &[scryer_application::TitleNameBucketQuery<'_>],
+    ) -> AppResult<Vec<Vec<scryer_application::TitleNameCandidate>>> {
         const CANDIDATE_COLUMNS: &str =
             "title_id, facet, raw_term, literal_term, match_term, match_year, language_tag";
 
-        // The equality lanes first, uncapped: a romanization or a
-        // locale-equal spelling is not a bounded edit distance, so no length
-        // band can stand in for them.
-        let (sql, args) = title_name_equality_statement(&query);
-        let mut rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
-
-        // Then the bounded-distance lane, which is not SQL at all: the fuzzy
-        // index answers "within n edits of" and hands back term ids, and the
+        // The bounded-distance lane is not SQL at all: the fuzzy index
+        // answers "within n edits of" and hands back term ids, and the
         // candidate columns are read from the same projection row the
         // equality lanes read, so a candidate is the same thing whichever
-        // lane found it. The index must be complete before ambiguity is evaluated.
-        if let Some(distance) = query.typo_distance {
+        // lane found it. The index must be complete before ambiguity is
+        // evaluated; the batch checks that once and searches one generation
+        // for every bucket.
+        let fuzzy_queries = queries
+            .iter()
+            .enumerate()
+            .filter_map(|(position, query)| {
+                query.typo_distance.map(|distance| {
+                    (
+                        position,
+                        scryer_infrastructure_library_search::fuzzy::ResolverFuzzyQuery {
+                            facet: query.facet,
+                            script: query.script,
+                            numbers_key: query.numbers_key,
+                            match_term: query.match_term,
+                            distance,
+                            limit: query.limit.max(0) as usize,
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut fuzzy_term_ids = vec![Vec::new(); queries.len()];
+        if !fuzzy_queries.is_empty() {
             let fuzzy = self
                 .fuzzy
                 .as_deref()
                 .ok_or_else(|| AppError::Repository("title fuzzy index is not attached".into()))?;
-            let term_ids = fuzzy
-                .resolver_candidates(
-                    scryer_infrastructure_library_search::fuzzy::ResolverFuzzyQuery {
-                        facet: query.facet,
-                        script: query.script,
-                        numbers_key: query.numbers_key,
-                        match_term: query.match_term,
-                        distance,
-                        limit: query.limit.max(0) as usize,
-                    },
-                )
-                .await?;
+            let (positions, fuzzy_queries): (Vec<_>, Vec<_>) = fuzzy_queries.into_iter().unzip();
+            let found = fuzzy.resolver_candidates_batch(&fuzzy_queries).await?;
+            for (position, term_ids) in positions.into_iter().zip(found) {
+                fuzzy_term_ids[position] = term_ids;
+            }
+        }
+
+        let mut results = Vec::with_capacity(queries.len());
+        for (query, term_ids) in queries.iter().zip(fuzzy_term_ids) {
+            // The equality lanes, uncapped: a romanization or a locale-equal
+            // spelling is not a bounded edit distance, so no length band can
+            // stand in for them.
+            let (sql, args) = title_name_equality_statement(query);
+            let mut rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
             if !term_ids.is_empty() {
                 let placeholders = std::iter::repeat_n("{}", term_ids.len())
                     .collect::<Vec<_>>()
@@ -1570,25 +1599,26 @@ impl TitleRepository for TitleStore {
                         .await?,
                 );
             }
-        }
 
-        let mut seen = std::collections::HashSet::new();
-        let mut candidates = Vec::with_capacity(rows.len());
-        for row in &rows {
-            let candidate = scryer_application::TitleNameCandidate {
-                title_id: row.text("title_id")?,
-                facet: row.text("facet")?,
-                raw_term: row.text("raw_term")?,
-                literal_term: row.text("literal_term")?,
-                match_term: row.text("match_term")?,
-                match_year: row.opt_i32("match_year")?,
-                language_tag: row.opt_text("language_tag")?,
-            };
-            if seen.insert((candidate.title_id.clone(), candidate.literal_term.clone())) {
-                candidates.push(candidate);
+            let mut seen = std::collections::HashSet::new();
+            let mut candidates = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let candidate = scryer_application::TitleNameCandidate {
+                    title_id: row.text("title_id")?,
+                    facet: row.text("facet")?,
+                    raw_term: row.text("raw_term")?,
+                    literal_term: row.text("literal_term")?,
+                    match_term: row.text("match_term")?,
+                    match_year: row.opt_i32("match_year")?,
+                    language_tag: row.opt_text("language_tag")?,
+                };
+                if seen.insert((candidate.title_id.clone(), candidate.literal_term.clone())) {
+                    candidates.push(candidate);
+                }
             }
+            results.push(candidates);
         }
-        Ok(candidates)
+        Ok(results)
     }
 
     async fn list_title_index_names(
