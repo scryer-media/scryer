@@ -504,6 +504,80 @@ fn folder_path_non_ascii_owner_pattern(candidate: &str) -> String {
     pattern
 }
 
+/// The equality read of `find_title_name_candidates`: exact spelling,
+/// romanization and locale collation keys, each within the one
+/// (term kind, script, numbers, facet) bucket.
+///
+/// Every lane is its own indexed SELECT joined by UNION ALL. ORed into one
+/// predicate, the collation-key lane defeats the (facet, key) indexes and the
+/// read scans the whole bucket on every call. One term row can come back from
+/// two lanes; the caller's (title_id, literal_term) dedup collapses it, which
+/// is cheaper than the sort a UNION DISTINCT costs on PostgreSQL.
+pub fn title_name_equality_statement(
+    query: &scryer_application::TitleNameBucketQuery<'_>,
+) -> (String, Vec<SqlArg>) {
+    const LANE_COLUMNS: &str = "t.title_id, t.facet, t.raw_term, t.literal_term, \
+         t.match_term, t.match_year, t.language_tag";
+
+    // Script and numbers are compared as expressions so they cannot drive an
+    // index: SQLite without planner statistics otherwise prefers the
+    // (facet, script, numbers_key) bucket index, which matches more columns
+    // than a key index, and walks the whole bucket again. The key index leaves
+    // a handful of rows for these filters to check. The `|| ''` exists only to
+    // keep idx_title_search_terms_bucket out of these lanes (both columns are
+    // NOT NULL); the SQLite plan test pins it.
+    let mut bucket = String::from(
+        "t.term_kind IN ('name', 'alias', 'tagged_alias') AND (t.script || '') = {} \
+         AND (t.numbers_key || '') = {}",
+    );
+    let mut bucket_args = vec![
+        SqlArg::Text(query.script.to_string()),
+        SqlArg::Text(query.numbers_key.to_string()),
+    ];
+    if let Some(facet) = query.facet {
+        bucket.push_str(" AND t.facet = {}");
+        bucket_args.push(SqlArg::Text(facet.to_string()));
+    }
+
+    let mut lanes = vec![format!(
+        "SELECT {LANE_COLUMNS} FROM title_search_terms t \
+         WHERE {bucket} AND t.match_term = {{}}"
+    )];
+    let mut args = bucket_args.clone();
+    args.push(SqlArg::Text(query.match_term.to_string()));
+    if let Some(romanization_key) = query.romanization_key {
+        lanes.push(format!(
+            "SELECT {LANE_COLUMNS} FROM title_search_terms t \
+             WHERE {bucket} AND t.romanization_key = {{}}"
+        ));
+        args.extend(bucket_args.iter().cloned());
+        args.push(SqlArg::Text(romanization_key.to_string()));
+    }
+    if !query.collation_keys.is_empty() {
+        // One lane for every profile: the ORed pairs all sit on the
+        // (profile, collation_key) index, which both dialects read as a union
+        // of index probes. CROSS JOIN keeps SQLite on that index as the outer
+        // loop instead of walking the facet; PostgreSQL reorders it freely.
+        let pairs = std::iter::repeat_n(
+            "(k.profile = {} AND k.collation_key = {})",
+            query.collation_keys.len(),
+        )
+        .collect::<Vec<_>>()
+        .join(" OR ");
+        lanes.push(format!(
+            "SELECT {LANE_COLUMNS} FROM title_search_collation_keys k \
+             CROSS JOIN title_search_terms t \
+             WHERE t.term_id = k.term_id AND {bucket} AND ({pairs})"
+        ));
+        args.extend(bucket_args.iter().cloned());
+        for (profile, key) in query.collation_keys {
+            args.push(SqlArg::Text((*profile).to_string()));
+            args.push(SqlArg::OptBytes(Some(key.clone())));
+        }
+    }
+    (lanes.join(" UNION ALL "), args)
+}
+
 #[async_trait]
 impl TitleRepository for TitleStore {
     async fn list_discovery_context_titles(
@@ -1450,42 +1524,10 @@ impl TitleRepository for TitleStore {
         const CANDIDATE_COLUMNS: &str =
             "title_id, facet, raw_term, literal_term, match_term, match_year, language_tag";
 
-        let mut args = vec![
-            SqlArg::Text(query.script.to_string()),
-            SqlArg::Text(query.numbers_key.to_string()),
-        ];
-        let mut bucket = String::from(
-            "term_kind IN ('name', 'alias', 'tagged_alias') AND script = {} AND numbers_key = {}",
-        );
-        if let Some(facet) = query.facet {
-            bucket.push_str(" AND facet = {}");
-            args.push(SqlArg::Text(facet.to_string()));
-        }
-
         // The equality lanes first, uncapped: a romanization or a
         // locale-equal spelling is not a bounded edit distance, so no length
         // band can stand in for them.
-        let mut equality = vec!["match_term = {}".to_string()];
-        args.push(SqlArg::Text(query.match_term.to_string()));
-        if let Some(romanization_key) = query.romanization_key {
-            equality.push("romanization_key = {}".to_string());
-            args.push(SqlArg::Text(romanization_key.to_string()));
-        }
-        for (profile, key) in query.collation_keys {
-            equality.push(
-                "EXISTS (SELECT 1 FROM title_search_collation_keys k \
-                 WHERE k.term_id = title_search_terms.term_id \
-                 AND k.profile = {} AND k.collation_key = {})"
-                    .to_string(),
-            );
-            args.push(SqlArg::Text((*profile).to_string()));
-            args.push(SqlArg::OptBytes(Some(key.clone())));
-        }
-        let sql = format!(
-            "SELECT {CANDIDATE_COLUMNS} FROM title_search_terms \
-             WHERE {bucket} AND ({})",
-            equality.join(" OR ")
-        );
+        let (sql, args) = title_name_equality_statement(&query);
         let mut rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
 
         // Then the bounded-distance lane, which is not SQL at all: the fuzzy
