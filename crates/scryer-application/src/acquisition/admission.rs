@@ -366,6 +366,8 @@ pub(crate) enum AdmissionVerdict {
 }
 
 impl AdmissionVerdict {
+    /// Assertions only; production reads [`AdmissionVerdict::rejection`].
+    #[cfg(test)]
     pub(crate) fn is_admitted(&self) -> bool {
         matches!(self, Self::Admit { .. })
     }
