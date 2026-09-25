@@ -16,6 +16,8 @@ struct RecordedSearchCall {
     query: String,
     facet: Option<String>,
     newznab_categories: Option<Vec<String>>,
+    season: Option<u32>,
+    episode: Option<u32>,
     /// Indexers the restriction plan left enabled — exactly one per task.
     enabled_indexers: Vec<String>,
 }
@@ -56,8 +58,8 @@ impl IndexerClient for ScriptedIndexerClient {
         indexer_routing: Option<IndexerRoutingPlan>,
         _mode: SearchMode,
         _operation: IndexerErrorOperation,
-        _season: Option<u32>,
-        _episode: Option<u32>,
+        season: Option<u32>,
+        episode: Option<u32>,
         _absolute_episode: Option<u32>,
         _year: Option<i32>,
         _tagged_aliases: Vec<TaggedAlias>,
@@ -75,6 +77,8 @@ impl IndexerClient for ScriptedIndexerClient {
             query,
             facet,
             newznab_categories,
+            season,
+            episode,
             enabled_indexers: enabled_indexers.clone(),
         });
 
@@ -454,6 +458,107 @@ async fn requested_indexer_ids_restrict_a_title_subject_fan_out() {
     );
 }
 
+// ── Title subject: a whole season ──────────────────────────────────────────
+
+/// A series with a season-2 collection holding two episodes. Returns the
+/// title and the season's collection id.
+async fn series_with_second_season(app: &AppUseCase, user: &User) -> (Title, String) {
+    let title = app
+        .add_title(
+            user,
+            NewTitle {
+                name: "Glass Harbor".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series title");
+    let collection = app
+        .create_collection(
+            user,
+            title.id.clone(),
+            "season".into(),
+            "2".into(),
+            Some("Season 2".into()),
+            None,
+            Some("1".into()),
+            Some("2".into()),
+        )
+        .await
+        .expect("create season collection");
+    for number in ["1", "2"] {
+        app.create_episode(
+            user,
+            title.id.clone(),
+            Some(collection.id.clone()),
+            "standard".into(),
+            Some(number.into()),
+            Some("2".into()),
+            Some(format!("S02E0{number}")),
+            None,
+            None,
+            Some(1_500),
+            false,
+            false,
+        )
+        .await
+        .expect("create season episode");
+    }
+    (title, collection.id)
+}
+
+#[tokio::test]
+async fn a_season_only_title_search_asks_indexers_for_the_season_and_no_episode() {
+    // No download client is configured here, so an announced source kind
+    // would be dropped as unroutable before scoring.
+    let mut pack = nzb_release("Glass.Harbor.S02.1080p.WEB-DL-GRP", "pack");
+    pack.source_kind = None;
+    let client = ScriptedIndexerClient::default()
+        .with_releases("idx-a", vec![pack])
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client.clone(),
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let (title, _) = series_with_second_season(&app, &user).await;
+
+    let start = app
+        .start_interactive_release_search(
+            &user,
+            InteractiveReleaseSearchRequest {
+                season: Some("2".into()),
+                ..title_request(&title.id)
+            },
+        )
+        .await
+        .expect("start season search");
+    let done = await_completion(&app, &user, &start.id).await;
+
+    let calls = client.calls().await;
+    assert!(!calls.is_empty(), "the season search reached the indexer");
+    for call in &calls {
+        assert_eq!(call.season, Some(2), "{call:?}");
+        assert_eq!(
+            call.episode, None,
+            "a season search names no episode: {call:?}"
+        );
+        assert_eq!(call.facet.as_deref(), Some("series"), "{call:?}");
+    }
+    assert!(
+        calls.iter().any(|call| call.query == "Glass Harbor S02"),
+        "the season-pack query form is sent: {calls:?}"
+    );
+    assert!(
+        done.results
+            .iter()
+            .any(|result| result.title == "Glass.Harbor.S02.1080p.WEB-DL-GRP"),
+        "the season pack is listed: {done:?}"
+    );
+}
+
 // ── Query subject: context-free rejections ─────────────────────────────
 
 #[tokio::test]
@@ -687,6 +792,142 @@ async fn a_query_subject_search_requires_manage_system_settings() {
 }
 
 // ── Candidate tokens at grab time ──────────────────────────────────────
+
+#[tokio::test]
+async fn a_season_only_token_binds_a_series_season_and_is_refused_for_a_movie() {
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-a",
+            vec![
+                nzb_release("Glass.Harbor.S02.1080p.WEB-DL-GRP", "pack"),
+                nzb_release("Glass.Harbor.S02E01.1080p.WEB-DL-GRP", "episode"),
+                // Carries no season or episode marker, so its coverage cannot
+                // be read from the name and the binding falls back to the
+                // subject the token was issued for.
+                nzb_release("Glass.Harbor.Extras.1080p.WEB-DL-GRP", "extras"),
+            ],
+        )
+        .await;
+    let (app, admin) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let (_, operator) = create_authenticated_user(
+        &app,
+        &admin,
+        "season_operator",
+        "password123",
+        vec![
+            TestPermissionPreset::CatalogView,
+            TestPermissionPreset::TitleManagement,
+            TestPermissionPreset::ConfigManagement,
+        ],
+    )
+    .await;
+    let (series, collection_id) = series_with_second_season(&app, &admin).await;
+    let movie = app
+        .add_title(
+            &admin,
+            NewTitle {
+                name: "Paper Lantern".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                year: Some(2019),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create movie title");
+
+    let start = app
+        .start_interactive_release_search(
+            &operator,
+            query_request("glass harbor", InteractiveSearchKind::Series),
+        )
+        .await
+        .expect("start");
+    let done = await_completion(&app, &operator, &start.id).await;
+    let download_url_for = |guid: &str| {
+        let wanted = format!("https://example.invalid/{guid}.nzb");
+        done.results
+            .iter()
+            .find_map(|result| {
+                result
+                    .download_url
+                    .as_deref()
+                    .filter(|url| *url == wanted)
+                    .map(str::to_string)
+            })
+            .unwrap_or_else(|| panic!("{guid} release listed: {:?}", done.results))
+    };
+    let first_episode_id = app
+        .list_episodes(&admin, &collection_id)
+        .await
+        .expect("list season episodes")
+        .into_iter()
+        .find(|episode| episode.episode_number.as_deref() == Some("1"))
+        .expect("season 2 episode 1")
+        .id;
+
+    let season_scope = |download_url: String| {
+        let app = &app;
+        let operator = &operator;
+        let start_id = &start.id;
+        let series_id = &series.id;
+        async move {
+            let issued = app
+                .issue_interactive_release_candidate_token(
+                    operator,
+                    start_id,
+                    &download_url,
+                    series_id,
+                    Some("2".into()),
+                    None,
+                )
+                .await
+                .expect("season-only token for a series");
+            assert!(issued.candidate_token.is_some(), "{issued:?}");
+            issued.queue_scope
+        }
+    };
+
+    assert_eq!(
+        season_scope(download_url_for("pack")).await,
+        Some(SubmissionScope::Collection {
+            collection_id: collection_id.clone()
+        }),
+        "a season pack binds its season"
+    );
+    assert_eq!(
+        season_scope(download_url_for("episode")).await,
+        Some(SubmissionScope::Episode {
+            episode_id: first_episode_id
+        }),
+        "a single-episode release binds that episode"
+    );
+    assert_eq!(
+        season_scope(download_url_for("extras")).await,
+        Some(SubmissionScope::Collection {
+            collection_id: collection_id.clone()
+        }),
+        "a release with no readable coverage binds the searched season"
+    );
+    let download_url = download_url_for("pack");
+
+    let error = app
+        .issue_interactive_release_candidate_token(
+            &operator,
+            &start.id,
+            &download_url,
+            &movie.id,
+            Some("1".into()),
+            None,
+        )
+        .await
+        .expect_err("season-only token for a movie");
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+}
 
 #[tokio::test]
 async fn a_token_is_issued_for_a_release_still_held_by_the_search() {

@@ -2283,7 +2283,6 @@ const nl: LocaleDictionary = {
   "episode.ova": "OVA",
   "episode.ona": "ONA",
   "episode.alternate": "Alternatief",
-  "seasonSection.seasonPackResults": "Seizoenspakket-resultaten",
   "seasonSection.noEpisodeRecords": "Geen afleveringsrecords voor dit seizoen.",
   "seriesOverview.selectColumn": "Selecteren",
   "seriesOverview.selectEpisodeForDelete": "{{name}} selecteren",

@@ -647,7 +647,7 @@ fn coverage_from_episode_ids(mut episode_ids: Vec<String>) -> Option<ReleaseCove
     }
 }
 
-fn collection_id_for_season(collections: &[Collection], season: u32) -> Option<String> {
+pub(crate) fn collection_id_for_season(collections: &[Collection], season: u32) -> Option<String> {
     collections
         .iter()
         .find(|collection| collection.collection_index.trim().parse::<u32>().ok() == Some(season))

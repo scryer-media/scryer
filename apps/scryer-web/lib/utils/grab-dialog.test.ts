@@ -109,18 +109,19 @@ test("rejection codes are de-duplicated across the batch", () => {
 });
 
 
-test("a season/episode narrowing is sent only when both halves are filled", () => {
+test("a season/episode narrowing needs a season; a season alone is the whole season", () => {
   assert.deepEqual(episodeSubjectInput("", ""), {});
   assert.deepEqual(episodeSubjectInput(" 6 ", " 4 "), {
     season: "6",
     episode: "4",
   });
-  assert.deepEqual(episodeSubjectInput("6", ""), {});
+  assert.deepEqual(episodeSubjectInput(" 6 ", ""), { season: "6" });
+  assert.deepEqual(episodeSubjectInput("", "4"), {});
 });
 
-test("a half-filled season/episode pair is reported as incomplete", () => {
+test("only an episode without a season is reported as incomplete", () => {
   assert.equal(episodeSubjectIncomplete("", ""), false);
   assert.equal(episodeSubjectIncomplete("6", "4"), false);
-  assert.equal(episodeSubjectIncomplete("6", ""), true);
+  assert.equal(episodeSubjectIncomplete("6", ""), false);
   assert.equal(episodeSubjectIncomplete("", "4"), true);
 });

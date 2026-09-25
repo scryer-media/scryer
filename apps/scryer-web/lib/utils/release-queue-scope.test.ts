@@ -4,6 +4,7 @@ import test from "node:test";
 import type { ReleaseQueueScope } from "@/lib/types/releases";
 import {
   hasPrimaryMediaFile,
+  queueScopeReplacesPrimary,
   releaseCoversMultipleEpisodes,
   releaseSupportsAdditionalFileQueue,
 } from "./release-queue-scope.ts";
@@ -96,4 +97,32 @@ test("the pack badge follows the signed scope, not the release name", () => {
 
   assert.equal(releaseCoversMultipleEpisodes({ queueScope: null }), false);
   assert.equal(releaseCoversMultipleEpisodes({}), false);
+});
+
+test("a season grab replaces only primary files inside its queue scope", () => {
+  const episodesByCollection = {
+    "season-1": [{ id: "s1e1" }, { id: "s1e2" }],
+    "season-2": [{ id: "s2e1" }, { id: "s2e2" }],
+  };
+  const mediaFilesByEpisode = {
+    s1e1: [{ role: "primary" }],
+    s2e1: [{ role: "additional" }],
+  };
+  const replaces = (scope: Parameters<typeof queueScopeReplacesPrimary>[0]) =>
+    queueScopeReplacesPrimary(scope, episodesByCollection, mediaFilesByEpisode);
+
+  // The scope covers an episode that has a primary file: replace.
+  assert.equal(replaces({ collection: "season-1" }), true);
+  assert.equal(replaces({ episode: "s1e1" }), true);
+  assert.equal(replaces({ episodeSet: ["s1e2", "s1e1"] }), true);
+  assert.equal(replaces({ title: true }), true);
+
+  // The scope covers no episode at all: plain queue.
+  assert.equal(replaces({ collection: "season-3" }), false);
+  assert.equal(replaces({ episodeSet: [] }), false);
+
+  // The season has a primary file, but outside the release's scope: plain queue.
+  assert.equal(replaces({ episode: "s1e2" }), false);
+  assert.equal(replaces({ episodeSet: ["s1e2"] }), false);
+  assert.equal(replaces({ collection: "season-2" }), false);
 });

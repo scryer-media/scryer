@@ -60,8 +60,9 @@ export function releaseRejectionCodes(releases: readonly Release[]): string[] {
 /**
  * Season/episode narrowing sent to the token mutation. Both blank means
  * "resolve it from the release name", which is what the server does by
- * default (D11). The server rejects one without the other, so a half-filled
- * pair sends nothing and the dialog blocks the grab instead.
+ * default (D11). A season alone targets the whole season. The server rejects
+ * an episode without a season, so that sends nothing and the dialog blocks the
+ * grab instead.
  */
 export function episodeSubjectInput(
   season: string,
@@ -69,13 +70,16 @@ export function episodeSubjectInput(
 ): { season?: string; episode?: string } {
   const trimmedSeason = season.trim();
   const trimmedEpisode = episode.trim();
-  if (!trimmedSeason || !trimmedEpisode) {
+  if (!trimmedSeason) {
     return {};
+  }
+  if (!trimmedEpisode) {
+    return { season: trimmedSeason };
   }
   return { season: trimmedSeason, episode: trimmedEpisode };
 }
 
-/** True when exactly one of season/episode is filled — the server rejects that. */
+/** True when an episode is filled without a season — the server rejects that. */
 export function episodeSubjectIncomplete(season: string, episode: string): boolean {
-  return season.trim().length > 0 !== episode.trim().length > 0;
+  return season.trim().length === 0 && episode.trim().length > 0;
 }

@@ -31,7 +31,12 @@ import type { CatalogDiscoveryItem } from "@/lib/types/discovery";
 import type { TitleRatings } from "@/components/views/title-ratings-strip";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import {
-  hasPrimaryMediaFile,
+  runIterativeReleaseSearch,
+  titleReleaseSearchInput,
+} from "@/lib/graphql/release-search";
+import { isAbortError } from "@/lib/graphql/urql-client";
+import {
+  queueScopeReplacesPrimary,
   releaseQueueScopeInput,
 } from "@/lib/utils/release-queue-scope";
 import {
@@ -1780,9 +1785,24 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     [refreshTitleDetail, client, confirmReplaceConflict, title, t, setGlobalStatus],
   );
 
-  const [seasonSearchResultsByCollection] = React.useState<
-    Record<string, Release[]>
-  >({});
+  const [seasonSearchResultsByCollection, setSeasonSearchResultsByCollection] =
+    React.useState<Record<string, Release[]>>({});
+  const [
+    seasonInteractiveSearchLoadingByCollection,
+    setSeasonInteractiveSearchLoadingByCollection,
+  ] = React.useState<Record<string, boolean>>({});
+  const seasonSearchAbortByCollectionRef = React.useRef<Record<string, AbortController>>({});
+  const seasonSearchTitleId = title?.id ?? null;
+  React.useEffect(() => {
+    setSeasonSearchResultsByCollection({});
+    setSeasonInteractiveSearchLoadingByCollection({});
+    return () => {
+      Object.values(seasonSearchAbortByCollectionRef.current).forEach((controller) =>
+        controller.abort(),
+      );
+      seasonSearchAbortByCollectionRef.current = {};
+    };
+  }, [seasonSearchTitleId]);
   const [seasonSearchLoadingByCollection, setSeasonSearchLoadingByCollection] = React.useState<
     Record<string, boolean>
   >({});
@@ -1808,6 +1828,58 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     [startAutomaticSearch, setGlobalStatus, t, title],
   );
 
+  // An interactive search of the whole season. Its releases carry candidate
+  // tokens already bound to what each one covers, so a grab queues them
+  // directly with the season's collection as the fallback scope.
+  const handleRunSeasonInteractiveSearch = React.useCallback(
+    (collection: TitleCollection) => {
+      if (!title) return;
+      const seasonNum = parseSearchSeason(collection.collectionIndex);
+      if (seasonNum === null) {
+        setGlobalStatus(t("wanted.searchInvalidSeason"));
+        return;
+      }
+
+      const collectionId = collection.id;
+      seasonSearchAbortByCollectionRef.current[collectionId]?.abort();
+      const abortController = new AbortController();
+      seasonSearchAbortByCollectionRef.current[collectionId] = abortController;
+      setSeasonSearchResultsByCollection((prev) => ({ ...prev, [collectionId]: [] }));
+      setSeasonInteractiveSearchLoadingByCollection((prev) => ({ ...prev, [collectionId]: true }));
+
+      runIterativeReleaseSearch(
+        client,
+        titleReleaseSearchInput(title.id, { kind: "season", season: String(seasonNum) }),
+        {
+          signal: abortController.signal,
+          onUpdate: (snapshot) => {
+            if (abortController.signal.aborted) return;
+            setSeasonSearchResultsByCollection((prev) => ({
+              ...prev,
+              [collectionId]: snapshot.releases,
+            }));
+          },
+        },
+      )
+        .catch((error: unknown) => {
+          if (isAbortError(error) || abortController.signal.aborted) return;
+          setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.apiError")), {
+            level: "ERROR",
+          });
+        })
+        .finally(() => {
+          if (seasonSearchAbortByCollectionRef.current[collectionId] === abortController) {
+            delete seasonSearchAbortByCollectionRef.current[collectionId];
+            setSeasonInteractiveSearchLoadingByCollection((prev) => ({
+              ...prev,
+              [collectionId]: false,
+            }));
+          }
+        });
+    },
+    [client, setGlobalStatus, t, title],
+  );
+
   const handleQueueFromSeasonSearch = React.useCallback(
     async (collection: TitleCollection, release: Release) => {
       if (!title) return;
@@ -1821,9 +1893,10 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
           scope: releaseQueueScopeInput(release, { collection: collection.id }),
           candidateToken: release.candidateToken,
         };
-        const replacesPrimary = (episodesByCollection[collection.id] ?? []).some(
-          (episode) =>
-            hasPrimaryMediaFile(mediaFilesByEpisode[episode.id]),
+        const replacesPrimary = queueScopeReplacesPrimary(
+          input.scope,
+          episodesByCollection,
+          mediaFilesByEpisode,
         );
         const mutation = replacesPrimary
           ? queueReplacementMutation
@@ -1923,6 +1996,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
             (!!title && season !== null && isSearching(title.id, season))];
         }))}
         onRunSeasonSearch={handleRunSeasonSearch}
+        seasonInteractiveSearchLoadingByCollection={seasonInteractiveSearchLoadingByCollection}
+        onRunSeasonInteractiveSearch={handleRunSeasonInteractiveSearch}
         onQueueFromSeasonSearch={handleQueueFromSeasonSearch}
         monitoredUpdating={monitoredUpdating}
         searchMonitoredLoading={searchAction.searching}

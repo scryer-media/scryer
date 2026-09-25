@@ -2884,8 +2884,6 @@ const ru: LocaleDictionary = {
     "episode.alternate": "Альтернативный",
     "episode.multiAudio": "Две аудиодорожки",
 
-    "seasonSection.seasonPackResults":
-        "Результаты поиска сезонных пакетов",
     "seasonSection.noEpisodeRecords":
         "Для этого сезона нет записей об эпизодах.",
 

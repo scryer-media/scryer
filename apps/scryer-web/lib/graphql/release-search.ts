@@ -12,6 +12,7 @@ import {
   startInteractiveReleaseSearchMutation,
 } from "./mutations";
 import { interactiveReleaseSearchQuery } from "./queries";
+import type { InteractiveReleaseSearchInput } from "./release-search-input";
 import { isAbortError, makeAbortableFetch } from "./urql-client";
 
 export type InteractiveSearchIndexerProgress = {
@@ -43,26 +44,12 @@ export type InteractiveSearchProgress = {
   state: "RUNNING" | "COMPLETED" | "CANCELLED";
 };
 
-/** Search kinds a title-less query subject may take (spec 0002 D2). */
-export type InteractiveSearchKind = "MOVIE" | "SERIES" | "ANIME" | "RAW";
-
-/**
- * The job accepts exactly one subject: a catalog title (`titleId`, optionally
- * narrowed to a season/episode) or a raw operator query (`query` + `kind`).
- * `indexerIds` and `categories` restrict either subject.
- */
-export type InteractiveReleaseSearchInput = {
-  titleId?: string;
-  seriesMovieLinkId?: string;
-  season?: string;
-  episode?: string;
-  query?: string;
-  kind?: InteractiveSearchKind;
-  indexerIds?: string[];
-  categories?: string[];
-  limit?: number;
-};
-
+export {
+  titleReleaseSearchInput,
+  type InteractiveReleaseSearchInput,
+  type InteractiveSearchKind,
+  type TitleReleaseSearchScope,
+} from "./release-search-input";
 type InteractiveReleaseSearchJobPayload = {
   id: string;
   state: InteractiveSearchProgress["state"];
