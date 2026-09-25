@@ -65,9 +65,12 @@ export function isMonitorSelectionEmpty(
 }
 
 /**
- * The GraphQL input shape is the draft shape, so this only normalizes and drops
+ * The GraphQL input shape is the draft shape, so this normalizes and drops
  * empty selections — the API rejects those, and callers use `undefined` to mean
- * "not advanced, send nothing".
+ * "not advanced, send nothing". Movies and their ids are rebuilt from exactly
+ * the input fields: drafts are often query-result objects, which the urql
+ * document cache stamps with `__typename`, and the server rejects that as an
+ * unknown input field.
  */
 export function monitorSelectionInput(
   selection: MonitorSelectionDraft | null | undefined,
@@ -75,7 +78,17 @@ export function monitorSelectionInput(
   if (isMonitorSelectionEmpty(selection)) {
     return undefined;
   }
-  return normalizeMonitorSelection(selection as MonitorSelectionDraft);
+  const normalized = normalizeMonitorSelection(selection as MonitorSelectionDraft);
+  return {
+    seasonNumbers: normalized.seasonNumbers,
+    seriesMovies: normalized.seriesMovies.map((movie) => ({
+      name: movie.name,
+      externalIds: movie.externalIds.map((externalId) => ({
+        source: externalId.source,
+        value: externalId.value,
+      })),
+    })),
+  };
 }
 
 export function monitorSelectionFromRecord(
