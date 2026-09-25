@@ -32,7 +32,7 @@ pub(crate) const ACQUISITION_LONG_TAIL_RECONVERGE_DAYS_KEY: &str =
     "acquisition.long_tail_reconverge_days";
 
 pub(crate) const DEFAULT_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE: i64 = 500;
-pub(crate) const DEFAULT_LONG_TAIL_RECONVERGE_DAYS: i64 = 30;
+pub(crate) const DEFAULT_LONG_TAIL_RECONVERGE_DAYS: i64 = 0;
 
 #[derive(Debug, Clone)]
 pub(crate) struct ConvergenceSettings {
