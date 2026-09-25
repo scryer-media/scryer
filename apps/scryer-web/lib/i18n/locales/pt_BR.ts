@@ -1695,6 +1695,7 @@ const pt_BR: LocaleDictionary = {
   "settings.notificationEvent.rename": "Arquivo renomeado",
   "settings.notificationEvent.titleAdded": "Título adicionado",
   "settings.notificationEvent.titleDeleted": "Título excluído",
+  "settings.notificationEvent.titleMoved": "Título movido",
   "settings.notificationEvent.fileDeleted": "Arquivo excluído",
   "settings.notificationEvent.fileDeletedForUpgrade":
     "Arquivo excluído para atualização",

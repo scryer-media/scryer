@@ -479,6 +479,7 @@ fn jellyfin_notification_payload(
         application_update: None,
         manual_interaction: None,
         media_request: None,
+        title_move: None,
     }
 }
 
@@ -510,6 +511,7 @@ fn test_notification_payload() -> NotificationPayload {
         application_update: None,
         manual_interaction: None,
         media_request: None,
+        title_move: None,
     }
 }
 
@@ -1167,6 +1169,7 @@ async fn notification_event_types_query_returns_only_dispatchable_subscription_e
             "health_restored",
             "title_added",
             "title_deleted",
+            "title_moved",
             "grab",
             "download",
             "import_complete",

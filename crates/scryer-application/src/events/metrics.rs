@@ -1156,6 +1156,7 @@ mod tests {
             }),
             DomainEventPayload::TitleDeleted(TitleDeletedEventData {
                 title: title.clone(),
+                deleted_paths: Vec::new(),
             }),
             DomainEventPayload::ConfigurationChanged(ConfigurationChangedEventData {
                 resource_type: "indexer".to_string(),

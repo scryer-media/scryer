@@ -22,7 +22,7 @@ use crate::types::{
     PluginNotificationFile, PluginNotificationHealth, PluginNotificationImport,
     PluginNotificationManualInteraction, PluginNotificationMediaFile,
     PluginNotificationMediaRequest, PluginNotificationMediaUpdate, PluginNotificationRequest,
-    PluginNotificationResponse, PluginNotificationTitle,
+    PluginNotificationResponse, PluginNotificationTitle, PluginNotificationTitleMove,
 };
 use crate::wasmtime_host::{NotificationComponentInvocation, process_notification_component};
 
@@ -132,186 +132,7 @@ impl WasmNotificationClient {
 #[async_trait]
 impl NotificationClient for WasmNotificationClient {
     async fn send_notification(&self, payload: &NotificationPayload) -> AppResult<()> {
-        let request = PluginNotificationRequest {
-            schema_version: payload.schema_version,
-            event_type: map_event_type(payload.event_type),
-            event_id: payload.event_id.clone(),
-            occurred_at: payload.occurred_at.clone(),
-            correlation_id: payload.correlation_id.clone(),
-            actor: payload.actor.as_ref().map(|actor| PluginNotificationActor {
-                user_id: actor.user_id.clone(),
-            }),
-            severity: payload.severity.map(map_severity),
-            is_test: payload.is_test,
-            summary_title: payload.summary_title.clone(),
-            summary_message: payload.summary_message.clone(),
-            app: PluginNotificationApp {
-                name: payload.app.name.clone(),
-                version: payload.app.version.clone(),
-            },
-            title: payload.title.as_ref().map(|title| PluginNotificationTitle {
-                id: title.id.clone(),
-                name: title.name.clone(),
-                facet: title.facet.clone(),
-                year: title.year,
-                slug: title.slug.clone(),
-                path: title.path.clone(),
-                overview: title.overview.clone(),
-                sort_title: title.sort_title.clone(),
-                background_url: title.background_url.clone(),
-                poster_url: title.poster_url.clone(),
-                tags: title.tags.clone(),
-                aliases: title.aliases.clone(),
-                original_language: title.original_language.clone(),
-                original_country: title.original_country.clone(),
-                external_ids: PluginNotificationExternalIds {
-                    tmdb_id: title.external_ids.tmdb_id.clone(),
-                    imdb_id: title.external_ids.imdb_id.clone(),
-                    tvdb_id: title.external_ids.tvdb_id.clone(),
-                    anidb_id: title.external_ids.anidb_id.clone(),
-                    tvmaze_id: title.external_ids.tvmaze_id.clone(),
-                    anilist_ids: title.external_ids.anilist_ids.clone(),
-                    mal_ids: title.external_ids.mal_ids.clone(),
-                    kitsu_ids: title.external_ids.kitsu_ids.clone(),
-                    by_source: title.external_ids.by_source.clone(),
-                },
-            }),
-            episode: payload.episode.as_ref().map(map_episode),
-            episodes: payload.episodes.iter().map(map_episode).collect(),
-            release: payload.release.as_ref().map(|release| {
-                crate::types::PluginNotificationRelease {
-                    source_title: release.source_title.clone(),
-                    source_hint: release.source_hint.clone(),
-                    quality: release.quality.clone(),
-                    provider: release.provider.clone(),
-                    language: release.language.clone(),
-                    release_group: release.release_group.clone(),
-                    protocol: release.protocol.clone(),
-                    indexer: release.indexer.clone(),
-                    languages: release.languages.clone(),
-                    custom_scores: release.custom_scores.clone(),
-                }
-            }),
-            download: payload
-                .download
-                .as_ref()
-                .map(|download| PluginNotificationDownload {
-                    download_id: download.download_id.clone(),
-                    client_id: download.client_id.clone(),
-                    client_name: download.client_name.clone(),
-                    client_type: download.client_type.clone(),
-                    title: download.title.clone(),
-                    status: download.status.clone(),
-                    status_message: download.status_message.clone(),
-                    size_bytes: download.size_bytes,
-                    progress_percent: download.progress_percent,
-                    output_path: download.output_path.clone(),
-                }),
-            import: payload
-                .import
-                .as_ref()
-                .map(|import| PluginNotificationImport {
-                    import_id: import.import_id.clone(),
-                    source_system: import.source_system.clone(),
-                    source_ref: import.source_ref.clone(),
-                    source_title: import.source_title.clone(),
-                    source_path: import.source_path.clone(),
-                    dest_path: import.dest_path.clone(),
-                    imported_count: import.imported_count,
-                    status: import.status.clone(),
-                    skipped_count: import.skipped_count,
-                    rejected_count: import.rejected_count,
-                    upgrade: import.upgrade,
-                    deleted_paths: import.deleted_paths.clone(),
-                    replaced_paths: import.replaced_paths.clone(),
-                }),
-            health: payload
-                .health
-                .as_ref()
-                .map(|health| PluginNotificationHealth {
-                    status: health.status.clone(),
-                    message: health.message.clone(),
-                    severity: health.severity.clone(),
-                    code: health.code.clone(),
-                    details: health.details.clone(),
-                }),
-            file: payload.file.as_ref().map(|file| PluginNotificationFile {
-                primary_path: file.primary_path.clone(),
-                media_updates: file
-                    .media_updates
-                    .iter()
-                    .map(|update| PluginNotificationMediaUpdate {
-                        path: update.path.clone(),
-                        update_type: match update.update_type {
-                            NotificationMediaUpdateTypePayload::Created => {
-                                crate::types::NotificationMediaUpdateType::Created
-                            }
-                            NotificationMediaUpdateTypePayload::Modified => {
-                                crate::types::NotificationMediaUpdateType::Modified
-                            }
-                            NotificationMediaUpdateTypePayload::Deleted => {
-                                crate::types::NotificationMediaUpdateType::Deleted
-                            }
-                        },
-                    })
-                    .collect(),
-            }),
-            media_files: payload
-                .media_files
-                .iter()
-                .map(|media_file| PluginNotificationMediaFile {
-                    id: media_file.id.clone(),
-                    path: media_file.path.clone(),
-                    previous_path: media_file.previous_path.clone(),
-                    recycle_bin_path: media_file.recycle_bin_path.clone(),
-                    size_bytes: media_file.size_bytes,
-                    quality: media_file.quality.clone(),
-                    release_group: media_file.release_group.clone(),
-                    scene_name: media_file.scene_name.clone(),
-                    audio_languages: media_file.audio_languages.clone(),
-                    subtitle_languages: media_file.subtitle_languages.clone(),
-                    video_codec: media_file.video_codec.clone(),
-                    audio_codec: media_file.audio_codec.clone(),
-                    audio_channels: media_file.audio_channels.clone(),
-                    video_width: media_file.video_width,
-                    video_height: media_file.video_height,
-                    video_bit_depth: media_file.video_bit_depth,
-                    video_hdr_format: media_file.video_hdr_format.clone(),
-                    video_frame_rate: media_file.video_frame_rate.clone(),
-                    container_format: media_file.container_format.clone(),
-                    edition: media_file.edition.clone(),
-                })
-                .collect(),
-            application_update: payload.application_update.as_ref().map(|update| {
-                PluginNotificationApplicationUpdate {
-                    current_version: update.current_version.clone(),
-                    target_version: update.target_version.clone(),
-                    status: update.status.clone(),
-                    summary: update.summary.clone(),
-                }
-            }),
-            manual_interaction: payload.manual_interaction.as_ref().map(|manual| {
-                PluginNotificationManualInteraction {
-                    kind: manual.kind.clone(),
-                    reason: manual.reason.clone(),
-                    link: manual.link.clone(),
-                }
-            }),
-            media_request: payload.media_request.as_ref().map(|request| {
-                PluginNotificationMediaRequest {
-                    request_id: request.request_id.clone(),
-                    library_id: request.library_id.clone(),
-                    status: request.status.clone(),
-                    facet: request.facet.clone(),
-                    requested_quality_profile_id: request.requested_quality_profile_id.clone(),
-                    requested_quality_profile_name: request.requested_quality_profile_name.clone(),
-                    requested_monitor_type: request.requested_monitor_type.clone(),
-                    approved_quality_profile_id: request.approved_quality_profile_id.clone(),
-                    approved_quality_profile_name: request.approved_quality_profile_name.clone(),
-                    created_title_id: request.created_title_id.clone(),
-                }
-            }),
-        };
+        let request = plugin_notification_request(payload);
 
         let plugin_name = self.descriptor.name.clone();
         let channel_name = self.channel_name.clone();
@@ -402,6 +223,207 @@ fn map_severity(severity: NotificationSeverityPayload) -> crate::types::Notifica
     }
 }
 
+/// The plugin SDK request a host notification payload is sent as.
+fn plugin_notification_request(payload: &NotificationPayload) -> PluginNotificationRequest {
+    PluginNotificationRequest {
+        schema_version: payload.schema_version,
+        event_type: map_event_type(payload.event_type),
+        event_id: payload.event_id.clone(),
+        occurred_at: payload.occurred_at.clone(),
+        correlation_id: payload.correlation_id.clone(),
+        actor: payload.actor.as_ref().map(|actor| PluginNotificationActor {
+            user_id: actor.user_id.clone(),
+        }),
+        severity: payload.severity.map(map_severity),
+        is_test: payload.is_test,
+        summary_title: payload.summary_title.clone(),
+        summary_message: payload.summary_message.clone(),
+        app: PluginNotificationApp {
+            name: payload.app.name.clone(),
+            version: payload.app.version.clone(),
+        },
+        title: payload.title.as_ref().map(|title| PluginNotificationTitle {
+            id: title.id.clone(),
+            name: title.name.clone(),
+            facet: title.facet.clone(),
+            year: title.year,
+            slug: title.slug.clone(),
+            path: title.path.clone(),
+            overview: title.overview.clone(),
+            sort_title: title.sort_title.clone(),
+            background_url: title.background_url.clone(),
+            poster_url: title.poster_url.clone(),
+            tags: title.tags.clone(),
+            aliases: title.aliases.clone(),
+            original_language: title.original_language.clone(),
+            original_country: title.original_country.clone(),
+            external_ids: PluginNotificationExternalIds {
+                tmdb_id: title.external_ids.tmdb_id.clone(),
+                imdb_id: title.external_ids.imdb_id.clone(),
+                tvdb_id: title.external_ids.tvdb_id.clone(),
+                anidb_id: title.external_ids.anidb_id.clone(),
+                tvmaze_id: title.external_ids.tvmaze_id.clone(),
+                anilist_ids: title.external_ids.anilist_ids.clone(),
+                mal_ids: title.external_ids.mal_ids.clone(),
+                kitsu_ids: title.external_ids.kitsu_ids.clone(),
+                by_source: title.external_ids.by_source.clone(),
+            },
+        }),
+        episode: payload.episode.as_ref().map(map_episode),
+        episodes: payload.episodes.iter().map(map_episode).collect(),
+        release: payload
+            .release
+            .as_ref()
+            .map(|release| crate::types::PluginNotificationRelease {
+                source_title: release.source_title.clone(),
+                source_hint: release.source_hint.clone(),
+                quality: release.quality.clone(),
+                provider: release.provider.clone(),
+                language: release.language.clone(),
+                release_group: release.release_group.clone(),
+                protocol: release.protocol.clone(),
+                indexer: release.indexer.clone(),
+                languages: release.languages.clone(),
+                custom_scores: release.custom_scores.clone(),
+            }),
+        download: payload
+            .download
+            .as_ref()
+            .map(|download| PluginNotificationDownload {
+                download_id: download.download_id.clone(),
+                client_id: download.client_id.clone(),
+                client_name: download.client_name.clone(),
+                client_type: download.client_type.clone(),
+                title: download.title.clone(),
+                status: download.status.clone(),
+                status_message: download.status_message.clone(),
+                size_bytes: download.size_bytes,
+                progress_percent: download.progress_percent,
+                output_path: download.output_path.clone(),
+            }),
+        import: payload
+            .import
+            .as_ref()
+            .map(|import| PluginNotificationImport {
+                import_id: import.import_id.clone(),
+                source_system: import.source_system.clone(),
+                source_ref: import.source_ref.clone(),
+                source_title: import.source_title.clone(),
+                source_path: import.source_path.clone(),
+                dest_path: import.dest_path.clone(),
+                imported_count: import.imported_count,
+                status: import.status.clone(),
+                skipped_count: import.skipped_count,
+                rejected_count: import.rejected_count,
+                upgrade: import.upgrade,
+                deleted_paths: import.deleted_paths.clone(),
+                replaced_paths: import.replaced_paths.clone(),
+            }),
+        health: payload
+            .health
+            .as_ref()
+            .map(|health| PluginNotificationHealth {
+                status: health.status.clone(),
+                message: health.message.clone(),
+                severity: health.severity.clone(),
+                code: health.code.clone(),
+                details: health.details.clone(),
+            }),
+        file: payload.file.as_ref().map(|file| PluginNotificationFile {
+            primary_path: file.primary_path.clone(),
+            media_updates: file
+                .media_updates
+                .iter()
+                .map(|update| PluginNotificationMediaUpdate {
+                    path: update.path.clone(),
+                    update_type: match update.update_type {
+                        NotificationMediaUpdateTypePayload::Created => {
+                            crate::types::NotificationMediaUpdateType::Created
+                        }
+                        NotificationMediaUpdateTypePayload::Modified => {
+                            crate::types::NotificationMediaUpdateType::Modified
+                        }
+                        NotificationMediaUpdateTypePayload::Deleted => {
+                            crate::types::NotificationMediaUpdateType::Deleted
+                        }
+                    },
+                })
+                .collect(),
+        }),
+        media_files: payload
+            .media_files
+            .iter()
+            .map(|media_file| PluginNotificationMediaFile {
+                id: media_file.id.clone(),
+                path: media_file.path.clone(),
+                previous_path: media_file.previous_path.clone(),
+                recycle_bin_path: media_file.recycle_bin_path.clone(),
+                size_bytes: media_file.size_bytes,
+                quality: media_file.quality.clone(),
+                release_group: media_file.release_group.clone(),
+                scene_name: media_file.scene_name.clone(),
+                audio_languages: media_file.audio_languages.clone(),
+                subtitle_languages: media_file.subtitle_languages.clone(),
+                video_codec: media_file.video_codec.clone(),
+                audio_codec: media_file.audio_codec.clone(),
+                audio_channels: media_file.audio_channels.clone(),
+                video_width: media_file.video_width,
+                video_height: media_file.video_height,
+                video_bit_depth: media_file.video_bit_depth,
+                video_hdr_format: media_file.video_hdr_format.clone(),
+                video_frame_rate: media_file.video_frame_rate.clone(),
+                container_format: media_file.container_format.clone(),
+                edition: media_file.edition.clone(),
+            })
+            .collect(),
+        application_update: payload.application_update.as_ref().map(|update| {
+            PluginNotificationApplicationUpdate {
+                current_version: update.current_version.clone(),
+                target_version: update.target_version.clone(),
+                status: update.status.clone(),
+                summary: update.summary.clone(),
+            }
+        }),
+        manual_interaction: payload.manual_interaction.as_ref().map(|manual| {
+            PluginNotificationManualInteraction {
+                kind: manual.kind.clone(),
+                reason: manual.reason.clone(),
+                link: manual.link.clone(),
+            }
+        }),
+        media_request: payload.media_request.as_ref().map(|request| {
+            PluginNotificationMediaRequest {
+                request_id: request.request_id.clone(),
+                library_id: request.library_id.clone(),
+                status: request.status.clone(),
+                facet: request.facet.clone(),
+                requested_quality_profile_id: request.requested_quality_profile_id.clone(),
+                requested_quality_profile_name: request.requested_quality_profile_name.clone(),
+                requested_monitor_type: request.requested_monitor_type.clone(),
+                approved_quality_profile_id: request.approved_quality_profile_id.clone(),
+                approved_quality_profile_name: request.approved_quality_profile_name.clone(),
+                created_title_id: request.created_title_id.clone(),
+            }
+        }),
+        title_move: payload
+            .title_move
+            .as_ref()
+            .map(|title_move| PluginNotificationTitleMove {
+                operation_id: title_move.operation_id.clone(),
+                operation_type: title_move.operation_type.clone(),
+                mode: title_move.mode.clone(),
+                source_library_id: title_move.source_library_id.clone(),
+                source_library_name: title_move.source_library_name.clone(),
+                destination_library_id: title_move.destination_library_id.clone(),
+                destination_library_name: title_move.destination_library_name.clone(),
+                source_path: title_move.source_path.clone(),
+                destination_path: title_move.destination_path.clone(),
+                completed_with_warnings: title_move.completed_with_warnings,
+                detail: title_move.detail.clone(),
+            }),
+    }
+}
+
 fn map_event_type(event_type: DomainNotificationEventType) -> NotificationEventType {
     match event_type {
         DomainNotificationEventType::Grab => NotificationEventType::Grab,
@@ -443,6 +465,7 @@ fn map_event_type(event_type: DomainNotificationEventType) -> NotificationEventT
         DomainNotificationEventType::ManualInteractionRequired => {
             NotificationEventType::ManualInteractionRequired
         }
+        DomainNotificationEventType::TitleMoved => NotificationEventType::TitleMoved,
         DomainNotificationEventType::Test => NotificationEventType::Test,
     }
 }
@@ -522,6 +545,7 @@ mod component_routing_tests {
             application_update: None,
             manual_interaction: None,
             media_request: None,
+            title_move: None,
         }
     }
 
@@ -560,5 +584,105 @@ mod component_routing_tests {
             0,
             "a completed send must leave no socket open on the channel",
         );
+    }
+}
+
+#[cfg(test)]
+mod request_mapping_tests {
+    use super::*;
+    use scryer_application::{
+        NotificationAppPayload, NotificationFilePayload, NotificationMediaUpdatePayload,
+        NotificationTitleMovePayload,
+    };
+
+    fn payload(event_type: DomainNotificationEventType) -> NotificationPayload {
+        NotificationPayload {
+            schema_version: 1,
+            event_type,
+            event_id: None,
+            occurred_at: None,
+            correlation_id: None,
+            actor: None,
+            severity: None,
+            is_test: false,
+            summary_title: "fixture".to_string(),
+            summary_message: "fixture".to_string(),
+            app: NotificationAppPayload {
+                name: "scryer".to_string(),
+                version: "0.0.0".to_string(),
+            },
+            title: None,
+            episode: None,
+            episodes: Vec::new(),
+            release: None,
+            download: None,
+            import: None,
+            health: None,
+            file: None,
+            media_files: Vec::new(),
+            application_update: None,
+            manual_interaction: None,
+            media_request: None,
+            title_move: None,
+        }
+    }
+
+    #[test]
+    fn title_moved_notification_carries_move_and_file_paths_to_the_plugin() {
+        let mut payload = payload(DomainNotificationEventType::TitleMoved);
+        payload.file = Some(NotificationFilePayload {
+            primary_path: Some("/root-b/Example Film (2020)/film.mkv".to_string()),
+            media_updates: vec![
+                NotificationMediaUpdatePayload {
+                    path: "/root-a/Example Film (2020)/film.mkv".to_string(),
+                    update_type: NotificationMediaUpdateTypePayload::Deleted,
+                },
+                NotificationMediaUpdatePayload {
+                    path: "/root-b/Example Film (2020)/film.mkv".to_string(),
+                    update_type: NotificationMediaUpdateTypePayload::Created,
+                },
+            ],
+        });
+        payload.title_move = Some(NotificationTitleMovePayload {
+            operation_id: Some("operation-1".to_string()),
+            operation_type: Some("cross_library_transfer".to_string()),
+            mode: Some("move_with_scryer".to_string()),
+            source_library_id: Some("library-a".to_string()),
+            source_library_name: Some("Library A".to_string()),
+            destination_library_id: Some("library-b".to_string()),
+            destination_library_name: Some("Library B".to_string()),
+            source_path: Some("/root-a/Example Film (2020)".to_string()),
+            destination_path: Some("/root-b/Example Film (2020)".to_string()),
+            completed_with_warnings: true,
+            detail: Some("kept both copies".to_string()),
+        });
+
+        let request = plugin_notification_request(&payload);
+        let json = serde_json::to_value(&request).expect("request serializes");
+
+        assert_eq!(json["event_type"], "title_moved");
+        assert_eq!(json["title_move"]["source_library_name"], "Library A");
+        assert_eq!(json["title_move"]["destination_library_name"], "Library B");
+        assert_eq!(
+            json["title_move"]["destination_path"],
+            "/root-b/Example Film (2020)"
+        );
+        assert_eq!(json["title_move"]["completed_with_warnings"], true);
+        assert_eq!(
+            json["file"]["media_updates"],
+            serde_json::json!([
+                {"path": "/root-a/Example Film (2020)/film.mkv", "update_type": "deleted"},
+                {"path": "/root-b/Example Film (2020)/film.mkv", "update_type": "created"},
+            ])
+        );
+    }
+
+    #[test]
+    fn notification_without_move_omits_the_move_object() {
+        let request =
+            plugin_notification_request(&payload(DomainNotificationEventType::TitleDeleted));
+        let json = serde_json::to_value(&request).expect("request serializes");
+        assert_eq!(json["event_type"], "title_deleted");
+        assert!(json.get("title_move").is_none());
     }
 }

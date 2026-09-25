@@ -1624,6 +1624,7 @@ const ko: LocaleDictionary = {
   "settings.notificationEvent.rename": "파일 이름이 변경됨",
   "settings.notificationEvent.titleAdded": "제목이 추가되었습니다",
   "settings.notificationEvent.titleDeleted": "제목이 삭제되었습니다.",
+  "settings.notificationEvent.titleMoved": "제목이 이동되었습니다.",
   "settings.notificationEvent.fileDeleted": "파일이 삭제되었습니다",
   "settings.notificationEvent.fileDeletedForUpgrade":
     "업그레이드를 위해 파일이 삭제되었습니다.",

@@ -1313,6 +1313,7 @@ pub enum NotificationEventType {
     HealthRestored,
     ApplicationUpdate,
     ManualInteractionRequired,
+    TitleMoved,
     Test,
 }
 
@@ -1340,6 +1341,7 @@ impl NotificationEventType {
             Self::HealthRestored => "health_restored",
             Self::ApplicationUpdate => "application_update",
             Self::ManualInteractionRequired => "manual_interaction_required",
+            Self::TitleMoved => "title_moved",
             Self::Test => "test",
         }
     }
@@ -2602,6 +2604,34 @@ pub struct PluginNotificationManualInteraction {
     pub link: Option<String>,
 }
 
+/// Where a moved title came from and went to. Present on `title_moved`; each
+/// moved media file's old and new path is in `file.media_updates`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginNotificationTitleMove {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operation_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_library_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_library_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_library_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_library_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_path: Option<String>,
+    #[serde(default)]
+    pub completed_with_warnings: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct PluginNotificationMediaRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2670,6 +2700,8 @@ pub struct PluginNotificationRequest {
     pub manual_interaction: Option<PluginNotificationManualInteraction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub media_request: Option<PluginNotificationMediaRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title_move: Option<PluginNotificationTitleMove>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3842,6 +3874,47 @@ mod tests {
     }
 
     #[test]
+    fn notification_title_move_payload_round_trips_and_stays_optional() {
+        let request = PluginNotificationRequest {
+            event_type: NotificationEventType::TitleMoved,
+            file: Some(PluginNotificationFile {
+                primary_path: Some("/root-b/Example Film (2020)/film.mkv".to_string()),
+                media_updates: vec![
+                    PluginNotificationMediaUpdate {
+                        path: "/root-a/Example Film (2020)/film.mkv".to_string(),
+                        update_type: NotificationMediaUpdateType::Deleted,
+                    },
+                    PluginNotificationMediaUpdate {
+                        path: "/root-b/Example Film (2020)/film.mkv".to_string(),
+                        update_type: NotificationMediaUpdateType::Created,
+                    },
+                ],
+            }),
+            title_move: Some(PluginNotificationTitleMove {
+                operation_type: Some("cross_library_transfer".to_string()),
+                source_library_name: Some("Library A".to_string()),
+                destination_library_name: Some("Library B".to_string()),
+                source_path: Some("/root-a/Example Film (2020)".to_string()),
+                destination_path: Some("/root-b/Example Film (2020)".to_string()),
+                ..PluginNotificationTitleMove::default()
+            }),
+            ..sample_notification_request()
+        };
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["event_type"], "title_moved");
+        assert_eq!(json["title_move"]["destination_library_name"], "Library B");
+        let parsed: PluginNotificationRequest = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(parsed.title_move, request.title_move);
+
+        // A request serialized before the field existed still decodes.
+        let mut legacy = json;
+        legacy.as_object_mut().unwrap().remove("title_move");
+        let parsed: PluginNotificationRequest = serde_json::from_value(legacy).unwrap();
+        assert!(parsed.title_move.is_none());
+    }
+
+    #[test]
     fn committed_schema_matches_generated_types() {
         let schema_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("schemas/plugin-sdk-v3.schema.json");
@@ -4355,6 +4428,7 @@ mod tests {
             application_update: None,
             manual_interaction: None,
             media_request: None,
+            title_move: None,
         }
     }
 

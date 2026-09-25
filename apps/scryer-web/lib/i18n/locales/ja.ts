@@ -1658,6 +1658,7 @@ const ja: LocaleDictionary = {
   "settings.notificationEvent.rename": "ファイル名が変更されました",
   "settings.notificationEvent.titleAdded": "タイトル追加",
   "settings.notificationEvent.titleDeleted": "タイトルを削除しました",
+  "settings.notificationEvent.titleMoved": "タイトルを移動しました",
   "settings.notificationEvent.fileDeleted": "ファイルが削除されました",
   "settings.notificationEvent.fileDeletedForUpgrade":
     "アップグレードのためにファイルが削除されました",

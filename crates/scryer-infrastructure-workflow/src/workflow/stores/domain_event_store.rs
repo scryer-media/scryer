@@ -584,6 +584,7 @@ mod title_history_filter_tests {
                 destination_path: Some("/new/Film".into()),
                 completed_with_warnings: true,
                 detail: Some("Kept both versions of season.nfo".into()),
+                media_updates: Vec::new(),
             }),
         );
         let (first, replay) = tokio::join!(

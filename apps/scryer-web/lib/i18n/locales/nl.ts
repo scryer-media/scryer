@@ -2813,6 +2813,7 @@ const nl: LocaleDictionary = {
   "settings.notificationEvent.rename": "Bestand hernoemd",
   "settings.notificationEvent.titleAdded": "Titel toegevoegd",
   "settings.notificationEvent.titleDeleted": "Titel verwijderd",
+  "settings.notificationEvent.titleMoved": "Titel verplaatst",
   "settings.notificationEvent.fileDeleted": "Bestand verwijderd",
   "settings.notificationEvent.fileDeletedForUpgrade":
     "Bestand verwijderd voor upgrade",
