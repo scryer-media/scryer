@@ -334,7 +334,9 @@ pub(crate) async fn recover_import_retry(
     );
     let handle = app.runtime.acquisition.tracked_download_handle.clone();
     let mut tracked = if let Some(handle) = handle.as_ref() {
-        handle.begin_history_retry(id.clone()).await?
+        handle
+            .begin_history_retry(id.clone(), claim.download_id)
+            .await?
     } else {
         None
     };
@@ -365,7 +367,9 @@ pub(crate) async fn recover_import_retry(
         Ok(())
     }.await;
     if let Some(handle) = handle {
-        handle.finish_history_retry(id, finished).await?;
+        handle
+            .finish_history_retry(id, claim.download_id, finished)
+            .await?;
     }
     outcome
 }

@@ -2434,6 +2434,66 @@ async fn assign_tracked_download_title_keeps_series_blocked_for_manual_mapping()
 }
 
 #[tokio::test]
+async fn assign_tracked_download_title_lands_on_the_live_row_beside_a_settled_sibling() {
+    for _ in 0..8 {
+        // A deleted title's settled row shares the live row's id string.
+        let mut fixture = tracked_title_assignment_fixture().await;
+        let live = fixture
+            .tracker
+            .find(&fixture.tracked_id)
+            .expect("live row")
+            .clone();
+        let mut settled = live.clone();
+        settled.download_id = scryer_domain::download_identity::DownloadId::new();
+        settled.state = TrackedDownloadState::Imported;
+        settled.status = scryer_domain::TrackedDownloadStatus::Ok;
+        settled.status_messages.clear();
+        settled.title_id = Some("deleted-title".to_string());
+        let settled_id = fixture.tracker.insert_for_tests(settled);
+        let settled_before = format!(
+            "{:?}",
+            fixture
+                .tracker
+                .get_by_download_id(settled_id)
+                .expect("settled row")
+        );
+        let actor_snapshot = crate::domain_events::DomainEventActor::from(&fixture.user)
+            .into_download_submission_actor_snapshot();
+
+        crate::integration::workflow::assign_tracked_download_title_command(
+            &fixture.app,
+            &mut fixture.tracker,
+            &HashSet::new(),
+            fixture.tracked_id.clone(),
+            fixture.title.clone(),
+            fixture.submission.clone(),
+            actor_snapshot,
+        )
+        .await
+        .expect("assignment command should succeed");
+
+        let assigned = fixture
+            .tracker
+            .get_by_download_id(live.download_id)
+            .expect("live row");
+        assert_eq!(
+            assigned.title_id.as_deref(),
+            Some(fixture.title.id.as_str())
+        );
+        assert_eq!(
+            format!(
+                "{:?}",
+                fixture
+                    .tracker
+                    .get_by_download_id(settled_id)
+                    .expect("settled row")
+            ),
+            settled_before
+        );
+    }
+}
+
+#[tokio::test]
 async fn assign_tracked_download_title_busy_rejection_persists_nothing() {
     let mut fixture = tracked_title_assignment_fixture().await;
     let actor_snapshot = crate::domain_events::DomainEventActor::from(&fixture.user)

@@ -21,6 +21,8 @@ impl TrackedDownloadBackgroundWorkKind {
 }
 #[derive(Debug)]
 struct TrackedDownloadBackgroundWorkResult {
+    /// The cache key of the row the work was dispatched for.
+    download_id: scryer_domain::download_identity::DownloadId,
     id: String,
     kind: TrackedDownloadBackgroundWorkKind,
     outcome: Result<TrackedDownload, String>,
