@@ -974,3 +974,403 @@ async fn delete_title_queues_targeted_cancel_for_active_submission_only() {
             .all(|entry| entry.title_id != created.id)
     );
 }
+
+fn deleted_title_submission(
+    title_id: &str,
+    download_id: scryer_domain::download_identity::DownloadId,
+    client_type: &str,
+    item_id: &str,
+) -> DownloadSubmission {
+    DownloadSubmission {
+        download_id,
+        title_id: title_id.to_string(),
+        purpose: crate::DownloadSubmissionPurpose::Standard,
+        facet: "movie".to_string(),
+        download_client_id: Some("primary".to_string()),
+        download_client_type: client_type.to_string(),
+        download_client_item_id: item_id.to_string(),
+        source_hint: None,
+        source_provider_id: None,
+        source_provider_name: None,
+        source_kind: None,
+        source_title: Some("Synthetic.Movie.2031.1080p".to_string()),
+        info_hash: None,
+        release_size_bytes: None,
+        request_signature: None,
+        scope: SubmissionScope::Title,
+    }
+}
+
+fn canonical_identity(
+    download_id: scryer_domain::download_identity::DownloadId,
+) -> crate::DownloadSubmissionIdentity {
+    crate::DownloadSubmissionIdentity {
+        download_id: Some(download_id.to_wire()),
+    }
+}
+
+fn synthetic_movie(name: &str) -> NewTitle {
+    NewTitle {
+        name: name.into(),
+        facet: MediaFacet::Movie,
+        monitored: false,
+        tags: vec![],
+        external_ids: vec![],
+        min_availability: None,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn delete_title_ends_bindings_and_forgets_tracked_state_of_its_downloads() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let (tracked_tx, mut tracked_rx) = tokio::sync::mpsc::channel(4);
+    let (base_app, user) = bootstrap_with_cleanup_tracking_and_queue_commands(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+        download_queue_commands.clone(),
+    );
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_tracked_download_handle(crate::tracked_downloads::TrackedDownloadHandle::new(
+                tracked_tx,
+            ))
+    });
+
+    let created = app
+        .add_title(&user, synthetic_movie("Synthetic Deleted Movie"))
+        .await
+        .expect("create title");
+    let imported_id = scryer_domain::download_identity::DownloadId::new();
+    let active_id = scryer_domain::download_identity::DownloadId::new();
+    let imported = deleted_title_submission(&created.id, imported_id, "sabnzbd", "job-imported");
+    let active = deleted_title_submission(&created.id, active_id, "sabnzbd", "job-active");
+    for (submission, state) in [(&imported, "imported"), (&active, "downloading")] {
+        let locator = ClientJobLocator::from_submission(submission);
+        download_submissions
+            .record_submission(submission.clone())
+            .await
+            .expect("record submission");
+        download_submissions
+            .update_tracked_state(&locator, state)
+            .await
+            .expect("record tracked state");
+        registry.bind(locator, submission.download_id).await;
+    }
+    download_submissions
+        .record_identity_tracked_state_for_download(
+            Some(&imported_id),
+            &canonical_identity(imported_id),
+            Some(&ClientJobLocator::from_submission(&imported)),
+            "imported",
+            None,
+            None,
+        )
+        .await
+        .expect("record terminal marker");
+
+    let tracked_responder = tokio::spawn(async move {
+        match tracked_rx.recv().await.expect("forget-for-title command") {
+            crate::tracked_downloads::TrackedDownloadCommand::ForgetForTitle {
+                title_id,
+                download_ids,
+                reply,
+            } => {
+                let _ = reply.send(Ok(download_ids.clone()));
+                (title_id, download_ids)
+            }
+            _ => panic!("unexpected tracked-download command"),
+        }
+    });
+
+    app.delete_title(&user, &created.id, false, None)
+        .await
+        .expect("delete title");
+    let (forgotten_title_id, mut forgotten_ids) =
+        within_deadline("the forget-for-title command", tracked_responder)
+            .await
+            .expect("responder task");
+
+    // The cancel for the still-active download is queued exactly as before.
+    let queued_commands = download_queue_commands.queued.lock().await.clone();
+    assert_eq!(queued_commands.len(), 1);
+    assert_eq!(queued_commands[0].download_client_item_id, "job-active");
+
+    let mut expected_ids = vec![imported_id, active_id];
+    expected_ids.sort_unstable();
+    for download_id in &expected_ids {
+        assert!(
+            registry.is_ended(download_id).await,
+            "every binding the deleted title held is ended"
+        );
+    }
+    let mut deleted_marker_ids = download_submissions
+        .deleted_identity_state_download_ids
+        .lock()
+        .await
+        .clone();
+    deleted_marker_ids.sort_unstable();
+    assert_eq!(deleted_marker_ids, expected_ids);
+    assert_eq!(
+        download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&imported_id),
+                &canonical_identity(imported_id),
+                None,
+            )
+            .await
+            .expect("read terminal marker"),
+        None
+    );
+    assert_eq!(forgotten_title_id, created.id);
+    forgotten_ids.sort_unstable();
+    assert_eq!(forgotten_ids, expected_ids);
+}
+
+#[tokio::test]
+async fn delete_title_then_regrab_of_the_same_torrent_tracks_a_fresh_downloading_row() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let tracker = Arc::new(tokio::sync::Mutex::new(
+        crate::tracked_downloads::TrackedDownloadService::new(),
+    ));
+    let (tracked_tx, mut tracked_rx) = tokio::sync::mpsc::channel(4);
+    let responder_tracker = tracker.clone();
+    tokio::spawn(async move {
+        while let Some(command) = tracked_rx.recv().await {
+            match command {
+                crate::tracked_downloads::TrackedDownloadCommand::ForgetForTitle {
+                    title_id,
+                    download_ids,
+                    reply,
+                } => {
+                    let removed = responder_tracker
+                        .lock()
+                        .await
+                        .forget_for_title(&title_id, &download_ids);
+                    let _ = reply.send(Ok(removed));
+                }
+                _ => panic!("unexpected tracked-download command"),
+            }
+        }
+    });
+    let (base_app, user) = bootstrap_with_cleanup_tracking_and_queue_commands(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+        download_queue_commands,
+    );
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_tracked_download_handle(crate::tracked_downloads::TrackedDownloadHandle::new(
+                tracked_tx,
+            ))
+    });
+
+    // One torrent, one client item: the info hash is the native id both times.
+    let info_hash = "0123456789abcdef0123456789abcdef01234567";
+    let client_item = || {
+        let mut item = queue_history_fixture_item(info_hash, DownloadQueueState::Downloading, 1);
+        item.client_type = "qbittorrent".to_string();
+        item.title_id = None;
+        item.facet = None;
+        item
+    };
+    let locator = ClientJobLocator::new(Some("primary"), "qbittorrent", info_hash);
+
+    let deleted = app
+        .add_title(&user, synthetic_movie("Synthetic Deleted Movie"))
+        .await
+        .expect("create deleted title");
+    let dead_id = scryer_domain::download_identity::DownloadId::new();
+    download_submissions
+        .record_submission(deleted_title_submission(
+            &deleted.id,
+            dead_id,
+            "qbittorrent",
+            info_hash,
+        ))
+        .await
+        .expect("record dead submission");
+    registry.bind(locator.clone(), dead_id).await;
+    download_submissions
+        .record_identity_tracked_state_for_download(
+            Some(&dead_id),
+            &canonical_identity(dead_id),
+            Some(&locator),
+            "imported",
+            None,
+            None,
+        )
+        .await
+        .expect("record terminal marker");
+
+    let first = tracker
+        .lock()
+        .await
+        .track(&app, client_item())
+        .await
+        .expect("dead download is tracked");
+    assert_eq!(first.download_id, dead_id);
+    assert_eq!(
+        tracker
+            .lock()
+            .await
+            .get_by_download_id(dead_id)
+            .expect("dead row")
+            .state,
+        scryer_domain::TrackedDownloadState::Imported,
+        "the terminal marker is what revives the dead download's outcome"
+    );
+
+    app.delete_title(&user, &deleted.id, false, None)
+        .await
+        .expect("delete title");
+
+    assert!(tracker.lock().await.get_by_download_id(dead_id).is_none());
+    assert!(registry.is_ended(&dead_id).await);
+    assert_eq!(
+        download_submissions
+            .get_identity_tracked_state_for_download(
+                Some(&dead_id),
+                &canonical_identity(dead_id),
+                Some(&locator),
+            )
+            .await
+            .expect("read terminal marker"),
+        None
+    );
+
+    // The same torrent grabbed again for a new title.
+    let regrabbed = app
+        .add_title(&user, synthetic_movie("Synthetic Regrabbed Movie"))
+        .await
+        .expect("create new title");
+    let regrab_id = scryer_domain::download_identity::DownloadId::new();
+    download_submissions
+        .record_submission(deleted_title_submission(
+            &regrabbed.id,
+            regrab_id,
+            "qbittorrent",
+            info_hash,
+        ))
+        .await
+        .expect("record re-grab submission");
+    registry.bind(locator.clone(), regrab_id).await;
+
+    let outcome = tracker
+        .lock()
+        .await
+        .track(&app, client_item())
+        .await
+        .expect("re-grab is tracked");
+    assert_eq!(outcome.download_id, regrab_id);
+    assert!(outcome.newly_tracked);
+    let tracker = tracker.lock().await;
+    assert_eq!(tracker.get_all().len(), 1);
+    let row = tracker.get_by_download_id(regrab_id).expect("re-grab row");
+    assert_eq!(row.state, scryer_domain::TrackedDownloadState::Downloading);
+    assert_eq!(row.title_id.as_deref(), Some(regrabbed.id.as_str()));
+}
+
+#[tokio::test]
+async fn delete_title_ends_the_binding_of_a_grab_the_client_has_not_reported_yet() {
+    let download_client = Arc::new(StubDownloadClient::default());
+    let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    download_submissions
+        .list_for_title_requires_item_id
+        .store(true, Ordering::SeqCst);
+    let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
+    let download_queue_commands = Arc::new(TrackingDownloadQueueCommandRepo::default());
+    let registry = Arc::new(super::downloads::RecordingDownloadRegistry::default());
+    let (tracked_tx, mut tracked_rx) = tokio::sync::mpsc::channel(4);
+    let (base_app, user) = bootstrap_with_cleanup_tracking_and_queue_commands(
+        download_client,
+        download_submissions.clone(),
+        pending_releases,
+        download_queue_commands.clone(),
+    );
+    let app = base_app.with_test_overrides(|services| {
+        services
+            .with_download_registry(registry.clone())
+            .with_tracked_download_handle(crate::tracked_downloads::TrackedDownloadHandle::new(
+                tracked_tx,
+            ))
+    });
+
+    let created = app
+        .add_title(&user, synthetic_movie("Synthetic Deleted Movie"))
+        .await
+        .expect("create title");
+    let bound_id = scryer_domain::download_identity::DownloadId::new();
+    let unbound_id = scryer_domain::download_identity::DownloadId::new();
+    let bound = deleted_title_submission(&created.id, bound_id, "sabnzbd", "job-bound");
+    let unbound = deleted_title_submission(&created.id, unbound_id, "sabnzbd", "");
+    download_submissions
+        .record_submission(bound.clone())
+        .await
+        .expect("record bound submission");
+    download_submissions
+        .update_tracked_state(&ClientJobLocator::from_submission(&bound), "downloading")
+        .await
+        .expect("track bound submission");
+    registry
+        .bind(ClientJobLocator::from_submission(&bound), bound_id)
+        .await;
+    download_submissions
+        .record_submission(unbound)
+        .await
+        .expect("record unbound submission");
+
+    let tracked_responder = tokio::spawn(async move {
+        match tracked_rx.recv().await.expect("forget-for-title command") {
+            crate::tracked_downloads::TrackedDownloadCommand::ForgetForTitle {
+                download_ids,
+                reply,
+                ..
+            } => {
+                let _ = reply.send(Ok(download_ids.clone()));
+                download_ids
+            }
+            _ => panic!("unexpected tracked-download command"),
+        }
+    });
+
+    app.delete_title(&user, &created.id, false, None)
+        .await
+        .expect("delete title");
+    let mut forgotten_ids = within_deadline("the forget-for-title command", tracked_responder)
+        .await
+        .expect("responder task");
+
+    assert!(registry.is_ended(&bound_id).await);
+    assert!(
+        registry.is_ended(&unbound_id).await,
+        "a grab with no client item yet still retires with its title"
+    );
+    let mut expected_ids = vec![bound_id, unbound_id];
+    expected_ids.sort_unstable();
+    forgotten_ids.sort_unstable();
+    assert_eq!(forgotten_ids, expected_ids);
+    let mut deleted_marker_ids = download_submissions
+        .deleted_identity_state_download_ids
+        .lock()
+        .await
+        .clone();
+    deleted_marker_ids.sort_unstable();
+    assert_eq!(deleted_marker_ids, expected_ids);
+    // Only the bound grab has a client item to cancel.
+    let queued_commands = download_queue_commands.queued.lock().await.clone();
+    assert_eq!(queued_commands.len(), 1);
+    assert_eq!(queued_commands[0].download_client_item_id, "job-bound");
+}

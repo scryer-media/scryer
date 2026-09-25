@@ -5583,6 +5583,17 @@ pub trait DownloadSubmissionRepository: Send + Sync {
             .await
     }
 
+    /// Remove every durable tracked-state row recorded against these
+    /// canonical downloads, returning how many rows went. Retiring a deleted
+    /// title's downloads uses this so a later observation of the same client
+    /// item cannot revive the dead download's terminal state.
+    async fn delete_identity_tracked_states_for_downloads(
+        &self,
+        _download_ids: &[DownloadId],
+    ) -> AppResult<u32> {
+        Ok(0)
+    }
+
     async fn get_identity_tracked_state_reason(
         &self,
         _identity: &DownloadSubmissionIdentity,

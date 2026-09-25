@@ -1674,6 +1674,36 @@ impl AppUseCase {
             }
         };
 
+        // `list_for_title` only returns submissions a client item is known
+        // for. A grab the client has not reported yet still holds an active
+        // binding, and must retire with the title too: otherwise the client's
+        // later report attaches to the dead download. It has no item id to
+        // cancel, so it joins the retire list only.
+        let unbound_submissions = match self
+            .services
+            .workflow
+            .download_submissions
+            .list_active_unbound_for_title(title_id)
+            .await
+        {
+            Ok(submissions) => submissions,
+            Err(err) => {
+                warn!(
+                    title_id = %title_id,
+                    error = %err,
+                    "failed to list unbound download submissions while deleting title"
+                );
+                Vec::new()
+            }
+        };
+
+        let mut submitted_download_ids = Vec::new();
+        for submission in download_submissions.iter().chain(&unbound_submissions) {
+            if !submitted_download_ids.contains(&submission.download_id) {
+                submitted_download_ids.push(submission.download_id);
+            }
+        }
+
         let mut seen_downloads = HashSet::new();
         for submission in download_submissions {
             let identity = ClientJobLocator::from_submission(&submission);
@@ -1729,6 +1759,9 @@ impl AppUseCase {
             }
         }
 
+        self.retire_title_downloads(title_id, submitted_download_ids)
+            .await;
+
         self.services
             .workflow
             .pending_releases
@@ -1744,7 +1777,8 @@ impl AppUseCase {
             .download_submissions
             .delete_for_title(title_id)
             .await?;
-        // Deleting a title ends every binding its submissions held.
+        // The bindings were ended above; drop the resolutions cached for the
+        // deleted submissions too.
         self.runtime
             .acquisition
             .invalidate_download_registry_observations();
@@ -1767,6 +1801,133 @@ impl AppUseCase {
             .await?;
 
         Ok(())
+    }
+
+    /// Forget a deleted title's downloads, the way Sonarr drops a series'
+    /// history when the series is deleted.
+    ///
+    /// Deleting a title ends every binding its submissions held, removes the
+    /// terminal tracked-state markers recorded against those downloads, and
+    /// drops their rows from the tracked-download cache. Without this a later
+    /// grab of the same client item (the same torrent re-added for a new
+    /// title) resolved onto the dead download and read back its terminal
+    /// outcome. Only database rows and in-memory state change here.
+    ///
+    /// The deleted title's seeding downloads (and completed ones held for
+    /// removal) are no longer cleaned up by Scryer: they stay in the client,
+    /// torrent and payload alike. Their pending cleanup rows are settled here
+    /// rather than left to fail the identity check against an ended binding
+    /// until they are abandoned. Nothing is sent to the client.
+    ///
+    /// Runs after the cancellations are queued: a queued cancel names the
+    /// client item, not the binding, so it still reaches the client. Each
+    /// step logs and continues, matching the rest of the title cleanup.
+    async fn retire_title_downloads(
+        &self,
+        title_id: &str,
+        download_ids: Vec<scryer_domain::download_identity::DownloadId>,
+    ) {
+        for download_id in &download_ids {
+            if let Err(err) = self
+                .services
+                .workflow
+                .download_registry
+                .end_binding(download_id)
+                .await
+            {
+                warn!(
+                    title_id = %title_id,
+                    download_id = %download_id,
+                    error = %err,
+                    "failed to end download binding while deleting title"
+                );
+            }
+        }
+        for download_id in &download_ids {
+            self.settle_pending_cleanup_of_deleted_title(title_id, download_id)
+                .await;
+        }
+        // Resolutions memoized against the bindings just ended must not
+        // outlive them, or the poller keeps resolving the client item onto
+        // the dead download until the next unrelated registry write.
+        self.runtime
+            .acquisition
+            .invalidate_download_registry_observations();
+
+        if let Err(err) = self
+            .services
+            .workflow
+            .download_submissions
+            .delete_identity_tracked_states_for_downloads(&download_ids)
+            .await
+        {
+            warn!(
+                title_id = %title_id,
+                error = %err,
+                "failed to remove tracked-state markers while deleting title"
+            );
+        }
+
+        if let Some(handle) = self.runtime.acquisition.tracked_download_handle.as_ref() {
+            match handle
+                .forget_for_title(title_id.to_string(), download_ids)
+                .await
+            {
+                Ok(removed) => debug!(
+                    title_id = %title_id,
+                    removed = removed.len(),
+                    "stopped tracking downloads of deleted title"
+                ),
+                Err(err) => warn!(
+                    title_id = %title_id,
+                    error = %err,
+                    "failed to stop tracking downloads while deleting title"
+                ),
+            }
+        }
+    }
+
+    /// Settle a deleted title's pending cleanup row for `download_id` in the
+    /// database only. `cleanup_abandoned` is the existing settled outcome for
+    /// "no longer Scryer's to clean up; the client entry is left for the
+    /// operator", which the cleanup tick replays without touching the client.
+    async fn settle_pending_cleanup_of_deleted_title(
+        &self,
+        title_id: &str,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) {
+        let submissions = &self.services.workflow.download_submissions;
+        match submissions.has_pending_download_cleanup(download_id).await {
+            Ok(true) => {}
+            Ok(false) => return,
+            Err(err) => {
+                warn!(
+                    title_id = %title_id,
+                    download_id = %download_id,
+                    error = %err,
+                    "failed to read download cleanup while deleting title"
+                );
+                return;
+            }
+        }
+        if let Err(err) = submissions
+            .finish_download_cleanup(
+                download_id,
+                "cleanup_abandoned",
+                true,
+                0,
+                0,
+                Some("title deleted; the client entry is left for the operator"),
+            )
+            .await
+        {
+            warn!(
+                title_id = %title_id,
+                download_id = %download_id,
+                error = %err,
+                "failed to settle download cleanup while deleting title"
+            );
+        }
     }
 }
 impl AppUseCase {

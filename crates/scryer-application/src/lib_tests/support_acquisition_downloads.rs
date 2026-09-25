@@ -306,7 +306,14 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     pub(super) finished_cleanup:
         Arc<Mutex<Vec<(scryer_domain::download_identity::DownloadId, String, bool)>>>,
     pub(super) deleted_title_ids: Arc<Mutex<Vec<String>>>,
+    /// Every download id passed to `delete_identity_tracked_states_for_downloads`,
+    /// in call order.
+    pub(super) deleted_identity_state_download_ids:
+        Arc<Mutex<Vec<scryer_domain::download_identity::DownloadId>>>,
     pub(super) list_for_title_calls: Arc<Mutex<Vec<String>>>,
+    /// Make `list_for_title` skip submissions with no client item id, as the
+    /// real store does.
+    pub(super) list_for_title_requires_item_id: Arc<std::sync::atomic::AtomicBool>,
     /// Answer `supports_durable_download_cleanup` with `true`, so a caller
     /// that branches on durable support takes the binding-backed path.
     pub(super) durable_cleanup: Arc<std::sync::atomic::AtomicBool>,
@@ -1046,6 +1053,29 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             .await
     }
 
+    async fn delete_identity_tracked_states_for_downloads(
+        &self,
+        download_ids: &[scryer_domain::download_identity::DownloadId],
+    ) -> AppResult<u32> {
+        self.deleted_identity_state_download_ids
+            .lock()
+            .await
+            .extend_from_slice(download_ids);
+        let mut states = self.identity_states.lock().await;
+        let mut reasons = self.identity_state_reasons.lock().await;
+        let mut details = self.identity_state_details.lock().await;
+        let mut deleted = 0;
+        for download_id in download_ids {
+            let key = format!("download:{}", download_id.to_wire());
+            if states.remove(&key).is_some() {
+                deleted += 1;
+            }
+            reasons.remove(&key);
+            details.remove(&key);
+        }
+        Ok(deleted)
+    }
+
     async fn upsert_identity_tracked_state_for_download_returning_previous(
         &self,
         target: IdentityTrackedStateTarget<'_>,
@@ -1115,10 +1145,14 @@ impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
             .lock()
             .await
             .push(title_id.to_string());
+        let requires_item_id = self
+            .list_for_title_requires_item_id
+            .load(std::sync::atomic::Ordering::SeqCst);
         let entries = self.store.lock().await;
         Ok(entries
             .iter()
             .filter(|entry| entry.title_id == title_id)
+            .filter(|entry| !requires_item_id || !entry.download_client_item_id.trim().is_empty())
             .cloned()
             .collect())
     }
