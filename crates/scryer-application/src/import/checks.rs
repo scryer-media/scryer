@@ -266,10 +266,11 @@ fn measured_disk_space(ctx: &ImportCheckContext<'_>) -> (ImportVerdict, Option<(
             std::fs::metadata(stat_path)
                 .ok()
                 .map(|metadata| format!("device:{}", metadata.dev()))
+                .unwrap_or_default()
         };
         #[cfg(not(unix))]
-        let volume: Option<String> = None;
-        (available, volume.unwrap_or_default())
+        let volume = String::new();
+        (available, volume)
     });
     (
         disk_space_verdict_for_measurement(available, ctx.source_size),
