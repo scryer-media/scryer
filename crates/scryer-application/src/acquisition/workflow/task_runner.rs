@@ -2186,7 +2186,10 @@ async fn commit_season_pack_proposal(
     Ok(Vec::new())
 }
 
-#[allow(clippy::too_many_arguments)]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pack evaluation weighs the candidates against the episode, owned and claimed sets of one title"
+)]
 async fn evaluate_series_pack_candidates(
     app: &AppUseCase,
     title: &Title,
