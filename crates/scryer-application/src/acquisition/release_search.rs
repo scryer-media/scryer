@@ -3256,6 +3256,46 @@ mod tests {
         );
     }
 
+    /// A topic particle written as two words (`de wa`) in the release name
+    /// matches an alias that writes it as one (`dewa`).
+    #[tokio::test]
+    async fn romanized_particle_spacing_matches_the_tagged_romaji_alias() {
+        let mut title = spelling_title("Sleepless Beneath the Starlit Sky", "eng");
+        title.facet = MediaFacet::Anime;
+        title.year = None;
+        title.imdb_id = None;
+        title.tagged_aliases = vec![scryer_domain::TaggedAlias {
+            name: "Hoshizora no Kanata dewa Nemurenai".into(),
+            language: "x-jat".into(),
+        }];
+        let evidence = spelling_evidence(&title, std::slice::from_ref(&title)).await;
+
+        let spaced = make_candidate(
+            "[Synthgroup] Hoshizora no Kanata de wa Nemurenai - 03 (1080p) [ABCD1234].mkv",
+            None,
+        );
+        let matched = candidate_title_match(&spaced, &evidence)
+            .expect("the two-word particle spelling must match the one-word alias");
+        let spelling = matched
+            .evidence_match
+            .expect("evidence match")
+            .spelling
+            .expect("spelling evidence");
+        assert_eq!(
+            spelling.locale,
+            Some(scryer_domain::title_spelling::JAPANESE_ROMANIZATION_TAG)
+        );
+
+        let exact = make_candidate(
+            "[Synthgroup] Hoshizora no Kanata dewa Nemurenai - 03 (1080p) [ABCD1234].mkv",
+            None,
+        );
+        assert!(
+            candidate_title_match(&exact, &evidence).is_some(),
+            "the exact alias spelling must still match"
+        );
+    }
+
     /// A romanization equivalence must not rescue an identity that a second
     /// library title answers to just as well.
     #[tokio::test]
@@ -3287,6 +3327,60 @@ mod tests {
             candidate_title_match(&candidate, &evidence).is_none(),
             "a romanization two library titles answer to names neither of them"
         );
+    }
+
+    /// `to wa` and `towa` fold to one key, so two library titles whose aliases
+    /// differ only by that spacing are kept apart by their exact spellings and
+    /// by the competing-identity check, never by the fold.
+    #[tokio::test]
+    async fn romanized_particle_spacing_keeps_two_library_titles_apart() {
+        let mut spaced = spelling_title("Clouded Hill Unspoken", "eng");
+        spaced.facet = MediaFacet::Anime;
+        spaced.year = None;
+        spaced.imdb_id = None;
+        spaced.tagged_aliases = vec![scryer_domain::TaggedAlias {
+            name: "Kumori no Oka to wa Iwanai".into(),
+            language: "x-jat".into(),
+        }];
+        let mut joined = spaced.clone();
+        joined.id = "joined".to_string();
+        joined.name = "Clouded Hill Forever".to_string();
+        joined.tagged_aliases = vec![scryer_domain::TaggedAlias {
+            name: "Kumori no Oka towa Iwanai".into(),
+            language: "x-jat".into(),
+        }];
+        let library = [spaced.clone(), joined.clone()];
+        let spaced_evidence = spelling_evidence(&spaced, &library).await;
+        let joined_evidence = spelling_evidence(&joined, &library).await;
+
+        let spaced_release = make_candidate(
+            "[Synthgroup] Kumori no Oka to wa Iwanai - 05 (1080p) [ABCD1234].mkv",
+            None,
+        );
+        let joined_release = make_candidate(
+            "[Synthgroup] Kumori no Oka towa Iwanai - 05 (1080p) [ABCD1234].mkv",
+            None,
+        );
+        assert!(candidate_title_match(&spaced_release, &spaced_evidence).is_some());
+        assert!(candidate_title_match(&spaced_release, &joined_evidence).is_none());
+        assert!(candidate_title_match(&joined_release, &joined_evidence).is_some());
+        assert!(candidate_title_match(&joined_release, &spaced_evidence).is_none());
+
+        // Literally neither alias, but folds equal to both.
+        let ambiguous = make_candidate(
+            "[Synthgroup] Kumori no Ooka towa Iwanai - 05 (1080p) [ABCD1234].mkv",
+            None,
+        );
+        let alone_evidence = spelling_evidence(&spaced, std::slice::from_ref(&spaced)).await;
+        assert!(
+            candidate_title_match(&ambiguous, &alone_evidence).is_some(),
+            "without a rival the folded spelling matches, so the rejections below come from the competitor check"
+        );
+        assert!(
+            candidate_title_match(&ambiguous, &spaced_evidence).is_none(),
+            "a spelling both titles fold to names neither of them"
+        );
+        assert!(candidate_title_match(&ambiguous, &joined_evidence).is_none());
     }
 
     #[tokio::test]

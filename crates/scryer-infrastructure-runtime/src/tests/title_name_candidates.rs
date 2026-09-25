@@ -169,6 +169,28 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         language: "x-jat".to_string(),
     }];
 
+    // Romanized aliases whose topic particle is written one way in the catalog
+    // and may be written the other way in a release: joined, then spaced.
+    let mut particle = matching_title(
+        "anime-particle",
+        "星空の彼方",
+        MediaFacet::Anime,
+        Some("ja"),
+        Some(2021),
+        &[],
+    );
+    particle.monitored = false;
+    particle.tagged_aliases = vec![
+        TaggedAlias {
+            name: "Hoshizora no Kanata dewa Nemurenai".to_string(),
+            language: "x-jat".to_string(),
+        },
+        TaggedAlias {
+            name: "Kumori no Oka to wa Iwanai".to_string(),
+            language: "x-jat".to_string(),
+        },
+    ];
+
     let mut movie = matching_title(
         "movie-ids",
         "Signal Runner",
@@ -197,6 +219,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         tide_series.clone(),
         tide_anime.clone(),
         romaji.clone(),
+        particle.clone(),
         movie.clone(),
     ];
     for title in &titles {
@@ -364,6 +387,45 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         64,
     );
     assert_within(&candidates, &name_candidates_in_bucket(&titles, &query));
+
+    // The romanization lane folds topic-particle spacing on the persisted key
+    // as well: a spaced particle reaches a joined alias, and a joined particle
+    // reaches a spaced one.
+    for spelling in [
+        "Hoshizora no Kanata de wa Nemurenai",
+        "Kumori no Oka towa Iwanai",
+    ] {
+        let observed = title_spelling::title_lookup_form(spelling);
+        let romanization = title_spelling::japanese_romanization_key(&observed, Some("x-jat"));
+        let numbers = title_spelling::title_numbers_key(spelling);
+        let collation = collation_keys_for(&observed);
+        let query = bucket_query(
+            Some("anime"),
+            &observed,
+            &numbers,
+            &collation,
+            romanization.as_deref(),
+            None,
+            64,
+        );
+        let candidates = TitleRepository::find_title_name_candidates(catalog, query).await?;
+        assert!(
+            candidate_pairs(&candidates)
+                .iter()
+                .any(|(id, _)| id == "anime-particle"),
+            "{spelling}: {candidates:?}"
+        );
+        let query = bucket_query(
+            Some("anime"),
+            &observed,
+            &numbers,
+            &collation,
+            romanization.as_deref(),
+            None,
+            64,
+        );
+        assert_within(&candidates, &name_candidates_in_bucket(&titles, &query));
+    }
 
     // The typo lane: a misspelling equals nothing, so only the fuzzy index
     // can reach the name.
