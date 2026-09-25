@@ -3462,13 +3462,11 @@ async fn process_single_target(
 
                 // Calculate total season runtime for accurate size scoring.
                 // A 10-episode × 24-min season should expect ~10× a single episode's size.
-                let pack_runtime = if !season_episodes.is_empty() {
-                    let ep_count = season_episodes.len().max(1) as i32;
-                    let per_ep = title.runtime_minutes.unwrap_or(24);
-                    Some(per_ep * ep_count)
-                } else {
-                    title.runtime_minutes
-                };
+                let pack_runtime =
+                    crate::acquisition::release_search::season_pack_runtime_minutes(
+                        &title,
+                        season_episodes.len(),
+                    );
 
                 let pack_subject = app
                     .resolve_release_search_subject_for_season_pack(

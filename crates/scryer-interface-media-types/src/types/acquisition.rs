@@ -771,9 +771,11 @@ pub struct SearchReleasesInput {
     pub title_id: Option<ID>,
     /// Optional series/movie link identity for an episodic movie target.
     pub series_movie_link_id: Option<ID>,
-    /// Optional season label or number to search.
+    /// Optional season label or number to search. An interactive search given a
+    /// season alone searches the whole season; the one-shot `searchReleases`
+    /// query still requires an episode with it.
     pub season: Option<String>,
-    /// Optional episode label or number to search.
+    /// Optional episode label or number to search; requires `season`.
     pub episode: Option<String>,
     /// Optional result limit; the resolver applies its own default and cap.
     pub limit: Option<i32>,
@@ -796,9 +798,9 @@ pub struct IssueInteractiveReleaseCandidateTokenInput {
     pub download_url: String,
     /// Title identity the release is being assigned to.
     pub title_id: ID,
-    /// Optional season label or number for an episode target.
+    /// Optional season label or number; alone it targets the whole season.
     pub season: Option<String>,
-    /// Optional episode label or number for an episode target.
+    /// Optional episode label or number for an episode target; requires `season`.
     pub episode: Option<String>,
 }
 

@@ -10,12 +10,13 @@ pub(crate) struct InteractiveSearchMutations;
 #[Object]
 impl InteractiveSearchMutations {
     /// Start a background interactive release-search job for the requested scopes.
+    /// A title with a season and no episode searches the whole season as a season pack.
     /// Results accumulate as indexers complete, and a new search cancels the caller's running job for the same scope.
     async fn start_interactive_release_search(
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Either a title (with optional series-movie link, season and episode) or a raw query and kind, plus an optional indexer restriction, categories and result limit."
+            desc = "Either a title (with an optional series-movie link, a season alone for the whole season, or a season and episode) or a raw query and kind, plus an optional indexer restriction, categories and result limit."
         )]
         input: SearchReleasesInput,
     ) -> GqlResult<InteractiveReleaseSearchPayload> {

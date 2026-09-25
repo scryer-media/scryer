@@ -8655,11 +8655,11 @@ input IssueInteractiveReleaseCandidateTokenInput {
 	"""
 	titleId: ID!
 	"""
-	Optional season label or number for an episode target.
+	Optional season label or number; alone it targets the whole season.
 	"""
 	season: String
 	"""
-	Optional episode label or number for an episode target.
+	Optional episode label or number for an episode target; requires `season`.
 	"""
 	episode: String
 }
@@ -18390,11 +18390,12 @@ type MutationRoot {
 	): EmptyRecycleBinPayload!
 	"""
 	Start a background interactive release-search job for the requested scopes.
+	A title with a season and no episode searches the whole season as a season pack.
 	Results accumulate as indexers complete, and a new search cancels the caller's running job for the same scope.
 	"""
 	startInteractiveReleaseSearch(
 		"""
-		Either a title (with optional series-movie link, season and episode) or a raw query and kind, plus an optional indexer restriction, categories and result limit.
+		Either a title (with an optional series-movie link, a season alone for the whole season, or a season and episode) or a raw query and kind, plus an optional indexer restriction, categories and result limit.
 		"""
 		input: SearchReleasesInput!
 	): InteractiveReleaseSearchPayload!
@@ -24302,11 +24303,13 @@ input SearchReleasesInput {
 	"""
 	seriesMovieLinkId: ID
 	"""
-	Optional season label or number to search.
+	Optional season label or number to search. An interactive search given a
+	season alone searches the whole season; the one-shot `searchReleases`
+	query still requires an episode with it.
 	"""
 	season: String
 	"""
-	Optional episode label or number to search.
+	Optional episode label or number to search; requires `season`.
 	"""
 	episode: String
 	"""

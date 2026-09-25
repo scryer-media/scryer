@@ -2743,6 +2743,73 @@ impl AppUseCase {
         runtime_minutes: Option<i32>,
         reads: Option<&crate::acquisition::title_reads::TitleCatalogReads>,
     ) -> AppResult<PendingReleaseSearchSubject> {
+        self.season_pack_search_subject(
+            title,
+            episode.and_then(|episode| episode.collection_id.as_deref()),
+            collection_download_submission_scope_for_wanted_item(item, episode),
+            season_num,
+            runtime_minutes,
+            reads,
+        )
+        .await
+    }
+
+    /// An operator's search for a whole season: the same season-pack subject
+    /// the automatic walk searches, anchored on the title's collection for
+    /// that season instead of a wanted item.
+    pub(crate) async fn resolve_release_search_subject_for_season(
+        &self,
+        title: &Title,
+        season: &str,
+    ) -> AppResult<ResolvedReleaseSearchSubject> {
+        let season_num = whole_season_number(season)?;
+
+        let collections = self
+            .services
+            .catalog
+            .shows
+            .list_collections_for_title(&title.id)
+            .await?;
+        let collection_id =
+            crate::acquisition::coverage::collection_id_for_season(&collections, season_num);
+        let season_episode_count = match collection_id.as_deref() {
+            Some(collection_id) => self
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_collection(collection_id)
+                .await?
+                .len(),
+            None => 0,
+        };
+        let runtime_minutes = season_pack_runtime_minutes(title, season_episode_count);
+        let submission_scope = collection_id
+            .clone()
+            .map(|collection_id| SubmissionScope::Collection { collection_id })
+            .unwrap_or(SubmissionScope::Title);
+
+        self.season_pack_search_subject(
+            title,
+            collection_id.as_deref(),
+            submission_scope,
+            season_num,
+            runtime_minutes,
+            None,
+        )
+        .await?
+        .resolve(self)
+        .await
+    }
+
+    async fn season_pack_search_subject(
+        &self,
+        title: &Title,
+        collection_id: Option<&str>,
+        submission_scope: SubmissionScope,
+        season_num: u32,
+        runtime_minutes: Option<i32>,
+        reads: Option<&crate::acquisition::title_reads::TitleCatalogReads>,
+    ) -> AppResult<PendingReleaseSearchSubject> {
         let imdb_id = imdb_id_from_title(title);
         let tvdb_id = tvdb_id_from_external_ids(&title.external_ids)
             .as_deref()
@@ -2750,8 +2817,7 @@ impl AppUseCase {
         let anidb_id = anidb_id_from_external_ids(&title.external_ids)
             .as_deref()
             .and_then(crate::normalize::normalize_numeric_id);
-        let collection_anidb_id = match episode.and_then(|episode| episode.collection_id.as_deref())
-        {
+        let collection_anidb_id = match collection_id {
             Some(collection_id) => {
                 self.local_scoped_anidb_id_for_collection(collection_id, reads)
                     .await
@@ -2795,9 +2861,7 @@ impl AppUseCase {
                 numbering_context: crate::IndexerSearchNumberingContext::default(),
                 absolute_episode: None,
                 subject_kind: ReleaseSearchSubjectKind::Season,
-                submission_scope: collection_download_submission_scope_for_wanted_item(
-                    item, episode,
-                ),
+                submission_scope,
             },
             // Results come back under any name the index holds for the title,
             // a cour name included, so the evidence is built from the index's
@@ -2968,6 +3032,38 @@ impl AppUseCase {
     }
 }
 
+/// The season number of an operator's whole-season search. Only a plain
+/// unsigned integer is accepted: a label such as "-1" or "2x5" names no season,
+/// and reading its digits alone would silently search a different one.
+fn whole_season_number(season: &str) -> AppResult<u32> {
+    let season = season.trim();
+    if season.is_empty() || !season.chars().all(|value| value.is_ascii_digit()) {
+        return Err(AppError::Validation("season must be a whole number".into()));
+    }
+    season
+        .parse::<u32>()
+        .map_err(|_| AppError::Validation("invalid season value".into()))
+}
+
+/// Expected runtime of a whole-season pack, the basis its size is scored on:
+/// the title's episode length times the season's episode count. A season with
+/// no known episodes falls back to the title's own runtime.
+pub(crate) fn season_pack_runtime_minutes(
+    title: &Title,
+    season_episode_count: usize,
+) -> Option<i32> {
+    if season_episode_count == 0 {
+        return title.runtime_minutes;
+    }
+    let episode_count = i32::try_from(season_episode_count).unwrap_or(i32::MAX);
+    Some(
+        title
+            .runtime_minutes
+            .unwrap_or(24)
+            .saturating_mul(episode_count),
+    )
+}
+
 /// A search subject whose title-match evidence is not finished.
 ///
 /// Everything the convergence gate reads (ids, facets, submission scope, tags)
@@ -3020,6 +3116,18 @@ impl PendingReleaseSearchSubject {
 mod tests {
     use super::*;
     use scryer_domain::{MediaFacet, TaggedAlias, Title};
+
+    #[test]
+    fn a_whole_season_search_accepts_only_a_plain_season_number() {
+        assert_eq!(whole_season_number("2").ok(), Some(2));
+        assert_eq!(whole_season_number(" 02 ").ok(), Some(2));
+        for rejected in ["-1", "2x5", "", "  ", "S02", "1.5"] {
+            assert!(
+                matches!(whole_season_number(rejected), Err(AppError::Validation(_))),
+                "{rejected:?} must be refused"
+            );
+        }
+    }
 
     fn spelling_title(name: &str, language: &str) -> Title {
         let mut title = make_title();

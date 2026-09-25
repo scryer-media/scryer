@@ -34,6 +34,9 @@ const en: LocaleDictionary = {
   "series.searchSeason": "Search for season pack",
   "help.seasonSearchTooltip":
     "Search indexers for a season pack release for this season.",
+  "series.interactiveSearchSeason": "Search season",
+  "help.seasonInteractiveSearchTooltip":
+    "Search now for this whole season and choose which release to queue.",
   "label.refresh": "Refresh",
   "label.refreshing": "Refreshing…",
   "label.save": "Save",
@@ -2570,7 +2573,7 @@ const en: LocaleDictionary = {
   "episode.ova": "OVA",
   "episode.ona": "ONA",
   "episode.alternate": "Alternate",
-  "seasonSection.seasonPackResults": "Season pack results",
+  "seasonSection.seasonSearchResults": "{{season}} search results",
   "seasonSection.noEpisodeRecords": "No episode records for this season.",
   "seriesOverview.selectColumn": "Select",
   "seriesOverview.selectEpisodeForDelete": "Select {{name}}",

@@ -1830,6 +1830,11 @@ impl AppUseCase {
         season: Option<&str>,
         episode: Option<&str>,
     ) -> AppResult<(Title, ResolvedReleaseSearchSubject, bool)> {
+        if season.is_some() && title.facet == MediaFacet::Movie {
+            return Err(AppError::Validation(
+                "movie searches cannot include season or episode".to_string(),
+            ));
+        }
         match (series_movie_link_id, season, episode) {
             (Some(series_movie_link_id), None, None) => {
                 let link = self
@@ -1854,6 +1859,15 @@ impl AppUseCase {
             (None, Some(season), Some(episode)) => {
                 let subject = self
                     .resolve_release_search_subject_for_episode(title, season, episode)
+                    .await?;
+                Ok((title.clone(), subject, false))
+            }
+            // A whole season searches as a season pack. Each release still
+            // binds to what it parses as covering, so an episode release that
+            // answers the season query stays an episode grab.
+            (None, Some(season), None) => {
+                let subject = self
+                    .resolve_release_search_subject_for_season(title, season)
                     .await?;
                 Ok((title.clone(), subject, false))
             }
@@ -2024,20 +2038,56 @@ fn unlinked_grab_title(release_title: &str, facet: MediaFacet, now: DateTime<Utc
     }
 }
 
-/// Same input-shape validation (and messages) as the one-shot `searchReleases`
-/// resolver.
+/// Input-shape validation for a title subject. Unlike the one-shot
+/// `searchReleases` resolver, a season alone is accepted: it searches the
+/// whole season.
 fn validate_interactive_search_subject_shape(
     series_movie_link_id: Option<&str>,
     season: Option<&str>,
     episode: Option<&str>,
 ) -> AppResult<()> {
     match (series_movie_link_id, season, episode) {
-        (Some(_), None, None) | (None, Some(_), Some(_)) | (None, None, None) => Ok(()),
-        (None, Some(_), None) | (None, None, Some(_)) => Err(AppError::Validation(
-            "episode searches require both season and episode".to_string(),
+        (Some(_), None, None)
+        | (None, Some(_), Some(_))
+        | (None, Some(_), None)
+        | (None, None, None) => Ok(()),
+        (None, None, Some(_)) => Err(AppError::Validation(
+            "episode searches require a season".to_string(),
         )),
         (Some(_), Some(_), _) | (Some(_), _, Some(_)) => Err(AppError::Validation(
             "series movie searches cannot include season or episode".to_string(),
         )),
+    }
+}
+
+#[cfg(test)]
+mod subject_shape_tests {
+    use super::*;
+
+    #[test]
+    fn a_season_alone_is_a_whole_season_subject() {
+        validate_interactive_search_subject_shape(None, Some("2"), None)
+            .expect("season-only subject");
+        validate_interactive_search_subject_shape(None, Some("2"), Some("5"))
+            .expect("episode subject");
+        validate_interactive_search_subject_shape(None, None, None).expect("title subject");
+    }
+
+    #[test]
+    fn an_episode_without_a_season_is_rejected() {
+        let error = validate_interactive_search_subject_shape(None, None, Some("5"))
+            .expect_err("episode without season");
+        assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    }
+
+    #[test]
+    fn a_series_movie_subject_rejects_a_season() {
+        for (season, episode) in [(Some("1"), None), (Some("1"), Some("2")), (None, Some("2"))] {
+            let error = validate_interactive_search_subject_shape(Some("link-1"), season, episode)
+                .expect_err("series movie with season or episode");
+            assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+        }
+        validate_interactive_search_subject_shape(Some("link-1"), None, None)
+            .expect("series movie subject");
     }
 }

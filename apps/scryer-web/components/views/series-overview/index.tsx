@@ -13,7 +13,10 @@ import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useDownloadConflictConfirmation } from "@/components/common/download-conflict-confirmation";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { isAbortError } from "@/lib/graphql/urql-client";
-import { runIterativeReleaseSearch } from "@/lib/graphql/release-search";
+import {
+  runIterativeReleaseSearch,
+  titleReleaseSearchInput,
+} from "@/lib/graphql/release-search";
 import {
   hasPrimaryMediaFile,
   releaseQueueScopeInput,
@@ -174,6 +177,9 @@ type Props = {
   seasonSearchResultsByCollection?: Record<string, Release[]>;
   seasonSearchLoadingByCollection?: Record<string, boolean>;
   onRunSeasonSearch?: (collection: TitleCollection) => Promise<void> | void;
+  seasonInteractiveSearchLoadingByCollection?: Record<string, boolean>;
+  /** Interactive search of a whole season; its results list under the season header. */
+  onRunSeasonInteractiveSearch?: (collection: TitleCollection) => void;
   onQueueFromSeasonSearch?: (collection: TitleCollection, release: Release) => Promise<void> | void;
   monitoredUpdating?: boolean;
   searchMonitoredLoading?: boolean;
@@ -246,6 +252,8 @@ function SeriesOverviewViewImpl({
   seasonSearchResultsByCollection,
   seasonSearchLoadingByCollection,
   onRunSeasonSearch,
+  seasonInteractiveSearchLoadingByCollection,
+  onRunSeasonInteractiveSearch,
   onQueueFromSeasonSearch,
   monitoredUpdating = false,
   searchMonitoredLoading = false,
@@ -556,39 +564,50 @@ function SeriesOverviewViewImpl({
       ),
     [timelineItems, toggleKey],
   );
-  const seasonSearchActionByKey = React.useMemo(() => {
-    const actions = new Map<string, (() => void) | undefined>();
-    for (const item of timelineItems) {
-      if (item.kind === "seriesMovie") {
-        continue;
-      }
-      const { collection } = item;
-      actions.set(
-        item.key,
-        canManageTitle && onRunSeasonSearch
-          ? () => {
-              if (!hasDownloadClients) {
-                setSearchBlockedByCollection((previous) => ({
-                  ...previous,
-                  [collection.id]: true,
-                }));
-                return;
-              }
-              setSearchBlockedByCollection((previous) => {
-                if (!previous[collection.id]) {
-                  return previous;
+  const seasonActionsByKey = React.useCallback(
+    (run: ((collection: TitleCollection) => Promise<void> | void) | undefined) => {
+      const actions = new Map<string, (() => void) | undefined>();
+      for (const item of timelineItems) {
+        if (item.kind === "seriesMovie") {
+          continue;
+        }
+        const { collection } = item;
+        actions.set(
+          item.key,
+          canManageTitle && run
+            ? () => {
+                if (!hasDownloadClients) {
+                  setSearchBlockedByCollection((previous) => ({
+                    ...previous,
+                    [collection.id]: true,
+                  }));
+                  return;
                 }
-                const next = { ...previous };
-                delete next[collection.id];
-                return next;
-              });
-              void onRunSeasonSearch(collection);
-            }
-          : undefined,
-      );
-    }
-    return actions;
-  }, [canManageTitle, hasDownloadClients, onRunSeasonSearch, timelineItems]);
+                setSearchBlockedByCollection((previous) => {
+                  if (!previous[collection.id]) {
+                    return previous;
+                  }
+                  const next = { ...previous };
+                  delete next[collection.id];
+                  return next;
+                });
+                void run(collection);
+              }
+            : undefined,
+        );
+      }
+      return actions;
+    },
+    [canManageTitle, hasDownloadClients, timelineItems],
+  );
+  const seasonSearchActionByKey = React.useMemo(
+    () => seasonActionsByKey(onRunSeasonSearch),
+    [onRunSeasonSearch, seasonActionsByKey],
+  );
+  const seasonInteractiveSearchActionByKey = React.useMemo(
+    () => seasonActionsByKey(onRunSeasonInteractiveSearch),
+    [onRunSeasonInteractiveSearch, seasonActionsByKey],
+  );
 
   const handleRunEpisodeSearch = React.useCallback(
     (episode: CollectionEpisode) => {
@@ -622,11 +641,11 @@ function SeriesOverviewViewImpl({
         || "1";
       const episodeNum = episode.episodeNumber?.trim().replace(/\D+/g, "") || "1";
 
-      runIterativeReleaseSearch(client, {
-        titleId: title.id,
+      runIterativeReleaseSearch(client, titleReleaseSearchInput(title.id, {
+        kind: "episode",
         season: seasonNum,
         episode: episodeNum,
-      }, {
+      }), {
         signal: abortController.signal,
         onUpdate: (snapshot) => {
           if (abortController.signal.aborted) return;
@@ -1357,6 +1376,10 @@ function SeriesOverviewViewImpl({
                     seasonSearchResults={seasonSearchResultsByCollection?.[collection.id]}
                     seasonSearchLoading={seasonSearchLoadingByCollection?.[collection.id] === true}
                     onRunSeasonSearch={seasonSearchActionByKey.get(item.key)}
+                    seasonInteractiveSearchLoading={
+                      seasonInteractiveSearchLoadingByCollection?.[collection.id] === true
+                    }
+                    onRunSeasonInteractiveSearch={seasonInteractiveSearchActionByKey.get(item.key)}
                     searchBlocked={searchBlockedByCollection[collection.id] === true}
                     onQueueFromSeasonSearch={canManageTitle ? onQueueFromSeasonSearch : undefined}
                     onDeleteFile={canManageTitle ? onDeleteFile : undefined}

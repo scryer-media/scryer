@@ -4,6 +4,7 @@ import {
   ChevronRight,
   Eye,
   EyeOff,
+  Search,
   Zap,
 } from "lucide-react";
 import {
@@ -23,6 +24,7 @@ import type { Release } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import {
+  seriesOverviewSeasonInteractiveSearchId,
   seriesOverviewSeasonMonitorId,
   seriesOverviewSeasonSectionId,
   seriesOverviewSeasonSearchId,
@@ -96,6 +98,9 @@ type SeasonSectionProps = {
   seasonSearchLoading?: boolean;
   searchBlocked?: boolean;
   onRunSeasonSearch?: () => void;
+  seasonInteractiveSearchLoading?: boolean;
+  /** Interactive search of the whole season, listed under this header. */
+  onRunSeasonInteractiveSearch?: () => void;
   onQueueFromSeasonSearch?: (collection: TitleCollection, release: Release) => Promise<void> | void;
   onDeleteFile?: (fileId: string) => void;
   onMakePrimaryFile?: (fileId: string) => Promise<void> | void;
@@ -208,6 +213,8 @@ function SeasonSectionImpl({
   seasonSearchLoading,
   searchBlocked = false,
   onRunSeasonSearch,
+  seasonInteractiveSearchLoading = false,
+  onRunSeasonInteractiveSearch,
   onQueueFromSeasonSearch,
   onDeleteFile,
   onMakePrimaryFile,
@@ -502,11 +509,34 @@ function SeasonSectionImpl({
                 )}
               </EpisodeTableActionButton>
             ) : null}
+            {onRunSeasonInteractiveSearch && onQueueFromSeasonSearch ? (
+              <EpisodeTableActionButton
+                id={seriesOverviewSeasonInteractiveSearchId(collection.id)}
+                tone="search"
+                aria-label={t("series.interactiveSearchSeason")}
+                showTitleAttribute={false}
+                disabled={seasonInteractiveSearchLoading}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRunSeasonInteractiveSearch();
+                }}
+                label={t("series.interactiveSearchSeason")}
+                tooltip={t("help.seasonInteractiveSearchTooltip")}
+                tooltipSide="left"
+                tooltipClassName="w-auto text-left"
+              >
+                {seasonInteractiveSearchLoading ? (
+                  <LoadingMark className="h-4 w-4" />
+                ) : (
+                  <Search className="h-4 w-4" />
+                )}
+              </EpisodeTableActionButton>
+            ) : null}
           </div>
         </div>
       ) : null}
 
-      {searchBlocked && onRunSeasonSearch && showCollectionHeader ? (
+      {searchBlocked && (onRunSeasonSearch || onRunSeasonInteractiveSearch) && showCollectionHeader ? (
         <div className="border-t border-border bg-card/40 p-4">
           <TitleSearchDownloadClientNotice />
         </div>
@@ -514,14 +544,24 @@ function SeasonSectionImpl({
 
       {showSectionContent ? (
         <>
-            {seasonSearchResults && seasonSearchResults.length > 0 && onQueueFromSeasonSearch ? (
+            {seasonSearchResults &&
+            onQueueFromSeasonSearch &&
+            (seasonSearchResults.length > 0 || !seasonInteractiveSearchLoading) ? (
               <div className={cn(showCollectionHeader && "border-t border-border", "px-4 py-3")}>
-                <p className="mb-2 text-xs font-medium text-muted-foreground">{t("seasonSection.seasonPackResults")}</p>
-                <SearchResultBuckets
-                  results={seasonSearchResults}
-                  onQueue={(release) => onQueueFromSeasonSearch(collection, release)}
-                  requireCandidateToken
-                />
+                <p className="mb-2 text-xs font-medium text-muted-foreground">
+                  {t("seasonSection.seasonSearchResults", {
+                    season: seasonHeading(collection, t),
+                  })}
+                </p>
+                {seasonSearchResults.length > 0 ? (
+                  <SearchResultBuckets
+                    results={seasonSearchResults}
+                    onQueue={(release) => onQueueFromSeasonSearch(collection, release)}
+                    requireCandidateToken
+                  />
+                ) : (
+                  <p className="text-sm text-muted-foreground">{t("nzb.noResultsYet")}</p>
+                )}
               </div>
             ) : null}
             {!episodesReady ? (

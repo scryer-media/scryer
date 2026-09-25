@@ -189,6 +189,10 @@ export function seriesOverviewSeasonSearchId(collectionId: string): string {
   return selectorId("series-overview-season-search", collectionId);
 }
 
+export function seriesOverviewSeasonInteractiveSearchId(collectionId: string): string {
+  return selectorId("series-overview-season-interactive-search", collectionId);
+}
+
 export function seriesOverviewSeasonSelectId(collectionId: string): string {
   return selectorId("series-overview-season-select", collectionId);
 }
