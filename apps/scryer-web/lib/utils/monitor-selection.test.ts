@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  type MonitorSelectionDraft,
   isMonitorSelectionEmpty,
   monitorSelectionFromRecord,
   monitorSelectionInput,
@@ -63,6 +64,25 @@ test("empty selections never reach the API", () => {
     seriesMovies: [],
   });
   assert.equal(monitorSelectionFromRecord({ seasonNumbers: [], seriesMovies: [] }), null);
+});
+
+test("the API input carries only input fields, never urql cache keys", () => {
+  const cached = {
+    seasonNumbers: [1],
+    seriesMovies: [
+      {
+        __typename: "MetadataSeriesMovie",
+        name: "Synthetic Movie",
+        externalIds: [{ __typename: "ExternalId", source: "tmdb", value: "42" }],
+      },
+    ],
+  } as unknown as MonitorSelectionDraft;
+  const input = monitorSelectionInput(cached);
+  assert.deepEqual(input, {
+    seasonNumbers: [1],
+    seriesMovies: [{ name: "Synthetic Movie", externalIds: [{ source: "tmdb", value: "42" }] }],
+  });
+  assert.equal(JSON.stringify(input).includes("__typename"), false);
 });
 
 test("the card summary renders specials and movie names", () => {

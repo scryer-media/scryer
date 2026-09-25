@@ -69,6 +69,10 @@ import type {
   RootFolderOption,
 } from "@/lib/types/titles";
 import { monitorSelectionInput } from "@/lib/utils/monitor-selection";
+import type {
+  TitleExternalRating,
+  TitleExternalRatingInput,
+} from "@/lib/utils/title-ratings";
 
 export type MetadataCatalogAddOptions = {
   libraryId?: string;
@@ -396,7 +400,7 @@ export function submitMediaRequestInput(
     contentStatus: result.status || undefined,
     rating: result.rating ?? undefined,
     ratingSources: result.ratingSources,
-    externalRatings: result.externalRatings,
+    externalRatings: result.externalRatings?.map(mediaRequestExternalRatingInput),
     requestedQualityProfileId: options.requestedQualityProfileId || undefined,
     requestedMonitorType: options.requestedMonitorType || undefined,
     requestedMonitorSelection:
@@ -404,6 +408,22 @@ export function submitMediaRequestInput(
         ? monitorSelectionInput(options.requestedMonitorSelection)
         : undefined,
     requestedLeaseDays: options.requestedLeaseDays ?? undefined,
+  };
+}
+
+// Objects read from urql query results carry `__typename`, and the server
+// rejects unknown input fields, so every object copied from a query result
+// into the request input is rebuilt from exactly the fields the input accepts.
+function mediaRequestExternalRatingInput(
+  rating: TitleExternalRating,
+): TitleExternalRatingInput {
+  return {
+    source: rating.source,
+    value: rating.value,
+    score: rating.score,
+    normalized: rating.normalized,
+    votes: rating.votes,
+    url: rating.url,
   };
 }
 
