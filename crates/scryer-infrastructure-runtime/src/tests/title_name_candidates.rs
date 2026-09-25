@@ -629,6 +629,103 @@ async fn title_matching_port_on_sqlite() -> AppResult<()> {
     result
 }
 
+/// The equality read runs once per anchor per facet for every release a
+/// search returns, so it has to stay on its key indexes: when the lanes were
+/// ORed into one predicate, the collation lane pushed it onto a scan of the
+/// whole (facet, script, numbers) bucket. Splitting the lanes must not widen
+/// what they read either. Token rows carry the same spelling keys as names, so
+/// every lane must keep the name/alias term-kind filter.
+#[tokio::test]
+async fn title_name_equality_read_stays_on_key_indexes_and_name_terms() -> AppResult<()> {
+    use crate::queries::sql_runtime::SqlRuntime;
+    use scryer_infrastructure_library::media::titles::store::title_name_equality_statement;
+
+    let db = std::env::temp_dir().join(format!(
+        "scryer_title_name_equality_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let services = SqliteServices::new(db.to_string_lossy()).await?;
+    let (catalog, _index_dir) = super::title_store_with_fuzzy_index(&services).await;
+    let result = async {
+        let harbor = matching_title(
+            "harbor-series",
+            "Brightwater Harbor",
+            MediaFacet::Series,
+            Some("en"),
+            None,
+            &[],
+        );
+        TitleRepository::create(&catalog, harbor).await?;
+
+        // One word of the name: it is a token row's spelling, never a name.
+        let anchor = title_spelling::title_lookup_form("Brightwater");
+        let numbers = title_spelling::title_numbers_key("Brightwater");
+        let collation = collation_keys_for(&anchor);
+        assert!(!collation.is_empty());
+        let query = bucket_query(
+            Some("series"),
+            &anchor,
+            &numbers,
+            &collation,
+            Some(anchor.as_str()),
+            None,
+            64,
+        );
+        let (sql, args) = title_name_equality_statement(&query);
+
+        let without_term_kind =
+            sql.replace("t.term_kind IN ('name', 'alias', 'tagged_alias') AND ", "");
+        assert_ne!(without_term_kind, sql);
+        let token_hits =
+            SqlRuntime::fetch_all(services.datastore().read_exec(), &without_term_kind, &args)
+                .await?;
+        assert!(
+            !token_hits.is_empty(),
+            "the fixture must hold a token row the key lanes reach without the term-kind filter"
+        );
+        let candidates = TitleRepository::find_title_name_candidates(
+            &catalog,
+            bucket_query(
+                Some("series"),
+                &anchor,
+                &numbers,
+                &collation,
+                Some(anchor.as_str()),
+                None,
+                64,
+            ),
+        )
+        .await?;
+        assert!(
+            candidates.is_empty(),
+            "a token row is not a name candidate: {candidates:?}"
+        );
+
+        let plan = SqlRuntime::fetch_all(
+            services.datastore().read_exec(),
+            &format!("EXPLAIN QUERY PLAN {sql}"),
+            &args,
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("detail"))
+        .collect::<AppResult<Vec<_>>>()?
+        .join("\n");
+        for index in [
+            "idx_title_search_terms_facet_match_term",
+            "idx_title_search_terms_facet_romanization",
+            "idx_title_search_collation_keys_profile_key",
+        ] {
+            assert!(plan.contains(index), "the plan must use {index}:\n{plan}");
+        }
+        Ok(())
+    }
+    .await;
+    services.pool().close().await;
+    let _ = std::fs::remove_file(&db);
+    result
+}
+
 #[tokio::test]
 async fn title_matching_port_on_postgres() -> AppResult<()> {
     let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")

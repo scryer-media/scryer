@@ -37,6 +37,9 @@ pub struct SubtitleQuery {
     pub episode: Option<i32>,
     /// Absolute episode number when available.
     pub absolute_episode: Option<i32>,
+    /// The anime community entry (usually one cour) the episode belongs to,
+    /// with the episode's number inside it.
+    pub community_entry: Option<SubtitleCommunityEntry>,
     /// Provider-specific external identifiers grouped by normalized source key.
     pub external_ids: BTreeMap<String, Vec<String>>,
     /// Internal subtitle language codes to search for.
@@ -57,6 +60,20 @@ pub struct SubtitleQuery {
     pub include_ai_translated: bool,
     /// Whether to include machine-translated results.
     pub include_machine_translated: bool,
+}
+
+/// One AniList/AniDB/MAL entry an episode belongs to, numbered on its own.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SubtitleCommunityEntry {
+    /// 1-based community season, in air order.
+    pub season: i32,
+    /// The episode's number within this entry.
+    pub episode: i32,
+    pub anilist_id: Option<i64>,
+    pub anidb_id: Option<i64>,
+    pub mal_id: Option<i64>,
+    /// The entry's titles, most canonical first.
+    pub titles: Vec<String>,
 }
 
 /// A single subtitle search result from a provider.
@@ -276,6 +293,7 @@ mod tests {
             season: Some(1),
             episode: Some(3),
             absolute_episode: None,
+            community_entry: None,
             external_ids: Default::default(),
             languages: vec!["eng".into(), "spa".into()],
             release_group: Some("NTb".into()),
@@ -309,6 +327,7 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
+            community_entry: None,
             external_ids: Default::default(),
             languages: vec![],
             release_group: None,

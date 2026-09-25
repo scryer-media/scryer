@@ -241,6 +241,16 @@ type Bucket = (String, TitleScript, String);
 #[derive(Clone, Debug, Default)]
 pub(crate) struct SpellingCandidates {
     buckets: HashMap<Bucket, SpellingBucket>,
+    /// `(facet, anchor, numbers key)` of every anchor the projection has
+    /// answered for, empty answers included. A bucket is keyed coarser than a
+    /// fetch — each fetch is the names near one anchor — so a present bucket
+    /// says nothing about whether *this* anchor's neighbours are in it.
+    fetched: HashSet<(String, String, String)>,
+    /// Set once a caller fetched only the anchors that can reach the
+    /// collision check ([`Self::extend_for_collision_checks`]). From then on
+    /// a collision check for an anchor nobody fetched is refused instead of
+    /// answered from whatever the bucket happens to hold.
+    selective: bool,
 }
 
 /// How many names one bucket's typo lane may fetch. A common bucket in a large
@@ -344,7 +354,36 @@ impl SpellingCandidates {
                 target.insert(indexed);
             }
         }
+        self.fetched.extend(fetched.fetched);
         Ok(())
+    }
+
+    /// Fold in only the anchors whose comparison with `identity` can reach
+    /// [`Self::has_competitor`], and only in `identity`'s facet — the one
+    /// bucket that check reads.
+    ///
+    /// A release that names the subject exactly, or names nothing near it,
+    /// never consults the collision index, and fetching its neighbours was
+    /// most of what a search paid for. Skipping them is only sound while the
+    /// filter and the matcher agree, so the index turns selective: a
+    /// collision check for an anchor this skipped is refused, never waved
+    /// through on an absent bucket.
+    pub async fn extend_for_collision_checks(
+        &mut self,
+        titles: &dyn crate::ports::TitleRepository,
+        anchors: &[(String, String)],
+        identity: &SpellingIdentity,
+    ) -> crate::AppResult<()> {
+        let reachable = anchors
+            .iter()
+            .filter(|(observed, observed_raw)| {
+                anchor_reaches_collision_check(observed, observed_raw, identity)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.selective = true;
+        self.extend_for_anchors(titles, &reachable, Some(identity.facet.as_str()))
+            .await
     }
 
     async fn load_anchored(
@@ -352,48 +391,73 @@ impl SpellingCandidates {
         anchors: &[(String, String)],
         facet: Option<&str>,
     ) -> crate::AppResult<Self> {
-        let mut index = Self::default();
-        for (anchor, observed_raw) in anchors {
-            if anchor.is_empty() {
-                continue;
-            }
-            let numbers_key = scryer_domain::title_spelling::title_numbers_key(observed_raw);
-            let collation_keys = scryer_domain::title_spelling::COLLATION_PROFILES
-                .iter()
-                .filter_map(|profile| {
-                    title_spelling_key(anchor, profile).map(|key| (*profile, key))
-                })
-                .collect::<Vec<_>>();
+        struct AnchorKeys<'a> {
+            anchor: &'a String,
+            script: TitleScript,
+            numbers_key: String,
+            romanization_key: Option<String>,
+            collation_keys: Vec<(&'static str, Vec<u8>)>,
+        }
+        let keys = anchors
+            .iter()
+            .filter(|(anchor, _)| !anchor.is_empty())
+            .map(|(anchor, observed_raw)| AnchorKeys {
+                anchor,
+                script: title_script(anchor),
+                numbers_key: scryer_domain::title_spelling::title_numbers_key(observed_raw),
+                romanization_key: japanese_romanization_key(anchor, Some("ja")),
+                collation_keys: scryer_domain::title_spelling::COLLATION_PROFILES
+                    .iter()
+                    .filter_map(|profile| {
+                        title_spelling_key(anchor, profile).map(|key| (*profile, key))
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>();
+        let mut buckets = Vec::new();
+        let mut queries = Vec::new();
+        for anchor in &keys {
             for candidate_facet in ["movie", "series", "anime"] {
                 if facet.is_some_and(|facet| facet != candidate_facet) {
                     continue;
                 }
-                let rows = titles
-                    .find_title_name_candidates(crate::ports::TitleNameBucketQuery {
-                        facet: Some(candidate_facet),
-                        script: title_script(anchor).as_str(),
-                        numbers_key: &numbers_key,
-                        typo_distance: Some(anchor_fetch_distance(anchor)),
-                        match_term: anchor,
-                        romanization_key: japanese_romanization_key(anchor, Some("ja")).as_deref(),
-                        collation_keys: &collation_keys,
-                        limit: BUCKET_FETCH_LIMIT,
-                    })
-                    .await?;
-                for row in rows {
-                    index.insert(
-                        &row.facet,
-                        &row.title_id,
-                        SpellingName {
-                            key: row.literal_term,
-                            text: row.match_term,
-                            raw: row.raw_term,
-                            language: row.language_tag,
-                            year: row.match_year,
-                        },
-                    );
-                }
+                buckets.push((candidate_facet, anchor));
+                queries.push(crate::ports::TitleNameBucketQuery {
+                    facet: Some(candidate_facet),
+                    script: anchor.script.as_str(),
+                    numbers_key: &anchor.numbers_key,
+                    typo_distance: Some(anchor_fetch_distance(anchor.anchor)),
+                    match_term: anchor.anchor,
+                    romanization_key: anchor.romanization_key.as_deref(),
+                    collation_keys: &anchor.collation_keys,
+                    limit: BUCKET_FETCH_LIMIT,
+                });
             }
+        }
+        // One call for the whole batch: a store backed by the fuzzy index
+        // checks its freshness once, not once per anchor and facet.
+        let fetched = titles.find_title_name_candidates_batch(&queries).await?;
+
+        let mut index = Self::default();
+        for ((candidate_facet, anchor), rows) in buckets.into_iter().zip(fetched) {
+            for row in rows {
+                index.insert(
+                    &row.facet,
+                    &row.title_id,
+                    SpellingName {
+                        key: row.literal_term,
+                        text: row.match_term,
+                        raw: row.raw_term,
+                        language: row.language_tag,
+                        year: row.match_year,
+                    },
+                );
+            }
+            index.fetched.insert((
+                candidate_facet.to_string(),
+                anchor.anchor.clone(),
+                anchor.numbers_key.clone(),
+            ));
         }
         Ok(index)
     }
@@ -442,6 +506,12 @@ impl SpellingCandidates {
         ids
     }
 
+    /// How many `(facet, anchor, numbers key)` fetches this index holds.
+    #[cfg(test)]
+    pub fn fetched_anchor_count(&self) -> usize {
+        self.fetched.len()
+    }
+
     pub fn has_competitor(
         &self,
         identity: &SpellingIdentity,
@@ -450,6 +520,20 @@ impl SpellingCandidates {
         year: Option<i32>,
         distance: usize,
     ) -> bool {
+        if self.selective
+            && !self.fetched.contains(&(
+                identity.facet.clone(),
+                observed.to_string(),
+                numbers_key(observed_raw),
+            ))
+        {
+            tracing::debug!(
+                title_id = identity.id,
+                observed,
+                "title spelling collision check refused: anchor was never fetched"
+            );
+            return true;
+        }
         let Some(bucket) = self.buckets.get(&(
             identity.facet.clone(),
             title_script(observed),
@@ -512,6 +596,36 @@ pub(crate) fn anchor_fetch_distance(anchor: &str) -> u8 {
         .min(MAX_SPELLING_DISTANCE)
 }
 
+/// The one gate between a name comparison and the collision index: the
+/// distance and locale when `observed` is within reach of `name`, plus
+/// whether it *is* `name`. [`find_spelling_match`] consults
+/// [`SpellingCandidates::has_competitor`] only for a comparison that is not
+/// literally exact, and [`anchor_reaches_collision_check`] asks the same
+/// question to decide what to prefetch, so the two cannot drift apart.
+fn spelling_comparison(
+    observed: &str,
+    observed_raw: &str,
+    name: &SpellingName,
+) -> Option<(usize, Option<&'static str>, bool)> {
+    let (distance, locale) = spelling_distance(observed, observed_raw, name, None)?;
+    Some((distance, locale, observed == name.text))
+}
+
+/// Whether any comparison of `observed` with `identity`'s names can reach the
+/// collision check. Year and corroboration filters come later in
+/// [`find_spelling_match`] and only remove comparisons, so this is a superset
+/// of the anchors that check is ever asked about.
+pub(crate) fn anchor_reaches_collision_check(
+    observed: &str,
+    observed_raw: &str,
+    identity: &SpellingIdentity,
+) -> bool {
+    identity.names.iter().any(|name| {
+        spelling_comparison(observed, observed_raw, name)
+            .is_some_and(|(_, _, literally_exact)| !literally_exact)
+    })
+}
+
 fn spelling_distance(
     observed: &str,
     observed_raw: &str,
@@ -568,11 +682,11 @@ pub(crate) fn find_spelling_match(
             {
                 continue;
             }
-            let Some((distance, locale)) = spelling_distance(observed, observed_raw, name, None)
+            let Some((distance, locale, literally_exact)) =
+                spelling_comparison(observed, observed_raw, name)
             else {
                 continue;
             };
-            let literally_exact = observed == &name.text;
             // A romanization is a transliteration convention, not a spelling a
             // release group can get wrong: the catalog carries the romanized
             // alias precisely so a release named in romaji is recognizable,
@@ -640,6 +754,21 @@ pub(crate) fn find_spelling_match(
 pub(crate) fn neutral_spelling_anchors(raw: &str) -> (Vec<String>, crate::ParsedReleaseMetadata) {
     let (forms, parsed) = neutral_spelling_forms(raw);
     (forms.into_iter().map(|(key, _)| key).collect(), parsed)
+}
+
+/// The distinct anchors a batch of release names asks the index for: one per
+/// `(key, numbers key)`, which is what a fetch is recorded under. The numbers
+/// guard reads letter case, so `MIX` and `Mix` share a key but not a fetch,
+/// and deduplicating on the key alone would leave the second one unfetched.
+pub(crate) fn release_batch_anchors<'a>(
+    raw_titles: impl IntoIterator<Item = &'a str>,
+) -> Vec<(String, String)> {
+    let mut seen = HashSet::new();
+    raw_titles
+        .into_iter()
+        .flat_map(|raw| neutral_spelling_forms(raw).0)
+        .filter(|(key, raw)| seen.insert((key.clone(), numbers_key(raw))))
+        .collect()
 }
 
 /// Keep the observed punctuation for the later contextual parser check.

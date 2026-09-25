@@ -414,14 +414,15 @@ async fn locked_tracked_pack_copy_rejection_preserves_source_and_installation() 
     let mut locked = initial.clone();
     locked.customizable = false;
     locked.revision += 1;
-    assert!(repo
-        .apply_rule_pack_installation(&locked, Some(initial.revision), &[], &[])
-        .await
-        .unwrap());
+    assert!(
+        repo.apply_rule_pack_installation(&locked, Some(initial.revision), &[], &[])
+            .await
+            .unwrap()
+    );
     let rules_before = repo.rules_snapshot().await;
 
-    assert!(app
-        .copy_tracked_rule_pack_rule(
+    assert!(
+        app.copy_tracked_rule_pack_rule(
             &actor,
             "tracked_fixture",
             "Custom".into(),
@@ -434,10 +435,13 @@ async fn locked_tracked_pack_copy_rejection_preserves_source_and_installation() 
             22,
         )
         .await
-        .is_err());
+        .is_err()
+    );
     assert_eq!(repo.rules_snapshot().await, rules_before);
     assert_eq!(
-        repo.get_rule_pack_installation(&locked.pack_id).await.unwrap(),
+        repo.get_rule_pack_installation(&locked.pack_id)
+            .await
+            .unwrap(),
         Some(locked)
     );
 }

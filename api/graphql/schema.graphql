@@ -4517,6 +4517,14 @@ Domain event name emitted by the application.
 """
 enum DomainEventTypeValue {
 	"""
+	Imports on a destination became blocked by insufficient disk space.
+	"""
+	IMPORT_SPACE_BLOCKED
+	"""
+	All remaining blocked imports passed their normal space checks.
+	"""
+	IMPORT_SPACE_RESTORED
+	"""
 	A media request was submitted.
 	"""
 	MEDIA_REQUEST_SUBMITTED
@@ -6856,6 +6864,68 @@ input ExternalImportSourceLibraryMappingInput {
 	Media facet receiving the imported root.
 	"""
 	facet: MediaFacetValue!
+}
+
+"""
+Acquisition decision and durable identities associated with an external release.
+"""
+type ExternalReleasePayload {
+	"""
+	Whether the release queued, was held, was rejected, or already existed.
+	"""
+	status: ExternalReleaseStatusValue!
+	"""
+	Decision explanations, including delay or rejection reasons.
+	"""
+	reasons: [String!]!
+	"""
+	Matched authorized catalog title, when one was resolved.
+	"""
+	titleId: ID
+	"""
+	New or existing canonical download identity, when applicable.
+	"""
+	downloadId: ID
+	"""
+	Durable pending-release identity when acquisition is delayed.
+	"""
+	pendingId: ID
+}
+
+"""
+Download protocol advertised by an external release source.
+"""
+enum ExternalReleaseProtocolValue {
+	"""
+	An NZB release downloaded through a Usenet client.
+	"""
+	USENET
+	"""
+	A torrent file or magnet downloaded through a BitTorrent client.
+	"""
+	TORRENT
+}
+
+"""
+Result of evaluating an externally announced release.
+"""
+enum ExternalReleaseStatusValue {
+	"""
+	A new download was submitted through normal acquisition.
+	"""
+	QUEUED
+	"""
+	The release was persisted for later automatic acquisition evaluation.
+	"""
+	HELD
+	"""
+	Matching or acquisition policy refused the release.
+	"""
+	REJECTED
+	"""
+	The release already has an existing download; no new download was submitted.
+	"""
+	DUPLICATE
 }
 
 """
@@ -16100,6 +16170,15 @@ type MutationRoot {
 		input: UpdateSeriesMovieTagsInput!
 	): [SeriesMovieLinkPayload!]!
 	"""
+	Evaluate an external announcement using normal automatic acquisition rules.
+	"""
+	submitExternalRelease(
+		"""
+		Release identity, source, and advertised attributes to evaluate without adding a title.
+		"""
+		input: SubmitExternalReleaseInput!
+	): ExternalReleasePayload!
+	"""
 	Queue the release represented by a signed candidate token for an existing title.
 	Returns a job id when accepted or a conflict payload when the submission scope is busy.
 	"""
@@ -25257,6 +25336,52 @@ type StringConfigValuePayload {
 	String value.
 	"""
 	value: String!
+}
+
+"""
+Externally discovered release evaluated against the existing authorized catalog.
+"""
+input SubmitExternalReleaseInput {
+	"""
+	Original release name used for title, episode, and quality matching.
+	"""
+	name: String!
+	"""
+	HTTP or HTTPS download URL, or a valid torrent magnet URI.
+	"""
+	downloadUrl: String!
+	"""
+	Protocol used to route the release to a download client.
+	"""
+	protocol: ExternalReleaseProtocolValue!
+	"""
+	Source name retained for attribution without creating an indexer configuration.
+	"""
+	source: String!
+	"""
+	Advertised nonnegative release size in bytes, when available.
+	"""
+	sizeBytes: Int
+	"""
+	Original publication time used by normal acquisition delay rules.
+	"""
+	publishedAt: DateTime
+	"""
+	Optional TVDB title identity supplied by the source.
+	"""
+	tvdbId: String
+	"""
+	Optional TMDB title identity supplied by the source.
+	"""
+	tmdbId: String
+	"""
+	Optional IMDb title identity, including its tt prefix.
+	"""
+	imdbId: String
+	"""
+	Release flags: freeleech, halfleech, double_upload, internal, scene, freeleech_75, freeleech_25, nuked, subtitles, golden, or approved.
+	"""
+	flags: [String!]! = []
 }
 
 """

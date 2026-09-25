@@ -100,7 +100,7 @@ impl IndexerArtifactTransport {
         Self {
             outbound_http: OutboundHttpClient::new(
                 generic_reqwest_client(),
-                RateLimitRegistry::new(),
+                RateLimitRegistry::indexers(),
             ),
             proxy_clients: Arc::new(Mutex::new(HashMap::new())),
             indexer_configs,
@@ -577,7 +577,8 @@ impl IndexerArtifactTransport {
         if !headers.is_empty() {
             solver::SolvedSessionCache::shared().invalidate(&proxy.id, url);
         }
-        let solver_http = OutboundHttpClient::new(proxy_reqwest_client(), RateLimitRegistry::new());
+        let solver_http =
+            OutboundHttpClient::new(proxy_reqwest_client(), RateLimitRegistry::indexers());
         let response = tokio::time::timeout(
             timeout,
             solver_http.send_with_rate_limit_and_dispatch_observer(

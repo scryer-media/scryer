@@ -1987,14 +1987,22 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     },
     [activeFacet, client, refreshRuleSets, ruleSets, setGlobalStatus, t],
   );
+  // The loaders outlive renders; read the current reporter through a ref.
+  const reportSummaryFailure = React.useRef((_error: unknown) => {});
+  React.useEffect(() => {
+    reportSummaryFailure.current = (error: unknown) =>
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")));
+  }, [setGlobalStatus, t]);
   const summaryLoaders = React.useMemo(
     () => ({
-      counts: createCatalogSummaryLoader((error) =>
-        console.error("[catalog-counts] refresh failed:", error),
-      ),
-      bytes: createCatalogSummaryLoader((error) =>
-        console.error("[catalog-bytes] refresh failed:", error),
-      ),
+      counts: createCatalogSummaryLoader((error) => {
+        console.error("[catalog-counts] refresh failed:", error);
+        reportSummaryFailure.current(error);
+      }),
+      bytes: createCatalogSummaryLoader((error) => {
+        console.error("[catalog-bytes] refresh failed:", error);
+        reportSummaryFailure.current(error);
+      }),
     }),
     [],
   );
@@ -2039,22 +2047,13 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
       const countVariables = { ...scope, query, filter };
       const countKey = JSON.stringify(countVariables);
       const bytesKey = JSON.stringify(scope);
+      // A new scope keeps the previous counts on screen until its own counts
+      // land; the loader drops a superseded scope's late result.
       if (summaryScopesRef.current.counts !== countKey) {
         summaryScopesRef.current.counts = countKey;
         summaryScopesRef.current.countsReady = false;
-        setCatalogPaginationState((current) => ({
-          ...current,
-          totalCount: 0,
-          filterCounts: emptyTitleCatalogState.filterCounts,
-        }));
       }
-      if (summaryScopesRef.current.bytes !== bytesKey) {
-        summaryScopesRef.current.bytes = bytesKey;
-        setCatalogPaginationState((current) => ({
-          ...current,
-          managedBytes: 0,
-        }));
-      }
+      summaryScopesRef.current.bytes = bytesKey;
       void summaryLoaders.counts.run(
         countKey,
         async () => {

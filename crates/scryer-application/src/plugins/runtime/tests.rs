@@ -335,7 +335,10 @@ mod catalog_artifact_selection_tests {
         .expect("SDK 3 release");
 
         assert_eq!(selected_release.version, "2.0.0");
-        assert_eq!(selected_artifact.url, "https://example.invalid/plugin-sdk3.zst");
+        assert_eq!(
+            selected_artifact.url,
+            "https://example.invalid/plugin-sdk3.zst"
+        );
     }
 
     #[test]
@@ -546,10 +549,8 @@ mod catalog_artifact_selection_tests {
     #[test]
     fn catalog_selection_skips_release_requiring_newer_scryer() {
         let compatible_release = release(vec![artifact(&[], "https://example.invalid/plugin.zst")]);
-        let mut newer_release = release(vec![artifact(
-            &[],
-            "https://example.invalid/plugin-v2.zst",
-        )]);
+        let mut newer_release =
+            release(vec![artifact(&[], "https://example.invalid/plugin-v2.zst")]);
         newer_release.version = "2.0.0".to_string();
         newer_release.min_scryer_version = Some("999.0.0".to_string());
 
@@ -568,10 +569,8 @@ mod catalog_artifact_selection_tests {
     #[test]
     fn catalog_selection_skips_release_past_its_max_scryer_version() {
         let compatible_release = release(vec![artifact(&[], "https://example.invalid/plugin.zst")]);
-        let mut retired_release = release(vec![artifact(
-            &[],
-            "https://example.invalid/plugin-v2.zst",
-        )]);
+        let mut retired_release =
+            release(vec![artifact(&[], "https://example.invalid/plugin-v2.zst")]);
         retired_release.version = "2.0.0".to_string();
         retired_release.min_scryer_version = Some("0.17.0".to_string());
         retired_release.max_scryer_version = Some("0.18.11".to_string());
@@ -594,20 +593,16 @@ mod catalog_artifact_selection_tests {
 
     #[test]
     fn catalog_selection_checks_all_releases_before_picking_highest_compatible() {
-        let mut newest_incompatible_first = release(vec![artifact(
-            &[],
-            "https://example.invalid/plugin-v3.zst",
-        )]);
+        let mut newest_incompatible_first =
+            release(vec![artifact(&[], "https://example.invalid/plugin-v3.zst")]);
         newest_incompatible_first.version = "3.0.0".to_string();
         newest_incompatible_first.min_scryer_version = Some("999.0.0".to_string());
 
         let older_compatible =
             release(vec![artifact(&[], "https://example.invalid/plugin-v1.zst")]);
 
-        let mut incompatible_after_compatible = release(vec![artifact(
-            &[],
-            "https://example.invalid/plugin-v4.zst",
-        )]);
+        let mut incompatible_after_compatible =
+            release(vec![artifact(&[], "https://example.invalid/plugin-v4.zst")]);
         incompatible_after_compatible.version = "4.0.0".to_string();
         incompatible_after_compatible.min_scryer_version = Some("999.0.0".to_string());
 
@@ -783,12 +778,10 @@ mod signature_bundle_decode_tests {
     async fn plain_signature_bundle_is_left_unchanged() {
         let bundle = br#"{"base64Signature":"signature"}"#.to_vec();
 
-        let decoded = decode_signature_bundle(
-            bundle.clone(),
-            "https://example.test/plugin.tar.zst.bundle",
-        )
-        .await
-        .expect("plain bundle should decode");
+        let decoded =
+            decode_signature_bundle(bundle.clone(), "https://example.test/plugin.tar.zst.bundle")
+                .await
+                .expect("plain bundle should decode");
 
         assert_eq!(decoded, bundle);
     }
@@ -801,12 +794,10 @@ mod signature_bundle_decode_tests {
             .await
             .expect("bundle should compress");
 
-        let decoded = decode_signature_bundle(
-            compressed,
-            "https://example.test/catalog.json.bundle.zst",
-        )
-        .await
-        .expect("zstd bundle should decode");
+        let decoded =
+            decode_signature_bundle(compressed, "https://example.test/catalog.json.bundle.zst")
+                .await
+                .expect("zstd bundle should decode");
 
         assert_eq!(decoded, bundle);
     }
@@ -965,22 +956,16 @@ mod bounded_decompression_tests {
             .await
             .expect("manual upload should compress");
 
-        let decoded = decode_uploaded_plugin_wasm_with_limit(
-            compressed.clone(),
-            true,
-            payload.len() as u64,
-        )
-        .await
-        .expect("manual upload at cap should decode");
+        let decoded =
+            decode_uploaded_plugin_wasm_with_limit(compressed.clone(), true, payload.len() as u64)
+                .await
+                .expect("manual upload at cap should decode");
         assert_eq!(decoded, payload);
 
-        let compressed_error = decode_uploaded_plugin_wasm_with_limit(
-            compressed,
-            true,
-            (payload.len() - 1) as u64,
-        )
-        .await
-        .expect_err("compressed manual upload over cap should fail");
+        let compressed_error =
+            decode_uploaded_plugin_wasm_with_limit(compressed, true, (payload.len() - 1) as u64)
+                .await
+                .expect_err("compressed manual upload over cap should fail");
         assert_limit_error(compressed_error);
 
         let raw_error = decode_uploaded_plugin_wasm_with_limit(
@@ -1256,12 +1241,7 @@ mod component_blocker_message_tests {
             catalog_entry_serves_same_provider(&installation, &entry),
             "a hand-uploaded build must still find the catalog build for its provider"
         );
-        let other = catalog_entry(
-            "beacon",
-            "Beacon",
-            "beacon",
-            PluginLifecycleStatus::Active,
-        );
+        let other = catalog_entry("beacon", "Beacon", "beacon", PluginLifecycleStatus::Active);
         assert!(!catalog_entry_serves_same_provider(&installation, &other));
     }
 
@@ -1275,16 +1255,10 @@ mod component_blocker_message_tests {
             "hubcast-legacy",
             PluginLifecycleStatus::Deprecated,
         );
-        let successor = catalog_entry(
-            "hubcast",
-            "Hubcast",
-            "hubcast",
-            PluginLifecycleStatus::Beta,
-        );
+        let successor = catalog_entry("hubcast", "Hubcast", "hubcast", PluginLifecycleStatus::Beta);
         let catalog = catalog(vec![deprecated.clone(), successor]);
         assert_eq!(
-            catalog_successor_for(&catalog, &deprecated)
-                .map(|entry| entry.id.as_str()),
+            catalog_successor_for(&catalog, &deprecated).map(|entry| entry.id.as_str()),
             Some("hubcast")
         );
     }
@@ -1297,12 +1271,7 @@ mod component_blocker_message_tests {
             "hubcast-legacy",
             PluginLifecycleStatus::Deprecated,
         );
-        let unrelated = catalog_entry(
-            "beacon",
-            "Beacon",
-            "beacon",
-            PluginLifecycleStatus::Active,
-        );
+        let unrelated = catalog_entry("beacon", "Beacon", "beacon", PluginLifecycleStatus::Active);
         let catalog = catalog(vec![deprecated.clone(), unrelated]);
         assert!(catalog_successor_for(&catalog, &deprecated).is_none());
     }
@@ -1319,8 +1288,18 @@ mod component_blocker_message_tests {
         );
         let catalog = catalog(vec![
             deprecated.clone(),
-            catalog_entry("hubcast-a", "Hubcast", "hubcast-a", PluginLifecycleStatus::Active),
-            catalog_entry("hubcast-b", "Hubcast", "hubcast-b", PluginLifecycleStatus::Beta),
+            catalog_entry(
+                "hubcast-a",
+                "Hubcast",
+                "hubcast-a",
+                PluginLifecycleStatus::Active,
+            ),
+            catalog_entry(
+                "hubcast-b",
+                "Hubcast",
+                "hubcast-b",
+                PluginLifecycleStatus::Beta,
+            ),
         ]);
         assert!(catalog_successor_for(&catalog, &deprecated).is_none());
     }

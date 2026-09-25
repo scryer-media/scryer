@@ -124,11 +124,13 @@ impl AppUseCase {
                             "archive extractor plugin provider unavailable".to_string(),
                         )
                     })?;
-                provider.upsert_runtime_plugin(runtime_plugin).map_err(|e| {
-                    AppError::Repository(format!(
-                        "failed to upsert archive extractor plugin: {e}"
-                    ))
-                })?;
+                provider
+                    .upsert_runtime_plugin(runtime_plugin)
+                    .map_err(|e| {
+                        AppError::Repository(format!(
+                            "failed to upsert archive extractor plugin: {e}"
+                        ))
+                    })?;
             }
             other => {
                 return Err(AppError::Validation(format!(
@@ -314,20 +316,14 @@ impl AppUseCase {
         let runtime_plugin = self
             .load_runtime_plugin_for_installation(&installation)
             .await?;
-        let descriptor_loader = self
-            .services
-            .customization
-            .plugin_descriptor_loader
-            .clone();
+        let descriptor_loader = self.services.customization.plugin_descriptor_loader.clone();
         let wasm_bytes = runtime_plugin.wasm_bytes;
         let descriptor = tokio::task::spawn_blocking(move || {
             descriptor_loader.load_descriptor_from_wasm_bytes(&wasm_bytes)
         })
         .await
         .map_err(|error| {
-            AppError::Repository(format!(
-                "plugin descriptor loading task failed: {error}"
-            ))
+            AppError::Repository(format!("plugin descriptor loading task failed: {error}"))
         })??;
         let provider_alias = provider_alias.trim().to_ascii_lowercase();
         Ok(descriptor
@@ -354,29 +350,22 @@ impl AppUseCase {
             .ok_or_else(|| AppError::NotFound(format!("plugin '{plugin_id}' not installed")))?;
 
         let prepared_runtime_plugin = if enabled {
-            if installation.is_builtin
-                && installation.source_kind == PluginSourceKind::Bundled
-            {
+            if installation.is_builtin && installation.source_kind == PluginSourceKind::Bundled {
                 self.prepare_runtime_builtin(&installation).await?;
                 None
             } else {
                 let runtime_plugin = self
                     .load_runtime_plugin_for_installation(&installation)
                     .await?;
-                let descriptor_loader = self
-                    .services
-                    .customization
-                    .plugin_descriptor_loader
-                    .clone();
+                let descriptor_loader =
+                    self.services.customization.plugin_descriptor_loader.clone();
                 let wasm_bytes = runtime_plugin.wasm_bytes.clone();
                 tokio::task::spawn_blocking(move || {
                     descriptor_loader.load_descriptor_from_wasm_bytes(&wasm_bytes)
                 })
                 .await
                 .map_err(|error| {
-                    AppError::Repository(format!(
-                        "plugin descriptor loading task failed: {error}"
-                    ))
+                    AppError::Repository(format!("plugin descriptor loading task failed: {error}"))
                 })??;
                 Some(runtime_plugin)
             }

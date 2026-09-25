@@ -128,6 +128,27 @@ impl AppUseCase {
         &self,
         scopes: &[LandedBarScope],
     ) -> Vec<Option<i32>> {
+        self.landed_bars_for_scopes_with_memo(scopes, None).await
+    }
+
+    /// [`Self::landed_bars_for_scopes`] for the background cutoff pass, reusing
+    /// bars an earlier pass derived from identical inputs. Only that pass reads
+    /// the memo: the gate and the Wanted page keep deriving live.
+    pub(crate) async fn landed_bars_for_scopes_memoized(
+        &self,
+        scopes: &[LandedBarScope],
+    ) -> Vec<Option<i32>> {
+        // Taken before any scoring context (and so before the rules engine) is
+        // read: a swap that lands after this point refuses what we fill.
+        let ticket = self.runtime.acquisition.landed_bar_memo.ticket();
+        self.landed_bars_for_scopes_with_memo(scopes, ticket).await
+    }
+
+    async fn landed_bars_for_scopes_with_memo(
+        &self,
+        scopes: &[LandedBarScope],
+        memo_ticket: Option<crate::quality::landed_bar_memo::LandedBarMemoTicket>,
+    ) -> Vec<Option<i32>> {
         let mut bars = vec![None; scopes.len()];
         if scopes.is_empty() {
             return bars;
@@ -176,8 +197,10 @@ impl AppUseCase {
         // collection membership. Resolving members with
         // `list_episodes_for_collection` per collection made a 50-row page
         // across 50 seasons 50 extra round-trips for a display number.
+        // One batched read for every title on the page: per-title reads made
+        // the background cutoff pass one round-trip per title per cycle.
         let mut episodes_by_title: HashMap<&str, Vec<scryer_domain::Episode>> = HashMap::new();
-        let needs_episodes: HashSet<&str> = scopes
+        let mut needs_episodes: Vec<&str> = scopes
             .iter()
             .filter(|scope| {
                 LandedBarScope::non_empty(&scope.episode_id).is_some()
@@ -185,16 +208,25 @@ impl AppUseCase {
             })
             .map(|scope| scope.title_id.as_str())
             .collect();
-        for title_id in needs_episodes {
-            episodes_by_title.insert(
-                title_id,
-                self.services
-                    .catalog
-                    .shows
-                    .list_episodes_for_title(title_id)
-                    .await
-                    .unwrap_or_default(),
-            );
+        needs_episodes.sort_unstable();
+        needs_episodes.dedup();
+        if !needs_episodes.is_empty() {
+            let ids: Vec<String> = needs_episodes.iter().map(|id| (*id).to_owned()).collect();
+            let episodes = self
+                .services
+                .catalog
+                .shows
+                .list_episodes_for_titles(&ids)
+                .await
+                .unwrap_or_default();
+            for title_id in &needs_episodes {
+                episodes_by_title.insert(title_id, Vec::new());
+            }
+            for episode in episodes {
+                if let Some(bucket) = episodes_by_title.get_mut(episode.title_id.as_str()) {
+                    bucket.push(episode);
+                }
+            }
         }
         let collection_members = |title_id: &str, collection_id: &str| -> Vec<&str> {
             episodes_by_title
@@ -265,6 +297,11 @@ impl AppUseCase {
             let context = self
                 .resolve_canonical_scoring_context(title, &profile)
                 .await;
+            let memo_base = memo_ticket.map(|_| {
+                let mut hasher = blake3::Hasher::new();
+                context.hash_memo_inputs(&mut hasher);
+                hasher
+            });
             let no_episodes: Vec<scryer_domain::Episode> = Vec::new();
             let title_episodes = episodes_by_title
                 .get(title.id.as_str())
@@ -303,13 +340,35 @@ impl AppUseCase {
                                 &file.episode_ids,
                                 title.runtime_minutes,
                             );
-                            self.incumbent_bar_for_episodes(
-                                &file.file,
-                                &context,
-                                basis,
-                                &episode_ids,
-                            )
-                            .score
+                            // The key covers exactly the arguments the
+                            // derivation below reads; the context's share
+                            // was hashed once for the title.
+                            let memo = memo_ticket.zip(memo_base.as_ref()).map(|(ticket, base)| {
+                                use crate::quality::landed_bar_memo::{finish_key, hash_debug};
+                                let mut hasher = base.clone();
+                                hash_debug(&mut hasher, &file.file);
+                                hash_debug(&mut hasher, &basis);
+                                hash_debug(&mut hasher, &episode_ids);
+                                (ticket, finish_key(&hasher))
+                            });
+                            let memo_store = &self.runtime.acquisition.landed_bar_memo;
+                            if let Some(bar) =
+                                memo.and_then(|(ticket, key)| memo_store.get(ticket, &key))
+                            {
+                                return bar;
+                            }
+                            let bar = self
+                                .incumbent_bar_for_episodes(
+                                    &file.file,
+                                    &context,
+                                    basis,
+                                    &episode_ids,
+                                )
+                                .score;
+                            if let Some((ticket, key)) = memo {
+                                memo_store.fill(ticket, key, bar);
+                            }
+                            bar
                         });
                     bars[scope_index] =
                         Some(bars[scope_index].map_or(score, |current| current.max(score)));

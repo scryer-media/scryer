@@ -23,6 +23,7 @@ pub(crate) mod scoring;
 pub(crate) mod search_queries;
 pub(crate) mod seed_goals;
 pub(crate) mod targets;
+pub(crate) mod title_reads;
 pub(crate) mod wanted_views;
 pub(crate) mod workflow;
 

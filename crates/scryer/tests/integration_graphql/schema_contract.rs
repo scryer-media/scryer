@@ -736,7 +736,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Failed-move recovery adds `abandonLocationOperation`, the way out of a
     // stalled operation whose storage is not coming back: mutation 247->248.
     assert_eq!(
-        mutation_field_count, 249,
+        mutation_field_count, 250,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -896,10 +896,20 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
-    assert_eq!(public_types.len(), 860);
-    assert_eq!(kind_count("OBJECT"), 466);
-    assert_eq!(kind_count("INPUT_OBJECT"), 222);
-    assert_eq!(kind_count("ENUM"), 160);
+    // External intake adds one mutation, one input, one payload, and two enums.
+    assert!(mutation_field_names.contains(&"submitExternalRelease"));
+    for name in [
+        "SubmitExternalReleaseInput",
+        "ExternalReleasePayload",
+        "ExternalReleaseProtocolValue",
+        "ExternalReleaseStatusValue",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    assert_eq!(public_types.len(), 864);
+    assert_eq!(kind_count("OBJECT"), 467);
+    assert_eq!(kind_count("INPUT_OBJECT"), 223);
+    assert_eq!(kind_count("ENUM"), 162);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

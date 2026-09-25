@@ -308,6 +308,8 @@ type RootSidebarProps = {
   pendingImportCounts: PendingImportCounts | null;
   pendingMediaRequestCounts: PendingImportCounts | null;
   manualImportRequiredCount: number;
+  manualImportCountKnown?: boolean;
+  manualImportCountStale?: boolean;
   pluginUpdateCount: number;
   pluginBlockedCount: number;
   header?: React.ReactNode;
@@ -640,6 +642,8 @@ function RootSidebarContent({
   pendingImportCounts,
   pendingMediaRequestCounts,
   manualImportRequiredCount,
+  manualImportCountKnown = true,
+  manualImportCountStale = false,
   pluginUpdateCount,
   pluginBlockedCount,
   header,
@@ -967,14 +971,12 @@ function RootSidebarContent({
   );
   const isRequestsSection = view === "requests";
   const activityImportBadgeCount = Math.max(0, manualImportRequiredCount);
-  const hasActivityImportBadge = activityImportBadgeCount > 0;
-  const visibleActivitySubPages = React.useMemo(
-    () =>
-      ACTIVITY_SUB_PAGES.filter(
-        (entry) => entry.id !== "import" || hasActivityImportBadge,
-      ),
-    [hasActivityImportBadge],
-  );
+  const hasActivityImportBadge = !manualImportCountKnown || manualImportCountStale || activityImportBadgeCount > 0;
+  const activityImportBadgeLabel = !manualImportCountKnown
+    ? t("activity.countUnknown")
+    : manualImportCountStale ? t("activity.countStale") : undefined;
+  const activityImportBadgeText = !manualImportCountKnown ? "…" : `${activityImportBadgeCount}${manualImportCountStale ? "*" : ""}`;
+  const visibleActivitySubPages = ACTIVITY_SUB_PAGES;
   const hasVisibleActivitySubnav = React.useMemo(
     () => visibleActivitySubPages.some((entry) => entry.id !== "activity"),
     [visibleActivitySubPages],
@@ -1360,8 +1362,8 @@ function RootSidebarContent({
                             {item.label}
                           </SidebarMenuButton>
                           {item.id === "activity" && hasActivityImportBadge ? (
-                            <SidebarMenuBadge className="bg-primary text-primary-foreground">
-                              {activityImportBadgeCount}
+                            <SidebarMenuBadge className="bg-primary text-primary-foreground" title={activityImportBadgeLabel} aria-label={activityImportBadgeLabel}>
+                              {activityImportBadgeText}
                             </SidebarMenuBadge>
                           ) : null}
                         </SidebarMenuItem>
@@ -1438,8 +1440,8 @@ function RootSidebarContent({
                           </span>
                         </SidebarMenuButton>
                         {item.id === "activity" && hasActivityImportBadge ? (
-                          <SidebarMenuBadge className="bg-primary text-primary-foreground">
-                            {activityImportBadgeCount}
+                          <SidebarMenuBadge className="bg-primary text-primary-foreground" title={activityImportBadgeLabel} aria-label={activityImportBadgeLabel}>
+                            {activityImportBadgeText}
                           </SidebarMenuBadge>
                         ) : null}
                         {isSettingsTop && pluginBlockedCount > 0 ? (
@@ -1574,9 +1576,9 @@ function RootSidebarContent({
                                     {t(entry.labelKey)}
                                     {entry.id === "import" &&
                                     hasActivityImportBadge ? (
-                                      <LeafNavBadge
-                                        count={activityImportBadgeCount}
-                                      />
+                                      <span className="ml-auto rounded-full bg-primary px-2 text-xs text-primary-foreground" title={activityImportBadgeLabel} aria-label={activityImportBadgeLabel}>
+                                        {activityImportBadgeText}
+                                      </span>
                                     ) : null}
                                   </SidebarMenuSubButton>
                                 </SidebarMenuSubItem>

@@ -301,9 +301,6 @@ export function SettingsIndexersContainer({
   const [proxyConfigs, setProxyConfigs] = useState<ProxyRecord[]>([]);
   const [indexerRoutingByScope, setIndexerRoutingByScope] =
     useState<IndexerRoutingSettingsByScope>(emptyIndexerRoutingByScope);
-  const [indexerRoutingIndexerIds, setIndexerRoutingIndexerIds] = useState<
-    string[]
-  >([]);
   const [indexerRoutingLoaded, setIndexerRoutingLoaded] = useState(false);
   const [indexerRoutingLoading, setIndexerRoutingLoading] = useState(false);
   const [mutatingIndexerRoutingScopes, setMutatingIndexerRoutingScopes] =
@@ -428,9 +425,6 @@ export function SettingsIndexersContainer({
           SERIES: indexerRoutingEntriesToMap(data?.series),
           ANIME: indexerRoutingEntriesToMap(data?.anime),
         });
-        setIndexerRoutingIndexerIds(
-          (data?.indexers ?? []).map((indexer: { id: string }) => indexer.id),
-        );
         setIndexerRoutingLoaded(true);
       } catch (error) {
         setGlobalStatus(
@@ -471,10 +465,19 @@ export function SettingsIndexersContainer({
       });
 
       try {
-        const indexerIds = new Set([
-          ...indexerRoutingIndexerIds,
-          ...settingsIndexers.map((indexer) => indexer.id),
-        ]);
+        // The mutation replaces the scope's whole routing map, so it needs
+        // every live indexer, not just the rows a provider filter left on
+        // screen: a hidden indexer left out would lose its routing. Only live
+        // indexers, though; a deleted one must not be resubmitted.
+        let liveIndexers = settingsIndexers;
+        if (settingsIndexerFilter) {
+          const { data: unfiltered, error: listError } = await client
+            .query(indexersQuery, {}, { requestPolicy: "network-only" })
+            .toPromise();
+          if (listError) throw listError;
+          liveIndexers = unfiltered?.indexers ?? [];
+        }
+        const indexerIds = new Set(liveIndexers.map((indexer) => indexer.id));
         const { data, error } = await client
           .mutation(updateIndexerRoutingMutation, {
             input: {
@@ -521,8 +524,8 @@ export function SettingsIndexersContainer({
     [
       client,
       indexerRoutingByScope,
-      indexerRoutingIndexerIds,
       setGlobalStatus,
+      settingsIndexerFilter,
       settingsIndexers,
       t,
     ],

@@ -1,4 +1,6 @@
 use super::*;
+#[path = "external.rs"]
+pub(crate) mod external;
 use crate::acquisition::submission::{
     CanonicalDownloadSubmissionIntent, CanonicalDownloadSubmissionOutcome, GrabTrigger,
     record_grab_submission_outcome,
@@ -241,6 +243,7 @@ fn pending_release_as_rss_result(pending: &PendingRelease) -> IndexerSearchResul
         extra.insert("magnet_url".to_string(), serde_json::json!(url));
     }
 
+    let response_attributes = external::restore_announcement(pending, &mut extra);
     IndexerSearchResult {
         indexer_id: pending.indexer_id.clone(),
         source: pending
@@ -262,7 +265,7 @@ fn pending_release_as_rss_result(pending: &PendingRelease) -> IndexerSearchResul
         parsed_release_metadata: None,
         quality_profile_decision: None,
         extra,
-        response_attributes: IndexerResponseAttributes::default(),
+        response_attributes,
         guid: pending.release_guid.clone(),
         info_url: None,
         provenance: None,
@@ -2304,7 +2307,7 @@ impl AppUseCase {
             None => None,
         };
         let search_title = self
-            .release_search_title_for_wanted_item(title, &wanted, episode.as_ref())
+            .release_search_title_for_wanted_item(title, &wanted, episode.as_ref(), None)
             .await;
         let mut subject = match self
             .resolve_release_search_subject_for_wanted_item(
@@ -2324,15 +2327,17 @@ impl AppUseCase {
         if let Some(scope) = scope_override.as_ref() {
             subject.submission_scope = scope.clone();
         }
-        let existing_files = self
-            .services
-            .library
-            .media_files
-            .list_media_files_for_title(&title.id)
+        // The episode list, collections and media files are read by the gate,
+        // the admission subject, the scope membership and the submit block
+        // below; one memo serves all of them for this release.
+        let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+        let existing_files = reads
+            .media_files(self)
             .await
             .unwrap_or_default()
-            .into_iter()
+            .iter()
             .filter(|file| file.role.is_primary())
+            .cloned()
             .collect::<Vec<_>>();
         let cutoff_scope = self.cutoff_scope_for(&subject.submission_scope).await;
         let analyzed_cutoff_quality =
@@ -2385,21 +2390,11 @@ impl AppUseCase {
         // One catalog read per scope, shared by the unmonitored-episode refusal
         // (D21) and by the queued pseudo-incumbents' D4 runtime basis (D18).
         let (catalog_episodes, catalog_collections) = if title.facet == MediaFacet::Movie {
-            (Vec::new(), Vec::new())
+            (Arc::default(), Arc::default())
         } else {
             (
-                self.services
-                    .catalog
-                    .shows
-                    .list_episodes_for_title(&title.id)
-                    .await
-                    .unwrap_or_default(),
-                self.services
-                    .catalog
-                    .shows
-                    .list_collections_for_title(&title.id)
-                    .await
-                    .unwrap_or_default(),
+                reads.episodes(self).await.unwrap_or_default(),
+                reads.collections(self).await.unwrap_or_default(),
             )
         };
         let unmonitored_episode_ids: HashSet<String> = catalog_episodes
@@ -2413,18 +2408,19 @@ impl AppUseCase {
             .resolve_canonical_scoring_context(title, &upgrade_context.profile)
             .await;
         let mut admission = self
-            .admission_subject_for_scope(
+            .admission_subject_for_scope_with_reads(
                 title,
                 &subject.submission_scope,
                 &scoring_context,
                 None,
                 crate::quality::canonical_context::SubjectIntent::Grab,
+                &reads,
             )
             .await;
         // D18: whatever this title already has in flight, compared on the same
         // ladder as a file on disk. `queue` was read once for the whole title.
         let membership = self
-            .scope_membership_for(title, &subject.submission_scope)
+            .scope_membership_for_with_reads(title, &subject.submission_scope, &reads)
             .await;
         let mut queued = Vec::new();
         if let Some(queue) = queue {
@@ -2565,6 +2561,14 @@ impl AppUseCase {
                 .unwrap_or(0);
             let mut decision_candidate = candidate.clone();
             annotate_auto_decision(&mut decision_candidate, decision_code);
+            if let Some(outcome) = report.external_outcome.as_mut() {
+                outcome.reasons = vec![
+                    decision_candidate
+                        .auto_decision_summary
+                        .clone()
+                        .unwrap_or_else(|| decision_code.as_str().to_owned()),
+                ];
+            }
 
             // One construction, shared with the convergence path, so the two
             // cannot drift apart in what they record.
@@ -2687,7 +2691,7 @@ impl AppUseCase {
                         .or(candidate.source_kind),
                     release_size_bytes: candidate.size_bytes,
                     release_score: candidate_score,
-                    scoring_log_json: serialize_decision_explanation(&decision_candidate),
+                    scoring_log_json: external::pending_explanation(&decision_candidate),
                     indexer_source: Some(candidate.source.clone()),
                     indexer_id: candidate.indexer_id.clone(),
                     release_guid: candidate.guid.clone(),
@@ -2731,16 +2735,23 @@ impl AppUseCase {
                     ),
                     last_observed_at,
                 };
-                if let Err(error) = self
+                match self
                     .insert_pending_release_observation(&pending, &observation)
                     .await
                 {
-                    warn!(
-                        error = %error,
-                        title_id = title.id.as_str(),
-                        release = candidate.title.as_str(),
-                        "RSS sync: failed to persist delayed release observation"
-                    );
+                    Ok(id) => {
+                        if let Some(outcome) = report.external_outcome.as_mut() {
+                            outcome.status = external::ExternalReleaseStatus::Held;
+                            outcome.pending_id = Some(id);
+                        }
+                    }
+                    Err(error) => {
+                        if let Some(outcome) = report.external_outcome.as_mut() {
+                            outcome.reasons =
+                                vec![format!("Could not persist delayed release: {error}")];
+                        }
+                        warn!(error = %error, title_id = title.id.as_str(), release = candidate.title.as_str(), "RSS sync: failed to persist delayed release observation");
+                    }
                 }
                 report.releases_held += 1;
                 next_pending_role = PendingReleaseRole::Fallback;
@@ -2823,20 +2834,8 @@ impl AppUseCase {
         // submitting: a multi-episode/season pack grabs once with the pack scope
         // and `season_pack: true` (§D5 #3), never per member episode.
         let submission_scope = if let Some(parsed) = best.parsed_release_metadata.as_ref() {
-            let catalog_episodes = self
-                .services
-                .catalog
-                .shows
-                .list_episodes_for_title(&title.id)
-                .await
-                .unwrap_or_default();
-            let catalog_collections = self
-                .services
-                .catalog
-                .shows
-                .list_collections_for_title(&title.id)
-                .await
-                .unwrap_or_default();
+            let catalog_episodes = reads.episodes(self).await.unwrap_or_default();
+            let catalog_collections = reads.collections(self).await.unwrap_or_default();
             crate::acquisition_coverage::resolve_release_coverage(
                 parsed,
                 &catalog_episodes,
@@ -2922,12 +2921,41 @@ impl AppUseCase {
 
         let canonical_submission = match canonical_result {
             Ok(CanonicalDownloadSubmissionOutcome::Accepted(submission)) => Ok(submission),
-            Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => return,
-            Err(error) => Err(error),
+            Ok(CanonicalDownloadSubmissionOutcome::Conflict(_)) => {
+                if let Some(outcome) = report.external_outcome.as_mut() {
+                    outcome.reasons = vec!["An active download already covers this release".into()];
+                }
+                return;
+            }
+            Err(error) => {
+                if let Some(outcome) = report.external_outcome.as_mut() {
+                    outcome.reasons = vec![error.to_string()];
+                }
+                Err(error)
+            }
         };
 
         match canonical_submission {
             Ok(canonical_submission) => {
+                if let Some(outcome) = report.external_outcome.as_mut() {
+                    outcome.status = if canonical_submission.newly_submitted {
+                        external::ExternalReleaseStatus::Queued
+                    } else {
+                        external::ExternalReleaseStatus::Duplicate
+                    };
+                    outcome.download_id = Some(
+                        canonical_submission
+                            .grab
+                            .download_id
+                            .unwrap_or(download_id)
+                            .to_string(),
+                    );
+                    outcome.reasons = if canonical_submission.newly_submitted {
+                        vec![]
+                    } else {
+                        vec!["Release already submitted".into()]
+                    };
+                }
                 // A reused submission re-attached to an existing download; the
                 // indexer was not asked for the release again, so it is not a
                 // grab — the same rule `scryer_grabs_total` applies.
@@ -2953,7 +2981,7 @@ impl AppUseCase {
                     "title": best.title,
                     "score": candidate_score,
                     "grabbed_at": now.to_rfc3339(),
-                    "source": "rss_sync",
+                    "source": if best.extra.contains_key("external_announcement") { "external_release" } else { "rss_sync" },
                 })
                 .to_string();
 
@@ -2970,7 +2998,10 @@ impl AppUseCase {
 
                 let _ = self
                     .append_domain_event(new_title_domain_event(
-                        None,
+                        report.external_actor.as_ref().map_or_else(
+                            crate::domain_events::DomainEventActor::system,
+                            crate::domain_events::DomainEventActor::user,
+                        ),
                         title,
                         DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
                             title: title_context_snapshot(title),
@@ -3237,6 +3268,8 @@ pub struct RssSyncReport {
     pub releases_matched: usize,
     pub releases_grabbed: usize,
     pub releases_held: usize,
+    external_outcome: Option<external::ExternalReleaseOutcome>,
+    external_actor: Option<User>,
 }
 
 #[cfg(test)]

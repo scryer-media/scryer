@@ -94,7 +94,7 @@ import {
   usageTone,
 } from "@/lib/utils/dashboard";
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
-import type { DashboardPanelState, DashboardPanelStates } from "@/lib/utils/dashboard-refresh";
+import { combinePanelStates, type DashboardPanelState, type DashboardPanelStates } from "@/lib/utils/dashboard-refresh";
 import { buildOverviewDetailPath, buildViewPath } from "@/lib/utils/routing";
 
 /** Rows visible before the top panels start scrolling. */
@@ -222,7 +222,7 @@ export function DashboardView({
 
       <div className="grid grid-cols-1 gap-3 min-[1241px]:grid-cols-2">
         <DashboardPanelLoad state={panels.overview}><IndexersPanel overview={overview} /></DashboardPanelLoad>
-        <DashboardPanelLoad state={panels.overview}><DownloadClientsPanel overview={overview} queueItems={queueItems} /></DashboardPanelLoad>
+        <DashboardPanelLoad state={combinePanelStates(panels.overview, panels.queue)}><DownloadClientsPanel overview={overview} queueItems={queueItems} /></DashboardPanelLoad>
       </div>
 
       <div className="grid grid-cols-1 gap-3 min-[1241px]:grid-cols-2">

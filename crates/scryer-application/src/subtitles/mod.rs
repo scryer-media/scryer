@@ -35,7 +35,8 @@ pub(crate) use external::{
 pub use external_probe::{ExternalSubtitleDetectionSource, ExternalSubtitleProbeCacheEntry};
 pub use language::{normalize_subtitle_language_code, same_subtitle_language};
 pub use provider::{
-    SubtitleFile, SubtitleMatch, SubtitleMediaKind, SubtitleProvider, SubtitleQuery,
+    SubtitleCommunityEntry, SubtitleFile, SubtitleMatch, SubtitleMediaKind, SubtitleProvider,
+    SubtitleQuery,
 };
 pub use scoring::{MovieScore, SeriesScore};
 pub use search::SubtitleSearchOrchestrator;

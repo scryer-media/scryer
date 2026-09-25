@@ -200,12 +200,29 @@ impl AppUseCase {
         &self,
         title: &Title,
     ) -> AppResult<QualityProfile> {
+        self.resolve_quality_profile_for_title_with_category(title, None)
+            .await
+    }
+
+    /// The profile half of
+    /// [`Self::resolve_upgrade_context_for_title_with_category_and_quality`]:
+    /// the same lookup (title tag, category override, library, global) under
+    /// the same category, without the persona and acquisition thresholds.
+    ///
+    /// The full upgrade context resolves its profile through this helper, so a
+    /// caller that needs only the profile — the convergence fingerprint — can
+    /// never resolve a different one than the grab path would.
+    pub(crate) async fn resolve_quality_profile_for_title_with_category(
+        &self,
+        title: &Title,
+        category_hint: Option<&str>,
+    ) -> AppResult<QualityProfile> {
         self.resolve_quality_profile(QualityProfileLookup {
             title_tags: &title.tags,
             library_id: Some(title.library_id.as_str()),
             imdb_id: title.imdb_id.as_deref(),
             tvdb_id: tvdb_id_from_external_ids(&title.external_ids).as_deref(),
-            category_hint: Some(upgrade_context_category(title, None)),
+            category_hint: Some(upgrade_context_category(title, category_hint)),
         })
         .await
     }
@@ -221,13 +238,7 @@ impl AppUseCase {
         // silently makes the wrong upgrade decision, which is exactly the
         // failure mode the strict resolver exists to prevent.
         let profile = self
-            .resolve_quality_profile(QualityProfileLookup {
-                title_tags: &title.tags,
-                library_id: Some(title.library_id.as_str()),
-                imdb_id: title.imdb_id.as_deref(),
-                tvdb_id: tvdb_id_from_external_ids(&title.external_ids).as_deref(),
-                category_hint: Some(category),
-            })
+            .resolve_quality_profile_for_title_with_category(title, category_hint)
             .await?;
 
         // **The cutoff is a fact about files.** It used to fall back to parsing

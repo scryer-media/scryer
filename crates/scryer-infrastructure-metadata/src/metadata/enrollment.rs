@@ -1,5 +1,5 @@
 use std::future::Future;
-use std::sync::{LazyLock, OnceLock, mpsc};
+use std::sync::{OnceLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -12,8 +12,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use scryer_application::{SettingsRepository, SmgScryerUpdateNotice};
 use scryer_outbound_http::{
-    OutboundHttpClient, OutboundHttpError, OutboundRequestError, RateLimitRegistry, RequestPolicy,
-    parse_retry_after, smg_reqwest_client,
+    OutboundHttpClient, OutboundHttpError, OutboundRequestError, RequestPolicy, parse_retry_after,
+    smg_outbound_http_client,
 };
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
@@ -32,9 +32,6 @@ const SMG_SCRYER_UPDATE_NOTICE_KEY: &str = "smg.scryer_update_notice";
 const SMG_ENROLLMENT_MAX_RETRIES: u32 = 3;
 const SMG_ENROLLMENT_TRANSIENT_BASE_DELAY: Duration = Duration::from_secs(1);
 const SMG_ENROLLMENT_TRANSIENT_MAX_DELAY: Duration = Duration::from_secs(30);
-
-static SMG_ENROLLMENT_RATE_LIMITS: LazyLock<RateLimitRegistry> =
-    LazyLock::new(RateLimitRegistry::new);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PqAuthVersion {
@@ -576,7 +573,7 @@ pub fn derive_registration_endpoint(
 }
 
 fn enrollment_outbound_http_client() -> OutboundHttpClient {
-    OutboundHttpClient::new(smg_reqwest_client(), SMG_ENROLLMENT_RATE_LIMITS.clone())
+    smg_outbound_http_client()
 }
 
 fn enrollment_request_policy(request_label: &'static str) -> RequestPolicy {

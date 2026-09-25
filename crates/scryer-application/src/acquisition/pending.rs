@@ -950,20 +950,11 @@ impl AppUseCase {
         // pack would be judged against one episode when the delay elapsed — no
         // per-member gate, no `unaired_members`, no `SeasonIncomplete`. D8's
         // "one pack gate" had a hole exactly the size of the delay lane.
-        let catalog_episodes = self
-            .services
-            .catalog
-            .shows
-            .list_episodes_for_title(&title.id)
-            .await
-            .unwrap_or_default();
-        let catalog_collections = self
-            .services
-            .catalog
-            .shows
-            .list_collections_for_title(&title.id)
-            .await
-            .unwrap_or_default();
+        // The episode list and collections are read again by the admission
+        // subject and the scope membership below; one memo serves them all.
+        let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+        let catalog_episodes = reads.episodes(self).await.unwrap_or_default();
+        let catalog_collections = reads.collections(self).await.unwrap_or_default();
         // Resolved **once**, and the answer is the one that gets submitted (MA3).
         // The submit block used to parse and resolve coverage a second time with
         // a different parse context (an episode anchor rather than the title's
@@ -1061,16 +1052,11 @@ impl AppUseCase {
             .episode
             .as_ref()
             .is_some_and(|episode| episode.is_series_pack);
-        let existing_files = match self
-            .services
-            .library
-            .media_files
-            .list_media_files_for_title(&title.id)
-            .await
-        {
+        let existing_files = match reads.media_files(self).await {
             Ok(files) => files
-                .into_iter()
+                .iter()
                 .filter(|file| file.role.is_primary())
+                .cloned()
                 .collect::<Vec<_>>(),
             Err(error) if is_series_pack => {
                 warn!(
@@ -1212,12 +1198,13 @@ impl AppUseCase {
         let candidate_score = facts.score;
 
         let mut admission = self
-            .admission_subject_for_scope(
+            .admission_subject_for_scope_with_reads(
                 &title,
                 &pending_scope,
                 &scoring_context,
                 candidate_runtime_minutes,
                 crate::quality::canonical_context::SubjectIntent::Grab,
+                &reads,
             )
             .await;
         // D18: whatever is already downloading for this scope is a
@@ -1250,7 +1237,9 @@ impl AppUseCase {
                             .map(|state| (identity, state))
                     })
                     .collect();
-                let membership = self.scope_membership_for(&title, &pending_scope).await;
+                let membership = self
+                    .scope_membership_for_with_reads(&title, &pending_scope, &reads)
+                    .await;
                 queued = self
                     .queued_releases_for_scope(
                         &title,
@@ -1267,7 +1256,9 @@ impl AppUseCase {
         }
         // The ledger's recorded grab claims the scope even when the client
         // shows nothing for it this pass.
-        let membership = self.scope_membership_for(&title, &pending_scope).await;
+        let membership = self
+            .scope_membership_for_with_reads(&title, &pending_scope, &reads)
+            .await;
         let queued = self
             .queued_releases_with_grabbed_claims(
                 queued,

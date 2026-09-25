@@ -166,6 +166,17 @@ export function shouldRefreshDownloadQueueSync(enabled: boolean, visibility: str
   return enabled && visibility !== "hidden";
 }
 
+/**
+ * A refresh right after a mutation often lands before the server has the new
+ * revision. The page keeps its last good rows and polls again; only this many
+ * behind results in a row are worth reporting.
+ */
+export const DOWNLOAD_QUEUE_BEHIND_TOLERANCE = 5;
+
+export function shouldSurfaceRefreshBehind(consecutiveBehind: number): boolean {
+  return consecutiveBehind >= DOWNLOAD_QUEUE_BEHIND_TOLERANCE;
+}
+
 export function shouldApplyDownloadQueuePageResponse(
   responseRevision: number,
   currentRevision: number,

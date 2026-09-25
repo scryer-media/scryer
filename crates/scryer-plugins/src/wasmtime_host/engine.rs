@@ -10,7 +10,7 @@
 //! per-invocation deadlines actually fire without a timer thread per call.
 
 use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::io::{Read, Seek, Write};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -172,19 +172,30 @@ fn probe_cache_directory(cache_dir: &Path) -> Result<(), String> {
                 probe.display()
             )
         })?;
+    finish_cache_probe(file, &probe)
+}
+
+fn finish_cache_probe(mut file: fs::File, probe: &Path) -> Result<(), String> {
+    // Another process's Wasmtime cleanup can unlink this unrecognized file.
+    // Read through the original handle rather than reopening its path.
+    let mut contents = Vec::new();
+    file.rewind()
+        .and_then(|_| file.read_to_end(&mut contents))
+        .map_err(|error| {
+            format!(
+                "failed to read Wasmtime cache probe {}: {error}",
+                probe.display()
+            )
+        })?;
     drop(file);
-    fs::read(&probe).map_err(|error| {
-        format!(
-            "Wasmtime cache directory {} is not readable: {error}",
-            cache_dir.display()
-        )
-    })?;
-    fs::remove_file(&probe).map_err(|error| {
-        format!(
+    match fs::remove_file(probe) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
             "failed to remove Wasmtime cache probe {}: {error}",
             probe.display()
-        )
-    })
+        )),
+    }
 }
 
 /// Borrow the process-wide archive engine, initialising it (and its epoch
@@ -334,11 +345,63 @@ mod tests {
     #[test]
     fn cache_directory_probe_requires_read_write_access() {
         let temp = tempfile::tempdir().expect("temporary directory");
+        let unrelated = temp.path().join("unrelated");
+        fs::write(&unrelated, b"keep").unwrap();
         probe_cache_directory(temp.path()).expect("writable directory must pass probe");
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
 
         let file = temp.path().join("not-a-directory");
         fs::write(&file, b"file").expect("test file");
         assert!(probe_cache_directory(&file).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_probe_survives_cleanup_unlink_before_readback() {
+        let temp = tempfile::tempdir().unwrap();
+        let probe = temp.path().join("probe");
+        let unrelated = temp.path().join("unrelated");
+        fs::write(&unrelated, b"keep").unwrap();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .unwrap();
+        file.write_all(b"scryer-wasmtime-cache-probe").unwrap();
+        file.sync_all().unwrap();
+        // Deterministically reproduce another process's cache cleanup.
+        fs::remove_file(&probe).unwrap();
+        finish_cache_probe(file, &probe).expect("unlinked open probe remains readable");
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
+        assert_eq!(fs::read_dir(temp.path()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn cache_probe_does_not_hide_read_errors() {
+        let temp = tempfile::tempdir().unwrap();
+        let probe = temp.path().join("probe");
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&probe)
+            .unwrap();
+        file.write_all(b"keep").unwrap();
+        let error = finish_cache_probe(file, &probe).unwrap_err();
+        assert!(error.contains("failed to read Wasmtime cache probe"));
+        assert_eq!(fs::read(&probe).unwrap(), b"keep");
+    }
+
+    #[test]
+    fn cache_probe_does_not_hide_cleanup_errors_or_remove_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let unrelated = temp.path().join("unrelated");
+        fs::write(&unrelated, b"keep").unwrap();
+        let file = tempfile::tempfile().unwrap();
+        let error = finish_cache_probe(file, temp.path()).unwrap_err();
+        assert!(error.contains("failed to remove Wasmtime cache probe"));
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
     }
 
     #[test]

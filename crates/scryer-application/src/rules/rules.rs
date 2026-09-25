@@ -724,12 +724,20 @@ impl AppUseCase {
     }
 
     pub(crate) fn swap_user_rules_engine(&self, engine: scryer_rules::UserRulesEngine) {
+        let reads_clock = engine.reads_clock();
         let lock = &self.services.customization.user_rules;
         let mut guard = lock
             .write()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         *guard = engine;
         lock.clear_poison();
+        drop(guard);
+        // After the engine is in place: a bar derived against the old engine
+        // holds a ticket from before this reset and cannot be installed.
+        self.runtime
+            .acquisition
+            .landed_bar_memo
+            .reset_for_engine(reads_clock);
     }
 }
 

@@ -1121,7 +1121,16 @@ fn execute_request_with_extra_headers(
         builder = builder.body(body);
     }
 
+    // Only indexer adapters give their host a destination cooldown key, and it
+    // is the key the upstream scheduler admits against, so their requests obey
+    // and record into the indexer registry. Other plugin traffic stays general.
+    let registry = if destination_cooldown_key.is_some() {
+        scryer_outbound_http::RateLimitRegistry::indexers()
+    } else {
+        scryer_outbound_http::RateLimitRegistry::new()
+    };
     let result = scryer_outbound_http::send_blocking_reqwest_request_with_cooldown_policy_and_dispatch_observer(
+        &registry,
         builder,
         timeout,
         destination_cooldown_key.cloned(),
@@ -2397,6 +2406,61 @@ mod tests {
 
         assert_eq!(errored_children, vec![0]);
         assert_eq!(server.received_requests().await.unwrap().len(), 11);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn indexer_plugin_requests_obey_and_record_indexer_registry_cooldowns() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api"))
+            .respond_with(ResponseTemplate::new(429).insert_header("Retry-After", "90"))
+            .mount(&server)
+            .await;
+        let destination = scryer_outbound_http::DestinationKey::from(format!(
+            "indexer-registry-test:{}",
+            server.address().port()
+        ));
+
+        let server_uri = server.uri();
+        let key = destination.to_string();
+        let (first, second) = tokio::task::spawn_blocking(move || {
+            let host = PluginHttpHost::new(
+                vec!["127.0.0.1".to_string()],
+                scryer_outbound_http::PluginEgressPolicy::default(),
+                None,
+                Some(key),
+                Some(64 * 1024),
+            );
+            let request = || PluginHttpRequest {
+                url: format!("{server_uri}/api"),
+                method: Some("GET".to_string()),
+                headers: BTreeMap::new(),
+            };
+            let first = host.request("newznab", request(), None, Duration::from_secs(30));
+            let second = host.request("newznab", request(), None, Duration::from_secs(30));
+            (first, second)
+        })
+        .await
+        .unwrap();
+
+        assert!(first.is_ok(), "the 429 itself reaches the plugin");
+        assert!(
+            scryer_outbound_http::RateLimitRegistry::indexers()
+                .active_destination_cooldown(&destination)
+                .is_some(),
+            "the 429 lands where the scheduler admits against"
+        );
+        assert!(
+            scryer_outbound_http::RateLimitRegistry::new()
+                .active_destination_cooldown(&destination)
+                .is_none(),
+            "indexer cooldowns stay out of the general registry"
+        );
+        second.expect_err("an indexer-registry cooldown refuses the next request");
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]

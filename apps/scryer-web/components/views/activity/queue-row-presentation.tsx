@@ -1,4 +1,5 @@
 import { ChevronDown, ChevronUp, Lock } from "lucide-react";
+import { Link } from "react-router";
 
 import { ActionTooltip } from "@/components/ui/tooltip";
 import type { DownloadQueueItem } from "@/lib/types";
@@ -54,13 +55,21 @@ export function ActivityQueueStatusBadge({
 export function ActivityQueueTitleContent({
   displayTitle,
   releaseTitle,
+  titleHref,
 }: {
   displayTitle: string;
   releaseTitle: string;
+  titleHref?: string | null;
 }) {
   return (
     <div className="space-y-1">
-      <p className="break-words whitespace-normal text-sm text-foreground">{displayTitle}</p>
+      <p className="break-words whitespace-normal text-sm text-foreground">
+        {titleHref ? (
+          <Link to={titleHref} className="rounded underline decoration-muted-foreground underline-offset-4 hover:text-primary focus-visible:outline-2 focus-visible:outline-ring">
+            {displayTitle}
+          </Link>
+        ) : displayTitle}
+      </p>
       {releaseTitle !== displayTitle ? (
         <p
           className="break-words whitespace-normal text-xs text-muted-foreground"
@@ -188,16 +197,16 @@ export function ActivityQueueDetailsPanel({
           ) : null}
         </div>
       </div>
-      <div className="mt-4">
+      {failureReason ? <div className="mt-4">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.16em] text-muted-foreground">
             {t("queue.blockReason")}
           </p>
           <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground">
-            {failureReason || "—"}
+            {failureReason}
           </p>
         </div>
-      </div>
+      </div> : null}
     </div>
   );
 }

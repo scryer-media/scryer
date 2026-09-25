@@ -14,7 +14,9 @@ pub(crate) const fn retention_class_for_domain_event_type(
     event_type: DomainEventType,
 ) -> DomainEventRetentionClass {
     match event_type {
-        DomainEventType::TitleAdded
+        DomainEventType::ImportSpaceBlocked
+        | DomainEventType::ImportSpaceRestored
+        | DomainEventType::TitleAdded
         | DomainEventType::TitleUpdated
         | DomainEventType::TitleRematched
         | DomainEventType::TitleMoved

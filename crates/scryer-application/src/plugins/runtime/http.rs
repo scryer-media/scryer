@@ -50,12 +50,12 @@ fn map_plugin_outbound_error(label: &str, error: OutboundHttpError) -> AppError 
             let retry_after = rate_limited.retry_after.filter(|delay| !delay.is_zero());
             AppError::rate_limited_temporary_unavailable(
                 match retry_after {
-                Some(delay) => format!(
-                    "failed to download {label}: rate limited, retry after {}s",
-                    delay.as_secs()
-                ),
-                None => format!("failed to download {label}: rate limited"),
-            },
+                    Some(delay) => format!(
+                        "failed to download {label}: rate limited, retry after {}s",
+                        delay.as_secs()
+                    ),
+                    None => format!("failed to download {label}: rate limited"),
+                },
                 retry_after,
                 RateLimitCooldownAction::AlreadyRecorded,
             )

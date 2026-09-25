@@ -1840,6 +1840,20 @@ pub trait TitleRepository: Send + Sync {
         ))
     }
 
+    /// [`Self::find_title_name_candidates`] for several buckets, answered in
+    /// order. A store with a fuzzy index checks that index's freshness once
+    /// for the whole batch instead of once per bucket.
+    async fn find_title_name_candidates_batch(
+        &self,
+        queries: &[TitleNameBucketQuery<'_>],
+    ) -> AppResult<Vec<Vec<TitleNameCandidate>>> {
+        let mut results = Vec::with_capacity(queries.len());
+        for query in queries {
+            results.push(self.find_title_name_candidates(query.clone()).await?);
+        }
+        Ok(results)
+    }
+
     /// Every name the persisted index holds for one title.
     ///
     /// The index is the whole of what a title answers to: its catalog names
@@ -3090,6 +3104,17 @@ pub trait ShowRepository: Send + Sync {
         Ok(episodes)
     }
     async fn list_episodes_for_title(&self, title_id: &str) -> AppResult<Vec<Episode>>;
+    /// Batch-load episodes for many titles. Returns a flat list (each episode
+    /// carries `title_id`), in `list_episodes_for_title` order within a title;
+    /// callers group by that field. The default fans out to
+    /// `list_episodes_for_title`; SQL stores override with a single `IN` query.
+    async fn list_episodes_for_titles(&self, title_ids: &[String]) -> AppResult<Vec<Episode>> {
+        let mut episodes = Vec::new();
+        for title_id in title_ids {
+            episodes.extend(self.list_episodes_for_title(title_id).await?);
+        }
+        Ok(episodes)
+    }
     /// The community season layout stored for an anime title, or `None` when
     /// SMG has never sent one.
     ///
@@ -4173,6 +4198,51 @@ const UNFINISHED_LIBRARY_SCAN_REPLAY_BATCH_LIMIT: usize = 500;
 
 #[async_trait]
 pub trait DomainEventRepository: Send + Sync {
+    async fn import_space_notification_delivered(
+        &self,
+        _event_id: &str,
+        _target: &str,
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "import space notification receipts are not configured".into(),
+        ))
+    }
+    async fn mark_import_space_notification_delivered(
+        &self,
+        _event_id: &str,
+        _target: &str,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "import space notification receipts are not configured".into(),
+        ))
+    }
+
+    /// Count one failed delivery pass of a durable import space notification
+    /// and return the total so far. Survives restarts, so the retry ceiling
+    /// does too.
+    async fn record_import_space_notification_attempt(&self, _event_id: &str) -> AppResult<i64> {
+        Err(AppError::Repository(
+            "import space notification attempts are not configured".into(),
+        ))
+    }
+
+    /// Retire incident membership for durably ignored or removed sources without claiming recovery.
+    async fn reconcile_import_space_incidents(&self) -> AppResult<()> {
+        Err(AppError::Repository(
+            "import space reconciliation is not configured".into(),
+        ))
+    }
+
+    /// Persist an observed admission outcome and its notification intent atomically.
+    async fn update_import_space_incident(
+        &self,
+        _update: scryer_domain::import_space::SpaceIncidentUpdate,
+    ) -> AppResult<Vec<DomainEvent>> {
+        Err(AppError::Repository(
+            "import space incidents are not configured".into(),
+        ))
+    }
+
     /// A library-scoped, count-free page of import facts, newest sequence first.
     async fn recent_import_events(
         &self,

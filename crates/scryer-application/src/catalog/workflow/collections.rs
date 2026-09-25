@@ -614,10 +614,13 @@ impl AppUseCase {
             };
             // A retained, unmonitored season also governs episodes discovered
             // after a scoped maintenance deletion or a manual unmonitor.
-            let collection_unmonitored = collection_id.as_ref()
+            let collection_unmonitored = collection_id
+                .as_ref()
                 .and_then(|id| existing_collections_by_id.get(id))
                 .is_some_and(|collection| !collection.monitored);
-            let episode_monitored = if collection_unmonitored || (skip_filler && ep.is_filler) || (skip_recap && ep.is_recap)
+            let episode_monitored = if collection_unmonitored
+                || (skip_filler && ep.is_filler)
+                || (skip_recap && ep.is_recap)
             {
                 false
             } else {

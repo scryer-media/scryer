@@ -12,6 +12,7 @@ import type {
   ExternalImportMonitorWarmupPhaseProgress,
   ExternalImportMonitorWarmupProgress,
 } from "@/lib/types/external-import";
+import { SCORING_PERSONA_CHOICES } from "@/lib/constants/quality-profiles";
 import type { FacetQualityPrefs, ViewCategoryId } from "@/lib/types/quality-profiles";
 
 interface SummaryItem {
@@ -53,7 +54,8 @@ function formatFacetPrefs(
     .map((facet) => {
       const p = facetPrefs[facet];
       const quality = formatQualityTarget(p.quality);
-      const persona = t(`qualityProfile.persona${p.persona}`);
+      const personaChoice = SCORING_PERSONA_CHOICES.find((choice) => choice.value === p.persona);
+      const persona = personaChoice ? t(personaChoice.labelKey) : p.persona;
       return `${FACET_LABELS[facet]}: ${quality} ${persona}`;
     })
     .join(", ");

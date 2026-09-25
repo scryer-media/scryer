@@ -6,6 +6,7 @@ import {
   normalizeQueueState,
 } from "@/lib/utils/download-queue";
 import { downloadImportActions } from "@/lib/utils/manual-import-actions";
+import { isWaitingForDiskSpace } from "@/lib/utils/import-row";
 
 export type TranslateFn = ReturnType<typeof useTranslate>;
 
@@ -174,7 +175,9 @@ export function deriveQueueRowPresentation(
           ? "queue.state.extracting"
           : "queue.state.postProcessing";
   const statusLabel =
-    displayStateKey === "IGNORED"
+    isWaitingForDiskSpace(queueItem)
+      ? t("queue.state.waitingForDiskSpace")
+      : displayStateKey === "IGNORED"
       ? t("queue.state.ignored")
       : queueItem.importTransferPhase === "EXTRACTING"
         ? t("queue.transfer.extracting")

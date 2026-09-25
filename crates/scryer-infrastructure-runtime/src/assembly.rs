@@ -821,9 +821,14 @@ impl DatastoreAssembly {
             ),
         )
         .await?;
-        let title_store =
-            Arc::new(TitleStore::new(datastore.clone()).with_fuzzy_index(fuzzy_index.clone()));
+        // One bridge cache for every store that can change or remove a
+        // `title_anime_numbering_bridges` row.
         let show_store = Arc::new(ShowStore::new(datastore.clone()));
+        let title_store = Arc::new(
+            TitleStore::new(datastore.clone())
+                .with_fuzzy_index(fuzzy_index.clone())
+                .with_anime_numbering_bridge_cache(show_store.anime_numbering_bridge_cache()),
+        );
         let library_store = Arc::new(LibraryStore::new(datastore.clone()));
         let media_request_store = Arc::new(MediaRequestStore::new(datastore.clone()));
         let media_server_connection_store = Arc::new(MediaServerConnectionStore::new(
@@ -973,9 +978,14 @@ impl DatastoreAssembly {
             ),
         )
         .await?;
-        let title_store =
-            Arc::new(TitleStore::new(datastore.clone()).with_fuzzy_index(fuzzy_index.clone()));
+        // One bridge cache for every store that can change or remove a
+        // `title_anime_numbering_bridges` row.
         let show_store = Arc::new(ShowStore::new(datastore.clone()));
+        let title_store = Arc::new(
+            TitleStore::new(datastore.clone())
+                .with_fuzzy_index(fuzzy_index.clone())
+                .with_anime_numbering_bridge_cache(show_store.anime_numbering_bridge_cache()),
+        );
         let library_store = Arc::new(LibraryStore::new(datastore.clone()));
         let media_request_store = Arc::new(MediaRequestStore::new(datastore.clone()));
         let media_server_connection_store = Arc::new(MediaServerConnectionStore::new(
@@ -1219,16 +1229,22 @@ impl DatastoreAssembly {
                 indexer_config_store,
                 pending_release_store,
                 release_store,
+                settings_store,
                 ..
             } => {
                 let encryption_key = crate::encryption::ensure_encryption_key(
                     db,
                     Some(self.config.data_dir.clone()),
                 )
-                .await?;
+                .await;
+                // The legacy key migration rewrites settings_values directly.
+                settings_store.invalidate_cache();
+                let encryption_key = encryption_key?;
                 db.set_encryption_key(encryption_key)
                     .await
                     .map_err(|error| error.to_string())?;
+                // Values cached before the key loaded were read undecrypted.
+                settings_store.invalidate_cache();
                 let migrated_indexer_configs = indexer_config_store
                     .migrate_legacy_indexer_config_sources()
                     .await
@@ -1251,6 +1267,7 @@ impl DatastoreAssembly {
                 db,
                 pending_release_store,
                 release_store,
+                settings_store,
                 ..
             } => {
                 let encryption_key = crate::encryption::ensure_encryption_key_without_legacy(Some(
@@ -1260,6 +1277,8 @@ impl DatastoreAssembly {
                 db.set_encryption_key(encryption_key)
                     .await
                     .map_err(|error| error.to_string())?;
+                // Values cached before the key loaded were read undecrypted.
+                settings_store.invalidate_cache();
                 let encrypted_release_attempt_source_passwords = release_store
                     .backfill_source_passwords()
                     .await
@@ -1630,10 +1649,15 @@ impl DatastoreAssembly {
                 .with_library_probe_signatures(library_probe_store.clone())
                 .with_library_scan_unmatched_items(library_scan_unmatched_store.clone())
                 .with_location_operation_repository(location_operation_store.clone())
-                // The US7 merge store needs only the datastore, so it is
-                // built here rather than threaded through both store
-                // variants: nothing else in the assembly holds it.
-                .with_title_merge_repository(Arc::new(TitleMergeStore::new(self.datastore())))
+                // The US7 merge store needs only the datastore and the show
+                // store's bridge cache, so it is built here rather than
+                // threaded through both store variants: nothing else in the
+                // assembly holds it.
+                .with_title_merge_repository(Arc::new(
+                    TitleMergeStore::new(self.datastore()).with_anime_numbering_bridge_cache(
+                        show_store.anime_numbering_bridge_cache(),
+                    ),
+                ))
                 .with_title_images(title_image_store.clone())
                 .with_image_proxy(image_proxy_store.clone())
                 .with_housekeeping(housekeeping_store.clone())
@@ -1756,10 +1780,15 @@ impl DatastoreAssembly {
                 .with_library_probe_signatures(library_probe_store.clone())
                 .with_library_scan_unmatched_items(library_scan_unmatched_store.clone())
                 .with_location_operation_repository(location_operation_store.clone())
-                // The US7 merge store needs only the datastore, so it is
-                // built here rather than threaded through both store
-                // variants: nothing else in the assembly holds it.
-                .with_title_merge_repository(Arc::new(TitleMergeStore::new(self.datastore())))
+                // The US7 merge store needs only the datastore and the show
+                // store's bridge cache, so it is built here rather than
+                // threaded through both store variants: nothing else in the
+                // assembly holds it.
+                .with_title_merge_repository(Arc::new(
+                    TitleMergeStore::new(self.datastore()).with_anime_numbering_bridge_cache(
+                        show_store.anime_numbering_bridge_cache(),
+                    ),
+                ))
                 .with_title_images(title_image_store.clone())
                 .with_image_proxy(image_proxy_store.clone())
                 .with_housekeeping(housekeeping_store.clone())

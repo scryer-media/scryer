@@ -1128,10 +1128,20 @@ pub(crate) async fn run_claimed_download_cleanup(
                         item_id = %record.item_id, attempts = record.attempts, error = %error,
                         "terminal cleanup abandoned; the client entry is left for the operator");
                 }
-                finish_cleanup_attempt(app, &record, "cleanup_abandoned", true, 0,
-                    Some(&error.to_string())).await;
-                return Some((record.download_id, None,
-                    TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::NotConfigured)));
+                finish_cleanup_attempt(
+                    app,
+                    &record,
+                    "cleanup_abandoned",
+                    true,
+                    0,
+                    Some(&error.to_string()),
+                )
+                .await;
+                return Some((
+                    record.download_id,
+                    None,
+                    TerminalDownloadCleanup::bare(TerminalDownloadCleanupOutcome::NotConfigured),
+                ));
             }
             // Keep the log useful: the first failure and then one line per
             // hour of backoff, not one every attempt forever.

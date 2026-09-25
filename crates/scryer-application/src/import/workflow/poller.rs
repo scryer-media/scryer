@@ -295,9 +295,7 @@ fn select_completed_import_evidence(
                     .and_then(|matched| non_empty_title_id(Some(&matched.submission.title_id)))
                     .map(str::to_string)
             })
-            .or_else(|| {
-                non_empty_title_id(inputs.persisted_target_title_id).map(str::to_string)
-            })
+            .or_else(|| non_empty_title_id(inputs.persisted_target_title_id).map(str::to_string))
             .or_else(|| {
                 // Last resort, when both the submission row and the tracked
                 // state are gone: `*scryer_title_id` is Scryer's own stamp,
@@ -363,25 +361,30 @@ async fn resolve_import_provenance(
     mut completed: CompletedDownload,
     request: ImportProvenanceRequest<'_>,
 ) -> AppResult<ImportProvenance> {
-    let submission_resolution =
-        match resolve_completed_download_submission(app, &completed, request.queue_item).await {
-            Ok(resolution) => Some(downgrade_unresolved_submission_identity(
-                &completed, resolution,
-            )),
-            Err(error) => {
-                if !request.tolerate_lookup_failure || request.persisted.is_none() {
-                    return Err(error);
-                }
-                tracing::warn!(
-                    client_id = %completed.client_id,
-                    client_type = %completed.client_type,
-                    download_client_item_id = %completed.download_client_item_id,
-                    error = %error,
-                    "import: live submission lookup failed; continuing with the persisted release evidence"
-                );
-                None
+    let submission_resolution = match resolve_completed_download_submission(
+        app,
+        &completed,
+        request.queue_item,
+    )
+    .await
+    {
+        Ok(resolution) => Some(downgrade_unresolved_submission_identity(
+            &completed, resolution,
+        )),
+        Err(error) => {
+            if !request.tolerate_lookup_failure || request.persisted.is_none() {
+                return Err(error);
             }
-        };
+            tracing::warn!(
+                client_id = %completed.client_id,
+                client_type = %completed.client_type,
+                download_client_item_id = %completed.download_client_item_id,
+                error = %error,
+                "import: live submission lookup failed; continuing with the persisted release evidence"
+            );
+            None
+        }
+    };
     let SelectedCompletedImportEvidence {
         release_evidence,
         target_title_id,
@@ -608,6 +611,7 @@ async fn execute_completed_import(
         request.started_at,
         None,
         preparation_permit,
+        None,
     ))
     .await
     {

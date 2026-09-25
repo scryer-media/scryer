@@ -118,6 +118,8 @@ type ActivityViewState = {
   toggleActivityClientId: (clientId: string) => void;
   visibleHasMore: boolean;
   requestMoreItems: () => Promise<void>;
+  requestRefresh: () => Promise<void>;
+  queueRefreshing: boolean;
 };
 
 type ActivityFilterChipOption<T extends string> = {
@@ -352,6 +354,8 @@ export function ActivityView({
     toggleActivityClientId,
     visibleHasMore,
     requestMoreItems,
+    requestRefresh,
+    queueRefreshing,
   } = state;
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<DownloadQueueItem | null>(null);
@@ -496,12 +500,13 @@ export function ActivityView({
         !queueLoadingMore &&
         visibleHasMore &&
         !queueLoading &&
+        !queueRefreshing && !queueError &&
         element.scrollHeight - element.scrollTop - element.clientHeight <= 160
       ) {
         void requestMoreItems();
       }
     },
-    [queueLoading, queueLoadingMore, requestMoreItems, visibleHasMore],
+    [queueLoading, queueLoadingMore, queueRefreshing, queueError, requestMoreItems, visibleHasMore],
   );
 
   const emptyStateLabel =
@@ -772,6 +777,7 @@ export function ActivityView({
     if (
       queueLoading ||
       queueLoadingMore ||
+      queueRefreshing || queueError ||
       !visibleHasMore ||
       autoFillAttemptsRef.current >= MAX_QUEUE_AUTO_FILL_PAGES
     ) {
@@ -790,6 +796,8 @@ export function ActivityView({
     requestMoreItems,
     virtualQueueItems.length,
     visibleHasMore,
+    queueRefreshing,
+    queueError,
   ]);
 
   const visibleImportItems = useMemo(
@@ -1351,15 +1359,18 @@ export function ActivityView({
         >
           <CardContent className="space-y-3 p-0">
           {queueError ? (
-            <p className="rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-2 text-sm text-[var(--scry-danger-text)]">
-              {queueError}
-            </p>
+            <div role="alert" className="flex flex-wrap items-center gap-2 rounded border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] p-2 text-sm text-[var(--scry-danger-text)]">
+              <span className="min-w-0 flex-1 break-words">{queueError}</span>
+              <Button size="sm" variant="secondary" disabled={queueRefreshing || queueLoadingMore} onClick={() => void requestRefresh()}>{t("activity.retry")}</Button>
+              {visibleHasMore ? <Button size="sm" variant="secondary" disabled={queueRefreshing || queueLoadingMore} onClick={() => void requestMoreItems()}>{t("activity.loadMore")}</Button> : null}
+            </div>
           ) : null}
           {queueStale ? (
             <p className="rounded border border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] p-2 text-sm text-[var(--scry-warning-text)]">
-              {t("activity.queueStale")}
+              {t(queueError ? "activity.staleData" : "activity.queueStale")}
             </p>
           ) : null}
+          {queueRefreshing && !queueLoading ? <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoadingMark className="h-4 w-4" />{t("label.loading")}</div> : null}
           <div
             className={cn(
               "flex flex-col gap-3 sm:flex-row sm:items-center",
@@ -1549,7 +1560,7 @@ export function ActivityView({
           {isMobile ? (
             sortedQueueItems.length === 0 && !queueLoading ? (
               activeTab === "activity" && activeImportStreams.length > 0 ? null : (
-                <p className="text-sm text-muted-foreground">{emptyStateLabel}</p>
+                queueError ? null : <p className="text-sm text-muted-foreground">{emptyStateLabel}</p>
               )
             ) : sortedQueueItems.length === 0 ? (
               <div className={`${scrollHeightClass} overflow-y-auto pr-1`}>
@@ -1652,7 +1663,7 @@ export function ActivityView({
                         {queueLoading ? (
                           <ActivityTableLoadingMask label={t("label.loading")} />
                         ) : (
-                          emptyStateLabel
+                          queueError ? null : emptyStateLabel
                         )}
                       </TableCell>
                     </TableRow>

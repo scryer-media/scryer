@@ -10,7 +10,7 @@ import { useClient } from "urql";
 
 import { useDownloadConflictConfirmation } from "@/components/common/download-conflict-confirmation";
 import { TitlePosterSlot } from "@/components/title-poster-slot";
-import { grabSubjects, rankGrabSuggestions, groupGrabRouting, grabGroupAllows, pendingGrabRows, type GrabClient, type GrabGroup, type GrabRoutingRow } from "@/lib/utils/indexer-grab";
+import { grabSubjects, rankGrabSuggestions, groupGrabRouting, canSubmitGrab, grabClientKey, selectedGrabClientKey, pendingGrabRows, type GrabClient, type GrabGroup, type GrabRoutingRow } from "@/lib/utils/indexer-grab";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -226,9 +226,13 @@ export function GrabDialog({
   const useReplacement = canReplace && replaceExisting;
   const locked = submitting || frozenAction !== null;
   const routingReady = !loadingRouting && groups.length > 0;
-  const canGrab = !submitting && routingReady && frozenAction !== true && groups.every((group) => grabGroupAllows(group, false));
-  const canAssign = !submitting && routingReady && frozenAction !== false && selectedTitle !== null && !incompleteSubject &&
-    (rejectionCodes.length === 0 || acknowledged) && groups.every((group) => grabGroupAllows(group, true));
+  const grabGate = { groups, rejectionCount: rejectionCodes.length, acknowledged };
+  const canGrab = canSubmitGrab({ ...grabGate, assign: false, ready: !submitting && routingReady && frozenAction !== true });
+  const canAssign = canSubmitGrab({
+    ...grabGate,
+    assign: true,
+    ready: !submitting && routingReady && frozenAction !== false && selectedTitle !== null && !incompleteSubject,
+  });
 
   const chooseTitle = React.useCallback((title: TitleRecord) => {
     setSelectedTitle((current) => current?.id === title.id ? null : title);
@@ -431,9 +435,12 @@ export function GrabDialog({
                 {groups.length > 1 ? <p className="text-xs text-[var(--scry-muted2)]">{t(group.rows.length === 1 ? "grabDialog.routing.single" : "grabDialog.routing.group", { count: group.rows.length })}</p> : null}
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <LabelledField label={t("grabDialog.client")}>
-                    <Select value={group.clientId} disabled={locked || loadingRouting || group.clients.some((item) => item.mapped)} onValueChange={(clientId) => setGroups((current) => current.map((item) => item.id === group.id ? { ...item, clientId, category: item.clients.find((client) => client.id === clientId)?.category ?? "" } : item))}>
+                    <Select value={selectedGrabClientKey(group)} disabled={locked || loadingRouting || group.clients.some((item) => item.mapped)} onValueChange={(key) => setGroups((current) => current.map((item) => {
+                      const choice = item.clients.find((client) => grabClientKey(client) === key);
+                      return item.id === group.id && choice ? { ...item, clientId: choice.id, category: choice.category ?? "" } : item;
+                    }))}>
                       <SelectTrigger id={`grab-dialog-client-${index}`} aria-label={t("grabDialog.client")} className="w-full"><SelectValue placeholder={t("grabDialog.client.placeholder")} /></SelectTrigger>
-                      <SelectContent>{group.clients.map((item) => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}</SelectContent>
+                      <SelectContent>{group.clients.map((item) => <SelectItem key={grabClientKey(item)} value={grabClientKey(item)}>{group.clients.some((other) => other !== item && other.id === item.id) && item.category ? `${item.name} · ${item.category}` : item.name}</SelectItem>)}</SelectContent>
                     </Select>
                   </LabelledField>
                   <CategoryField clientId={group.clientId} category={group.category} disabled={locked} index={index} onChange={(category) => setGroups((current) => current.map((item) => item.id === group.id ? { ...item, category } : item))} />

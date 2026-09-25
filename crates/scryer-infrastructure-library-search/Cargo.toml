@@ -1,6 +1,6 @@
 [package]
 name = "scryer-infrastructure-library-search"
-version = "0.21.9"
+version = "0.21.10"
 edition.workspace = true
 publish = false
 
@@ -19,3 +19,6 @@ tantivy = { version = "0.26", default-features = false, features = ["mmap", "lz4
 tokio = { workspace = true }
 tracing = { workspace = true }
 unicode-normalization = "0.1"
+
+[dev-dependencies]
+tempfile = "3"

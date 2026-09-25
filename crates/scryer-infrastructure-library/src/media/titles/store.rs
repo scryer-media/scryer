@@ -31,6 +31,7 @@ use crate::media::canonical_tags::{
 use crate::media::monitor_selections::{
     OWNER_KIND_TITLE, load_monitor_selection, replace_monitor_selection_tx,
 };
+use crate::media::shows::bridge_cache::AnimeNumberingBridgeCache;
 use crate::media::title_credits::{load_title_credits, replace_title_credits_tx};
 use crate::queries::{
     common::parse_utc_datetime,
@@ -147,6 +148,10 @@ pub struct TitleStore {
     /// their own and a missing index costs typo tolerance, never a wrong
     /// answer.
     fuzzy: Option<Arc<scryer_infrastructure_library_search::TitleFuzzyIndex>>,
+    /// The show store's bridge cache. A title delete cascades the title's
+    /// bridge row away, so it has to reach the cache the reads are served
+    /// from. `None` only in stores built without a show store beside them.
+    anime_numbering_bridge_cache: Option<Arc<AnimeNumberingBridgeCache>>,
 }
 
 impl TitleStore {
@@ -154,6 +159,21 @@ impl TitleStore {
         Self {
             datastore,
             fuzzy: None,
+            anime_numbering_bridge_cache: None,
+        }
+    }
+
+    pub fn with_anime_numbering_bridge_cache(
+        mut self,
+        cache: Arc<AnimeNumberingBridgeCache>,
+    ) -> Self {
+        self.anime_numbering_bridge_cache = Some(cache);
+        self
+    }
+
+    fn invalidate_anime_numbering_bridge(&self, title_id: &str) {
+        if let Some(cache) = &self.anime_numbering_bridge_cache {
+            cache.invalidate(title_id);
         }
     }
 
@@ -407,18 +427,155 @@ fn folder_path_owner_predicate(
         return (format!("folder_path IN ({exact_placeholders})"), args);
     }
 
+    let mut non_ascii_patterns = Vec::<String>::new();
+    for candidate in match_candidates {
+        if scryer_application::stored_paths::is_escaped_stored_path(candidate)
+            || candidate.is_ascii()
+        {
+            continue;
+        }
+        let pattern = folder_path_non_ascii_owner_pattern(candidate);
+        if !non_ascii_patterns.contains(&pattern) {
+            non_ascii_patterns.push(pattern);
+        }
+    }
+
     let folded_placeholders = std::iter::repeat_n("{}", folded.len())
         .collect::<Vec<_>>()
         .join(", ");
     args.extend(folded.into_iter().map(SqlArg::Text));
+    let non_ascii_arm = if non_ascii_patterns.is_empty() {
+        String::new()
+    } else {
+        let likes = std::iter::repeat_n(
+            "lower(replace(folder_path, '/', '\\')) LIKE {} ESCAPE '!'",
+            non_ascii_patterns.len(),
+        )
+        .collect::<Vec<_>>()
+        .join(" OR ");
+        args.extend(non_ascii_patterns.into_iter().map(SqlArg::Text));
+        format!(" OR {likes}")
+    };
     (
         format!(
             "(folder_path IN ({exact_placeholders}) OR (\
              folder_path NOT LIKE 'scryer-path-v1:%' \
-             AND lower(replace(folder_path, '/', '\\')) IN ({folded_placeholders})))"
+             AND (lower(replace(folder_path, '/', '\\')) IN ({folded_placeholders}){non_ascii_arm})))"
         ),
         args,
     )
+}
+
+/// A `LIKE ... ESCAPE '!'` pattern that keeps the Windows narrowing a superset
+/// of `folder_paths_match` for a candidate with non-ASCII characters.
+///
+/// The matcher folds case with full Unicode rules, but SQL `lower()` does not
+/// agree with it: sqlite's built-in `lower()` folds ASCII only, and postgres
+/// folds by the database locale. A stored `C:\MÉDIA\Show` therefore folds to
+/// `c:\mÉdia\show` in sqlite while the candidate `c:/média/show` folds to
+/// `c:\média\show`, and the equality arm misses an owner the matcher accepts.
+/// Both engines do agree on ASCII, so this pattern pins every ASCII character
+/// (lowercased, separators as `\`) and lets each run of non-ASCII characters
+/// match any run (`%`), whatever either engine's `lower()` made of it. It can
+/// admit extra rows; the caller's `folder_paths_match` still decides. The
+/// equality arm stays for ASCII candidates, which is the indexed common case.
+fn folder_path_non_ascii_owner_pattern(candidate: &str) -> String {
+    let mut pattern = String::with_capacity(candidate.len());
+    let mut in_non_ascii_run = false;
+    for character in candidate.chars() {
+        if !character.is_ascii() {
+            if !in_non_ascii_run {
+                pattern.push('%');
+            }
+            in_non_ascii_run = true;
+            continue;
+        }
+        in_non_ascii_run = false;
+        let character = if character == '/' {
+            '\\'
+        } else {
+            character.to_ascii_lowercase()
+        };
+        if matches!(character, '!' | '%' | '_') {
+            pattern.push('!');
+        }
+        pattern.push(character);
+    }
+    pattern
+}
+
+/// The equality read of `find_title_name_candidates`: exact spelling,
+/// romanization and locale collation keys, each within the one
+/// (term kind, script, numbers, facet) bucket.
+///
+/// Every lane is its own indexed SELECT joined by UNION ALL. ORed into one
+/// predicate, the collation-key lane defeats the (facet, key) indexes and the
+/// read scans the whole bucket on every call. One term row can come back from
+/// two lanes; the caller's (title_id, literal_term) dedup collapses it, which
+/// is cheaper than the sort a UNION DISTINCT costs on PostgreSQL.
+pub fn title_name_equality_statement(
+    query: &scryer_application::TitleNameBucketQuery<'_>,
+) -> (String, Vec<SqlArg>) {
+    const LANE_COLUMNS: &str = "t.title_id, t.facet, t.raw_term, t.literal_term, \
+         t.match_term, t.match_year, t.language_tag";
+
+    // Script and numbers are compared as expressions so they cannot drive an
+    // index: SQLite without planner statistics otherwise prefers the
+    // (facet, script, numbers_key) bucket index, which matches more columns
+    // than a key index, and walks the whole bucket again. The key index leaves
+    // a handful of rows for these filters to check. The `|| ''` exists only to
+    // keep idx_title_search_terms_bucket out of these lanes (both columns are
+    // NOT NULL); the SQLite plan test pins it.
+    let mut bucket = String::from(
+        "t.term_kind IN ('name', 'alias', 'tagged_alias') AND (t.script || '') = {} \
+         AND (t.numbers_key || '') = {}",
+    );
+    let mut bucket_args = vec![
+        SqlArg::Text(query.script.to_string()),
+        SqlArg::Text(query.numbers_key.to_string()),
+    ];
+    if let Some(facet) = query.facet {
+        bucket.push_str(" AND t.facet = {}");
+        bucket_args.push(SqlArg::Text(facet.to_string()));
+    }
+
+    let mut lanes = vec![format!(
+        "SELECT {LANE_COLUMNS} FROM title_search_terms t \
+         WHERE {bucket} AND t.match_term = {{}}"
+    )];
+    let mut args = bucket_args.clone();
+    args.push(SqlArg::Text(query.match_term.to_string()));
+    if let Some(romanization_key) = query.romanization_key {
+        lanes.push(format!(
+            "SELECT {LANE_COLUMNS} FROM title_search_terms t \
+             WHERE {bucket} AND t.romanization_key = {{}}"
+        ));
+        args.extend(bucket_args.iter().cloned());
+        args.push(SqlArg::Text(romanization_key.to_string()));
+    }
+    if !query.collation_keys.is_empty() {
+        // One lane for every profile: the ORed pairs all sit on the
+        // (profile, collation_key) index, which both dialects read as a union
+        // of index probes. CROSS JOIN keeps SQLite on that index as the outer
+        // loop instead of walking the facet; PostgreSQL reorders it freely.
+        let pairs = std::iter::repeat_n(
+            "(k.profile = {} AND k.collation_key = {})",
+            query.collation_keys.len(),
+        )
+        .collect::<Vec<_>>()
+        .join(" OR ");
+        lanes.push(format!(
+            "SELECT {LANE_COLUMNS} FROM title_search_collation_keys k \
+             CROSS JOIN title_search_terms t \
+             WHERE t.term_id = k.term_id AND {bucket} AND ({pairs})"
+        ));
+        args.extend(bucket_args.iter().cloned());
+        for (profile, key) in query.collation_keys {
+            args.push(SqlArg::Text((*profile).to_string()));
+            args.push(SqlArg::OptBytes(Some(key.clone())));
+        }
+    }
+    (lanes.join(" UNION ALL "), args)
 }
 
 #[async_trait]
@@ -431,7 +588,7 @@ impl TitleRepository for TitleStore {
                 "COALESCE((SELECT json_group_array(name) FROM title_metadata_tags WHERE title_id = titles.id AND LOWER(category) = 'genre'), '[]')"
             }
             StoreDatastore::Postgres { .. } => {
-                "COALESCE((SELECT json_agg(name)::text FROM title_metadata_tags WHERE title_id = titles.id AND LOWER(category) = 'genre'), '[]')"
+                "COALESCE((SELECT jsonb_agg(name) FROM title_metadata_tags WHERE title_id = titles.id AND LOWER(category) = 'genre'), '[]'::jsonb)"
             }
         };
         let rows = SqlRuntime::fetch_all(
@@ -1364,69 +1521,66 @@ impl TitleRepository for TitleStore {
         &self,
         query: scryer_application::TitleNameBucketQuery<'_>,
     ) -> AppResult<Vec<scryer_application::TitleNameCandidate>> {
+        Ok(self
+            .find_title_name_candidates_batch(std::slice::from_ref(&query))
+            .await?
+            .pop()
+            .unwrap_or_default())
+    }
+
+    async fn find_title_name_candidates_batch(
+        &self,
+        queries: &[scryer_application::TitleNameBucketQuery<'_>],
+    ) -> AppResult<Vec<Vec<scryer_application::TitleNameCandidate>>> {
         const CANDIDATE_COLUMNS: &str =
             "title_id, facet, raw_term, literal_term, match_term, match_year, language_tag";
 
-        let mut args = vec![
-            SqlArg::Text(query.script.to_string()),
-            SqlArg::Text(query.numbers_key.to_string()),
-        ];
-        let mut bucket = String::from(
-            "term_kind IN ('name', 'alias', 'tagged_alias') AND script = {} AND numbers_key = {}",
-        );
-        if let Some(facet) = query.facet {
-            bucket.push_str(" AND facet = {}");
-            args.push(SqlArg::Text(facet.to_string()));
-        }
-
-        // The equality lanes first, uncapped: a romanization or a
-        // locale-equal spelling is not a bounded edit distance, so no length
-        // band can stand in for them.
-        let mut equality = vec!["match_term = {}".to_string()];
-        args.push(SqlArg::Text(query.match_term.to_string()));
-        if let Some(romanization_key) = query.romanization_key {
-            equality.push("romanization_key = {}".to_string());
-            args.push(SqlArg::Text(romanization_key.to_string()));
-        }
-        for (profile, key) in query.collation_keys {
-            equality.push(
-                "EXISTS (SELECT 1 FROM title_search_collation_keys k \
-                 WHERE k.term_id = title_search_terms.term_id \
-                 AND k.profile = {} AND k.collation_key = {})"
-                    .to_string(),
-            );
-            args.push(SqlArg::Text((*profile).to_string()));
-            args.push(SqlArg::OptBytes(Some(key.clone())));
-        }
-        let sql = format!(
-            "SELECT {CANDIDATE_COLUMNS} FROM title_search_terms \
-             WHERE {bucket} AND ({})",
-            equality.join(" OR ")
-        );
-        let mut rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
-
-        // Then the bounded-distance lane, which is not SQL at all: the fuzzy
-        // index answers "within n edits of" and hands back term ids, and the
+        // The bounded-distance lane is not SQL at all: the fuzzy index
+        // answers "within n edits of" and hands back term ids, and the
         // candidate columns are read from the same projection row the
         // equality lanes read, so a candidate is the same thing whichever
-        // lane found it. The index must be complete before ambiguity is evaluated.
-        if let Some(distance) = query.typo_distance {
+        // lane found it. The index must be complete before ambiguity is
+        // evaluated; the batch checks that once and searches one generation
+        // for every bucket.
+        let fuzzy_queries = queries
+            .iter()
+            .enumerate()
+            .filter_map(|(position, query)| {
+                query.typo_distance.map(|distance| {
+                    (
+                        position,
+                        scryer_infrastructure_library_search::fuzzy::ResolverFuzzyQuery {
+                            facet: query.facet,
+                            script: query.script,
+                            numbers_key: query.numbers_key,
+                            match_term: query.match_term,
+                            distance,
+                            limit: query.limit.max(0) as usize,
+                        },
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut fuzzy_term_ids = vec![Vec::new(); queries.len()];
+        if !fuzzy_queries.is_empty() {
             let fuzzy = self
                 .fuzzy
                 .as_deref()
                 .ok_or_else(|| AppError::Repository("title fuzzy index is not attached".into()))?;
-            let term_ids = fuzzy
-                .resolver_candidates(
-                    scryer_infrastructure_library_search::fuzzy::ResolverFuzzyQuery {
-                        facet: query.facet,
-                        script: query.script,
-                        numbers_key: query.numbers_key,
-                        match_term: query.match_term,
-                        distance,
-                        limit: query.limit.max(0) as usize,
-                    },
-                )
-                .await?;
+            let (positions, fuzzy_queries): (Vec<_>, Vec<_>) = fuzzy_queries.into_iter().unzip();
+            let found = fuzzy.resolver_candidates_batch(&fuzzy_queries).await?;
+            for (position, term_ids) in positions.into_iter().zip(found) {
+                fuzzy_term_ids[position] = term_ids;
+            }
+        }
+
+        let mut results = Vec::with_capacity(queries.len());
+        for (query, term_ids) in queries.iter().zip(fuzzy_term_ids) {
+            // The equality lanes, uncapped: a romanization or a locale-equal
+            // spelling is not a bounded edit distance, so no length band can
+            // stand in for them.
+            let (sql, args) = title_name_equality_statement(query);
+            let mut rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
             if !term_ids.is_empty() {
                 let placeholders = std::iter::repeat_n("{}", term_ids.len())
                     .collect::<Vec<_>>()
@@ -1445,25 +1599,26 @@ impl TitleRepository for TitleStore {
                         .await?,
                 );
             }
-        }
 
-        let mut seen = std::collections::HashSet::new();
-        let mut candidates = Vec::with_capacity(rows.len());
-        for row in &rows {
-            let candidate = scryer_application::TitleNameCandidate {
-                title_id: row.text("title_id")?,
-                facet: row.text("facet")?,
-                raw_term: row.text("raw_term")?,
-                literal_term: row.text("literal_term")?,
-                match_term: row.text("match_term")?,
-                match_year: row.opt_i32("match_year")?,
-                language_tag: row.opt_text("language_tag")?,
-            };
-            if seen.insert((candidate.title_id.clone(), candidate.literal_term.clone())) {
-                candidates.push(candidate);
+            let mut seen = std::collections::HashSet::new();
+            let mut candidates = Vec::with_capacity(rows.len());
+            for row in &rows {
+                let candidate = scryer_application::TitleNameCandidate {
+                    title_id: row.text("title_id")?,
+                    facet: row.text("facet")?,
+                    raw_term: row.text("raw_term")?,
+                    literal_term: row.text("literal_term")?,
+                    match_term: row.text("match_term")?,
+                    match_year: row.opt_i32("match_year")?,
+                    language_tag: row.opt_text("language_tag")?,
+                };
+                if seen.insert((candidate.title_id.clone(), candidate.literal_term.clone())) {
+                    candidates.push(candidate);
+                }
             }
+            results.push(candidates);
         }
-        Ok(candidates)
+        Ok(results)
     }
 
     async fn list_title_index_names(
@@ -2319,6 +2474,12 @@ impl TitleRepository for TitleStore {
             ));
         }
 
+        // A title edit restates the title's search projection from the stored
+        // bridge, so it drops the cached bridge as well. The e2e numbering
+        // fixture writes the bridge row from outside the process and then
+        // edits the title to make the app pick it up; this keeps the cache on
+        // the same contract as the projection.
+        self.invalidate_anime_numbering_bridge(id);
         let id = id.to_string();
         SqlRuntime::run_in_transaction(&self.datastore, "update_title_metadata", move |tx| {
             let id = id.clone();
@@ -2509,8 +2670,9 @@ impl TitleRepository for TitleStore {
     }
 
     async fn delete(&self, id: &str) -> AppResult<()> {
+        let cache_key = id.to_string();
         let id = id.to_string();
-        SqlRuntime::run_in_transaction(&self.datastore, "delete_title", move |tx| {
+        let result = SqlRuntime::run_in_transaction(&self.datastore, "delete_title", move |tx| {
             let id = id.clone();
             Box::pin(async move {
                 delete_title_search_projection_sql_tx(tx, &id).await?;
@@ -2530,7 +2692,10 @@ impl TitleRepository for TitleStore {
                 Ok(())
             })
         })
-        .await
+        .await;
+        // `title_anime_numbering_bridges` cascades with the title row.
+        self.invalidate_anime_numbering_bridge(&cache_key);
+        result
     }
 
     async fn set_folder_path(&self, id: &str, folder_path: &str) -> AppResult<()> {
@@ -5404,6 +5569,68 @@ mod tests {
             found,
             vec!["owner".to_string()],
             "the folded lookup must find the owner and only the owner"
+        );
+    }
+
+    /// sqlite's `lower()` folds ASCII only, so `C:\MÉDIA\Show` folds to
+    /// `c:\mÉdia\show` in SQL while the Windows matcher (full Unicode case
+    /// folding, NFC) treats it as `c:/média/show`. The narrowing must still
+    /// return every stored spelling the matcher accepts, including the other
+    /// Unicode normal form, and keep excluding unrelated folders.
+    #[tokio::test]
+    async fn folder_owner_lookup_finds_a_windows_folder_differing_in_non_ascii_case() {
+        let candidates =
+            scryer_application::stored_paths::folder_path_match_candidates("c:/m\u{e9}dia/show");
+        let (predicate, args) = folder_path_owner_predicate(&candidates, true);
+
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query("CREATE TABLE titles (id TEXT PRIMARY KEY, folder_path TEXT)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        for (id, folder_path) in [
+            ("upper-accent", "C:\\M\u{c9}DIA\\Show"),
+            ("decomposed", "C:\\Me\u{301}dia\\Show"),
+            ("other-folder", "C:\\M\u{e9}dia\\Show 2"),
+            ("other-root", "C:\\Other\\Show"),
+        ] {
+            sqlx::query("INSERT INTO titles VALUES (?, ?)")
+                .bind(id)
+                .bind(folder_path)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        let datastore =
+            StoreDatastore::sqlite(pool, std::sync::Arc::new(tokio::sync::Mutex::new(())));
+        let rows = SqlRuntime::fetch_all(
+            datastore.read_exec(),
+            &format!("SELECT id FROM titles WHERE {predicate} ORDER BY id"),
+            &args,
+        )
+        .await
+        .unwrap();
+        let found = rows
+            .iter()
+            .map(|row| row.text("id").unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            found,
+            vec!["decomposed".to_string(), "upper-accent".to_string()],
+            "the narrowing must reach every spelling the matcher accepts"
+        );
+    }
+
+    #[test]
+    fn non_ascii_owner_pattern_pins_ascii_and_escapes_like_metacharacters() {
+        assert_eq!(
+            folder_path_non_ascii_owner_pattern("C:/M\u{c9}\u{c9}dia/100%_Show!"),
+            "c:\\m%dia\\100!%!_show!!"
         );
     }
 

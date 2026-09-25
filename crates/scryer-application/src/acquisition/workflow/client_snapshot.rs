@@ -1778,8 +1778,10 @@ pub(crate) async fn try_saved_candidates(
         // explaining why the pinned client never ran. Let the grab reach the
         // router, which asks the pinned client and records its answer.
         let blind_queue = dl_snapshot.queue_listing_failed();
-        let route_pinned =
-            blind_queue && app.release_route_is_pinned(standby.indexer_id.as_deref()).await;
+        let route_pinned = blind_queue
+            && app
+                .release_route_is_pinned(standby.indexer_id.as_deref())
+                .await;
         if blind_queue && !route_pinned {
             // Cannot confirm the release isn't already active; keep the standby
             // for a later cycle rather than expiring it on an unknown signal.

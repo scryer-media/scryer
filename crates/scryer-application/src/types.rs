@@ -2495,12 +2495,22 @@ pub enum IndexerSearchOutcome {
     Skipped {
         retry_after: Option<std::time::Duration>,
     },
+    /// The indexer cannot answer this search at all: it declares no id it can
+    /// search the facet by, and takes no usable text query for it. Nothing was
+    /// sent. Asking again gives the same answer until the indexer's config,
+    /// caps, or plugin changes, so convergence records it under a fingerprint
+    /// that includes the provider's declared capabilities.
+    Unsupported,
     Errored,
 }
 
 impl IndexerSearchOutcome {
     pub fn coverage_eligible(&self) -> bool {
         matches!(self, Self::Complete { .. })
+    }
+
+    pub fn is_unsupported(&self) -> bool {
+        matches!(self, Self::Unsupported)
     }
 }
 

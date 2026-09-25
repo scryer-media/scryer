@@ -30,7 +30,9 @@ use scryer_application::{AppError, AppResult};
 use scryer_domain::{CollectionType, EpisodeType};
 use serde_json::Value;
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
+use crate::media::shows::bridge_cache::AnimeNumberingBridgeCache;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 use scryer_infrastructure_sql::domain_event_payload::{
     decode_domain_event_payload, encode_domain_event_payload,
@@ -99,11 +101,25 @@ const DROPPED_CANDIDATE_CHILD_TABLES: &[&str] = &[
 #[derive(Clone)]
 pub struct TitleMergeStore {
     datastore: StoreDatastore,
+    /// Retiring the source title cascades its numbering bridge row away, so
+    /// the merge drops the source from the show store's bridge cache.
+    anime_numbering_bridge_cache: Option<Arc<AnimeNumberingBridgeCache>>,
 }
 
 impl TitleMergeStore {
     pub fn new(datastore: StoreDatastore) -> Self {
-        Self { datastore }
+        Self {
+            datastore,
+            anime_numbering_bridge_cache: None,
+        }
+    }
+
+    pub fn with_anime_numbering_bridge_cache(
+        mut self,
+        cache: Arc<AnimeNumberingBridgeCache>,
+    ) -> Self {
+        self.anime_numbering_bridge_cache = Some(cache);
+        self
     }
 }
 
@@ -203,46 +219,53 @@ impl TitleMergeRepository for TitleMergeStore {
             ));
         }
         let map = plan.require_identity_map()?.clone();
+        let source_title_id = map.source_title_id.clone();
         let plan = plan.clone();
 
-        SqlRuntime::run_in_transaction(&self.datastore, "execute_title_merge", move |tx| {
-            let plan = plan.clone();
-            let map = map.clone();
-            Box::pin(async move {
-                let mut outcome = MergeOutcome {
-                    source_title_id: map.source_title_id.clone(),
-                    destination_title_id: map.destination_title_id.clone(),
-                    ..MergeOutcome::default()
-                };
-                repoint_media_files(tx, &plan, &map, &mut outcome).await?;
-                carry_history(tx, &map, &mut outcome).await?;
-                // Move protection and its history before retiring the source.
-                // Producer identity, state and lease deadlines remain intact.
-                SqlRuntime::execute(
-                    SqlExec::Tx(tx),
-                    "UPDATE lifecycle_claims
+        let result =
+            SqlRuntime::run_in_transaction(&self.datastore, "execute_title_merge", move |tx| {
+                let plan = plan.clone();
+                let map = map.clone();
+                Box::pin(async move {
+                    let mut outcome = MergeOutcome {
+                        source_title_id: map.source_title_id.clone(),
+                        destination_title_id: map.destination_title_id.clone(),
+                        ..MergeOutcome::default()
+                    };
+                    repoint_media_files(tx, &plan, &map, &mut outcome).await?;
+                    carry_history(tx, &map, &mut outcome).await?;
+                    // Move protection and its history before retiring the source.
+                    // Producer identity, state and lease deadlines remain intact.
+                    SqlRuntime::execute(
+                        SqlExec::Tx(tx),
+                        "UPDATE lifecycle_claims
                         SET title_id = {},
                             library_id = (SELECT library_id FROM titles WHERE id = {})
                       WHERE title_id = {}",
-                    &[
-                        SqlArg::Text(map.destination_title_id.clone()),
-                        SqlArg::Text(map.destination_title_id.clone()),
-                        SqlArg::Text(map.source_title_id.clone()),
-                    ],
-                )
-                .await?;
-                purge_title_dependent_records(
-                    tx,
-                    &map,
-                    plan.current_operation_id.as_deref(),
-                    &mut outcome,
-                )
-                .await?;
-                retire_source_title(tx, &map, &mut outcome).await?;
-                Ok(outcome)
+                        &[
+                            SqlArg::Text(map.destination_title_id.clone()),
+                            SqlArg::Text(map.destination_title_id.clone()),
+                            SqlArg::Text(map.source_title_id.clone()),
+                        ],
+                    )
+                    .await?;
+                    purge_title_dependent_records(
+                        tx,
+                        &map,
+                        plan.current_operation_id.as_deref(),
+                        &mut outcome,
+                    )
+                    .await?;
+                    retire_source_title(tx, &map, &mut outcome).await?;
+                    Ok(outcome)
+                })
             })
-        })
-        .await
+            .await;
+        // The destination keeps its own bridge; only the source's row goes.
+        if let Some(cache) = &self.anime_numbering_bridge_cache {
+            cache.invalidate(&source_title_id);
+        }
+        result
     }
 }
 

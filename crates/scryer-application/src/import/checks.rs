@@ -245,7 +245,7 @@ pub fn check_not_already_imported(ctx: &ImportCheckContext<'_>) -> ImportVerdict
 /// Reject if available disk space is insufficient.
 ///
 /// Requires at least `source_size + 500 MB` free on the destination volume.
-pub fn check_disk_space(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
+fn measured_disk_space(ctx: &ImportCheckContext<'_>) -> (ImportVerdict, Option<(u64, String)>) {
     let target_dir = destination_directory(ctx.dest_path);
     let stat_path = nearest_existing_ancestor(target_dir);
     let available = match available_disk_space(stat_path) {
@@ -259,31 +259,205 @@ pub fn check_disk_space(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
             None
         }
     };
-    disk_space_verdict_for_measurement(available, ctx.source_size)
+    let identity = available.map(|available| {
+        #[cfg(unix)]
+        let volume = {
+            use std::os::unix::fs::MetadataExt;
+            std::fs::metadata(stat_path)
+                .ok()
+                .map(|metadata| format!("device:{}", metadata.dev()))
+                .unwrap_or_default()
+        };
+        #[cfg(not(unix))]
+        let volume = String::new();
+        (available, volume)
+    });
+    (
+        disk_space_verdict_for_measurement(available, ctx.source_size),
+        identity,
+    )
 }
 
 // ── Pipeline ─────────────────────────────────────────────────────────────────
 
 /// Run all pre-import checks in order. Short-circuits on the first `Reject`.
+#[cfg(test)]
 pub fn run_import_checks(ctx: &ImportCheckContext<'_>) -> ImportVerdict {
+    run_observed_checks(ctx).0
+}
+
+fn run_observed_checks(ctx: &ImportCheckContext<'_>) -> (ImportVerdict, Option<(u64, String)>) {
+    run_checks_with_measurement(ctx, measured_disk_space)
+}
+
+fn run_checks_with_measurement(
+    ctx: &ImportCheckContext<'_>,
+    measure: impl FnOnce(&ImportCheckContext<'_>) -> (ImportVerdict, Option<(u64, String)>),
+) -> (ImportVerdict, Option<(u64, String)>) {
     let checks: &[fn(&ImportCheckContext<'_>) -> ImportVerdict] = &[
         // Active-download suffixes change the apparent extension, so this
         // transient check must run before extension validation.
         check_not_unpacking,
         check_valid_extension,
         check_not_sample,
-        check_disk_space,
-        check_not_already_imported,
     ];
 
     for check in checks {
         let verdict = check(ctx);
         if !verdict.is_accept() {
-            return verdict;
+            return (verdict, None);
         }
     }
 
-    ImportVerdict::Accept
+    let (verdict, measurement) = measure(ctx);
+    if !verdict.is_accept() {
+        return (verdict, measurement);
+    }
+    (check_not_already_imported(ctx), measurement)
+}
+
+/// Observation and retirement read `client_type` from different records, so
+/// fold its casing and padding here; otherwise a retire keyed `"NZBGet"` would
+/// miss an incident observed as `"nzbget"`.
+pub(crate) fn space_job_key(client_type: &str, client_id: &str, item_id: &str) -> String {
+    let client_type = client_type.trim().to_ascii_lowercase();
+    serde_json::to_string(&(client_type, client_id, item_id)).expect("string tuple serializes")
+}
+
+fn space_path_key(path: &std::path::Path) -> String {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStrExt;
+        serde_json::to_string(&path.as_os_str().encode_wide().collect::<Vec<_>>())
+            .expect("path units serialize")
+    }
+    #[cfg(not(windows))]
+    {
+        serde_json::to_string(path.as_os_str().as_encoded_bytes()).expect("path bytes serialize")
+    }
+}
+
+fn normalized_space_root(root: &std::path::Path) -> String {
+    use std::path::Component;
+    let absolute = std::fs::canonicalize(root)
+        .or_else(|_| std::path::absolute(root))
+        .unwrap_or_else(|_| root.to_path_buf());
+    let mut normalized = std::path::PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                if matches!(
+                    normalized.components().next_back(),
+                    Some(Component::Normal(_))
+                ) {
+                    normalized.pop();
+                } else if !normalized.has_root() {
+                    normalized.push(component.as_os_str());
+                }
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    let root = normalized.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    let root = root.replace('/', "\\").to_lowercase();
+    format!("root:{root}")
+}
+
+pub(crate) async fn retire_space_blocks(
+    app: &crate::AppUseCase,
+    source: &crate::ClientJobLocator,
+    download_id: Option<&scryer_domain::download_identity::DownloadId>,
+) {
+    let Some(client_id) = source.client_id.as_deref() else {
+        return;
+    };
+    let update = scryer_domain::import_space::SpaceIncidentUpdate::Retired {
+        job_key: space_job_key(&source.client_type, client_id, &source.item_id),
+        download_id: download_id.map(ToString::to_string),
+    };
+    if let Err(error) = app
+        .services
+        .events
+        .domain_events
+        .update_import_space_incident(update)
+        .await
+    {
+        tracing::warn!(%error, "unable to retire import disk-space incident membership");
+    }
+}
+
+/// Observability is best effort and never changes an admission decision.
+pub(crate) async fn run_import_checks_and_report(
+    app: &crate::AppUseCase,
+    ctx: &ImportCheckContext<'_>,
+    completed: Option<&scryer_domain::CompletedDownload>,
+    title: &scryer_domain::Title,
+) -> ImportVerdict {
+    use scryer_domain::import_space::{SpaceIncidentUpdate, SpaceMeasurement};
+    let (verdict, measured) = run_observed_checks(ctx);
+    if let Some((available_bytes, volume)) = measured {
+        let destination = destination_directory(ctx.dest_path)
+            .to_string_lossy()
+            .into_owned();
+        let destination_key = if volume.is_empty() {
+            let root = match app.title_root_folder_path_override(title).await {
+                Ok(root) => root,
+                Err(error) => {
+                    tracing::warn!(%error, "unable to identify import space incident root");
+                    return verdict;
+                }
+            };
+            normalized_space_root(std::path::Path::new(&root))
+        } else {
+            volume
+        };
+        let job_key = completed
+            .map(|job| {
+                space_job_key(
+                    &job.client_type,
+                    &job.client_id,
+                    &job.download_client_item_id,
+                )
+            })
+            .unwrap_or_else(|| format!("manual:{}", space_path_key(ctx.source_path)));
+        let member_key = serde_json::to_string(&(&job_key, space_path_key(ctx.source_path)))
+            .expect("string tuple serializes");
+        let update = SpaceIncidentUpdate::Observed {
+            member_key,
+            job_key,
+            download_id: completed.and_then(|job| job.download_id.clone()),
+            measurement: SpaceMeasurement {
+                destination_key,
+                destination,
+                available_bytes,
+                required_bytes: u128::from(ctx.source_size) + u128::from(DISK_SPACE_RESERVE_BYTES),
+            },
+            blocked: matches!(
+                verdict,
+                ImportVerdict::Reject {
+                    code: ImportCheckCode::InsufficientDiskSpace,
+                    ..
+                }
+            ),
+        };
+        match app
+            .services
+            .events
+            .domain_events
+            .update_import_space_incident(update)
+            .await
+        {
+            Ok(events) => {
+                for event in events {
+                    app.publish_stored_domain_event(&event).await;
+                }
+            }
+            Err(error) => tracing::warn!(%error, "unable to persist import disk-space observation"),
+        }
+    }
+    verdict
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -293,6 +467,14 @@ mod tests {
     use super::*;
     use crate::release_parser::parse_release_metadata;
     use std::path::PathBuf;
+
+    #[test]
+    fn space_job_key_folds_client_type_case_and_padding() {
+        let observed = space_job_key("nzbget", "client-1", "item-7");
+        assert_eq!(space_job_key(" NZBGet ", "client-1", "item-7"), observed);
+        assert_ne!(space_job_key("nzbget", "client-1", "ITEM-7"), observed);
+        assert_ne!(space_job_key("nzbget", "Client-1", "item-7"), observed);
+    }
 
     fn dummy_ctx<'a>(
         source: &'a Path,
@@ -491,6 +673,65 @@ mod tests {
     #[test]
     fn disk_space_query_failure_is_non_blocking() {
         assert!(disk_space_verdict_for_measurement(None, u64::MAX).is_accept());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn import_space_members_preserve_non_utf8_path_identity() {
+        use std::os::unix::ffi::OsStrExt;
+        let first = std::path::Path::new(std::ffi::OsStr::from_bytes(b"episode-\xff.mkv"));
+        let second = std::path::Path::new(std::ffi::OsStr::from_bytes(b"episode-\xfe.mkv"));
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        assert_ne!(space_path_key(first), space_path_key(second));
+    }
+
+    #[test]
+    fn import_space_root_groups_equivalent_missing_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("missing-library");
+        assert_eq!(
+            normalized_space_root(&root),
+            normalized_space_root(&root.join("nested").join("..").join("."))
+        );
+        assert_ne!(
+            normalized_space_root(&root),
+            normalized_space_root(&dir.path().join("other"))
+        );
+    }
+
+    #[test]
+    fn import_space_unknown_measurement_cannot_report_recovery() {
+        let dir = tempfile::tempdir().unwrap();
+        let parsed = parse_release_metadata("Show.S01E01");
+        let src = dir.path().join("episode.mkv");
+        let dest = dir.path().join("destination.mkv");
+        let ctx = dummy_ctx(&src, &dest, 5, &parsed, &[]);
+        let (verdict, measurement) =
+            run_checks_with_measurement(&ctx, |_| (ImportVerdict::Accept, None));
+        assert!(verdict.is_accept());
+        assert!(measurement.is_none());
+    }
+
+    #[test]
+    fn import_space_pass_is_observed_even_when_a_later_check_rejects() {
+        let dir = tempfile::tempdir().unwrap();
+        let parsed = parse_release_metadata("Show.S01E01");
+        let src = dir.path().join("episode.mkv");
+        let dest = dir.path().join("destination.mkv");
+        std::fs::write(&dest, b"video").unwrap();
+        let ctx = dummy_ctx(&src, &dest, 5, &parsed, &[]);
+        let (verdict, measurement) = run_checks_with_measurement(&ctx, |_| {
+            (ImportVerdict::Accept, Some((123, "device:fixture".into())))
+        });
+        assert!(matches!(
+            verdict,
+            ImportVerdict::Reject {
+                code: ImportCheckCode::DuplicateFile,
+                ..
+            }
+        ));
+        assert_eq!(measurement, Some((123, "device:fixture".into())));
+        assert_eq!(std::fs::read(&dest).unwrap(), b"video");
     }
 
     #[test]

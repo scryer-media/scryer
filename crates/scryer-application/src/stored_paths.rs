@@ -513,6 +513,26 @@ mod tests {
         }
     }
 
+    /// The Windows matcher folds case with full Unicode rules and both Unicode
+    /// normal forms, so a repository narrowing cannot rely on SQL `lower()`
+    /// (ASCII-only in sqlite) for non-ASCII folders; the title store adds a
+    /// non-ASCII arm for exactly these pairs.
+    #[test]
+    fn windows_folder_matcher_folds_non_ascii_case_and_normal_form() {
+        let scanned = "c:/m\u{e9}dia/show";
+        for stored in ["C:\\M\u{c9}DIA\\Show", "C:\\Me\u{301}dia\\Show"] {
+            assert_eq!(
+                super::folder_path_identity_key_for_platform(stored, true),
+                super::folder_path_identity_key_for_platform(scanned, true),
+                "{stored:?}"
+            );
+        }
+        assert_ne!(
+            super::folder_path_identity_key_for_platform(r"C:\Media\Show", true),
+            super::folder_path_identity_key_for_platform(scanned, true),
+        );
+    }
+
     /// The fold widens the lookup only where the matcher is already lenient.
     #[test]
     fn posix_folder_lookup_keys_keep_case_and_separators() {

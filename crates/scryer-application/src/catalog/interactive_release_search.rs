@@ -33,7 +33,7 @@ const COMPLETED_JOB_TTL_MINUTES: i64 = 5;
 const RUNNING_JOB_TTL_MINUTES: i64 = 10;
 /// Per-actor cap on concurrently running jobs.
 const MAX_RUNNING_JOBS_PER_ACTOR: usize = 8;
-/// Releases one browser download may bundle (D17). Each one is a separate
+/// Releases one browser download may bundle. Each one is a separate
 /// upstream fetch, so the cap bounds how long a single request can hold.
 const MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS: usize = 50;
 /// Total retained payload before archive construction (individual fetches are also capped).
@@ -51,7 +51,7 @@ pub struct InteractiveSearchArtifactTarget {
 }
 
 /// One file for the browser: a release's own artifact, or the `tar.gz` holding
-/// several of them (D17).
+/// several of them.
 pub struct InteractiveSearchArtifactBundle {
     pub file_name: String,
     pub content_type: String,
@@ -96,7 +96,7 @@ pub struct InteractiveReleaseSearchIndexerView {
     pub status: InteractiveReleaseSearchIndexerStatus,
     /// The indexer's own batch size (before cross-indexer dedup).
     pub result_count: usize,
-    /// Wall time of this indexer's own call, once it has answered (D15).
+    /// Wall time of this indexer's own call, once it has answered.
     pub elapsed_ms: Option<i64>,
     pub failure_reason: Option<String>,
     /// The indexer asked Scryer to slow down rather than failing. It is a
@@ -107,7 +107,7 @@ pub struct InteractiveReleaseSearchIndexerView {
 
 /// What a title-less query subject searches as. The kind picks the search
 /// facet, the id-search facet and the default newznab categories; `Raw` picks
-/// none of them and sends the query as plain text (D2).
+/// none of them and sends the query as plain text.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum InteractiveSearchKind {
     Movie,
@@ -167,7 +167,7 @@ pub struct InteractiveReleaseSearchRequest {
     pub categories: Option<Vec<String>>,
 }
 
-/// What an unlinked grab (D8) reports back: the download the client accepted,
+/// What an unlinked grab reports back: the download the client accepted,
 /// the client that took it and the release name Activity will show.
 #[derive(Clone, Debug)]
 pub struct QueueUnlinkedReleaseOutcome {
@@ -184,7 +184,7 @@ pub(crate) struct InteractiveReleaseSearchJobEntry {
     pub(crate) actor_id: String,
     pub(crate) scope_key: String,
     /// The query subject's kind, kept because a grab out of this search has no
-    /// title of its own to read a facet from (D8). `None` for a title subject.
+    /// title of its own to read a facet from. `None` for a title subject.
     pub(crate) kind: Option<InteractiveSearchKind>,
     pub(crate) cancel: CancellationToken,
 }
@@ -234,7 +234,7 @@ fn interactive_release_search_scope_key(request: &InteractiveReleaseSearchReques
     }
 }
 
-/// The two subjects one job can search for (D3). Everything downstream of the
+/// The two subjects one job can search for. Everything downstream of the
 /// per-indexer call — merge, dedupe, status, registry, TTLs, cancel, poll — is
 /// shared; only the call itself branches.
 enum InteractiveReleaseSearchSubject {
@@ -247,7 +247,7 @@ enum InteractiveReleaseSearchSubject {
         subject: Box<ResolvedReleaseSearchSubject>,
         preserve_subject_scope: bool,
     },
-    /// An operator's raw query, with no title to score or judge against (D6).
+    /// An operator's raw query, with no title to score or judge against.
     Query {
         query: String,
         /// Search facet and id-search facet; `None` for a raw text query.
@@ -341,7 +341,7 @@ impl AppUseCase {
                 )
             }
             (None, Some(query)) if !query.is_empty() => {
-                // The Indexers page's own gate (D13): a title-less search
+                // The Indexers page's own gate: a title-less search
                 // reaches every configured indexer regardless of library.
                 self.require_app_permission(
                     actor,
@@ -972,9 +972,9 @@ impl AppUseCase {
     }
 
     /// One indexer's answer to a query subject: its own catalogue, parsed and —
-    /// for a faceted kind — judged against the facet's default profile (D6).
+    /// for a faceted kind — judged against the facet's default profile.
     /// No candidate tokens: those are minted at grab time, once a title is
-    /// chosen (D4).
+    /// chosen.
     #[expect(
         clippy::too_many_arguments,
         reason = "the call carries the whole query envelope plus the indexer it is restricted to"
@@ -1104,7 +1104,7 @@ impl AppUseCase {
     }
 
     /// The facet's default quality profile — everything a
-    /// context-free rejection can be based on (D6). Best effort: an
+    /// context-free rejection can be based on. Best effort: an
     /// unresolvable profile means the pane shows releases without profile
     /// rejections, never a failed search.
     async fn resolve_query_subject_judge(
@@ -1140,7 +1140,7 @@ impl AppUseCase {
         Some((profile, category))
     }
 
-    /// Mint a candidate token for one release of an existing search (D4).
+    /// Mint a candidate token for one release of an existing search.
     ///
     /// The release is named by the download URL the search payload already
     /// handed the browser and must still be in that actor's job snapshot, so a
@@ -1192,7 +1192,7 @@ impl AppUseCase {
         Ok(result)
     }
 
-    /// Grab one release of an existing search with no title at all (D8).
+    /// Grab one release of an existing search with no title at all.
     ///
     /// The release is submitted to the client the operator picked and recorded
     /// the way the tracker records an adopted foreign item: title-less, orphan
@@ -1206,8 +1206,13 @@ impl AppUseCase {
         download_url: &str,
         title_id: Option<&str>,
     ) -> AppResult<Vec<crate::IndexerGrabClient>> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
-            .await?;
+        // Gate like the grab each branch leads to: an assigned grab needs
+        // `ManageTitles` on the title's library (checked below), a title-less
+        // grab bypasses every library and needs `ManageSystemSettings`.
+        if title_id.is_none() {
+            self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+                .await?;
+        }
         let (result, kind) = self
             .find_interactive_search_result(actor, search_id, download_url)
             .await?;
@@ -1312,7 +1317,7 @@ impl AppUseCase {
         download_client_id: &str,
         category: Option<String>,
     ) -> AppResult<QueueUnlinkedReleaseOutcome> {
-        // The Indexers page's own gate (D13): an unlinked grab bypasses every
+        // The Indexers page's own gate: an unlinked grab bypasses every
         // library, so it is gated on system settings rather than a library.
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
@@ -1588,7 +1593,7 @@ impl AppUseCase {
         })
     }
 
-    /// Hand the operator the selected releases' own files (D17, FR-028).
+    /// Hand the operator the selected releases' own files.
     ///
     /// A third grab mode next to "assign to a title" and "grab unlinked":
     /// nothing is submitted, queued or tracked, so there is no submission row
@@ -1600,7 +1605,7 @@ impl AppUseCase {
         actor: &User,
         targets: &[InteractiveSearchArtifactTarget],
     ) -> AppResult<InteractiveSearchArtifactBundle> {
-        // Same gate as the unlinked grab (D13): this bypasses every library.
+        // Same gate as the unlinked grab: this bypasses every library.
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
         if targets.is_empty() {
@@ -1778,7 +1783,7 @@ impl AppUseCase {
     /// Locate one release of the actor's own live search by the download URL
     /// the search payload already handed the browser, with the search's kind.
     ///
-    /// Shared by candidate-token issuance (D4) and the unlinked grab (D8) so
+    /// Shared by candidate-token issuance and the unlinked grab so
     /// neither can act on a release the operator never saw.
     async fn find_interactive_search_result(
         &self,
@@ -1969,7 +1974,7 @@ fn build_release_artifact_archive(
         .map_err(|error| AppError::Repository(format!("failed to compress archive: {error}")))
 }
 
-/// The title-less stand-in an unlinked grab submits under (D8).
+/// The title-less stand-in an unlinked grab submits under.
 ///
 /// Every download client reads the request's title for its own bookkeeping —
 /// the file name it falls back to when a release name is missing, the

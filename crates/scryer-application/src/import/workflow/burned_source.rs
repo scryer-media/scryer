@@ -103,12 +103,11 @@ pub(crate) async fn delete_burned_download_data(
         Ok(libraries) => libraries,
         Err(error) => return failed_burned_data_cleanup(&job_dir, error),
     };
-    let library_roots = crate::catalog_workflow::library_root_folders_from_libraries(
-        &libraries, None,
-    )
-    .into_iter()
-    .map(|root| stored_path_to_path_buf(&root.path))
-    .collect::<Vec<_>>();
+    let library_roots =
+        crate::catalog_workflow::library_root_folders_from_libraries(&libraries, None)
+            .into_iter()
+            .map(|root| stored_path_to_path_buf(&root.path))
+            .collect::<Vec<_>>();
     let recycle_bin_configs = app
         .recycle_bin_configs_for_media_roots(
             library_roots
@@ -136,7 +135,8 @@ pub(crate) async fn delete_burned_download_data(
     );
     let mut container_roots = Vec::new();
     for config in download_client_configs {
-        let mappings = match crate::parse_download_client_remote_path_mappings(&config.config_json) {
+        let mappings = match crate::parse_download_client_remote_path_mappings(&config.config_json)
+        {
             Ok(mappings) => mappings,
             Err(error) => return failed_burned_data_cleanup(&job_dir, error),
         };
@@ -164,9 +164,7 @@ fn job_dir_overlaps_protected_root(job_dir: &Path, protected_roots: &[PathBuf]) 
     protected_roots
         .iter()
         .filter(|root| !root.as_os_str().is_empty())
-        .any(|root| {
-            path_is_under_root(job_dir, root) || path_is_under_root(root, job_dir)
-        })
+        .any(|root| path_is_under_root(job_dir, root) || path_is_under_root(root, job_dir))
 }
 
 fn container_root_is_within_job_dir(job_dir: &Path, container_roots: &[PathBuf]) -> bool {
@@ -221,7 +219,10 @@ fn deleted_burned_data_directory(job_dir: &Path) -> BurnedDataCleanupOutcome {
     BurnedDataCleanupOutcome::DeletedDirectory(job_dir.to_path_buf())
 }
 
-fn deleted_burned_data_files(job_dir: &Path, deleted_files: Vec<PathBuf>) -> BurnedDataCleanupOutcome {
+fn deleted_burned_data_files(
+    job_dir: &Path,
+    deleted_files: Vec<PathBuf>,
+) -> BurnedDataCleanupOutcome {
     tracing::info!(
         path = %job_dir.display(),
         outcome = "deleted_files",
@@ -231,10 +232,7 @@ fn deleted_burned_data_files(job_dir: &Path, deleted_files: Vec<PathBuf>) -> Bur
     BurnedDataCleanupOutcome::DeletedFiles(deleted_files)
 }
 
-fn skipped_burned_data_cleanup(
-    job_dir: &Path,
-    reason: &'static str,
-) -> BurnedDataCleanupOutcome {
+fn skipped_burned_data_cleanup(job_dir: &Path, reason: &'static str) -> BurnedDataCleanupOutcome {
     tracing::warn!(
         path = %job_dir.display(),
         reason,
@@ -266,13 +264,17 @@ mod burned_source_tests {
         let job_dir = temp_dir.path().join("completed/job");
         std::fs::create_dir_all(&job_dir).expect("create job directory");
         let video = job_dir.join("release/episode.mkv");
-        std::fs::create_dir_all(video.parent().expect("video parent")).expect("create video parent");
+        std::fs::create_dir_all(video.parent().expect("video parent"))
+            .expect("create video parent");
         std::fs::write(&video, "video").expect("write video");
         std::fs::write(job_dir.join("release/episode.nfo"), "sidecar").expect("write sidecar");
 
         let outcome = delete_burned_download_data_with_roots(&job_dir, &[video], &[], &[]).await;
 
-        assert_eq!(outcome, BurnedDataCleanupOutcome::DeletedDirectory(job_dir.clone()));
+        assert_eq!(
+            outcome,
+            BurnedDataCleanupOutcome::DeletedDirectory(job_dir.clone())
+        );
         assert!(!job_dir.exists());
     }
 
@@ -294,7 +296,10 @@ mod burned_source_tests {
         )
         .await;
 
-        assert_eq!(outcome, BurnedDataCleanupOutcome::DeletedFiles(vec![video.clone()]));
+        assert_eq!(
+            outcome,
+            BurnedDataCleanupOutcome::DeletedFiles(vec![video.clone()])
+        );
         assert!(!video.exists());
         assert!(shared_root.exists());
         assert!(sibling.exists());
@@ -305,7 +310,8 @@ mod burned_source_tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let job_dir = temp_dir.path().join("job");
         let video = job_dir.join("nested/episode.mkv");
-        std::fs::create_dir_all(video.parent().expect("video parent")).expect("create job directory");
+        std::fs::create_dir_all(video.parent().expect("video parent"))
+            .expect("create job directory");
         std::fs::write(&video, "video").expect("write video");
 
         let outcome = delete_burned_download_data_with_roots(
@@ -329,7 +335,8 @@ mod burned_source_tests {
         let library_root = temp_dir.path().join("library");
         let job_dir = library_root.join("shows/example");
         let video = job_dir.join("nested/episode.mkv");
-        std::fs::create_dir_all(video.parent().expect("video parent")).expect("create job directory");
+        std::fs::create_dir_all(video.parent().expect("video parent"))
+            .expect("create job directory");
         std::fs::write(&video, "video").expect("write video");
 
         let outcome = delete_burned_download_data_with_roots(
@@ -353,7 +360,8 @@ mod burned_source_tests {
         let temp_dir = tempfile::tempdir().expect("tempdir");
         let protected_root = temp_dir.path().join("library");
         let video = protected_root.join("show/episode.mkv");
-        std::fs::create_dir_all(video.parent().expect("video parent")).expect("create video parent");
+        std::fs::create_dir_all(video.parent().expect("video parent"))
+            .expect("create video parent");
         std::fs::write(&video, "video").expect("write video");
 
         let outcome = delete_burned_download_data_with_roots(
@@ -378,7 +386,8 @@ mod burned_source_tests {
         let protected_root = job_dir.join("protected");
         let video = job_dir.join("nested/episode.mkv");
         std::fs::create_dir_all(&protected_root).expect("create protected root");
-        std::fs::create_dir_all(video.parent().expect("video parent")).expect("create video parent");
+        std::fs::create_dir_all(video.parent().expect("video parent"))
+            .expect("create video parent");
         std::fs::write(&video, "video").expect("write video");
 
         let outcome = delete_burned_download_data_with_roots(
@@ -402,7 +411,8 @@ mod burned_source_tests {
         let mapping_local_root = temp_dir.path().join("downloads");
         let job_dir = mapping_local_root.join("complete/series/show");
         let video = job_dir.join("nested/episode.mkv");
-        std::fs::create_dir_all(video.parent().expect("video parent")).expect("create job directory");
+        std::fs::create_dir_all(video.parent().expect("video parent"))
+            .expect("create job directory");
         std::fs::write(&video, "video").expect("write video");
 
         let outcome = delete_burned_download_data_with_roots(
@@ -413,7 +423,10 @@ mod burned_source_tests {
         )
         .await;
 
-        assert_eq!(outcome, BurnedDataCleanupOutcome::DeletedDirectory(job_dir.clone()));
+        assert_eq!(
+            outcome,
+            BurnedDataCleanupOutcome::DeletedDirectory(job_dir.clone())
+        );
         assert!(!job_dir.exists());
         assert!(mapping_local_root.exists());
     }
@@ -437,7 +450,10 @@ mod burned_source_tests {
         )
         .await;
 
-        assert_eq!(outcome, BurnedDataCleanupOutcome::Skipped("job_dir_is_symlink"));
+        assert_eq!(
+            outcome,
+            BurnedDataCleanupOutcome::Skipped("job_dir_is_symlink")
+        );
         assert!(target.exists());
         assert!(video.exists());
     }
@@ -476,7 +492,10 @@ mod burned_source_tests {
 
         let outcome = delete_burned_download_data_with_roots(&job_dir, &[video], &[], &[]).await;
 
-        assert_eq!(outcome, BurnedDataCleanupOutcome::Skipped("job_dir_missing"));
+        assert_eq!(
+            outcome,
+            BurnedDataCleanupOutcome::Skipped("job_dir_missing")
+        );
     }
 
     #[tokio::test]
@@ -489,7 +508,10 @@ mod burned_source_tests {
             delete_burned_download_data_with_roots(&video, std::slice::from_ref(&video), &[], &[])
                 .await;
 
-        assert_eq!(outcome, BurnedDataCleanupOutcome::DeletedFiles(vec![video.clone()]));
+        assert_eq!(
+            outcome,
+            BurnedDataCleanupOutcome::DeletedFiles(vec![video.clone()])
+        );
         assert!(!video.exists());
     }
 }

@@ -72,6 +72,46 @@ impl ResolvedScoringContext {
     pub(crate) fn default_runtime_minutes(&self) -> Option<i32> {
         self.default_runtime_minutes
     }
+
+    /// Hashes every scoring input this context carries, except the rules
+    /// engine, into a landed-bar memo key.
+    ///
+    /// The destructure is exhaustive on purpose: a field added to this struct
+    /// does not compile here until someone decides whether it belongs in the
+    /// key. Leaving a scoring input out would let the memo return a bar derived
+    /// under a different input. The engine is fenced by the memo's generation
+    /// instead (see [`crate::quality::landed_bar_memo`]).
+    pub(crate) fn hash_memo_inputs(&self, hasher: &mut blake3::Hasher) {
+        use crate::quality::landed_bar_memo::{SCORER_VERSION, hash_debug, hash_json};
+
+        let Self {
+            profile,
+            required_audio_languages,
+            category,
+            title_id,
+            library_name,
+            original_language,
+            original_country,
+            title_tags,
+            rules: _,
+            default_runtime_minutes,
+        } = self;
+        hasher.update(&SCORER_VERSION.to_le_bytes());
+        // The whole profile, ranking fields included, with the persona this
+        // context resolved already substituted into it.
+        hash_json(
+            hasher,
+            &serde_json::to_value(profile).unwrap_or(serde_json::Value::Null),
+        );
+        hash_debug(hasher, required_audio_languages);
+        hash_debug(hasher, category);
+        hash_debug(hasher, title_id);
+        hash_debug(hasher, library_name);
+        hash_debug(hasher, original_language);
+        hash_debug(hasher, original_country);
+        hash_debug(hasher, title_tags);
+        hash_debug(hasher, default_runtime_minutes);
+    }
 }
 
 /// The announced-evidence parse for a release against one title.
@@ -381,8 +421,40 @@ impl AppUseCase {
         runtime_minutes: Option<i32>,
         intent: SubjectIntent,
     ) -> crate::admission::AdmissionSubject {
+        let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+        self.admission_subject_for_scope_with_reads(
+            title,
+            scope,
+            context,
+            runtime_minutes,
+            intent,
+            &reads,
+        )
+        .await
+    }
+
+    /// [`Self::admission_subject_for_scope`] reading the title's catalog and
+    /// media files through the caller's per-operation memo, so a walk that
+    /// asks for many scopes of one title reads each of them once.
+    pub(crate) async fn admission_subject_for_scope_with_reads(
+        &self,
+        title: &Title,
+        scope: &crate::SubmissionScope,
+        context: &ResolvedScoringContext,
+        runtime_minutes: Option<i32>,
+        intent: SubjectIntent,
+        reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    ) -> crate::admission::AdmissionSubject {
         use crate::SubmissionScope;
         use crate::admission::{AdmissionScope, AdmissionSubject, Incumbent};
+
+        let fresh;
+        let reads = if reads.covers(&title.id) {
+            reads
+        } else {
+            fresh = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+            &fresh
+        };
 
         // **One runtime basis per scope** (D4). Size scoring is runtime-derived,
         // so an incumbent's bar has to be computed against the length of what
@@ -390,19 +462,13 @@ impl AppUseCase {
         // two-episode file — not the series average. Fetched once for the whole
         // subject; title and link scopes have no episodes and keep the caller's
         // runtime (the movie's).
-        let episodes: Vec<scryer_domain::Episode> = match scope {
+        let episodes: std::sync::Arc<Vec<scryer_domain::Episode>> = match scope {
             SubmissionScope::Episode { .. }
             | SubmissionScope::EpisodeSet { .. }
-            | SubmissionScope::Collection { .. } => self
-                .services
-                .catalog
-                .shows
-                .list_episodes_for_title(&title.id)
-                .await
-                .unwrap_or_default(),
+            | SubmissionScope::Collection { .. } => reads.episodes(self).await.unwrap_or_default(),
             SubmissionScope::Title
             | SubmissionScope::SeriesMovie { .. }
-            | SubmissionScope::Orphan => Vec::new(),
+            | SubmissionScope::Orphan => std::sync::Arc::default(),
         };
 
         let to_incumbent = |file: &crate::TitleMediaFile, covers: Vec<String>| {
@@ -468,11 +534,8 @@ impl AppUseCase {
                 } else {
                     (episode_ids, 0)
                 };
-                let incumbents = self
-                    .services
-                    .library
-                    .media_files
-                    .list_live_media_files_for_episode_ids(&title.id, &episode_ids)
+                let incumbents = reads
+                    .live_media_files_for_episode_ids(self, &episode_ids)
                     .await
                     .unwrap_or_default();
 
@@ -494,13 +557,7 @@ impl AppUseCase {
             SubmissionScope::SeriesMovie {
                 series_movie_link_id,
             } => {
-                let files = self
-                    .services
-                    .library
-                    .media_files
-                    .list_media_files_for_title(&title.id)
-                    .await
-                    .unwrap_or_default();
+                let files = reads.media_files(self).await.unwrap_or_default();
                 AdmissionSubject::new(
                     AdmissionScope::SeriesMovieLink(series_movie_link_id.clone()),
                     files
@@ -515,13 +572,7 @@ impl AppUseCase {
                 )
             }
             SubmissionScope::Title => {
-                let files = self
-                    .services
-                    .library
-                    .media_files
-                    .list_media_files_for_title(&title.id)
-                    .await
-                    .unwrap_or_default();
+                let files = reads.media_files(self).await.unwrap_or_default();
                 AdmissionSubject::new(
                     AdmissionScope::Title,
                     files
@@ -545,11 +596,8 @@ impl AppUseCase {
             // Members and the unaired count come from `monitored_pack_members`,
             // shared with the batch shape so the two pack gates cannot drift.
             SubmissionScope::Collection { collection_id } => {
-                let members: Vec<scryer_domain::Episode> = self
-                    .services
-                    .catalog
-                    .shows
-                    .list_episodes_for_collection(collection_id)
+                let members = reads
+                    .episodes_for_collection(self, collection_id)
                     .await
                     .unwrap_or_default();
                 let all_member_ids: Vec<String> =
@@ -570,11 +618,8 @@ impl AppUseCase {
                         .per_member();
                 }
 
-                let incumbents = self
-                    .services
-                    .library
-                    .media_files
-                    .list_live_media_files_for_episode_ids(&title.id, &episode_ids)
+                let incumbents = reads
+                    .live_media_files_for_episode_ids(self, &episode_ids)
                     .await
                     .unwrap_or_default();
 
@@ -595,19 +640,40 @@ impl AppUseCase {
         }
     }
 
-    /// Resolve a submission scope to the members scope-intersection needs.
-    ///
-    /// One catalog read at most, and only for scopes that have episodes. The
-    /// collection ids matter because a season pack downloading for the season an
-    /// episode belongs to is in flight *for that episode*, and the reverse: a
-    /// single episode downloading blocks nothing else in its season.
+    #[cfg(test)]
     pub(crate) async fn scope_membership_for(
         &self,
         title: &Title,
         scope: &crate::SubmissionScope,
     ) -> crate::acquisition::acquisition::OwnedScopeMembership {
+        let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+        self.scope_membership_for_with_reads(title, scope, &reads)
+            .await
+    }
+
+    /// Resolve a submission scope to the members scope-intersection needs.
+    ///
+    /// One catalog read at most, and only for scopes that have episodes. The
+    /// collection ids matter because a season pack downloading for the season an
+    /// episode belongs to is in flight *for that episode*, and the reverse: a
+    /// single episode downloading blocks nothing else in its season. The read
+    /// goes through the caller's per-operation memo.
+    pub(crate) async fn scope_membership_for_with_reads(
+        &self,
+        title: &Title,
+        scope: &crate::SubmissionScope,
+        reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    ) -> crate::acquisition::acquisition::OwnedScopeMembership {
         use crate::SubmissionScope;
         use crate::acquisition::acquisition::OwnedScopeMembership;
+
+        let fresh;
+        let reads = if reads.covers(&title.id) {
+            reads
+        } else {
+            fresh = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+            &fresh
+        };
 
         let episode_ids: Vec<String> = match scope {
             SubmissionScope::Episode { episode_id } => vec![episode_id.clone()],
@@ -627,15 +693,12 @@ impl AppUseCase {
                 ..OwnedScopeMembership::default()
             },
             SubmissionScope::Collection { collection_id } => {
-                let episode_ids = self
-                    .services
-                    .catalog
-                    .shows
-                    .list_episodes_for_collection(collection_id)
+                let episode_ids = reads
+                    .episodes_for_collection(self, collection_id)
                     .await
                     .unwrap_or_default()
-                    .into_iter()
-                    .map(|episode| episode.id)
+                    .iter()
+                    .map(|episode| episode.id.clone())
                     .collect();
                 OwnedScopeMembership {
                     episode_ids,
@@ -644,13 +707,7 @@ impl AppUseCase {
                 }
             }
             SubmissionScope::Episode { .. } | SubmissionScope::EpisodeSet { .. } => {
-                let catalog = self
-                    .services
-                    .catalog
-                    .shows
-                    .list_episodes_for_title(&title.id)
-                    .await
-                    .unwrap_or_default();
+                let catalog = reads.episodes(self).await.unwrap_or_default();
                 let mut collection_ids: Vec<String> = catalog
                     .iter()
                     .filter(|episode| episode_ids.contains(&episode.id))
@@ -898,6 +955,10 @@ impl AppUseCase {
     /// All three facts come out of the same re-derivation because admission
     /// compares them in one ladder (tier → revision → score, I3/D9); splitting
     /// them across two derivations is how the sides drift.
+    ///
+    /// The background cutoff pass memoises this derivation's score by its
+    /// inputs; a change to how it scores the same inputs must bump
+    /// [`crate::quality::landed_bar_memo::SCORER_VERSION`].
     pub(crate) fn incumbent_bar(
         &self,
         file: &crate::TitleMediaFile,

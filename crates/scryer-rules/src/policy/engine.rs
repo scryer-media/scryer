@@ -72,6 +72,9 @@ pub struct PolicyEngine<F: PolicyFamily> {
     pub(crate) template: Arc<Engine>,
     pub(crate) rules: Vec<RuleHandle<F::RuleExtra>>,
     pub(crate) limits: RuntimeLimits,
+    /// Whether any loaded policy calls `time.now_ns`. See
+    /// [`Self::reads_clock`].
+    pub(crate) reads_clock: bool,
     pub(crate) family: PhantomData<fn() -> F>,
 }
 
@@ -82,6 +85,7 @@ impl<F: PolicyFamily> Clone for PolicyEngine<F> {
             template: Arc::clone(&self.template),
             rules: self.rules.clone(),
             limits: self.limits,
+            reads_clock: self.reads_clock,
             family: PhantomData,
         }
     }
@@ -109,6 +113,7 @@ impl<F: PolicyFamily> PolicyEngine<F> {
     ) -> Result<Self, RulesError> {
         let mut engine = runtime::configured_engine(&limits);
         let mut rules = Vec::with_capacity(policies.len());
+        let mut reads_clock = false;
 
         for policy in policies {
             let timer = PolicyTimer::new(
@@ -142,6 +147,8 @@ impl<F: PolicyFamily> PolicyEngine<F> {
                 &engine.get_modules()[policy_module_index],
             )
             .map_err(|e| RulesError::Compilation(format!("{}: {e}", policy.id())))?;
+            reads_clock |=
+                crate::validation::module_reads_clock(&engine.get_modules()[policy_module_index]);
 
             rules.push(RuleHandle {
                 id: policy.id().to_string(),
@@ -158,6 +165,7 @@ impl<F: PolicyFamily> PolicyEngine<F> {
             template: Arc::new(engine),
             rules,
             limits,
+            reads_clock,
             family: PhantomData,
         })
     }
@@ -170,6 +178,7 @@ impl<F: PolicyFamily> PolicyEngine<F> {
             template: Arc::new(runtime::configured_engine(&limits)),
             rules: Vec::new(),
             limits,
+            reads_clock: false,
             family: PhantomData,
         }
     }
@@ -187,6 +196,17 @@ impl<F: PolicyFamily> PolicyEngine<F> {
     /// The loaded policies, in policy order.
     pub fn rules(&self) -> &[RuleHandle<F::RuleExtra>] {
         &self.rules
+    }
+
+    /// Whether any loaded policy calls `time.now_ns`.
+    ///
+    /// That is the one enabled builtin whose result is not a function of the
+    /// evaluation input (the `time.parse_*` family is pure). An engine that
+    /// reads the clock can score the same input differently from one run to
+    /// the next, so a caller that memoises results by input must not do so
+    /// while such an engine is active.
+    pub fn reads_clock(&self) -> bool {
+        self.reads_clock
     }
 
     /// The limits this engine was built under.

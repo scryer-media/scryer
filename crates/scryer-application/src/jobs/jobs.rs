@@ -1857,13 +1857,18 @@ impl AppUseCase {
                     }
                 }
             }
-            JobKey::PendingReleaseProcessing => Ok(JobExecutionOutcome::new(
-                Some(
-                    "Pending releases are re-evaluated with fresh RSS results during RSS sync"
-                        .to_string(),
-                ),
-                serde_json::to_string(&CountSummary { count: 0 }).ok(),
-            )),
+            JobKey::PendingReleaseProcessing => {
+                let count = self.process_external_pending_releases().await?;
+                Ok(JobExecutionOutcome::new(
+                    Some(format!(
+                        "Submitted {count} externally announced pending releases; indexed releases remain evaluated by RSS"
+                    )),
+                    serde_json::to_string(&CountSummary {
+                        count: count.try_into().unwrap_or(u32::MAX),
+                    })
+                    .ok(),
+                ))
+            }
             JobKey::StagedNzbPrune => {
                 let count = self
                     .services

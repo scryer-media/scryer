@@ -1,5 +1,6 @@
 pub(crate) mod canonical;
 pub(crate) mod canonical_context;
+pub(crate) mod landed_bar_memo;
 
 /// Canonicality invariants for [`canonical`]: one term set, two evidence
 /// levels, no incumbent state. They live beside the module they pin.

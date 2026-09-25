@@ -10,6 +10,9 @@ pub struct SubtitleExtractionContext {
     pub language: Option<String>,
     pub episode: Option<i32>,
     pub absolute_episode: Option<i32>,
+    /// The episode's number inside its anime community entry, which is how a
+    /// cour's subtitle archive usually numbers its members.
+    pub community_episode: Option<i32>,
 }
 
 pub fn is_supported_subtitle_format(format: &str) -> bool {

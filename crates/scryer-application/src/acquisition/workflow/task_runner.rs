@@ -1443,6 +1443,7 @@ async fn try_series_pack_for_title(
     claimed_episode_ids: &HashSet<String>,
     cycle: &BackgroundAcquisitionCycleCoordinator,
     session: &mut TitleWalkSession,
+    reads: &crate::acquisition::title_reads::TitleCatalogReads,
 ) -> AppResult<Option<Vec<String>>> {
     let Some(proposal) = plan_series_pack_for_title(
         app,
@@ -1456,6 +1457,7 @@ async fn try_series_pack_for_title(
         tracked_states,
         claimed_episode_ids,
         session,
+        reads,
     )
     .await?
     else {
@@ -1506,18 +1508,13 @@ async fn plan_series_pack_for_title(
     >,
     claimed_episode_ids: &HashSet<String>,
     session: &mut TitleWalkSession,
+    reads: &crate::acquisition::title_reads::TitleCatalogReads,
 ) -> AppResult<Option<GrabProposal>> {
     let mut title_subject = app
         .resolve_release_search_subject_for_title(search_title)
         .await?;
     title_subject.submission_scope = SubmissionScope::Title;
-    let episodes = match app
-        .services
-        .catalog
-        .shows
-        .list_episodes_for_title(&title.id)
-        .await
-    {
+    let episodes = match reads.episodes(app).await {
         Ok(episodes) => episodes,
         Err(error) => {
             warn!(
@@ -1641,6 +1638,7 @@ async fn plan_series_pack_for_title(
         &episodes,
         &owned_episode_ids,
         claimed_episode_ids,
+        reads,
     )
     .await?;
     let session_finalized = app
@@ -1657,6 +1655,7 @@ async fn plan_series_pack_for_title(
                 app,
                 &convergence,
                 &search_outcome.complete_indexer_ids,
+                &search_outcome.unsupported_indexer_ids,
                 &qualifying_collection_ids,
             )
             .await;
@@ -1671,6 +1670,7 @@ async fn plan_series_pack_for_title(
             app,
             &convergence,
             &search_outcome.complete_indexer_ids,
+            &search_outcome.unsupported_indexer_ids,
             &qualifying_collection_ids,
         )
         .await;
@@ -1712,7 +1712,7 @@ async fn plan_series_pack_for_title(
         eligible,
         commit: GrabProposalCommit::SeriesPack(Box::new(SeriesPackCommit {
             anchors,
-            episodes,
+            episodes: episodes.to_vec(),
             blocklist,
         })),
     }))
@@ -2186,6 +2186,10 @@ async fn commit_season_pack_proposal(
     Ok(Vec::new())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "pack evaluation weighs the candidates against the episode, owned and claimed sets of one title"
+)]
 async fn evaluate_series_pack_candidates(
     app: &AppUseCase,
     title: &Title,
@@ -2194,6 +2198,7 @@ async fn evaluate_series_pack_candidates(
     episodes: &[Episode],
     owned_episode_ids: &HashSet<String>,
     claimed_episode_ids: &HashSet<String>,
+    reads: &crate::acquisition::title_reads::TitleCatalogReads,
 ) -> AppResult<(Vec<IndexerSearchResult>, HashSet<String>)> {
     let mut groups = HashMap::<Vec<String>, Vec<(usize, IndexerSearchResult)>>::new();
     let mut collection_ids = HashSet::new();
@@ -2251,7 +2256,13 @@ async fn evaluate_series_pack_candidates(
         let mut scoped_subject = title_subject.clone();
         scoped_subject.submission_scope = SubmissionScope::EpisodeSet { episode_ids };
         for candidate in app
-            .evaluate_search_results_for_subject(title, &scoped_subject, candidates, false)
+            .evaluate_search_results_for_subject_with_reads(
+                title,
+                &scoped_subject,
+                candidates,
+                false,
+                reads,
+            )
             .await?
         {
             let key = crate::app_usecase_discovery::release_search_key(&candidate);
@@ -2401,9 +2412,10 @@ async fn record_series_pack_search_coverage(
     app: &AppUseCase,
     convergence: &crate::acquisition::convergence::ScopeConvergence,
     fired_indexer_ids: &[String],
+    unsupported_indexer_ids: &[String],
     collection_ids: &HashSet<String>,
 ) {
-    app.record_convergence_coverage(convergence, fired_indexer_ids)
+    app.record_convergence_coverage(convergence, fired_indexer_ids, unsupported_indexer_ids)
         .await;
     for collection_id in collection_ids {
         let Some(scope_key) =
@@ -2413,17 +2425,62 @@ async fn record_series_pack_search_coverage(
         };
         let mut collection_convergence = convergence.clone();
         collection_convergence.scope_key = scope_key;
-        app.record_convergence_coverage(&collection_convergence, fired_indexer_ids)
-            .await;
+        app.record_convergence_coverage(
+            &collection_convergence,
+            fired_indexer_ids,
+            unsupported_indexer_ids,
+        )
+        .await;
     }
+}
+
+/// The coverage keys a title walk's gates will ask about: each stage's own
+/// scope, and the season collection its pack stage converges on.
+fn walk_coverage_scope_keys(
+    title_work: &BackgroundAcquisitionTitleWork,
+    targets: &[crate::acquisition::targets::AcquisitionTarget],
+    context: &BackgroundAcquisitionTitleContext,
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    for work in &title_work.ready {
+        let target = &targets[work.target_index];
+        keys.push(target.scope_key.clone());
+        let collection_id = target.collection_id.as_deref().or_else(|| {
+            target
+                .episode_id
+                .as_deref()
+                .and_then(|episode_id| context.episodes_by_id.get(episode_id))
+                .and_then(|episode| episode.collection_id.as_deref())
+        });
+        if let Some(key) = collection_id.and_then(|collection_id| {
+            crate::acquisition::convergence::convergence_scope_key(
+                &SubmissionScope::Collection {
+                    collection_id: collection_id.to_string(),
+                },
+                &target.title_id,
+            )
+        }) {
+            keys.push(key);
+        }
+    }
+    keys
 }
 
 struct BackgroundAcquisitionTitleContext {
     title: scryer_domain::Title,
     episodes_by_id: HashMap<String, scryer_domain::Episode>,
+    /// The title's catalog and media-file reads for the length of this walk.
+    /// Every due scope of the title is evaluated against the same rows, so
+    /// they are read once per walk rather than once per scope.
+    reads: crate::acquisition::title_reads::TitleCatalogReads,
     submissions: Vec<DownloadSubmission>,
     tracked_states:
         HashMap<crate::contracts::ClientJobLocator, scryer_domain::TrackedDownloadState>,
+    /// The title-level convergence inputs (required audio languages, routed
+    /// indexers) for the length of this walk. Every stage resolves its
+    /// convergence coordinates before the coverage gate, and most stages stop
+    /// there, so these are read once per walk rather than once per stage.
+    convergence_inputs: crate::acquisition::convergence::ConvergenceInputMemo,
 }
 
 impl BackgroundAcquisitionTitleContext {
@@ -2482,14 +2539,21 @@ impl BackgroundAcquisitionTitleContext {
             })
             .collect();
 
+        let reads =
+            crate::acquisition::title_reads::TitleCatalogReads::with_episodes(&title.id, episodes);
+        let episodes_by_id = reads
+            .episodes(app)
+            .await?
+            .iter()
+            .map(|episode| (episode.id.clone(), episode.clone()))
+            .collect();
         Ok(Self {
             title,
-            episodes_by_id: episodes
-                .into_iter()
-                .map(|episode| (episode.id.clone(), episode))
-                .collect(),
+            episodes_by_id,
+            reads,
             submissions,
             tracked_states,
+            convergence_inputs: Default::default(),
         })
     }
 }
@@ -2527,6 +2591,15 @@ where
     let started = std::time::Instant::now();
     let intent = options.intent;
     let context = BackgroundAcquisitionTitleContext::load(app, title).await?;
+    if !intent.is_interactive() {
+        // Only the machine sweep reads coverage, and most of its stages stop at
+        // the gate: read every stage's receipts in one round-trip.
+        app.load_walk_coverage(
+            &context.convergence_inputs,
+            walk_coverage_scope_keys(&title_work, targets, &context),
+        )
+        .await;
+    }
     let mut session = TitleWalkSession::new(options);
 
     while let Some(work) = title_work.ready.pop_front() {
@@ -3081,107 +3154,118 @@ async fn process_single_target(
     // exhausted list (or a scope that never saved one) reaches the convergence
     // gate below.
     let claimed_episode_ids = cycle.claimed_episode_ids();
-    let stale_standby_indexer_ids =
-        if item.status == AcquisitionScopeStatus::Wanted && !item.id.is_empty() {
-            match try_saved_candidates(
-                app,
-                item,
-                None,
-                Some(&claimed_episode_ids),
-                dl_snapshot,
-                now,
-            )
-            .await
-            {
-                StandbyRecoveryOutcome::Recovered { scope }
-                | StandbyRecoveryOutcome::Active { scope } => {
-                    if let Some(episode_ids) = episode_ids_for_scope(&scope) {
-                        cycle.claim_episode_ids(episode_ids.iter().cloned());
-                    }
-                    if let SubmissionScope::Collection { collection_id } = &scope {
-                        if let Ok(episodes) = app
-                            .services
-                            .catalog
-                            .shows
-                            .list_episodes_for_collection(collection_id)
-                            .await
-                        {
-                            cycle.claim_episode_ids(episodes.into_iter().map(|episode| episode.id));
-                        }
-                        if let Some(season) = target
-                            .season_number
-                            .as_deref()
-                            .or(episode
-                                .as_ref()
-                                .and_then(|episode| episode.season_number.as_deref()))
-                            .and_then(|season| season.parse::<u32>().ok())
-                        {
-                            cycle.mark_season_pack_grabbed(&(title.id.clone(), season));
-                        }
-                    }
-                    session.stats.inline_grabs += 1;
-                    info!(
-                        title = title.name.as_str(),
-                        scope_key = target.scope_key.as_str(),
-                        "grabbed the next saved search result; no indexer query spent"
-                    );
-                    return Ok(());
+    let stale_standby_indexer_ids = if item.status == AcquisitionScopeStatus::Wanted
+        && !item.id.is_empty()
+    {
+        match try_saved_candidates(
+            app,
+            item,
+            None,
+            Some(&claimed_episode_ids),
+            dl_snapshot,
+            now,
+        )
+        .await
+        {
+            StandbyRecoveryOutcome::Recovered { scope }
+            | StandbyRecoveryOutcome::Active { scope } => {
+                if let Some(episode_ids) = episode_ids_for_scope(&scope) {
+                    cycle.claim_episode_ids(episode_ids.iter().cloned());
                 }
-                StandbyRecoveryOutcome::Deferred { refused, .. } => {
-                    info!(
-                        title = title.name.as_str(),
-                        scope_key = target.scope_key.as_str(),
-                        "saved search result kept pending until the download client recovers"
-                    );
-                    // A refused saved result is a failed submission, counted like
-                    // the same refusal on the search lane. Only the episode's own
-                    // `Scope` stage counts it: every pack stage's anchor has one,
-                    // so the scope counts once however many stages walked it.
-                    if let Some(refused) = refused
-                        && !pack_stage_only
+                if let SubmissionScope::Collection { collection_id } = &scope {
+                    if let Ok(episodes) = context
+                        .reads
+                        .episodes_for_collection(app, collection_id)
+                        .await
                     {
-                        let mut tally = GrabFailureTally::default();
-                        tally.record_refused_submission(refused);
-                        session.stats.record_grab_failures(tally);
+                        cycle.claim_episode_ids(episodes.iter().map(|episode| episode.id.clone()));
                     }
-                    return Ok(());
+                    if let Some(season) = target
+                        .season_number
+                        .as_deref()
+                        .or(episode
+                            .as_ref()
+                            .and_then(|episode| episode.season_number.as_deref()))
+                        .and_then(|season| season.parse::<u32>().ok())
+                    {
+                        cycle.mark_season_pack_grabbed(&(title.id.clone(), season));
+                    }
                 }
-                StandbyRecoveryOutcome::Parked { .. } => {
-                    info!(
-                        title = title.name.as_str(),
-                        scope_key = target.scope_key.as_str(),
-                        "best saved search result is held by its delay profile"
-                    );
-                    return Ok(());
-                }
-                StandbyRecoveryOutcome::Exhausted { stale_indexer_ids } => stale_indexer_ids,
+                session.stats.inline_grabs += 1;
+                info!(
+                    title = title.name.as_str(),
+                    scope_key = target.scope_key.as_str(),
+                    "grabbed the next saved search result; no indexer query spent"
+                );
+                return Ok(());
             }
-        } else {
-            Vec::new()
-        };
+            StandbyRecoveryOutcome::Deferred { refused, .. } => {
+                info!(
+                    title = title.name.as_str(),
+                    scope_key = target.scope_key.as_str(),
+                    "saved search result kept pending until the download client recovers"
+                );
+                // A refused saved result is a failed submission, counted like
+                // the same refusal on the search lane. Only the episode's own
+                // `Scope` stage counts it: every pack stage's anchor has one,
+                // so the scope counts once however many stages walked it.
+                if let Some(refused) = refused
+                    && !pack_stage_only
+                {
+                    let mut tally = GrabFailureTally::default();
+                    tally.record_refused_submission(refused);
+                    session.stats.record_grab_failures(tally);
+                }
+                return Ok(());
+            }
+            StandbyRecoveryOutcome::Parked { .. } => {
+                info!(
+                    title = title.name.as_str(),
+                    scope_key = target.scope_key.as_str(),
+                    "best saved search result is held by its delay profile"
+                );
+                return Ok(());
+            }
+            StandbyRecoveryOutcome::Exhausted { stale_indexer_ids } => stale_indexer_ids,
+        }
+    } else {
+        Vec::new()
+    };
 
     let search_title = app
-        .release_search_title_for_wanted_item(title, item, episode.as_ref())
+        .release_search_title_for_wanted_item(title, item, episode.as_ref(), Some(&context.reads))
         .await;
 
-    let subject = app
-        .resolve_release_search_subject_for_wanted_item(
+    // The title-match evidence is finished only once this stage is known to
+    // search: a covered stage never reads it.
+    let pending_subject = app
+        .resolve_pending_release_search_subject_for_wanted_item(
             title,
             &search_title,
             item,
             episode.as_ref(),
         )
-        .await?;
+        .await;
     // Season-pack shaping only, so season 0 is excluded: the specials season is
     // not a pack an indexer publishes, and `{title} S00` is not a query worth
     // spending. The subject keeps its `Some(0)` for the acceptance veto.
-    let search_season = subject.season.filter(|season| *season > 0);
+    let search_season = pending_subject
+        .for_convergence()
+        .season
+        .filter(|season| *season > 0);
 
     // Exhausting saved results is a recovery action, not a new search. Preserve
     // that contract before either the title or episode lane spends an indexer
     // query.
     if !stale_standby_indexer_ids.is_empty() {
-        if let Some(convergence) = app.resolve_scope_convergence(&search_title, &subject).await {
+        if let Some(convergence) = app
+            .resolve_scope_convergence_memoized(
+                &search_title,
+                pending_subject.for_convergence(),
+                &context.convergence_inputs,
+            )
+            .await
+        {
             info!(
                 title_id = title.id.as_str(),
                 scope_key = convergence.scope_key.as_str(),
@@ -3221,6 +3305,7 @@ async fn process_single_target(
             &claimed_episode_ids,
             cycle,
             session,
+            &context.reads,
         )
         .await
         {
@@ -3248,7 +3333,14 @@ async fn process_single_target(
     let (uncovered, convergence_scope_key) = if pack_stage_only {
         (HashSet::new(), None)
     } else {
-        let Some(convergence) = app.resolve_scope_convergence(&search_title, &subject).await else {
+        let Some(convergence) = app
+            .resolve_scope_convergence_memoized(
+                &search_title,
+                pending_subject.for_convergence(),
+                &context.convergence_inputs,
+            )
+            .await
+        else {
             debug!(
                 title_id = title.id.as_str(),
                 scope_key = target.scope_key.as_str(),
@@ -3257,12 +3349,7 @@ async fn process_single_target(
             return Ok(());
         };
         let uncovered = match app
-            .uncovered_indexers_for_scope(
-                &convergence.scope_key,
-                &convergence.facet,
-                &convergence.fingerprint,
-                &convergence.routed_indexer_ids,
-            )
+            .uncovered_indexers_for_scope_memoized(&convergence, &context.convergence_inputs)
             .await
         {
             Ok(uncovered) => uncovered,
@@ -3364,14 +3451,13 @@ async fn process_single_target(
             } else {
                 // Load season episodes for runtime scoring and upgrade checking.
                 let season_episodes = if let Some(ref coll_id) = effective_collection_id {
-                    app.services
-                        .catalog
-                        .shows
-                        .list_episodes_for_collection(coll_id)
+                    context
+                        .reads
+                        .episodes_for_collection(app, coll_id)
                         .await
                         .unwrap_or_default()
                 } else {
-                    Vec::new()
+                    Arc::default()
                 };
 
                 // Calculate total season runtime for accurate size scoring.
@@ -3391,6 +3477,7 @@ async fn process_single_target(
                         episode.as_ref(),
                         season_num,
                         pack_runtime,
+                        Some(&context.reads),
                     )
                     .await?;
 
@@ -3398,15 +3485,17 @@ async fn process_single_target(
                 // converged pack scope rides RSS, an unconverged one is searched
                 // against its uncovered subset.
                 let pack_uncovered = match app
-                    .resolve_scope_convergence(&search_title, &pack_subject)
+                    .resolve_scope_convergence_memoized(
+                        &search_title,
+                        pack_subject.for_convergence(),
+                        &context.convergence_inputs,
+                    )
                     .await
                 {
                     Some(pack_convergence) => app
-                        .uncovered_indexers_for_scope(
-                            &pack_convergence.scope_key,
-                            &pack_convergence.facet,
-                            &pack_convergence.fingerprint,
-                            &pack_convergence.routed_indexer_ids,
+                        .uncovered_indexers_for_scope_memoized(
+                            &pack_convergence,
+                            &context.convergence_inputs,
                         )
                         .await
                         .ok(),
@@ -3430,6 +3519,7 @@ async fn process_single_target(
                     );
                     Vec::new()
                 } else {
+                    let pack_subject = pack_subject.resolve(app).await?;
                     session.stats.queries += 1;
                     match app
                         .search_and_evaluate_subject_restricted(
@@ -3578,7 +3668,7 @@ async fn process_single_target(
     // explicit routing category overrides this inside the router.
     let download_cat = app.derive_download_category(&title.facet).await;
 
-    if subject.queries.is_empty() {
+    if pending_subject.for_convergence().queries.is_empty() {
         info!(
             title_id = title.id.as_str(),
             title_name = title.name.as_str(),
@@ -3587,6 +3677,7 @@ async fn process_single_target(
         );
         return Ok(());
     }
+    let subject = pending_subject.resolve(app).await?;
 
     debug!(
         title_id = title.id.as_str(),
@@ -3649,7 +3740,13 @@ async fn process_single_target(
     // One evaluation over the union, so the merged rows are ranked by the same
     // comparator as the rest rather than appended past it.
     let results = app
-        .evaluate_search_results_for_subject(&search_title, &subject, scored, false)
+        .evaluate_search_results_for_subject_with_reads(
+            &search_title,
+            &subject,
+            scored,
+            false,
+            &context.reads,
+        )
         .await?;
     // A finalize failure withholds coverage (the scope re-searches next cycle)
     // but never the grab walk below: these are live results in hand, and
@@ -3666,6 +3763,7 @@ async fn process_single_target(
             &search_title,
             &subject,
             &search_outcome.complete_indexer_ids,
+            &search_outcome.unsupported_indexer_ids,
         )
         .await;
     }
@@ -3699,15 +3797,14 @@ async fn process_single_target(
     // files, in addition to the download-client snapshot checked below). It is the
     // single, removable exclusion source; the failed-attempt log never gates.
     let db_blocklist = app.load_title_release_blocklist_signatures(&title.id).await;
-    let existing_files = app
-        .services
-        .library
-        .media_files
-        .list_media_files_for_title(&title.id)
+    let existing_files = context
+        .reads
+        .media_files(app)
         .await
         .unwrap_or_default()
-        .into_iter()
+        .iter()
         .filter(|file| file.role.is_primary())
+        .cloned()
         .collect::<Vec<_>>();
     let cutoff_scope = app.cutoff_scope_for(&subject.submission_scope).await;
     let analyzed_cutoff_quality =
@@ -3742,12 +3839,13 @@ async fn process_single_target(
     // can ask about the *score* half of the cutoff, not just the quality half.
     let admission = {
         let scoring_context = app.resolve_canonical_scoring_context(title, profile).await;
-        app.admission_subject_for_scope(
+        app.admission_subject_for_scope_with_reads(
             title,
             &item.submission_scope(),
             &scoring_context,
             title.runtime_minutes,
             crate::quality::canonical_context::SubjectIntent::Grab,
+            &context.reads,
         )
         .await
     };
@@ -4282,7 +4380,7 @@ async fn propose_covered_episode_evidence(
     }
 
     let search_title = app
-        .release_search_title_for_wanted_item(title, item, episode)
+        .release_search_title_for_wanted_item(title, item, episode, Some(&context.reads))
         .await;
     let subject = app
         .resolve_release_search_subject_for_wanted_item(title, &search_title, item, episode)
@@ -4290,7 +4388,13 @@ async fn propose_covered_episode_evidence(
     // One evaluation, the same one the live path runs, so a pack and an episode
     // are compared on scores produced by the same comparator.
     let results = app
-        .evaluate_search_results_for_subject(&search_title, &subject, extras, false)
+        .evaluate_search_results_for_subject_with_reads(
+            &search_title,
+            &subject,
+            extras,
+            false,
+            &context.reads,
+        )
         .await?;
 
     let failed_routes = cycle.failed_routes();
@@ -4317,13 +4421,7 @@ async fn propose_covered_episode_evidence(
         .values()
         .cloned()
         .collect::<Vec<Episode>>();
-    let catalog_collections = app
-        .services
-        .catalog
-        .shows
-        .list_collections_for_title(&title.id)
-        .await
-        .unwrap_or_default();
+    let catalog_collections = context.reads.collections(app).await.unwrap_or_default();
     let mut episode_ids = Vec::new();
     for index in &eligible {
         let candidate = &results[*index];
@@ -4994,8 +5092,11 @@ pub async fn start_background_acquisition_poller(
     // here made the jobs view promise a sweep four minutes before the worker
     // would actually wake for it.
     let rss_sync_tick = crate::acquisition::rss::rss_sync_tick_period();
-    app.advertise_job_next_run_at(JobKey::RssSync, Utc::now() + rss_sync_next_run_delta(rss_sync_tick))
-        .await;
+    app.advertise_job_next_run_at(
+        JobKey::RssSync,
+        Utc::now() + rss_sync_next_run_delta(rss_sync_tick),
+    )
+    .await;
     app.advertise_job_next_run_at(
         JobKey::PendingReleaseProcessing,
         Utc::now() + chrono::Duration::minutes(1),

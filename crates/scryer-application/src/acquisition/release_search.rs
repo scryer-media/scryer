@@ -2038,26 +2038,40 @@ impl AppUseCase {
             })
     }
 
+    /// `reads`, when supplied, answers repeated collection lookups within one
+    /// title walk.
     pub(crate) async fn local_scoped_anidb_id_for_episode(
         &self,
         episode: Option<&Episode>,
+        reads: Option<&crate::acquisition::title_reads::TitleCatalogReads>,
     ) -> Option<String> {
         let episode = episode?;
         // Prefer season/collection-scoped AniDB mappings, then let callers fall
         // back to the title-level AniDB ID.
         let collection_id = episode.collection_id.as_deref()?;
-        self.local_scoped_anidb_id_for_collection(collection_id)
+        self.local_scoped_anidb_id_for_collection(collection_id, reads)
             .await
     }
 
-    async fn local_scoped_anidb_id_for_collection(&self, collection_id: &str) -> Option<String> {
-        let collection_ids = self
-            .services
-            .catalog
-            .shows
-            .list_collection_external_ids(collection_id)
-            .await
-            .unwrap_or_default();
+    async fn local_scoped_anidb_id_for_collection(
+        &self,
+        collection_id: &str,
+        reads: Option<&crate::acquisition::title_reads::TitleCatalogReads>,
+    ) -> Option<String> {
+        let collection_ids = match reads {
+            Some(reads) => reads
+                .collection_external_ids(self, collection_id)
+                .await
+                .unwrap_or_default(),
+            None => std::sync::Arc::new(
+                self.services
+                    .catalog
+                    .shows
+                    .list_collection_external_ids(collection_id)
+                    .await
+                    .unwrap_or_default(),
+            ),
+        };
         preferred_scoped_external_id(&collection_ids, "anidb")
     }
 
@@ -2066,6 +2080,7 @@ impl AppUseCase {
         title: &Title,
         item: &AcquisitionScopeState,
         episode: Option<&Episode>,
+        reads: Option<&crate::acquisition::title_reads::TitleCatalogReads>,
     ) -> Title {
         let search_title = if item.media_type == "series_movie" {
             if let Some(ref link_id) = item.series_movie_link_id
@@ -2085,7 +2100,7 @@ impl AppUseCase {
         };
 
         if item.media_type == "episode"
-            && let Some(anidb_id) = self.local_scoped_anidb_id_for_episode(episode).await
+            && let Some(anidb_id) = self.local_scoped_anidb_id_for_episode(episode, reads).await
         {
             let mut search_title = search_title;
             search_title.external_ids.retain(|id| {
@@ -2162,15 +2177,45 @@ impl AppUseCase {
         &self,
         title: &Title,
         subject: &ResolvedReleaseSearchSubject,
-        mut results: Vec<IndexerSearchResult>,
+        results: Vec<IndexerSearchResult>,
         user_invoked: bool,
     ) -> AppResult<Vec<IndexerSearchResult>> {
+        let reads = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+        self.evaluate_search_results_for_subject_with_reads(
+            title,
+            subject,
+            results,
+            user_invoked,
+            &reads,
+        )
+        .await
+    }
+
+    /// [`Self::evaluate_search_results_for_subject`] reading the title's
+    /// catalog and media files through the caller's per-operation memo. A title
+    /// walk evaluates every due scope of one title; each scope used to re-read
+    /// the whole episode list, the collections and the media files.
+    pub(crate) async fn evaluate_search_results_for_subject_with_reads(
+        &self,
+        title: &Title,
+        subject: &ResolvedReleaseSearchSubject,
+        mut results: Vec<IndexerSearchResult>,
+        user_invoked: bool,
+        reads: &crate::acquisition::title_reads::TitleCatalogReads,
+    ) -> AppResult<Vec<IndexerSearchResult>> {
+        let fresh;
+        let reads = if reads.covers(&title.id) {
+            reads
+        } else {
+            fresh = crate::acquisition::title_reads::TitleCatalogReads::new(&title.id);
+            &fresh
+        };
         // The subject's evidence was built from the subject's own names. The
         // spelling lane also has to see what each *release* is named, or the
         // collision guard has no competitor to find and a rival spelling
         // silently becomes a confident match. One fetch for every release
-        // name in this batch, at the same distance and through the same port
-        // method the release-anchored paths use.
+        // name in this batch that can reach that guard, at the same distance
+        // and through the same port method the release-anchored paths use.
         let extended_subject = self.subject_with_release_anchors(subject, &results).await?;
         let subject = extended_subject.as_ref().unwrap_or(subject);
         // `DbBlocklisted` reads the per-title blocklist (the single, removable
@@ -2180,15 +2225,13 @@ impl AppUseCase {
             .await;
 
         let dl_snapshot = crate::acquisition_workflow::DownloadClientSnapshot::fetch(self).await;
-        let existing_files = self
-            .services
-            .library
-            .media_files
-            .list_media_files_for_title(&title.id)
+        let existing_files = reads
+            .media_files(self)
             .await
             .unwrap_or_default()
-            .into_iter()
+            .iter()
             .filter(|file| file.role.is_primary())
+            .cloned()
             .collect::<Vec<_>>();
         let delay_profiles = self.load_delay_profiles().await;
         let now = Utc::now();
@@ -2220,21 +2263,11 @@ impl AppUseCase {
         // One catalog read per scope, shared by the unmonitored-episode refusal
         // and by the queued pseudo-incumbents' runtime-basis calculation.
         let (catalog_episodes, catalog_collections) = if title.facet == MediaFacet::Movie {
-            (Vec::new(), Vec::new())
+            (Arc::default(), Arc::default())
         } else {
             (
-                self.services
-                    .catalog
-                    .shows
-                    .list_episodes_for_title(&title.id)
-                    .await
-                    .unwrap_or_default(),
-                self.services
-                    .catalog
-                    .shows
-                    .list_collections_for_title(&title.id)
-                    .await
-                    .unwrap_or_default(),
+                reads.episodes(self).await.unwrap_or_default(),
+                reads.collections(self).await.unwrap_or_default(),
             )
         };
         let unmonitored_episode_ids: HashSet<String> = catalog_episodes
@@ -2250,12 +2283,13 @@ impl AppUseCase {
             .resolve_canonical_scoring_context(title, &upgrade_context.profile)
             .await;
         let mut admission = self
-            .admission_subject_for_scope(
+            .admission_subject_for_scope_with_reads(
                 title,
                 &subject.submission_scope,
                 &scoring_context,
                 None,
                 crate::quality::canonical_context::SubjectIntent::Grab,
+                reads,
             )
             .await;
         // **What is already downloading counts too.** Sonarr's
@@ -2268,7 +2302,7 @@ impl AppUseCase {
         // lane; here it means the pseudo-incumbents would be built from a
         // snapshot that reports everything as active, so they are skipped.
         let membership = self
-            .scope_membership_for(title, &subject.submission_scope)
+            .scope_membership_for_with_reads(title, &subject.submission_scope, reads)
             .await;
         let mut queued = Vec::new();
         if !dl_snapshot.queue_listing_failed() {
@@ -2440,8 +2474,10 @@ impl AppUseCase {
         Ok(results)
     }
 
-    /// The subject again, with every candidate's release name folded into its
-    /// spelling evidence.
+    /// The subject again, with the candidates' release names folded into its
+    /// spelling evidence — only those that can reach the subject's collision
+    /// check, in the subject's facet. The index is selective afterwards: a
+    /// collision check for a name this skipped is refused.
     ///
     /// `None` when there is nothing to add — no evidence index, or no result
     /// carries a name — and the caller then keeps the subject as it stands.
@@ -2453,17 +2489,9 @@ impl AppUseCase {
         let Some(existing) = subject.title_evidence.ambiguity.spelling_index.as_ref() else {
             return Ok(None);
         };
-        let mut anchors = Vec::new();
-        let mut seen = HashSet::new();
-        for candidate in results {
-            let (forms, _) =
-                crate::title_matching::relaxed::neutral_spelling_forms(&candidate.title);
-            for (key, raw) in forms {
-                if seen.insert(key.clone()) {
-                    anchors.push((key, raw));
-                }
-            }
-        }
+        let anchors = crate::title_matching::relaxed::release_batch_anchors(
+            results.iter().map(|candidate| candidate.title.as_str()),
+        );
         if anchors.is_empty() {
             return Ok(None);
         }
@@ -2471,7 +2499,11 @@ impl AppUseCase {
         let matcher = self.monitored_title_matcher().await?;
         let mut index = existing.as_ref().clone();
         matcher
-            .extend_spelling_candidates(&mut index, &anchors)
+            .extend_spelling_candidates_for_collisions(
+                &mut index,
+                &anchors,
+                &subject.title_evidence.spelling_identity,
+            )
             .await?;
 
         let mut subject = subject.clone();
@@ -2606,7 +2638,7 @@ impl AppUseCase {
             .as_deref()
             .and_then(crate::normalize::normalize_numeric_id);
         let anidb_id = self
-            .local_scoped_anidb_id_for_episode(episode_record.as_ref())
+            .local_scoped_anidb_id_for_episode(episode_record.as_ref(), None)
             .await
             .or(title_anidb_id);
 
@@ -2709,7 +2741,8 @@ impl AppUseCase {
         episode: Option<&Episode>,
         season_num: u32,
         runtime_minutes: Option<i32>,
-    ) -> AppResult<ResolvedReleaseSearchSubject> {
+        reads: Option<&crate::acquisition::title_reads::TitleCatalogReads>,
+    ) -> AppResult<PendingReleaseSearchSubject> {
         let imdb_id = imdb_id_from_title(title);
         let tvdb_id = tvdb_id_from_external_ids(&title.external_ids)
             .as_deref()
@@ -2720,7 +2753,7 @@ impl AppUseCase {
         let collection_anidb_id = match episode.and_then(|episode| episode.collection_id.as_deref())
         {
             Some(collection_id) => {
-                self.local_scoped_anidb_id_for_collection(collection_id)
+                self.local_scoped_anidb_id_for_collection(collection_id, reads)
                     .await
             }
             None => None,
@@ -2738,33 +2771,38 @@ impl AppUseCase {
             ));
         }
 
-        // Results come back under any name the index holds for the title, a
-        // cour name included, so the evidence is built from the index's names.
-        let evidence_title = self.index_evidence_title(title).await?;
-
-        Ok(ResolvedReleaseSearchSubject {
-            title_id: title.id.clone(),
-            title_tags: title.tags.clone(),
-            title_evidence: canonical_title_evidence(&evidence_title)
-                .with_ambiguity(self.title_identity_ambiguity(&evidence_title).await?),
-            queries,
-            imdb_id,
-            tmdb_id: tmdb_id_from_external_ids(&title.external_ids),
-            tvdb_id,
-            anidb_id,
-            mal_id: mal_id_from_external_ids(&title.external_ids),
-            category: category.clone(),
-            owner_facet: title.facet.clone(),
-            search_facet: title.facet.clone(),
-            id_search_facet: None,
-            newznab_categories: Vec::new(),
-            runtime_minutes,
-            season: Some(season_num),
-            episode: None,
-            numbering_context: crate::IndexerSearchNumberingContext::default(),
-            absolute_episode: None,
-            subject_kind: ReleaseSearchSubjectKind::Season,
-            submission_scope: collection_download_submission_scope_for_wanted_item(item, episode),
+        Ok(PendingReleaseSearchSubject {
+            subject: ResolvedReleaseSearchSubject {
+                title_id: title.id.clone(),
+                title_tags: title.tags.clone(),
+                // Replaced by `PendingReleaseSearchSubject::resolve` with evidence
+                // from the index's names.
+                title_evidence: canonical_title_evidence(title),
+                queries,
+                imdb_id,
+                tmdb_id: tmdb_id_from_external_ids(&title.external_ids),
+                tvdb_id,
+                anidb_id,
+                mal_id: mal_id_from_external_ids(&title.external_ids),
+                category: category.clone(),
+                owner_facet: title.facet.clone(),
+                search_facet: title.facet.clone(),
+                id_search_facet: None,
+                newznab_categories: Vec::new(),
+                runtime_minutes,
+                season: Some(season_num),
+                episode: None,
+                numbering_context: crate::IndexerSearchNumberingContext::default(),
+                absolute_episode: None,
+                subject_kind: ReleaseSearchSubjectKind::Season,
+                submission_scope: collection_download_submission_scope_for_wanted_item(
+                    item, episode,
+                ),
+            },
+            // Results come back under any name the index holds for the title,
+            // a cour name included, so the evidence is built from the index's
+            // names.
+            evidence: PendingTitleEvidence::IndexNames(title.clone()),
         })
     }
 
@@ -2839,6 +2877,27 @@ impl AppUseCase {
         item: &AcquisitionScopeState,
         episode: Option<&Episode>,
     ) -> AppResult<ResolvedReleaseSearchSubject> {
+        self.resolve_pending_release_search_subject_for_wanted_item(
+            owner_title,
+            search_title,
+            item,
+            episode,
+        )
+        .await
+        .resolve(self)
+        .await
+    }
+
+    /// [`Self::resolve_release_search_subject_for_wanted_item`] with the title
+    /// evidence's identity ambiguity left for
+    /// [`PendingReleaseSearchSubject::resolve`].
+    pub(crate) async fn resolve_pending_release_search_subject_for_wanted_item(
+        &self,
+        owner_title: &Title,
+        search_title: &Title,
+        item: &AcquisitionScopeState,
+        episode: Option<&Episode>,
+    ) -> PendingReleaseSearchSubject {
         // Anime whose community numbering differs from TVDB's needs the extra
         // community-numbered query forms; every other title reads `None` here
         // and searches exactly as before.
@@ -2870,40 +2929,90 @@ impl AppUseCase {
         let evidence_title =
             title_with_bridge_cour_titles(search_title, anime_numbering_bridge.as_ref());
 
-        Ok(ResolvedReleaseSearchSubject {
-            title_id: owner_title.id.clone(),
-            title_tags: owner_title.tags.clone(),
-            title_evidence: canonical_title_evidence_for_episode(&evidence_title, episode)
-                .with_ambiguity(self.title_identity_ambiguity(search_title).await?),
-            queries: query_result.queries,
-            imdb_id: query_result.imdb_id,
-            tmdb_id: query_result.tmdb_id,
-            tvdb_id: query_result.tvdb_id,
-            anidb_id: query_result.anidb_id,
-            mal_id: query_result.mal_id,
-            category: query_result.category.clone(),
-            owner_facet: owner_facet.clone(),
-            search_facet: search_title.facet.clone(),
-            id_search_facet: (item.media_type == "series_movie").then_some(MediaFacet::Movie),
-            newznab_categories: if item.media_type == "series_movie" {
-                series_movie_newznab_categories(&owner_facet)
-            } else {
-                Vec::new()
+        PendingReleaseSearchSubject {
+            subject: ResolvedReleaseSearchSubject {
+                title_id: owner_title.id.clone(),
+                title_tags: owner_title.tags.clone(),
+                title_evidence: canonical_title_evidence_for_episode(&evidence_title, episode),
+                queries: query_result.queries,
+                imdb_id: query_result.imdb_id,
+                tmdb_id: query_result.tmdb_id,
+                tvdb_id: query_result.tvdb_id,
+                anidb_id: query_result.anidb_id,
+                mal_id: query_result.mal_id,
+                category: query_result.category.clone(),
+                owner_facet: owner_facet.clone(),
+                search_facet: search_title.facet.clone(),
+                id_search_facet: (item.media_type == "series_movie").then_some(MediaFacet::Movie),
+                newznab_categories: if item.media_type == "series_movie" {
+                    series_movie_newznab_categories(&owner_facet)
+                } else {
+                    Vec::new()
+                },
+                runtime_minutes: episode
+                    .and_then(|episode| episode.duration_seconds)
+                    .map(|seconds| (seconds / 60) as i32)
+                    .or(search_title.runtime_minutes),
+                season: query_result.season,
+                episode: query_result.episode,
+                numbering_context: query_result.numbering_context,
+                absolute_episode,
+                subject_kind: match item.media_type.as_str() {
+                    "episode" => ReleaseSearchSubjectKind::Episode,
+                    _ => ReleaseSearchSubjectKind::Title,
+                },
+                submission_scope: direct_download_submission_scope_for_wanted_item(item, episode),
             },
-            runtime_minutes: episode
-                .and_then(|episode| episode.duration_seconds)
-                .map(|seconds| (seconds / 60) as i32)
-                .or(search_title.runtime_minutes),
-            season: query_result.season,
-            episode: query_result.episode,
-            numbering_context: query_result.numbering_context,
-            absolute_episode,
-            subject_kind: match item.media_type.as_str() {
-                "episode" => ReleaseSearchSubjectKind::Episode,
-                _ => ReleaseSearchSubjectKind::Title,
-            },
-            submission_scope: direct_download_submission_scope_for_wanted_item(item, episode),
-        })
+            evidence: PendingTitleEvidence::Ambiguity(search_title.clone()),
+        }
+    }
+}
+
+/// A search subject whose title-match evidence is not finished.
+///
+/// Everything the convergence gate reads (ids, facets, submission scope, tags)
+/// is resolved. The rest of the evidence (the title's persisted index names,
+/// the other titles sharing its lookup keys, its spelling candidates) costs
+/// several catalog reads and only a subject that is searched needs it, so a
+/// stage the gate skips never pays for it.
+pub(crate) struct PendingReleaseSearchSubject {
+    subject: ResolvedReleaseSearchSubject,
+    evidence: PendingTitleEvidence,
+}
+
+enum PendingTitleEvidence {
+    /// The evidence is built from the subject's own names; only the identity
+    /// ambiguity of this title is missing.
+    Ambiguity(Title),
+    /// The evidence is built from every name the persisted index holds for
+    /// this title.
+    IndexNames(Title),
+}
+
+impl PendingReleaseSearchSubject {
+    /// The subject as the convergence gate reads it. Its title evidence is
+    /// unfinished, so nothing may match a release against it.
+    pub(crate) fn for_convergence(&self) -> &ResolvedReleaseSearchSubject {
+        &self.subject
+    }
+
+    /// The finished subject, identical to the one the one-step builder returns.
+    pub(crate) async fn resolve(self, app: &AppUseCase) -> AppResult<ResolvedReleaseSearchSubject> {
+        let Self {
+            mut subject,
+            evidence,
+        } = self;
+        subject.title_evidence = match evidence {
+            PendingTitleEvidence::Ambiguity(title) => subject
+                .title_evidence
+                .with_ambiguity(app.title_identity_ambiguity(&title).await?),
+            PendingTitleEvidence::IndexNames(title) => {
+                let evidence_title = app.index_evidence_title(&title).await?;
+                canonical_title_evidence(&evidence_title)
+                    .with_ambiguity(app.title_identity_ambiguity(&evidence_title).await?)
+            }
+        };
+        Ok(subject)
     }
 }
 

@@ -84,6 +84,24 @@ pub(crate) fn queue_download_conflict_payload(
 
 #[Object]
 impl DownloadMutations {
+    /// Evaluate an external announcement using normal automatic acquisition rules.
+    async fn submit_external_release(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(
+            desc = "Release identity, source, and advertised attributes to evaluate without adding a title."
+        )]
+        input: crate::external::SubmitExternalReleaseInput,
+    ) -> GqlResult<crate::external::ExternalReleasePayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let outcome = app
+            .submit_external_release(&actor, input.into_application()?, &[])
+            .await
+            .map_err(to_gql_error)?;
+        Ok(outcome.into())
+    }
+
     /// Queue the release represented by a signed candidate token for an existing title.
     /// Returns a job id when accepted or a conflict payload when the submission scope is busy.
     async fn queue_indexer_search_assignment(

@@ -2562,6 +2562,40 @@ file = "postgres/migrations/0255_wanted_items_collection_scope_excludes_episodes
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 256
+description = "import disk space incidents and notification receipts"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0256_import_space_incidents.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0256_import_space_incidents.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 257
+description = "import space member age and notification attempt ceiling"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0257_import_space_attempts_and_member_age.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0257_import_space_attempts_and_member_age.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

@@ -10,7 +10,9 @@ use scryer_domain::{
     Episode, EpisodeType, Id, MovieEntity, SeriesMovieLink,
 };
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
+use super::bridge_cache::AnimeNumberingBridgeCache;
 use crate::media::canonical_tags::{
     load_movie_entity_metadata_ratings, replace_movie_entity_metadata_ratings_tx,
 };
@@ -98,11 +100,31 @@ WHERE id = {}";
 #[derive(Clone)]
 pub struct ShowStore {
     datastore: StoreDatastore,
+    /// Shared with every other store that can change or remove a bridge row;
+    /// see `bridge_cache` for the invalidation contract.
+    bridge_cache: Arc<AnimeNumberingBridgeCache>,
 }
 
 impl ShowStore {
     pub fn new(datastore: StoreDatastore) -> Self {
-        Self { datastore }
+        Self {
+            datastore,
+            bridge_cache: Arc::new(AnimeNumberingBridgeCache::new()),
+        }
+    }
+
+    /// Use `cache` for bridge reads. The assembly hands the same cache to the
+    /// title and merge stores so their deletes reach it.
+    pub fn with_anime_numbering_bridge_cache(
+        mut self,
+        cache: Arc<AnimeNumberingBridgeCache>,
+    ) -> Self {
+        self.bridge_cache = cache;
+        self
+    }
+
+    pub fn anime_numbering_bridge_cache(&self) -> Arc<AnimeNumberingBridgeCache> {
+        self.bridge_cache.clone()
     }
 
     fn read_target(&self) -> SqlTarget<'_> {
@@ -393,11 +415,19 @@ impl ShowRepository for ShowStore {
         list_episodes_for_title_query(self.read_target(), title_id).await
     }
 
+    async fn list_episodes_for_titles(&self, title_ids: &[String]) -> AppResult<Vec<Episode>> {
+        list_episodes_for_titles_query(self.read_target(), title_ids).await
+    }
+
     async fn get_anime_numbering_bridge(
         &self,
         title_id: &str,
     ) -> AppResult<Option<AnimeNumberingBridge>> {
-        get_anime_numbering_bridge_query(self.read_target(), title_id).await
+        self.bridge_cache
+            .get_or_load(title_id, || {
+                get_anime_numbering_bridge_query(self.read_target(), title_id)
+            })
+            .await
     }
 
     async fn replace_anime_numbering_bridge(
@@ -405,9 +435,10 @@ impl ShowRepository for ShowStore {
         title_id: &str,
         bridge: Option<&AnimeNumberingBridge>,
     ) -> AppResult<()> {
+        let cache_key = title_id.to_string();
         let title_id = title_id.to_string();
         let bridge = bridge.cloned();
-        SqlRuntime::run_in_transaction(
+        let result = SqlRuntime::run_in_transaction(
             &self.datastore,
             "replace_anime_numbering_bridge",
             move |tx| {
@@ -424,7 +455,11 @@ impl ShowRepository for ShowStore {
                 })
             },
         )
-        .await
+        .await;
+        // After the transaction, committed or not: a failed commit whose
+        // outcome is unknown must not leave the old value cached.
+        self.bridge_cache.invalidate(&cache_key);
+        result
     }
 
     async fn list_episode_external_ids(
@@ -1286,6 +1321,27 @@ async fn list_episodes_for_collections_query(
         "SELECT {EPISODE_COLUMNS} FROM episodes WHERE collection_id IN ({placeholders}) ORDER BY collection_id ASC, episode_number ASC, id ASC"
     );
     let args = collection_ids
+        .iter()
+        .cloned()
+        .map(SqlArg::Text)
+        .collect::<Vec<_>>();
+    let rows = SqlRuntime::fetch_all(SqlExec::Target(target), &sql, &args).await?;
+    rows.iter().map(row_to_episode).collect()
+}
+
+/// Per title, the same order `list_episodes_for_title_query` returns.
+async fn list_episodes_for_titles_query(
+    target: SqlTarget<'_>,
+    title_ids: &[String],
+) -> AppResult<Vec<Episode>> {
+    if title_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = bind_placeholders(title_ids.len());
+    let sql = format!(
+        "SELECT {EPISODE_COLUMNS} FROM episodes WHERE title_id IN ({placeholders}) ORDER BY title_id ASC, season_number ASC, episode_number ASC, id ASC"
+    );
+    let args = title_ids
         .iter()
         .cloned()
         .map(SqlArg::Text)
@@ -2466,6 +2522,7 @@ mod tests {
 mod collection_ordered_path_tests {
     use super::{
         SqlTarget, get_collection_by_ordered_path_query, list_collections_by_ordered_paths_query,
+        list_episodes_for_title_query, list_episodes_for_titles_query,
     };
     use sqlx::sqlite::SqlitePoolOptions;
 
@@ -2536,6 +2593,78 @@ mod collection_ordered_path_tests {
     }
 
     #[tokio::test]
+    async fn batched_title_episodes_match_the_per_title_listing() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("open SQLite pool");
+        sqlx::query(
+            "CREATE TABLE episodes (
+                id TEXT PRIMARY KEY, title_id TEXT NOT NULL, collection_id TEXT,
+                episode_type TEXT NOT NULL, episode_number TEXT, season_number TEXT,
+                episode_label TEXT, title TEXT, air_date TEXT, duration_seconds INTEGER,
+                has_multi_audio INTEGER NOT NULL, has_subtitle INTEGER NOT NULL,
+                is_filler INTEGER, is_recap INTEGER, absolute_number TEXT, overview TEXT,
+                tvdb_id TEXT, image_url TEXT, monitored INTEGER NOT NULL, created_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create episodes table");
+        // Inserted out of order, across three titles, one of them not asked for.
+        for (id, title_id, season, episode) in [
+            ("ep-b2", "title-b", "1", "2"),
+            ("ep-a3", "title-a", "2", "1"),
+            ("ep-c1", "title-c", "1", "1"),
+            ("ep-a1", "title-a", "1", "1"),
+            ("ep-b1", "title-b", "1", "1"),
+            ("ep-a2", "title-a", "1", "2"),
+        ] {
+            sqlx::query(
+                "INSERT INTO episodes (
+                    id, title_id, episode_type, episode_number, season_number,
+                    has_multi_audio, has_subtitle, monitored, created_at
+                ) VALUES (?, ?, 'standard', ?, ?, 0, 0, 1, '2026-01-01T00:00:00Z')",
+            )
+            .bind(id)
+            .bind(title_id)
+            .bind(episode)
+            .bind(season)
+            .execute(&pool)
+            .await
+            .expect("insert episode");
+        }
+
+        let wanted = ["title-b".to_string(), "title-a".to_string()];
+        let batched = list_episodes_for_titles_query(SqlTarget::Sqlite(&pool), &wanted)
+            .await
+            .expect("batched listing");
+        let mut per_title = Vec::new();
+        for title_id in ["title-a", "title-b"] {
+            per_title.extend(
+                list_episodes_for_title_query(SqlTarget::Sqlite(&pool), title_id)
+                    .await
+                    .expect("per-title listing"),
+            );
+        }
+        let ids = |episodes: &[scryer_domain::Episode]| {
+            episodes
+                .iter()
+                .map(|episode| episode.id.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ids(&batched), ids(&per_title));
+        assert_eq!(ids(&batched), ["ep-a1", "ep-a2", "ep-a3", "ep-b1", "ep-b2"]);
+        assert!(
+            list_episodes_for_titles_query(SqlTarget::Sqlite(&pool), &[])
+                .await
+                .expect("empty listing")
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn batched_ordered_path_lookup_returns_nothing_for_empty_input() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
@@ -2548,3 +2677,6 @@ mod collection_ordered_path_tests {
         assert!(batched.is_empty());
     }
 }
+
+#[cfg(test)]
+mod bridge_cache_tests;

@@ -281,11 +281,18 @@ impl AppUseCase {
 mod routing_tests {
     use super::*;
 
-    fn routing_entry(enabled: bool, categories: &[&str], priority: i32) -> IndexerRoutingSettingsEntry {
+    fn routing_entry(
+        enabled: bool,
+        categories: &[&str],
+        priority: i32,
+    ) -> IndexerRoutingSettingsEntry {
         IndexerRoutingSettingsEntry {
             indexer_id: "managed-child".to_string(),
             enabled,
-            categories: categories.iter().map(|value| (*value).to_string()).collect(),
+            categories: categories
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
             priority,
         }
     }
@@ -308,11 +315,7 @@ mod routing_tests {
             "movie".to_string(),
             vec!["2010".to_string(), "2020".to_string()],
         )]);
-        apply_managed_child_routing(
-            &mut routing_by_scope,
-            "managed-child",
-            &desired_scopes,
-        );
+        apply_managed_child_routing(&mut routing_by_scope, "managed-child", &desired_scopes);
 
         let restored = &routing_by_scope["movie"][0];
         assert!(!restored.enabled);
@@ -322,10 +325,8 @@ mod routing_tests {
 
     #[test]
     fn managed_routing_removes_enabled_entry_for_omitted_scope() {
-        let mut routing_by_scope = HashMap::from([(
-            "movie".to_string(),
-            vec![routing_entry(true, &["2000"], 7)],
-        )]);
+        let mut routing_by_scope =
+            HashMap::from([("movie".to_string(), vec![routing_entry(true, &["2000"], 7)])]);
 
         apply_managed_child_routing(&mut routing_by_scope, "managed-child", &HashMap::new());
 

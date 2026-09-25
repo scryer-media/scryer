@@ -41,24 +41,17 @@ type AuthLoginResult = {
 let currentToken: string | null = null;
 
 export function getAuthToken(): string | null {
-  if (currentToken) {
-    if (userFromToken(currentToken)) {
-      return currentToken;
-    }
-    if (isRestrictedAuthToken(currentToken)) {
-      return null;
-    }
-    currentToken = null;
-  }
-
   if (typeof window === "undefined") {
     return null;
   }
 
+  // Storage is authoritative across tabs. A cached token can outlive another
+  // tab's logout or account change and defeat query-scope invalidation.
   const stored =
     window.sessionStorage.getItem(SESSION_STORAGE_KEY) ??
     window.localStorage.getItem(PERSISTENT_STORAGE_KEY);
   if (!stored) {
+    currentToken = null;
     return null;
   }
 

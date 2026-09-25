@@ -71,7 +71,12 @@ impl AppUseCase {
         let _scheduled_guard = TitleImageCacheClearScheduledGuard { flag: scheduled };
 
         let _maintenance_guard = loop {
-            let active_scans = self.runtime.library.library_scan_tracker.list_active().await;
+            let active_scans = self
+                .runtime
+                .library
+                .library_scan_tracker
+                .list_active()
+                .await;
             if !active_scans.is_empty() {
                 info!(
                     active_scans = active_scans.len(),
@@ -170,8 +175,7 @@ impl AppUseCase {
                 batch_title_urls_updated = batch_summary.title_urls_updated,
                 batch_episode_urls_updated = batch_summary.episode_urls_updated,
                 batch_missing_artwork_results = batch_summary.missing_artwork_results,
-                batch_missing_title_artwork_results =
-                    batch_summary.missing_title_artwork_results,
+                batch_missing_title_artwork_results = batch_summary.missing_title_artwork_results,
                 batch_missing_episode_matches = batch_summary.missing_episode_matches,
                 batch_missing_incoming_image_urls = batch_summary.missing_incoming_image_urls,
                 "title image cache refresh rehydrated artwork url batch"
@@ -240,8 +244,8 @@ impl AppUseCase {
                             summary.missing_title_artwork_results += 1;
                             continue;
                         };
-                        let poster_url = (!movie.poster_url.trim().is_empty())
-                            .then_some(&movie.poster_url);
+                        let poster_url =
+                            (!movie.poster_url.trim().is_empty()).then_some(&movie.poster_url);
                         let background_url = movie
                             .background_url
                             .as_ref()
@@ -250,7 +254,8 @@ impl AppUseCase {
                             summary.missing_artwork_results += 1;
                             summary.missing_incoming_image_urls += 1;
                         }
-                        if let Some(update) = title_artwork_update(title, poster_url, background_url)
+                        if let Some(update) =
+                            title_artwork_update(title, poster_url, background_url)
                         {
                             title_updates.push(update);
                         }
@@ -344,9 +349,11 @@ impl AppUseCase {
                     "title image cache refresh skipped series artwork update with no usable image URLs"
                 );
             }
-            if let Some(update) =
-                title_artwork_update(title, urls.poster_url.as_ref(), urls.background_url.as_ref())
-            {
+            if let Some(update) = title_artwork_update(
+                title,
+                urls.poster_url.as_ref(),
+                urls.background_url.as_ref(),
+            ) {
                 title_updates.push(update);
             }
 
@@ -357,7 +364,8 @@ impl AppUseCase {
                 .list_episodes_for_title(&title.id)
                 .await?;
             let mut episode_by_tvdb = HashMap::<i64, &scryer_domain::Episode>::new();
-            let mut episode_by_numbers = HashMap::<(String, String), &scryer_domain::Episode>::new();
+            let mut episode_by_numbers =
+                HashMap::<(String, String), &scryer_domain::Episode>::new();
             for episode in &episodes {
                 if let Some(tvdb_id) = episode
                     .tvdb_id
@@ -375,17 +383,14 @@ impl AppUseCase {
             }
 
             for incoming in &urls.episodes {
-                let existing = episode_by_tvdb
-                    .get(&incoming.tvdb_id)
-                    .copied()
-                    .or_else(|| {
-                        episode_by_numbers
-                            .get(&(
-                                incoming.season_number.to_string(),
-                                incoming.episode_number.to_string(),
-                            ))
-                            .copied()
-                    });
+                let existing = episode_by_tvdb.get(&incoming.tvdb_id).copied().or_else(|| {
+                    episode_by_numbers
+                        .get(&(
+                            incoming.season_number.to_string(),
+                            incoming.episode_number.to_string(),
+                        ))
+                        .copied()
+                });
                 let Some(existing) = existing else {
                     summary.missing_artwork_results += 1;
                     summary.missing_episode_matches += 1;
@@ -410,7 +415,8 @@ impl AppUseCase {
                     );
                     continue;
                 };
-                if let Some(update) = episode_image_url_update(existing, incoming.image_url.as_ref())
+                if let Some(update) =
+                    episode_image_url_update(existing, incoming.image_url.as_ref())
                 {
                     episode_updates.push(update);
                 }
@@ -457,7 +463,9 @@ fn title_artwork_update(
         .or(title.background_url.as_ref())
         .cloned();
     let next_poster = incoming_poster_url.cloned().or(current_poster.clone());
-    let next_background = incoming_background_url.cloned().or(current_background.clone());
+    let next_background = incoming_background_url
+        .cloned()
+        .or(current_background.clone());
 
     if next_poster == current_poster && next_background == current_background {
         return None;
@@ -499,7 +507,10 @@ mod title_image_cache_refresh_tests {
             monitored: true,
             tags: Vec::new(),
             canonical_tags: vec![],
-            external_ids: vec![scryer_domain::ExternalId::new("tvdb".to_string(), "123".to_string())],
+            external_ids: vec![scryer_domain::ExternalId::new(
+                "tvdb".to_string(),
+                "123".to_string(),
+            )],
             created_by: None,
             created_at: chrono::Utc::now(),
             year: None,

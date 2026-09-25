@@ -10,6 +10,15 @@ export type DashboardPanelStates = Record<
   DashboardPanelState
 >;
 
+/** A panel fed by several loads: ready only when all are, loading while any is, first error wins. */
+export function combinePanelStates(...states: DashboardPanelState[]): DashboardPanelState {
+  return {
+    loading: states.some((state) => state.loading),
+    ready: states.every((state) => state.ready),
+    error: states.find((state) => state.error)?.error ?? null,
+  };
+}
+
 export function initialDashboardPanelStates(): DashboardPanelStates {
   return Object.fromEntries(
     ["overview", "storage", "requests", "imports", "recent", "queue"].map(

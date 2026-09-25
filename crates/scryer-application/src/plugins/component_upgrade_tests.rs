@@ -426,7 +426,10 @@ async fn a_blocked_download_client_stops_reporting_stale_healthy() {
         .apply_component_blockers_to_download_clients(&mut configs)
         .await;
 
-    assert_eq!(configs[0].status, scryer_domain::DownloadClientStatus::Error);
+    assert_eq!(
+        configs[0].status,
+        scryer_domain::DownloadClientStatus::Error
+    );
     assert_eq!(
         configs[0].last_error.as_deref(),
         Some("no compatible build"),

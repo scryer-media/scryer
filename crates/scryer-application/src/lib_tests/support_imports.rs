@@ -244,6 +244,9 @@ pub(super) struct MockMediaFileRepo {
     /// anti-join over every monitored episode, so a scheduled cycle that cannot
     /// act on the result must not take one.
     pub(super) missing_scope_sweeps: Arc<std::sync::atomic::AtomicUsize>,
+    /// Title-wide and episode-scoped file reads, for read-budget tests.
+    pub(super) title_file_reads: Arc<std::sync::atomic::AtomicUsize>,
+    pub(super) scoped_file_reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl MockMediaFileRepo {
@@ -530,6 +533,8 @@ impl MediaFileRepository for MockMediaFileRepo {
     }
 
     async fn list_media_files_for_title(&self, title_id: &str) -> AppResult<Vec<TitleMediaFile>> {
+        self.title_file_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         Ok(self
             .store
             .lock()
@@ -545,6 +550,8 @@ impl MediaFileRepository for MockMediaFileRepo {
         title_id: &str,
         episode_ids: &[String],
     ) -> AppResult<Vec<EpisodeScopedMediaFile>> {
+        self.scoped_file_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let requested = episode_ids
             .iter()
             .map(String::as_str)

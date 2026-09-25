@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  combinePanelStates,
   createDashboardRefresh,
   initialDashboardPanelStates,
 } from "./dashboard-refresh.ts";
@@ -103,4 +104,13 @@ test("overlapping polls do not starve a slow panel", async () => {
   });
   await pending;
   assert.equal(published, true);
+});
+
+test("a panel fed by two loads waits for both and shows the first error", () => {
+  const ready = { loading: false, ready: true, error: null };
+  const loading = { loading: true, ready: false, error: null };
+  const failed = { loading: false, ready: false, error: "queue failed" };
+  assert.deepEqual(combinePanelStates(ready, loading), { loading: true, ready: false, error: null });
+  assert.deepEqual(combinePanelStates(ready, failed), { loading: false, ready: false, error: "queue failed" });
+  assert.deepEqual(combinePanelStates(ready, ready), { loading: false, ready: true, error: null });
 });

@@ -102,8 +102,7 @@ fn ensure_unique_quality_profile_ids(profiles: &[crate::QualityProfile]) -> AppR
 }
 
 fn profile_id_from_setting_json(raw: &str) -> Option<String> {
-    let value = serde_json::from_str::<String>(raw)
-        .unwrap_or_else(|_| raw.trim().to_string());
+    let value = serde_json::from_str::<String>(raw).unwrap_or_else(|_| raw.trim().to_string());
     normalize_optional_string(Some(value))
         .filter(|profile_id| profile_id != QUALITY_PROFILE_INHERIT_VALUE)
 }
@@ -418,10 +417,7 @@ impl AppUseCase {
             .has_any_library_permission(actor, scryer_domain::LibraryPermission::ManageTitles)
             .await?;
         let can_manage_library = self
-            .has_any_library_permission(
-                actor,
-                scryer_domain::LibraryPermission::ManageLibrary,
-            )
+            .has_any_library_permission(actor, scryer_domain::LibraryPermission::ManageLibrary)
             .await?;
         let can_request = self
             .has_any_library_permission(actor, scryer_domain::LibraryPermission::Request)
@@ -438,7 +434,9 @@ impl AppUseCase {
     pub async fn canonical_quality_profile_id(&self, profile_id: &str) -> AppResult<String> {
         let profile_id = profile_id.trim();
         if profile_id.is_empty() {
-            return Err(AppError::Validation("quality profile id is required".to_string()));
+            return Err(AppError::Validation(
+                "quality profile id is required".to_string(),
+            ));
         }
         let profiles = ensure_quality_profiles_exist(
             self.services
@@ -449,13 +447,13 @@ impl AppUseCase {
         );
         quality_profile_by_id(&profiles, profile_id)?
             .map(|profile| profile.id.clone())
-            .ok_or_else(|| AppError::Validation(format!(
-                "unknown quality profile '{profile_id}'"
-            )))
+            .ok_or_else(|| AppError::Validation(format!("unknown quality profile '{profile_id}'")))
     }
 
     pub async fn validate_quality_profile_id(&self, profile_id: &str) -> AppResult<()> {
-        self.canonical_quality_profile_id(profile_id).await.map(|_| ())
+        self.canonical_quality_profile_id(profile_id)
+            .await
+            .map(|_| ())
     }
 
     pub(crate) async fn canonicalize_title_quality_profile_tags(
@@ -548,9 +546,8 @@ impl AppUseCase {
                 &library_ids,
             )
             .await?;
-        if let Some((library_id, profile_id)) = request_overrides
-            .into_iter()
-            .find_map(|(library_id, raw)| {
+        if let Some((library_id, profile_id)) =
+            request_overrides.into_iter().find_map(|(library_id, raw)| {
                 request_profile_ids_from_setting_json(&raw)
                     .into_iter()
                     .find(|profile_id| referenced(profile_id))
@@ -634,7 +631,11 @@ impl AppUseCase {
         let global_profile_id = global_profile_id
             .map(|profile_id| {
                 quality_profile_by_id(&current_profiles, &profile_id)?.map_or_else(
-                    || Err(AppError::Validation(format!("unknown quality profile '{profile_id}'"))),
+                    || {
+                        Err(AppError::Validation(format!(
+                            "unknown quality profile '{profile_id}'"
+                        )))
+                    },
                     |profile| Ok(profile.id.clone()),
                 )
             })
@@ -687,13 +688,17 @@ impl AppUseCase {
                 selection.override_profile_id = if update.inherit_global {
                     None
                 } else {
-                    update.profile_id.as_deref().map(str::trim).map(|profile_id| {
-                        quality_profile_by_id(&current_profiles, profile_id)
-                            .expect("profile id was validated")
-                            .expect("profile id exists")
-                            .id
-                            .clone()
-                    })
+                    update
+                        .profile_id
+                        .as_deref()
+                        .map(str::trim)
+                        .map(|profile_id| {
+                            quality_profile_by_id(&current_profiles, profile_id)
+                                .expect("profile id was validated")
+                                .expect("profile id exists")
+                                .id
+                                .clone()
+                        })
                 };
             }
         }

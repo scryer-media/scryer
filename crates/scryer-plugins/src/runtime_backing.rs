@@ -64,7 +64,7 @@ pub(crate) struct PluginInstanceSpec {
 /// that is not a component never reaches this enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PluginRuntimeBacking {
-    /// `scryer:archive/archive-extractor@1.0.0`.
+    /// `scryer:archive/archive-extractor@1.1.0` (and its 1.0 predecessor).
     Archive,
     /// `scryer:indexer/indexer-plugin@1.1.0` (and its 1.0 predecessor).
     Indexer,
@@ -91,7 +91,7 @@ pub(crate) fn core_module_rejected(provider: &ProviderDescriptor) -> String {
         }
         ProviderDescriptor::ArchiveExtractor(_) => (
             "archive extractor plugins",
-            "scryer:archive/archive-extractor@1.0.0",
+            "scryer:archive/archive-extractor@1.1.0",
         ),
         ProviderDescriptor::Subtitle(_) => (
             "subtitle provider plugins",
@@ -286,7 +286,7 @@ mod tests {
             (indexer_descriptor(), "scryer:indexer/indexer-plugin@1.1.0"),
             (
                 archive_descriptor(),
-                "scryer:archive/archive-extractor@1.0.0",
+                "scryer:archive/archive-extractor@1.1.0",
             ),
             (
                 subtitle_descriptor(SubtitleProviderMode::Catalog),

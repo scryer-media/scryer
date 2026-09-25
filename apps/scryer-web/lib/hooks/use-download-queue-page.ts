@@ -1,5 +1,9 @@
-import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useClient } from "urql";
+import { ACTIVITY_READ_TIMEOUT_MS, boundedQuery, QueryTimeoutError } from "@/lib/graphql/bounded-query";
+import { useQueryAuthScope } from "@/lib/hooks/use-query-auth-scope";
+import { getAuthToken } from "@/lib/hooks/use-auth";
+import { useTranslate } from "@/lib/context/translate-context";
 
 import { GlobalStatusContext } from "@/lib/context/global-status-context";
 import {
@@ -24,6 +28,7 @@ import {
   retainedDownloadQueuePageNeedsRefresh,
   shouldApplyDownloadQueuePageResponse,
   shouldRefreshDownloadQueueSync,
+  shouldSurfaceRefreshBehind,
 } from "@/lib/utils/download-queue-page";
 
 const SYNC_DEBOUNCE_MS = 300;
@@ -40,6 +45,7 @@ type DownloadQueuePagePayload = {
 };
 
 type QueryPageOptions = {
+  deadline?: number;
   reset?: boolean;
   markRetainedStale?: boolean;
   minimumRevision?: number;
@@ -82,6 +88,8 @@ export function useDownloadQueuePage({
 }: UseDownloadQueuePageArgs): UseDownloadQueuePageResult {
   const contextGlobalStatus = useContext(GlobalStatusContext);
   const client = useClient();
+  const authScope = useQueryAuthScope();
+  const t = useTranslate();
   const [pages, setPages] = useState<Map<number, DownloadQueueRetainedPage>>(new Map());
   const [queueLoading, setQueueLoading] = useState(false);
   const [queueLoadingMore, setQueueLoadingMore] = useState(false);
@@ -95,10 +103,15 @@ export function useDownloadQueuePage({
   const [queueSnapshotStale, setQueueSnapshotStale] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const nextOffsetRef = useRef(0);
+  // Refreshes in a row that came back older than the page needs.
+  const consecutiveBehindRef = useRef(0);
   const visibleOffsetRef = useRef(0);
   const revisionRef = useRef(0);
   const targetRevisionRef = useRef(0);
   const scopeEpochRef = useRef(0);
+  const activeRequestRef = useRef<AbortController | null>(null);
+  const queuedRefreshRef = useRef(false);
+  const [loadedScope, setLoadedScope] = useState<{ key: string; auth: string | null } | null>(null);
   const requestSequenceRef = useRef(new Map<string, number>());
   const pagesRef = useRef<Map<number, DownloadQueueRetainedPage>>(new Map());
   const pendingSyncRef = useRef(false);
@@ -111,7 +124,7 @@ export function useDownloadQueuePage({
 
   const queueItems = useMemo(() => flattenDownloadQueuePages(pages), [pages]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     activeScopeKeyRef.current = scopeKey;
   }, [scopeKey]);
 
@@ -122,6 +135,7 @@ export function useDownloadQueuePage({
       limit: number,
       options: QueryPageOptions,
     ) => {
+      consecutiveBehindRef.current = 0;
       const next = mergeDownloadQueuePageRange(
         pagesRef.current,
         payload.items,
@@ -145,7 +159,7 @@ export function useDownloadQueuePage({
       // health belongs in the user-facing stale warning.
       setQueueSnapshotStale(payload.stale);
       revisionRef.current = Math.max(revisionRef.current, payload.revision);
-      setLastRefreshedAt(payload.updatedAt ? new Date(payload.updatedAt) : null);
+      setLastRefreshedAt(payload.updatedAt ? new Date(payload.updatedAt) : new Date());
       setQueueError(null);
       lastReportedErrorRef.current = null;
     },
@@ -153,7 +167,7 @@ export function useDownloadQueuePage({
   );
 
   const queryPage = useCallback(
-    async (offset: number, limit: number, options: QueryPageOptions = {}) => {
+    async (offset: number, limit: number, signal: AbortSignal, options: QueryPageOptions = {}) => {
       const requestScopeKey = scopeKey;
       const requestEpoch = scopeEpochRef.current;
       const rangeKey = `${offset}:${limit}`;
@@ -165,7 +179,7 @@ export function useDownloadQueuePage({
       );
 
       for (let attempt = 0; attempt < 2; attempt += 1) {
-        const { data, error } = await client
+        const { data, error } = await boundedQuery(client
           .query(
             downloadQueuePageQuery,
             {
@@ -179,10 +193,10 @@ export function useDownloadQueuePage({
               sortDirection: sort.direction,
             },
             { requestPolicy: "network-only" },
-          )
-          .toPromise();
+          ), signal, Math.max(0, (options.deadline ?? (Date.now() + ACTIVITY_READ_TIMEOUT_MS)) - Date.now()));
         if (
           activeScopeKeyRef.current !== requestScopeKey ||
+          authScope !== getAuthToken() ||
           scopeEpochRef.current !== requestEpoch ||
           requestSequenceRef.current.get(rangeKey) !== requestSequence
         ) {
@@ -192,7 +206,10 @@ export function useDownloadQueuePage({
           throw error;
         }
         const payload = data?.downloadQueuePage as DownloadQueuePagePayload | undefined;
-        if (!payload) {
+        if (!payload || !Array.isArray(payload.items) || !Array.isArray(payload.availableClients) ||
+            !Number.isSafeInteger(payload.totalCount) || payload.totalCount < 0 ||
+            !Number.isSafeInteger(payload.revision) || typeof payload.hasMore !== "boolean" ||
+            typeof payload.ready !== "boolean" || typeof payload.stale !== "boolean") {
           throw new Error("Failed to load queue page.");
         }
         if (
@@ -205,15 +222,19 @@ export function useDownloadQueuePage({
           if (payload.revision < minimumRevision && attempt === 0) {
             continue;
           }
+          // Keep the last good page; the next poll asks again.
+          consecutiveBehindRef.current += 1;
+          if (shouldSurfaceRefreshBehind(consecutiveBehindRef.current)) {
+            throw new Error(t("activity.refreshBehind"));
+          }
           return null;
         }
-        applyPage(payload, offset, limit, options);
         return payload;
       }
       return null;
     },
     [
-      applyPage,
+      authScope,
       client,
       clientIds,
       filters,
@@ -221,20 +242,23 @@ export function useDownloadQueuePage({
       scryerSubmittedOnly,
       sort.direction,
       sort.key,
+      t,
       titleId,
     ],
   );
 
   const reportError = useCallback(
     (error: unknown) => {
-      const message = error instanceof Error ? error.message : "Failed to load queue.";
+      const message = error instanceof QueryTimeoutError ? t("activity.refreshTimedOut") :
+        error instanceof Error ? error.message : "Failed to load queue.";
       setQueueError(message);
+      setQueueSnapshotStale(true);
       if (lastReportedErrorRef.current !== message) {
         lastReportedErrorRef.current = message;
         (onErrorStatus ?? contextGlobalStatus)?.(message);
       }
     },
-    [contextGlobalStatus, onErrorStatus],
+    [contextGlobalStatus, onErrorStatus, t],
   );
 
   const refreshQueue = useCallback(async () => {
@@ -242,48 +266,92 @@ export function useDownloadQueuePage({
       pendingSyncRef.current = true;
       return;
     }
+    if (activeRequestRef.current) {
+      queuedRefreshRef.current = true;
+      return;
+    }
+    const epoch = scopeEpochRef.current;
+    const current = () => scopeEpochRef.current === epoch && authScope === getAuthToken() && activeScopeKeyRef.current === scopeKey;
+    do {
+    queuedRefreshRef.current = false;
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+    let succeeded = false;
     setQueueLoading(true);
     try {
       const targetRevision = targetRevisionRef.current;
+      const deadline = Date.now() + ACTIVITY_READ_TIMEOUT_MS;
       const ranges = downloadQueueSyncRefreshRanges(
         nextOffsetRef.current,
         visibleOffsetRef.current,
       );
       let reconciled = true;
+      const updates: Array<{ payload: DownloadQueuePagePayload; offset: number; limit: number; options: QueryPageOptions }> = [];
       for (const [index, range] of ranges.entries()) {
-        const payload = await queryPage(range.offset, range.limit, {
+        const options: QueryPageOptions = {
           reset: index === 0 && nextOffsetRef.current === 0,
           markRetainedStale: index === 0,
-          minimumRevision: targetRevision,
-        });
+          minimumRevision: updates.at(-1)?.payload.revision ?? targetRevision,
+          deadline,
+        };
+        const payload = await queryPage(range.offset, range.limit, controller.signal, options);
+        if (!current()) return;
         reconciled = reconciled && payload !== null;
+        if (payload) updates.push({ payload, ...range, options });
+      }
+      // Publish a refresh only when every requested range succeeded. A failed
+      // later range must leave the last successful rows and pagination intact.
+      if (reconciled) {
+        for (const update of updates) applyPage(update.payload, update.offset, update.limit, update.options);
+        setLoadedScope({ key: scopeKey, auth: authScope });
       }
       if (reconciled && revisionRef.current >= targetRevision) {
         pendingSyncRef.current = false;
       }
+      succeeded = reconciled;
     } catch (error) {
-      reportError(error);
+      if (current()) reportError(error);
     } finally {
-      setQueueLoading(false);
+      if (current()) {
+        activeRequestRef.current = null;
+        setQueueLoading(false);
+      }
     }
-  }, [enabled, queryPage, reportError]);
+    if (!current() || !succeeded) break;
+    } while (queuedRefreshRef.current);
+  }, [applyPage, authScope, enabled, queryPage, reportError, scopeKey]);
 
   const loadMoreQueue = useCallback(async () => {
-    if (!enabled || queueLoadingMore || !queueHasMore) {
+    if (!enabled || activeRequestRef.current || !queueHasMore) {
       return;
     }
+    const epoch = scopeEpochRef.current;
+    const current = () => scopeEpochRef.current === epoch && authScope === getAuthToken() && activeScopeKeyRef.current === scopeKey;
+    const controller = new AbortController();
+    activeRequestRef.current = controller;
+    let succeeded = false;
     setQueueLoadingMore(true);
     try {
       const offset = nextOffsetRef.current;
-      await queryPage(offset, DOWNLOAD_QUEUE_PAGE_SIZE, {
+      const payload = await queryPage(offset, DOWNLOAD_QUEUE_PAGE_SIZE, controller.signal, {
         minimumRevision: targetRevisionRef.current,
+        deadline: Date.now() + ACTIVITY_READ_TIMEOUT_MS,
       });
+      if (current() && payload) {
+        applyPage(payload, offset, DOWNLOAD_QUEUE_PAGE_SIZE, {});
+        setLoadedScope({ key: scopeKey, auth: authScope });
+      }
+      succeeded = payload !== null;
     } catch (error) {
-      reportError(error);
+      if (current()) reportError(error);
     } finally {
-      setQueueLoadingMore(false);
+      if (current()) {
+        activeRequestRef.current = null;
+        setQueueLoadingMore(false);
+      }
     }
-  }, [enabled, queryPage, queueHasMore, queueLoadingMore, reportError]);
+    if (current() && succeeded && queuedRefreshRef.current) await refreshQueue();
+  }, [applyPage, authScope, enabled, queryPage, queueHasMore, refreshQueue, reportError, scopeKey]);
 
   const scheduleSync = useCallback(() => {
     pendingSyncRef.current = true;
@@ -321,11 +389,7 @@ export function useDownloadQueuePage({
     },
   });
 
-  useEffect(() => {
-    if (!enabled) {
-      return;
-    }
-    const requestScopeKey = scopeKey;
+  useLayoutEffect(() => {
     scopeEpochRef.current += 1;
     requestSequenceRef.current.clear();
     nextOffsetRef.current = 0;
@@ -333,21 +397,28 @@ export function useDownloadQueuePage({
     revisionRef.current = 0;
     targetRevisionRef.current = 0;
     pendingSyncRef.current = false;
+    queuedRefreshRef.current = false;
     const emptyPages = new Map<number, DownloadQueueRetainedPage>();
     pagesRef.current = emptyPages;
     setPages(emptyPages);
     setQueueHasMore(false);
     setQueueTotalCount(0);
     setQueueSnapshotStale(false);
-    setQueueLoading(true);
-    void queryPage(0, DOWNLOAD_QUEUE_PAGE_SIZE, { reset: true })
-      .catch(reportError)
-      .finally(() => {
-        if (activeScopeKeyRef.current === requestScopeKey) {
-          setQueueLoading(false);
-        }
-      });
-  }, [enabled, queryPage, reportError, scopeKey]);
+    setQueueError(null);
+    setQueueReady(false);
+    setQueueAvailableClients([]);
+    setLoadedScope({ key: scopeKey, auth: authScope });
+    setLastRefreshedAt(null);
+    setQueueLoading(false);
+    setQueueLoadingMore(false);
+    if (enabled) void refreshQueue();
+    return () => {
+      scopeEpochRef.current += 1;
+      activeRequestRef.current?.abort();
+      activeRequestRef.current = null;
+      queuedRefreshRef.current = false;
+    };
+  }, [authScope, enabled, refreshQueue, scopeKey]);
 
   useEffect(() => {
     if (!enabled) {
@@ -388,27 +459,24 @@ export function useDownloadQueuePage({
           targetRevisionRef.current,
         )
       ) {
-        const pageOffset =
-          Math.floor(normalizedOffset / DOWNLOAD_QUEUE_PAGE_SIZE) * DOWNLOAD_QUEUE_PAGE_SIZE;
-        void queryPage(pageOffset, DOWNLOAD_QUEUE_PAGE_SIZE, {
-          minimumRevision: targetRevisionRef.current,
-        }).catch(reportError);
+        scheduleSync();
       }
     },
-    [enabled, queryPage, reportError, scheduleSync],
+    [enabled, scheduleSync],
   );
 
+  const sameScope = loadedScope?.key === scopeKey && loadedScope.auth === authScope;
   return {
-    queueItems,
-    queueLoading,
-    queueLoadingMore,
-    queueError,
-    queueHasMore,
-    queueTotalCount,
-    queueAvailableClients,
-    queueReady,
-    queueStale: queueSnapshotStale,
-    lastRefreshedAt,
+    queueItems: sameScope ? queueItems : [],
+    queueLoading: enabled && (!sameScope || queueLoading),
+    queueLoadingMore: sameScope && queueLoadingMore,
+    queueError: sameScope ? queueError : null,
+    queueHasMore: sameScope && queueHasMore,
+    queueTotalCount: sameScope ? queueTotalCount : 0,
+    queueAvailableClients: sameScope ? queueAvailableClients : [],
+    queueReady: sameScope && queueReady,
+    queueStale: sameScope && queueSnapshotStale,
+    lastRefreshedAt: sameScope ? lastRefreshedAt : null,
     refreshQueue,
     loadMoreQueue,
     setVisibleQueueOffset,

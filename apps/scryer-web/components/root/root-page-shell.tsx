@@ -1393,6 +1393,8 @@ function AuthenticatedHomePage({
     pluginUpdateCount,
     pluginBlockedCount,
     scryerVersion,
+    manualImportCountKnown,
+    manualImportCountStale,
   } = useNavigationBadges({
     serviceRestarting,
     canManageTitle,
@@ -1758,32 +1760,6 @@ function AuthenticatedHomePage({
     });
   }, [navigate, searchParams, view]);
 
-  useEffect(() => {
-    if (
-      view !== "activity" ||
-      activitySection !== "import" ||
-      pendingImportCounts === null ||
-      manualImportRequiredCount > 0
-    ) {
-      return;
-    }
-
-    navigateTo(
-      "activity",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      "activity",
-    );
-  }, [
-    activitySection,
-    manualImportRequiredCount,
-    navigateTo,
-    pendingImportCounts,
-    view,
-  ]);
-
   return (
     <ScryerGraphqlProvider language={uiLanguage}>
       <TranslateContext.Provider value={t}>
@@ -1942,6 +1918,8 @@ function AuthenticatedHomePage({
                           pendingImportCounts={pendingImportCounts}
                           pendingMediaRequestCounts={pendingMediaRequestCounts}
                           manualImportRequiredCount={manualImportRequiredCount}
+                          manualImportCountKnown={manualImportCountKnown}
+                          manualImportCountStale={manualImportCountStale}
                           pluginUpdateCount={pluginUpdateCount}
                           pluginBlockedCount={pluginBlockedCount}
                           header={

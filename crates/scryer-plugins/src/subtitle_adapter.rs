@@ -9,7 +9,7 @@ use scryer_application::subtitles::scoring::{
     normalized_score_percent,
 };
 use scryer_application::subtitles::{
-    SubtitleFile, SubtitleMatch, SubtitleMediaKind, SubtitleQuery,
+    SubtitleCommunityEntry, SubtitleFile, SubtitleMatch, SubtitleMediaKind, SubtitleQuery,
 };
 use scryer_application::{
     AppError, AppResult, ArchiveExtractorPluginProvider, ParsedReleaseMetadata,
@@ -183,6 +183,7 @@ impl SubtitleProviderClient for WasmSubtitleClient {
             season: query.season,
             episode: query.episode,
             absolute_episode: query.absolute_episode,
+            community_entry: query.community_entry.as_ref().map(map_community_entry),
             external_ids: query.external_ids.clone(),
             languages: query.languages.clone(),
             release_group: query.release_group.clone(),
@@ -458,6 +459,19 @@ fn map_media_kind(kind: SubtitleMediaKind) -> SubtitleQueryMediaKind {
     match kind {
         SubtitleMediaKind::Movie => SubtitleQueryMediaKind::Movie,
         SubtitleMediaKind::Episode => SubtitleQueryMediaKind::Episode,
+    }
+}
+
+fn map_community_entry(
+    entry: &SubtitleCommunityEntry,
+) -> scryer_plugin_sdk::SubtitleCommunityEntry {
+    scryer_plugin_sdk::SubtitleCommunityEntry {
+        season: entry.season,
+        episode: entry.episode,
+        anilist_id: entry.anilist_id,
+        anidb_id: entry.anidb_id,
+        mal_id: entry.mal_id,
+        titles: entry.titles.clone(),
     }
 }
 
@@ -873,6 +887,7 @@ mod tests {
             season: None,
             episode: None,
             absolute_episode: None,
+            community_entry: None,
             external_ids: Default::default(),
             languages: vec!["eng".into()],
             release_group: Some("GROUP".into()),

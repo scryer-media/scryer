@@ -207,6 +207,8 @@ export function SettingsUsersContainer() {
       setGlobalStatus(t("settings.passwordMinLengthError", { min: passwordMinLength }));
       return false;
     }
+    const updatedUserName =
+      settingsUsers.find((candidate) => candidate.id === userId)?.username ?? userId;
     setMutatingUserId(userId);
     try {
       const { error } = await client.mutation(setUserPasswordMutation, {
@@ -220,7 +222,7 @@ export function SettingsUsersContainer() {
         ...previous,
         [userId]: "",
       }));
-      setGlobalStatus(t("user.passwordUpdated"));
+      setGlobalStatus(t("user.passwordUpdated", { name: updatedUserName }));
       await refreshUsers();
       return true;
     } catch (error) {
@@ -358,7 +360,7 @@ export function SettingsUsersContainer() {
         id: user.id,
       }).toPromise();
       if (error) throw error;
-      setGlobalStatus(t("status.deletingUser", { name: user.username }));
+      setGlobalStatus(t("status.userDeleted", { name: user.username }));
       await refreshUsers();
       setUserPasswordDrafts((previous) => {
         const next = { ...previous };

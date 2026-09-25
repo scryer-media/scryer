@@ -51,18 +51,15 @@ impl VerifiedEpisodePack {
     /// the season or set the grab was scoped to.
     fn vouches_for(&self, episode: &scryer_domain::Episode) -> bool {
         episode.episode_type == scryer_domain::EpisodeType::Standard
-            && self
-                .exact_episode_ids
-                .as_ref()
-                .map_or_else(
-                    || {
-                        self.declared_seasons.as_ref().is_none_or(|declared| {
-                            catalog_episode_season(episode)
-                                .is_some_and(|season| declared.contains(&season))
-                        })
-                    },
-                    |episode_ids| episode_ids.contains(&episode.id),
-                )
+            && self.exact_episode_ids.as_ref().map_or_else(
+                || {
+                    self.declared_seasons.as_ref().is_none_or(|declared| {
+                        catalog_episode_season(episode)
+                            .is_some_and(|season| declared.contains(&season))
+                    })
+                },
+                |episode_ids| episode_ids.contains(&episode.id),
+            )
     }
 }
 
@@ -122,8 +119,8 @@ fn verified_episode_pack(
         || episode.is_series_pack
         || episode.is_multi_season
         || episode.release_type == crate::ParsedEpisodeReleaseType::SeasonPack;
-    let has_episode_bounds = episode.episode_numbers.len() > 1
-        || episode.absolute_episode_numbers.len() > 1;
+    let has_episode_bounds =
+        episode.episode_numbers.len() > 1 || episode.absolute_episode_numbers.len() > 1;
     if !is_pack && !has_episode_bounds {
         return EpisodePackVerification::NotPack;
     }
@@ -140,10 +137,12 @@ fn verified_episode_pack(
             let mut episode_ids: HashSet<_> = candidate.episode_ids.into_iter().collect();
             episode_ids.retain(|episode_id| match scope {
                 SubmissionScope::EpisodeSet { episode_ids } => episode_ids.contains(episode_id),
-                SubmissionScope::Collection { collection_id } => catalog_episodes.iter().any(|episode| {
-                    episode.id == *episode_id
-                        && episode.collection_id.as_deref() == Some(collection_id.as_str())
-                }),
+                SubmissionScope::Collection { collection_id } => {
+                    catalog_episodes.iter().any(|episode| {
+                        episode.id == *episode_id
+                            && episode.collection_id.as_deref() == Some(collection_id.as_str())
+                    })
+                }
                 _ => false,
             });
             if let Some(acquired) = acquired_episode_ids {
@@ -295,7 +294,8 @@ async fn build_episode_pack_import_plan(
     let mut plan = EpisodePackImportPlan::default();
     for (video_file, draft) in video_files.iter().zip(drafts) {
         let disposition = finalize_pack_member_disposition(draft, &pack);
-        plan.members.insert(video_file.physical.clone(), disposition);
+        plan.members
+            .insert(video_file.physical.clone(), disposition);
     }
     Ok(Some(plan))
 }
@@ -435,7 +435,10 @@ fn reconcile_pack_member_from_scene_numbering(
     catalog: &[scryer_domain::Episode],
     expected_episode_ids: Option<&HashSet<String>>,
 ) -> ScopedPackMemberReconciliation {
-    let Some(declared_seasons) = pack.declared_seasons.as_ref().filter(|seasons| !seasons.is_empty())
+    let Some(declared_seasons) = pack
+        .declared_seasons
+        .as_ref()
+        .filter(|seasons| !seasons.is_empty())
     else {
         return ScopedPackMemberReconciliation::Unresolved;
     };
@@ -1604,21 +1607,31 @@ mod series_plan_tests {
                 episode_ids: (28..=35).map(|number| format!("ep-{number}")).collect(),
             },
         };
-        let EpisodePackVerification::Verified(pack) = verified_episode_pack(
-            &evidence, &title, &catalog, Some(&bridge), None,
-        ) else { panic!("closed cour should verify"); };
+        let EpisodePackVerification::Verified(pack) =
+            verified_episode_pack(&evidence, &title, &catalog, Some(&bridge), None)
+        else {
+            panic!("closed cour should verify");
+        };
         for episode in &catalog {
             let number: u32 = episode.episode_number.as_ref().unwrap().parse().unwrap();
             assert_eq!(pack.vouches_for(episode), (28..=35).contains(&number));
         }
-        assert!(matches!(verified_episode_pack(
-            &evidence, &title, &catalog, Some(&bridge), Some(&HashSet::new()),
-        ), EpisodePackVerification::Unresolved));
+        assert!(matches!(
+            verified_episode_pack(
+                &evidence,
+                &title,
+                &catalog,
+                Some(&bridge),
+                Some(&HashSet::new()),
+            ),
+            EpisodePackVerification::Unresolved
+        ));
         let mut special = catalog_episode("special-1", 1, 1);
         special.episode_type = scryer_domain::EpisodeType::Special;
-        assert!(matches!(finalize_pack_member_disposition(
-            PlannedMemberDraft::Resolved(vec![special]), &pack,
-        ), PlannedEpisodeMemberDisposition::Hold { .. }));
+        assert!(matches!(
+            finalize_pack_member_disposition(PlannedMemberDraft::Resolved(vec![special]), &pack,),
+            PlannedEpisodeMemberDisposition::Hold { .. }
+        ));
     }
 
     #[test]
@@ -1634,10 +1647,7 @@ mod series_plan_tests {
         assert!(pack.vouches_for(&in_scope));
         assert!(!pack.vouches_for(&adjacent));
         assert!(matches!(
-            finalize_pack_member_disposition(
-                PlannedMemberDraft::Resolved(vec![adjacent]),
-                &pack,
-            ),
+            finalize_pack_member_disposition(PlannedMemberDraft::Resolved(vec![adjacent]), &pack,),
             PlannedEpisodeMemberDisposition::Hold {
                 reason_code: "episode_outside_declared_pack_seasons",
                 ..

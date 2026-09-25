@@ -2495,7 +2495,7 @@ impl MultiIndexerSearchClient {
         if !is_managed_proxy {
             return;
         }
-        RateLimitRegistry::new().register_host_profile(
+        RateLimitRegistry::indexers().register_host_profile(
             host_key.clone(),
             HostRpsProfile::limited(LOCAL_MANAGED_HOST_RPS, LOCAL_MANAGED_HOST_RPS_BURST),
             HostRpsProfileSource::ExplicitRegistration,
@@ -3997,6 +3997,9 @@ impl IndexerClient for MultiIndexerSearchClient {
         }
         let mut scheduler_candidates = Vec::new();
         let mut scheduler_eligible = Vec::new();
+        // Indexers that cannot answer this search at all. They are reported as
+        // `Unsupported` so convergence can stop asking them every cycle.
+        let mut unsupported_indexer_ids: Vec<String> = Vec::new();
         for (config, had_persisted_system_backoff) in &enabled {
             let routing_entry = indexer_routing
                 .as_ref()
@@ -4074,6 +4077,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     indexer = config.name.as_str(),
                     facet, "skipping indexer: no supported IDs for facet and no freetext"
                 );
+                unsupported_indexer_ids.push(config.id.clone());
                 continue;
             }
 
@@ -4219,12 +4223,19 @@ impl IndexerClient for MultiIndexerSearchClient {
             }
         }
 
+        let unsupported_outcomes = unsupported_indexer_ids
+            .into_iter()
+            .map(|indexer_id| IndexerQueryOutcome {
+                indexer_id,
+                outcome: IndexerSearchOutcome::Unsupported,
+            })
+            .collect::<Vec<_>>();
         if scheduler_candidates.is_empty() {
             debug!(mode = ?mode, "no scheduler-eligible indexer configs found");
             return Ok(IndexerSearchResponse {
                 results: vec![],
 
-                indexer_outcomes: Vec::new(),
+                indexer_outcomes: unsupported_outcomes,
                 completion: IndexerSearchCompletion::Complete,
                 api_current: None,
                 api_max: None,
@@ -4254,7 +4265,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         // Per-indexer outcome for convergence coverage. Deferred/skipped
         // indexers (never queried) are recorded below; fired/errored are recorded as
         // their tasks complete in the join loop.
-        let mut indexer_outcomes: Vec<IndexerQueryOutcome> = Vec::new();
+        let mut indexer_outcomes: Vec<IndexerQueryOutcome> = unsupported_outcomes;
         let mut set = tokio::task::JoinSet::<(
             String,
             String,
@@ -4372,6 +4383,10 @@ impl IndexerClient for MultiIndexerSearchClient {
                     indexer = config.name.as_str(),
                     facet, "skipping indexer: no supported IDs for facet and no freetext"
                 );
+                indexer_outcomes.push(IndexerQueryOutcome {
+                    indexer_id: config.id.clone(),
+                    outcome: IndexerSearchOutcome::Unsupported,
+                });
                 continue;
             }
 
@@ -5935,9 +5950,11 @@ impl IndexerClient for MultiIndexerSearchClient {
                     Some(scryer_application::parse_release_metadata(&result.title));
             }
         }
+        // An unsupported indexer was never asked, so it cannot make the
+        // response partial.
         let completion = if indexer_outcomes
             .iter()
-            .all(|outcome| outcome.outcome.coverage_eligible())
+            .all(|outcome| outcome.outcome.coverage_eligible() || outcome.outcome.is_unsupported())
         {
             IndexerSearchCompletion::Complete
         } else {
@@ -9327,7 +9344,7 @@ mod tests {
         )
         .with_upstream_scheduler(scheduler);
 
-        let _ = client
+        let response = client
             .search(
                 "Example Show".to_string(),
                 HashMap::new(),
@@ -9352,6 +9369,77 @@ mod tests {
                 .as_slice(),
             &[vec!["idx-executable".to_string()]]
         );
+        let unsupported = response
+            .indexer_outcomes
+            .iter()
+            .filter(|outcome| outcome.outcome == IndexerSearchOutcome::Unsupported)
+            .map(|outcome| outcome.indexer_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(unsupported, ["idx-ineligible"]);
+    }
+
+    #[tokio::test]
+    async fn an_anime_only_indexer_reports_a_movie_search_as_unsupported() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let scheduler = Arc::new(RecordingScheduler::default());
+        let recorded_candidates = scheduler.candidate_ids.clone();
+        let mut anime_only = mock_indexer_config();
+        anime_only.id = "idx-anime-only".to_string();
+        anime_only.provider_type = "anime_only".to_string();
+        let anime_only_caps = IndexerProviderCapabilities {
+            supported_ids: HashMap::from([("anime".into(), vec!["anidb_id".into()])]),
+            query_param: Some("q".into()),
+            supported_query_facets: vec!["anime".into()],
+            search: true,
+            anidb_search: true,
+            ..Default::default()
+        };
+        let client = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![anime_only],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(CapabilityByProviderPluginProvider {
+                calls: calls.clone(),
+                capabilities: HashMap::from([("anime_only".to_string(), anime_only_caps)]),
+            }),
+        )
+        .with_upstream_scheduler(scheduler);
+
+        let response = client
+            .search(
+                "Example Film".to_string(),
+                HashMap::from([("imdb_id".to_string(), "tt0000001".to_string())]),
+                None,
+                Some("movie".to_string()),
+                None,
+                None,
+                None,
+                SearchMode::Auto,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("a search no indexer can serve still succeeds");
+
+        assert_eq!(calls.load(Ordering::SeqCst), 0, "nothing is dispatched");
+        assert!(
+            recorded_candidates
+                .lock()
+                .expect("scheduler candidates")
+                .is_empty(),
+            "an indexer that cannot serve the facet never reaches the scheduler"
+        );
+        assert_eq!(
+            response.indexer_outcomes,
+            vec![IndexerQueryOutcome {
+                indexer_id: "idx-anime-only".to_string(),
+                outcome: IndexerSearchOutcome::Unsupported,
+            }]
+        );
+        assert!(response.completion.is_complete());
     }
 
     #[tokio::test]
