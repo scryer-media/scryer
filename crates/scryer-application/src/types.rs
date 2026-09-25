@@ -4546,6 +4546,7 @@ mod indexer_search_identity_tests {
             api_key_encrypted: Some("secret-a".into()),
             rate_limit_seconds: None,
             rate_limit_burst: None,
+            max_queries_per_minute: None,
             disabled_until: None,
             is_enabled: true,
             enable_interactive_search: true,

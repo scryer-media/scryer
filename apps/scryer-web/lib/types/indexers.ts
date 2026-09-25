@@ -26,6 +26,8 @@ export type IndexerRecord = {
   storedSecretKeys: string[];
   rateLimitSeconds: number | null;
   rateLimitBurst: number | null;
+  /** Sustained query budget per minute, or null when the indexer has none. */
+  maxQueriesPerMinute: number | null;
   disabledUntil: string | null;
   /**
    * When the indexer's rate-limit cooldown lifts, or null when it is not
@@ -66,6 +68,8 @@ export type IndexerDraft = {
   downloadClientId: string | null;
   seedingProfileId: string | null;
   storedSecretKeys: string[];
+  /** Query budget per minute as typed; blank means no budget. */
+  maxQueriesPerMinute: string;
   isEnabled: boolean;
   enableInteractiveSearch: boolean;
   enableAutoSearch: boolean;

@@ -1798,6 +1798,33 @@ export function SettingsIndexersSection({
                             placeholder={t("form.indexerNamePlaceholder")}
                           />
                         </label>
+                        {!isManagedSyncProvider ? (
+                          <label>
+                            <Label
+                              className="mb-2 block"
+                              htmlFor="settings-indexer-max-queries-per-minute"
+                            >
+                              {t("form.indexerMaxQueriesPerMinute")}
+                            </Label>
+                            <Input
+                              id="settings-indexer-max-queries-per-minute"
+                              type="number"
+                              inputMode="numeric"
+                              min={1}
+                              step={1}
+                              value={indexerDraft.maxQueriesPerMinute}
+                              onChange={(event) =>
+                                setIndexerDraft((prev: IndexerDraft) => ({
+                                  ...prev,
+                                  maxQueriesPerMinute: event.target.value,
+                                }))
+                              }
+                              placeholder={t(
+                                "form.indexerMaxQueriesPerMinutePlaceholder",
+                              )}
+                            />
+                          </label>
+                        ) : null}
                       </div>
 
                       <div className="grid gap-3 md:grid-cols-2">

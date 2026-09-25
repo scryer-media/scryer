@@ -813,6 +813,7 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
             derived_base_url,
             rate_limit_seconds,
             rate_limit_burst,
+            max_queries_per_minute,
             is_enabled,
             enable_interactive_search,
             enable_auto_search,
@@ -845,6 +846,9 @@ impl IndexerConfigRepository for MockIndexerConfigRepo {
         }
         if let Some(rate_limit_burst) = rate_limit_burst {
             item.rate_limit_burst = Some(rate_limit_burst);
+        }
+        if let Some(max_queries_per_minute) = max_queries_per_minute {
+            item.max_queries_per_minute = max_queries_per_minute;
         }
         if let Some(is_enabled) = is_enabled {
             item.is_enabled = is_enabled;

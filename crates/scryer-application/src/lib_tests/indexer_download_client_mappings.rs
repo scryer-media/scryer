@@ -162,6 +162,7 @@ async fn indexer_create_and_update_persist_mapping_atomically() {
                 provider_type: "nzbgeek".to_string(),
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
+                max_queries_per_minute: None,
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
@@ -188,6 +189,7 @@ async fn indexer_create_and_update_persist_mapping_atomically() {
                 provider_type: "nzbgeek".to_string(),
                 rate_limit_seconds: None,
                 rate_limit_burst: None,
+                max_queries_per_minute: None,
                 is_enabled: true,
                 enable_interactive_search: true,
                 enable_auto_search: true,
@@ -390,4 +392,68 @@ async fn indexer_mapping_requires_system_settings_permission() {
         .await
         .expect_err("mapping requires system settings permission");
     assert!(matches!(error, AppError::Unauthorized(_)));
+}
+
+#[tokio::test]
+async fn indexer_query_budget_is_refused_on_a_managed_children_parent() {
+    let (app, admin) = bootstrap_with_search_settings_indexer_and_configs(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockIndexerClient),
+        vec![synthetic_direct_nab_indexer_config(
+            "sync-parent",
+            "prowlarr",
+        )],
+    );
+
+    let refused_create = app
+        .create_indexer_config(
+            &admin,
+            NewIndexerConfig {
+                name: "Synthetic Sync Parent".to_string(),
+                provider_type: "prowlarr".to_string(),
+                rate_limit_seconds: None,
+                rate_limit_burst: None,
+                max_queries_per_minute: Some(30),
+                is_enabled: false,
+                enable_interactive_search: false,
+                enable_auto_search: false,
+                proxy_config_id: None,
+                download_client_id: None,
+                config_json: Some(
+                    serde_json::json!({
+                        "base_url": "https://sync-parent.example.invalid",
+                        "api_key": "synthetic-secret"
+                    })
+                    .to_string(),
+                ),
+            },
+        )
+        .await
+        .expect_err("a parent that syncs managed children takes no budget");
+    assert!(
+        matches!(&refused_create, AppError::Validation(message) if message.contains("set on each managed indexer")),
+        "unexpected error: {refused_create:?}"
+    );
+
+    let refused_update = app
+        .update_indexer_config(
+            &admin,
+            IndexerConfigUpdate {
+                id: "sync-parent".to_string(),
+                max_queries_per_minute: Some(Some(30)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a parent that syncs managed children takes no budget");
+    assert!(
+        matches!(&refused_update, AppError::Validation(message) if message.contains("set on each managed indexer")),
+        "unexpected error: {refused_update:?}"
+    );
+    let unchanged = app
+        .get_indexer_config(&admin, "sync-parent")
+        .await
+        .expect("lookup should succeed")
+        .expect("parent should exist");
+    assert_eq!(unchanged.max_queries_per_minute, None);
 }

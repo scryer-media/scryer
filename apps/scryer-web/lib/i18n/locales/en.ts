@@ -2435,6 +2435,10 @@ const en: LocaleDictionary = {
   "status.catalogRefreshed": "Plugin catalog refreshed.",
 
   "form.indexerNamePlaceholder": "My Newznab Indexer",
+  "form.indexerMaxQueriesPerMinute": "Max queries per minute",
+  "form.indexerMaxQueriesPerMinutePlaceholder": "No limit",
+  "form.indexerMaxQueriesPerMinuteInvalid":
+    "Max queries per minute must be a whole number of at least 1, or empty for no limit.",
   "form.providerTypePlaceholder": "Provider Type",
   "form.subtitleProviderValidation": "Name and provider type are required.",
   "form.subtitleProviderFacetsRequired":

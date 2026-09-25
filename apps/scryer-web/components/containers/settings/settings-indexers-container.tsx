@@ -64,6 +64,11 @@ import {
 } from "@/lib/utils/provider-config";
 import { useSeedingProfileOptions } from "@/lib/hooks/use-seeding-profile-options";
 import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
+import {
+  buildIndexerSavePayload,
+  indexerQueryBudgetDraftValue,
+  parseIndexerQueryBudget,
+} from "@/lib/utils/indexer-payload";
 
 type SettingsIndexersSectionProps = ComponentProps<
   typeof SettingsIndexersSection
@@ -76,6 +81,7 @@ const INDEXER_INITIAL_DRAFT = {
   downloadClientId: null as string | null,
   seedingProfileId: null as string | null,
   storedSecretKeys: [] as string[],
+  maxQueriesPerMinute: "",
   isEnabled: true,
   enableInteractiveSearch: true,
   enableAutoSearch: true,
@@ -702,24 +708,23 @@ export function SettingsIndexersContainer({
       configValues,
       indexerDraft.storedSecretKeys,
     );
-    const payload = {
-      name: indexerDraft.name.trim(),
-      providerType: normalizedProviderType,
-      proxyConfigId: indexerDraft.proxyConfigId,
-      downloadClientId: indexerDraft.downloadClientId,
-      seedingProfileId: indexerDraft.seedingProfileId,
-      isEnabled: indexerDraft.isEnabled,
-      enableInteractiveSearch: indexerDraft.enableInteractiveSearch,
-      enableAutoSearch: indexerDraft.enableAutoSearch,
-      config: serializeConfigValues(
+    const payload = buildIndexerSavePayload(
+      indexerDraft,
+      normalizedProviderType,
+      serializeConfigValues(
         selectedProvider?.configFields ?? [],
         configValues,
         indexerDraft.storedSecretKeys,
       ),
-    };
+    );
 
     if (!payload.name || !payload.providerType) {
       setGlobalStatus(t("form.indexerValidation"));
+      return;
+    }
+
+    if (!parseIndexerQueryBudget(indexerDraft.maxQueriesPerMinute).valid) {
+      setGlobalStatus(t("form.indexerMaxQueriesPerMinuteInvalid"));
       return;
     }
 
@@ -762,6 +767,7 @@ export function SettingsIndexersContainer({
               name: payload.name,
               providerType: payload.providerType,
               proxyConfigId: payload.proxyConfigId,
+              maxQueriesPerMinute: payload.maxQueriesPerMinute,
               isEnabled: payload.isEnabled,
               enableInteractiveSearch: payload.enableInteractiveSearch,
               enableAutoSearch: payload.enableAutoSearch,
@@ -793,6 +799,7 @@ export function SettingsIndexersContainer({
               name: payload.name,
               providerType: payload.providerType,
               proxyConfigId: payload.proxyConfigId,
+              maxQueriesPerMinute: payload.maxQueriesPerMinute,
               isEnabled: payload.isEnabled,
               enableInteractiveSearch: payload.enableInteractiveSearch,
               enableAutoSearch: payload.enableAutoSearch,
@@ -850,6 +857,7 @@ export function SettingsIndexersContainer({
         downloadClientId: indexer.downloadClientId ?? null,
         seedingProfileId: indexer.seedingProfileId ?? null,
         storedSecretKeys: indexer.storedSecretKeys,
+        maxQueriesPerMinute: indexerQueryBudgetDraftValue(indexer),
         isEnabled: indexer.isEnabled,
         enableInteractiveSearch: indexer.enableInteractiveSearch,
         enableAutoSearch: indexer.enableAutoSearch,

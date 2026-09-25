@@ -1698,6 +1698,10 @@ pub struct IndexerConfig {
     pub api_key_encrypted: Option<String>,
     pub rate_limit_seconds: Option<i64>,
     pub rate_limit_burst: Option<i64>,
+    /// Sustained query budget the provider allows per minute. `None` means no
+    /// budget beyond the request interval.
+    #[serde(default)]
+    pub max_queries_per_minute: Option<i64>,
     pub disabled_until: Option<DateTime<Utc>>,
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
@@ -2007,6 +2011,8 @@ pub struct NewIndexerConfig {
     pub provider_type: String,
     pub rate_limit_seconds: Option<i64>,
     pub rate_limit_burst: Option<i64>,
+    #[serde(default)]
+    pub max_queries_per_minute: Option<i64>,
     pub is_enabled: bool,
     pub enable_interactive_search: bool,
     pub enable_auto_search: bool,

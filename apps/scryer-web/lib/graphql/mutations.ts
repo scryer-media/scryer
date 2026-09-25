@@ -400,6 +400,7 @@ export const createIndexerMutation = `mutation CreateIndexer($input: CreateIndex
     storedSecretKeys
     rateLimitSeconds
     rateLimitBurst
+    maxQueriesPerMinute
     disabledUntil
     isEnabled
     isManaged
@@ -429,6 +430,7 @@ export const updateIndexerMutation = `mutation UpdateIndexer($input: UpdateIndex
     storedSecretKeys
     rateLimitSeconds
     rateLimitBurst
+    maxQueriesPerMinute
     disabledUntil
     isEnabled
     isManaged

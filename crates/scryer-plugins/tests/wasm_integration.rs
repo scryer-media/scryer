@@ -43,6 +43,7 @@ fn test_config(provider_type: &str) -> IndexerConfig {
         api_key_encrypted: None,
         rate_limit_seconds: None,
         rate_limit_burst: None,
+        max_queries_per_minute: None,
         disabled_until: None,
         is_enabled: true,
         enable_interactive_search: true,

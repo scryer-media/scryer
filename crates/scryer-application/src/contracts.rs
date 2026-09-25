@@ -515,6 +515,8 @@ pub struct IndexerConfigUpdate {
     pub derived_base_url: Option<String>,
     pub rate_limit_seconds: Option<i64>,
     pub rate_limit_burst: Option<i64>,
+    /// Omission keeps the stored budget, `Some(None)` clears it.
+    pub max_queries_per_minute: Option<Option<i64>>,
     pub is_enabled: Option<bool>,
     pub enable_interactive_search: Option<bool>,
     pub enable_auto_search: Option<bool>,
@@ -642,6 +644,7 @@ impl IndexerConfigUpdate {
             || self.derived_base_url.is_some()
             || self.rate_limit_seconds.is_some()
             || self.rate_limit_burst.is_some()
+            || self.max_queries_per_minute.is_some()
             || self.is_enabled.is_some()
             || self.enable_interactive_search.is_some()
             || self.enable_auto_search.is_some()
