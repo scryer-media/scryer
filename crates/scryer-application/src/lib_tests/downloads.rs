@@ -5987,6 +5987,63 @@ async fn shared_native_probe_rejects_source_changes_in_both_production_paths() {
     );
 }
 
+#[test]
+fn post_download_rule_error_rejection_is_held_by_the_disposition_helpers() {
+    let runtime_error =
+        crate::post_download_gate::post_download_rule_entries(Ok(scryer_rules::EvalResult {
+            entries: vec![scryer_rules::UserRuleEntry {
+                code: "blocked_downgrade".into(),
+                delta: -100_000,
+                rule_set_id: "blocking_rule".into(),
+                rule_set_name: "Blocking Rule".into(),
+                origin: scryer_rules::PolicyOrigin::User,
+            }],
+            errors: vec![scryer_rules::RuleEvalError {
+                rule_set_id: "erroring_rule".into(),
+                rule_set_name: "Erroring Rule".into(),
+                origin: scryer_rules::PolicyOrigin::User,
+                message: "type mismatch".into(),
+            }],
+        }))
+        .expect_err("a rule runtime error must hold the import");
+    let engine_error = crate::post_download_gate::post_download_rule_entries(Err(
+        scryer_rules::RulesError::Evaluation("engine unavailable".into()),
+    ))
+    .expect_err("an engine failure must hold the import");
+
+    for rejection in [runtime_error, engine_error] {
+        assert!(rejection.requires_review(), "{rejection:?}");
+        assert_eq!(
+            rejection.recycle_reason,
+            crate::post_download_gate::POST_DOWNLOAD_RULE_ERROR_CODE
+        );
+        for origin in [
+            crate::import::decide::ImportOrigin::Automatic,
+            crate::import::decide::ImportOrigin::OperatorQueued,
+        ] {
+            assert_eq!(
+                crate::import::decide::prepare_rejection_disposition_for_origin(&rejection, origin),
+                crate::import::decide::RejectionDisposition::Hold,
+                "{origin:?}"
+            );
+            // The operator-queued rewording keeps the review code, so the
+            // wrapped rejection is still held rather than burned.
+            let wrapped = origin.held_rejection(crate::post_download_gate::ImportedFileRejection {
+                message: rejection.message.clone(),
+                recycle_reason: rejection.recycle_reason,
+                skip_reason: rejection.skip_reason.clone(),
+                blocking_rule_codes: rejection.blocking_rule_codes.clone(),
+            });
+            assert!(wrapped.requires_review(), "{origin:?}");
+            assert_eq!(
+                crate::import::decide::prepare_rejection_disposition_for_origin(&wrapped, origin),
+                crate::import::decide::RejectionDisposition::Hold,
+                "{origin:?}"
+            );
+        }
+    }
+}
+
 #[cfg(feature = "runtime-media-analysis")]
 #[tokio::test]
 async fn canonical_catalog_and_import_paths_preserve_the_same_analysis_contract() {

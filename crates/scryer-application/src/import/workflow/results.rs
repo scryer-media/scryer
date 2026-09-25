@@ -2397,6 +2397,10 @@ pub(crate) fn completed_import_result_is_retryable(result: &ImportResult) -> boo
                     | ImportSkipReason::ArchiveExtractionTimedOut
             )
         ),
+        // A post-download rule outcome is a decision, never a transient
+        // execution failure. Its message quotes operator-authored rule names
+        // and rule source, so the message allowlist must not be consulted.
+        _ if result.skip_reason == Some(ImportSkipReason::PostDownloadRuleBlocked) => false,
         _ => {
             matches!(
                 result.skip_reason,

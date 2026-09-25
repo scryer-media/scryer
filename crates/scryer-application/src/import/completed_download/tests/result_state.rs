@@ -873,6 +873,57 @@ async fn apply_result_blocks_cancelled_import_for_manual_review() {
     assert!(td.import_execution_retry.is_none());
 }
 
+/// The result a movie import reports when a post-download rule failed to
+/// evaluate: held, not burned, and parked for the operator with the rule
+/// error as the visible reason until they fix the rule and retry.
+#[tokio::test]
+async fn apply_result_blocks_post_download_rule_error_hold_for_operator_review() {
+    let app = build_app(vec![], vec![], vec![], vec![]);
+    // Rule names and engine text are operator-authored; words the transient
+    // allowlist looks for must not schedule an automatic retry.
+    for reason in [
+        "post-download rule failed to evaluate; import held for review: \
+         Erroring Rule (erroring_rule): type mismatch",
+        "post-download rule failed to evaluate; import held for review: \
+         Locked audio (locked_audio): score_entry[\"locked_audio\"] := lower(input.file.video_width)",
+        "post-download rule failed to evaluate; import held for review: \
+         Sample rule (sample_rule): value temporarily unavailable",
+    ] {
+        let mut td = build_tracked_download("title-1", "movie", "Example.Film.2024.1080p.WEB-DL");
+        let result = ImportResult {
+            import_id: "import-rule-error".to_string(),
+            decision: ImportDecision::Skipped,
+            skip_reason: Some(ImportSkipReason::PostDownloadRuleBlocked),
+            title_id: Some("title-1".to_string()),
+            source_system: Some("nzbget".to_string()),
+            source_ref: Some("dl-1".to_string()),
+            source_title: Some("Example.Film.2024.1080p.WEB-DL".to_string()),
+            source_path: "/downloads/Example.Film.2024.1080p.WEB-DL/film.mkv".to_string(),
+            dest_path: None,
+            quality: None,
+            episode_ids: vec![],
+            file_size_bytes: None,
+            link_type: None,
+            error_message: Some(reason.to_string()),
+            release_burned: false,
+            started_at: Utc::now(),
+            completed_at: Utc::now(),
+            upgrade: false,
+            upgrade_previous_path: None,
+        };
+
+        assert!(
+            !apply_import_result(&app, &mut td, result, 0).await,
+            "{reason}"
+        );
+        assert_eq!(td.state, TrackedDownloadState::ImportBlocked, "{reason}");
+        assert_eq!(td.status, TrackedDownloadStatus::Warning, "{reason}");
+        assert_eq!(td.status_messages, vec![reason.to_string()]);
+        assert!(!td.burned_by_import_gate, "{reason}");
+        assert!(td.import_execution_retry.is_none(), "{reason}");
+    }
+}
+
 #[tokio::test]
 async fn apply_result_keeps_ambiguous_obfuscated_episode_blocked_with_actionable_reason() {
     let app = build_app(vec![], vec![], vec![], vec![]);

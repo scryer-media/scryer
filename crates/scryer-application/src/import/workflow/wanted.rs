@@ -382,7 +382,7 @@ async fn execute_resolved_episode_import(
                 return Ok(EpisodeImportOutcome::Skipped {
                     message: rejection.message.clone(),
                     reason_code: Some(rejection.recycle_reason.to_string()),
-                    skip_reason: Some(ImportSkipReason::PolicyMismatch),
+                    skip_reason: Some(rejection.review_hold_skip_reason()),
                     episode_ids: target_episode_ids.clone(),
                 });
             }

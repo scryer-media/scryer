@@ -2110,17 +2110,21 @@ async fn manual_import_series_rejects_when_incumbent_covers_broader_episode_set(
     );
 }
 
+/// A post-download rule that fails at runtime must not be read as "every rule
+/// passed": the import is held for the operator with the rule error as the
+/// reason, and the source file, the release and the scope are left untouched.
 #[tokio::test]
-async fn import_movie_rule_eval_error_fails_open() {
+async fn import_movie_rule_eval_error_holds_import_for_review() {
     let ctx = TestContext::new().await;
     let app = app_with_real_imports(&ctx).await;
     let user = ctx.app.find_or_create_default_user().await.unwrap();
     let source_dir = tempfile::tempdir().expect("source tempdir");
-    copy_fixture(
+    let source_file = copy_fixture(
         source_dir.path(),
         "h264_aac.mkv",
         "Rule.Error.Movie.2024.1080p.WEB-DL.H264.mkv",
     );
+    let source_bytes = std::fs::read(&source_file).expect("read source fixture");
     let dest_root = tempfile::tempdir().expect("dest tempdir");
     let title = add_movie_title(
         &ctx,
@@ -2129,16 +2133,24 @@ async fn import_movie_rule_eval_error_fails_open() {
         dest_root.path().to_str().unwrap(),
     )
     .await;
+    let wanted = seed_movie_wanted_item(
+        &ctx,
+        &title.id,
+        scryer_application::AcquisitionScopeStatus::Grabbed,
+    )
+    .await;
 
+    // Saving a rule evaluates it against a 3840-wide sample file, so the type
+    // error is guarded to fire only on the (narrower) fixture at import time.
     install_rule(
         &app,
         &user,
         r#"
 import rego.v1
 
-score_entry["bad_runtime"] := count(input.file.video_width) if {
+score_entry["bad_runtime"] := lower(input.file.video_width) if {
     input.file != null
-    input.file.num_chapters == 0
+    input.file.video_width < 3840
 }
 "#,
         vec![MediaFacet::Movie],
@@ -2151,18 +2163,88 @@ score_entry["bad_runtime"] := count(input.file.video_width) if {
         &title.id,
         "movie",
     );
+    // With a grab submission on record, a burned release would leave a
+    // blocklist row and a failed release attempt behind; a hold leaves neither.
+    let grabbed_release = "Rule.Error.Movie.2024.1080p.WEB-DL.H264-GRP";
+    record_movie_grab_submission(&ctx, &completed, &title, grabbed_release).await;
 
     let result = import_completed_download(&app, &user, &completed)
         .await
         .expect("import completed download");
 
-    assert_eq!(result.decision, ImportDecision::Imported);
-    let media_files = ctx
-        .media_files
-        .list_media_files_for_title(&title.id)
+    // Held for the operator: a skipped (not rejected) result is what parks the
+    // tracked download in ImportBlocked with this message as its status.
+    assert_eq!(result.decision, ImportDecision::Skipped, "{result:?}");
+    assert_eq!(
+        result.skip_reason,
+        Some(ImportSkipReason::PostDownloadRuleBlocked)
+    );
+    assert!(!result.release_burned);
+    assert!(result.dest_path.is_none());
+    let message = result.error_message.as_deref().unwrap_or_default();
+    assert!(
+        message.contains("post-download rule failed to evaluate")
+            && message.contains("held for review")
+            && message.contains("Test Rule"),
+        "hold reason must name the failing rule: {message}"
+    );
+    // The engine's final error sentence, not its multi-line source excerpt.
+    assert!(
+        message.contains("expects string argument") && !message.contains('\n'),
+        "hold reason must carry the engine error on one line: {message}"
+    );
+
+    assert_eq!(
+        std::fs::read(&source_file).expect("source file must stay at its original path"),
+        source_bytes,
+        "held source file must be left untouched"
+    );
+    assert!(
+        std::fs::read_dir(dest_root.path())
+            .expect("read destination root")
+            .next()
+            .is_none(),
+        "held import must not create library artifacts"
+    );
+    assert!(
+        ctx.media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .expect("list media files")
+            .is_empty(),
+        "held import must not record a media file"
+    );
+    assert!(
+        ctx.library_state
+            .list_for_title(&title.id, 10)
+            .await
+            .expect("list blocklist")
+            .is_empty(),
+        "held import must not blocklist the release"
+    );
+    assert!(
+        scryer_infrastructure_workflow::workflow::release_store::ReleaseStore::new(
+            ctx.db.datastore(),
+            ctx.db.encryption_key_state(),
+        )
+        .list_failed_release_signatures_for_title(&title.id, 10)
         .await
-        .expect("list media files");
-    assert_eq!(media_files.len(), 1);
+        .expect("failed signatures")
+        .is_empty(),
+        "held import must not record a failed release attempt"
+    );
+    let unchanged_wanted = ctx
+        .library_state
+        .get_acquisition_scope_state_for_title(&title.id, None)
+        .await
+        .expect("get wanted")
+        .expect("wanted item");
+    assert_eq!(unchanged_wanted.id, wanted.id);
+    assert_eq!(
+        unchanged_wanted.status,
+        scryer_application::AcquisitionScopeStatus::Grabbed,
+        "held import must not reopen the scope"
+    );
 }
 
 #[tokio::test]
