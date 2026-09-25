@@ -340,8 +340,9 @@ impl AppUseCase {
         replacement: bool,
         mut routing: crate::IndexerGrabSelection,
     ) -> AppResult<QueueDownloadOutcome> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
-            .await?;
+        // A grab assigned to a title is gated like every other grab for that
+        // title: `ManageTitles` on its library, checked below. Only the
+        // title-less grab bypasses the libraries and needs system settings.
         routing.validate()?;
         let (queued_release, scope) = self
             .verify_release_candidate_token_for_signed_scope(actor, title_id, candidate_token)
