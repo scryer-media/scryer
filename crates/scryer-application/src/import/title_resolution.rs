@@ -271,20 +271,41 @@ impl MonitoredTitleMatcher {
     /// This is how evidence built from a subject picks up the release that
     /// will be compared against it: the release's name is an anchor like any
     /// other, fetched at the same distance, so the collision guard sees the
-    /// competitors it has to see.
+    /// competitors it has to see. `facet` is the evidence identity's: the
+    /// collision guard reads only that facet's bucket.
     pub(crate) async fn extend_spelling_candidates(
         &self,
         index: &mut crate::title_matching::relaxed::SpellingCandidates,
         anchors: &[(String, String)],
+        facet: &str,
     ) -> crate::AppResult<()> {
         match &self.titles {
             TitleSource::Repository(titles) => {
                 index
-                    .extend_for_anchors(titles.as_ref(), anchors, None)
+                    .extend_for_anchors(titles.as_ref(), anchors, Some(facet))
                     .await
             }
             // A fixed set is the caller's own and is already whole: there is
             // no wider bucket to fetch.
+            TitleSource::Fixed(_) => Ok(()),
+        }
+    }
+
+    /// [`Self::extend_spelling_candidates`] for a batch of releases compared
+    /// against one identity: only the anchors that can reach its collision
+    /// check are fetched, and the index then refuses a check for any other.
+    pub(crate) async fn extend_spelling_candidates_for_collisions(
+        &self,
+        index: &mut crate::title_matching::relaxed::SpellingCandidates,
+        anchors: &[(String, String)],
+        identity: &crate::title_matching::relaxed::SpellingIdentity,
+    ) -> crate::AppResult<()> {
+        match &self.titles {
+            TitleSource::Repository(titles) => {
+                index
+                    .extend_for_collision_checks(titles.as_ref(), anchors, identity)
+                    .await
+            }
             TitleSource::Fixed(_) => Ok(()),
         }
     }
