@@ -9392,6 +9392,22 @@ pub struct NotificationManualInteractionPayload {
     pub link: Option<String>,
 }
 
+/// Where a moved title came from and went to; carried by `title_moved`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NotificationTitleMovePayload {
+    pub operation_id: Option<String>,
+    pub operation_type: Option<String>,
+    pub mode: Option<String>,
+    pub source_library_id: Option<String>,
+    pub source_library_name: Option<String>,
+    pub destination_library_id: Option<String>,
+    pub destination_library_name: Option<String>,
+    pub source_path: Option<String>,
+    pub destination_path: Option<String>,
+    pub completed_with_warnings: bool,
+    pub detail: Option<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct NotificationMediaRequestPayload {
     pub request_id: Option<String>,
@@ -9431,6 +9447,7 @@ pub struct NotificationPayload {
     pub application_update: Option<NotificationApplicationUpdatePayload>,
     pub manual_interaction: Option<NotificationManualInteractionPayload>,
     pub media_request: Option<NotificationMediaRequestPayload>,
+    pub title_move: Option<NotificationTitleMovePayload>,
 }
 
 #[async_trait]

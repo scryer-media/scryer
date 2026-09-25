@@ -813,7 +813,7 @@ impl AppUseCase {
         }
 
         for title in &titles {
-            self.delete_title_row(title, actor_event.clone(), true)
+            self.delete_title_row(title, actor_event.clone(), true, Vec::new())
                 .await?;
         }
 

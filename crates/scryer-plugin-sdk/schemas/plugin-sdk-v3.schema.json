@@ -1619,6 +1619,7 @@
         "health_restored",
         "application_update",
         "manual_interaction_required",
+        "title_moved",
         "test"
       ]
     },
@@ -3295,6 +3296,16 @@
               "type": "null"
             }
           ]
+        },
+        "title_move": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginNotificationTitleMove"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -4123,6 +4134,76 @@
           ]
         },
         "created_title_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "PluginNotificationTitleMove": {
+      "description": "Where a moved title came from and went to. Present on `title_moved`; each\nmoved media file's old and new path is in `file.media_updates`.",
+      "type": "object",
+      "properties": {
+        "operation_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_library_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_library_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destination_library_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destination_library_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "source_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "destination_path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "completed_with_warnings": {
+          "type": "boolean",
+          "default": false
+        },
+        "detail": {
           "type": [
             "string",
             "null"

@@ -1,7 +1,11 @@
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct TitleLogicalDeleteOptions {
     pub(crate) purge_recycle_bin_entries: bool,
     pub(crate) append_title_deleted_event: bool,
+    /// Media file paths the title tracked before its files were deleted from
+    /// disk; reported on the title-deleted event. Empty for catalog-only
+    /// deletes.
+    pub(crate) deleted_paths: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -189,6 +193,7 @@ impl AppUseCase {
             )
             .await?;
 
+        let mut deleted_paths = Vec::new();
         if delete_files_on_disk {
             let delete_confirmation = delete_confirmation.ok_or_else(|| {
                 AppError::Validation(
@@ -199,12 +204,14 @@ impl AppUseCase {
                 preview_fingerprint,
                 typed_confirmation,
             } = delete_confirmation;
+            deleted_paths = self.tracked_media_file_paths(id).await;
             self.execute_delete_title_files(
                 id,
                 &preview_fingerprint,
                 typed_confirmation.as_deref(),
             )
             .await?;
+            deleted_paths = paths_no_longer_on_disk(deleted_paths).await;
         }
 
         self.delete_title_logical_cleanup(
@@ -213,6 +220,7 @@ impl AppUseCase {
             TitleLogicalDeleteOptions {
                 purge_recycle_bin_entries: true,
                 append_title_deleted_event: true,
+                deleted_paths,
             },
         )
         .await?;
@@ -256,8 +264,10 @@ impl AppUseCase {
             )
             .await?;
 
+        let deleted_paths = self.tracked_media_file_paths(id).await;
         self.execute_delete_title_files_by_policy(id, preview_fingerprint, authorization)
             .await?;
+        let deleted_paths = paths_no_longer_on_disk(deleted_paths).await;
 
         self.delete_title_logical_cleanup(
             &title,
@@ -265,6 +275,7 @@ impl AppUseCase {
             TitleLogicalDeleteOptions {
                 purge_recycle_bin_entries: true,
                 append_title_deleted_event: true,
+                deleted_paths,
             },
         )
         .await?;
@@ -524,6 +535,7 @@ impl AppUseCase {
             )
             .await?;
 
+        let mut deleted_paths = Vec::new();
         if delete_files_on_disk {
             let preview_fingerprint = item
                 .preview_fingerprint
@@ -536,12 +548,14 @@ impl AppUseCase {
                             .into(),
                     )
                 })?;
+            deleted_paths = self.tracked_media_file_paths(&item.title_id).await;
             self.execute_delete_title_files(
                 &item.title_id,
                 preview_fingerprint,
                 typed_confirmation,
             )
             .await?;
+            deleted_paths = paths_no_longer_on_disk(deleted_paths).await;
         }
 
         self.delete_title_logical_cleanup(
@@ -550,9 +564,41 @@ impl AppUseCase {
             TitleLogicalDeleteOptions {
                 purge_recycle_bin_entries: true,
                 append_title_deleted_event: true,
+                deleted_paths,
             },
         )
         .await
+    }
+
+    /// The title's tracked media file paths, read before a delete from disk so
+    /// the title-deleted event can name what was removed. A read only: a
+    /// failed listing reports no paths and leaves the delete itself alone.
+    async fn tracked_media_file_paths(&self, title_id: &str) -> Vec<String> {
+        match self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(title_id)
+            .await
+        {
+            Ok(files) => {
+                let mut paths = files
+                    .into_iter()
+                    .map(|file| file.file_path)
+                    .collect::<Vec<_>>();
+                paths.sort();
+                paths.dedup();
+                paths
+            }
+            Err(error) => {
+                warn!(
+                    title_id,
+                    error = %error,
+                    "could not list media files for the title-deleted event"
+                );
+                Vec::new()
+            }
+        }
     }
 
     async fn update_title_deletion_progress(
@@ -642,8 +688,13 @@ impl AppUseCase {
             actor.clone(),
         )
         .await?;
-        self.delete_title_row(title, actor, options.append_title_deleted_event)
-            .await?;
+        self.delete_title_row(
+            title,
+            actor,
+            options.append_title_deleted_event,
+            options.deleted_paths,
+        )
+        .await?;
         // Last, and only once the rows are gone: a lifecycle claim is a hold on
         // a title, and there is no title left to hold (spec 0003 FR-044).
         // Releasing first would open a window in which a maintenance action
@@ -659,6 +710,7 @@ impl AppUseCase {
         title: &scryer_domain::Title,
         actor: DomainEventActor,
         append_title_deleted_event: bool,
+        deleted_paths: Vec<String>,
     ) -> AppResult<()> {
         let title_id = title.id.as_str();
 
@@ -675,6 +727,7 @@ impl AppUseCase {
                     title,
                     DomainEventPayload::TitleDeleted(TitleDeletedEventData {
                         title: title_context_snapshot(title),
+                        deleted_paths,
                     }),
                 ))
                 .await;
@@ -1693,4 +1746,19 @@ impl AppUseCase {
             .await?;
         Ok(())
     }
+}
+
+/// Keep only the paths a completed delete actually removed. The delete takes
+/// the title's folder, so a catalogued file outside it — or every file of a
+/// title with no folder — is still on disk and must not be reported as gone.
+/// A read only; a path whose existence cannot be checked is not reported.
+async fn paths_no_longer_on_disk(paths: Vec<String>) -> Vec<String> {
+    let mut removed = Vec::with_capacity(paths.len());
+    for path in paths {
+        let on_disk = crate::stored_paths::stored_path_to_path_buf(&path);
+        if matches!(tokio::fs::try_exists(&on_disk).await, Ok(false)) {
+            removed.push(path);
+        }
+    }
+    removed
 }

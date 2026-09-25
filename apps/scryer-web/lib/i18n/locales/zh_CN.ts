@@ -1562,6 +1562,7 @@ const zh_CN: LocaleDictionary = {
   "settings.notificationEvent.rename": "文件已重命名",
   "settings.notificationEvent.titleAdded": "标题已添加",
   "settings.notificationEvent.titleDeleted": "标题已删除",
+  "settings.notificationEvent.titleMoved": "标题已移动",
   "settings.notificationEvent.fileDeleted": "文件已删除",
   "settings.notificationEvent.fileDeletedForUpgrade": "升级时删除文件",
   "settings.notificationEvent.postProcessingCompleted": "后处理完成",

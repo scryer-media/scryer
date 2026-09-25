@@ -1642,3 +1642,222 @@ async fn maintenance_scope_newly_discovered_future_episodes_inherit_unmonitored_
     assert_eq!(future.collection_id.as_ref(), Some(&setup.seasons[1].id));
     assert!(title.monitored);
 }
+
+impl EpisodeDeleteFixture {
+    /// Every title-deleted event recorded for this fixture's title.
+    async fn title_deleted_events(&self) -> Vec<scryer_domain::TitleDeletedEventData> {
+        self.app
+            .services
+            .events
+            .domain_events
+            .list(&scryer_domain::DomainEventFilter {
+                event_types: Some(vec![scryer_domain::DomainEventType::TitleDeleted]),
+                limit: 50,
+                ..scryer_domain::DomainEventFilter::default()
+            })
+            .await
+            .expect("list title-deleted events")
+            .into_iter()
+            .filter(|event| event.title_id.as_deref() == Some(self.title_id.as_str()))
+            .filter_map(|event| match event.payload {
+                DomainEventPayload::TitleDeleted(data) => Some(data),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Two tracked episode files and an untracked sidecar inside the title
+    /// folder, plus an unrelated file in a sibling folder of the same root.
+    /// Returns the tracked paths, sorted, and the unrelated file.
+    async fn seed_title_files_and_bystander(&self) -> (Vec<String>, PathBuf) {
+        self.add_episode_file("Emberfall/Season 01/Emberfall - S01E01.mkv", "episode-1")
+            .await;
+        self.add_episode_file("Emberfall/Season 01/Emberfall - S01E02.mkv", "episode-2")
+            .await;
+        std::fs::write(
+            self.root
+                .join("Emberfall/Season 01/Emberfall - S01E01.en.srt"),
+            b"subtitle",
+        )
+        .expect("write sidecar");
+        let bystander = self.root.join("Brightwater/Brightwater - S01E01.mkv");
+        std::fs::create_dir_all(bystander.parent().unwrap()).expect("create bystander folder");
+        std::fs::write(&bystander, b"video").expect("write bystander file");
+
+        let mut tracked = vec![
+            self.root
+                .join("Emberfall/Season 01/Emberfall - S01E01.mkv")
+                .to_string_lossy()
+                .to_string(),
+            self.root
+                .join("Emberfall/Season 01/Emberfall - S01E02.mkv")
+                .to_string_lossy()
+                .to_string(),
+        ];
+        tracked.sort();
+        (tracked, bystander)
+    }
+}
+
+#[tokio::test]
+async fn delete_title_from_disk_reports_the_tracked_files_it_removed() {
+    let fixture = seed_episode_delete_fixture().await;
+    let (tracked, bystander) = fixture.seed_title_files_and_bystander().await;
+    let preview = fixture
+        .app
+        .preview_delete_title_files(&fixture.admin, &fixture.title_id)
+        .await
+        .expect("preview title delete");
+    assert_eq!(preview.media_count as usize, tracked.len());
+
+    fixture
+        .app
+        .delete_title(
+            &fixture.admin,
+            &fixture.title_id,
+            true,
+            Some(DeleteExecutionConfirmation {
+                preview_fingerprint: preview.fingerprint.clone(),
+                typed_confirmation: None,
+            }),
+        )
+        .await
+        .expect("delete title with files");
+
+    let events = fixture.title_deleted_events().await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].deleted_paths, tracked);
+    // What the event names is what the existing delete removed ...
+    for path in &events[0].deleted_paths {
+        assert!(!Path::new(path).exists(), "{path} should be gone");
+    }
+    // ... and nothing outside the title's folder was touched.
+    assert!(bystander.exists(), "unrelated file must be preserved");
+}
+
+#[tokio::test]
+async fn delete_title_from_catalog_only_reports_no_deleted_paths() {
+    let fixture = seed_episode_delete_fixture().await;
+    let (tracked, bystander) = fixture.seed_title_files_and_bystander().await;
+
+    fixture
+        .app
+        .delete_title(&fixture.admin, &fixture.title_id, false, None)
+        .await
+        .expect("delete title from catalog");
+
+    let events = fixture.title_deleted_events().await;
+    assert_eq!(events.len(), 1);
+    assert!(events[0].deleted_paths.is_empty());
+    for path in &tracked {
+        assert!(Path::new(path).exists(), "{path} stays on disk");
+    }
+    assert!(bystander.exists());
+}
+
+#[tokio::test]
+async fn delete_titles_job_from_disk_reports_the_tracked_files_it_removed() {
+    let fixture = seed_episode_delete_fixture().await;
+    let (tracked, bystander) = fixture.seed_title_files_and_bystander().await;
+    let preview = fixture
+        .app
+        .preview_delete_title_files(&fixture.admin, &fixture.title_id)
+        .await
+        .expect("preview title delete");
+
+    let accepted = fixture
+        .app
+        .start_delete_titles_job(
+            &fixture.admin,
+            DeleteTitlesJobRequest {
+                items: vec![DeleteTitlesJobItem {
+                    title_id: fixture.title_id.clone(),
+                    preview_fingerprint: Some(preview.fingerprint.clone()),
+                }],
+                delete_files_on_disk: true,
+                typed_confirmation: None,
+            },
+        )
+        .await
+        .expect("start title deletion job");
+    let run_id = accepted.job_run.id.clone();
+    let run = wait_for(
+        "the title deletion job to reach a terminal status",
+        || async {
+            fixture
+                .app
+                .list_job_runs(&fixture.admin, JobKey::TitleDeletion, 10)
+                .await
+                .expect("list title deletion runs")
+                .into_iter()
+                .find(|run| run.id == run_id && run.status.is_terminal())
+        },
+    )
+    .await;
+    assert_eq!(run.status, JobRunStatus::Completed);
+
+    let events = fixture.title_deleted_events().await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].deleted_paths, tracked);
+    for path in &events[0].deleted_paths {
+        assert!(!Path::new(path).exists(), "{path} should be gone");
+    }
+    assert!(bystander.exists(), "unrelated file must be preserved");
+}
+
+#[tokio::test]
+async fn delete_title_from_disk_omits_tracked_files_outside_the_title_folder() {
+    let fixture = seed_episode_delete_fixture().await;
+    let (tracked, bystander) = fixture.seed_title_files_and_bystander().await;
+    fixture
+        .app
+        .services
+        .catalog
+        .titles
+        .set_folder_path(
+            &fixture.title_id,
+            fixture.root.join("Emberfall").to_string_lossy().as_ref(),
+        )
+        .await
+        .expect("set title folder");
+    // Catalogued for this title, but outside the folder the delete removes.
+    let stray = fixture
+        .root
+        .join("Stray Imports/Emberfall - S01E03.mkv")
+        .to_string_lossy()
+        .to_string();
+    std::fs::create_dir_all(Path::new(&stray).parent().unwrap()).expect("create stray folder");
+    std::fs::write(&stray, b"video").expect("write stray file");
+    fixture
+        .insert_media_file_row(&stray, Some("episode-3"))
+        .await;
+
+    let preview = fixture
+        .app
+        .preview_delete_title_files(&fixture.admin, &fixture.title_id)
+        .await
+        .expect("preview title delete");
+    fixture
+        .app
+        .delete_title(
+            &fixture.admin,
+            &fixture.title_id,
+            true,
+            Some(DeleteExecutionConfirmation {
+                preview_fingerprint: preview.fingerprint.clone(),
+                typed_confirmation: None,
+            }),
+        )
+        .await
+        .expect("delete title with files");
+
+    let events = fixture.title_deleted_events().await;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].deleted_paths, tracked);
+    for path in &events[0].deleted_paths {
+        assert!(!Path::new(path).exists(), "{path} should be gone");
+    }
+    assert!(!events[0].deleted_paths.contains(&stray));
+    assert!(Path::new(&stray).exists(), "file outside the folder stays");
+    assert!(bystander.exists(), "unrelated file must be preserved");
+}

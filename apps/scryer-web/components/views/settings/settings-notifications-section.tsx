@@ -123,6 +123,7 @@ const NOTIFICATION_EVENT_LABEL_KEYS: Record<string, string> = {
   rename: "settings.notificationEvent.rename",
   title_added: "settings.notificationEvent.titleAdded",
   title_deleted: "settings.notificationEvent.titleDeleted",
+  title_moved: "settings.notificationEvent.titleMoved",
   file_deleted: "settings.notificationEvent.fileDeleted",
   file_deleted_for_upgrade: "settings.notificationEvent.fileDeletedForUpgrade",
   post_processing_completed: "settings.notificationEvent.postProcessingCompleted",

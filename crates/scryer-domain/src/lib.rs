@@ -3951,6 +3951,10 @@ pub struct TitleMovedEventData {
     pub destination_path: Option<String>,
     pub completed_with_warnings: bool,
     pub detail: Option<String>,
+    /// Each moved media file's old path (`deleted`) and new path (`created`).
+    /// Defaulted so moves recorded before the field existed still decode.
+    #[serde(default)]
+    pub media_updates: Vec<MediaPathUpdate>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -3966,6 +3970,11 @@ pub struct TitleRematchedEventData {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TitleDeletedEventData {
     pub title: TitleContextSnapshot,
+    /// Media file paths the title tracked when its files were deleted from
+    /// disk; empty when only the catalog entry was removed. Defaulted so
+    /// deletions recorded before the field existed still decode.
+    #[serde(default)]
+    pub deleted_paths: Vec<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -7183,6 +7192,7 @@ pub enum NotificationEventType {
     HealthRestored,
     ApplicationUpdate,
     ManualInteractionRequired,
+    TitleMoved,
     Test,
 }
 
@@ -7210,6 +7220,7 @@ impl NotificationEventType {
             Self::HealthRestored => "health_restored",
             Self::ApplicationUpdate => "application_update",
             Self::ManualInteractionRequired => "manual_interaction_required",
+            Self::TitleMoved => "title_moved",
             Self::Test => "test",
         }
     }
@@ -7237,6 +7248,7 @@ impl NotificationEventType {
             Self::HealthRestored,
             Self::ApplicationUpdate,
             Self::ManualInteractionRequired,
+            Self::TitleMoved,
             Self::Test,
         ]
     }
@@ -7264,6 +7276,7 @@ impl NotificationEventType {
             "health_restored" => Some(Self::HealthRestored),
             "application_update" => Some(Self::ApplicationUpdate),
             "manual_interaction_required" => Some(Self::ManualInteractionRequired),
+            "title_moved" => Some(Self::TitleMoved),
             "test" => Some(Self::Test),
             "release_grabbed" => Some(Self::Grab),
             "download_failed" => Some(Self::Download),
@@ -7467,6 +7480,103 @@ mod tests {
                 upgrade: false,
                 ..data
             }
+        );
+    }
+
+    fn synthetic_title_context() -> TitleContextSnapshot {
+        TitleContextSnapshot {
+            title_name: "Synthetic Movie".to_string(),
+            facet: MediaFacet::Movie,
+            external_ids: DomainExternalIds::default(),
+            poster_url: None,
+            year: Some(2001),
+        }
+    }
+
+    #[test]
+    fn title_deleted_event_data_without_deleted_paths_reads_as_empty() {
+        let data = TitleDeletedEventData {
+            title: synthetic_title_context(),
+            deleted_paths: vec!["/library/Synthetic Movie (2001)/movie.mkv".to_string()],
+        };
+        let mut legacy = serde_json::to_value(&data).expect("event data should serialize");
+        legacy
+            .as_object_mut()
+            .expect("event data serializes as an object")
+            .remove("deleted_paths")
+            .expect("deleted_paths is serialized");
+
+        let parsed: TitleDeletedEventData =
+            serde_json::from_value(legacy).expect("legacy row should parse");
+        assert_eq!(
+            parsed,
+            TitleDeletedEventData {
+                deleted_paths: Vec::new(),
+                ..data
+            }
+        );
+    }
+
+    #[test]
+    fn title_moved_event_data_without_media_updates_reads_as_empty() {
+        let data = TitleMovedEventData {
+            title: synthetic_title_context(),
+            operation_id: "operation-1".to_string(),
+            operation_type: "root_move".to_string(),
+            mode: "user_moved_files".to_string(),
+            source_title_id: "title-1".to_string(),
+            source_title_name: "Synthetic Movie".to_string(),
+            source_library_id: "library-a".to_string(),
+            source_library_name: "Library A".to_string(),
+            destination_library_id: "library-b".to_string(),
+            destination_library_name: "Library B".to_string(),
+            source_root_id: "root-a".to_string(),
+            destination_root_id: "root-b".to_string(),
+            source_path: Some("/root-a/Synthetic Movie (2001)".to_string()),
+            destination_path: Some("/root-b/Synthetic Movie (2001)".to_string()),
+            completed_with_warnings: false,
+            detail: None,
+            media_updates: vec![
+                MediaPathUpdate {
+                    path: "/root-a/Synthetic Movie (2001)/movie.mkv".to_string(),
+                    update_type: MediaUpdateType::Deleted,
+                },
+                MediaPathUpdate {
+                    path: "/root-b/Synthetic Movie (2001)/movie.mkv".to_string(),
+                    update_type: MediaUpdateType::Created,
+                },
+            ],
+        };
+        let mut legacy = serde_json::to_value(&data).expect("event data should serialize");
+        legacy
+            .as_object_mut()
+            .expect("event data serializes as an object")
+            .remove("media_updates")
+            .expect("media_updates is serialized");
+
+        let parsed: TitleMovedEventData =
+            serde_json::from_value(legacy).expect("legacy row should parse");
+        assert_eq!(
+            parsed,
+            TitleMovedEventData {
+                media_updates: Vec::new(),
+                ..data
+            }
+        );
+    }
+
+    #[test]
+    fn title_moved_notification_event_type_round_trips() {
+        let event_type = NotificationEventType::TitleMoved;
+        assert_eq!(event_type.as_str(), "title_moved");
+        assert_eq!(
+            NotificationEventType::parse("title_moved"),
+            Some(event_type)
+        );
+        assert!(NotificationEventType::all().contains(&event_type));
+        assert_eq!(
+            serde_json::to_value(event_type).expect("serialize"),
+            serde_json::json!("title_moved")
         );
     }
 

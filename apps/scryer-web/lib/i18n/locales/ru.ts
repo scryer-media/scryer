@@ -3738,6 +3738,7 @@ const ru: LocaleDictionary = {
     "settings.notificationEvent.rename": "Файл переименован",
     "settings.notificationEvent.titleAdded": "Название добавлено",
     "settings.notificationEvent.titleDeleted": "Название удалено",
+    "settings.notificationEvent.titleMoved": "Название перемещено",
     "settings.notificationEvent.fileDeleted": "Файл удалён",
 
     "settings.notificationEvent.fileDeletedForUpgrade":

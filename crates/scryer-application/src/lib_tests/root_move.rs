@@ -661,6 +661,22 @@ async fn confirming_a_move_relocates_the_files_and_then_the_catalog() {
     assert_eq!(data["operation_id"], operation.id);
     assert_eq!(data["source_root_id"], fixture.root_a_id);
     assert_eq!(data["destination_root_id"], fixture.root_b_id);
+    // The recorded move names the media file's old and new path, which is
+    // what the title-moved notification forwards.
+    let source_file = std::path::Path::new(title.folder_path.as_deref().unwrap())
+        .join("Confirmed.Move.2023.1080p.mkv");
+    assert_eq!(
+        data["media_updates"],
+        serde_json::json!([
+            {"path": source_file.to_string_lossy(), "update_type": "deleted"},
+            {
+                "path": destination_folder
+                    .join("Confirmed.Move.2023.1080p.mkv")
+                    .to_string_lossy(),
+                "update_type": "created",
+            },
+        ])
+    );
 }
 
 /// US2.1's ordering rule from the failing side: when a title's content cannot

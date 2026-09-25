@@ -1693,6 +1693,7 @@ const it: LocaleDictionary = {
   "settings.notificationEvent.rename": "File rinominato",
   "settings.notificationEvent.titleAdded": "Titolo aggiunto",
   "settings.notificationEvent.titleDeleted": "Titolo cancellato",
+  "settings.notificationEvent.titleMoved": "Titolo spostato",
   "settings.notificationEvent.fileDeleted": "File eliminato",
   "settings.notificationEvent.fileDeletedForUpgrade":
     "File eliminato per l'aggiornamento",

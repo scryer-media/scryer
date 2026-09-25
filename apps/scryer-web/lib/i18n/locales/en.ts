@@ -3213,6 +3213,7 @@ const en: LocaleDictionary = {
   "settings.notificationEvent.rename": "File Renamed",
   "settings.notificationEvent.titleAdded": "Title Added",
   "settings.notificationEvent.titleDeleted": "Title Deleted",
+  "settings.notificationEvent.titleMoved": "Title Moved",
   "settings.notificationEvent.fileDeleted": "File Deleted",
   "settings.notificationEvent.fileDeletedForUpgrade":
     "File Deleted For Upgrade",
