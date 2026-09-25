@@ -2989,6 +2989,13 @@ fn classify_http_rate_limit(_method: &Method, path: &str) -> Option<HttpRateLimi
         || path.starts_with("/api/")
         || path.starts_with("/compat/sonarr/api/")
         || path.starts_with("/compat/radarr/api/")
+        || ["/compat/sonarr/library/", "/compat/radarr/library/"]
+            .iter()
+            .any(|prefix| {
+                path.strip_prefix(prefix)
+                    .and_then(|rest| rest.split_once('/'))
+                    .is_some_and(|(id, rest)| !id.is_empty() && rest.starts_with("api/"))
+            })
     {
         return Some(HttpRateLimitClass::Api);
     }
@@ -5476,6 +5483,13 @@ mod tests {
                     classify_http_rate_limit(
                         &Method::POST,
                         &format!("/compat/{flavor}/api/v3/{endpoint}"),
+                    ),
+                    Some(HttpRateLimitClass::Api),
+                );
+                assert_eq!(
+                    classify_http_rate_limit(
+                        &Method::POST,
+                        &format!("/compat/{flavor}/library/fixture-library/api/v3/{endpoint}"),
                     ),
                     Some(HttpRateLimitClass::Api),
                 );

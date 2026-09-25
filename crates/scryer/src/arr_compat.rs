@@ -27,10 +27,11 @@ enum Flavor {
 struct CompatState {
     auth: AuthState,
     flavor: Flavor,
+    scoped: bool,
 }
 
 pub(crate) fn router(auth: AuthState) -> Router {
-    let routes = |flavor, list_path| {
+    let routes = |flavor, list_path, scoped| {
         Router::new()
             .route("/api/v3/system/status", get(status))
             .route("/api/v3/release/push", post(push))
@@ -40,11 +41,71 @@ pub(crate) fn router(auth: AuthState) -> Router {
             .with_state(CompatState {
                 auth: auth.clone(),
                 flavor,
+                scoped,
             })
     };
     Router::new()
-        .nest("/compat/sonarr", routes(Flavor::Sonarr, "/api/v3/series"))
-        .nest("/compat/radarr", routes(Flavor::Radarr, "/api/v3/movie"))
+        .nest(
+            "/compat/sonarr",
+            routes(Flavor::Sonarr, "/api/v3/series", false),
+        )
+        .nest(
+            "/compat/radarr",
+            routes(Flavor::Radarr, "/api/v3/movie", false),
+        )
+        .nest(
+            "/compat/sonarr/library/{library_id}",
+            routes(Flavor::Sonarr, "/api/v3/series", true),
+        )
+        .nest(
+            "/compat/radarr/library/{library_id}",
+            routes(Flavor::Radarr, "/api/v3/movie", true),
+        )
+}
+
+impl Flavor {
+    fn facets(self) -> &'static [MediaFacet] {
+        match self {
+            Self::Sonarr => &[MediaFacet::Series, MediaFacet::Anime],
+            Self::Radarr => &[MediaFacet::Movie],
+        }
+    }
+}
+
+type LibraryPath = Result<
+    axum::extract::Path<std::collections::HashMap<String, String>>,
+    axum::extract::rejection::PathRejection,
+>;
+
+async fn library_scope(
+    state: &CompatState,
+    actor: &User,
+    path: LibraryPath,
+    permission: scryer_domain::LibraryPermission,
+) -> Result<Option<String>, Response> {
+    if !state.scoped {
+        return Ok(None);
+    }
+    let id = path
+        .ok()
+        .and_then(|mut path| path.remove("library_id"))
+        .ok_or_else(|| validation("libraryId", "Invalid library scope"))?;
+    let libraries = state
+        .auth
+        .app
+        .list_libraries_for_permission(actor, None, permission)
+        .await
+        .map_err(map_app_error)?;
+    if !libraries
+        .iter()
+        .any(|library| library.id == id && state.flavor.facets().contains(&library.facet))
+    {
+        return Err(validation(
+            "libraryId",
+            "The selected library is unavailable or incompatible with this endpoint",
+        ));
+    }
+    Ok(Some(id))
 }
 
 async fn actor(state: &CompatState, headers: &HeaderMap) -> Result<User, Response> {
@@ -67,15 +128,36 @@ async fn actor(state: &CompatState, headers: &HeaderMap) -> Result<User, Respons
     Ok(resolved.user)
 }
 
-async fn status(State(state): State<CompatState>, headers: HeaderMap) -> Response {
-    if let Err(error) = actor(&state, &headers).await {
+async fn status(
+    State(state): State<CompatState>,
+    path: LibraryPath,
+    headers: HeaderMap,
+) -> Response {
+    let actor = match actor(&state, &headers).await {
+        Ok(actor) => actor,
+        Err(error) => return error,
+    };
+    if let Err(error) = library_scope(
+        &state,
+        &actor,
+        path,
+        scryer_domain::LibraryPermission::ManageTitles,
+    )
+    .await
+    {
         return error;
     }
     Json(json!({ "version": crate::VERSION })).into_response()
 }
 
-async fn tags(State(state): State<CompatState>, headers: HeaderMap) -> Response {
-    if let Err(error) = actor(&state, &headers).await {
+async fn tags(State(state): State<CompatState>, path: LibraryPath, headers: HeaderMap) -> Response {
+    let actor = match actor(&state, &headers).await {
+        Ok(actor) => actor,
+        Err(error) => return error,
+    };
+    if let Err(error) =
+        library_scope(&state, &actor, path, scryer_domain::LibraryPermission::View).await
+    {
         return error;
     }
     Json(json!([])).into_response()
@@ -227,6 +309,7 @@ impl PushInput {
 
 async fn push(
     State(state): State<CompatState>,
+    path: LibraryPath,
     headers: HeaderMap,
     body: Result<Json<PushInput>, JsonRejection>,
 ) -> Response {
@@ -242,11 +325,18 @@ async fn push(
         Ok(input) => input,
         Err(error) => return error,
     };
-    let facets = match state.flavor {
-        Flavor::Sonarr => vec![MediaFacet::Series, MediaFacet::Anime],
-        Flavor::Radarr => vec![MediaFacet::Movie],
+    let library_id = match library_scope(
+        &state,
+        &actor,
+        path,
+        scryer_domain::LibraryPermission::ManageTitles,
+    )
+    .await
+    {
+        Ok(id) => id,
+        Err(error) => return error,
     };
-    match state.auth.app.submit_external_release(&actor, input, &facets).await {
+    match state.auth.app.submit_arr_compat_release(&actor, input, state.flavor.facets(), library_id.as_deref()).await {
         Ok(outcome) => Json(json!([{
             "approved": outcome.status == ExternalReleaseStatus::Queued,
             "rejected": matches!(outcome.status, ExternalReleaseStatus::Rejected | ExternalReleaseStatus::Duplicate),
@@ -274,16 +364,25 @@ fn title_json(title: Title) -> Value {
     })
 }
 
-async fn titles(State(state): State<CompatState>, headers: HeaderMap) -> Response {
+async fn titles(
+    State(state): State<CompatState>,
+    path: LibraryPath,
+    headers: HeaderMap,
+) -> Response {
     let actor = match actor(&state, &headers).await {
         Ok(actor) => actor,
         Err(error) => return error,
     };
+    let library_ids =
+        match library_scope(&state, &actor, path, scryer_domain::LibraryPermission::View).await {
+            Ok(id) => id.map(|id| vec![id]),
+            Err(error) => return error,
+        };
     // Each body chunk contains at most one bounded catalog page. A read error
     // aborts the stream rather than returning a silently truncated JSON array.
     let pages = stream::try_unfold(
-        (state, actor, 0usize, false, false),
-        |(state, actor, offset, started, done)| async move {
+        (state, actor, library_ids, 0usize, false, false),
+        |(state, actor, library_ids, offset, started, done)| async move {
             if done {
                 return Ok::<_, std::io::Error>(None);
             }
@@ -293,7 +392,7 @@ async fn titles(State(state): State<CompatState>, headers: HeaderMap) -> Respons
                 .list_titles(
                     &actor,
                     None,
-                    None,
+                    library_ids.clone(),
                     None,
                     Default::default(),
                     Default::default(),
@@ -332,7 +431,14 @@ async fn titles(State(state): State<CompatState>, headers: HeaderMap) -> Respons
             }
             Ok(Some((
                 chunk,
-                (state, actor, offset + 300, started, !page.has_more),
+                (
+                    state,
+                    actor,
+                    library_ids,
+                    offset + 300,
+                    started,
+                    !page.has_more,
+                ),
             )))
         },
     );
@@ -474,6 +580,167 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn arr_compat_library_scope_and_conflicts() {
+        tokio::time::timeout(std::time::Duration::from_secs(120), async {
+            use scryer_application::PendingReleaseRepository;
+            let context = TestContext::new().await;
+            let admin = context.app.find_or_create_default_user().await.unwrap();
+            let (scopes, _) = duplicate_library_fixture(&context, &admin).await;
+            let key = context.app.create_api_key(&admin, scryer_application::CreateApiKey {
+                label: "Scoped fixture".into(), expiry: scryer_application::ApiKeyExpiryPreset::Never,
+            }).await.unwrap();
+            let router = test_router(&context);
+            for (flavor, scope, list) in [("radarr", "RADARR_PRIMARY", "movie"), ("sonarr", "SONARR_PRIMARY", "series")] {
+                let id = scopes[scope].as_str().unwrap();
+                for endpoint in ["system/status", "tag", list] {
+                    let response = router.clone().oneshot(Request::builder()
+                        .uri(format!("/compat/{flavor}/library/{id}/api/v3/{endpoint}"))
+                        .header("X-Api-Key", &key.raw_key).body(Body::empty()).unwrap()).await.unwrap();
+                    assert_eq!(response.status(), StatusCode::OK);
+                    let value: Value = serde_json::from_slice(&to_bytes(response.into_body(), 65536).await.unwrap()).unwrap();
+                    if endpoint == list {
+                        let rows = value.as_array().unwrap();
+                        assert_eq!(rows.len(), 2);
+                        assert!(rows.iter().any(|row| row["title"].as_str().unwrap().starts_with("PRIMARY Only")));
+                        assert!(rows.iter().all(|row| !row["title"].as_str().unwrap().contains("SECONDARY")));
+                    }
+                }
+                let wrong = scopes[if flavor == "radarr" { "SONARR_PRIMARY" } else { "RADARR_PRIMARY" }].as_str().unwrap();
+                for invalid in ["missing", wrong] {
+                    for endpoint in ["system/status", "tag", list, "release/push"] {
+                        let mut request = Request::builder().uri(format!("/compat/{flavor}/library/{invalid}/api/v3/{endpoint}"))
+                            .header("X-Api-Key", &key.raw_key);
+                        let body = if endpoint == "release/push" {
+                            request = request.method("POST").header(header::CONTENT_TYPE, "application/json");
+                            Body::from(json!({"title":"Library.Movie.2024.1080p.WEB-DL", "downloadUrl":"https://releases.invalid/file.nzb", "indexer":"Fixture", "protocol":"usenet"}).to_string())
+                        } else { Body::empty() };
+                        let response = router.clone().oneshot(request.body(body).unwrap()).await.unwrap();
+                        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                    }
+                }
+                let name = if flavor == "radarr" { "Library.Movie.2024.1080p.WEB-DL" } else { "Library.Series.2024.S01E01.1080p.WEB-DL" };
+                let response = router.clone().oneshot(Request::builder().method("POST")
+                    .uri(format!("/compat/{flavor}/api/v3/release/push"))
+                    .header("X-Api-Key", &key.raw_key).header(header::CONTENT_TYPE, "application/json")
+                    .body(Body::from(json!({"title":name,"downloadUrl":"https://releases.invalid/file.nzb","indexer":"Fixture","protocol":"usenet"}).to_string())).unwrap()).await.unwrap();
+                assert_eq!(response.status(), StatusCode::OK);
+                let value: Value = serde_json::from_slice(&to_bytes(response.into_body(),8192).await.unwrap()).unwrap();
+                assert_eq!(value[0]["rejected"], true);
+                assert!(value[0]["rejections"].to_string().contains("multiple catalog entries"), "{value}");
+            }
+            let primary = scopes["RADARR_PRIMARY"].as_str().unwrap();
+            let secondary = scopes["RADARR_SECONDARY"].as_str().unwrap();
+            let mut restricted = admin.clone();
+            restricted.authorization = scryer_domain::UserAuthorization { loaded: true, ..Default::default() };
+            let release = || input(0, Value::Null).into_release(Flavor::Radarr).unwrap();
+            assert!(matches!(context.app.submit_arr_compat_release(&restricted, release(), &[MediaFacet::Movie], Some(primary)).await, Err(scryer_application::AppError::Validation(_))));
+            restricted.authorization.libraries.insert(primary.into(), scryer_domain::LibraryPermissionMask::from_permissions([scryer_domain::LibraryPermission::View]));
+            assert!(matches!(context.app.submit_arr_compat_release(&restricted, release(), &[MediaFacet::Movie], Some(primary)).await, Err(scryer_application::AppError::Validation(_))));
+            restricted.authorization.libraries.insert(primary.into(), scryer_domain::LibraryPermissionMask::from_permissions([scryer_domain::LibraryPermission::View, scryer_domain::LibraryPermission::ManageTitles]));
+            assert!(matches!(context.app.submit_arr_compat_release(&restricted, release(), &[MediaFacet::Movie], Some(secondary)).await, Err(scryer_application::AppError::Validation(_))));
+            let outcome = context.app.submit_arr_compat_release(&restricted, release(), &[MediaFacet::Movie], Some(primary)).await.unwrap();
+            assert_eq!(outcome.status, ExternalReleaseStatus::Rejected);
+            assert!(outcome.title_id.is_none());
+            assert!(context.library_state.list_waiting_pending_releases().await.unwrap().is_empty());
+            assert!(context.nzbget_server.received_requests().await.unwrap().is_empty());
+        }).await.expect("bounded scope fixture");
+    }
+
+    async fn duplicate_library_fixture(context: &TestContext, admin: &User) -> (Value, Vec<Title>) {
+        let mut scopes = serde_json::Map::new();
+        let mut copies = Vec::new();
+        for (flavor, facet, name) in [
+            ("RADARR", MediaFacet::Movie, "Library Movie"),
+            ("SONARR", MediaFacet::Series, "Library Series"),
+        ] {
+            for label in ["PRIMARY", "SECONDARY"] {
+                let library = context
+                    .app
+                    .create_library(
+                        admin,
+                        facet.clone(),
+                        format!("{flavor} {label}"),
+                        vec![scryer_application::LibraryRootDraft {
+                            path: format!("/fixture/{flavor}/{label}"),
+                            is_default: true,
+                        }],
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                scopes.insert(format!("{flavor}_{label}"), json!(library.id));
+                let title = context
+                    .app
+                    .add_title_with_outcome_in_library(
+                        admin,
+                        scryer_domain::NewTitle {
+                            name: name.into(),
+                            facet: facet.clone(),
+                            monitored: true,
+                            year: Some(2024),
+                            min_availability: Some("announced".into()),
+                            ..Default::default()
+                        },
+                        library.id.clone(),
+                    )
+                    .await
+                    .unwrap()
+                    .title;
+                if facet == MediaFacet::Series {
+                    let season = context
+                        .app
+                        .create_collection(
+                            admin,
+                            title.id.clone(),
+                            "season".into(),
+                            "1".into(),
+                            Some("Season 1".into()),
+                            None,
+                            Some("1".into()),
+                            Some("1".into()),
+                        )
+                        .await
+                        .unwrap();
+                    context
+                        .app
+                        .create_episode(
+                            admin,
+                            title.id.clone(),
+                            Some(season.id),
+                            "standard".into(),
+                            Some("1".into()),
+                            Some("1".into()),
+                            Some("S01E01".into()),
+                            Some("Fixture episode".into()),
+                            Some("2024-01-01".into()),
+                            Some(1440),
+                            false,
+                            false,
+                        )
+                        .await
+                        .unwrap();
+                }
+                copies.push(title);
+                context
+                    .app
+                    .add_title_with_outcome_in_library(
+                        admin,
+                        scryer_domain::NewTitle {
+                            name: format!("{label} Only {name}"),
+                            facet: facet.clone(),
+                            monitored: true,
+                            ..Default::default()
+                        },
+                        library.id,
+                    )
+                    .await
+                    .unwrap();
+            }
+        }
+        (Value::Object(scopes), copies)
+    }
+
+    #[tokio::test]
     #[ignore = "requires an explicitly supplied isolated autobrr application driver"]
     async fn arr_compat_real_autobrr_application() {
         use scryer_application::{
@@ -549,6 +816,7 @@ mod tests {
             crate::settings_bootstrap::seed_service_setting_definitions(context.settings_store.clone()).await.unwrap();
             context.settings_store.upsert_setting_json("system","acquisition.delay_profiles",None,
                 json!([{"id":"external-delay","name":"Fixture delay","usenet_delay_minutes":120,"tags":["external-delay"]}]).to_string(),"test",None).await.unwrap();
+            let (scopes, copies) = duplicate_library_fixture(&context, &admin).await;
             let metadata_before = context.smg_server.received_requests().await.unwrap().len();
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
             let address = listener.local_addr().unwrap();
@@ -556,15 +824,19 @@ mod tests {
             let server = tokio::spawn(async move { axum::serve(listener,router).await });
             let result = tokio::process::Command::new(driver)
                 .env("INTAKE_HOST",format!("http://{address}"))
+                .env("INTAKE_LIBRARY_SCOPES", scopes.to_string())
                 .env("INTAKE_KEY",&key.raw_key).kill_on_drop(true).output().await.unwrap();
             server.abort();
             assert!(result.status.success(),"{}\n{}",String::from_utf8_lossy(&result.stdout),String::from_utf8_lossy(&result.stderr));
             eprintln!("{}",String::from_utf8_lossy(&result.stdout));
             assert!(unexpected_rpc.lock().unwrap().is_empty(),"unexpected RPCs: {:?}",unexpected_rpc.lock().unwrap());
-            assert_eq!(jobs.lock().unwrap().len(),2,"only accepted movie and episode reach the client");
+            assert_eq!(jobs.lock().unwrap().len(),6,"only uniquely accepted movie and episode copies reach the client");
             let submissions = DownloadSubmissionStore::new(context.db.datastore());
             for (id, expected) in title_ids.iter().zip([1,0,1,0]) {
                 assert_eq!(submissions.list_for_title(id).await.unwrap().len(),expected,"submission count for {id}");
+            }
+            for title in copies {
+                assert_eq!(submissions.list_for_title(&title.id).await.unwrap().len(), 1);
             }
             let pending = context.library_state.list_waiting_pending_releases().await.unwrap();
             assert_eq!(pending.len(),1);
