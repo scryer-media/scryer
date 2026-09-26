@@ -14822,13 +14822,9 @@ async fn saved_proper_of_the_downloading_pack_is_grabbed() {
     .await;
 }
 
-#[tokio::test]
-async fn a_pack_downloading_for_another_season_does_not_block_a_saved_pack() {
-    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
-    let other_season_pack = "Recent.Failed.Season.Pack.S08.1080p.WEB-DL-GroupB".to_string();
-    let (app, title, download_client) =
-        season_pack_downloading_fixture(vec![queued_pack.clone()]).await;
-
+/// Add a monitored season eight (two wanted episodes) to the season-pack
+/// fixture's title and return its scope state ids.
+async fn seed_season_eight_scopes(app: &AppUseCase, title: &Title) -> Vec<String> {
     let season_eight = app
         .services
         .catalog
@@ -14910,6 +14906,17 @@ async fn a_pack_downloading_for_another_season_does_not_block_a_saved_pack() {
             .expect("seed season eight scope");
         season_eight_state_ids.push(state_id);
     }
+    season_eight_state_ids
+}
+
+#[tokio::test]
+async fn a_pack_downloading_for_another_season_does_not_block_a_saved_pack() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let other_season_pack = "Recent.Failed.Season.Pack.S08.1080p.WEB-DL-GroupB".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone()]).await;
+
+    let season_eight_state_ids = seed_season_eight_scopes(&app, &title).await;
     let mut standby = pending_movie_release(
         &season_eight_state_ids[0],
         &title,
@@ -14940,12 +14947,12 @@ async fn a_pack_downloading_for_another_season_does_not_block_a_saved_pack() {
     );
 }
 
-/// Saved rows are ordered by the score stored when they were saved, and each is
-/// re-scored when walked. A row the queued pack covers must not stop the walk:
-/// a real upgrade saved below it is still tried, and grabbed once the queued
-/// pack no longer holds the client queue.
+/// A row the queued pack covers reports the scope covered, and every later
+/// row within that scope is skipped unclaimed and unjudged that cycle. An
+/// upgrade saved within the covered scope waits until the queued pack leaves
+/// the queue; every row stays walkable for that.
 #[tokio::test]
-async fn a_queue_covered_saved_pack_does_not_hide_an_upgrade_saved_below_it() {
+async fn a_queue_covered_saved_pack_skips_later_rows_within_its_scope() {
     let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
     let equal_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupB".to_string();
     let proper_pack = "Recent.Failed.Season.Pack.S07.PROPER.1080p.WEB-DL-GroupA".to_string();
@@ -14958,17 +14965,28 @@ async fn a_queue_covered_saved_pack_does_not_hide_an_upgrade_saved_below_it() {
     assert!(
         outcomes.iter().all(|outcome| matches!(
             outcome,
-            crate::acquisition_workflow::StandbyRecoveryOutcome::Deferred { .. }
+            crate::acquisition_workflow::StandbyRecoveryOutcome::Active { .. }
         )),
-        "the walk passes the covered row and reaches the PROPER, which only the client queue holds back: {outcomes:?}"
+        "the covered row reports the scope covered and skips the rows within it: {outcomes:?}"
+    );
+    let submitted = download_client
+        .submitted_release_titles
+        .lock()
+        .await
+        .clone();
+    assert!(
+        !submitted.contains(&equal_pack) && !submitted.contains(&proper_pack),
+        "nothing is fetched beside the queued pack: {submitted:?}"
     );
     assert_eq!(
         pending_status(&app, &equal_id).await,
-        PendingReleaseStatus::Standby
+        PendingReleaseStatus::Standby,
+        "the covered row stays walkable for a later failure"
     );
     assert_eq!(
         pending_status(&app, &proper_id).await,
-        PendingReleaseStatus::Standby
+        PendingReleaseStatus::Standby,
+        "the row below the covered one is left untouched"
     );
 
     set_queued_pack_state(
@@ -14982,27 +15000,170 @@ async fn a_queue_covered_saved_pack_does_not_hide_an_upgrade_saved_below_it() {
     .await;
     let outcomes = walk_season_saved_results(&app, &title, "7").await;
 
+    assert!(
+        outcomes.iter().all(|outcome| matches!(
+            outcome,
+            crate::acquisition_workflow::StandbyRecoveryOutcome::Active { .. }
+        )),
+        "the queued pack still covers the scope while it awaits import: {outcomes:?}"
+    );
     let submitted = download_client
         .submitted_release_titles
         .lock()
         .await
         .clone();
     assert!(
-        submitted.contains(&proper_pack),
-        "the PROPER below the covered row is grabbed: {outcomes:?}"
-    );
-    assert!(
-        !submitted.contains(&equal_pack),
-        "the covered row is never fetched: {submitted:?}"
+        !submitted.contains(&equal_pack) && !submitted.contains(&proper_pack),
+        "the upgrade below the covered row waits for the queued pack to leave the queue: {submitted:?}"
     );
     assert_eq!(
         pending_status(&app, &proper_id).await,
-        PendingReleaseStatus::Grabbed
+        PendingReleaseStatus::Standby
     );
     assert_eq!(
         pending_status(&app, &equal_id).await,
+        PendingReleaseStatus::Standby
+    );
+}
+
+/// A covered row hides only what it covers. A single-episode row the queued
+/// season pack covers is refused and every later row within that episode is
+/// skipped unjudged, but a series pack saved below it reaches beyond that
+/// episode, so it is still judged. Here it is a PROPER the queued pack does
+/// not block, awaiting import, so it is grabbed.
+#[tokio::test]
+async fn a_covered_row_does_not_hide_a_series_pack_reaching_beyond_it() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let covered_single = "Recent.Failed.Season.Pack.S07E23.1080p.WEB-DL-GroupB".to_string();
+    let series_pack = "Recent.Failed.Season.Pack.S07-S08.PROPER.1080p.WEB-DL-GroupC".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone()]).await;
+    seed_season_eight_scopes(&app, &title).await;
+    let single_id = save_season_standby(&app, &title, &covered_single, 5_000).await;
+    let series_id = save_season_standby(&app, &title, &series_pack, 1_000).await;
+    // A strict upgrade is held back while the queued pack is still
+    // downloading; once that pack awaits import it is still a live claim
+    // (so the equal single row stays covered) but no longer holds the queue.
+    set_queued_pack_state(
+        &app,
+        &title,
+        &download_client,
+        &queued_pack,
+        DownloadQueueState::Completed,
+        TrackedDownloadState::ImportPending,
+    )
+    .await;
+
+    let outcomes = walk_season_saved_results(&app, &title, "7").await;
+
+    let submitted = download_client
+        .submitted_release_titles
+        .lock()
+        .await
+        .clone();
+    assert!(
+        submitted.contains(&series_pack),
+        "the series pack reaching beyond the covered episode is judged and grabbed: {outcomes:?}"
+    );
+    assert!(
+        !submitted.contains(&covered_single),
+        "the covered single-episode row is never fetched: {submitted:?}"
+    );
+    assert_eq!(
+        pending_status(&app, &single_id).await,
         PendingReleaseStatus::Standby,
         "the covered row stays walkable for a later failure"
+    );
+    assert_eq!(
+        pending_status(&app, &series_id).await,
+        PendingReleaseStatus::Grabbed
+    );
+}
+
+/// A `waiting` row the client refused is walked with the standby rows, but it
+/// is read from the episode's own list, not the title-wide one, so it must be
+/// parsed on its own: a refused season pack spans the season, not the walked
+/// episode. A covered single-episode row above it therefore hides nothing,
+/// and the refused PROPER pack is submitted again and grabbed.
+#[tokio::test]
+async fn a_covered_episode_row_does_not_hide_a_refused_pack_below_it() {
+    let queued_pack = "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-GroupA".to_string();
+    let refused_pack = "Recent.Failed.Season.Pack.S07.PROPER.1080p.WEB-DL-GroupB".to_string();
+    let (app, title, download_client) =
+        season_pack_downloading_fixture(vec![queued_pack.clone()]).await;
+    let anchor = season_scope_states(&app, &title, "7")
+        .await
+        .into_iter()
+        .next()
+        .expect("season scope exists");
+    let anchor_episode = app
+        .services
+        .catalog
+        .shows
+        .get_episode_by_id(anchor.episode_id.as_deref().expect("episode scope"))
+        .await
+        .expect("read the anchor episode")
+        .expect("the anchor episode exists");
+    let covered_single = format!(
+        "Recent.Failed.Season.Pack.S07E{:0>2}.1080p.WEB-DL-GroupC",
+        anchor_episode
+            .episode_number
+            .as_deref()
+            .expect("numbered episode")
+    );
+    let single_id = save_season_standby(&app, &title, &covered_single, 5_000).await;
+    // What the RSS lane leaves behind after the client refuses its promotion.
+    let mut refused = pending_movie_release(
+        &anchor.id,
+        &title,
+        &refused_pack,
+        PendingReleaseStatus::Waiting,
+    );
+    refused.release_size_bytes = None;
+    refused.release_score = 1_000;
+    refused.last_decision_code = Some(
+        crate::acquisition_release_search::ReleaseAutoDecisionCode::DownloadClientUnavailable
+            .as_str()
+            .to_string(),
+    );
+    app.services
+        .workflow
+        .pending_releases
+        .insert_pending_release(&refused)
+        .await
+        .expect("seed the refused pack row");
+    set_queued_pack_state(
+        &app,
+        &title,
+        &download_client,
+        &queued_pack,
+        DownloadQueueState::Completed,
+        TrackedDownloadState::ImportPending,
+    )
+    .await;
+
+    let outcomes = walk_season_saved_results(&app, &title, "7").await;
+
+    let submitted = download_client
+        .submitted_release_titles
+        .lock()
+        .await
+        .clone();
+    assert!(
+        submitted.contains(&refused_pack),
+        "the refused pack spanning the season is judged and grabbed: {outcomes:?}"
+    );
+    assert!(
+        !submitted.contains(&covered_single),
+        "the covered single-episode row is never fetched: {submitted:?}"
+    );
+    assert_eq!(
+        pending_status(&app, &single_id).await,
+        PendingReleaseStatus::Standby
+    );
+    assert_eq!(
+        pending_status(&app, &refused.id).await,
+        PendingReleaseStatus::Grabbed
     );
 }
 
