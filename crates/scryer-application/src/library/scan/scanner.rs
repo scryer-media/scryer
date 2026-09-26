@@ -610,6 +610,17 @@ pub struct TitleResolution {
     pub reason: String,
 }
 
+/// A title named by whatever external ids a caller holds, for any kind.
+///
+/// Unlike [`MovieTitleRef`] this carries ids verbatim, including sources the
+/// gateway maps itself (Plex GUIDs, Trakt, Simkl, Kitsu, MAL, AniList), so a
+/// list item resolves by exactly the ids its provider sent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TitleExternalRef {
+    pub smg_id: Option<i64>,
+    pub external_ids: Vec<ExternalId>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MovieTitleBulkResult {
     pub by_ref_index: HashMap<usize, MovieMetadata>,
@@ -813,6 +824,58 @@ pub trait MetadataGateway: Send + Sync {
         let _ = (refs, create_missing);
         Err(AppError::Repository(
             "metadata gateway does not support title-id queries".into(),
+        ))
+    }
+
+    /// Resolve refs of one `kind` (`movie`, `series`, or `anime`) to gateway
+    /// titles. Results carry `ref_index` into `refs`.
+    async fn resolve_titles(
+        &self,
+        refs: &[TitleExternalRef],
+        kind: &str,
+        create_missing: bool,
+    ) -> AppResult<Vec<TitleResolution>> {
+        let _ = (refs, kind, create_missing);
+        Err(AppError::Repository(
+            "metadata gateway does not support title-id queries".into(),
+        ))
+    }
+
+    /// The public charts an import list may follow.
+    async fn list_chart_catalog(
+        &self,
+        language: &str,
+    ) -> AppResult<Vec<crate::lists::gateway::ListChartCatalogEntry>> {
+        let _ = language;
+        Err(AppError::Repository(
+            "metadata gateway listChartCatalog is not implemented".into(),
+        ))
+    }
+
+    /// One chart's resolved items in chart order.
+    async fn list_chart_items(
+        &self,
+        provider: &str,
+        chart_key: &str,
+        scope: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<Vec<crate::lists::gateway::ListChartItem>> {
+        let _ = (provider, chart_key, scope, limit, language);
+        Err(AppError::Repository(
+            "metadata gateway listChartItems is not implemented".into(),
+        ))
+    }
+
+    /// A public IMDb list, proxied by the gateway, in list order. Entries the
+    /// gateway has no title for come back unresolved with their IMDb id only.
+    async fn list_imdb_user_list(
+        &self,
+        list_id: &str,
+    ) -> AppResult<Vec<crate::lists::gateway::ListChartItem>> {
+        let _ = list_id;
+        Err(AppError::Repository(
+            "metadata gateway listImdbUserList is not implemented".into(),
         ))
     }
 

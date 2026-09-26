@@ -31,6 +31,10 @@ const LIFECYCLE_ACTION_HANDLING_JITTER_WINDOW: std::time::Duration =
 const MEDIA_SERVER_SIGNAL_SYNC_JITTER_WINDOW: std::time::Duration =
     std::time::Duration::from_secs(30 * 60);
 
+/// The list sweep's first run lands in this window after its startup delay,
+/// so a fleet restarted together does not fetch the same provider at once.
+const LIST_SYNC_JITTER_WINDOW: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
 #[derive(Debug, Clone, Copy)]
 struct BackgroundAcquisitionSettings {
     max_scopes_per_cycle: usize,
@@ -5179,6 +5183,30 @@ pub async fn start_background_acquisition_poller(
     )
     .await;
 
+    let list_sync_cadence =
+        std::time::Duration::from_secs(crate::jobs::LIST_SYNC_INTERVAL_SECONDS as u64);
+    let list_sync_offset = std::time::Duration::from_secs(
+        crate::jobs::LIST_SYNC_INITIAL_DELAY_SECONDS as u64,
+    ) + match app.discovery_scheduler_seed().await {
+        Ok(seed) => crate::scheduler::stable_jitter_offset(
+            &seed,
+            "list_sync",
+            "global",
+            LIST_SYNC_JITTER_WINDOW,
+        ),
+        Err(error) => {
+            warn!(error = %error, "could not resolve the scheduler seed; list sync runs unjittered");
+            std::time::Duration::ZERO
+        }
+    };
+    app.advertise_job_next_run_at(
+        JobKey::ListSync,
+        Utc::now()
+            + chrono::Duration::from_std(list_sync_offset)
+                .unwrap_or_else(|_| chrono::Duration::zero()),
+    )
+    .await;
+
     let acquisition_poll_period =
         std::time::Duration::from_secs(settings.poll_interval_seconds.max(1) as u64);
     let mut poll_interval = new_skip_interval(acquisition_poll_period);
@@ -5209,6 +5237,11 @@ pub async fn start_background_acquisition_poller(
         tokio::time::Instant::now() + media_server_signal_offset,
         media_server_signal_cadence,
     );
+    let mut list_sync_interval = tokio::time::interval_at(
+        tokio::time::Instant::now() + list_sync_offset,
+        list_sync_cadence,
+    );
+    list_sync_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     // Consume immediate intervals.
     poll_interval.tick().await;
@@ -5470,6 +5503,22 @@ pub async fn start_background_acquisition_poller(
                     if let Err(e) = app.run_scheduled_job_now(JobKey::MediaServerSignalSync, JobTriggerSource::ScheduledInterval).await {
                         warn!(error = %e, "scheduled media-server signal sync failed");
                         metrics::counter!("scryer_task_errors_total", "task" => "media_server_signal_sync").increment(1);
+                    }
+                }).await;
+            }
+            _ = list_sync_interval.tick() => {
+                let app = app.clone();
+                let cadence = list_sync_cadence;
+                run_task("list_sync", async move {
+                    app.advertise_job_next_run_at(
+                        JobKey::ListSync,
+                        Utc::now()
+                            + chrono::Duration::from_std(cadence)
+                                .unwrap_or_else(|_| chrono::Duration::minutes(15)),
+                    ).await;
+                    if let Err(e) = app.run_scheduled_job_now(JobKey::ListSync, JobTriggerSource::ScheduledInterval).await {
+                        warn!(error = %e, "scheduled list sync failed");
+                        metrics::counter!("scryer_task_errors_total", "task" => "list_sync").increment(1);
                     }
                 }).await;
             }

@@ -2439,3 +2439,101 @@ fn enrichment_cache_key_ignores_external_id_order_and_case() {
         "the same identifiers under a different facet are a different subject"
     );
 }
+
+#[tokio::test]
+async fn a_held_list_request_waits_for_review_despite_auto_approve() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let owner = library_permission_user(
+        "list-owner",
+        &library_id,
+        &[scryer_domain::LibraryPermission::AutoApproveRequests],
+    );
+    let mut input = media_request_input(library_id, 9031);
+    input.origin = scryer_domain::MediaRequestOrigin::PublicList {
+        subscription_id: "public-list-one".to_string(),
+    };
+    input.admission = crate::MediaRequestAdmission::HoldForReview;
+
+    harness
+        .app
+        .submit_media_request(&owner, input)
+        .await
+        .expect("held request should be admitted");
+
+    assert!(harness.titles.store.lock().await.is_empty());
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].status, MediaRequestStatus::Pending);
+    assert_eq!(
+        requests[0].origin,
+        scryer_domain::MediaRequestOrigin::PublicList {
+            subscription_id: "public-list-one".to_string()
+        }
+    );
+}
+
+#[tokio::test]
+async fn dismissing_a_public_list_request_excludes_the_title_from_that_list() {
+    use crate::lists::test_support::{membership, subscription};
+
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    *harness.lists.subscriptions.lock().unwrap() = vec![subscription("public-list-one")];
+    let mut input = media_request_input(library_id, 9032);
+    input.origin = scryer_domain::MediaRequestOrigin::PublicList {
+        subscription_id: "public-list-one".to_string(),
+    };
+    input.admission = crate::MediaRequestAdmission::HoldForReview;
+    let outcome = harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("held request should be admitted");
+    let mut row = membership(
+        "public-list-one",
+        "item-one",
+        scryer_domain::ListMembershipState::Held,
+    );
+    row.request_id = Some(outcome.request_id.clone());
+    harness.lists.insert_rows(vec![row]);
+
+    harness
+        .app
+        .dismiss_media_request(&harness.manager, &outcome.request_id)
+        .await
+        .expect("dismiss should succeed");
+
+    let exclusions = harness.lists.exclusions.lock().unwrap().clone();
+    assert_eq!(exclusions.len(), 1);
+    assert_eq!(
+        exclusions[0].scope,
+        scryer_domain::ListExclusionScope::List {
+            subscription_id: "public-list-one".to_string()
+        }
+    );
+    assert_eq!(exclusions[0].display_title, "Glass Harbor");
+    assert_eq!(
+        harness.lists.row("public-list-one", "item-one").state,
+        scryer_domain::ListMembershipState::Excluded
+    );
+}
+
+#[tokio::test]
+async fn dismissing_a_manual_request_creates_no_exclusion() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let outcome = harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id, 9033))
+        .await
+        .expect("request should be admitted");
+
+    harness
+        .app
+        .dismiss_media_request(&harness.manager, &outcome.request_id)
+        .await
+        .expect("dismiss should succeed");
+
+    assert!(harness.lists.exclusions.lock().unwrap().is_empty());
+}

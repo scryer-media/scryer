@@ -260,6 +260,7 @@ fn request_for(title_id: &str, requester: &str) -> MediaRequest {
             requested_at: now,
         }],
         created_by_user_id: requester.to_string(),
+        origin: Default::default(),
         created_at: now,
         updated_at: now,
     }

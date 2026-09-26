@@ -296,9 +296,19 @@ pub(super) struct MediaRequestTestHarness {
     pub(super) request_rule_decisions: Arc<InMemoryRequestRuleDecisionRepo>,
     #[allow(dead_code)]
     pub(super) lifecycle_claims: Arc<InMemoryLifecycleClaimRepo>,
+    /// The list store, so list-originated requests can be followed back to
+    /// their subscription.
+    pub(super) lists: Arc<crate::lists::test_support::MemoryListStore>,
 }
 
 pub(super) fn bootstrap_media_request_app() -> MediaRequestTestHarness {
+    bootstrap_media_request_app_with_list_plugins(Arc::new(crate::lists::NullListPluginProvider))
+}
+
+/// The same harness with `list_plugins` as the installed list providers.
+pub(super) fn bootstrap_media_request_app_with_list_plugins(
+    list_plugins: Arc<dyn crate::lists::ListPluginProvider>,
+) -> MediaRequestTestHarness {
     let titles = Arc::new(MockTitleRepo::default());
     let shows = Arc::new(MockShowRepo {
         titles: Some(titles.clone()),
@@ -331,6 +341,7 @@ pub(super) fn bootstrap_media_request_app() -> MediaRequestTestHarness {
     let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let lists = Arc::new(crate::lists::test_support::MemoryListStore::default());
     let metadata_gateway = Arc::new(MockMetadataGateway {
         movies: (9000..9100)
             .map(|tvdb_id| (tvdb_id, make_movie_metadata(tvdb_id, "Glass Harbor")))
@@ -356,6 +367,8 @@ pub(super) fn bootstrap_media_request_app() -> MediaRequestTestHarness {
     .with_request_rule_set_store(request_rules.clone())
     .with_request_rule_decision_store(request_rule_decisions.clone())
     .with_lifecycle_claim_store(lifecycle_claims.clone())
+    .with_list_store(lists.clone())
+    .with_list_plugin_provider(list_plugins)
     .with_metadata_gateway(metadata_gateway)
     .with_acquisition_scope_states(wanted_items.clone())
     .with_pending_releases(pending_releases.clone())
@@ -406,6 +419,7 @@ pub(super) fn bootstrap_media_request_app() -> MediaRequestTestHarness {
         request_rules,
         request_rule_decisions,
         lifecycle_claims,
+        lists,
     }
 }
 
@@ -433,6 +447,8 @@ pub(super) fn media_request_input(
             ExternalId::new("TVDB".to_string(), tvdb_id.to_string()),
             ExternalId::new("imdb".to_string(), "tt1234567".to_string()),
         ],
+        origin: Default::default(),
+        admission: Default::default(),
     }
 }
 

@@ -54,6 +54,9 @@ pub struct MediaRequestPolicyFacts {
     pub decision_redacted: bool,
     /// The live retention claim the request produced, if it has one.
     pub lease_claim: Option<LifecycleClaim>,
+    /// The name of the public list that submitted the request, while that
+    /// list is still followed. Personal lists are never named here.
+    pub public_list_name: Option<String>,
 }
 
 impl AppUseCase {
@@ -202,9 +205,43 @@ impl AppUseCase {
             }
         };
 
+        let mut public_list_names: HashMap<String, Option<String>> = HashMap::new();
+        for request in requests {
+            if let scryer_domain::MediaRequestOrigin::PublicList { subscription_id } =
+                &request.origin
+                && !public_list_names.contains_key(subscription_id)
+            {
+                let name = match self
+                    .services
+                    .lists
+                    .subscriptions
+                    .get_by_id(subscription_id)
+                    .await
+                {
+                    Ok(subscription) => subscription
+                        .filter(|subscription| {
+                            subscription.scope == scryer_domain::ListScope::Public
+                        })
+                        .map(|subscription| subscription.name),
+                    Err(error) => {
+                        tracing::warn!(
+                            error = %error,
+                            "could not read the list behind a media request projection"
+                        );
+                        None
+                    }
+                };
+                public_list_names.insert(subscription_id.clone(), name);
+            }
+        }
+
         for request in requests {
             let mut entry = MediaRequestPolicyFacts {
                 decision_redacted: !managed.contains(&request.library_id),
+                public_list_name: request
+                    .origin
+                    .subscription_id()
+                    .and_then(|id| public_list_names.get(id).cloned().flatten()),
                 ..MediaRequestPolicyFacts::default()
             };
 

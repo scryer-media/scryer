@@ -33,6 +33,8 @@ mod interactive_release_search;
 mod landed_bar_memo;
 mod libraries;
 mod library_scan;
+mod list_actions;
+mod list_provider_settings;
 mod maintenance_action_sequences;
 mod maintenance_claims;
 mod maintenance_evaluation;

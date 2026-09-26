@@ -8,7 +8,7 @@ use crate::ports::MediaRequestResolution;
 use scryer_domain::{
     DomainEvent, DomainEventFilter, DomainEventPayload, DomainEventType, LibraryPermission,
     LifecycleClaim, LifecycleClaimKind, LifecycleClaimProducer, LifecycleClaimState,
-    MONITOR_TYPE_ADVANCED, MediaRequestResolvedEventData, MediaRequestStatus,
+    MONITOR_TYPE_ADVANCED, MediaRequestOrigin, MediaRequestResolvedEventData, MediaRequestStatus,
     MediaRequestSubmittedEventData, MonitorSelection, RequestDecisionOutcome,
 };
 use snapshot::{MediaRequestMetadataSnapshot, MediaRequestMetadataSnapshotExt};
@@ -99,6 +99,21 @@ pub struct SubmitMediaRequestInput {
     /// (spec 0003 FR-040).
     pub requested_lease_days: Option<i64>,
     pub external_ids: Vec<ExternalId>,
+    /// Where the request came from. Only the list engine sets anything other
+    /// than `Manual`; GraphQL submissions are always manual.
+    pub origin: MediaRequestOrigin,
+    pub admission: MediaRequestAdmission,
+}
+
+/// How a submitted request is admitted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum MediaRequestAdmission {
+    /// The requester's grants and the request rules decide.
+    #[default]
+    Evaluate,
+    /// The request waits for a person even when grants or rules would approve
+    /// it. A denial still stands.
+    HoldForReview,
 }
 
 #[derive(Clone, Debug)]
@@ -161,6 +176,19 @@ impl RequestDecisionProvenance {
                 .map(|reason| reason.code.clone())
                 .collect(),
         }
+    }
+}
+
+/// A held request never approves itself: an approval becomes a wait for
+/// review, and a denial stands.
+fn apply_admission_floor(
+    evaluation: &mut crate::request_rules::RequestEvaluation,
+    admission: MediaRequestAdmission,
+) {
+    if admission == MediaRequestAdmission::HoldForReview
+        && evaluation.effective_outcome == RequestDecisionOutcome::AutoApprove
+    {
+        evaluation.effective_outcome = RequestDecisionOutcome::ManualReview;
     }
 }
 
@@ -276,6 +304,7 @@ impl AppUseCase {
             metadata_snapshot_json,
             external_ids,
             created_by_user_id: actor.id.clone(),
+            origin: input.origin,
         };
         let submitted_event = new_global_domain_event(
             actor,
@@ -298,7 +327,7 @@ impl AppUseCase {
         // Evaluate the draft before adding its row to the repositories that
         // supply history facts. A submission must see the same prior-request
         // state that preflight saw for this draft.
-        let evaluation = self
+        let mut evaluation = self
             .evaluate_request_draft(
                 actor,
                 &library,
@@ -309,6 +338,7 @@ impl AppUseCase {
                 },
             )
             .await?;
+        apply_admission_floor(&mut evaluation, input.admission);
 
         let submission = self
             .services
@@ -661,6 +691,10 @@ impl AppUseCase {
         // the repository answers zero.
         self.release_request_lifecycle_claims(&request.id, CLAIM_RELEASE_REQUEST_REJECTED)
             .await;
+        if resolution.updated > 0 {
+            // A list must not submit what a reviewer just turned down.
+            self.remember_rejected_list_request(actor, &request).await;
+        }
         Ok(resolution.updated)
     }
 

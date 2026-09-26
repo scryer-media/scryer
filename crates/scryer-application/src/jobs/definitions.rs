@@ -28,6 +28,14 @@ pub const LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS: i64 = 12 * 3600;
 /// participant's played set rather than a delta.
 pub const MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS: i64 = 6 * 3600;
 
+/// How often the list sweep looks for due subscriptions. Each subscription
+/// keeps its own interval; this is only how often the job asks which are due.
+pub const LIST_SYNC_INTERVAL_SECONDS: i64 = 15 * 60;
+
+/// How long after startup the first list sweep waits, so a restart does not
+/// stack list fetches on top of the startup scans.
+pub const LIST_SYNC_INITIAL_DELAY_SECONDS: i64 = 5 * 60;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum JobCategory {
     Library,
@@ -185,6 +193,7 @@ pub enum JobKey {
     MaintenanceRuleEvaluation,
     LifecycleActionHandling,
     MediaServerSignalSync,
+    ListSync,
     LocationOperation,
 }
 
@@ -220,6 +229,7 @@ impl JobKey {
             Self::MaintenanceRuleEvaluation => "maintenance_rule_evaluation",
             Self::LifecycleActionHandling => "lifecycle_action_handling",
             Self::MediaServerSignalSync => "media_server_signal_sync",
+            Self::ListSync => "list_sync",
             Self::LocationOperation => "location_operation",
         }
     }
@@ -255,6 +265,7 @@ impl JobKey {
             "maintenance_rule_evaluation" => Some(Self::MaintenanceRuleEvaluation),
             "lifecycle_action_handling" => Some(Self::LifecycleActionHandling),
             "media_server_signal_sync" => Some(Self::MediaServerSignalSync),
+            "list_sync" => Some(Self::ListSync),
             "location_operation" => Some(Self::LocationOperation),
             _ => None,
         }
@@ -291,6 +302,7 @@ impl JobKey {
             Self::MaintenanceRuleEvaluation => "Maintenance Rule Evaluation",
             Self::LifecycleActionHandling => "Maintenance Action Handling",
             Self::MediaServerSignalSync => "Media Server Signal Sync",
+            Self::ListSync => "List Sync",
             Self::LocationOperation => "Location Operation",
         }
     }
@@ -354,6 +366,9 @@ impl JobKey {
             Self::MediaServerSignalSync => {
                 "Read played state for verified linked accounts on enabled media-server connections and store it as normalized watch signals."
             }
+            Self::ListSync => {
+                "Read due list subscriptions, then add, request, or record their titles according to each list's settings."
+            }
             Self::LocationOperation => {
                 "Move title content and catalog placement between roots or libraries."
             }
@@ -391,7 +406,8 @@ impl JobKey {
             | Self::FullHashBackfill
             | Self::MaintenanceRuleEvaluation
             | Self::LifecycleActionHandling
-            | Self::MediaServerSignalSync => JobCategory::Maintenance,
+            | Self::MediaServerSignalSync
+            | Self::ListSync => JobCategory::Maintenance,
         }
     }
 
@@ -419,7 +435,8 @@ impl JobKey {
             | Self::FullHashBackfill
             | Self::MaintenanceRuleEvaluation
             | Self::LifecycleActionHandling
-            | Self::MediaServerSignalSync => JobScheduleKind::Interval,
+            | Self::MediaServerSignalSync
+            | Self::ListSync => JobScheduleKind::Interval,
             Self::DiscoverySync => JobScheduleKind::StartupAndInterval,
             Self::AutoBackup | Self::ArtworkEncoding => JobScheduleKind::DailyAtTime,
             Self::LibraryScanMovies
@@ -457,6 +474,7 @@ impl JobKey {
             Self::MaintenanceRuleEvaluation => "Every 8 hours",
             Self::LifecycleActionHandling => "Every 12 hours",
             Self::MediaServerSignalSync => "Every 6 hours",
+            Self::ListSync => "Every 15 minutes",
             Self::DiscoverySync => "Dynamic discovery evaluator with daily backstop",
             Self::LibraryScanMovies
             | Self::LibraryScanSeries
@@ -488,6 +506,7 @@ impl JobKey {
             Self::MaintenanceRuleEvaluation => Some(MAINTENANCE_RULE_EVALUATION_INTERVAL_SECONDS),
             Self::LifecycleActionHandling => Some(LIFECYCLE_ACTION_HANDLING_INTERVAL_SECONDS),
             Self::MediaServerSignalSync => Some(MEDIA_SERVER_SIGNAL_SYNC_INTERVAL_SECONDS),
+            Self::ListSync => Some(LIST_SYNC_INTERVAL_SECONDS),
             Self::DiscoverySync => Some(24 * 3600),
             _ => None,
         }
@@ -501,6 +520,7 @@ impl JobKey {
             Self::SubtitleSearch => Some(120),
             Self::HealthChecks => Some(30),
             Self::DiscoverySync => Some(30 * 60),
+            Self::ListSync => Some(LIST_SYNC_INITIAL_DELAY_SECONDS),
             Self::FullHashBackfill => None,
             _ => None,
         }
@@ -534,7 +554,7 @@ impl JobKey {
     }
 }
 
-pub const ALL_JOB_KEYS: [JobKey; 21] = [
+pub const ALL_JOB_KEYS: [JobKey; 22] = [
     JobKey::LibraryScanMovies,
     JobKey::LibraryScanSeries,
     JobKey::LibraryScanAnime,
@@ -556,6 +576,7 @@ pub const ALL_JOB_KEYS: [JobKey; 21] = [
     JobKey::MaintenanceRuleEvaluation,
     JobKey::LifecycleActionHandling,
     JobKey::MediaServerSignalSync,
+    JobKey::ListSync,
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1032,6 +1053,32 @@ mod tests {
         assert!(
             definition.manual_trigger_allowed,
             "an operator must be able to refresh watch signals on demand"
+        );
+    }
+
+    #[test]
+    fn list_sync_is_registered_as_a_recurring_maintenance_job() {
+        let definition = JobDefinition::from_key(JobKey::ListSync, None);
+
+        assert_eq!(JobKey::ListSync.as_str(), "list_sync");
+        assert_eq!(JobKey::parse("list_sync"), Some(JobKey::ListSync));
+        assert!(ALL_JOB_KEYS.contains(&JobKey::ListSync));
+        assert_eq!(definition.display_name, "List Sync");
+        assert_eq!(definition.category, JobCategory::Maintenance);
+        assert_eq!(definition.schedule.kind, JobScheduleKind::Interval);
+        assert_eq!(definition.schedule.description, "Every 15 minutes");
+        assert_eq!(
+            definition.schedule.interval_seconds,
+            Some(LIST_SYNC_INTERVAL_SECONDS)
+        );
+        assert_eq!(LIST_SYNC_INTERVAL_SECONDS, 15 * 60);
+        assert_eq!(
+            JobKey::ListSync.initial_delay_seconds(),
+            Some(LIST_SYNC_INITIAL_DELAY_SECONDS)
+        );
+        assert!(
+            definition.manual_trigger_allowed,
+            "an operator must be able to sync lists on demand"
         );
     }
 

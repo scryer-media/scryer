@@ -2522,6 +2522,7 @@ pub struct NewMediaRequest {
     pub metadata_snapshot_json: String,
     pub external_ids: Vec<ExternalId>,
     pub created_by_user_id: String,
+    pub origin: scryer_domain::MediaRequestOrigin,
 }
 
 #[derive(Clone, Debug)]

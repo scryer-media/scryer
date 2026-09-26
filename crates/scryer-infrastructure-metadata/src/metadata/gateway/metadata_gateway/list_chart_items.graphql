@@ -1,0 +1,12 @@
+query ListChartItems($provider: String!, $chartKey: String!, $scope: String!, $limit: Int!, $language: String!) {
+  listChartItems(provider: $provider, chart_key: $chartKey, scope: $scope, limit: $limit, language: $language) {
+    rank
+    title_id
+    resolved
+    kind
+    external_ids { source kind id key }
+    display_title
+    year
+    poster_url
+  }
+}

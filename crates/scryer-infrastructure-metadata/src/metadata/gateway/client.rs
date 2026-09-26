@@ -20,8 +20,8 @@ use scryer_application::{
     MovieMetadata, MovieTitleBulkResult, MovieTitleRef, MultiMetadataSearchResult,
     RateLimitCooldownAction, RichMetadataSearchItem, SeasonMetadata, SeriesArtworkUrls,
     SeriesMetadata, SettingsRepository, SmgScryerUpdateNotice, TitleArtworkUrls, TitleAward,
-    TitleCredit, TitleExternalRating, TitleRatingSummary, TitleRecommendationsInput,
-    TitleResolution,
+    TitleCredit, TitleExternalRating, TitleExternalRef, TitleRatingSummary,
+    TitleRecommendationsInput, TitleResolution,
 };
 use scryer_domain::{
     AnimeCommunitySeason, AnimeCommunitySeasonRange, AnimeNumberingBridge, CanonicalMediaTag,
@@ -75,6 +75,9 @@ impl ApqCache {
 
 use crate::metadata::response_body::{ResponseBodyPreview, read_response_body_preview};
 use crate::{graphql::metadata_gateway as graphql_docs, smg_enrollment};
+
+#[path = "client_lists.rs"]
+mod lists;
 
 /// SHA-256 of a GraphQL query document, for Automatic Persisted Queries.
 ///
@@ -6987,6 +6990,45 @@ impl MetadataGateway for MetadataGatewayClient {
             return Ok(Vec::new());
         }
         self.resolve_movie_title_refs(refs, create_missing).await
+    }
+
+    async fn resolve_titles(
+        &self,
+        refs: &[TitleExternalRef],
+        kind: &str,
+        create_missing: bool,
+    ) -> AppResult<Vec<TitleResolution>> {
+        if refs.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.resolve_alias_title_refs(refs, kind, create_missing)
+            .await
+    }
+
+    async fn list_chart_catalog(
+        &self,
+        language: &str,
+    ) -> AppResult<Vec<scryer_application::lists::gateway::ListChartCatalogEntry>> {
+        self.fetch_list_chart_catalog(language).await
+    }
+
+    async fn list_chart_items(
+        &self,
+        provider: &str,
+        chart_key: &str,
+        scope: &str,
+        limit: i32,
+        language: &str,
+    ) -> AppResult<Vec<scryer_application::lists::gateway::ListChartItem>> {
+        self.fetch_list_chart_items(provider, chart_key, scope, limit, language)
+            .await
+    }
+
+    async fn list_imdb_user_list(
+        &self,
+        list_id: &str,
+    ) -> AppResult<Vec<scryer_application::lists::gateway::ListChartItem>> {
+        self.fetch_list_imdb_user_list(list_id).await
     }
 
     async fn search_titles_multi(
