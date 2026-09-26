@@ -2060,6 +2060,14 @@ impl AppUseCase {
                 .unwrap_or_default(),
             completed_retention_episode_ids.as_ref(),
         );
+        // Re-read like everything else here: a title that joined a list since
+        // the pass must not be removed on the pass's stale answer. A store
+        // that cannot be read leaves the list facts unknown, which holds any
+        // rule that reads them.
+        let lists_by_title = self
+            .maintenance_list_facts_or_unknown(std::slice::from_ref(&title))
+            .await;
+        super::list_facts::apply_list_facts(&mut input.facts, lists_by_title.as_ref(), &title.id);
         // The capacity snapshot must be fresh for this lease. Baseline restore
         // below deliberately excludes storage facts, so a resumed deletion
         // cannot match against the capacity it observed before deleting.

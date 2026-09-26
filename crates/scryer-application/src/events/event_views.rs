@@ -267,6 +267,37 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
             ActivitySeverity::Warning,
             format!("Subtitle search failed for '{}'.", data.title.title_name),
         ),
+        DomainEventPayload::ListTitleAdded(data) => (
+            ActivityKind::SystemNotice,
+            ActivitySeverity::Success,
+            format!(
+                "The list '{}' added '{}'.",
+                data.list.list_name, data.title.title_name
+            ),
+        ),
+        DomainEventPayload::ListRequestSubmitted(data) => (
+            ActivityKind::SystemNotice,
+            ActivitySeverity::Info,
+            list_request_submitted_message(data),
+        ),
+        DomainEventPayload::ListTitleLeft(data) => (
+            ActivityKind::SystemNotice,
+            ActivitySeverity::Info,
+            list_title_left_message(data),
+        ),
+        DomainEventPayload::ListSyncFailed(data) => (
+            ActivityKind::SystemNotice,
+            ActivitySeverity::Warning,
+            format!(
+                "The list '{}' could not sync: {}",
+                data.list.list_name, data.reason
+            ),
+        ),
+        DomainEventPayload::ListUnfollowed(data) => (
+            ActivityKind::SystemNotice,
+            ActivitySeverity::Info,
+            format!("Stopped following the list '{}'.", data.list.list_name),
+        ),
         _ => return None,
     };
 
@@ -897,7 +928,8 @@ pub(crate) fn history_event_from_domain_event(event: &DomainEvent) -> Option<His
         DomainEventPayload::DownloadFailed(_)
         | DomainEventPayload::ReleaseBlocklisted(_)
         | DomainEventPayload::ImportRejected(_)
-        | DomainEventPayload::SubtitleSearchFailed(_) => EventType::Error,
+        | DomainEventPayload::SubtitleSearchFailed(_)
+        | DomainEventPayload::ListSyncFailed(_) => EventType::Error,
         _ => EventType::ActionCompleted,
     };
 
@@ -1047,6 +1079,36 @@ fn metadata_hydration_activity(
             },
         ),
     }
+}
+
+pub(crate) fn list_request_submitted_message(
+    data: &scryer_domain::ListRequestSubmittedEventData,
+) -> String {
+    if data.held {
+        format!(
+            "The list '{}' requested '{}'; the request waits for review.",
+            data.list.list_name, data.title_name
+        )
+    } else {
+        format!(
+            "The list '{}' requested '{}'.",
+            data.list.list_name, data.title_name
+        )
+    }
+}
+
+pub(crate) fn list_title_left_message(data: &scryer_domain::ListTitleLeftEventData) -> String {
+    let outcome = match data.action {
+        scryer_domain::ListOnLeave::Keep | scryer_domain::ListOnLeave::Log => {
+            "it stays in the library"
+        }
+        scryer_domain::ListOnLeave::Unmonitor => "it is no longer monitored",
+        scryer_domain::ListOnLeave::Tag => "it was tagged left-list",
+    };
+    format!(
+        "'{}' left the list '{}'; {outcome}.",
+        data.title.title_name, data.list.list_name
+    )
 }
 
 fn import_requested_message(client_type: &str, source_ref: &str) -> String {

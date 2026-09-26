@@ -195,6 +195,22 @@ pub struct MaintenanceFactsDoc {
     pub request_lease_state: Observation<String>,
     pub request_lease_expires_at: Observation<String>,
     pub active_retention_claims: Observation<i64>,
+    /// List membership. `lists_added_by_list` says a list, not a person, put
+    /// the title in the library. `lists_on_enabled_list` says whether any
+    /// enabled list of either scope still lists it; `lists_names` names only
+    /// the enabled public lists that do, because a member's personal list
+    /// name is private to them. `lists_left_all` is true once every list that
+    /// ever listed the title has dropped it, and `lists_left_at` is when the
+    /// last one did. `lists_last_list_name` is the public list the title most
+    /// recently left. Every one of them is unknown when the list store could
+    /// not be read: a rule that removes titles no list wants any more must be
+    /// held rather than told nothing lists them.
+    pub lists_added_by_list: Observation<bool>,
+    pub lists_on_enabled_list: Observation<bool>,
+    pub lists_names: Observation<Vec<String>>,
+    pub lists_left_all: Observation<bool>,
+    pub lists_left_at: Observation<String>,
+    pub lists_last_list_name: Observation<String>,
     /// The series movies linked to a show subject: one entry per
     /// `series_movie_links` row, each with its own tags.
     ///
@@ -602,6 +618,12 @@ pub(crate) fn synthetic_maintenance_input() -> MaintenanceInput {
             // date no instance ever produced.
             request_lease_expires_at: Observation::absent(),
             active_retention_claims: Observation::known(0),
+            lists_added_by_list: Observation::known(true),
+            lists_on_enabled_list: Observation::known(false),
+            lists_names: Observation::known(Vec::new()),
+            lists_left_all: Observation::known(true),
+            lists_left_at: Observation::known("2024-04-01T00:00:00Z".to_string()),
+            lists_last_list_name: Observation::known("Fixture Picks".to_string()),
             // A movie subject: series movies do not apply to it at all.
             series_movies: Observation::absent(),
             storage_root_id: Observation::absent(),

@@ -658,6 +658,7 @@ impl AppUseCase {
                 None
             }
         };
+        let lists_by_title = self.maintenance_list_facts_or_unknown(&titles).await;
 
         let matcher_content_hash = content_hash(&policy.rego_source);
         let rule_set_id = policy.id.clone();
@@ -761,6 +762,11 @@ impl AppUseCase {
                         .get(&title.id)
                         .map(Vec::as_slice)
                         .unwrap_or_default(),
+                );
+                super::list_facts::apply_list_facts(
+                    &mut input.facts,
+                    lists_by_title.as_ref(),
+                    &title.id,
                 );
                 self.populate_maintenance_storage_facts_from_cache(
                     &mut input,

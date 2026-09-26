@@ -288,6 +288,8 @@ fn payload_title(payload: &DomainEventPayload) -> Option<&TitleContextSnapshot> 
         DomainEventPayload::DownloadIgnored(data) => data.title.as_ref(),
         DomainEventPayload::SeedingStarted(data) => data.title.as_ref(),
         DomainEventPayload::SeedingCompleted(data) => data.title.as_ref(),
+        DomainEventPayload::ListTitleAdded(data) => Some(&data.title),
+        DomainEventPayload::ListTitleLeft(data) => Some(&data.title),
         _ => None,
     }
 }

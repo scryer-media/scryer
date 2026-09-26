@@ -199,6 +199,43 @@ impl AppUseCase {
         Ok(created)
     }
 
+    /// Make sure a tag Scryer applies on its own exists in the registry,
+    /// creating it when missing. The registry has no seeded tags, so a
+    /// feature that tags titles registers its label at first use. The label
+    /// is an ordinary tag: an administrator may rename or delete it, and the
+    /// next use registers it again.
+    pub(crate) async fn ensure_title_tag_registered(
+        &self,
+        label: &str,
+        description: &str,
+    ) -> AppResult<()> {
+        let label = crate::normalize_user_title_tag(label).map_err(AppError::Validation)?;
+        let _registry_guard = TITLE_TAG_REGISTRY_MUTATION.lock().await;
+        self.resume_pending_title_tag_mutations_locked().await?;
+        let titles = &self.services.catalog.titles;
+        if titles.list_title_tag_labels().await?.contains(&label) {
+            return Ok(());
+        }
+        let now = Utc::now();
+        let definition = scryer_domain::TitleTagDefinition {
+            id: Id::new().0,
+            label,
+            description: normalize_title_tag_description(Some(description.to_string())),
+            created_by: None,
+            created_at: now,
+            updated_at: now,
+        };
+        let created = titles.create_title_tag_definition(&definition).await?;
+        self.emit_configuration_changed_event(
+            &User::system_execution_actor(),
+            "title_tag",
+            Some(created.id),
+            scryer_domain::ConfigurationChangeAction::Saved,
+        )
+        .await;
+        Ok(())
+    }
+
     /// Rename and/or re-describe a tag.
     ///
     /// A rename is a data migration, not a label edit: membership is stored by

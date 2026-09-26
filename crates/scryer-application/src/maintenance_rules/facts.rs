@@ -141,6 +141,20 @@ pub mod unknown_reason {
     /// input.facts.request_lease_expires_at` is a decisive "nothing is holding
     /// this", which is why it is not unknown.
     pub const NO_LIVE_LEASE: &str = "no_live_lease";
+
+    /// The list store could not be read for this pass, so nothing is known
+    /// about which lists hold the title. Every list fact is unknown together:
+    /// a rule that removes titles no list wants must be held rather than told
+    /// nothing lists them.
+    pub const LIST_STORE_UNREADABLE: &str = "list_store_unreadable";
+
+    /// The title is still on a list, or was never on one, so there is no
+    /// departure time. An *absence* reason.
+    pub const NOT_LEFT_EVERY_LIST: &str = "not_left_every_list";
+
+    /// No public list has dropped the title, so there is no list name to
+    /// report. An *absence* reason; personal list names are never reported.
+    pub const NO_PUBLIC_LIST_LEFT: &str = "no_public_list_left";
 }
 
 /// The four values `request_lease_state` can take. Part of the authoring
@@ -412,6 +426,14 @@ fn build_facts(
         request_lease_state: claim_facts.request_lease_state,
         request_lease_expires_at: claim_facts.request_lease_expires_at,
         active_retention_claims: claim_facts.active_retention_claims,
+        // List membership is loaded per batch and applied by the caller;
+        // a caller that did not load it leaves these unknown.
+        lists_added_by_list: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        lists_on_enabled_list: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        lists_names: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        lists_left_all: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        lists_left_at: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
+        lists_last_list_name: Observation::unknown(unknown_reason::NOT_YET_COLLECTED),
         series_movies: series_movies_observation(&title.facet, series_movies),
         // Storage facts are populated only when a rule selected one configured
         // root. Until that storage context is applied they are confirmed absent
@@ -1125,10 +1147,10 @@ fn scoped_watch_observations(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
-    fn title(created_by: Option<&str>) -> Title {
+    pub(crate) fn title(created_by: Option<&str>) -> Title {
         faceted_title(created_by, MediaFacet::Movie)
     }
 
