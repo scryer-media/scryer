@@ -834,6 +834,7 @@ function RootSidebarContent({
     [
       canAccessMediaTopNav,
       canManageLists,
+      experimentalFeaturesEnabled,
       canManageSystemSettings,
       canManageTitle,
       canResolveImports,
