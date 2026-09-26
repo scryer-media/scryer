@@ -243,6 +243,33 @@ impl AppNotificationServices {
     }
 }
 
+/// Lists: subscriptions, memberships, exclusions, member accounts and policies.
+/// One store implements all five ports in production; the null store answers
+/// "no lists" everywhere else.
+#[derive(Clone)]
+pub struct AppListServices {
+    pub(crate) subscriptions: Arc<dyn crate::lists::ListSubscriptionRepository>,
+    pub(crate) memberships: Arc<dyn crate::lists::ListMembershipRepository>,
+    pub(crate) exclusions: Arc<dyn crate::lists::ListExclusionRepository>,
+    pub(crate) accounts: Arc<dyn crate::lists::UserListAccountRepository>,
+    pub(crate) policies: Arc<dyn crate::lists::UserListPolicyRepository>,
+    pub(crate) plugins: Arc<dyn crate::lists::ListPluginProvider>,
+}
+
+impl AppListServices {
+    pub(crate) fn disabled() -> Self {
+        let store = Arc::new(crate::lists::null_repositories::NullListStore);
+        Self {
+            subscriptions: store.clone(),
+            memberships: store.clone(),
+            exclusions: store.clone(),
+            accounts: store.clone(),
+            policies: store,
+            plugins: Arc::new(crate::lists::NullListPluginProvider),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct AppServices {
     pub(crate) catalog: AppCatalogServices,
@@ -254,6 +281,7 @@ pub struct AppServices {
     pub(crate) config: AppConfigServices,
     pub(crate) customization: AppCustomizationServices,
     pub(crate) notifications: AppNotificationServices,
+    pub(crate) lists: AppListServices,
 }
 
 impl AppServices {
@@ -453,6 +481,7 @@ impl AppServices {
                 rule_mutation_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             notifications: AppNotificationServices::Disabled,
+            lists: AppListServices::disabled(),
         }
     }
 }

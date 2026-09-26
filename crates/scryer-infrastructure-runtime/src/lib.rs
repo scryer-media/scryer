@@ -128,6 +128,7 @@ pub(crate) use scryer_infrastructure_library::media::{
         title_merge_store::TitleMergeStore,
     },
     lifecycle_claims::LifecycleClaimStore,
+    lists::ListStore,
     requests::MediaRequestStore,
     search::media_file_store::MediaFileStore,
     servers::MediaServerConnectionStore,
