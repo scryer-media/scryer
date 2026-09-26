@@ -448,6 +448,16 @@ mod independent_technical_metadata_tests {
     use crate::{ContextFacetHint, ContextTitle, ReleaseParseContext, analyze_release_for_target};
 
     #[test]
+    fn ukrainian_language_tokens_are_language_metadata_but_uk_is_not() {
+        for token in ["UKR", "UKRAINIAN", "UKRDUB", "DUBUKR", "UKRSUB"] {
+            assert!(is_explicit_language_metadata_token(token), "{token}");
+        }
+        for token in ["UK", "UKDUB", "UKSUB"] {
+            assert!(!is_explicit_language_metadata_token(token), "{token}");
+        }
+    }
+
+    #[test]
     fn protected_title_span_blocks_fused_bd_resolution_recovery() {
         // `detect_compound_quality` intentionally predates independent recovery
         // and classifies embedded resolution substrings in beam parsing. Test
@@ -1412,6 +1422,8 @@ fn is_language_metadata_atom(token: &str) -> bool {
             | "TRUEFRENCH"
             | "TUR"
             | "TURKISH"
+            | "UKR"
+            | "UKRAINIAN"
             | "VFF"
             | "VFQ"
             | "VOSTFR"

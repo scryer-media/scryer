@@ -1,0 +1,264 @@
+{
+  "schema_version": 1,
+  "category": "ukrainian_language_tags",
+  "review_basis": "Shapes copied from public Ukrainian-dubbed release listings; every title, group, and hash is invented. Expected facts were annotated from the filename syntax, independently of parser output.",
+  "cases": [
+    {
+      "id": "ukr-001",
+      "shape": "cyrillic_slash_latin_title",
+      "release": "Vyhadana Rika / Invented River (2023) [WEB-DL 1080p H.265] Ukr DVO SUB",
+      "context": {
+        "facet_hint": "movie",
+        "title": {
+          "name": "Invented River"
+        },
+        "aliases": [],
+        "known_years": [],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [
+          "ukr"
+        ],
+        "quality": "1080p"
+      },
+      "evidence": {
+        "languages_audio": "Trailing mixed-case `Ukr` before a voice-over type (DVO) names the audio dub",
+        "quality": "Explicit resolution token"
+      }
+    },
+    {
+      "id": "ukr-002",
+      "shape": "cyrillic_slash_latin_title",
+      "release": "Vyhadana Rika / Invented River (2008) [BDRip 720p] UKR MVO SUB",
+      "context": {
+        "facet_hint": "movie",
+        "title": {
+          "name": "Invented River"
+        },
+        "aliases": [],
+        "known_years": [],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [
+          "ukr"
+        ],
+        "quality": "720p"
+      },
+      "evidence": {
+        "languages_audio": "Upper-case `UKR` before a multi-voice-over marker names the audio dub",
+        "quality": "Explicit resolution token"
+      }
+    },
+    {
+      "id": "ukr-003",
+      "shape": "episodic_group_prefix",
+      "release": "[Groupa] Lantern Orchard - 01 [1080p] (Ukrainian MVO + SUB)",
+      "context": {
+        "facet_hint": "anime",
+        "title": {
+          "name": "Lantern Orchard"
+        },
+        "aliases": [],
+        "known_years": [],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [
+          "ukr"
+        ],
+        "quality": "1080p"
+      },
+      "evidence": {
+        "languages_audio": "Full language name inside the trailing parenthesised dub tag",
+        "quality": "Explicit resolution token"
+      }
+    },
+    {
+      "id": "ukr-004",
+      "shape": "episodic_voiceover",
+      "release": "Lantern Orchard - 12 (WEBDL x265 1080p AAC) Ukrainian voiceover",
+      "context": {
+        "facet_hint": "anime",
+        "title": {
+          "name": "Lantern Orchard"
+        },
+        "aliases": [],
+        "known_years": [],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [
+          "ukr"
+        ],
+        "quality": "1080p"
+      },
+      "evidence": {
+        "languages_audio": "Full language name followed by `voiceover`",
+        "quality": "Explicit resolution token"
+      }
+    },
+    {
+      "id": "ukr-005",
+      "shape": "scene_fused_dub",
+      "release": "Lantern.Orchard.S01E02.1080p.WEB-DL.UkrDub.x264-Groupb",
+      "context": {
+        "facet_hint": "series",
+        "title": {
+          "name": "Lantern Orchard"
+        },
+        "aliases": [],
+        "known_years": [],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [
+          "ukr"
+        ],
+        "release_group": "Groupb"
+      },
+      "evidence": {
+        "languages_audio": "Fused language-then-DUB token",
+        "release_group": "Annotated release-group position, replaced by a sentinel"
+      }
+    },
+    {
+      "id": "ukr-006",
+      "shape": "scene_fused_dub",
+      "release": "Lantern.Orchard.S01E02.1080p.WEB-DL.DubUkr.x264-Groupb",
+      "context": {
+        "facet_hint": "series",
+        "title": {
+          "name": "Lantern Orchard"
+        },
+        "aliases": [],
+        "known_years": [],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [
+          "ukr"
+        ],
+        "release_group": "Groupb"
+      },
+      "evidence": {
+        "languages_audio": "Fused DUB-then-language token",
+        "release_group": "Annotated release-group position, replaced by a sentinel"
+      }
+    },
+    {
+      "id": "ukr-007",
+      "shape": "episodic_subbed_only",
+      "release": "[Groupa] Lantern Orchard Ep. 04 (1280x720_x264_AAC) Ukrainian_Sub [556e3829]",
+      "context": {
+        "facet_hint": "anime",
+        "title": {
+          "name": "Lantern Orchard"
+        },
+        "aliases": [],
+        "known_years": [],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [],
+        "languages_subtitles": [
+          "ukr"
+        ]
+      },
+      "evidence": {
+        "languages_audio": "Subbed-only copy names no dub",
+        "languages_subtitles": "Language name directly followed by a subtitle marker"
+      }
+    },
+    {
+      "id": "ukr-008",
+      "shape": "hardsub",
+      "release": "Lantern Orchard - 03 (2024) Ukr Hardsub [1080p]",
+      "context": {
+        "facet_hint": "anime",
+        "title": {
+          "name": "Lantern Orchard"
+        },
+        "aliases": [],
+        "known_years": [],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [],
+        "languages_subtitles": [
+          "ukr"
+        ]
+      },
+      "evidence": {
+        "languages_audio": "A hard-subbed copy names no dub",
+        "languages_subtitles": "Language code directly followed by a hard-subtitle marker"
+      }
+    },
+    {
+      "id": "ukr-009",
+      "shape": "multi_subtitle_code_list",
+      "release": "[Groupa] Lantern Orchard - 06 [1080p][HEVC][Multiple Subtitle] [ENG][SPA][RUS][POL][UKR][HUN]",
+      "context": {
+        "facet_hint": "anime",
+        "title": {
+          "name": "Lantern Orchard"
+        },
+        "aliases": [],
+        "known_years": [],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [],
+        "languages_subtitles": [
+          "eng",
+          "spa",
+          "rus",
+          "pol",
+          "ukr",
+          "hun"
+        ]
+      },
+      "evidence": {
+        "languages_audio": "A subtitle code list names no dub",
+        "languages_subtitles": "Bracketed language codes after a multiple-subtitle marker, in listed order"
+      }
+    },
+    {
+      "id": "uk-001",
+      "shape": "united_kingdom_region",
+      "release": "Invented.River.2019.UK.BluRay.1080p.x264-Groupb",
+      "context": {
+        "facet_hint": "movie",
+        "title": {
+          "name": "Invented River"
+        },
+        "aliases": [],
+        "known_years": [
+          2019
+        ],
+        "imdb_ids": [],
+        "episodes": []
+      },
+      "expected": {
+        "languages_audio": [],
+        "languages_subtitles": [],
+        "source": "BluRay"
+      },
+      "evidence": {
+        "languages_audio": "`UK` is the United Kingdom region marker, not a language",
+        "languages_subtitles": "No subtitle marker",
+        "source": "Unambiguous explicit technical token"
+      }
+    }
+  ]
+}

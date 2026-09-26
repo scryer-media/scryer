@@ -75,6 +75,8 @@ fn normalize_release_language_token(token: &str) -> Option<&'static str> {
         "ES" | "SPA" | "ESP" | "SPANISH" | "ESPANOL" | "ESPAÑOL" | "CASTELLANO" => Some("spa"),
         "IT" | "ITA" | "ITALIAN" => Some("ita"),
         "RU" | "RUS" | "RUSSIAN" => Some("rus"),
+        // Bare `UK` is the United Kingdom in release names (`UK.BluRay`).
+        "UKR" | "UKRAINIAN" => Some("ukr"),
         "PT" | "POR" | "PORTUGUESE" => Some("por"),
         "PTBR" | "POR-BR" | "PT-BR" | "BRAZILIAN" | "DUBLADO" => Some("por"),
         "LATINO" | "LAT" => Some("spa"),

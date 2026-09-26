@@ -43,6 +43,7 @@ const LANG_SUBTITLE_MARKERS: &[&str] = &[
 ];
 
 const DUB_ONLY_MARKERS: &[&str] = &["DUB", "DUBS", "DUBBED"];
+const HARDCODED_SUBTITLE_MARKERS: &[&str] = &["HC", "HARDCODED", "HARDSUBBED", "HARDSUB"];
 
 pub(crate) fn enrich_candidate(
     tokens: &[Token],
@@ -109,7 +110,7 @@ pub(crate) fn enrich_candidate(
             continue;
         }
 
-        if matches!(token, "HC" | "HARDCODED" | "HARDSUBBED" | "HARDSUB") {
+        if HARDCODED_SUBTITLE_MARKERS.contains(&token) {
             enrichment.is_hardcoded_subs = true;
             index += 1;
             continue;
@@ -223,10 +224,14 @@ pub(crate) fn enrich_candidate(
             // next token is a subtitle marker names the subtitle track, not an
             // audio track — claiming English audio here sends the release
             // through grab scoring as dubbed, and import's real audio probe
-            // then terminally rejects every copy.
+            // then terminally rejects every copy. A hard-subtitle marker
+            // ("Ukr Hardsub") names burned-in subtitles the same way.
             let scope = match language_context {
                 LanguageScope::Auto
-                    if next.is_some_and(|value| LANG_SUBTITLE_MARKERS.contains(&value)) =>
+                    if next.is_some_and(|value| {
+                        LANG_SUBTITLE_MARKERS.contains(&value)
+                            || HARDCODED_SUBTITLE_MARKERS.contains(&value)
+                    }) =>
                 {
                     LanguageScope::Subtitle
                 }
@@ -641,6 +646,9 @@ fn normalize_language_token(token: &str) -> Option<&'static str> {
         "ES" | "SPA" | "ESP" | "SPANISH" | "ESPANOL" | "CASTELLANO" => Some("spa"),
         "IT" | "ITA" | "ITALIAN" => Some("ita"),
         "RU" | "RUS" | "RUSSIAN" => Some("rus"),
+        // Bare `UK` is the United Kingdom in release names (`UK.BluRay`), so
+        // only the three-letter code and the full name name Ukrainian.
+        "UKR" | "UKRAINIAN" => Some("ukr"),
         "PT" | "POR" | "PORTUGUESE" => Some("por"),
         "PTBR" | "POR-BR" | "PT-BR" | "BRAZILIAN" | "DUBLADO" => Some("por"),
         "LATINO" | "LAT" => Some("spa"),
@@ -1325,6 +1333,27 @@ mod scoped_metadata_tests {
         assert!(enrichment.video_codec.is_none());
         assert!(enrichment.video_encoding.is_none());
         assert!(!enrichment.is_10bit);
+    }
+
+    #[test]
+    fn ukrainian_language_tokens_cover_codes_names_and_dub_affixes() {
+        for token in [
+            "UKR",
+            "UKRAINIAN",
+            "UKRDUB",
+            "DUBUKR",
+            "UKRDUBBED",
+            "UKRAUDIO",
+        ] {
+            assert_eq!(parse_language_hint(token), Some("ukr"), "{token}");
+        }
+        // A fused subtitle affix names the language, but like every other
+        // `<LANG>SUB` token it does not claim a track from the hint scan.
+        assert_eq!(parse_language_token_with_affixes("UKRSUB"), Some("ukr"));
+        assert_eq!(parse_language_hint("UKRSUB"), None);
+        for token in ["UK", "UKDUB", "UKSUB"] {
+            assert_eq!(parse_language_hint(token), None, "{token}");
+        }
     }
 
     #[test]
