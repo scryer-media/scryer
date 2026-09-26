@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 pub mod download_identity;
 pub mod import_space;
+pub mod title_normalization;
 mod title_sort;
 pub mod title_spelling;
 pub use title_sort::{

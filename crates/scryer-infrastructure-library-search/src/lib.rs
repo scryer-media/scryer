@@ -553,7 +553,9 @@ fn spelling_facts(raw_term: &str, language: Option<&str>, match_term: &str) -> S
         // From the term as written, not the lowercased literal: the
         // Roman-numeral rule reads letter case.
         numbers_key: title_spelling::title_numbers_key(raw_term),
-        romanization_key: title_spelling::japanese_romanization_key(match_term, language),
+        romanization_key: scryer_domain::title_normalization::romanization_key(
+            match_term, language,
+        ),
         collation_keys,
         literal,
     }

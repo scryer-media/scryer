@@ -4,9 +4,10 @@
 use super::{bounded_levenshtein_distance, canonical_lookup_key};
 use scryer_domain::{
     Title,
+    title_normalization::{is_romanization_tag, release_romanization_keys, romanization_key},
     title_spelling::{
-        JAPANESE_ROMANIZATION_TAG, SpellingEquivalence, TitleScript, compare_title_spelling,
-        japanese_romanization_key, title_script, title_spelling_key, title_spelling_profiles,
+        SpellingEquivalence, TitleScript, compare_title_spelling, title_script, title_spelling_key,
+        title_spelling_profiles,
     },
 };
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -135,9 +136,7 @@ impl SpellingBucket {
             .or_default()
             .push(index);
         self.by_length.entry(length).or_default().push(index);
-        if let Some(key) =
-            japanese_romanization_key(&entry.name.text, entry.name.language.as_deref())
-        {
+        if let Some(key) = romanization_key(&entry.name.text, entry.name.language.as_deref()) {
             self.romanized.entry(key).or_default().push(index);
         }
         for profile in title_spelling_profiles(&entry.name.text, entry.name.language.as_deref()) {
@@ -171,13 +170,13 @@ impl SpellingBucket {
             .flatten()
             .copied()
             .collect::<HashSet<_>>();
-        // Only Japanese-romanized catalog names are keyed here, so folding the
-        // observed spelling can only reach names the catalog itself marked as
-        // romanizations.
-        if let Some(key) = japanese_romanization_key(observed, Some("ja"))
-            && let Some(indexes) = self.romanized.get(&key)
-        {
-            possible.extend(indexes);
+        // Only catalog names tagged with a romanized language are keyed here,
+        // so folding the observed spelling under every registered rule set
+        // can only reach names the catalog itself marked as romanizations.
+        for key in release_romanization_keys(observed) {
+            if let Some(indexes) = self.romanized.get(&key) {
+                possible.extend(indexes);
+            }
         }
         for (&profile, keys) in &self.locales {
             if let Some(key) = title_spelling_key(observed, profile)
@@ -395,7 +394,7 @@ impl SpellingCandidates {
             anchor: &'a String,
             script: TitleScript,
             numbers_key: String,
-            romanization_key: Option<String>,
+            romanization_keys: Vec<String>,
             collation_keys: Vec<(&'static str, Vec<u8>)>,
         }
         let keys = anchors
@@ -405,7 +404,7 @@ impl SpellingCandidates {
                 anchor,
                 script: title_script(anchor),
                 numbers_key: scryer_domain::title_spelling::title_numbers_key(observed_raw),
-                romanization_key: japanese_romanization_key(anchor, Some("ja")),
+                romanization_keys: release_romanization_keys(anchor),
                 collation_keys: scryer_domain::title_spelling::COLLATION_PROFILES
                     .iter()
                     .filter_map(|profile| {
@@ -428,7 +427,7 @@ impl SpellingCandidates {
                     numbers_key: &anchor.numbers_key,
                     typo_distance: Some(anchor_fetch_distance(anchor.anchor)),
                     match_term: anchor.anchor,
-                    romanization_key: anchor.romanization_key.as_deref(),
+                    romanization_keys: &anchor.romanization_keys,
                     collation_keys: &anchor.collation_keys,
                     limit: BUCKET_FETCH_LIMIT,
                 });
@@ -695,7 +694,7 @@ pub(crate) fn find_spelling_match(
             // keeps its corroboration requirement. A romanization still has to
             // be the only library identity that spelling can name, which the
             // competitor check below proves.
-            let romanization = distance == 0 && locale == Some(JAPANESE_ROMANIZATION_TAG);
+            let romanization = distance == 0 && locale.is_some_and(is_romanization_tag);
             let exact = literally_exact || romanization;
             if !literally_exact {
                 let native_typo = distance > 0 && title_script(observed) == TitleScript::Cjk;

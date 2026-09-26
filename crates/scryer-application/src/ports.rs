@@ -1002,7 +1002,10 @@ pub struct TitleNameBucketQuery<'a> {
     /// locale-equal spelling can differ from the observed name by any number
     /// of characters, so they are fetched by key.
     pub match_term: &'a str,
-    pub romanization_key: Option<&'a str>,
+    /// The observed name's key under every registered romanization rule set
+    /// that reads its script; a release name carries no language tag to pick
+    /// one. Empty when none applies.
+    pub romanization_keys: &'a [String],
     pub collation_keys: &'a [(&'static str, Vec<u8>)],
     /// Guard on how many index hits are hydrated, so a pathological bucket
     /// cannot turn one release into a catalog-sized read. The equality lanes

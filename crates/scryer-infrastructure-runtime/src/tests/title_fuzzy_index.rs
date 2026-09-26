@@ -834,7 +834,7 @@ async fn fuzzy_lookup_timing_over_a_library_sized_catalog() {
                 numbers_key: &name.numbers_key,
                 typo_distance: Some(4),
                 match_term: &name.match_term,
-                romanization_key: None,
+                romanization_keys: &[],
                 collation_keys: &[],
                 limit: 256,
             },
