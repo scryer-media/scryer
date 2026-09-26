@@ -409,10 +409,14 @@ pub fn title_collation_data_version() -> &'static str {
 const TITLE_SPELLING_SEED: &[u8] = b"title-spelling-collation-v3";
 
 pub(crate) fn title_spelling_fingerprint(romanization: &[&dyn LanguageRules]) -> String {
-    title_spelling_fingerprint_seeded(TITLE_SPELLING_SEED, romanization)
+    title_spelling_fingerprint_seeded(TITLE_SPELLING_SEED, COLLATION_PROFILES, romanization)
 }
 
-fn title_spelling_fingerprint_seeded(seed: &[u8], romanization: &[&dyn LanguageRules]) -> String {
+fn title_spelling_fingerprint_seeded(
+    seed: &[u8],
+    profiles: &[&'static str],
+    romanization: &[&dyn LanguageRules],
+) -> String {
     const PROBES: &[&str] = &[
         "muller",
         "müller",
@@ -421,6 +425,7 @@ fn title_spelling_fingerprint_seeded(seed: &[u8], romanization: &[&dyn LanguageR
         "grüße",
         "le cœur de chloé",
         "майский вечер",
+        "ґанок їжака",
         "流浪地球2",
         "ガラスの城",
         "한글",
@@ -428,7 +433,7 @@ fn title_spelling_fingerprint_seeded(seed: &[u8], romanization: &[&dyn LanguageR
     let mut hasher = blake3::Hasher::new();
     hasher.update(seed);
     hasher.update(env!("SCRYER_ICU_COLLATOR_VERSIONS").as_bytes());
-    for tag in COLLATION_PROFILES {
+    for tag in profiles {
         hasher.update(tag.as_bytes());
         for probe in PROBES {
             match title_spelling_key(probe, tag) {
@@ -463,6 +468,7 @@ pub const COLLATION_PROFILES: &[&str] = &[
     "it",
     "pt",
     "ru",
+    "uk",
     "ja",
     "ko",
     "zh",
@@ -479,6 +485,10 @@ fn collator(tag: &'static str) -> Option<MatchCollator> {
         return Some(cached.clone());
     }
     let mut options = CollatorOptions::default();
+    // Ukrainian stays at primary strength: its tailoring gives `ґ` and `ї`
+    // primary weights of their own (the root order files them under `г` and
+    // `і` with a mark), so primary already keeps every Ukrainian letter apart
+    // and equates only case and marks such as stress accents.
     options.strength = Some(match tag {
         "ru" => Strength::Secondary,
         "ja" | "ko" | "zh" => Strength::Tertiary,
@@ -505,6 +515,7 @@ fn profile(language: Option<&str>, script: TitleScript) -> Option<&'static str> 
         "it" | "ita" => Some("it"),
         "pt" | "por" | "pob" => Some("pt"),
         "ru" | "rus" => Some("ru"),
+        "uk" | "ukr" => Some("uk"),
         "ja" | "jpn" => Some("ja"),
         "ko" | "kor" => Some("ko"),
         "zh" | "zho" | "chi" => Some("zh"),
@@ -521,7 +532,7 @@ pub fn title_spelling_profiles(value: &str, language: Option<&str>) -> Vec<&'sta
         return Vec::new();
     };
     if script == TitleScript::Other
-        || (script == TitleScript::Cyrillic && tag != "ru")
+        || (script == TitleScript::Cyrillic && !matches!(tag, "ru" | "uk"))
         || (script == TitleScript::Cjk && !matches!(tag, "ja" | "ko" | "zh"))
     {
         return Vec::new();
@@ -737,6 +748,7 @@ mod tests {
             current,
             title_spelling_fingerprint_seeded(
                 b"title-spelling-collation-v2",
+                COLLATION_PROFILES,
                 title_normalization::RULES
             )
         );
@@ -852,6 +864,165 @@ mod tests {
         assert_eq!(compare_title_spelling("harbor", "hаrbor", Some("en")), None);
         assert_eq!(compare_title_spelling("かく", "がく", Some("ru")), None);
         assert_eq!(compare_title_spelling("маи", "май", Some("ja")), None);
+    }
+
+    #[test]
+    fn ukrainian_collation_data_is_bundled_and_tailored() {
+        // An unknown locale silently falls back to the root order, so a
+        // `Some` key alone proves nothing. The Ukrainian tailoring is what
+        // gives `ґ` and `ї` their own primary weights; root and Russian file
+        // them under `г` and `і`, so under root `ґа` sorts before `гя`.
+        let order = |tag: &'static str, left: &str, right: &str| {
+            let left = title_spelling_key(left, tag).expect("key");
+            let right = title_spelling_key(right, tag).expect("key");
+            left.cmp(&right)
+        };
+        assert_eq!(order("uk", "ґа", "гя"), std::cmp::Ordering::Greater);
+        assert_eq!(order("und", "ґа", "гя"), std::cmp::Ordering::Less);
+        assert_eq!(order("uk", "їа", "ія"), std::cmp::Ordering::Greater);
+        assert_eq!(order("und", "їа", "ія"), std::cmp::Ordering::Less);
+        assert_ne!(
+            title_spelling_key("ґанок їжака", "uk"),
+            title_spelling_key("ґанок їжака", "ru")
+        );
+    }
+
+    #[test]
+    fn ukrainian_names_use_the_ukrainian_profile() {
+        for language in ["uk", "ukr", "uk-UA", "UKR"] {
+            assert_eq!(
+                title_spelling_profiles("Вигадана річка", Some(language)),
+                vec!["uk"],
+                "{language}"
+            );
+        }
+        // Cyrillic without a Cyrillic-language tag still has no profile.
+        assert!(title_spelling_profiles("Вигадана річка", Some("pl")).is_empty());
+
+        for (left, right) in [
+            // Stress accents and case are not spelling differences.
+            ("За\u{301}мок на ґа\u{301}нку", "замок на ґанку"),
+            ("ЇЖАК І ЄНОТ", "їжак і єнот"),
+            // A decomposed `ї` is the same letter.
+            ("і\u{308}жак", "їжак"),
+        ] {
+            let result = compare_title_spelling(
+                &normalize_title_spelling(left),
+                &normalize_title_spelling(right),
+                Some("uk"),
+            );
+            assert!(
+                matches!(
+                    result,
+                    Some(SpellingEquivalence::Exact | SpellingEquivalence::Locale("uk"))
+                ),
+                "{left} / {right}: {result:?}"
+            );
+        }
+        for (left, right) in [
+            ("гава", "ґава"),
+            ("іжак", "їжак"),
+            ("синій", "сіній"),
+            ("есень", "єсень"),
+            ("мій", "міи"),
+        ] {
+            assert_eq!(
+                compare_title_spelling(left, right, Some("uk")),
+                Some(SpellingEquivalence::Different),
+                "{left} / {right}"
+            );
+        }
+    }
+
+    #[test]
+    fn ukrainian_apostrophes_in_the_lookup_form() {
+        // A word-internal apostrophe is written with the ASCII or the
+        // typographic mark; both separate words, so both spellings are one key.
+        assert_eq!(
+            title_lookup_form("Тінь м'ятного саду"),
+            "тінь м ятного саду"
+        );
+        assert_eq!(
+            title_lookup_form("Тінь м\u{2019}ятного саду"),
+            "тінь м ятного саду"
+        );
+    }
+
+    #[test]
+    fn every_profile_a_name_can_select_is_fingerprinted() {
+        // The fingerprint only covers `COLLATION_PROFILES`; a tag `profile()`
+        // or the phonebook fallback can return outside it would persist keys
+        // no fingerprint change ever invalidates.
+        let languages = [
+            None,
+            Some(""),
+            Some("en"),
+            Some("eng"),
+            Some("en-GB"),
+            Some("de"),
+            Some("deu"),
+            Some("ger"),
+            Some("fr"),
+            Some("fra"),
+            Some("fre"),
+            Some("es"),
+            Some("spa"),
+            Some("it"),
+            Some("ita"),
+            Some("pt"),
+            Some("por"),
+            Some("pob"),
+            Some("pt_BR"),
+            Some("ru"),
+            Some("rus"),
+            Some("uk"),
+            Some("ukr"),
+            Some("uk-UA"),
+            Some("ja"),
+            Some("jpn"),
+            Some("ja-Latn"),
+            Some("x-jat"),
+            Some("ko"),
+            Some("kor"),
+            Some("zh"),
+            Some("zho"),
+            Some("chi"),
+            Some("zh-Hant"),
+            Some("pl"),
+            Some("und"),
+        ];
+        let scripts = [
+            TitleScript::Latin,
+            TitleScript::Cyrillic,
+            TitleScript::Cjk,
+            TitleScript::Other,
+        ];
+        let names = [
+            "Lantern Orchard",
+            "Müller Straße",
+            "Вигадана річка",
+            "ガラスの城",
+            "한글",
+            "Ελληνικά",
+        ];
+        for language in languages {
+            for script in scripts {
+                if let Some(tag) = profile(language, script) {
+                    assert!(
+                        COLLATION_PROFILES.contains(&tag),
+                        "{language:?} {script:?} -> {tag}"
+                    );
+                }
+            }
+            for name in names {
+                for tag in title_spelling_profiles(name, language) {
+                    assert!(
+                        COLLATION_PROFILES.contains(&tag),
+                        "{language:?} {name} -> {tag}"
+                    );
+                }
+            }
+        }
     }
 
     /// The romanization axes a catalog and a release group each choose

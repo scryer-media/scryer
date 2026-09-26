@@ -1224,6 +1224,88 @@ fn enrichment_extracts_named_language_before_release_group_suffix() {
     assert_eq!(projected.release_group.as_deref(), Some("GRP"));
 }
 
+fn projected_languages(raw: &str, target: &ReleaseParseContext) -> (Vec<String>, Vec<String>) {
+    let analysis = analyze_release_for_target(raw, target);
+    let candidate = analysis.best_candidate().expect("best candidate");
+    let enrichment = enrich_candidate(&analysis.tokens, candidate, &analysis.raw_input);
+    let projected = project_final_metadata(candidate.projected.clone(), &enrichment);
+    (projected.languages_audio, projected.languages_subtitles)
+}
+
+/// Shapes copied from Ukrainian-dubbed anime and film releases: a trailing
+/// `Ukr DVO SUB` voice-over tag, a parenthesised `Ukrainian MVO + SUB`, a fused
+/// `UkrDub` in either position, and `Ukrainian_Sub` for a subbed-only copy.
+#[test]
+fn enrichment_reads_ukrainian_release_language_tags() {
+    let ukr = vec!["ukr".to_string()];
+    for (raw, title, facet) in [
+        (
+            "Vyhadana Rika / Invented River (2023) [WEB-DL 1080p H.265] Ukr DVO SUB",
+            "Invented River",
+            ContextFacetHint::Movie,
+        ),
+        (
+            "Vyhadana Rika / Invented River (2023) [BDRip 720p] UKR MVO SUB",
+            "Invented River",
+            ContextFacetHint::Movie,
+        ),
+        (
+            "[Groupa] Lantern Orchard - 01 [1080p] (Ukrainian MVO + SUB)",
+            "Lantern Orchard",
+            ContextFacetHint::Anime,
+        ),
+        (
+            "Lantern.Orchard.S01E02.1080p.WEB-DL.UkrDub.x264-GRP",
+            "Lantern Orchard",
+            ContextFacetHint::Series,
+        ),
+        (
+            "Lantern.Orchard.S01E02.1080p.WEB-DL.DubUkr.x264-GRP",
+            "Lantern Orchard",
+            ContextFacetHint::Series,
+        ),
+        (
+            "Lantern Orchard - 12 (WEBDL x265 1080p AAC) Ukrainian voiceover",
+            "Lantern Orchard",
+            ContextFacetHint::Anime,
+        ),
+    ] {
+        let (audio, _) = projected_languages(raw, &context(facet, title));
+        assert_eq!(audio, ukr, "{raw}");
+    }
+
+    let (audio, subtitles) = projected_languages(
+        "[Groupa] Lantern Orchard Ep. 04 (1280x720_x264_AAC) Ukrainian_Sub [556e3829]",
+        &context(ContextFacetHint::Anime, "Lantern Orchard"),
+    );
+    assert_eq!(subtitles, ukr);
+    assert!(
+        audio.is_empty(),
+        "a Ukrainian-subbed copy claims no audio: {audio:?}"
+    );
+}
+
+/// `UK` in a release name is the United Kingdom (`UK.BluRay`), and a Cyrillic
+/// title word that merely starts with the same letters is a title word.
+#[test]
+fn enrichment_does_not_read_uk_or_cyrillic_title_words_as_ukrainian() {
+    let mut target = context(ContextFacetHint::Movie, "Invented River");
+    target.known_years.push(2019);
+    let (audio, subtitles) =
+        projected_languages("Invented.River.2019.UK.BluRay.1080p.x264-GRP", &target);
+    assert!(
+        audio.is_empty() && subtitles.is_empty(),
+        "{audio:?} {subtitles:?}"
+    );
+
+    let (audio, subtitles) = projected_languages(
+        "Invented River | Укротитель рік [2022] [WEBRip] [1080p] [RUS + JAP]",
+        &context(ContextFacetHint::Anime, "Invented River"),
+    );
+    assert!(!audio.contains(&"ukr".to_string()), "{audio:?}");
+    assert!(!subtitles.contains(&"ukr".to_string()), "{subtitles:?}");
+}
+
 #[test]
 fn enrichment_extracts_english_dub_gap_group_after_episode_identity() {
     let analysis = analyze_release_for_target(

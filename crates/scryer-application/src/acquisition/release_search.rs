@@ -3602,6 +3602,7 @@ mod tests {
             ("ita", "L’amore in città"),
             ("por", "Coração de açúcar"),
             ("rus", "Майский вечер"),
+            ("ukr", "Ґанок і їжак"),
             ("zho", "流浪地球"),
             ("jpn", "ガラスの城"),
             ("kor", "한글 이야기"),
@@ -3629,6 +3630,8 @@ mod tests {
             ("ita", "L’amore nella città", "L'amore.nella.citxà"),
             ("por", "Coração de açúcar", "Coracao.de.acucar"),
             ("rus", "Далёкий тихий берег", "Далекий.тихий.берег"),
+            ("ukr", "За\u{301}мок на ґа\u{301}нку", "Замок.на.ґанку"),
+            ("ukr", "Їжачий тихий берег", "Іжачий.тихий.берег"),
         ] {
             let title = spelling_title(expected, language);
             let evidence = spelling_evidence(&title, std::slice::from_ref(&title)).await;

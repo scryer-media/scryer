@@ -325,6 +325,20 @@ async fn assert_multilingual_projection(
     assert_eq!(name.literal_term, "майский вечер");
     assert_eq!(profiles_for(datastore, name).await?, vec!["ru".to_string()]);
 
+    // A Ukrainian-tagged Cyrillic name collates under its own profile. The
+    // lenient form folds `ї` to `і` the same way it drops the breve on `й`;
+    // the literal form keeps both, and so does the collation key.
+    TitleRepository::create(
+        catalog,
+        multilingual_title("uk-porch", "Ґанок і їжак", Some("uk"), None, &[], &[]),
+    )
+    .await?;
+    let terms = projected_terms(datastore, "uk-porch").await?;
+    let name = term(&terms, "name", "ґанок і іжак");
+    assert_eq!(name.script, "cyrillic");
+    assert_eq!(name.literal_term, "ґанок і їжак");
+    assert_eq!(profiles_for(datastore, name).await?, vec!["uk".to_string()]);
+
     // No language tag means no supported collation for a Cyrillic name. The
     // projection must record *no* key rather than a Latin one: an absent key
     // is a lane that does not fire, a wrong key is a wrong match.
