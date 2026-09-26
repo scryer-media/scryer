@@ -224,13 +224,14 @@ pub(crate) fn enrich_candidate(
             // next token is a subtitle marker names the subtitle track, not an
             // audio track — claiming English audio here sends the release
             // through grab scoring as dubbed, and import's real audio probe
-            // then terminally rejects every copy. A hard-subtitle marker
-            // ("Ukr Hardsub") names burned-in subtitles the same way.
+            // then terminally rejects every copy. `Hardsub` names burned-in
+            // subtitles the same way ("Ukr Hardsub"). `HC` does not: scene
+            // `KOREAN.HC` is Korean audio with burned-in English subtitles.
             let scope = match language_context {
                 LanguageScope::Auto
                     if next.is_some_and(|value| {
                         LANG_SUBTITLE_MARKERS.contains(&value)
-                            || HARDCODED_SUBTITLE_MARKERS.contains(&value)
+                            || matches!(value, "HARDSUB" | "HARDSUBBED")
                     }) =>
                 {
                     LanguageScope::Subtitle
@@ -1333,6 +1334,39 @@ mod scoped_metadata_tests {
         assert!(enrichment.video_codec.is_none());
         assert!(enrichment.video_encoding.is_none());
         assert!(!enrichment.is_10bit);
+    }
+
+    fn parsed_languages(raw: &str) -> (Vec<String>, Vec<String>) {
+        let mut target = context();
+        target.facet_hint = ContextFacetHint::Movie;
+        target.title.name = "Known Title".to_string();
+        let parsed = crate::best_parse_for_target(raw, &target);
+        (parsed.languages_audio, parsed.languages_subtitles)
+    }
+
+    #[test]
+    fn hc_after_a_language_keeps_it_an_audio_language() {
+        // Scene `KOREAN.HC` is Korean audio with burned-in English subtitles.
+        for (raw, language) in [
+            ("Known.Title.2019.KOREAN.HC.1080p.WEB-DL.H264-GRP", "kor"),
+            ("Known Title (2019) [ENG] [HC] [1080p]", "eng"),
+        ] {
+            let (audio, subtitles) = parsed_languages(raw);
+            assert_eq!(audio, vec![language.to_string()], "{raw}");
+            assert!(subtitles.is_empty(), "{raw}: {subtitles:?}");
+        }
+    }
+
+    #[test]
+    fn hardsub_after_a_language_names_the_subtitle_language() {
+        for raw in [
+            "Known Title (2019) Eng Hardsub [1080p]",
+            "Known Title (2019) [ENG HARDSUB] [1080p]",
+        ] {
+            let (audio, subtitles) = parsed_languages(raw);
+            assert_eq!(subtitles, vec!["eng".to_string()], "{raw}");
+            assert!(audio.is_empty(), "{raw}: {audio:?}");
+        }
     }
 
     #[test]

@@ -938,28 +938,90 @@ mod tests {
     fn ukrainian_apostrophes_in_the_lookup_form() {
         // A word-internal apostrophe is written with the ASCII or the
         // typographic mark; both separate words, so both spellings are one key.
-        assert_eq!(title_lookup_form("П'ять вечорів"), "п ять вечорів");
-        assert_eq!(title_lookup_form("П\u{2019}ять вечорів"), "п ять вечорів");
+        assert_eq!(
+            title_lookup_form("Тінь м'ятного саду"),
+            "тінь м ятного саду"
+        );
+        assert_eq!(
+            title_lookup_form("Тінь м\u{2019}ятного саду"),
+            "тінь м ятного саду"
+        );
     }
 
     #[test]
-    fn collation_fingerprint_covers_every_profile() {
-        let current = title_spelling_fingerprint(title_normalization::RULES);
-        for dropped in COLLATION_PROFILES {
-            let without = COLLATION_PROFILES
-                .iter()
-                .copied()
-                .filter(|tag| tag != dropped)
-                .collect::<Vec<_>>();
-            assert_ne!(
-                current,
-                title_spelling_fingerprint_seeded(
-                    TITLE_SPELLING_SEED,
-                    &without,
-                    title_normalization::RULES
-                ),
-                "{dropped}"
-            );
+    fn every_profile_a_name_can_select_is_fingerprinted() {
+        // The fingerprint only covers `COLLATION_PROFILES`; a tag `profile()`
+        // or the phonebook fallback can return outside it would persist keys
+        // no fingerprint change ever invalidates.
+        let languages = [
+            None,
+            Some(""),
+            Some("en"),
+            Some("eng"),
+            Some("en-GB"),
+            Some("de"),
+            Some("deu"),
+            Some("ger"),
+            Some("fr"),
+            Some("fra"),
+            Some("fre"),
+            Some("es"),
+            Some("spa"),
+            Some("it"),
+            Some("ita"),
+            Some("pt"),
+            Some("por"),
+            Some("pob"),
+            Some("pt_BR"),
+            Some("ru"),
+            Some("rus"),
+            Some("uk"),
+            Some("ukr"),
+            Some("uk-UA"),
+            Some("ja"),
+            Some("jpn"),
+            Some("ja-Latn"),
+            Some("x-jat"),
+            Some("ko"),
+            Some("kor"),
+            Some("zh"),
+            Some("zho"),
+            Some("chi"),
+            Some("zh-Hant"),
+            Some("pl"),
+            Some("und"),
+        ];
+        let scripts = [
+            TitleScript::Latin,
+            TitleScript::Cyrillic,
+            TitleScript::Cjk,
+            TitleScript::Other,
+        ];
+        let names = [
+            "Lantern Orchard",
+            "Müller Straße",
+            "Вигадана річка",
+            "ガラスの城",
+            "한글",
+            "Ελληνικά",
+        ];
+        for language in languages {
+            for script in scripts {
+                if let Some(tag) = profile(language, script) {
+                    assert!(
+                        COLLATION_PROFILES.contains(&tag),
+                        "{language:?} {script:?} -> {tag}"
+                    );
+                }
+            }
+            for name in names {
+                for tag in title_spelling_profiles(name, language) {
+                    assert!(
+                        COLLATION_PROFILES.contains(&tag),
+                        "{language:?} {name} -> {tag}"
+                    );
+                }
+            }
         }
     }
 
