@@ -76,6 +76,7 @@ import { TitleCastStrip } from "../title-cast-strip";
 import { TitleDubCastStrip } from "../title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { TitleRatingsStrip } from "../title-ratings-strip";
+import { TitleListProvenance } from "@/components/common/title-list-provenance";
 import { TitleSettingsPanel } from "../title-settings-panel";
 import { SeasonSection, SeriesMovieTimelineSection } from "./season-section";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
@@ -1107,6 +1108,7 @@ function SeriesOverviewViewImpl({
               ) : null}
 
               <TitleRatingsStrip ratings={title.ratings} />
+              <TitleListProvenance titleId={title.id} className="mt-2" />
 
               {title.overview ? (
                 <p className="mt-4 text-sm leading-relaxed text-foreground/70">

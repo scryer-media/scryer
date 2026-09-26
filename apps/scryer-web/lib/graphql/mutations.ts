@@ -3197,3 +3197,86 @@ export const resumeLocationOperationMutation = `mutation ResumeLocationOperation
     detail
   }
 }`;
+
+const LIST_SUBSCRIPTION_MUTATION_FIELDS = `
+    id
+    name
+    enabled
+    mode
+    onLeave
+    sync {
+      state
+      lastAt
+      nextAt
+      errorMessage
+    }`;
+
+export const subscribeListMutation = `mutation SubscribeList($input: SubscribeListInput!) {
+  subscribeList(input: $input) {${LIST_SUBSCRIPTION_MUTATION_FIELDS}
+  }
+}`;
+
+export const updateListSubscriptionMutation = `mutation UpdateListSubscription($id: ID!, $input: UpdateListSubscriptionInput!) {
+  updateListSubscription(id: $id, input: $input) {${LIST_SUBSCRIPTION_MUTATION_FIELDS}
+  }
+}`;
+
+export const setListSubscriptionEnabledMutation = `mutation SetListSubscriptionEnabled($id: ID!, $enabled: Boolean!) {
+  setListSubscriptionEnabled(id: $id, enabled: $enabled) {${LIST_SUBSCRIPTION_MUTATION_FIELDS}
+  }
+}`;
+
+export const syncListSubscriptionMutation = `mutation SyncListSubscription($id: ID!) {
+  syncListSubscription(id: $id) {
+    subscriptionIds
+  }
+}`;
+
+export const syncAllListsMutation = `mutation SyncAllLists($scope: ListScope) {
+  syncAllLists(scope: $scope) {
+    subscriptionIds
+  }
+}`;
+
+export const unsubscribeListMutation = `mutation UnsubscribeList($id: ID!) {
+  unsubscribeList(id: $id)
+}`;
+
+export const addListExclusionMutation = `mutation AddListExclusion($input: AddListExclusionInput!) {
+  addListExclusion(input: $input) {
+    id
+    displayTitle
+    scope
+  }
+}`;
+
+export const removeListExclusionMutation = `mutation RemoveListExclusion($id: ID!) {
+  removeListExclusion(id: $id)
+}`;
+
+export const updateListProviderSettingsMutation = `mutation UpdateListProviderSettings($provider: String!, $changes: [ListProviderSettingChangeInput!]!) {
+  updateListProviderSettings(provider: $provider, changes: $changes) {
+    providerType
+    fields {
+      key
+      label
+      helpText
+      type
+      required
+      secret
+      isSet
+      value
+    }
+  }
+}`;
+
+export const setMemberListPolicyMutation = `mutation SetMemberListPolicy($userId: ID!, $policy: ListPolicy!) {
+  setMemberListPolicy(userId: $userId, policy: $policy) {
+    user {
+      id
+      username
+    }
+    policy
+    listRequestsLast30d
+  }
+}`;

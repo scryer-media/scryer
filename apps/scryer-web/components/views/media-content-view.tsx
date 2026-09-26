@@ -71,6 +71,7 @@ import { TitleCastStrip } from "@/components/views/title-cast-strip";
 import { TitleDubCastStrip } from "@/components/views/title-dub-cast-strip";
 import { titleCastOriginalCredits } from "@/lib/utils/title-cast";
 import { TitleRatingsStrip } from "@/components/views/title-ratings-strip";
+import { TitleListProvenance } from "@/components/common/title-list-provenance";
 import type {
   ContentSettingsSection,
   OverviewTitleTarget,
@@ -1503,6 +1504,7 @@ function TitleContextPanel({
               <div className="mt-3 hidden min-h-10 sm:block">
                 <TitleRatingsStrip ratings={title.ratings} variant="hero" />
               </div>
+              <TitleListProvenance titleId={title.id} variant="hero" className="mt-2" />
               <p className="mt-3 min-h-[6.25rem] line-clamp-5 text-[12.5px] leading-5 text-[#b7c0dd]">
                 {overviewText}
               </p>

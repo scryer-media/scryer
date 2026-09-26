@@ -3,6 +3,7 @@ export const APP_PERMISSIONS = {
   managePermissions: "MANAGE_PERMISSIONS",
   manageSystemSettings: "MANAGE_SYSTEM_SETTINGS",
   manageCatalogSettings: "MANAGE_CATALOG_SETTINGS",
+  manageLists: "MANAGE_LISTS",
 } as const;
 
 export const LIBRARY_PERMISSIONS = {

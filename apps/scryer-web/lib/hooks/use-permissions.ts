@@ -5,6 +5,7 @@ import {
   hasAnyLibraryPermission,
   hasAppPermission,
 } from "@/lib/utils/permissions";
+import { canAccessListsPage } from "@/lib/utils/routes";
 
 export function usePermissions(authenticatedUser: AuthUser) {
   const canViewCatalog = hasAnyLibraryPermission(
@@ -40,6 +41,11 @@ export function usePermissions(authenticatedUser: AuthUser) {
     authenticatedUser,
     APP_PERMISSIONS.manageCatalogSettings,
   );
+  const canManageLists = hasAppPermission(
+    authenticatedUser,
+    APP_PERMISSIONS.manageLists,
+  );
+  const canAccessLists = canAccessListsPage(canViewCatalog, canManageLists);
   const canManageUsers = canManageUserAccounts || canManagePermissions;
   const canManageConfig = canManageSystemSettings || canManageCatalogSettings;
   const canManageLibrarySettings =
@@ -55,6 +61,8 @@ export function usePermissions(authenticatedUser: AuthUser) {
     canManagePermissions,
     canManageSystemSettings,
     canManageCatalogSettings,
+    canManageLists,
+    canAccessLists,
     canManageUsers,
     canManageConfig,
     canManageLibrarySettings,

@@ -3,6 +3,8 @@ import test from "node:test";
 
 import {
   canAccessApiExplorer,
+  canAccessListExclusions,
+  canAccessListsPage,
   canAccessSettingsSection,
   canAccessDashboard,
   canAccessRecycleBinPage,
@@ -106,4 +108,16 @@ test("a non-admin's landing route never resolves to the dashboard", () => {
   const landing = landingFor({ canViewCatalog: true, canRequestMedia: true });
   assert.notEqual(landing.view, "dashboard");
   assert.equal(canAccessDashboard(false), false);
+});
+
+test("catalog viewers and list managers both reach the Lists page", () => {
+  assert.equal(canAccessListsPage(true, false), true);
+  assert.equal(canAccessListsPage(false, true), true);
+  assert.equal(canAccessListsPage(true, true), true);
+  assert.equal(canAccessListsPage(false, false), false);
+});
+
+test("list exclusions are a list-management surface only", () => {
+  assert.equal(canAccessListExclusions(true), true);
+  assert.equal(canAccessListExclusions(false), false);
 });
