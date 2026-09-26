@@ -289,15 +289,12 @@ async fn assert_multilingual_projection(
     assert_eq!(shimbun.language_tag.as_deref(), Some("x-jat"));
     assert_eq!(shinbun.language_tag.as_deref(), Some("ja-Latn"));
     assert_eq!(shimbun.romanization_key, shinbun.romanization_key);
-    assert_eq!(
-        shimbun.romanization_key.as_deref(),
-        Some("yusha no shinbun")
-    );
+    assert_eq!(shimbun.romanization_key.as_deref(), Some("yushanoshinbun"));
 
     let wo = term(&terms, "tagged_alias", "kaze wo miru");
     let o = term(&terms, "tagged_alias", "kaze o miru");
     assert_eq!(wo.romanization_key, o.romanization_key);
-    assert_eq!(wo.romanization_key.as_deref(), Some("kaze o miru"));
+    assert_eq!(wo.romanization_key.as_deref(), Some("kazeomiru"));
 
     // --- CJK -------------------------------------------------------------
     TitleRepository::create(
@@ -358,7 +355,7 @@ async fn assert_multilingual_projection(
     let latin = term(&terms, "name", "kokaku kidotai");
     assert_eq!(latin.script, "latin");
     assert_eq!(latin.literal_term, "kōkaku kidōtai");
-    assert_eq!(latin.romanization_key.as_deref(), Some("kokaku kidotai"));
+    assert_eq!(latin.romanization_key.as_deref(), Some("kokakukidotai"));
     assert_eq!(
         profiles_for(datastore, latin).await?,
         vec!["und".to_string()],

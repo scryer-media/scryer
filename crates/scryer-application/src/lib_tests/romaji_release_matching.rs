@@ -172,6 +172,69 @@ async fn every_romanization_of_every_shape_reaches_the_anime() {
     );
 }
 
+/// A group and a catalog split a romanized name into words differently: a
+/// compound, an auxiliary or a particle is written apart in one and joined in
+/// the other. The word count differs, so no edit-distance lane can bridge it;
+/// the romanization key joins the words, and every split reaches the anime.
+#[tokio::test]
+async fn a_romanized_name_split_into_words_or_joined_reaches_the_anime() {
+    let mut unresolved = Vec::new();
+    for (alias, spellings) in [
+        (
+            "Hoshikage no Machi",
+            &[
+                "Hoshi Kage no Machi",
+                "Hoshikage no Machi",
+                "Hoshikageno Machi",
+            ][..],
+        ),
+        (
+            "Kirameki ni Shite Mite",
+            &["Kirameki ni Shitemite", "Kirameki ni Shite Mite"][..],
+        ),
+    ] {
+        let (app, expected) = anime_with_romanization(alias, true).await;
+        for spelling in spellings {
+            for (shape, build) in SHAPES {
+                let release = build(spelling);
+                if resolves_to(&app, &release).await.as_deref() != Some(expected.as_str()) {
+                    unresolved.push(format!("{alias} / {shape}: {release}"));
+                }
+            }
+        }
+    }
+    assert!(
+        unresolved.is_empty(),
+        "every word split of a romanized name names one anime; these did not reach it:\n{}",
+        unresolved.join("\n")
+    );
+}
+
+/// Joining words is licensed by the same tag as every other romanization
+/// rule, and it never joins two different names into one.
+#[tokio::test]
+async fn joining_words_needs_the_tag_and_keeps_other_names_apart() {
+    let (untagged, _) = anime_with_romanization("Hoshikage no Machi", false).await;
+    assert_eq!(
+        resolves_to(&untagged, "[Group] Hoshi Kage no Machi - 03 [1080p]").await,
+        None,
+        "an untagged alias is not a romanization, so its words are not joined"
+    );
+
+    let (app, _) = anime_with_romanization("Hoshikage no Machi", true).await;
+    for release in [
+        "[Group] Hoshi Kaze no Machi - 03 [1080p]",
+        "[Group] Hoshikage no Mori - 03 [1080p]",
+        "[Group] Hoshi no Machi - 03 [1080p]",
+    ] {
+        assert_eq!(
+            resolves_to(&app, release).await,
+            None,
+            "{release} is a different name and must not reach the anime"
+        );
+    }
+}
+
 /// Folding romanization variance must not fold two names together. These are
 /// different words, not different spellings of one word, and the fold touches
 /// exactly the characters that carry no meaning.
@@ -233,7 +296,7 @@ async fn the_romanization_tag_is_what_licenses_the_fold() {
 }
 
 /// What the fold promises and does not deliver, at the release layer.
-/// `romanized_japanese_spelling` says it folds long vowels "written with a
+/// The Japanese romanization fold said it folded long vowels "written with a
 /// macron, doubled, or bare" and `m` before a labial; it folds the doubled
 /// form for `o` and `u` only, does not read long `e` written `ei` at all, and
 /// covers `m` before `b` and `p` but not before `m`. Every release below is

@@ -85,7 +85,7 @@ fn bucket_query<'a>(
     anchor: &'a str,
     numbers_key: &'a str,
     collation_keys: &'a [(&'static str, Vec<u8>)],
-    romanization_key: Option<&'a str>,
+    romanization_keys: &'a [String],
     typo_distance: Option<u8>,
     limit: i64,
 ) -> TitleNameBucketQuery<'a> {
@@ -95,7 +95,7 @@ fn bucket_query<'a>(
         numbers_key,
         typo_distance,
         match_term: anchor,
-        romanization_key,
+        romanization_keys,
         collation_keys,
         limit,
     }
@@ -319,15 +319,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
     let anchor = title_spelling::title_lookup_form("Die Höhle der Löwen");
     let numbers = title_spelling::title_numbers_key("Die Höhle der Löwen");
     let collation = collation_keys_for(&anchor);
-    let query = bucket_query(
-        Some("series"),
-        &anchor,
-        &numbers,
-        &collation,
-        None,
-        None,
-        64,
-    );
+    let query = bucket_query(Some("series"), &anchor, &numbers, &collation, &[], None, 64);
     let candidates = TitleRepository::find_title_name_candidates(catalog, query).await?;
     assert!(
         candidate_pairs(&candidates)
@@ -344,21 +336,13 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
             .any(|(id, _)| id == "de-hoehle-rival"),
         "the locale-equal rival must come back on the collation lane: {candidates:?}"
     );
-    let query = bucket_query(
-        Some("series"),
-        &anchor,
-        &numbers,
-        &collation,
-        None,
-        None,
-        64,
-    );
+    let query = bucket_query(Some("series"), &anchor, &numbers, &collation, &[], None, 64);
     assert_within(&candidates, &name_candidates_in_bucket(&titles, &query));
 
     // The romanization lane: a romaji spelling reaches the tagged alias
     // without any edit-distance band.
     let observed = title_spelling::title_lookup_form("Hagane no Renkinjutsushi");
-    let romanization = title_spelling::japanese_romanization_key(&observed, Some("ja"));
+    let romanization = scryer_domain::title_normalization::release_romanization_keys(&observed);
     let numbers = title_spelling::title_numbers_key("Hagane no Renkinjutsushi");
     let collation = collation_keys_for(&observed);
     let query = bucket_query(
@@ -366,7 +350,27 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         &observed,
         &numbers,
         &collation,
-        romanization.as_deref(),
+        &romanization,
+        None,
+        64,
+    );
+    let candidates = TitleRepository::find_title_name_candidates(catalog, query).await?;
+    assert!(
+        candidate_pairs(&candidates)
+            .iter()
+            .any(|(id, _)| id == "anime-romaji"),
+        "{candidates:?}"
+    );
+    assert_eq!(romanization.len(), 1, "one registered rule set, one key");
+    // With a key per registered rule set, any one of them reaching the alias
+    // is enough.
+    let keys = ["kagenokanata".to_string(), romanization[0].clone()];
+    let query = bucket_query(
+        Some("anime"),
+        &observed,
+        &numbers,
+        &collation,
+        &keys,
         None,
         64,
     );
@@ -382,21 +386,21 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         &observed,
         &numbers,
         &collation,
-        romanization.as_deref(),
+        &romanization,
         None,
         64,
     );
     assert_within(&candidates, &name_candidates_in_bucket(&titles, &query));
 
-    // The romanization lane folds topic-particle spacing on the persisted key
-    // as well: a spaced particle reaches a joined alias, and a joined particle
-    // reaches a spaced one.
+    // The romanization lane folds word spacing on the persisted key as well:
+    // a spaced particle reaches a joined alias, and a joined particle reaches
+    // a spaced one.
     for spelling in [
         "Hoshizora no Kanata de wa Nemurenai",
         "Kumori no Oka towa Iwanai",
     ] {
         let observed = title_spelling::title_lookup_form(spelling);
-        let romanization = title_spelling::japanese_romanization_key(&observed, Some("x-jat"));
+        let romanization = scryer_domain::title_normalization::release_romanization_keys(&observed);
         let numbers = title_spelling::title_numbers_key(spelling);
         let collation = collation_keys_for(&observed);
         let query = bucket_query(
@@ -404,7 +408,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
             &observed,
             &numbers,
             &collation,
-            romanization.as_deref(),
+            &romanization,
             None,
             64,
         );
@@ -420,7 +424,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
             &observed,
             &numbers,
             &collation,
-            romanization.as_deref(),
+            &romanization,
             None,
             64,
         );
@@ -437,7 +441,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         &observed,
         &numbers,
         &collation,
-        None,
+        &[],
         Some(4),
         64,
     );
@@ -453,7 +457,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
         &observed,
         &numbers,
         &collation,
-        None,
+        &[],
         Some(4),
         64,
     );
@@ -481,7 +485,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
                 &observed,
                 &numbers,
                 &collation,
-                None,
+                &[],
                 Some(2),
                 2000,
             ),
@@ -503,7 +507,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
     let collation = collation_keys_for(&anchor);
     let capped = TitleRepository::find_title_name_candidates(
         catalog,
-        bucket_query(Some("series"), &anchor, &numbers, &collation, None, None, 1),
+        bucket_query(Some("series"), &anchor, &numbers, &collation, &[], None, 1),
     )
     .await?;
     assert!(
@@ -524,7 +528,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
             &anchor,
             &numbers,
             &collation,
-            None,
+            &[],
             Some(4),
             1,
         ),
@@ -544,15 +548,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
     let collation = collation_keys_for(&anchor);
     let series_only = TitleRepository::find_title_name_candidates(
         catalog,
-        bucket_query(
-            Some("series"),
-            &anchor,
-            &numbers,
-            &collation,
-            None,
-            None,
-            64,
-        ),
+        bucket_query(Some("series"), &anchor, &numbers, &collation, &[], None, 64),
     )
     .await?;
     assert!(
@@ -563,7 +559,7 @@ async fn assert_title_matching_port(catalog: &TitleStore) -> AppResult<()> {
     );
     let every_facet = TitleRepository::find_title_name_candidates(
         catalog,
-        bucket_query(None, &anchor, &numbers, &collation, None, None, 64),
+        bucket_query(None, &anchor, &numbers, &collation, &[], None, 64),
     )
     .await?;
     assert!(
@@ -729,7 +725,7 @@ async fn title_name_equality_read_stays_on_key_indexes_and_name_terms() -> AppRe
             &anchor,
             &numbers,
             &collation,
-            Some(anchor.as_str()),
+            std::slice::from_ref(&anchor),
             None,
             64,
         );
@@ -752,7 +748,7 @@ async fn title_name_equality_read_stays_on_key_indexes_and_name_terms() -> AppRe
                 &anchor,
                 &numbers,
                 &collation,
-                Some(anchor.as_str()),
+                std::slice::from_ref(&anchor),
                 None,
                 64,
             ),
@@ -780,6 +776,35 @@ async fn title_name_equality_read_stays_on_key_indexes_and_name_terms() -> AppRe
         ] {
             assert!(plan.contains(index), "the plan must use {index}:\n{plan}");
         }
+
+        // A second registered romanization rule set gives the observed name a
+        // second key; the lane probes both on the same index.
+        let keys = [anchor.clone(), format!("{anchor}qq")];
+        let query = bucket_query(
+            Some("series"),
+            &anchor,
+            &numbers,
+            &collation,
+            &keys,
+            None,
+            64,
+        );
+        let (sql, args) = title_name_equality_statement(&query);
+        assert!(sql.contains("t.romanization_key IN ("), "{sql}");
+        let plan = SqlRuntime::fetch_all(
+            services.datastore().read_exec(),
+            &format!("EXPLAIN QUERY PLAN {sql}"),
+            &args,
+        )
+        .await?
+        .iter()
+        .map(|row| row.text("detail"))
+        .collect::<AppResult<Vec<_>>>()?
+        .join("\n");
+        assert!(
+            plan.contains("idx_title_search_terms_facet_romanization"),
+            "{plan}"
+        );
         Ok(())
     }
     .await;

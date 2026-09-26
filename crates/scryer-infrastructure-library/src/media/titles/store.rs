@@ -545,13 +545,30 @@ pub fn title_name_equality_statement(
     )];
     let mut args = bucket_args.clone();
     args.push(SqlArg::Text(query.match_term.to_string()));
-    if let Some(romanization_key) = query.romanization_key {
+    if !query.romanization_keys.is_empty() {
+        // One key per registered romanization rule set that reads the
+        // observed name's script: a single `=` probe while only one is
+        // registered, an `IN` list over the same index otherwise.
+        let keys = match query.romanization_keys.len() {
+            1 => "= {}".to_string(),
+            count => format!(
+                "IN ({})",
+                std::iter::repeat_n("{}", count)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        };
         lanes.push(format!(
             "SELECT {LANE_COLUMNS} FROM title_search_terms t \
-             WHERE {bucket} AND t.romanization_key = {{}}"
+             WHERE {bucket} AND t.romanization_key {keys}"
         ));
         args.extend(bucket_args.iter().cloned());
-        args.push(SqlArg::Text(romanization_key.to_string()));
+        args.extend(
+            query
+                .romanization_keys
+                .iter()
+                .map(|key| SqlArg::Text(key.clone())),
+        );
     }
     if !query.collation_keys.is_empty() {
         // One lane for every profile: the ORed pairs all sit on the
