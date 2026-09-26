@@ -14,4 +14,4 @@ crate-type = ["cdylib"]
 scryer-plugin-sdk = { path = "../../crates/scryer-plugin-sdk" }
 serde_json = "1"
 test-indexer-descriptor = { path = "descriptor" }
-wit-bindgen = { version = "0.61", features = ["async"] }
+wit-bindgen = { version = "0.62", features = ["async"] }
