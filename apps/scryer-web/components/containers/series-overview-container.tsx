@@ -14,6 +14,7 @@ import {
   seriesSidePanelOverviewQuery,
 } from "@/lib/graphql/queries";
 import {
+  addListExclusionMutation,
   deleteEpisodeFilesMutation,
   deleteTitleMutation,
   setCollectionMonitoredMutation,
@@ -84,9 +85,13 @@ import type { TitleSidePanelOverviewSnapshot } from "@/lib/title-overview-loader
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import { useAuth } from "@/lib/hooks/use-auth";
 import {
+  APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
   hasAnyLibraryPermission,
+  hasAppPermission,
 } from "@/lib/utils/permissions";
+import { exclusionInputFromTitle } from "@/lib/utils/lists";
+import type { Facet } from "@/lib/types/titles";
 import { useTitleMoreLikeThisActions } from "@/lib/hooks/use-title-more-like-this-actions";
 import { useTitleOverviewReactiveRefresh } from "@/lib/hooks/use-title-overview-reactive-refresh";
 import { useCanManageOverviewTitle } from "@/lib/hooks/use-title-overview-access";
@@ -420,6 +425,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     auth.user,
     LIBRARY_PERMISSIONS.request,
   );
+  const canManageLists = hasAppPermission(auth.user, APP_PERMISSIONS.manageLists);
   const [collections, setCollections] = React.useState<TitleCollection[]>([]);
   const [seriesMovieLinks, setSeriesMovieLinks] = React.useState<SeriesMovieLink[]>([]);
   const [events, setEvents] = React.useState<TitleHistoryEvent[]>([]);
@@ -466,6 +472,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
   const [monitoredUpdating, setMonitoredUpdating] = React.useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [deleteFilesOnDisk, setDeleteFilesOnDisk] = React.useState(false);
+  const [alsoExcludeFromLists, setAlsoExcludeFromLists] = React.useState(false);
   const [deleteLoading, setDeleteLoading] = React.useState(false);
   const [titleDeleteTypedConfirmation, setTitleDeleteTypedConfirmation] =
     React.useState("");
@@ -1448,6 +1455,7 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     setDeleteDialogOpen(false);
     setDeleteFilesOnDisk(false);
     setTitleDeleteTypedConfirmation("");
+    setAlsoExcludeFromLists(false);
   }, [deleteLoading]);
 
   React.useEffect(() => {
@@ -1488,6 +1496,32 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       setDeleteDialogOpen(false);
       setDeleteFilesOnDisk(false);
 
+      // The exclusion is a separate request made only after the delete has
+      // succeeded, so it can never change what the delete removes.
+      if (canManageLists && alsoExcludeFromLists) {
+        setAlsoExcludeFromLists(false);
+        const exclusion = exclusionInputFromTitle({
+          facet: title.facet as Facet,
+          name: title.name,
+          year: title.year,
+          externalIds: title.externalIds,
+        });
+        if (!exclusion) {
+          setGlobalStatus(t("lists.exclusions.deleteNoIds", { name: title.name }));
+        } else {
+          const exclusionFailed = await client
+            .mutation(addListExclusionMutation, { input: exclusion })
+            .toPromise()
+            .then((result) => Boolean(result.error))
+            .catch(() => true);
+          if (exclusionFailed) {
+            setGlobalStatus(
+              t("lists.exclusions.deleteFailed", { name: title.name }),
+            );
+          }
+        }
+      }
+
       if (onBackToList) {
         onBackToList();
         return;
@@ -1499,6 +1533,8 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
       setDeleteLoading(false);
     }
   }, [
+    alsoExcludeFromLists,
+    canManageLists,
     client,
     deleteFilesOnDisk,
     onBackToList,
@@ -1974,6 +2010,19 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
             />
             <span className="text-sm text-muted-foreground">{t("title.deleteFilesOnDisk")}</span>
           </label>
+          {canManageLists ? (
+            <label className="flex items-center gap-2">
+              <Checkbox
+                id="title-delete-exclude-from-lists"
+                checked={alsoExcludeFromLists}
+                onCheckedChange={(checked) => setAlsoExcludeFromLists(checked === true)}
+                disabled={deleteLoading}
+              />
+              <span className="text-sm text-muted-foreground">
+                {t("lists.exclusions.deleteCheckbox")}
+              </span>
+            </label>
+          ) : null}
           {deleteFilesOnDisk ? (
             <DeletePreviewSummary
               preview={titleDeletePreview}
