@@ -3356,7 +3356,7 @@ mod tests {
         );
         assert_eq!(
             spelling.locale,
-            Some(scryer_domain::title_spelling::JAPANESE_ROMANIZATION_TAG)
+            Some(scryer_domain::title_normalization::JAPANESE_ROMANIZATION_TAG)
         );
         assert!(
             !proof.requires_external_id,
@@ -3391,7 +3391,7 @@ mod tests {
             .expect("spelling evidence");
         assert_eq!(
             spelling.locale,
-            Some(scryer_domain::title_spelling::JAPANESE_ROMANIZATION_TAG)
+            Some(scryer_domain::title_normalization::JAPANESE_ROMANIZATION_TAG)
         );
 
         let exact = make_candidate(
