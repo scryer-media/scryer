@@ -3527,7 +3527,7 @@ async fn process_single_target(
                 // A 10-episode × 24-min season should expect ~10× a single episode's size.
                 let pack_runtime =
                     crate::acquisition::release_search::season_pack_runtime_minutes(
-                        &title,
+                        title,
                         season_episodes.len(),
                     );
 
