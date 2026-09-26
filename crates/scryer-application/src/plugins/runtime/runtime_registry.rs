@@ -76,6 +76,15 @@ impl AppUseCase {
                     AppError::Repository(format!("failed to remove archive extractor plugin: {e}"))
                 })?;
             }
+            "list_provider" => {
+                self.services
+                    .lists
+                    .plugins
+                    .remove_runtime_plugin(provider_type)
+                    .map_err(|e| {
+                        AppError::Repository(format!("failed to remove list provider plugin: {e}"))
+                    })?;
+            }
             other => {
                 return Err(AppError::Validation(format!(
                     "unsupported plugin_type '{}' for runtime removal",

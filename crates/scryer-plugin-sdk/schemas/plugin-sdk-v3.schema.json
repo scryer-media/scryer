@@ -64,7 +64,7 @@
       "$ref": "#/$defs/SubtitleSyncAlignRequest"
     },
     "subtitle_sync_align_result": {
-      "$ref": "#/$defs/PluginResult29"
+      "$ref": "#/$defs/PluginResult32"
     },
     "subtitle_sync_process_request": {
       "$ref": "#/$defs/SubtitleSyncPluginProcessRequest"
@@ -112,13 +112,31 @@
       "$ref": "#/$defs/ArchivePluginProcessRequest"
     },
     "archive_process_result": {
-      "$ref": "#/$defs/PluginResult30"
+      "$ref": "#/$defs/PluginResult33"
     },
     "notification_request": {
       "$ref": "#/$defs/PluginNotificationRequest"
     },
     "notification_result": {
       "$ref": "#/$defs/PluginResult12"
+    },
+    "list_fetch_request": {
+      "$ref": "#/$defs/ListPluginFetchRequest"
+    },
+    "list_fetch_result": {
+      "$ref": "#/$defs/PluginResult18"
+    },
+    "list_account_request": {
+      "$ref": "#/$defs/ListPluginAccountRequest"
+    },
+    "list_account_result": {
+      "$ref": "#/$defs/PluginResult19"
+    },
+    "list_health_request": {
+      "$ref": "#/$defs/ListPluginHealthRequest"
+    },
+    "list_health_result": {
+      "$ref": "#/$defs/PluginResult20"
     }
   },
   "required": [
@@ -160,7 +178,13 @@
     "archive_process_request",
     "archive_process_result",
     "notification_request",
-    "notification_result"
+    "notification_result",
+    "list_fetch_request",
+    "list_fetch_result",
+    "list_account_request",
+    "list_account_result",
+    "list_health_request",
+    "list_health_result"
   ],
   "$defs": {
     "PluginDescriptor": {
@@ -299,6 +323,19 @@
             }
           },
           "$ref": "#/$defs/ArchiveExtractorDescriptor",
+          "required": [
+            "kind"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "kind": {
+              "type": "string",
+              "const": "list_provider"
+            }
+          },
+          "$ref": "#/$defs/ListProviderDescriptor",
           "required": [
             "kind"
           ]
@@ -1619,6 +1656,12 @@
         "health_restored",
         "application_update",
         "manual_interaction_required",
+        "list_title_added",
+        "list_request_submitted",
+        "list_item_held",
+        "list_title_left",
+        "list_sync_failed",
+        "list_unfollowed",
         "test"
       ]
     },
@@ -1950,6 +1993,463 @@
         "provider_type"
       ]
     },
+    "ListProviderTile": {
+      "type": "object",
+      "properties": {
+        "bg": {
+          "type": "string"
+        },
+        "ink": {
+          "type": "string"
+        },
+        "abbr": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bg",
+        "ink",
+        "abbr"
+      ]
+    },
+    "ListMediaKind": {
+      "description": "Media kinds a list, or one item of it, may contain.",
+      "type": "string",
+      "enum": [
+        "movie",
+        "series",
+        "anime"
+      ]
+    },
+    "ListProviderAuth": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "none"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "config_field": {
+              "type": "string"
+            },
+            "type": {
+              "type": "string",
+              "const": "server_api_key"
+            }
+          },
+          "required": [
+            "type",
+            "config_field"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "flow": {
+              "$ref": "#/$defs/ListAccountFlow"
+            },
+            "exchange": {
+              "$ref": "#/$defs/ListAccountExchange"
+            },
+            "byo_app": {
+              "type": "boolean",
+              "default": false
+            },
+            "scopes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "type": {
+              "type": "string",
+              "const": "member_account"
+            }
+          },
+          "required": [
+            "type",
+            "flow",
+            "exchange"
+          ]
+        }
+      ]
+    },
+    "ListAccountFlow": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "pkce": {
+              "type": "boolean",
+              "default": false
+            },
+            "type": {
+              "type": "string",
+              "const": "authorization_code"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "pin"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "plex_pin"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "const": "tmdb_approval"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        }
+      ]
+    },
+    "ListAccountExchange": {
+      "type": "string",
+      "enum": [
+        "direct",
+        "smg_relay"
+      ]
+    },
+    "ListProviderGroup": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string"
+        },
+        "auth_badge": {
+          "$ref": "#/$defs/ListAuthBadge"
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListProviderItem"
+          }
+        }
+      },
+      "required": [
+        "label",
+        "auth_badge"
+      ]
+    },
+    "ListAuthBadge": {
+      "type": "string",
+      "enum": [
+        "no_account",
+        "no_account_needs_value",
+        "member_account",
+        "server_api_key"
+      ]
+    },
+    "ListProviderItem": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListMediaKind"
+          }
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "params": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListSourceParam"
+          }
+        },
+        "personal": {
+          "type": "boolean",
+          "default": false
+        },
+        "default_interval_seconds": {
+          "type": "integer",
+          "format": "uint64",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "source_type",
+        "default_interval_seconds"
+      ]
+    },
+    "ListSourceParam": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "type": {
+          "$ref": "#/$defs/ListSourceParamType"
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "type"
+      ]
+    },
+    "ListSourceParamType": {
+      "type": "string",
+      "enum": [
+        "text",
+        "url",
+        "enum",
+        "season"
+      ]
+    },
+    "ListProviderNote": {
+      "type": "object",
+      "properties": {
+        "tone": {
+          "$ref": "#/$defs/ListNoteTone"
+        },
+        "text_key": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "tone",
+        "text_key"
+      ]
+    },
+    "ListNoteTone": {
+      "type": "string",
+      "enum": [
+        "info",
+        "warn",
+        "bad"
+      ]
+    },
+    "ListUrlPattern": {
+      "description": "A URL the host recognises as one of this provider's sources without\ninvoking the plugin. `pattern` is a Rust `regex` expression; each capture\nmaps a named group to a source parameter.",
+      "type": "object",
+      "properties": {
+        "pattern": {
+          "type": "string"
+        },
+        "source_type": {
+          "type": "string"
+        },
+        "captures": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListUrlPatternCapture"
+          }
+        }
+      },
+      "required": [
+        "pattern",
+        "source_type"
+      ]
+    },
+    "ListUrlPatternCapture": {
+      "type": "object",
+      "properties": {
+        "group": {
+          "type": "string"
+        },
+        "param": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "group",
+        "param"
+      ]
+    },
+    "ListProviderCapabilities": {
+      "type": "object",
+      "properties": {
+        "account": {
+          "description": "The plugin answers the account operation for a member credential.",
+          "type": "boolean",
+          "default": false
+        },
+        "health": {
+          "description": "The plugin answers the health operation for its server-wide config.",
+          "type": "boolean",
+          "default": false
+        },
+        "requires_member_credential": {
+          "description": "Every fetch must carry a member credential. The host refuses to invoke\nfetch without one, which is how member-only providers stay member-only.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "ListProviderDescriptor": {
+      "type": "object",
+      "properties": {
+        "provider_type": {
+          "type": "string"
+        },
+        "provider_aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "summary": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "blurb": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "tile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListProviderTile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "brand_url_template": {
+          "description": "Template for a link back to a followed list, with `{param}` placeholders.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "coverage": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListMediaKind"
+          }
+        },
+        "auth": {
+          "$ref": "#/$defs/ListProviderAuth",
+          "default": {
+            "type": "none"
+          }
+        },
+        "groups": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListProviderGroup"
+          }
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListProviderNote"
+          }
+        },
+        "url_patterns": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListUrlPattern"
+          }
+        },
+        "capabilities": {
+          "$ref": "#/$defs/ListProviderCapabilities",
+          "default": {
+            "account": false,
+            "health": false,
+            "requires_member_credential": false
+          }
+        },
+        "config_fields": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigFieldDef"
+          }
+        },
+        "default_base_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "allowed_hosts": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "rate_limit_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int64"
+        }
+      },
+      "required": [
+        "provider_type"
+      ]
+    },
     "PluginCommandRequest": {
       "description": "One native command request.",
       "type": "object",
@@ -2028,6 +2528,22 @@
             },
             "command": {
               "$ref": "#/$defs/PluginSubtitleCommand"
+            }
+          },
+          "required": [
+            "family",
+            "command"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "family": {
+              "type": "string",
+              "const": "list"
+            },
+            "command": {
+              "$ref": "#/$defs/PluginListCommand"
             }
           },
           "required": [
@@ -5096,6 +5612,146 @@
         "data_base64"
       ]
     },
+    "PluginListCommand": {
+      "description": "List-provider operations. The member credential, when one is needed,\ntravels inside the request and is never persisted by the plugin.",
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "fetch"
+            },
+            "request": {
+              "$ref": "#/$defs/ListPluginFetchRequest"
+            }
+          },
+          "required": [
+            "operation",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "account"
+            },
+            "request": {
+              "$ref": "#/$defs/ListPluginAccountRequest"
+            }
+          },
+          "required": [
+            "operation",
+            "request"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "health"
+            },
+            "request": {
+              "$ref": "#/$defs/ListPluginHealthRequest"
+            }
+          },
+          "required": [
+            "operation",
+            "request"
+          ]
+        }
+      ]
+    },
+    "ListPluginFetchRequest": {
+      "type": "object",
+      "properties": {
+        "source_type": {
+          "type": "string"
+        },
+        "params": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "default": {}
+        },
+        "credential": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListCredential"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "page_cursor": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "since_fingerprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "required": [
+        "source_type"
+      ]
+    },
+    "ListCredential": {
+      "description": "One member's credential for one call. The host decrypts it from its own\nstorage for the duration of the invocation; it never enters plugin config.",
+      "type": "object",
+      "properties": {
+        "access_token": {
+          "type": "string"
+        },
+        "token_type": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "external_user_id": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "username": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "access_token"
+      ]
+    },
+    "ListPluginAccountRequest": {
+      "type": "object",
+      "properties": {
+        "credential": {
+          "$ref": "#/$defs/ListCredential"
+        }
+      },
+      "required": [
+        "credential"
+      ]
+    },
+    "ListPluginHealthRequest": {
+      "type": "object"
+    },
     "PluginCommandResponse": {
       "description": "One native command response.",
       "type": "object",
@@ -5174,6 +5830,22 @@
             },
             "result": {
               "$ref": "#/$defs/PluginSubtitleCommandResult"
+            }
+          },
+          "required": [
+            "family",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "family": {
+              "type": "string",
+              "const": "list"
+            },
+            "result": {
+              "$ref": "#/$defs/PluginListCommandResult"
             }
           },
           "required": [
@@ -7561,6 +8233,423 @@
         "unsupported"
       ]
     },
+    "PluginListCommandResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "fetch"
+            },
+            "result": {
+              "$ref": "#/$defs/PluginResult18"
+            }
+          },
+          "required": [
+            "operation",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "account"
+            },
+            "result": {
+              "$ref": "#/$defs/PluginResult19"
+            }
+          },
+          "required": [
+            "operation",
+            "result"
+          ]
+        },
+        {
+          "type": "object",
+          "properties": {
+            "operation": {
+              "type": "string",
+              "const": "health"
+            },
+            "result": {
+              "$ref": "#/$defs/PluginResult20"
+            }
+          },
+          "required": [
+            "operation",
+            "result"
+          ]
+        }
+      ]
+    },
+    "PluginResult18": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "$ref": "#/$defs/ListPluginFetchResponse"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "err": {
+              "$ref": "#/$defs/PluginError"
+            }
+          },
+          "required": [
+            "err"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ListPluginFetchResponse": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListPluginItem"
+          }
+        },
+        "next_cursor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "list_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "list_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "total_hint": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "fingerprint": {
+          "description": "A fingerprint of the list's current content, echoed back as\n`since_fingerprint` on the next fetch.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "unchanged": {
+          "description": "The list has not changed since `since_fingerprint`; `items` is empty.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "ListPluginItem": {
+      "type": "object",
+      "properties": {
+        "item_key": {
+          "description": "Provider-native id, stable across syncs.",
+          "type": "string"
+        },
+        "rank": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "kind_hint": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListMediaKind"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "title": {
+          "description": "A last-resort hint for providers that carry no ids.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "year": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "external_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListExternalId"
+          }
+        },
+        "season": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "int32"
+        },
+        "provider_rating": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListProviderRating"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "genres": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "format": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "language": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "released": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "available_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "item_key"
+      ]
+    },
+    "ListExternalId": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string"
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "id"
+      ]
+    },
+    "ListProviderRating": {
+      "type": "object",
+      "properties": {
+        "scale": {
+          "type": "string"
+        },
+        "value": {
+          "type": "number",
+          "format": "double"
+        }
+      },
+      "required": [
+        "scale",
+        "value"
+      ]
+    },
+    "PluginResult19": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "$ref": "#/$defs/ListPluginAccountResponse"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "err": {
+              "$ref": "#/$defs/PluginError"
+            }
+          },
+          "required": [
+            "err"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ListPluginAccountResponse": {
+      "type": "object",
+      "properties": {
+        "external_user_id": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "avatar_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "owned_lists": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListAccountList"
+          }
+        },
+        "statuses": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListAccountStatus"
+          }
+        }
+      },
+      "required": [
+        "external_user_id",
+        "username"
+      ]
+    },
+    "ListAccountList": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListMediaKind"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ]
+    },
+    "ListAccountStatus": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "kinds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ListMediaKind"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "label"
+      ]
+    },
+    "PluginResult20": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "$ref": "#/$defs/ListPluginHealthResponse"
+            }
+          },
+          "required": [
+            "ok"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "err": {
+              "$ref": "#/$defs/PluginError"
+            }
+          },
+          "required": [
+            "err"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ListPluginHealthResponse": {
+      "type": "object",
+      "properties": {
+        "healthy": {
+          "type": "boolean"
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "healthy"
+      ]
+    },
     "PluginHostRequest": {
       "description": "A single request over the native host-service transport.",
       "oneOf": [
@@ -8008,7 +9097,7 @@
           "type": "object",
           "properties": {
             "ConfigGet": {
-              "$ref": "#/$defs/PluginResult18"
+              "$ref": "#/$defs/PluginResult21"
             }
           },
           "required": [
@@ -8020,7 +9109,7 @@
           "type": "object",
           "properties": {
             "StateGet": {
-              "$ref": "#/$defs/PluginResult19"
+              "$ref": "#/$defs/PluginResult22"
             }
           },
           "required": [
@@ -8032,7 +9121,7 @@
           "type": "object",
           "properties": {
             "StateSet": {
-              "$ref": "#/$defs/PluginResult20"
+              "$ref": "#/$defs/PluginResult23"
             }
           },
           "required": [
@@ -8044,7 +9133,7 @@
           "type": "object",
           "properties": {
             "StateDelete": {
-              "$ref": "#/$defs/PluginResult20"
+              "$ref": "#/$defs/PluginResult23"
             }
           },
           "required": [
@@ -8056,7 +9145,7 @@
           "type": "object",
           "properties": {
             "Http": {
-              "$ref": "#/$defs/PluginResult21"
+              "$ref": "#/$defs/PluginResult24"
             }
           },
           "required": [
@@ -8068,7 +9157,7 @@
           "type": "object",
           "properties": {
             "SocketOpen": {
-              "$ref": "#/$defs/PluginResult22"
+              "$ref": "#/$defs/PluginResult25"
             }
           },
           "required": [
@@ -8080,7 +9169,7 @@
           "type": "object",
           "properties": {
             "SocketRead": {
-              "$ref": "#/$defs/PluginResult23"
+              "$ref": "#/$defs/PluginResult26"
             }
           },
           "required": [
@@ -8092,7 +9181,7 @@
           "type": "object",
           "properties": {
             "SocketWrite": {
-              "$ref": "#/$defs/PluginResult24"
+              "$ref": "#/$defs/PluginResult27"
             }
           },
           "required": [
@@ -8104,7 +9193,7 @@
           "type": "object",
           "properties": {
             "SocketStartTls": {
-              "$ref": "#/$defs/PluginResult25"
+              "$ref": "#/$defs/PluginResult28"
             }
           },
           "required": [
@@ -8116,7 +9205,7 @@
           "type": "object",
           "properties": {
             "SocketClose": {
-              "$ref": "#/$defs/PluginResult26"
+              "$ref": "#/$defs/PluginResult29"
             }
           },
           "required": [
@@ -8128,7 +9217,7 @@
           "type": "object",
           "properties": {
             "ProcessExec": {
-              "$ref": "#/$defs/PluginResult27"
+              "$ref": "#/$defs/PluginResult30"
             }
           },
           "required": [
@@ -8140,7 +9229,7 @@
           "type": "object",
           "properties": {
             "ArchiveExtract": {
-              "$ref": "#/$defs/PluginResult28"
+              "$ref": "#/$defs/PluginResult31"
             }
           },
           "required": [
@@ -8150,7 +9239,7 @@
         }
       ]
     },
-    "PluginResult18": {
+    "PluginResult21": {
       "oneOf": [
         {
           "type": "object",
@@ -8190,7 +9279,7 @@
         }
       }
     },
-    "PluginResult19": {
+    "PluginResult22": {
       "oneOf": [
         {
           "type": "object",
@@ -8236,7 +9325,7 @@
         }
       }
     },
-    "PluginResult20": {
+    "PluginResult23": {
       "oneOf": [
         {
           "type": "object",
@@ -8275,7 +9364,7 @@
         "changed"
       ]
     },
-    "PluginResult21": {
+    "PluginResult24": {
       "oneOf": [
         {
           "type": "object",
@@ -8334,7 +9423,7 @@
         "status"
       ]
     },
-    "PluginResult22": {
+    "PluginResult25": {
       "oneOf": [
         {
           "type": "object",
@@ -8375,7 +9464,7 @@
         "handle"
       ]
     },
-    "PluginResult23": {
+    "PluginResult26": {
       "oneOf": [
         {
           "type": "object",
@@ -8418,7 +9507,7 @@
         "eof"
       ]
     },
-    "PluginResult24": {
+    "PluginResult27": {
       "oneOf": [
         {
           "type": "object",
@@ -8459,7 +9548,7 @@
         "bytes_written"
       ]
     },
-    "PluginResult25": {
+    "PluginResult28": {
       "oneOf": [
         {
           "type": "object",
@@ -8500,7 +9589,7 @@
         "handle"
       ]
     },
-    "PluginResult26": {
+    "PluginResult29": {
       "oneOf": [
         {
           "type": "object",
@@ -8539,7 +9628,7 @@
         "closed"
       ]
     },
-    "PluginResult27": {
+    "PluginResult30": {
       "oneOf": [
         {
           "type": "object",
@@ -8599,7 +9688,7 @@
         "exit_code"
       ]
     },
-    "PluginResult28": {
+    "PluginResult31": {
       "oneOf": [
         {
           "type": "object",
@@ -8868,7 +9957,7 @@
         "format"
       ]
     },
-    "PluginResult29": {
+    "PluginResult32": {
       "oneOf": [
         {
           "type": "object",
@@ -9065,7 +10154,7 @@
         }
       ]
     },
-    "PluginResult30": {
+    "PluginResult33": {
       "oneOf": [
         {
           "type": "object",

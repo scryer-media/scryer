@@ -1351,6 +1351,11 @@ async fn bootstrap_application(
         .filter(|plugin| plugin.descriptor.plugin_type() == "archive_extractor")
         .cloned()
         .collect::<Vec<_>>();
+    let list_runtime_plugins = runtime_plugins
+        .iter()
+        .filter(|plugin| plugin.descriptor.plugin_type() == "list_provider")
+        .cloned()
+        .collect::<Vec<_>>();
     let notification_runtime_plugins = runtime_plugins
         .iter()
         .filter(|plugin| plugin.descriptor.plugin_type() == "notification")
@@ -1624,6 +1629,12 @@ async fn bootstrap_application(
         .with_archive_extractor_plugin_provider(archive_extractor_plugin_provider)
         .with_srrdb_filename_lookup(srrdb_filename_lookup)
         .with_notification_provider(Arc::new(notif_provider))
+        .with_list_plugin_provider(Arc::new(scryer_plugins::DynamicListPluginProvider::new(
+            scryer_plugins::build_list_plugin_provider_from_runtime_plugins(
+                &list_runtime_plugins,
+                &disabled_builtin_plugins,
+            ),
+        )))
         .with_plugin_descriptor_loader(Arc::new(scryer_plugins::WasmPluginDescriptorLoader))
         .with_tracked_download_handle(TrackedDownloadHandle::new(tracked_download_tx))
         .build();

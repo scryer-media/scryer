@@ -10,6 +10,8 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    ListPluginAccountRequest, ListPluginAccountResponse, ListPluginFetchRequest,
+    ListPluginFetchResponse, ListPluginHealthRequest, ListPluginHealthResponse,
     PluginCompletedDownload, PluginDownloadClientAddRequest, PluginDownloadClientAddResponse,
     PluginDownloadClientControlRequest, PluginDownloadClientMarkImportedRequest,
     PluginDownloadClientStatus, PluginDownloadItem, PluginDownloadScopedListRequest,
@@ -69,6 +71,7 @@ pub enum PluginCommand {
     DownloadClient(PluginDownloadClientCommand),
     Notification(PluginNotificationCommand),
     Subtitle(PluginSubtitleCommand),
+    List(PluginListCommand),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -78,6 +81,7 @@ pub enum PluginCommandResult {
     DownloadClient(PluginDownloadClientCommandResult),
     Notification(PluginNotificationCommandResult),
     Subtitle(PluginSubtitleCommandResult),
+    List(PluginListCommandResult),
 }
 
 /// The existing action exports take an action name and arbitrary structured
@@ -212,6 +216,24 @@ pub enum PluginSubtitleCommandResult {
     /// [`PluginResult`] every other operation uses so a catalog-only provider
     /// asked to align can refuse in-band rather than by trapping.
     Sync(PluginResult<SubtitleSyncPluginProcessResponse>),
+}
+
+/// List-provider operations. The member credential, when one is needed,
+/// travels inside the request and is never persisted by the plugin.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "operation", content = "request", rename_all = "snake_case")]
+pub enum PluginListCommand {
+    Fetch(ListPluginFetchRequest),
+    Account(ListPluginAccountRequest),
+    Health(ListPluginHealthRequest),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "operation", content = "result", rename_all = "snake_case")]
+pub enum PluginListCommandResult {
+    Fetch(PluginResult<ListPluginFetchResponse>),
+    Account(PluginResult<ListPluginAccountResponse>),
+    Health(PluginResult<ListPluginHealthResponse>),
 }
 
 #[cfg(test)]

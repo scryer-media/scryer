@@ -132,6 +132,15 @@ impl AppUseCase {
                         ))
                     })?;
             }
+            "list_provider" => {
+                self.services
+                    .lists
+                    .plugins
+                    .upsert_runtime_plugin(runtime_plugin)
+                    .map_err(|e| {
+                        AppError::Repository(format!("failed to upsert list provider plugin: {e}"))
+                    })?;
+            }
             other => {
                 return Err(AppError::Validation(format!(
                     "unsupported plugin_type '{}' for runtime upsert",

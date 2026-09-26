@@ -3,6 +3,7 @@ pub mod builtins;
 mod download_client_adapter;
 mod embedded_descriptor;
 mod indexer_adapter;
+mod list_adapter;
 mod loader;
 pub mod newznab_profiles;
 mod notification_adapter;
@@ -17,6 +18,10 @@ mod subtitle_sync_adapter;
 mod types;
 mod wasmtime_host;
 
+pub use list_adapter::{
+    DynamicListPluginProvider, WasmListPluginProvider, build_list_plugin_provider,
+    build_list_plugin_provider_from_runtime_plugins,
+};
 pub use loader::DynamicArchiveExtractorPluginProvider;
 pub use loader::DynamicDownloadClientPluginProvider;
 pub use loader::DynamicNotificationPluginProvider;

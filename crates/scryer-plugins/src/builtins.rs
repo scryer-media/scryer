@@ -23,6 +23,7 @@ pub const INDEXER_BUILTINS: &[BuiltinPluginAsset] = &[NEWZNAB, TORZNAB];
 pub const SUBTITLE_BUILTINS: &[BuiltinPluginAsset] = &[];
 pub const DOWNLOAD_CLIENT_BUILTINS: &[BuiltinPluginAsset] = &[];
 pub const NOTIFICATION_BUILTINS: &[BuiltinPluginAsset] = &[];
+pub const LIST_BUILTINS: &[BuiltinPluginAsset] = &[];
 
 pub fn decode_builtin_wasm(asset: BuiltinPluginAsset) -> Result<Vec<u8>, String> {
     zstd::decode_all(asset.wasm_zstd)
@@ -36,6 +37,7 @@ pub fn builtin_description_for_provider(provider_type: &str) -> Option<&'static 
         .chain(SUBTITLE_BUILTINS.iter())
         .chain(DOWNLOAD_CLIENT_BUILTINS.iter())
         .chain(NOTIFICATION_BUILTINS.iter())
+        .chain(LIST_BUILTINS.iter())
         .find_map(|asset| {
             let descriptor: serde_json::Value = serde_json::from_str(asset.descriptor_json).ok()?;
             let provider = descriptor.get("provider")?;

@@ -74,6 +74,8 @@ pub(crate) enum PluginRuntimeBacking {
     DownloadClient,
     /// `scryer:notification/notification@1.0.0`.
     Notification,
+    /// `scryer:lists/list-provider@1.0.0`.
+    List,
 }
 
 /// The operator-facing diagnostic for a pre-component artifact of `provider`'s
@@ -105,6 +107,9 @@ pub(crate) fn core_module_rejected(provider: &ProviderDescriptor) -> String {
             "notification plugins",
             "scryer:notification/notification@1.0.0",
         ),
+        ProviderDescriptor::ListProvider(_) => {
+            ("list provider plugins", "scryer:lists/list-provider@1.0.0")
+        }
     };
     format!(
         "{family} must be WASI Preview 2 components (world {world}); this artifact is a legacy \
@@ -132,6 +137,7 @@ impl PluginRuntimeBacking {
             ProviderDescriptor::Subtitle(_) => Self::Subtitle,
             ProviderDescriptor::DownloadClient(_) => Self::DownloadClient,
             ProviderDescriptor::Notification(_) => Self::Notification,
+            ProviderDescriptor::ListProvider(_) => Self::List,
         })
     }
 }
@@ -228,6 +234,13 @@ mod tests {
         ))
     }
 
+    fn list_descriptor() -> PluginDescriptor {
+        descriptor_with(ProviderDescriptor::ListProvider(
+            serde_json::from_value(serde_json::json!({ "provider_type": "fixture-lists" }))
+                .expect("minimal list descriptor"),
+        ))
+    }
+
     fn subtitle_descriptor(mode: SubtitleProviderMode) -> PluginDescriptor {
         descriptor_with(ProviderDescriptor::Subtitle(
             scryer_plugin_sdk::SubtitleDescriptor {
@@ -264,6 +277,7 @@ mod tests {
                 notification_descriptor(),
                 PluginRuntimeBacking::Notification,
             ),
+            (list_descriptor(), PluginRuntimeBacking::List),
         ] {
             assert_eq!(
                 PluginRuntimeBacking::for_artifact(&descriptor, &component)
@@ -300,6 +314,7 @@ mod tests {
                 notification_descriptor(),
                 "scryer:notification/notification@1.0.0",
             ),
+            (list_descriptor(), "scryer:lists/list-provider@1.0.0"),
         ] {
             let error = PluginRuntimeBacking::for_artifact(&descriptor, &core_module)
                 .expect_err("a core-module artifact must not select a runtime");

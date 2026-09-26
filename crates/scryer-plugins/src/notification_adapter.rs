@@ -443,6 +443,14 @@ fn map_event_type(event_type: DomainNotificationEventType) -> NotificationEventT
         DomainNotificationEventType::ManualInteractionRequired => {
             NotificationEventType::ManualInteractionRequired
         }
+        DomainNotificationEventType::ListTitleAdded => NotificationEventType::ListTitleAdded,
+        DomainNotificationEventType::ListRequestSubmitted => {
+            NotificationEventType::ListRequestSubmitted
+        }
+        DomainNotificationEventType::ListItemHeld => NotificationEventType::ListItemHeld,
+        DomainNotificationEventType::ListTitleLeft => NotificationEventType::ListTitleLeft,
+        DomainNotificationEventType::ListSyncFailed => NotificationEventType::ListSyncFailed,
+        DomainNotificationEventType::ListUnfollowed => NotificationEventType::ListUnfollowed,
         DomainNotificationEventType::Test => NotificationEventType::Test,
     }
 }
