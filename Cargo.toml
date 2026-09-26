@@ -55,7 +55,7 @@ scryer-tunnel = { package = "proxy-tunnels", git = "https://github.com/scryer-me
 tokio = { version = "1.53", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
-base64 = "0.22"
+base64 = "0.23"
 dotenvy = "0.15"
 thiserror = "2.0"
 async-trait = "0.1"
@@ -85,7 +85,7 @@ security-framework-sys = "2"
 keyring-core = "1"
 windows-native-keyring-store = "1"
 wiremock = "0.6"
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 governor = "0.10.4"
 fixedbitset = "0.5"
 # SIMD-accelerated CRC used as the streaming move-corruption check during
