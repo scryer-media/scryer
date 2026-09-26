@@ -2,6 +2,7 @@ import * as React from "react";
 import { ListPlus } from "lucide-react";
 import { useClient } from "urql";
 
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { titleListMembershipsQuery } from "@/lib/graphql/queries";
 import type { TitleListMembership } from "@/lib/types/lists";
@@ -22,11 +23,14 @@ type TitleListProvenanceProps = {
 export function TitleListProvenance({ titleId, variant = "default", className }: TitleListProvenanceProps) {
   const client = useClient();
   const t = useTranslate();
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const [memberships, setMemberships] = React.useState<TitleListMembership[]>([]);
 
   React.useEffect(() => {
     let cancelled = false;
     setMemberships([]);
+    // Lists are experimental: nothing is asked for while the switch is off.
+    if (!experimentalFeaturesEnabled) return;
     void client
       .query(titleListMembershipsQuery, { id: titleId })
       .toPromise()
@@ -37,7 +41,7 @@ export function TitleListProvenance({ titleId, variant = "default", className }:
     return () => {
       cancelled = true;
     };
-  }, [client, titleId]);
+  }, [client, experimentalFeaturesEnabled, titleId]);
 
   const provenance = titleListProvenance(memberships);
   if (!provenance) return null;

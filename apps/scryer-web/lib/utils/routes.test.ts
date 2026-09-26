@@ -111,13 +111,16 @@ test("a non-admin's landing route never resolves to the dashboard", () => {
 });
 
 test("catalog viewers and list managers both reach the Lists page", () => {
-  assert.equal(canAccessListsPage(true, false), true);
-  assert.equal(canAccessListsPage(false, true), true);
-  assert.equal(canAccessListsPage(true, true), true);
-  assert.equal(canAccessListsPage(false, false), false);
+  assert.equal(canAccessListsPage(true, false, true), true);
+  assert.equal(canAccessListsPage(false, true, true), true);
+  assert.equal(canAccessListsPage(true, true, true), true);
+  assert.equal(canAccessListsPage(false, false, true), false);
+  // Lists are experimental: no grant reaches the page while the switch is off.
+  assert.equal(canAccessListsPage(true, true, false), false);
 });
 
 test("list exclusions are a list-management surface only", () => {
-  assert.equal(canAccessListExclusions(true), true);
-  assert.equal(canAccessListExclusions(false), false);
+  assert.equal(canAccessListExclusions(true, true), true);
+  assert.equal(canAccessListExclusions(false, true), false);
+  assert.equal(canAccessListExclusions(true, false), false);
 });

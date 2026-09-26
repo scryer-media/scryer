@@ -287,7 +287,7 @@ export function buildRouteCommands({
           onSelect: buildNavigate(onNavigate, "calendar"),
         } satisfies RouteCommand]
       : []),
-    ...(canAccessListsPage(canViewCatalog, canManageLists)
+    ...(canAccessListsPage(canViewCatalog, canManageLists, experimentalFeaturesEnabled)
       ? [{
           id: "lists",
           label: t("nav.lists"),
@@ -298,7 +298,7 @@ export function buildRouteCommands({
           onSelect: buildNavigate(onNavigate, "lists"),
         } satisfies RouteCommand]
       : []),
-    ...(canAccessListExclusions(canManageLists)
+    ...(canAccessListExclusions(canManageLists, experimentalFeaturesEnabled)
       ? [{
           id: "lists-exclusions",
           label: `${t("nav.lists")} / ${t("lists.tab.exclusions")}`,

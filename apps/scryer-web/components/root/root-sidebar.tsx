@@ -824,7 +824,8 @@ function RootSidebarContent({
         (item) =>
           (!MEDIA_NAV_VIEW_IDS.includes(item.id) || canAccessMediaTopNav) &&
           (item.id !== "calendar" || canViewCatalog) &&
-          (item.id !== "lists" || canAccessListsPage(canViewCatalog, canManageLists)) &&
+          (item.id !== "lists" ||
+            canAccessListsPage(canViewCatalog, canManageLists, experimentalFeaturesEnabled)) &&
           (item.id !== "wanted" || canViewCatalog) &&
           (item.id !== "dashboard" || canAccessDashboard(canManageSystemSettings)) &&
           (item.id !== "system" || canManageSystemSettings) &&

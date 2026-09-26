@@ -673,6 +673,7 @@ impl AppUseCase {
     ) -> AppResult<ListSubscription> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let (classified, _) = self
             .classify_source(
                 input.provider.as_deref(),
@@ -869,6 +870,7 @@ impl AppUseCase {
     pub async fn sync_public_list_now(&self, actor: &User, id: &str) -> AppResult<Vec<String>> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let subscription = self.public_subscription(id).await?;
         if !subscription.enabled {
             return Err(AppError::Validation("this list is turned off".into()));
@@ -879,6 +881,7 @@ impl AppUseCase {
     pub async fn sync_all_public_lists(&self, actor: &User) -> AppResult<Vec<String>> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let subscriptions = self
             .services
             .lists

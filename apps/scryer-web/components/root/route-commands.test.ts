@@ -180,14 +180,25 @@ test("lists command reaches catalog viewers and list managers", () => {
   const listManager = user({ appPermissions: [APP_PERMISSIONS.manageLists] });
 
   for (const authorizedUser of [viewer, listManager]) {
-    const commands = buildRouteCommands({ t, user: authorizedUser, onNavigate: () => {} });
+    const commands = buildRouteCommands({
+      t,
+      user: authorizedUser,
+      experimentalFeaturesEnabled: true,
+      onNavigate: () => {},
+    });
     const command = commands.find((candidate) => candidate.id === "lists");
     assert.ok(command);
     assert.equal(command.groupLabel, "nav.group.automation");
   }
   assert.equal(
-    buildRouteCommands({ t, user: user(), onNavigate: () => {} })
+    buildRouteCommands({ t, user: user(), experimentalFeaturesEnabled: true, onNavigate: () => {} })
       .some((command) => command.id === "lists"),
+    false,
+  );
+  // Lists are experimental: the palette never offers them while the switch is off.
+  assert.equal(
+    buildRouteCommands({ t, user: listManager, onNavigate: () => {} })
+      .some((command) => command.id === "lists" || command.id === "lists-exclusions"),
     false,
   );
 });
@@ -200,7 +211,7 @@ test("list exclusions command is limited to list managers and opens its pane", (
     }],
   });
   assert.equal(
-    buildRouteCommands({ t, user: viewer, onNavigate: () => {} })
+    buildRouteCommands({ t, user: viewer, experimentalFeaturesEnabled: true, onNavigate: () => {} })
       .some((command) => command.id === "lists-exclusions"),
     false,
   );
@@ -209,6 +220,7 @@ test("list exclusions command is limited to list managers and opens its pane", (
   const command = buildRouteCommands({
     t,
     user: user({ appPermissions: [APP_PERMISSIONS.manageLists] }),
+    experimentalFeaturesEnabled: true,
     onNavigate: () => {},
     onNavigatePath: (path) => paths.push(path),
   }).find((candidate) => candidate.id === "lists-exclusions");

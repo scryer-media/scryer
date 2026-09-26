@@ -34,6 +34,7 @@ mod landed_bar_memo;
 mod libraries;
 mod library_scan;
 mod list_actions;
+mod list_experimental_gate;
 mod list_provider_settings;
 mod maintenance_action_sequences;
 mod maintenance_claims;

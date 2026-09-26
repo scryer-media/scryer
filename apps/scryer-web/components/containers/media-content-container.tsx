@@ -694,7 +694,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   const { startAutomaticSearch } = useAutomaticSearch();
   const client = useClient();
   const auth = useAuth();
-  const canManageLists = hasAppPermission(auth.user, APP_PERMISSIONS.manageLists);
+  const canManageLists =
+    experimentalFeaturesEnabled && hasAppPermission(auth.user, APP_PERMISSIONS.manageLists);
   const [alsoExcludeFromLists, setAlsoExcludeFromLists] = React.useState(false);
   // Library and root moves are still being finished, so the bulk dialog only
   // becomes a move entry point when the instance has opted in.

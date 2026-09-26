@@ -91,6 +91,7 @@ import {
   hasAppPermission,
 } from "@/lib/utils/permissions";
 import { exclusionInputFromTitle } from "@/lib/utils/lists";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import type { Facet } from "@/lib/types/titles";
 import { useTitleMoreLikeThisActions } from "@/lib/hooks/use-title-more-like-this-actions";
 import { useTitleOverviewReactiveRefresh } from "@/lib/hooks/use-title-overview-reactive-refresh";
@@ -425,7 +426,9 @@ export const SeriesOverviewContainer = React.memo(function SeriesOverviewContain
     auth.user,
     LIBRARY_PERMISSIONS.request,
   );
-  const canManageLists = hasAppPermission(auth.user, APP_PERMISSIONS.manageLists);
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const canManageLists =
+    experimentalFeaturesEnabled && hasAppPermission(auth.user, APP_PERMISSIONS.manageLists);
   const [collections, setCollections] = React.useState<TitleCollection[]>([]);
   const [seriesMovieLinks, setSeriesMovieLinks] = React.useState<SeriesMovieLink[]>([]);
   const [events, setEvents] = React.useState<TitleHistoryEvent[]>([]);
