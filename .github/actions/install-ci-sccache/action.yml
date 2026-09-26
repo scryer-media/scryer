@@ -5,17 +5,17 @@ runs:
   steps:
     - id: first
       continue-on-error: true
-      uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2
+      uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
       with:
         tool: sccache@0.17.0
     - id: second
       if: steps.first.outcome == 'failure'
       continue-on-error: true
-      uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2
+      uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
       with:
         tool: sccache@0.17.0
     - if: steps.first.outcome == 'failure' && steps.second.outcome == 'failure'
-      uses: taiki-e/install-action@cb33e69fad06166ca28a42b2575e4dadabf62ee8 # v2
+      uses: taiki-e/install-action@4cef1412cce204788f482e778a0b9187f9626a29 # v2
       with:
         tool: sccache@0.17.0
     - name: Check installed version
