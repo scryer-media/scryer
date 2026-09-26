@@ -8,6 +8,7 @@ export type ViewId =
   | "requests"
   | "activity"
   | "calendar"
+  | "lists"
   | "wanted"
   | "settings"
   | "logs"
@@ -16,6 +17,9 @@ export type SystemSection = "overview" | "jobs" | "recycleBin";
 export type LogsSection = "logs" | "audit";
 export type ActivitySection = "activity" | "import" | "history";
 export type WantedSection = "wanted" | "cutoff" | "pending";
+/// Panes of the Lists page. Public lists are the default and have no segment
+/// of their own, so `/lists` keeps meaning the list table.
+export type ListsSection = "public" | "exclusions";
 export type SettingsSection =
   | "profile"
   | "general"

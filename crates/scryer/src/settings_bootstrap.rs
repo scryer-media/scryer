@@ -1125,6 +1125,16 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             is_sensitive: false,
         },
         // ── Subtitles ──────────────────────────────────────────────────
+        // Server-wide list provider values (an instance API key, for
+        // example), one value per provider type as the scope id.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.provider_config",
+            data_type: "json",
+            default_value_json: "{}",
+            is_sensitive: true,
+        },
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SUBTITLES,
             scope: SETTINGS_SCOPE_SYSTEM,

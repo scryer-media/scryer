@@ -3,10 +3,12 @@ import test from "node:test";
 
 import {
   buildIndexerSettingsPath,
+  buildListsPath,
   buildOverviewDetailPath,
   buildRulesPath,
   indexerSettingsTabFromPath,
-  indexerSettingsTabsFor,
+  indexerSettingsTabs,
+  listsSectionFromPath,
   maintenanceRulesSectionFromPath,
   resolveAppRoute,
   rulesSectionFromPath,
@@ -51,6 +53,8 @@ test("canonical route families resolve to typed application state", () => {
     "/activity/import",
     "/activity/history",
     "/calendar",
+    "/lists",
+    "/lists/exclusions",
     "/automation/wanted/items",
     "/automation/wanted/cutoff-unmet",
     "/automation/wanted/pending",
@@ -336,19 +340,12 @@ test("rules pane paths round-trip through the section helpers", () => {
   assert.equal(maintenanceRulesSectionFromPath("/settings/profile"), "rules");
 });
 
-test("indexerSettingsTabsFor drops search until experimental features are on", () => {
-  assert.deepEqual(indexerSettingsTabsFor(true), [
+test("indexerSettingsTabs always offers the search pane", () => {
+  assert.deepEqual(indexerSettingsTabs(), [
     "indexers",
     "search",
     "seedingProfiles",
   ]);
-  assert.deepEqual(indexerSettingsTabsFor(false), ["indexers", "seedingProfiles"]);
-  // The list and seeding profiles stay reachable either way, so a held search
-  // link has a pane to fall back to.
-  for (const enabled of [true, false]) {
-    assert.ok(indexerSettingsTabsFor(enabled).includes("indexers"));
-    assert.ok(indexerSettingsTabsFor(enabled).includes("seedingProfiles"));
-  }
   assert.equal(buildIndexerSettingsPath("indexers"), "/integrations/indexers");
 });
 
@@ -363,4 +360,16 @@ test("rulesSectionsFor drops maintenance and request rules until experimental fe
   }
   assert.equal(buildRulesPath("scoring"), "/automation/rules/scoring");
   assert.equal(buildRulesPath("request"), "/automation/rules/request");
+});
+
+test("the Lists page resolves its panes and redirects the default pane's alias", () => {
+  assert.equal(canonical("/lists").view, "lists");
+  assert.equal(canonical("/lists/exclusions").view, "lists");
+  redirects("/lists/public", "/lists");
+  assert.deepEqual(resolveAppRoute("/lists/unknown"), { kind: "not-found" });
+  assert.deepEqual(resolveAppRoute("/lists/exclusions/extra"), { kind: "not-found" });
+  for (const section of ["public", "exclusions"] as const) {
+    assert.equal(listsSectionFromPath(buildListsPath(section)), section, section);
+  }
+  assert.equal(listsSectionFromPath("/lists/unknown"), "public");
 });

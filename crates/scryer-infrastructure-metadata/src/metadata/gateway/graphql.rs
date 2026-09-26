@@ -50,3 +50,8 @@ pub const DISCOVERY_CONTEXT_CHANGES_QUERY: &str =
     include_str!("metadata_gateway/discovery_context_changes.graphql");
 pub const ACKNOWLEDGE_DISCOVERY_CONTEXT_SNAPSHOT_QUERY: &str =
     include_str!("metadata_gateway/acknowledge_discovery_context_snapshot.graphql");
+pub const LIST_CHART_CATALOG_QUERY: &str =
+    include_str!("metadata_gateway/list_chart_catalog.graphql");
+pub const LIST_CHART_ITEMS_QUERY: &str = include_str!("metadata_gateway/list_chart_items.graphql");
+pub const LIST_IMDB_USER_LIST_QUERY: &str =
+    include_str!("metadata_gateway/list_imdb_user_list.graphql");

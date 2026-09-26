@@ -7,8 +7,8 @@ use scryer_application::{
     NewMediaRequest,
 };
 use scryer_domain::{
-    ExternalId, MediaFacet, MediaRequest, MediaRequestRequester, MediaRequestStatus,
-    MonitorSelection, NewDomainEvent, User,
+    ExternalId, MediaFacet, MediaRequest, MediaRequestOrigin, MediaRequestRequester,
+    MediaRequestStatus, MonitorSelection, NewDomainEvent, User,
 };
 
 use crate::media::monitor_selections::{
@@ -581,7 +581,7 @@ const REQUEST_COLUMNS: &str = "id, library_id, facet, status, identity_fingerpri
         resolved_by_user_id, resolved_at, created_title_id,
         approved_quality_profile_id, approved_quality_profile_name,
         requested_lease_days, approved_lease_days, decision_id, decided_by_rule_set_ids,
-        policy_tags_json, metadata_snapshot_json,
+        policy_tags_json, metadata_snapshot_json, origin_kind, origin_subscription_id,
         created_by_user_id, created_at, updated_at";
 
 async fn insert_media_request_tx(
@@ -608,12 +608,14 @@ async fn insert_media_request_tx(
             requested_quality_profile_id, requested_quality_profile_name,
             requested_monitor_type,
             requested_lease_days, metadata_snapshot_json,
+            origin_kind, origin_subscription_id,
             created_by_user_id, created_at, updated_at
         ) VALUES (
             {}, {}, {}, {}, {}, {}, {}, {},
             {}, {}, {}, {}, {}, {}, {},
             {},
             {}, {}, {},
+            {}, {},
             {}, {},
             {}, {}, {}
         )",
@@ -639,6 +641,8 @@ async fn insert_media_request_tx(
             SqlArg::OptText(request.requested_monitor_type.clone()),
             SqlArg::OptI64(request.requested_lease_days),
             SqlArg::Text(metadata_snapshot_json),
+            SqlArg::Text(request.origin.as_str().to_string()),
+            SqlArg::OptText(request.origin.subscription_id().map(str::to_string)),
             SqlArg::Text(request.created_by_user_id.clone()),
             SqlArg::Timestamp(now),
             SqlArg::Timestamp(now),
@@ -1151,6 +1155,10 @@ fn row_to_media_request(row: &SqlRow) -> AppResult<MediaRequest> {
         metadata_snapshot_json: json_text_or(row, "metadata_snapshot_json", "{}")?,
         external_ids: Vec::new(),
         requesters: Vec::new(),
+        origin: MediaRequestOrigin::from_parts(
+            &row.text("origin_kind")?,
+            row.opt_text("origin_subscription_id")?,
+        ),
         created_by_user_id: row.text("created_by_user_id")?,
         created_at: row.timestamp("created_at")?,
         updated_at: row.timestamp("updated_at")?,

@@ -14,6 +14,7 @@ import {
   type LibraryPermission,
 } from "@/lib/utils/permissions";
 import { cn } from "@/lib/utils";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { permissionIdToken } from "@/lib/utils/permissions";
 
 export type LibraryPermissionDrafts = Record<string, string[]>;
@@ -40,6 +41,7 @@ export const APP_PERMISSION_OPTIONS: Array<{ value: AppPermission; label: string
   { value: APP_PERMISSIONS.managePermissions, label: "Manage Permissions" },
   { value: APP_PERMISSIONS.manageSystemSettings, label: "Manage System Settings" },
   { value: APP_PERMISSIONS.manageCatalogSettings, label: "Manage Catalog Settings" },
+  { value: APP_PERMISSIONS.manageLists, label: "Manage Lists" },
 ];
 
 export const LIBRARY_PERMISSION_OPTIONS: Array<{ value: LibraryPermission; label: string }> = [
@@ -155,7 +157,12 @@ function AppPermissionDropdown({
   idPrefix?: string;
   onChange: (next: string[]) => void;
 }) {
-  const options = permissionOptions(permissions, APP_PERMISSION_OPTIONS);
+  // Lists are experimental: their permission is offered only once the
+  // instance has opted in, so the picker never grants a right nothing uses.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const options = permissionOptions(permissions, APP_PERMISSION_OPTIONS).filter(
+    (option) => experimentalFeaturesEnabled || option.value !== APP_PERMISSIONS.manageLists,
+  );
   const allPermissions = options.map((option) => option.value);
   const allSelected =
     allPermissions.length > 0 && allPermissions.every((permission) => selected.includes(permission));

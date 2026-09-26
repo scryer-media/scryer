@@ -18,7 +18,7 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn filter_title_ids_for_permission(
+    pub(crate) async fn filter_title_ids_for_permission(
         &self,
         actor: &User,
         title_ids: &[String],

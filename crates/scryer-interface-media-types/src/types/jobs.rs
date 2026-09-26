@@ -50,6 +50,8 @@ pub enum JobKeyValue {
     LifecycleActionHandling,
     /// Scheduled media-server watch-signal synchronization.
     MediaServerSignalSync,
+    /// Scheduled list-subscription synchronization.
+    ListSync,
     /// Title deletion.
     TitleDeletion,
     /// Title rename.

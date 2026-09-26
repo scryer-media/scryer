@@ -1096,6 +1096,17 @@ impl AppUseCase {
     pub async fn trigger_job(&self, actor: &User, job_key: JobKey) -> AppResult<JobRun> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
+        self.start_manual_job_run(actor, job_key).await
+    }
+
+    /// Start a manual run of `job_key` for `actor`. Callers own the permission
+    /// check: `trigger_job` requires system settings, while a narrower use
+    /// case (a list's "sync now") checks its own permission first.
+    pub(crate) async fn start_manual_job_run(
+        &self,
+        actor: &User,
+        job_key: JobKey,
+    ) -> AppResult<JobRun> {
         let hash_start = if job_key == JobKey::FullHashBackfill {
             let guard = self.runtime.jobs.full_hash_start_lock.lock().await;
             if self.runtime.jobs.full_hash_shutdown.is_cancelled() {
@@ -1942,6 +1953,22 @@ impl AppUseCase {
                     report.canceled,
                     report.failed,
                 );
+                if report.failed > 0 {
+                    Ok(JobExecutionOutcome::warning(
+                        Some(summary_text),
+                        summary_json,
+                    ))
+                } else {
+                    Ok(JobExecutionOutcome::new(Some(summary_text), summary_json))
+                }
+            }
+            JobKey::ListSync => {
+                let report = self.run_list_sync_job(Some(run_id.to_string())).await?;
+                crate::lists::sync::log_list_sync_report(&report);
+                let summary_json = serde_json::to_string(&report).ok();
+                let summary_text = crate::lists::list_sync_summary(&report);
+                // A failed list is a warning: the others still synced, and the
+                // failed subscription carries its own reason.
                 if report.failed > 0 {
                     Ok(JobExecutionOutcome::warning(
                         Some(summary_text),

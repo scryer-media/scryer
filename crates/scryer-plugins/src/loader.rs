@@ -74,7 +74,8 @@ pub fn schedule_plugin_rehydration(
         .iter()
         .chain(crate::builtins::SUBTITLE_BUILTINS.iter())
         .chain(crate::builtins::DOWNLOAD_CLIENT_BUILTINS.iter())
-        .chain(crate::builtins::NOTIFICATION_BUILTINS.iter());
+        .chain(crate::builtins::NOTIFICATION_BUILTINS.iter())
+        .chain(crate::builtins::LIST_BUILTINS.iter());
     for asset in builtin_assets {
         let descriptor = match parse_builtin_descriptor(*asset) {
             Ok(descriptor) => descriptor,
@@ -127,6 +128,7 @@ fn module_flavor_for_artifact(
             PluginRuntimeBacking::Subtitle => ModuleFlavor::Subtitle,
             PluginRuntimeBacking::DownloadClient => ModuleFlavor::DownloadClient,
             PluginRuntimeBacking::Notification => ModuleFlavor::Notification,
+            PluginRuntimeBacking::List => ModuleFlavor::ListProvider,
         },
     )
 }
@@ -274,7 +276,7 @@ fn insert_subtitle_client_cache(
     )
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum PluginLoadSource {
+pub(crate) enum PluginLoadSource {
     Builtin,
     External { first_party: bool },
 }
@@ -290,16 +292,16 @@ enum LoadedPluginBacking {
     Builtin(crate::builtins::BuiltinPluginAsset),
 }
 
-struct LoadedPlugin {
+pub(crate) struct LoadedPlugin {
     wasm: LoadedPluginBacking,
-    descriptor: PluginDescriptor,
+    pub(crate) descriptor: PluginDescriptor,
     /// Trust provenance of this plugin. Drives host-capability gating (e.g. the
     /// host-process capability) via `can_use_first_party_host_bindings`.
     load_source: PluginLoadSource,
 }
 
 impl LoadedPlugin {
-    fn from_owned(descriptor: PluginDescriptor, wasm_bytes: Vec<u8>) -> Self {
+    pub(crate) fn from_owned(descriptor: PluginDescriptor, wasm_bytes: Vec<u8>) -> Self {
         Self {
             wasm: LoadedPluginBacking::Owned(wasm_bytes),
             descriptor,
@@ -309,7 +311,7 @@ impl LoadedPlugin {
         }
     }
 
-    fn from_builtin(
+    pub(crate) fn from_builtin(
         descriptor: PluginDescriptor,
         asset: crate::builtins::BuiltinPluginAsset,
     ) -> Self {
@@ -325,7 +327,7 @@ impl LoadedPlugin {
         self
     }
 
-    fn materialize_wasm(&self) -> Result<Vec<u8>, String> {
+    pub(crate) fn materialize_wasm(&self) -> Result<Vec<u8>, String> {
         match &self.wasm {
             LoadedPluginBacking::Owned(wasm_bytes) => Ok(wasm_bytes.clone()),
             LoadedPluginBacking::Builtin(asset) => crate::builtins::decode_builtin_wasm(*asset),
@@ -338,14 +340,18 @@ impl LoadedPlugin {
     }
 }
 
-struct LoadedPluginRecord {
+pub(crate) struct LoadedPluginRecord {
     primary_key: String,
     alias_keys: Vec<String>,
     loaded: LoadedPlugin,
 }
 
 impl LoadedPluginRecord {
-    fn new(loaded: LoadedPlugin) -> Self {
+    pub(crate) fn loaded(&self) -> &LoadedPlugin {
+        &self.loaded
+    }
+
+    pub(crate) fn new(loaded: LoadedPlugin) -> Self {
         let primary_key = loaded
             .descriptor
             .provider_type()
@@ -368,7 +374,7 @@ impl LoadedPluginRecord {
     }
 }
 
-fn resolve_loaded_plugin<'a>(
+pub(crate) fn resolve_loaded_plugin<'a>(
     plugins: &'a HashMap<String, LoadedPlugin>,
     aliases: &HashMap<String, String>,
     provider_type: &str,
@@ -381,7 +387,7 @@ fn resolve_loaded_plugin<'a>(
     plugins.get(primary)
 }
 
-fn remove_loaded_plugin(
+pub(crate) fn remove_loaded_plugin(
     plugins: &mut HashMap<String, LoadedPlugin>,
     aliases: &mut HashMap<String, String>,
     provider_type: &str,
@@ -407,7 +413,7 @@ fn remove_loaded_plugin(
     affected
 }
 
-fn insert_loaded_plugin(
+pub(crate) fn insert_loaded_plugin(
     plugins: &mut HashMap<String, LoadedPlugin>,
     aliases: &mut HashMap<String, String>,
     record: LoadedPluginRecord,
@@ -446,7 +452,7 @@ fn insert_loaded_plugin(
     affected
 }
 
-fn parse_builtin_descriptor(
+pub(crate) fn parse_builtin_descriptor(
     asset: crate::builtins::BuiltinPluginAsset,
 ) -> Result<PluginDescriptor, String> {
     serde_json::from_str(asset.descriptor_json)
@@ -1793,7 +1799,7 @@ impl DownloadClientPluginProvider for DynamicDownloadClientPluginProvider {
 
 /// Validate a plugin descriptor, optionally filtering by a specific plugin type.
 /// If `expected_type` is None, any supported type passes.
-fn validate_descriptor_for_type(
+pub(crate) fn validate_descriptor_for_type(
     descriptor: &PluginDescriptor,
     expected_type: Option<&str>,
     load_source: PluginLoadSource,
@@ -1846,6 +1852,10 @@ fn validate_descriptor_for_type(
             | (
                 PluginKind::ArchiveExtractor,
                 ProviderDescriptor::ArchiveExtractor(_)
+            )
+            | (
+                PluginKind::ListProvider,
+                ProviderDescriptor::ListProvider(_)
             )
     );
     if !provider_matches_kind {
@@ -3286,10 +3296,11 @@ fn descriptor_source_label(descriptor: &PluginDescriptor) -> &'static str {
         ProviderDescriptor::Subtitle(_) => "subtitle_component",
         ProviderDescriptor::DownloadClient(_) => "download_client_component",
         ProviderDescriptor::Notification(_) => "notification_component",
+        ProviderDescriptor::ListProvider(_) => "list_component",
     }
 }
 
-fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), String> {
+pub(crate) fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), String> {
     let started_at = Instant::now();
     module_cache::reset_failed_modules(wasm_bytes);
     let bytes = wasm_bytes.to_vec();
@@ -3313,6 +3324,9 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
             }
             PluginRuntimeBacking::Notification => {
                 crate::wasmtime_host::validate_notification_component(&bytes)?;
+            }
+            PluginRuntimeBacking::List => {
+                crate::wasmtime_host::validate_list_component(&bytes)?;
             }
         }
         let descriptor = embedded.descriptor;
@@ -3346,6 +3360,7 @@ fn load_from_bytes(wasm_bytes: &[u8]) -> Result<(PluginDescriptor, Vec<u8>), Str
         crate::wasmtime_host::subtitle_component_describe,
         crate::wasmtime_host::download_client_component_describe,
         crate::wasmtime_host::notification_component_describe,
+        crate::wasmtime_host::list_component_describe,
     ] {
         if let Ok(descriptor) = describe(&bytes) {
             debug!(
@@ -3435,6 +3450,10 @@ impl PluginDescriptorLoader for WasmPluginDescriptorLoader {
             }
             ProviderDescriptor::Notification(_) => {
                 crate::wasmtime_host::notification_component_describe(wasm_bytes)
+                    .map_err(AppError::Validation)?
+            }
+            ProviderDescriptor::ListProvider(_) => {
+                crate::wasmtime_host::list_component_describe(wasm_bytes)
                     .map_err(AppError::Validation)?
             }
         };
@@ -4254,6 +4273,9 @@ mod tests {
             ProviderDescriptor::ArchiveExtractor(provider) => {
                 provider.provider_type = provider_type.to_string()
             }
+            ProviderDescriptor::ListProvider(provider) => {
+                provider.provider_type = provider_type.to_string()
+            }
         }
     }
 
@@ -4264,6 +4286,7 @@ mod tests {
             ProviderDescriptor::DownloadClient(provider) => provider.provider_aliases = aliases,
             ProviderDescriptor::Subtitle(provider) => provider.provider_aliases = aliases,
             ProviderDescriptor::ArchiveExtractor(provider) => provider.provider_aliases = aliases,
+            ProviderDescriptor::ListProvider(provider) => provider.provider_aliases = aliases,
         }
     }
 
@@ -4276,6 +4299,7 @@ mod tests {
             ProviderDescriptor::ArchiveExtractor(provider) => {
                 provider.allowed_hosts = allowed_hosts
             }
+            ProviderDescriptor::ListProvider(provider) => provider.allowed_hosts = allowed_hosts,
         }
     }
 

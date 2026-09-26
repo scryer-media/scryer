@@ -564,6 +564,7 @@ impl MediaRequestRepository for MockMediaRequestRepo {
                 requested_at: now,
             }],
             created_by_user_id: request.created_by_user_id,
+            origin: request.origin,
             resolved_by_user_id: None,
             resolved_at: None,
             created_title_id: None,

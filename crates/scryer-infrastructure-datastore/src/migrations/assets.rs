@@ -635,6 +635,26 @@ mod tests {
                 EngineScope::Postgres,
                 "postgres/migrations/0257_import_space_attempts_and_member_age.sql",
             ),
+            (
+                258,
+                EngineScope::Sqlite,
+                "migrations/0258_indexer_query_budget.sql",
+            ),
+            (
+                258,
+                EngineScope::Postgres,
+                "postgres/migrations/0258_indexer_query_budget.sql",
+            ),
+            (
+                259,
+                EngineScope::Sqlite,
+                "migrations/0259_list_subscriptions.sql",
+            ),
+            (
+                259,
+                EngineScope::Postgres,
+                "postgres/migrations/0259_list_subscriptions.sql",
+            ),
         ] {
             let migration = bundle
                 .catalog

@@ -169,3 +169,62 @@ test("hiding maintenance rules leaves the rest of the catalog settings commands"
     );
   }
 });
+
+test("lists command reaches catalog viewers and list managers", () => {
+  const viewer = user({
+    libraryPermissions: [{
+      libraryId: "library-id",
+      permissions: [LIBRARY_PERMISSIONS.view],
+    }],
+  });
+  const listManager = user({ appPermissions: [APP_PERMISSIONS.manageLists] });
+
+  for (const authorizedUser of [viewer, listManager]) {
+    const commands = buildRouteCommands({
+      t,
+      user: authorizedUser,
+      experimentalFeaturesEnabled: true,
+      onNavigate: () => {},
+    });
+    const command = commands.find((candidate) => candidate.id === "lists");
+    assert.ok(command);
+    assert.equal(command.groupLabel, "nav.group.automation");
+  }
+  assert.equal(
+    buildRouteCommands({ t, user: user(), experimentalFeaturesEnabled: true, onNavigate: () => {} })
+      .some((command) => command.id === "lists"),
+    false,
+  );
+  // Lists are experimental: the palette never offers them while the switch is off.
+  assert.equal(
+    buildRouteCommands({ t, user: listManager, onNavigate: () => {} })
+      .some((command) => command.id === "lists" || command.id === "lists-exclusions"),
+    false,
+  );
+});
+
+test("list exclusions command is limited to list managers and opens its pane", () => {
+  const viewer = user({
+    libraryPermissions: [{
+      libraryId: "library-id",
+      permissions: [LIBRARY_PERMISSIONS.view],
+    }],
+  });
+  assert.equal(
+    buildRouteCommands({ t, user: viewer, experimentalFeaturesEnabled: true, onNavigate: () => {} })
+      .some((command) => command.id === "lists-exclusions"),
+    false,
+  );
+
+  const paths: string[] = [];
+  const command = buildRouteCommands({
+    t,
+    user: user({ appPermissions: [APP_PERMISSIONS.manageLists] }),
+    experimentalFeaturesEnabled: true,
+    onNavigate: () => {},
+    onNavigatePath: (path) => paths.push(path),
+  }).find((candidate) => candidate.id === "lists-exclusions");
+  assert.ok(command);
+  command.onSelect();
+  assert.deepEqual(paths, ["/lists/exclusions"]);
+});

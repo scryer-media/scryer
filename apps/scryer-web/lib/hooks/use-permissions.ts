@@ -5,6 +5,8 @@ import {
   hasAnyLibraryPermission,
   hasAppPermission,
 } from "@/lib/utils/permissions";
+import { canAccessListsPage } from "@/lib/utils/routes";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 
 export function usePermissions(authenticatedUser: AuthUser) {
   const canViewCatalog = hasAnyLibraryPermission(
@@ -40,6 +42,17 @@ export function usePermissions(authenticatedUser: AuthUser) {
     authenticatedUser,
     APP_PERMISSIONS.manageCatalogSettings,
   );
+  // Lists are experimental: without the instance opt-in the permission grants
+  // nothing, so every lists surface reads this one value.
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const canManageLists =
+    experimentalFeaturesEnabled &&
+    hasAppPermission(authenticatedUser, APP_PERMISSIONS.manageLists);
+  const canAccessLists = canAccessListsPage(
+    canViewCatalog,
+    canManageLists,
+    experimentalFeaturesEnabled,
+  );
   const canManageUsers = canManageUserAccounts || canManagePermissions;
   const canManageConfig = canManageSystemSettings || canManageCatalogSettings;
   const canManageLibrarySettings =
@@ -55,6 +68,8 @@ export function usePermissions(authenticatedUser: AuthUser) {
     canManagePermissions,
     canManageSystemSettings,
     canManageCatalogSettings,
+    canManageLists,
+    canAccessLists,
     canManageUsers,
     canManageConfig,
     canManageLibrarySettings,

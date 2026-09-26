@@ -1,4 +1,3 @@
-import { canAccessDashboard } from "@/lib/utils/routes";
 import type { LucideIcon } from "lucide-react";
 import {
   ActivitySquare,
@@ -13,6 +12,7 @@ import {
   Inbox,
   LayoutDashboard,
   ListChecks,
+  ListPlus,
   Network,
   Puzzle,
   Server,
@@ -36,9 +36,15 @@ import type {
   WantedSection,
 } from "@/components/root/types";
 import { FACET_REGISTRY } from "../../lib/facets/registry.ts";
+import { buildListsPath } from "../../lib/utils/routing.ts";
 import type { AuthUser } from "@/lib/hooks/use-auth";
 import { APP_PERMISSIONS, LIBRARY_PERMISSIONS, hasAnyAppPermission, hasAnyLibraryPermission } from "../../lib/utils/permissions.ts";
-import { canAccessRecycleBinPage } from "../../lib/utils/routes.ts";
+import {
+  canAccessDashboard,
+  canAccessListExclusions,
+  canAccessListsPage,
+  canAccessRecycleBinPage,
+} from "../../lib/utils/routes.ts";
 
 export type RouteCommand = {
   id: string;
@@ -60,6 +66,12 @@ type BuildRouteCommandsArgs = {
    * never surfaces a command for a page the sidebar is hiding.
    */
   experimentalFeaturesEnabled?: boolean;
+  /**
+   * Navigates to a canonical path. Panes that `onNavigate` has no section
+   * argument for (the Lists page's exclusions) go through this; without it
+   * those commands open the page's default pane instead.
+   */
+  onNavigatePath?: (path: string) => void;
   onNavigate: (
     nextView: ViewId,
     nextSettingsSection?: SettingsSection,
@@ -99,6 +111,7 @@ export function buildRouteCommands({
   user,
   activityImportCount = 0,
   experimentalFeaturesEnabled = false,
+  onNavigatePath,
   onNavigate,
 }: BuildRouteCommandsArgs): RouteCommand[] {
   const canViewCatalog = hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.view);
@@ -117,6 +130,7 @@ export function buildRouteCommands({
     canManageTitle,
   );
   const canManageCatalogSettings = hasAnyAppPermission(user, [APP_PERMISSIONS.manageCatalogSettings]);
+  const canManageLists = hasAnyAppPermission(user, [APP_PERMISSIONS.manageLists]);
   const canManageConfig = canManageSystemSettings || canManageCatalogSettings;
   const canManageLibrarySettings =
     canManageConfig || hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageLibrary);
@@ -271,6 +285,30 @@ export function buildRouteCommands({
           keywords: ["calendar", "episodes", "airing", "schedule", "upcoming"],
           icon: CalendarDays,
           onSelect: buildNavigate(onNavigate, "calendar"),
+        } satisfies RouteCommand]
+      : []),
+    ...(canAccessListsPage(canViewCatalog, canManageLists, experimentalFeaturesEnabled)
+      ? [{
+          id: "lists",
+          label: t("nav.lists"),
+          description: t("lists.commandDescription"),
+          groupLabel: automationGroupLabel,
+          keywords: ["lists", "import lists", "charts", "trending", "follow", "watchlist"],
+          icon: ListPlus,
+          onSelect: buildNavigate(onNavigate, "lists"),
+        } satisfies RouteCommand]
+      : []),
+    ...(canAccessListExclusions(canManageLists, experimentalFeaturesEnabled)
+      ? [{
+          id: "lists-exclusions",
+          label: `${t("nav.lists")} / ${t("lists.tab.exclusions")}`,
+          description: t("lists.exclusions.commandDescription"),
+          groupLabel: automationGroupLabel,
+          keywords: ["lists", "exclusions", "exclude", "blocked", "never add"],
+          icon: ListPlus,
+          onSelect: onNavigatePath
+            ? () => onNavigatePath(buildListsPath("exclusions"))
+            : buildNavigate(onNavigate, "lists"),
         } satisfies RouteCommand]
       : []),
     ...(canAccessActivity

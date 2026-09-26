@@ -262,7 +262,7 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    async fn upsert_scoped_system_setting_json<T: Serialize>(
+    pub(crate) async fn upsert_scoped_system_setting_json<T: Serialize>(
         &self,
         key_name: &str,
         scope_id: &str,

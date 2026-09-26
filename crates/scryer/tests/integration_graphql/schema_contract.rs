@@ -707,8 +707,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // or merely went invisible. Nothing else answers that: `activeLibraryScans`
     // takes no argument and lists only live sessions, and `libraryScanState` is
     // a push stream. Same shape as the `queueReplacementRelease` reinstatement.
+    // Public lists add ten reads: the provider catalog, followed lists, one
+    // list, its titles, its sync history, three previews, exclusions and
+    // member policies. Query 174->184. Server-wide list provider settings add
+    // one more read: 184->185.
     assert_eq!(
-        query_field_count, 174,
+        query_field_count, 185,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -735,8 +739,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // mutation 236->243.
     // Failed-move recovery adds `abandonLocationOperation`, the way out of a
     // stalled operation whose storage is not coming back: mutation 247->248.
+    // Public lists add nine mutations: follow, edit, enable, sync one, sync
+    // all, unfollow, add and remove an exclusion, and set a member's list
+    // policy. 250->259. Changing a list provider's server-wide settings adds
+    // one more: 259->260.
     assert_eq!(
-        mutation_field_count, 250,
+        mutation_field_count, 260,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -906,10 +914,86 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
-    assert_eq!(public_types.len(), 864);
-    assert_eq!(kind_count("OBJECT"), 467);
-    assert_eq!(kind_count("INPUT_OBJECT"), 223);
-    assert_eq!(kind_count("ENUM"), 162);
+    // Public lists add ten queries and nine mutations with their payload,
+    // input and enum types, and give media requests an origin: public types
+    // 864->909, OBJECT 467->492, INPUT_OBJECT 223->230, ENUM 162->175.
+    for name in [
+        "listProviders",
+        "listSubscriptions",
+        "listSubscription",
+        "listSubscriptionMemberships",
+        "listSyncRuns",
+        "listSubscriptionPreview",
+        "listUrlPreview",
+        "listSourcePreview",
+        "listExclusions",
+        "listMemberPolicies",
+    ] {
+        assert!(query_field_names.contains(&name), "missing query {name}");
+    }
+    for name in [
+        "subscribeList",
+        "updateListSubscription",
+        "setListSubscriptionEnabled",
+        "syncListSubscription",
+        "syncAllLists",
+        "unsubscribeList",
+        "addListExclusion",
+        "removeListExclusion",
+        "setMemberListPolicy",
+    ] {
+        assert!(
+            mutation_field_names.contains(&name),
+            "missing mutation {name}"
+        );
+    }
+    for name in [
+        "ListProviderPayload",
+        "ListSubscriptionPayload",
+        "ListMembershipPagePayload",
+        "ListSyncRunPayload",
+        "ListPreviewPayload",
+        "ListExclusionPayload",
+        "MemberListPolicyPayload",
+        "MediaRequestOriginPayload",
+        "SubscribeListInput",
+        "UpdateListSubscriptionInput",
+        "ListSourceInput",
+        "AddListExclusionInput",
+        "ListScope",
+        "ListMode",
+        "ListOnLeave",
+        "ListSyncState",
+        "ListPolicy",
+        "ListExclusionScope",
+        "ListSyncRunOutcome",
+        "ListMembershipState",
+        "ListFilterKind",
+        "ListAuthBadge",
+        "ListSourceParamType",
+        "ListNoteTone",
+        "MediaRequestOriginKind",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    // Server-wide list provider settings add one query, one mutation, the
+    // settings and field payloads and the change input; a title's public-list
+    // provenance adds one payload on an additive title field: public types
+    // 909->913, OBJECT 492->495, INPUT_OBJECT 230->231.
+    assert!(query_field_names.contains(&"listProviderSettings"));
+    assert!(mutation_field_names.contains(&"updateListProviderSettings"));
+    for name in [
+        "ListProviderSettingsPayload",
+        "ListProviderSettingFieldPayload",
+        "ListProviderSettingChangeInput",
+        "TitleListMembershipPayload",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    assert_eq!(public_types.len(), 913);
+    assert_eq!(kind_count("OBJECT"), 495);
+    assert_eq!(kind_count("INPUT_OBJECT"), 231);
+    assert_eq!(kind_count("ENUM"), 175);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

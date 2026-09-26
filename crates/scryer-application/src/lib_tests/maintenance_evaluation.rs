@@ -2191,6 +2191,7 @@ fn approved_request(title_id: &str, submitter: &str, seconder: &str) -> MediaReq
             },
         ],
         created_by_user_id: submitter.to_string(),
+        origin: Default::default(),
         created_at: now,
         updated_at: now,
     }

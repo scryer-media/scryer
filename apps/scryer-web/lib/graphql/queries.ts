@@ -5278,3 +5278,294 @@ export const locationRootScopePreviewQuery = `query LocationRootScopePreview($in
     }
   }
 }`;
+
+const LIST_COUNTS_FIELDS = `
+      total
+      inLibrary
+      added
+      requested
+      held
+      filtered
+      excluded
+      unresolved`;
+
+export const LIST_SUBSCRIPTION_FIELDS = `
+    id
+    scope
+    name
+    providerUrl
+    source {
+      provider
+      sourceType
+      params {
+        key
+        value
+      }
+    }
+    kinds
+    enabled
+    mode
+    routes {
+      kind
+      libraryId
+      qualityProfileId
+      rootFolderId
+      monitorType
+      minAvailability
+      useSeasonFolders
+      releaseNumbering
+      tags
+    }
+    filters {
+      kind
+      scale
+      value
+      from
+      to
+      values
+    }
+    maxPerSync
+    onLeave
+    intervalSeconds
+    sync {
+      state
+      lastAt
+      nextAt
+      errorMessage
+      errorAt
+      pausedUntil
+    }
+    counts {${LIST_COUNTS_FIELDS}
+    }
+    createdAt
+    updatedAt`;
+
+const LIST_PREVIEW_FIELDS = `
+    recognized
+    provider
+    sourceType
+    params {
+      key
+      value
+    }
+    name
+    kinds
+    total
+    inLibrary
+    filtered
+    excluded
+    unresolved
+    wouldAdd {
+      itemKey
+      displayTitle
+      year
+      kind
+      posterUrl
+    }`;
+
+export const LIST_EXCLUSION_FIELDS = `
+    id
+    kind
+    externalIds {
+      source
+      value
+    }
+    displayTitle
+    year
+    scope
+    subscriptionId
+    subscriptionName
+    createdAt`;
+
+/** What an "Also exclude from lists" delete needs to know about a title. */
+export const listExclusionTitleQuery = `query ListExclusionTitle($id: ID!) {
+  title(id: $id) {
+    id
+    name
+    facet
+    year
+    externalIds {
+      source
+      value
+    }
+  }
+}`;
+
+export const listProvidersQuery =`query ListProviders {
+  listProviders {
+    providerType
+    name
+    summary
+    blurb
+    tile {
+      bg
+      ink
+      abbr
+    }
+    coverage
+    groups {
+      label
+      authBadge
+      items {
+        id
+        name
+        description
+        kinds
+        sourceType
+        params {
+          key
+          label
+          type
+          options
+          required
+        }
+        personal
+        defaultIntervalSeconds
+      }
+    }
+    notes {
+      tone
+      textKey
+    }
+    configFields {
+      key
+      label
+      helpText
+      type
+      required
+      secret
+      isSet
+      value
+    }
+    urlPatterns {
+      pattern
+      sourceType
+      captures {
+        group
+        param
+      }
+    }
+  }
+}`;
+
+const LIST_PROVIDER_SETTINGS_FIELDS = `
+    providerType
+    fields {
+      key
+      label
+      helpText
+      type
+      required
+      secret
+      isSet
+      value
+    }`;
+
+export const listProviderSettingsQuery = `query ListProviderSettings {
+  listProviderSettings {${LIST_PROVIDER_SETTINGS_FIELDS}
+  }
+}`;
+
+export const titleListMembershipsQuery = `query TitleListMemberships($id: ID!) {
+  title(id: $id) {
+    id
+    listMemberships {
+      subscriptionId
+      name
+      state
+      addedByList
+      leftAt
+    }
+  }
+}`;
+
+export const listSubscriptionsQuery = `query ListSubscriptions {
+  listSubscriptions {${LIST_SUBSCRIPTION_FIELDS}
+  }
+}`;
+
+export const listSubscriptionDetailQuery = `query ListSubscriptionDetail($id: ID!, $membershipLimit: Int!, $membershipOffset: Int!, $runLimit: Int!) {
+  listSubscription(id: $id) {${LIST_SUBSCRIPTION_FIELDS}
+  }
+  listSubscriptionMemberships(id: $id, limit: $membershipLimit, offset: $membershipOffset) {
+    totalCount
+    items {
+      itemKey
+      rank
+      season
+      kind
+      state
+      stateReason
+      displayTitle
+      year
+      titleId
+      requestId
+      addedByList
+      firstSeenAt
+      lastSeenAt
+      leftAt
+    }
+  }
+  listSyncRuns(subscriptionId: $id, limit: $runLimit) {
+    id
+    startedAt
+    finishedAt
+    outcome
+    counts {${LIST_COUNTS_FIELDS}
+    }
+    errorMessage
+  }
+}`;
+
+export const listSubscriptionPreviewQuery = `query ListSubscriptionPreview($id: ID!) {
+  listSubscriptionPreview(id: $id) {${LIST_PREVIEW_FIELDS}
+  }
+}`;
+
+export const listUrlPreviewQuery = `query ListUrlPreview($url: String!) {
+  listUrlPreview(url: $url) {${LIST_PREVIEW_FIELDS}
+  }
+}`;
+
+export const listSourcePreviewQuery = `query ListSourcePreview($input: ListSourceInput!) {
+  listSourcePreview(input: $input) {${LIST_PREVIEW_FIELDS}
+  }
+}`;
+
+export const listExclusionsQuery = `query ListExclusions {
+  listExclusions {${LIST_EXCLUSION_FIELDS}
+  }
+}`;
+
+export const listMemberPoliciesQuery = `query ListMemberPolicies {
+  listMemberPolicies {
+    user {
+      id
+      username
+    }
+    policy
+    listRequestsLast30d
+  }
+}`;
+
+export const listRouteOptionsQuery = `query ListRouteOptions {
+  qualityProfileSettings {
+    profiles {
+      id
+      name
+    }
+  }
+  libraries(permission: MANAGE_TITLES) {
+    id
+    facet
+    name
+    slug
+    isDefault
+    qualityProfileId
+    roots {
+      id
+      path
+      isDefault
+    }
+  }
+}`;

@@ -683,6 +683,39 @@ impl AppServicesBuilder {
         self.services.integrations.media_server_signals = store;
         self
     }
+    /// Not a required service: an assembly without a list store has no lists,
+    /// and every list use case reads an empty instance.
+    pub fn with_list_store<T>(mut self, store: Arc<T>) -> Self
+    where
+        T: crate::lists::ListSubscriptionRepository
+            + crate::lists::ListMembershipRepository
+            + crate::lists::ListExclusionRepository
+            + crate::lists::UserListAccountRepository
+            + crate::lists::UserListPolicyRepository
+            + Send
+            + Sync
+            + 'static,
+    {
+        let plugins = self.services.lists.plugins.clone();
+        self.services.lists = AppListServices {
+            subscriptions: store.clone(),
+            memberships: store.clone(),
+            exclusions: store.clone(),
+            accounts: store.clone(),
+            policies: store,
+            plugins,
+        };
+        self
+    }
+    /// The installed list-provider plugins. Without one, every provider-origin
+    /// subscription fails its fetch with "provider not installed".
+    pub fn with_list_plugin_provider(
+        mut self,
+        value: Arc<dyn crate::lists::ListPluginProvider>,
+    ) -> Self {
+        self.services.lists.plugins = value;
+        self
+    }
     pub fn with_notification_provider(
         mut self,
         value: Arc<dyn NotificationPluginProvider>,

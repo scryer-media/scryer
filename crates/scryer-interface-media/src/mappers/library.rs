@@ -310,6 +310,10 @@ pub fn from_media_request(
     let metadata = super::request_rules::from_media_request_metadata(
         &scryer_application::MediaRequestMetadataSnapshotExt::metadata_snapshot(&request),
     );
+    let origin = super::lists::from_media_request_origin(
+        &request.origin,
+        policy.and_then(|facts| facts.public_list_name.clone()),
+    );
     let requested_lease_days = request.requested_lease_days;
     let approved_lease_days = request.approved_lease_days;
     let policy_tags = request.policy_tags.clone();
@@ -389,6 +393,7 @@ pub fn from_media_request(
         decision: policy_projection.decision,
         policy_tags,
         metadata,
+        origin,
     }
 }
 

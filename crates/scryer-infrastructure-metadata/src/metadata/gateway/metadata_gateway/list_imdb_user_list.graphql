@@ -1,0 +1,12 @@
+query ListImdbUserList($listId: String!) {
+  listImdbUserList(list_id: $listId) {
+    rank
+    title_id
+    resolved
+    kind
+    external_ids { source kind id key }
+    display_title
+    year
+    poster_url
+  }
+}

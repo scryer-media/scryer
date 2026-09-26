@@ -21,6 +21,7 @@ pub(crate) enum ModuleFlavor {
     Subtitle,
     DownloadClient,
     Notification,
+    ListProvider,
 }
 
 impl ModuleFlavor {
@@ -31,6 +32,7 @@ impl ModuleFlavor {
             Self::Subtitle => "subtitle_component",
             Self::DownloadClient => "download_client_component",
             Self::Notification => "notification_component",
+            Self::ListProvider => "list_provider_component",
         }
     }
 }
@@ -149,6 +151,10 @@ pub(crate) fn notification_component(wasm: &[u8]) -> Result<Arc<Component>, Stri
     component_for(ModuleFlavor::Notification, wasm)
 }
 
+pub(crate) fn list_provider_component(wasm: &[u8]) -> Result<Arc<Component>, String> {
+    component_for(ModuleFlavor::ListProvider, wasm)
+}
+
 /// A deliberate plugin load retries a prior compilation failure. This is used
 /// for installs, updates, and explicit provider reloads; ordinary invocations
 /// keep returning the retained failure instead of starting surprise work.
@@ -163,6 +169,7 @@ pub(crate) fn reset_failed_modules(wasm: &[u8]) {
         ModuleFlavor::Subtitle,
         ModuleFlavor::DownloadClient,
         ModuleFlavor::Notification,
+        ModuleFlavor::ListProvider,
     ] {
         let key = ModuleKey {
             flavor,

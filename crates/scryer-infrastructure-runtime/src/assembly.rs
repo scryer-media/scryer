@@ -37,7 +37,7 @@ use crate::{
     DownloadSubmissionStore, ExternalImportMonitorStore, ExternalImportSetupSecretDraftStore,
     FileSystemStagedNzbStore, HousekeepingStore, ImportStore, InMemoryIndexerStatsTracker,
     IndexerConfigStore, IndexerErrorStore, IndexerSearchLearningStore, LibraryProbeStore,
-    LibraryScanUnmatchedStore, LifecycleClaimStore, LocationOperationStore,
+    LibraryScanUnmatchedStore, LifecycleClaimStore, ListStore, LocationOperationStore,
     MaintenanceEvaluationStore, MaintenanceRuleSetStore, MediaFileStore, MediaRequestStore,
     MediaServerConnectionStore, MediaServerSignalStore, MetadataGatewayClient, MigrationMode,
     NotificationStore, OAuthStore, PendingReleaseStore, PluginStore, PostProcessingScriptStore,
@@ -1177,6 +1177,17 @@ impl DatastoreAssembly {
         Arc::new(MediaServerSignalStore::new(self.datastore()))
     }
 
+    /// Lists: subscriptions, memberships, exclusions, member accounts and
+    /// policies. Built on demand; the account credential column is encrypted
+    /// with the datastore key like every other at-rest secret.
+    pub fn list_store(&self) -> Arc<ListStore> {
+        let encryption_key = match &self.stores {
+            DatastoreStores::Sqlite { db, .. } => db.encryption_key_state(),
+            DatastoreStores::Postgres { db, .. } => db.encryption_key_state(),
+        };
+        Arc::new(ListStore::new(self.datastore(), encryption_key))
+    }
+
     pub fn settings_store(&self) -> Arc<SettingsStore> {
         match &self.stores {
             DatastoreStores::Sqlite { settings_store, .. } => settings_store.clone(),
@@ -1639,6 +1650,7 @@ impl DatastoreAssembly {
                 // Media-server watch signals (RFC 137 §7.3, WP-M).
                 .with_media_server_signal_source(Arc::new(HttpMediaServerSignalSource::new()))
                 .with_media_server_signal_store(self.media_server_signal_store())
+                .with_list_store(self.list_store())
                 .with_webauthn_store(webauthn)
                 .with_totp_store(totp)
                 .with_media_files(media_file_store.clone())
@@ -1770,6 +1782,7 @@ impl DatastoreAssembly {
                 // Media-server watch signals (RFC 137 §7.3, WP-M).
                 .with_media_server_signal_source(Arc::new(HttpMediaServerSignalSource::new()))
                 .with_media_server_signal_store(self.media_server_signal_store())
+                .with_list_store(self.list_store())
                 .with_webauthn_store(webauthn)
                 .with_totp_store(totp)
                 .with_media_files(media_file_store.clone())

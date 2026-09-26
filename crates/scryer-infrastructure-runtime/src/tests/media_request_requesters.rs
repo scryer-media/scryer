@@ -109,6 +109,7 @@ pub(super) fn new_request(id: &str, library_id: &str, submitter: &str) -> NewMed
         metadata_snapshot_json: "{}".to_string(),
         external_ids: Vec::new(),
         created_by_user_id: submitter.to_string(),
+        origin: Default::default(),
     }
 }
 
@@ -255,6 +256,51 @@ async fn requester_ids_union_every_request_that_created_the_title() {
         .await
         .expect("empty lookup");
     assert!(empty.is_empty());
+
+    let _ = std::fs::remove_file(db);
+}
+
+#[tokio::test]
+async fn a_request_keeps_the_list_it_came_from() {
+    let (services, db) = temp_services("scryer_media_request_origin").await;
+    seed_library(&services, "library-1").await;
+    seed_user(&services, "user-a").await;
+    let store = request_store(&services);
+
+    let mut from_list = new_request("request-list", "library-1", "user-a");
+    from_list.origin = scryer_domain::MediaRequestOrigin::PublicList {
+        subscription_id: "public-list-one".to_string(),
+    };
+    store
+        .submit(from_list, &user("user-a"), request_event("request-list"))
+        .await
+        .expect("submit the list request");
+    store
+        .submit(
+            new_request("request-manual", "library-1", "user-a"),
+            &user("user-a"),
+            request_event("request-manual"),
+        )
+        .await
+        .expect("submit the manual request");
+
+    let from_list = store
+        .get("request-list")
+        .await
+        .expect("read the list request")
+        .expect("the list request exists");
+    assert_eq!(
+        from_list.origin,
+        scryer_domain::MediaRequestOrigin::PublicList {
+            subscription_id: "public-list-one".to_string()
+        }
+    );
+    let manual = store
+        .get("request-manual")
+        .await
+        .expect("read the manual request")
+        .expect("the manual request exists");
+    assert_eq!(manual.origin, scryer_domain::MediaRequestOrigin::Manual);
 
     let _ = std::fs::remove_file(db);
 }

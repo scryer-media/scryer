@@ -1,0 +1,56 @@
+package scryer:lists@1.0.0;
+
+/// The list-provider contract, revision 1.0.
+///
+/// The package is `scryer:lists` because `list` is a WIT keyword.
+///
+/// # Payloads
+///
+/// Both exports carry UTF-8 JSON, exactly as the subtitle world does:
+/// `describe` returns a `PluginDescriptor` document whose provider is
+/// `ProviderDescriptor::ListProvider`, and `process` exchanges a
+/// `scryer_plugin_sdk::command::PluginCommandRequest` for a
+/// `PluginCommandResponse` carrying `PluginCommand::List` and its `fetch` /
+/// `account` / `health` operations. Keeping the payload an opaque byte string
+/// lets the SDK add list operations without a WIT revision.
+///
+/// # Credentials
+///
+/// A member's credential arrives inside the `fetch` or `account` request for
+/// that one invocation. It is never written to plugin config or plugin state,
+/// and a provider must not persist it through `state-cas` either: the host
+/// owns storage, refresh and revocation.
+///
+/// # Why `process` is async
+///
+/// A list fetch is paging through somebody else's API under a rate limit.
+/// Lifting `process` into the canonical ABI's async form lets the guest
+/// `await` the runtime's `http` and `sleep`, observe the invocation deadline,
+/// and unwind when the host cancels, while the host drives other instances on
+/// the same worker. `describe` stays synchronous: it is a pure function over a
+/// literal descriptor and performs no host calls.
+///
+/// # Imports
+///
+/// `scryer:host/services@1.0.0` is the encoded door (config, plugin state,
+/// HTTP) and `scryer:runtime/host@1.0.0` the typed, family-neutral surface
+/// (async `http`, `sleep`, clocks, deadline, state compare-and-swap). Both are
+/// answered by the same service layer, so allowed-host enforcement, the
+/// response cap and the proxy policy apply once.
+///
+/// WASI Preview 2 is imported implicitly: the host links the full p2 surface,
+/// so a guest sees clocks, random and its captured stdio through `wasi:*`.
+/// List providers receive no filesystem preopens.
+world list-provider {
+  import scryer:host/services@1.0.0;
+  import scryer:runtime/host@1.0.0;
+
+  enum invocation-error {
+    failed,
+    cancelled,
+    invalid-response,
+  }
+
+  export describe: func() -> list<u8>;
+  export process: async func(request: list<u8>) -> result<list<u8>, invocation-error>;
+}

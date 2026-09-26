@@ -1,7 +1,7 @@
 use super::{
     DomainEventTypeValue, ExternalIdInput, MediaFacetValue, MediaRequestLease,
-    MediaRequestMetadataPayload, MediaRequestStatusValue, MonitorTypeValue, RequestRuleDecision,
-    WantedSearchPayload,
+    MediaRequestMetadataPayload, MediaRequestOriginPayload, MediaRequestStatusValue,
+    MonitorTypeValue, RequestRuleDecision, WantedSearchPayload,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
@@ -187,6 +187,9 @@ pub struct MediaRequestPayload {
     /// The metadata the request was decided against, as captured at submit
     /// time.
     pub metadata: MediaRequestMetadataPayload,
+    /// Where the request came from: a person, a public list, or a member's
+    /// personal list.
+    pub origin: MediaRequestOriginPayload,
 }
 
 /// Event payload identifying a changed media request.

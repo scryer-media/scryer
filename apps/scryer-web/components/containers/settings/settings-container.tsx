@@ -31,6 +31,7 @@ import {
   X,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { IconButton } from "@/components/ui/icon-button";
 import type {
@@ -49,7 +50,7 @@ import {
   buildRulesPath,
   buildViewPath,
   indexerSettingsTabFromPath,
-  indexerSettingsTabsFor,
+  indexerSettingsTabs as allIndexerSettingsTabs,
   maintenanceRulesSectionFromPath,
   rulesSectionFromPath,
   rulesSectionsFor,
@@ -402,10 +403,9 @@ export const SettingsContainer = memo(function SettingsContainer({
     settingsSection === "requestRules" && !experimentalFeaturesEnabled;
   const effectiveRulesSection =
     maintenanceRulesHidden || requestRulesHidden ? "scoring" : rulesSection;
-  // Indexer search is on the same footing: with the switch off the Indexers
-  // page keeps its list and seeding profiles, and a held search link lands on
-  // the list.
-  const indexerSettingsTabs = indexerSettingsTabsFor(experimentalFeaturesEnabled);
+  // Indexer search is in beta rather than experimental: the pane is always
+  // offered, and the page header carries the notice.
+  const indexerSettingsTabs = allIndexerSettingsTabs();
   const effectiveIndexerSettingsTab = indexerSettingsTabs.includes(indexerSettingsTab)
     ? indexerSettingsTab
     : "indexers";
@@ -905,9 +905,22 @@ export const SettingsContainer = memo(function SettingsContainer({
                 <PageIcon className="h-[23px] w-[23px]" />
               </div>
               <div className="min-w-0">
-                <h1 className="text-[25px] font-bold tracking-normal text-[var(--scry-ink2)]">
+                <h1 className="flex flex-wrap items-center gap-2.5 text-[25px] font-bold tracking-normal text-[var(--scry-ink2)]">
                   {pageLabel}
+                  {settingsSection === "indexers" && effectiveIndexerSettingsTab === "search" ? (
+                    <Badge id="settings-indexer-search-beta" tone="warning" className="text-[11px]">
+                      {t("settings.pluginBeta")}
+                    </Badge>
+                  ) : null}
                 </h1>
+                {settingsSection === "indexers" && effectiveIndexerSettingsTab === "search" ? (
+                  <p
+                    id="settings-indexer-search-beta-notice"
+                    className="mt-1 max-w-[640px] text-[13.5px] text-[var(--scry-muted)]"
+                  >
+                    {t("settings.indexerSearchBetaNotice")}
+                  </p>
+                ) : null}
                 {!usesAutomationHeader &&
                 !usesIntegrationsHeader &&
                 !usesSystemHeader &&

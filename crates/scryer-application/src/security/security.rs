@@ -43,6 +43,7 @@ impl AppUseCase {
             scryer_domain::AppPermission::ManagePermissions => "managePermissions",
             scryer_domain::AppPermission::ManageSystemSettings => "manageSystemSettings",
             scryer_domain::AppPermission::ManageCatalogSettings => "manageCatalogSettings",
+            scryer_domain::AppPermission::ManageLists => "manageLists",
         }
     }
 

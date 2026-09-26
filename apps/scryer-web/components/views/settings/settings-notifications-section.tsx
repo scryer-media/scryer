@@ -137,6 +137,12 @@ const NOTIFICATION_EVENT_LABEL_KEYS: Record<string, string> = {
   health_restored: "settings.notificationEvent.healthRestored",
   application_update: "settings.notificationEvent.applicationUpdate",
   manual_interaction_required: "settings.notificationEvent.manualInteractionRequired",
+  list_title_added: "settings.notificationEvent.listTitleAdded",
+  list_request_submitted: "settings.notificationEvent.listRequestSubmitted",
+  list_item_held: "settings.notificationEvent.listItemHeld",
+  list_title_left: "settings.notificationEvent.listTitleLeft",
+  list_sync_failed: "settings.notificationEvent.listSyncFailed",
+  list_unfollowed: "settings.notificationEvent.listUnfollowed",
   test: "settings.notificationEvent.test",
 };
 

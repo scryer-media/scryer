@@ -966,14 +966,14 @@ pub(crate) mod tests {
         bytes.iter().map(|byte| format!("\\{byte:02x}")).collect()
     }
 
-    fn host_request_bytes() -> Vec<u8> {
+    pub(crate) fn host_request_bytes() -> Vec<u8> {
         postcard::to_allocvec(&PluginHostRequest::ConfigGet(PluginConfigGetRequest {
             key: FIXTURE_CONFIG_KEY.to_string(),
         }))
         .expect("fixture host request must encode")
     }
 
-    fn expected_host_response_bytes() -> Vec<u8> {
+    pub(crate) fn expected_host_response_bytes() -> Vec<u8> {
         postcard::to_allocvec(&PluginHostResponse::ConfigGet(PluginResult::Ok(
             PluginConfigGetResponse {
                 value: Some(FIXTURE_CONFIG_VALUE.to_string()),
@@ -1054,7 +1054,7 @@ pub(crate) mod tests {
     /// plugin's configured value. It answers with the ok document when both
     /// hold and the failure document otherwise, so the assertion is about the
     /// shared binding, not about a trap.
-    fn fixture_component_wat(
+    pub(crate) fn fixture_component_wat(
         descriptor_json: &str,
         ok_json: &str,
         fail_json: &str,
@@ -1202,7 +1202,7 @@ pub(crate) mod tests {
     const V1_1_STATE_VALUE: &str = "1";
 
     /// The 1.1 world's `transport-error` discriminants, in declaration order.
-    const V1_1_FORBIDDEN_ORIGIN: u8 = 1;
+    pub(crate) const V1_1_FORBIDDEN_ORIGIN: u8 = 1;
 
     fn subtitle_descriptor_json_v1_1() -> String {
         subtitle_descriptor_json().replace("fixture-subtitle", "fixture-subtitle-1-1")
@@ -1272,7 +1272,7 @@ pub(crate) mod tests {
     /// early-return branch instead and still pass, which is intended — the
     /// fixture asserts the answer, not the scheduling path.
     #[allow(clippy::too_many_arguments)]
-    fn fixture_component_v1_1_wat(
+    pub(crate) fn fixture_component_v1_1_wat(
         descriptor_json: &str,
         ok_json: &str,
         fail_json: &str,
@@ -1539,7 +1539,7 @@ pub(crate) mod tests {
         .expect("fixture subtitle component WAT must assemble")
     }
 
-    fn configured_command_host() -> CommandHost {
+    pub(crate) fn configured_command_host() -> CommandHost {
         let mut config = BTreeMap::new();
         config.insert(
             FIXTURE_CONFIG_KEY.to_string(),
@@ -1556,7 +1556,7 @@ pub(crate) mod tests {
         )
     }
 
-    fn test_spec(wasm: Vec<u8>, command_host: CommandHost) -> PluginInstanceSpec {
+    pub(crate) fn test_spec(wasm: Vec<u8>, command_host: CommandHost) -> PluginInstanceSpec {
         PluginInstanceSpec {
             wasm: Arc::new(wasm),
             preopens: Vec::new(),

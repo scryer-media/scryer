@@ -6,7 +6,9 @@ use uuid::Uuid;
 
 pub mod download_identity;
 pub mod import_space;
+pub mod lists;
 pub mod title_normalization;
+pub use lists::*;
 mod title_sort;
 pub mod title_spelling;
 pub use title_sort::{
@@ -398,6 +400,9 @@ pub struct MediaRequest {
     pub metadata_snapshot_json: String,
     pub external_ids: Vec<ExternalId>,
     pub requesters: Vec<MediaRequestRequester>,
+    /// Where the request came from: a person, or a list subscription.
+    #[serde(default)]
+    pub origin: MediaRequestOrigin,
     pub created_by_user_id: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -410,6 +415,9 @@ pub enum AppPermission {
     ManagePermissions,
     ManageSystemSettings,
     ManageCatalogSettings,
+    /// Following public lists, managing list exclusions for everyone, and
+    /// setting members' list policies.
+    ManageLists,
 }
 
 impl AppPermission {
@@ -419,6 +427,7 @@ impl AppPermission {
             Self::ManagePermissions => "manage_permissions",
             Self::ManageSystemSettings => "manage_system_settings",
             Self::ManageCatalogSettings => "manage_catalog_settings",
+            Self::ManageLists => "manage_lists",
         }
     }
 
@@ -428,6 +437,7 @@ impl AppPermission {
             "manage_permissions" => Some(Self::ManagePermissions),
             "manage_system_settings" => Some(Self::ManageSystemSettings),
             "manage_catalog_settings" => Some(Self::ManageCatalogSettings),
+            "manage_lists" => Some(Self::ManageLists),
             _ => None,
         }
     }
@@ -504,6 +514,7 @@ impl AppPermissionMask {
     pub const MANAGE_PERMISSIONS: Self = Self(1 << 1);
     pub const MANAGE_SYSTEM_SETTINGS: Self = Self(1 << 2);
     pub const MANAGE_CATALOG_SETTINGS: Self = Self(1 << 3);
+    pub const MANAGE_LISTS: Self = Self(1 << 4);
 
     pub fn bits(self) -> u64 {
         self.0
@@ -519,6 +530,7 @@ impl AppPermissionMask {
             AppPermission::ManagePermissions => Self::MANAGE_PERMISSIONS,
             AppPermission::ManageSystemSettings => Self::MANAGE_SYSTEM_SETTINGS,
             AppPermission::ManageCatalogSettings => Self::MANAGE_CATALOG_SETTINGS,
+            AppPermission::ManageLists => Self::MANAGE_LISTS,
         }
     }
 
@@ -543,6 +555,7 @@ impl AppPermissionMask {
                 Self::MANAGE_CATALOG_SETTINGS,
                 AppPermission::ManageCatalogSettings,
             ),
+            (Self::MANAGE_LISTS, AppPermission::ManageLists),
         ]
         .into_iter()
         .filter_map(|(mask, permission)| self.contains(mask).then_some(permission))
@@ -781,6 +794,7 @@ impl UserAuthorization {
                 AppPermission::ManagePermissions,
                 AppPermission::ManageSystemSettings,
                 AppPermission::ManageCatalogSettings,
+                AppPermission::ManageLists,
             ]),
             libraries: std::collections::HashMap::new(),
             default_library: LibraryPermissionMask::from_permissions([
@@ -3722,6 +3736,11 @@ pub enum DomainEventType {
     DownloadIgnored,
     SeedingStarted,
     SeedingCompleted,
+    ListTitleAdded,
+    ListRequestSubmitted,
+    ListTitleLeft,
+    ListSyncFailed,
+    ListUnfollowed,
 }
 
 impl DomainEventType {
@@ -3776,6 +3795,11 @@ impl DomainEventType {
             Self::DownloadIgnored => "download_ignored",
             Self::SeedingStarted => "seeding_started",
             Self::SeedingCompleted => "seeding_completed",
+            Self::ListTitleAdded => "list_title_added",
+            Self::ListRequestSubmitted => "list_request_submitted",
+            Self::ListTitleLeft => "list_title_left",
+            Self::ListSyncFailed => "list_sync_failed",
+            Self::ListUnfollowed => "list_unfollowed",
         }
     }
 
@@ -3830,6 +3854,11 @@ impl DomainEventType {
             "download_ignored" => Some(Self::DownloadIgnored),
             "seeding_started" => Some(Self::SeedingStarted),
             "seeding_completed" => Some(Self::SeedingCompleted),
+            "list_title_added" => Some(Self::ListTitleAdded),
+            "list_request_submitted" => Some(Self::ListRequestSubmitted),
+            "list_title_left" => Some(Self::ListTitleLeft),
+            "list_sync_failed" => Some(Self::ListSyncFailed),
+            "list_unfollowed" => Some(Self::ListUnfollowed),
             _ => None,
         }
     }
@@ -4575,6 +4604,11 @@ pub enum DomainEventPayload {
     DownloadIgnored(DownloadIgnoredEventData),
     SeedingStarted(SeedingStartedEventData),
     SeedingCompleted(SeedingCompletedEventData),
+    ListTitleAdded(ListTitleAddedEventData),
+    ListRequestSubmitted(ListRequestSubmittedEventData),
+    ListTitleLeft(ListTitleLeftEventData),
+    ListSyncFailed(ListSyncFailedEventData),
+    ListUnfollowed(ListUnfollowedEventData),
 }
 
 impl DomainEventPayload {
@@ -4631,6 +4665,11 @@ impl DomainEventPayload {
             Self::DownloadIgnored(_) => DomainEventType::DownloadIgnored,
             Self::SeedingStarted(_) => DomainEventType::SeedingStarted,
             Self::SeedingCompleted(_) => DomainEventType::SeedingCompleted,
+            Self::ListTitleAdded(_) => DomainEventType::ListTitleAdded,
+            Self::ListRequestSubmitted(_) => DomainEventType::ListRequestSubmitted,
+            Self::ListTitleLeft(_) => DomainEventType::ListTitleLeft,
+            Self::ListSyncFailed(_) => DomainEventType::ListSyncFailed,
+            Self::ListUnfollowed(_) => DomainEventType::ListUnfollowed,
         }
     }
 }
@@ -7194,6 +7233,12 @@ pub enum NotificationEventType {
     ApplicationUpdate,
     ManualInteractionRequired,
     TitleMoved,
+    ListTitleAdded,
+    ListRequestSubmitted,
+    ListItemHeld,
+    ListTitleLeft,
+    ListSyncFailed,
+    ListUnfollowed,
     Test,
 }
 
@@ -7222,6 +7267,12 @@ impl NotificationEventType {
             Self::ApplicationUpdate => "application_update",
             Self::ManualInteractionRequired => "manual_interaction_required",
             Self::TitleMoved => "title_moved",
+            Self::ListTitleAdded => "list_title_added",
+            Self::ListRequestSubmitted => "list_request_submitted",
+            Self::ListItemHeld => "list_item_held",
+            Self::ListTitleLeft => "list_title_left",
+            Self::ListSyncFailed => "list_sync_failed",
+            Self::ListUnfollowed => "list_unfollowed",
             Self::Test => "test",
         }
     }
@@ -7250,6 +7301,12 @@ impl NotificationEventType {
             Self::ApplicationUpdate,
             Self::ManualInteractionRequired,
             Self::TitleMoved,
+            Self::ListTitleAdded,
+            Self::ListRequestSubmitted,
+            Self::ListItemHeld,
+            Self::ListTitleLeft,
+            Self::ListSyncFailed,
+            Self::ListUnfollowed,
             Self::Test,
         ]
     }
@@ -7278,6 +7335,12 @@ impl NotificationEventType {
             "application_update" => Some(Self::ApplicationUpdate),
             "manual_interaction_required" => Some(Self::ManualInteractionRequired),
             "title_moved" => Some(Self::TitleMoved),
+            "list_title_added" => Some(Self::ListTitleAdded),
+            "list_request_submitted" => Some(Self::ListRequestSubmitted),
+            "list_item_held" => Some(Self::ListItemHeld),
+            "list_title_left" => Some(Self::ListTitleLeft),
+            "list_sync_failed" => Some(Self::ListSyncFailed),
+            "list_unfollowed" => Some(Self::ListUnfollowed),
             "test" => Some(Self::Test),
             "release_grabbed" => Some(Self::Grab),
             "download_failed" => Some(Self::Download),

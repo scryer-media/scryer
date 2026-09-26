@@ -1,0 +1,11 @@
+query ListChartCatalog($language: String!) {
+  listChartCatalog(language: $language) {
+    provider
+    chart_key
+    scope
+    label
+    kinds
+    refreshed_at
+    item_count
+  }
+}

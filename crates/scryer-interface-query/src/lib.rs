@@ -19,6 +19,8 @@ use scryer_interface_metadata::MetadataQueries;
 use scryer_interface_settings::SettingsQueries;
 use std::{collections::HashMap, fs, io, path::Path};
 
+mod lists;
+
 use scryer_interface_core as context;
 use scryer_interface_core::{
     actor_from_ctx, app_from_ctx, application_upgrade_assessment_from_ctx, current_user_from_ctx,
@@ -795,6 +797,7 @@ pub struct QueryRoot(
     UtilityQueries,
     AccountQueries,
     IndexerErrorQueries,
+    lists::ListQueries,
 );
 
 fn indexer_error_operation_value(

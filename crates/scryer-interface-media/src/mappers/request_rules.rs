@@ -549,6 +549,9 @@ pub fn submit_media_request_input_into_application(
             .into_iter()
             .map(|external_id| external_id.into_domain())
             .collect(),
+        // A person's submission is always manual and always evaluated.
+        origin: scryer_domain::MediaRequestOrigin::Manual,
+        admission: scryer_application::MediaRequestAdmission::Evaluate,
     }
 }
 
