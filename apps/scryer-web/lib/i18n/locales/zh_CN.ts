@@ -203,6 +203,8 @@ const zh_CN: LocaleDictionary = {
   "settings.users": "用户",
   "settings.indexers": "索引器",
   "settings.indexerSearch": "索引器搜索",
+  "settings.indexerSearchBetaNotice": "索引器搜索处于测试阶段，其行为和结果在版本之间仍可能变化。",
+  "settings.pluginBeta": "测试版",
   "settings.proxies": "代理",
   "settings.proxyUsername": "用户名",
   "settings.proxyPassword": "密码",

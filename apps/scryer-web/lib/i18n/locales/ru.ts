@@ -312,6 +312,7 @@ const ru: LocaleDictionary = {
     "settings.users": "Пользователи",
     "settings.indexers": "Индексаторы",
     "settings.indexerSearch": "Поиск по индексаторам",
+    "settings.indexerSearchBetaNotice": "Поиск по индексаторам находится в бета-версии. Его поведение и результаты ещё могут меняться между выпусками.",
     "settings.proxyUsername": "Имя пользователя",
     "settings.proxyPassword": "Пароль",
     "settings.proxyCredentialsStored": "Учётные данные заданы",

@@ -205,6 +205,8 @@ const ja: LocaleDictionary = {
   "settings.users": "ユーザー",
   "settings.indexers": "インデクサー",
   "settings.indexerSearch": "インデクサー検索",
+  "settings.indexerSearchBetaNotice": "インデクサー検索はベータ版です。動作や結果はリリース間で変わる可能性があります。",
+  "settings.pluginBeta": "ベータ",
   "settings.proxies": "プロキシ",
   "settings.proxyUsername": "ユーザー名",
   "settings.proxyPassword": "パスワード",

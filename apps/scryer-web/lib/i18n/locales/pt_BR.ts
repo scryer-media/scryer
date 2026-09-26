@@ -205,6 +205,8 @@ const pt_BR: LocaleDictionary = {
   "settings.users": "Usuários",
   "settings.indexers": "Indexadores",
   "settings.indexerSearch": "Busca em indexadores",
+  "settings.indexerSearchBetaNotice": "A busca em indexadores está em beta. Seu comportamento e resultados ainda podem mudar entre versões.",
+  "settings.pluginBeta": "Beta",
   "settings.proxies": "Proxies",
   "settings.proxyUsername": "Usuário",
   "settings.proxyPassword": "Senha",

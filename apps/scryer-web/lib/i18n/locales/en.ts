@@ -348,6 +348,7 @@ const en: LocaleDictionary = {
   "settings.users": "Users",
   "settings.indexers": "Indexers",
   "settings.indexerSearch": "Indexer Search",
+  "settings.indexerSearchBetaNotice": "Indexer Search is in beta. Its behaviour and results may still change between releases.",
   "settings.proxies": "Proxies",
   "settings.proxyUsername": "Username",
   "settings.proxyPassword": "Password",

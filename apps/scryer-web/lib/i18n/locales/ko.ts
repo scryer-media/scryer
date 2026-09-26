@@ -205,6 +205,8 @@ const ko: LocaleDictionary = {
   "settings.users": "사용자",
   "settings.indexers": "인덱서",
   "settings.indexerSearch": "인덱서 검색",
+  "settings.indexerSearchBetaNotice": "인덱서 검색은 베타 단계입니다. 동작과 결과는 릴리스 사이에 바뀔 수 있습니다.",
+  "settings.pluginBeta": "베타",
   "settings.proxies": "프록시",
   "settings.proxyUsername": "사용자 이름",
   "settings.proxyPassword": "비밀번호",

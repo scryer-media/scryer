@@ -2103,6 +2103,7 @@ const nl: LocaleDictionary = {
   "settings.pluginVerifiedCommunity": "Geverifieerde community",
   "settings.pluginUnverified": "Niet geverifieerd",
   "settings.pluginBeta": "Beta",
+  "settings.indexerSearchBetaNotice": "Indexer-zoeken is in bèta. Gedrag en resultaten kunnen tussen releases nog veranderen.",
   "settings.pluginDeprecated": "Verouderd",
   "settings.pluginSource": "Bron",
   "settings.pluginDocs": "Documentatie",
