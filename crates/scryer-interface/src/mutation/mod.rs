@@ -3,6 +3,7 @@ mod collections;
 mod config;
 mod interactive_search;
 mod library;
+mod lists;
 mod location;
 mod maintenance_rules;
 mod notifications;
@@ -48,4 +49,5 @@ pub struct MutationRoot(
     subtitle::SubtitleMutations,
     recycle_bin::RecycleBinMutations,
     interactive_search::InteractiveSearchMutations,
+    lists::ListMutations,
 );

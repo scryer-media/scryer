@@ -500,6 +500,18 @@ loader!(RatingsLoader, String, TitleRatingSummary, |ctx, keys| {
 });
 
 loader!(
+    ListMembershipsForTitleLoader,
+    String,
+    Vec<scryer_application::lists::TitleListMembership>,
+    |ctx, keys| {
+        ctx.app
+            .public_list_memberships_for_titles(&ctx.actor, keys)
+            .await
+            .map_err(to_gql_error)
+    }
+);
+
+loader!(
     MovieMediaSummaryLoader,
     String,
     TitleMovieMediaSummary,
@@ -541,6 +553,7 @@ pub struct RequestLoaders {
     pub collection_episode_progress: DataLoader<CollectionEpisodeProgressLoader>,
     pub ratings: DataLoader<RatingsLoader>,
     pub movie_media_summary: DataLoader<MovieMediaSummaryLoader>,
+    pub list_memberships_for_title: DataLoader<ListMembershipsForTitleLoader>,
     pub series_movie_links_for_title: DataLoader<SeriesMovieLinksForTitleLoader>,
     pub wanted_item: DataLoader<WantedItemLoader>,
     pub wanted_item_for_management: DataLoader<WantedItemForManagementLoader>,
@@ -582,6 +595,7 @@ impl RequestLoaders {
             collection_episode_progress: dl!(CollectionEpisodeProgressLoader),
             ratings: dl!(RatingsLoader),
             movie_media_summary: dl!(MovieMediaSummaryLoader),
+            list_memberships_for_title: dl!(ListMembershipsForTitleLoader),
             series_movie_links_for_title: dl!(SeriesMovieLinksForTitleLoader),
             wanted_item: dl!(WantedItemLoader),
             wanted_item_for_management: dl!(WantedItemForManagementLoader),
