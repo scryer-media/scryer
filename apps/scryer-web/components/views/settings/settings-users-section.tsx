@@ -43,6 +43,7 @@ type SettingsUsersSectionProps = {
   settingsUsers: UserRecord[];
   libraries: LibraryRecord[];
   externalAccountInvitesPanel: React.ReactNode;
+  memberListPoliciesPanel?: React.ReactNode;
   currentUserId?: string | null;
   appPermissions: string[];
   libraryPermissions: string[];
@@ -167,6 +168,7 @@ export function SettingsUsersSection({
   deleteUser,
   resetUserMfa,
   externalAccountInvitesPanel,
+  memberListPoliciesPanel,
 }: SettingsUsersSectionProps) {
   const t = useTranslate();
   const [isCreateUserOpen, setIsCreateUserOpen] = React.useState(false);
@@ -566,6 +568,7 @@ export function SettingsUsersSection({
       />
 
       {externalAccountInvitesPanel}
+      {memberListPoliciesPanel}
     </div>
   );
 }

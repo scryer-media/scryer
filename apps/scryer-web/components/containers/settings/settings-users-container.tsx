@@ -5,6 +5,7 @@ import {
   ExternalAccountInvitesContainer,
   notifyExternalAccountInviteSourcesChanged,
 } from "@/components/containers/settings/external-account-invites-container";
+import { MemberListPoliciesContainer } from "@/components/containers/settings/member-list-policies-container";
 import { SettingsUsersSection } from "@/components/views/settings/settings-users-section";
 import {
   createUserMutation,
@@ -28,6 +29,7 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
+  hasAppPermission,
   normalizeLibraryPermissionsForStorage,
 } from "@/lib/utils/permissions";
 
@@ -53,6 +55,7 @@ export function SettingsUsersContainer() {
   const t = useTranslate();
   const client = useClient();
   const { user: currentUser } = useAuth();
+  const canManageLists = hasAppPermission(currentUser, APP_PERMISSIONS.manageLists);
   const [settingsUsers, setSettingsUsers] = useState<UserRecord[]>([]);
   const [libraries, setLibraries] = useState<LibraryRecord[]>([]);
   const [newUsername, setNewUsername] = useState("");
@@ -412,6 +415,7 @@ export function SettingsUsersContainer() {
         settingsUsers={settingsUsers}
         libraries={libraries}
         externalAccountInvitesPanel={<ExternalAccountInvitesContainer />}
+        memberListPoliciesPanel={canManageLists ? <MemberListPoliciesContainer /> : null}
         newUsername={newUsername}
         setNewUsername={setNewUsername}
         newPassword={newPassword}
