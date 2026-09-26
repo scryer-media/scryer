@@ -120,6 +120,24 @@ export function canAccessDashboard(canManageSystemSettings: boolean): boolean {
   return canManageSystemSettings;
 }
 
+/**
+ * Anyone who can read a catalog may see which public lists feed it; following,
+ * editing and excluding need Manage Lists. A list manager without a catalog
+ * grant still reaches the page, because the lists they manage are theirs to
+ * run whether or not they browse the libraries those lists fill.
+ */
+export function canAccessListsPage(
+  canViewCatalog: boolean,
+  canManageLists: boolean,
+): boolean {
+  return canViewCatalog || canManageLists;
+}
+
+/** The instance-wide exclusions pane is a list-management surface only. */
+export function canAccessListExclusions(canManageLists: boolean): boolean {
+  return canManageLists;
+}
+
 export function canAccessApiExplorer(
   canManageSystemSettings: boolean,
   enabled: boolean | undefined,

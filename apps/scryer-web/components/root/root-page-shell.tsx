@@ -16,6 +16,7 @@ import {
   Download,
   LayoutDashboard,
   ListChecks,
+  ListPlus,
   Monitor,
   Settings,
   CircleFadingArrowUp,
@@ -184,6 +185,12 @@ const DiscoveryContainer = lazy(() =>
 const CalendarContainer = lazy(() =>
   import("@/components/containers/calendar-container").then((m) => ({
     default: m.CalendarContainer,
+  })),
+);
+
+const ListsContainer = lazy(() =>
+  import("@/components/containers/lists-container").then((m) => ({
+    default: m.ListsContainer,
   })),
 );
 
@@ -469,6 +476,8 @@ function MainContent({
   canManageCatalogSettings,
   canManageConfig,
   canManageLibrarySettings,
+  canAccessLists,
+  canManageLists,
 }: {
   view: ViewId;
   overviewTitleId: string | null;
@@ -508,6 +517,8 @@ function MainContent({
   canManageCatalogSettings: boolean;
   canManageConfig: boolean;
   canManageLibrarySettings: boolean;
+  canAccessLists: boolean;
+  canManageLists: boolean;
 }) {
   const { apiExplorerEnabled } = useInstanceFeatures();
   if (view === "api-explorer") {
@@ -537,6 +548,12 @@ function MainContent({
     return (
       <CalendarContainer key="calendar" onOpenOverview={handleOpenOverview} />
     );
+  }
+  if (view === "lists") {
+    if (!canAccessLists) {
+      return <ViewLoadingFallback />;
+    }
+    return <ListsContainer key="lists" canManageLists={canManageLists} />;
   }
   if (view === "discovery") {
     return (
@@ -1352,6 +1369,7 @@ function AuthenticatedHomePage({
         label: t("nav.calendar"),
         icon: CalendarDays,
       },
+      { id: "lists" as ViewId, label: t("nav.lists"), icon: ListPlus },
       { id: "wanted" as ViewId, label: t("nav.wanted"), icon: ListChecks },
       { id: "system" as ViewId, label: t("system.title"), icon: Monitor },
       { id: "settings" as ViewId, label: t("nav.settings"), icon: Settings },
@@ -1370,6 +1388,8 @@ function AuthenticatedHomePage({
     canManageUsers,
     canManageConfig,
     canManageLibrarySettings,
+    canManageLists,
+    canAccessLists,
   } = usePermissions(authenticatedUser);
   const discoveryAuthorizationSignature = useMemo(
     () => authorizationCacheSignature(authenticatedUser),
@@ -1422,11 +1442,13 @@ function AuthenticatedHomePage({
         activityImportCount: manualImportRequiredCount,
         experimentalFeaturesEnabled,
         onNavigate: navigateTo,
+        onNavigatePath: (path: string) => navigate(path),
       }),
     [
       authenticatedUser,
       experimentalFeaturesEnabled,
       manualImportRequiredCount,
+      navigate,
       navigateTo,
       t,
     ],
@@ -1599,6 +1621,14 @@ function AuthenticatedHomePage({
     routeIsCanonical,
     view,
   ]);
+
+  useEffect(() => {
+    if (!routeIsCanonical || view !== "lists" || canAccessLists) {
+      return;
+    }
+
+    navigateToAccessibleDefault();
+  }, [canAccessLists, navigateToAccessibleDefault, routeIsCanonical, view]);
 
   useEffect(() => {
     if (!routeIsCanonical || view !== "activity" || canAccessActivity) {
@@ -2014,6 +2044,8 @@ function AuthenticatedHomePage({
                                     canManageCatalogSettings
                                   }
                                   canManageConfig={canManageConfig}
+                                  canAccessLists={canAccessLists}
+                                  canManageLists={canManageLists}
                                   canManageLibrarySettings={
                                     canManageLibrarySettings
                                   }

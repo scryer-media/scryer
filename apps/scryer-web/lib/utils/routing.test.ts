@@ -3,10 +3,12 @@ import test from "node:test";
 
 import {
   buildIndexerSettingsPath,
+  buildListsPath,
   buildOverviewDetailPath,
   buildRulesPath,
   indexerSettingsTabFromPath,
   indexerSettingsTabsFor,
+  listsSectionFromPath,
   maintenanceRulesSectionFromPath,
   resolveAppRoute,
   rulesSectionFromPath,
@@ -51,6 +53,8 @@ test("canonical route families resolve to typed application state", () => {
     "/activity/import",
     "/activity/history",
     "/calendar",
+    "/lists",
+    "/lists/exclusions",
     "/automation/wanted/items",
     "/automation/wanted/cutoff-unmet",
     "/automation/wanted/pending",
@@ -363,4 +367,16 @@ test("rulesSectionsFor drops maintenance and request rules until experimental fe
   }
   assert.equal(buildRulesPath("scoring"), "/automation/rules/scoring");
   assert.equal(buildRulesPath("request"), "/automation/rules/request");
+});
+
+test("the Lists page resolves its panes and redirects the default pane's alias", () => {
+  assert.equal(canonical("/lists").view, "lists");
+  assert.equal(canonical("/lists/exclusions").view, "lists");
+  redirects("/lists/public", "/lists");
+  assert.deepEqual(resolveAppRoute("/lists/unknown"), { kind: "not-found" });
+  assert.deepEqual(resolveAppRoute("/lists/exclusions/extra"), { kind: "not-found" });
+  for (const section of ["public", "exclusions"] as const) {
+    assert.equal(listsSectionFromPath(buildListsPath(section)), section, section);
+  }
+  assert.equal(listsSectionFromPath("/lists/unknown"), "public");
 });

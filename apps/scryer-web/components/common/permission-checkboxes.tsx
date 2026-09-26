@@ -40,6 +40,7 @@ export const APP_PERMISSION_OPTIONS: Array<{ value: AppPermission; label: string
   { value: APP_PERMISSIONS.managePermissions, label: "Manage Permissions" },
   { value: APP_PERMISSIONS.manageSystemSettings, label: "Manage System Settings" },
   { value: APP_PERMISSIONS.manageCatalogSettings, label: "Manage Catalog Settings" },
+  { value: APP_PERMISSIONS.manageLists, label: "Manage Lists" },
 ];
 
 export const LIBRARY_PERMISSION_OPTIONS: Array<{ value: LibraryPermission; label: string }> = [

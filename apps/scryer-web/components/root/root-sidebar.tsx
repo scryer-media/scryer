@@ -89,6 +89,7 @@ import type { AppPermission, LibraryPermission } from "@/lib/utils/permissions";
 import {
   canAccessApiExplorer,
   canAccessDashboard,
+  canAccessListsPage,
   canAccessSystemSection,
 } from "@/lib/utils/routes";
 import { selectorId } from "@/lib/utils/dom-ids";
@@ -209,6 +210,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
     items: [
       { kind: "view", id: "wanted" },
       { kind: "view", id: "calendar" },
+      { kind: "view", id: "lists" },
       { kind: "view", id: "activity" },
       { kind: "settings", id: "subtitles", icon: Captions },
       // Scoring, maintenance and request rules share this entry; the Rules
@@ -753,6 +755,7 @@ function RootSidebarContent({
     user,
     LIBRARY_PERMISSIONS.view,
   );
+  const canManageLists = hasAnyAppPermission(user, [APP_PERMISSIONS.manageLists]);
   const canManageTitle = hasAnyLibraryPermission(
     user,
     LIBRARY_PERMISSIONS.manageTitles,
@@ -821,6 +824,7 @@ function RootSidebarContent({
         (item) =>
           (!MEDIA_NAV_VIEW_IDS.includes(item.id) || canAccessMediaTopNav) &&
           (item.id !== "calendar" || canViewCatalog) &&
+          (item.id !== "lists" || canAccessListsPage(canViewCatalog, canManageLists)) &&
           (item.id !== "wanted" || canViewCatalog) &&
           (item.id !== "dashboard" || canAccessDashboard(canManageSystemSettings)) &&
           (item.id !== "system" || canManageSystemSettings) &&
@@ -828,6 +832,7 @@ function RootSidebarContent({
       ),
     [
       canAccessMediaTopNav,
+      canManageLists,
       canManageSystemSettings,
       canManageTitle,
       canResolveImports,

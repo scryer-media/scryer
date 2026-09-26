@@ -3,6 +3,7 @@ import type {
   ActivitySection,
   ContentSettingsSection,
   IndexerSettingsTab,
+  ListsSection,
   LogsSection,
   MaintenanceRulesSection,
   RulesSection,
@@ -144,6 +145,30 @@ export function maintenanceRulesSectionFromPath(
     MAINTENANCE_RULES_SECTION_BY_SEGMENT[segments[rulesAt + 2]?.toLowerCase() ?? ""] ??
     "rules"
   );
+}
+
+/// Panes of the Lists page. Public lists are the default and add no segment.
+export const LISTS_SECTION_PATH: Record<ListsSection, string> = {
+  public: "",
+  exclusions: "exclusions",
+};
+
+const LISTS_SECTION_BY_SEGMENT: Record<string, ListsSection> = {
+  exclusions: "exclusions",
+};
+
+export function buildListsPath(section: ListsSection): string {
+  const segment = LISTS_SECTION_PATH[section];
+  return segment ? `/lists/${segment}` : "/lists";
+}
+
+export function listsSectionFromPath(pathname: string): ListsSection {
+  const segments = pathname.split("/").filter(Boolean);
+  const listsAt = segments.findIndex((segment) => segment.toLowerCase() === "lists");
+  if (listsAt < 0) {
+    return "public";
+  }
+  return LISTS_SECTION_BY_SEGMENT[segments[listsAt + 1]?.toLowerCase() ?? ""] ?? "public";
 }
 
 const INTEGRATIONS_SETTINGS_SECTION_PATH: Partial<Record<SettingsSection, string>> = {
@@ -658,6 +683,28 @@ export function resolveAppRoute(
       root as ViewId,
       rawSegments,
       normalizedSegments,
+      search,
+      hash,
+    );
+  }
+
+  if (root === "lists") {
+    if (rawSegments.length > 2) {
+      return { kind: "not-found" };
+    }
+    const segment = normalizedSegments[1] ?? "";
+    if (segment === "public") {
+      return redirectTo(buildListsPath("public"), search, hash);
+    }
+    const section: ListsSection | undefined = segment
+      ? LISTS_SECTION_BY_SEGMENT[segment]
+      : "public";
+    if (!section) {
+      return { kind: "not-found" };
+    }
+    return canonicalOrRedirect(
+      currentPath,
+      parsedRoute(buildListsPath(section), "lists"),
       search,
       hash,
     );
