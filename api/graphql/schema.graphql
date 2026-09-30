@@ -8605,7 +8605,9 @@ type InteractiveReleaseSearchIndexerPayload {
 	"""
 	status: InteractiveReleaseSearchIndexerStatusValue!
 	"""
-	The indexer's own result count (before cross-indexer dedup).
+	The indexer's result count. A title search counts its own batch, before
+	cross-indexer dedup; a query search counts what it contributed to the
+	listing, after exact duplicates are removed.
 	"""
 	resultCount: Int!
 	"""
@@ -8621,6 +8623,14 @@ type InteractiveReleaseSearchIndexerPayload {
 	Searching resumes on its own, so this reads as a cooldown, not an error.
 	"""
 	rateLimited: Boolean!
+	"""
+	Why a skipped indexer was not asked, or null when it was not skipped.
+	"""
+	skipReason: InteractiveReleaseSearchSkipReasonValue
+	"""
+	UTC time a skip that lifts on its own ends, when known.
+	"""
+	skippedUntil: DateTime
 }
 
 """
@@ -8677,6 +8687,36 @@ type InteractiveReleaseSearchPayload {
 	UTC completion time, or null while running.
 	"""
 	completedAt: DateTime
+}
+
+"""
+Why an interactive release search did not ask an indexer.
+"""
+enum InteractiveReleaseSearchSkipReasonValue {
+	"""
+	The indexer is switched off.
+	"""
+	INDEXER_DISABLED
+	"""
+	The indexer's configuration disables it for a while.
+	"""
+	TEMPORARILY_DISABLED
+	"""
+	The indexer is in a backoff after recent failures.
+	"""
+	BACKED_OFF
+	"""
+	The indexer takes no text query.
+	"""
+	NO_TEXT_SEARCH
+	"""
+	The indexer cannot search this kind of media.
+	"""
+	NO_SEARCH_FOR_FACET
+	"""
+	The indexer's capabilities are not known yet.
+	"""
+	CAPABILITIES_UNKNOWN
 }
 
 """

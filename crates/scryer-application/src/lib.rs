@@ -95,7 +95,7 @@ pub use ports::ObservationTouch;
 pub use ports::UnfinishedLibraryScanSession;
 pub use ports::{
     AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord,
-    IndexerSearchNumberingContext, TitleOptionsPatch,
+    IndexerSearchNumberingContext, TitleOptionsPatch, collect_streamed_indexer_search,
 };
 pub use ports::{DownloadCleanupClaim, DownloadCleanupRecord, DownloadClientObservation};
 pub use ports::{DownloadTitleReassignment, DownloadTitleReferences};
@@ -307,10 +307,11 @@ pub use catalog::facets::movie::MovieFacetHandler;
 pub use catalog::facets::registry::FacetRegistry;
 pub use catalog::facets::series::SeriesFacetHandler;
 pub use catalog::interactive_release_search::{
-    InteractiveReleaseSearchIndexerStatus, InteractiveReleaseSearchIndexerView,
-    InteractiveReleaseSearchRequest, InteractiveReleaseSearchSnapshot,
-    InteractiveReleaseSearchState, InteractiveSearchArtifactBundle,
-    InteractiveSearchArtifactTarget, InteractiveSearchKind, QueueUnlinkedReleaseOutcome,
+    InteractiveIndexerSkipReason, InteractiveReleaseSearchIndexerStatus,
+    InteractiveReleaseSearchIndexerView, InteractiveReleaseSearchRequest,
+    InteractiveReleaseSearchSnapshot, InteractiveReleaseSearchState,
+    InteractiveSearchArtifactBundle, InteractiveSearchArtifactTarget, InteractiveSearchKind,
+    QueueUnlinkedReleaseOutcome,
 };
 pub use catalog::release_search::release_candidate_fingerprint;
 pub use catalog::title_hydration::start_background_title_hydration_loop;
@@ -769,9 +770,9 @@ pub use types::{
     IndexerSearchPage, IndexerSearchPageReservation, IndexerSearchPageSink,
     IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
     IndexerSearchResponse, IndexerSearchResult, IndexerSearchStrategyEvent,
-    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, NewIndexerError,
-    ReleaseCandidateProvenance, ReleaseSearchSubjectKind, ReleaseStrategyKind,
-    extract_magnet_info_hash, indexer_search_identity, is_valid_magnet_uri,
+    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, IndexerUnsupportedReason,
+    NewIndexerError, RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
+    ReleaseStrategyKind, extract_magnet_info_hash, indexer_search_identity, is_valid_magnet_uri,
     search_relevant_indexer_caps, search_relevant_managed_indexer_metadata,
 };
 pub use types::{

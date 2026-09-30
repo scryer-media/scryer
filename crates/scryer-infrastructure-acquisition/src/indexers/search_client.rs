@@ -16,9 +16,10 @@ use scryer_application::{
     IndexerSearchNumberingContext, IndexerSearchOutcome, IndexerSearchPageSink,
     IndexerSearchPlanRequest, IndexerSearchResponse, IndexerSearchResult, IndexerSearchRunWrite,
     IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
-    IndexerStatsTracker, IndexerSystemBackoff, NewIndexerError, NormalizedIndexerSearchCandidate,
-    NullIndexerErrorRepository, NullIndexerSearchLearningRepository, NullProxyConfigRepository,
-    NullUpstreamScheduler, ProxyConfigRepository, RateLimitCooldownAction, RateLimitSignal,
+    IndexerStatsTracker, IndexerSystemBackoff, IndexerUnsupportedReason, NewIndexerError,
+    NormalizedIndexerSearchCandidate, NullIndexerErrorRepository,
+    NullIndexerSearchLearningRepository, NullProxyConfigRepository, NullUpstreamScheduler,
+    ProxyConfigRepository, RateLimitCooldownAction, RateLimitSignal, RawTextSearchRequest,
     ReleaseCandidateProvenance, ReleaseSearchSubjectKind, ReusableIndexerSearchCandidate,
     RssDueIndexers, RssFreshnessContext, SchedulerAdmission, SchedulerBatchRequest,
     SchedulerCandidate, SchedulerCandidateId, SchedulerFeedback, SchedulerFeedbackOutcome,
@@ -238,6 +239,9 @@ struct StrategyTierContext {
     /// A direct nab provider infers the function from the category prefixes and
     /// fails hard when that function is unavailable, so it cannot.
     prowlarr_nab_proxy: bool,
+    /// An operator's raw text search: the categories are the operator's own
+    /// and always sent, and no title guard applies.
+    raw_text: bool,
     mode: SearchMode,
     operation: IndexerErrorOperation,
     /// The request's known release year. Constant across the tier, like the
@@ -335,7 +339,13 @@ fn prepare_search_strategies(
     let mut by_identity = HashMap::<String, usize>::new();
 
     for strategy in strategies {
-        let title_guard_mode = title_guard_mode_for_strategy(&strategy);
+        // A raw text search is not a title search: the query is whatever the
+        // operator typed, so nothing it returns is judged against it.
+        let title_guard_mode = if context.raw_text {
+            TitleGuardMode::SkipTitleMatch
+        } else {
+            title_guard_mode_for_strategy(&strategy)
+        };
         let category = (!strategy.generic_query_only)
             .then(|| context.category.clone())
             .flatten();
@@ -347,8 +357,10 @@ fn prepare_search_strategies(
         // function and the category filter on our behalf. Direct nab providers
         // still lose it, because the shipped provider reads the request shape
         // off the category prefixes and would turn `t=search` into the very
-        // function this indexer's caps ruled out.
-        let keep_routed_categories = !strategy.generic_query_only || context.prowlarr_nab_proxy;
+        // function this indexer's caps ruled out. A raw text search carries
+        // only the categories the operator picked, and those always go.
+        let keep_routed_categories =
+            context.raw_text || !strategy.generic_query_only || context.prowlarr_nab_proxy;
         let newznab_categories = keep_routed_categories
             .then(|| context.per_indexer_categories.clone())
             .flatten();
@@ -490,6 +502,19 @@ enum IdDispatchMode {
     LegacyAggregate,
     Aggregate,
     QueryOnly,
+}
+
+/// What a search pass's text query is scoped to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TextQueryScope {
+    /// A media facet (possibly borrowed for a facet-less caller): the facet
+    /// drives capability gating, default categories and the title guard.
+    Faceted,
+    /// An operator's raw text search, with Prowlarr manual-search semantics:
+    /// any indexer that takes a text query at all is asked, no facet or
+    /// default category is sent, the operator's own categories always are,
+    /// and results are not filtered against the query as a title.
+    Raw,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3561,6 +3586,35 @@ impl MultiIndexerSearchClient {
         }
     }
 
+    /// Capabilities for one indexer on this pass, and the facet its text query
+    /// resolves against. A raw text search is not about any one facet, so it
+    /// takes the first facet the indexer accepts a text query for: an
+    /// anime-only or series-only text indexer is still asked. When no facet
+    /// takes text, the requested facet's resolution reports that.
+    fn resolve_pass_capabilities(
+        config: &IndexerConfig,
+        static_caps: &IndexerProviderCapabilities,
+        facet: &str,
+        id_facet: &str,
+        raw_text: bool,
+    ) -> (String, ResolvedSearchCapabilities) {
+        let requested = Self::resolve_search_capabilities(config, static_caps, facet, id_facet);
+        if !raw_text || requested.text_dispatch_mode.can_dispatch() {
+            return (facet.to_string(), requested);
+        }
+        IndexerProviderCapabilities::QUERY_FACETS
+            .iter()
+            .filter(|candidate| **candidate != facet)
+            .map(|candidate| {
+                (
+                    (*candidate).to_string(),
+                    Self::resolve_search_capabilities(config, static_caps, candidate, candidate),
+                )
+            })
+            .find(|(_, resolved)| resolved.text_dispatch_mode.can_dispatch())
+            .unwrap_or((facet.to_string(), requested))
+    }
+
     fn is_prowlarr_nab_proxy(config: &IndexerConfig) -> bool {
         config.is_prowlarr_nab_proxy()
     }
@@ -3655,6 +3709,7 @@ impl MultiIndexerSearchClient {
                     category: _,
                     per_indexer_categories: _,
                     prowlarr_nab_proxy: _,
+                    raw_text: _,
                     mode,
                     operation,
                     year: _,
@@ -4437,6 +4492,110 @@ impl IndexerClient for MultiIndexerSearchClient {
         cancel_token: CancellationToken,
         page_sink: IndexerSearchPageSink,
     ) -> AppResult<IndexerSearchResponse> {
+        self.search_queries_stream_scoped(
+            TextQueryScope::Faceted,
+            queries,
+            ids,
+            category,
+            facet,
+            id_search_facet,
+            newznab_categories,
+            indexer_routing,
+            mode,
+            operation,
+            season,
+            episode,
+            numbering_context,
+            absolute_episode,
+            year,
+            tagged_aliases,
+            learning_context,
+            cancel_token,
+            page_sink,
+        )
+        .await
+    }
+
+    async fn search_raw_text(
+        &self,
+        request: RawTextSearchRequest,
+        cancel_token: CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        let RawTextSearchRequest {
+            query,
+            newznab_categories,
+            indexer_routing,
+        } = request;
+        scryer_application::collect_streamed_indexer_search(|page_sink| {
+            self.search_queries_stream_scoped(
+                TextQueryScope::Raw,
+                vec![query],
+                HashMap::new(),
+                None,
+                None,
+                None,
+                newznab_categories,
+                indexer_routing,
+                SearchMode::Interactive,
+                IndexerErrorOperation::InteractiveSearch,
+                None,
+                None,
+                IndexerSearchNumberingContext::default(),
+                None,
+                None,
+                Vec::new(),
+                None,
+                cancel_token,
+                page_sink,
+            )
+        })
+        .await
+    }
+
+    async fn prune_search_learning(&self, indexer_id: &str) -> AppResult<()> {
+        self.search_learning.prune_indexer(indexer_id).await
+    }
+
+    async fn finalize_search_session(
+        &self,
+        search_session_id: &str,
+        admissible_fingerprints: &[String],
+    ) -> AppResult<()> {
+        self.search_learning
+            .finalize_search_session(search_session_id, admissible_fingerprints)
+            .await
+    }
+}
+
+impl MultiIndexerSearchClient {
+    /// The multi-indexer search pass. `scope` says whether the text query is
+    /// scoped to a media facet or is an operator's raw text search.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the pass carries the whole trait search envelope plus its text scope"
+    )]
+    async fn search_queries_stream_scoped(
+        &self,
+        scope: TextQueryScope,
+        queries: Vec<String>,
+        ids: HashMap<String, String>,
+        category: Option<String>,
+        facet: Option<String>,
+        id_search_facet: Option<String>,
+        newznab_categories: Option<Vec<String>>,
+        indexer_routing: Option<IndexerRoutingPlan>,
+        mode: SearchMode,
+        operation: IndexerErrorOperation,
+        season: Option<u32>,
+        episode: Option<u32>,
+        numbering_context: IndexerSearchNumberingContext,
+        absolute_episode: Option<u32>,
+        year: Option<i32>,
+        tagged_aliases: Vec<scryer_domain::TaggedAlias>,
+        learning_context: Option<IndexerSearchLearningContext>,
+        cancel_token: CancellationToken,
+        page_sink: IndexerSearchPageSink,
+    ) -> AppResult<IndexerSearchResponse> {
         if cancel_token.is_cancelled() {
             return Err(AppError::canceled("indexer search canceled"));
         }
@@ -4465,6 +4624,27 @@ impl IndexerClient for MultiIndexerSearchClient {
                 warn!(error = %err, "failed to load persisted indexer system backoffs");
                 HashMap::new()
             });
+
+        // A raw text search reports each indexer it leaves out for backoff, so
+        // the operator sees why it stayed silent. Only indexers the search
+        // would otherwise have asked are reported.
+        let raw_text = scope == TextQueryScope::Raw && !is_rss_request;
+        let mut backed_off_outcomes: Vec<IndexerQueryOutcome> = Vec::new();
+        let mut record_backed_off = |config: &IndexerConfig, until: DateTime<Utc>| {
+            let asked_otherwise = raw_text
+                && config.enable_interactive_search
+                && indexer_search_eligibility(
+                    indexer_routing.as_ref(),
+                    page_sink.indexer_restriction(),
+                    &config.id,
+                ) == IndexerSearchEligibility::Eligible;
+            if asked_otherwise {
+                backed_off_outcomes.push(IndexerQueryOutcome {
+                    indexer_id: config.id.clone(),
+                    outcome: IndexerSearchOutcome::BackedOff { until: Some(until) },
+                });
+            }
+        };
 
         // Filter by is_enabled, search mode flag, disabled_until (config), and backoff state
         let mut enabled: Vec<(&IndexerConfig, bool)> = Vec::new();
@@ -4515,6 +4695,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     IndexerSkipReason::SystemBackoff,
                     Some(backoff.disabled_until),
                 );
+                record_backed_off(c, backoff.disabled_until);
                 continue;
             }
             // Check in-memory backoff escalation
@@ -4526,6 +4707,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                     IndexerSkipReason::Backoff,
                     Some(until),
                 );
+                record_backed_off(c, until);
                 continue;
             }
             let mode_ok = match mode {
@@ -4552,7 +4734,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             return Ok(IndexerSearchResponse {
                 results: vec![],
 
-                indexer_outcomes: Vec::new(),
+                indexer_outcomes: backed_off_outcomes,
                 completion: IndexerSearchCompletion::Complete,
                 api_current: None,
                 api_max: None,
@@ -4568,11 +4750,11 @@ impl IndexerClient for MultiIndexerSearchClient {
             "dispatching search to indexers"
         );
 
-        // A title-less operator search (the Indexers page's raw kind) carries a
-        // query and no facet. Capability resolution still needs one to decide
-        // whether the endpoint answers freetext at all, so it borrows the movie
-        // facet, but the strategy omits the facet on the wire so plugins issue
-        // a plain `q=` text query rather than a facet-scoped nab function.
+        // A raw text search has no facet. Per indexer it is resolved against
+        // whichever facet that indexer takes a text query for, and the
+        // strategy omits the facet on the wire so plugins issue a plain `q=`
+        // text query. A facet-less caller that is not a raw search keeps the
+        // older behavior: it borrows the movie facet but does not send it.
         let facet_omitted = !is_rss_request
             && facet
                 .as_deref()
@@ -4659,7 +4841,7 @@ impl IndexerClient for MultiIndexerSearchClient {
         let mut scheduler_eligible = Vec::new();
         // Indexers that cannot answer this search at all. They are reported as
         // `Unsupported` so convergence can stop asking them every cycle.
-        let mut unsupported_indexer_ids: Vec<String> = Vec::new();
+        let mut unsupported_indexer_ids: Vec<(String, IndexerUnsupportedReason)> = Vec::new();
         for (config, had_persisted_system_backoff) in &enabled {
             let routing_entry = indexer_routing
                 .as_ref()
@@ -4701,8 +4883,13 @@ impl IndexerClient for MultiIndexerSearchClient {
             let static_caps = self
                 .plugin_provider
                 .capabilities_for_provider(&config.provider_type);
-            let resolved_caps =
-                Self::resolve_search_capabilities(config, &static_caps, &facet, &id_search_facet);
+            let (_, resolved_caps) = Self::resolve_pass_capabilities(
+                config,
+                &static_caps,
+                &facet,
+                &id_search_facet,
+                raw_text,
+            );
             let caps = resolved_caps.caps.clone();
 
             if is_rss_request && !caps.rss {
@@ -4724,8 +4911,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             let can_dispatch_id = !eligible_ids.is_empty()
                 && caps.has_facet(&id_search_facet)
                 && !matches!(resolved_caps.id_dispatch_mode, IdDispatchMode::QueryOnly);
-            let can_dispatch_text =
-                !query.trim().is_empty() && resolved_caps.text_dispatch_mode.can_dispatch();
+            let can_dispatch_text = can_dispatch_text_query(&query, &resolved_caps, raw_text);
             if !is_rss_request && !can_dispatch_id && !can_dispatch_text {
                 record_indexer_skip(
                     mode,
@@ -4737,7 +4923,10 @@ impl IndexerClient for MultiIndexerSearchClient {
                     indexer = config.name.as_str(),
                     facet, "skipping indexer: no supported IDs for facet and no freetext"
                 );
-                unsupported_indexer_ids.push(config.id.clone());
+                unsupported_indexer_ids.push((
+                    config.id.clone(),
+                    unsupported_reason(&resolved_caps, raw_text),
+                ));
                 continue;
             }
 
@@ -4807,9 +4996,26 @@ impl IndexerClient for MultiIndexerSearchClient {
             // Use per-indexer categories from routing if available. Prowlarr
             // proxy children may fall back to per-facet defaults when no
             // routed categories exist yet; direct *nab indexers stay broad.
-            let per_indexer_categories = routing_entry
-                .map(|entry| {
-                    if entry.categories.is_empty() {
+            // A raw text search sends only what the operator picked: neither
+            // routed nor facet-default categories narrow it.
+            let per_indexer_categories = if raw_text {
+                newznab_categories.clone()
+            } else {
+                routing_entry
+                    .map(|entry| {
+                        if entry.categories.is_empty() {
+                            if Self::is_prowlarr_nab_proxy(config) {
+                                newznab_categories
+                                    .clone()
+                                    .or_else(|| Self::default_newznab_categories_for_facet(&facet))
+                            } else {
+                                newznab_categories.clone()
+                            }
+                        } else {
+                            Some(entry.categories.clone())
+                        }
+                    })
+                    .unwrap_or_else(|| {
                         if Self::is_prowlarr_nab_proxy(config) {
                             newznab_categories
                                 .clone()
@@ -4817,19 +5023,8 @@ impl IndexerClient for MultiIndexerSearchClient {
                         } else {
                             newznab_categories.clone()
                         }
-                    } else {
-                        Some(entry.categories.clone())
-                    }
-                })
-                .unwrap_or_else(|| {
-                    if Self::is_prowlarr_nab_proxy(config) {
-                        newznab_categories
-                            .clone()
-                            .or_else(|| Self::default_newznab_categories_for_facet(&facet))
-                    } else {
-                        newznab_categories.clone()
-                    }
-                });
+                    })
+            };
             let category_requests = if is_rss_request {
                 Self::split_rss_category_requests(per_indexer_categories)
             } else {
@@ -4886,10 +5081,11 @@ impl IndexerClient for MultiIndexerSearchClient {
 
         let unsupported_outcomes = unsupported_indexer_ids
             .into_iter()
-            .map(|indexer_id| IndexerQueryOutcome {
+            .map(|(indexer_id, reason)| IndexerQueryOutcome {
                 indexer_id,
-                outcome: IndexerSearchOutcome::Unsupported,
+                outcome: IndexerSearchOutcome::Unsupported { reason },
             })
+            .chain(backed_off_outcomes)
             .collect::<Vec<_>>();
         if scheduler_candidates.is_empty() {
             debug!(mode = ?mode, "no scheduler-eligible indexer configs found");
@@ -4999,8 +5195,13 @@ impl IndexerClient for MultiIndexerSearchClient {
             let static_caps = self
                 .plugin_provider
                 .capabilities_for_provider(&config.provider_type);
-            let resolved_caps =
-                Self::resolve_search_capabilities(config, &static_caps, &facet, &id_search_facet);
+            let (text_facet, resolved_caps) = Self::resolve_pass_capabilities(
+                config,
+                &static_caps,
+                &facet,
+                &id_search_facet,
+                raw_text,
+            );
             let caps = resolved_caps.caps.clone();
             debug!(
                 indexer = config.name.as_str(),
@@ -5032,8 +5233,7 @@ impl IndexerClient for MultiIndexerSearchClient {
             let can_dispatch_id = !eligible_ids.is_empty()
                 && caps.has_facet(&id_search_facet)
                 && !matches!(resolved_caps.id_dispatch_mode, IdDispatchMode::QueryOnly);
-            let can_dispatch_text =
-                !query.trim().is_empty() && resolved_caps.text_dispatch_mode.can_dispatch();
+            let can_dispatch_text = can_dispatch_text_query(&query, &resolved_caps, raw_text);
             if !is_rss_request && !can_dispatch_id && !can_dispatch_text {
                 record_indexer_skip(
                     mode,
@@ -5047,7 +5247,9 @@ impl IndexerClient for MultiIndexerSearchClient {
                 );
                 indexer_outcomes.push(IndexerQueryOutcome {
                     indexer_id: config.id.clone(),
-                    outcome: IndexerSearchOutcome::Unsupported,
+                    outcome: IndexerSearchOutcome::Unsupported {
+                        reason: unsupported_reason(&resolved_caps, raw_text),
+                    },
                 });
                 continue;
             }
@@ -5495,7 +5697,15 @@ impl IndexerClient for MultiIndexerSearchClient {
                 .anime
                 .as_ref()
                 .map(|anime| anime.canonical_title.as_str());
-            for strategy_query in &queries {
+            for strategy_query in queries.iter().filter(|_| raw_text) {
+                strategies.extend(raw_text_strategy(
+                    strategy_query,
+                    &text_facet,
+                    &caps,
+                    resolved_caps.text_dispatch_mode,
+                ));
+            }
+            for strategy_query in queries.iter().filter(|_| !raw_text) {
                 strategies.extend(build_strategies(&StrategyParams {
                     query: strategy_query,
                     query_facet: &facet,
@@ -5718,6 +5928,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                         category: category_for_indexer.clone(),
                         per_indexer_categories: rss_category_request.clone(),
                         prowlarr_nab_proxy,
+                        raw_text,
                         mode,
                         operation,
                         year,
@@ -6074,6 +6285,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                             category: category_for_indexer,
                             per_indexer_categories: rss_category_request,
                             prowlarr_nab_proxy,
+                            raw_text,
                             mode,
                             operation,
                             year,
@@ -6690,12 +6902,13 @@ impl IndexerClient for MultiIndexerSearchClient {
                     Some(scryer_application::parse_release_metadata(&result.title));
             }
         }
-        // An unsupported indexer was never asked, so it cannot make the
-        // response partial.
-        let completion = if indexer_outcomes
-            .iter()
-            .all(|outcome| outcome.outcome.coverage_eligible() || outcome.outcome.is_unsupported())
-        {
+        // An unsupported or backed-off indexer was never asked, so it cannot
+        // make the response partial.
+        let completion = if indexer_outcomes.iter().all(|outcome| {
+            outcome.outcome.coverage_eligible()
+                || outcome.outcome.is_unsupported()
+                || matches!(outcome.outcome, IndexerSearchOutcome::BackedOff { .. })
+        }) {
             IndexerSearchCompletion::Complete
         } else {
             IndexerSearchCompletion::Partial {
@@ -6714,20 +6927,6 @@ impl IndexerClient for MultiIndexerSearchClient {
             grab_max: None,
             indexer_outcomes,
         })
-    }
-
-    async fn prune_search_learning(&self, indexer_id: &str) -> AppResult<()> {
-        self.search_learning.prune_indexer(indexer_id).await
-    }
-
-    async fn finalize_search_session(
-        &self,
-        search_session_id: &str,
-        admissible_fingerprints: &[String],
-    ) -> AppResult<()> {
-        self.search_learning
-            .finalize_search_session(search_session_id, admissible_fingerprints)
-            .await
     }
 }
 
@@ -6951,6 +7150,56 @@ fn build_strategies(p: &StrategyParams<'_>) -> Vec<SearchStrategy> {
     }
 
     strategies
+}
+
+/// The single strategy an operator's raw text search sends: the query as
+/// typed, with no ids, no facet on the wire and no structured coordinates
+/// read out of the text. `text_facet` is only the facet the indexer's text
+/// capability was resolved against.
+fn raw_text_strategy(
+    query: &str,
+    text_facet: &str,
+    caps: &IndexerProviderCapabilities,
+    text_dispatch_mode: TextDispatchMode,
+) -> Option<SearchStrategy> {
+    (text_dispatch_mode.can_dispatch() && caps.query_param.is_some() && !query.trim().is_empty())
+        .then(|| SearchStrategy {
+            request_query: query.to_string(),
+            request_facet: text_facet.to_string(),
+            ids: HashMap::new(),
+            season: None,
+            episode: None,
+            absolute_episode: None,
+            generic_query_only: text_dispatch_mode.is_generic_only(),
+            omit_request_facet: true,
+            label: "freetext".into(),
+        })
+}
+
+/// Whether this pass can send the indexer a text query. A raw text search
+/// also needs a query parameter, since it sends nothing else.
+fn can_dispatch_text_query(
+    query: &str,
+    resolved: &ResolvedSearchCapabilities,
+    raw_text: bool,
+) -> bool {
+    !query.trim().is_empty()
+        && resolved.text_dispatch_mode.can_dispatch()
+        && (!raw_text || resolved.caps.query_param.is_some())
+}
+
+/// Why an indexer this pass cannot dispatch to is unsupported.
+fn unsupported_reason(
+    resolved: &ResolvedSearchCapabilities,
+    raw_text: bool,
+) -> IndexerUnsupportedReason {
+    if resolved.caps_source == "query_only_fallback" {
+        IndexerUnsupportedReason::CapabilitiesUnknown
+    } else if raw_text || resolved.caps.query_param.is_none() {
+        IndexerUnsupportedReason::NoTextSearch
+    } else {
+        IndexerUnsupportedReason::NoSearchForFacet
+    }
 }
 
 /// Whether a failed strategy says the endpoint does not implement the newznab
@@ -7708,6 +7957,7 @@ mod tests {
             category: Some("movie".to_string()),
             per_indexer_categories: Some(vec!["2040".to_string()]),
             prowlarr_nab_proxy,
+            raw_text: false,
             mode: SearchMode::Auto,
             operation: IndexerErrorOperation::AutomaticSearch,
             year: None,
@@ -9264,6 +9514,7 @@ mod tests {
                 category: None,
                 per_indexer_categories: None,
                 prowlarr_nab_proxy: false,
+                raw_text: false,
                 mode: SearchMode::Auto,
                 operation: IndexerErrorOperation::AutomaticSearch,
                 year: None,
@@ -9295,6 +9546,7 @@ mod tests {
             category: None,
             per_indexer_categories: None,
             prowlarr_nab_proxy: false,
+            raw_text: false,
             mode: SearchMode::Interactive,
             operation: IndexerErrorOperation::InteractiveSearch,
             year,
@@ -10243,7 +10495,7 @@ mod tests {
         let unsupported = response
             .indexer_outcomes
             .iter()
-            .filter(|outcome| outcome.outcome == IndexerSearchOutcome::Unsupported)
+            .filter(|outcome| outcome.outcome.is_unsupported())
             .map(|outcome| outcome.indexer_id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(unsupported, ["idx-ineligible"]);
@@ -10307,7 +10559,9 @@ mod tests {
             response.indexer_outcomes,
             vec![IndexerQueryOutcome {
                 indexer_id: "idx-anime-only".to_string(),
-                outcome: IndexerSearchOutcome::Unsupported,
+                outcome: IndexerSearchOutcome::Unsupported {
+                    reason: IndexerUnsupportedReason::NoSearchForFacet,
+                },
             }]
         );
         assert!(response.completion.is_complete());
@@ -13430,6 +13684,7 @@ mod tests {
             category: None,
             per_indexer_categories: None,
             prowlarr_nab_proxy: false,
+            raw_text: false,
             mode: SearchMode::Auto,
             operation: IndexerErrorOperation::AutomaticSearch,
             year: None,
@@ -13997,6 +14252,255 @@ mod tests {
             .await
             .expect("pals search should succeed");
         assert!(pals.results.is_empty());
+    }
+
+    fn raw_search_client(
+        config: IndexerConfig,
+        caps: IndexerProviderCapabilities,
+        titles: &'static [&'static str],
+    ) -> (
+        MultiIndexerSearchClient,
+        StdArc<StdMutex<Vec<RecordedCall>>>,
+    ) {
+        let calls = StdArc::new(StdMutex::new(Vec::new()));
+        let client = Arc::new(ScriptedIndexerClient {
+            calls: calls.clone(),
+            responder: StdArc::new(move |_| response_with_titles(titles)),
+        });
+        let multi = MultiIndexerSearchClient::new(
+            Arc::new(MockIndexerConfigRepository {
+                configs: vec![config],
+            }),
+            Arc::new(MockIndexerStatsTracker),
+            Arc::new(ScriptedIndexerPluginProvider { client, caps }),
+        );
+        (multi, calls)
+    }
+
+    async fn run_raw_search(
+        multi: &MultiIndexerSearchClient,
+        query: &str,
+        newznab_categories: Option<Vec<String>>,
+    ) -> IndexerSearchResponse {
+        IndexerClient::search_raw_text(
+            multi,
+            RawTextSearchRequest {
+                query: query.to_string(),
+                newznab_categories,
+                indexer_routing: None,
+            },
+            CancellationToken::new(),
+        )
+        .await
+        .expect("raw search should succeed")
+    }
+
+    fn prowlarr_child_config() -> IndexerConfig {
+        let mut config = mock_indexer_config();
+        config.provider_type = "newznab".into();
+        config.managed_parent_config_id = Some("parent".into());
+        config.managed_metadata_json = Some(managed_metadata_with_caps(Some(
+            prowlarr_caps_snapshot(&["q", "imdbid"], &["q", "season", "ep", "tvdbid"]),
+        )));
+        config
+    }
+
+    fn direct_nab_config() -> IndexerConfig {
+        let mut config = mock_indexer_config();
+        config.provider_type = "newznab".into();
+        config
+    }
+
+    #[tokio::test]
+    async fn raw_search_sends_no_categories_unless_the_operator_picked_some() {
+        for config in [prowlarr_child_config(), direct_nab_config()] {
+            let label = if config.managed_parent_config_id.is_some() {
+                "prowlarr child"
+            } else {
+                "direct nab"
+            };
+
+            let (multi, calls) = raw_search_client(
+                config.clone(),
+                movie_caps(),
+                &["Sample.Movie.2021.1080p.WEB-DL-GROUP"],
+            );
+            let response = run_raw_search(&multi, "Sample Movie 2021", None).await;
+            assert_eq!(response.results.len(), 1, "{label}");
+            let recorded = calls.lock().expect("calls").clone();
+            assert_eq!(recorded.len(), 1, "{label}");
+            assert_eq!(recorded[0].query, "Sample Movie 2021", "{label}");
+            assert!(recorded[0].categories.is_empty(), "{label}: {recorded:?}");
+            assert!(recorded[0].ids.is_empty(), "{label}");
+            assert_eq!(recorded[0].season, None, "{label}");
+            assert_eq!(recorded[0].episode, None, "{label}");
+
+            let (multi, calls) = raw_search_client(
+                config,
+                movie_caps(),
+                &["Sample.Movie.2021.1080p.WEB-DL-GROUP"],
+            );
+            run_raw_search(
+                &multi,
+                "Sample Movie 2021",
+                Some(vec!["5030".to_string(), "7020".to_string()]),
+            )
+            .await;
+            let recorded = calls.lock().expect("calls").clone();
+            assert_eq!(recorded.len(), 1, "{label}");
+            assert_eq!(
+                recorded[0].categories,
+                vec!["5030".to_string(), "7020".to_string()],
+                "{label}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_search_dispatches_to_series_only_and_anime_only_text_plugins() {
+        for (label, caps) in [("series", series_caps()), ("anime", anime_caps())] {
+            let (multi, calls) = raw_search_client(
+                mock_indexer_config(),
+                caps,
+                &["Example.Show.S01E05.1080p.WEB-DL-GROUP"],
+            );
+            let response = run_raw_search(&multi, "Example Show", None).await;
+            let recorded = calls.lock().expect("calls").clone();
+            assert_eq!(recorded.len(), 1, "{label}-only plugin should be searched");
+            assert_eq!(recorded[0].query, "Example Show", "{label}");
+            assert_eq!(response.results.len(), 1, "{label}");
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_search_keeps_results_whose_titles_differ_from_the_query() {
+        let titles: &'static [&'static str] = &[
+            "Harbor.Lights.2019.1080p.WEB-DL-GROUP",
+            "Unrelated.Program.S02E03.720p.HDTV-GROUP",
+        ];
+
+        let (multi, _calls) = raw_search_client(mock_indexer_config(), series_caps(), titles);
+        let raw = run_raw_search(&multi, "harbor", None).await;
+        let mut raw_titles: Vec<_> = raw.results.iter().map(|r| r.title.clone()).collect();
+        raw_titles.sort();
+        assert_eq!(
+            raw_titles,
+            vec![
+                "Harbor.Lights.2019.1080p.WEB-DL-GROUP".to_string(),
+                "Unrelated.Program.S02E03.720p.HDTV-GROUP".to_string(),
+            ]
+        );
+
+        let (multi, _calls) = raw_search_client(mock_indexer_config(), series_caps(), titles);
+        let faceted = multi
+            .search(
+                "Harbor Lights".into(),
+                HashMap::new(),
+                Some("series".into()),
+                Some("series".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("faceted search should succeed");
+        assert!(
+            faceted
+                .results
+                .iter()
+                .all(|result| result.title != "Unrelated.Program.S02E03.720p.HDTV-GROUP"),
+            "faceted searches keep the title guard"
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_search_reports_an_indexer_without_text_search_as_unsupported() {
+        let (multi, calls) = raw_search_client(mock_indexer_config(), rss_only_caps(), &[]);
+        let response = run_raw_search(&multi, "Example Show", None).await;
+
+        assert!(calls.lock().expect("calls").is_empty());
+        assert_eq!(
+            response.indexer_outcomes,
+            vec![IndexerQueryOutcome {
+                indexer_id: "idx-1".to_string(),
+                outcome: IndexerSearchOutcome::Unsupported {
+                    reason: IndexerUnsupportedReason::NoTextSearch,
+                },
+            }]
+        );
+        assert!(response.completion.is_complete());
+    }
+
+    #[tokio::test]
+    async fn raw_search_reports_a_proxied_child_without_caps_as_capabilities_unknown() {
+        let mut config = mock_indexer_config();
+        config.provider_type = "newznab".into();
+        config.managed_parent_config_id = Some("parent".into());
+        config.managed_metadata_json = Some(managed_metadata_with_caps(None));
+        let (multi, calls) = raw_search_client(config, rss_only_caps(), &[]);
+        let response = run_raw_search(&multi, "Example Show", None).await;
+
+        assert!(calls.lock().expect("calls").is_empty());
+        assert_eq!(
+            response.indexer_outcomes,
+            vec![IndexerQueryOutcome {
+                indexer_id: "idx-1".to_string(),
+                outcome: IndexerSearchOutcome::Unsupported {
+                    reason: IndexerUnsupportedReason::CapabilitiesUnknown,
+                },
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn raw_search_reports_a_backed_off_indexer_with_its_backoff_end() {
+        let (multi, calls) = raw_search_client(
+            mock_indexer_config(),
+            movie_caps(),
+            &["Sample.Movie.2021.1080p.WEB-DL-GROUP"],
+        );
+        let backoff = multi
+            .backoff_tracker
+            .record_failure("idx-1", "Mock Indexer", None)
+            .await;
+
+        let response = run_raw_search(&multi, "Sample Movie", None).await;
+        assert!(calls.lock().expect("calls").is_empty());
+        assert_eq!(
+            response.indexer_outcomes,
+            vec![IndexerQueryOutcome {
+                indexer_id: "idx-1".to_string(),
+                outcome: IndexerSearchOutcome::BackedOff {
+                    until: Some(backoff.disabled_until),
+                },
+            }]
+        );
+        assert!(response.completion.is_complete());
+
+        // Other searches keep leaving a backed-off indexer out silently.
+        let faceted = multi
+            .search(
+                "Sample Movie".into(),
+                HashMap::new(),
+                None,
+                Some("movie".into()),
+                None,
+                None,
+                None,
+                SearchMode::Interactive,
+                None,
+                None,
+                None,
+                vec![],
+            )
+            .await
+            .expect("faceted search should succeed");
+        assert!(faceted.indexer_outcomes.is_empty());
     }
 
     #[tokio::test]

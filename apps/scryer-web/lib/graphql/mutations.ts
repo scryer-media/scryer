@@ -1871,6 +1871,8 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
       resultCount
       elapsedMs
       failureReason
+      skipReason
+      skippedUntil
     }
     startedAt
     completedAt

@@ -2579,8 +2579,29 @@ pub enum IndexerSearchOutcome {
     /// sent. Asking again gives the same answer until the indexer's config,
     /// caps, or plugin changes, so convergence records it under a fingerprint
     /// that includes the provider's declared capabilities.
-    Unsupported,
+    Unsupported {
+        reason: IndexerUnsupportedReason,
+    },
+    /// The indexer was left out because it is in an operational backoff after
+    /// recent failures. Nothing was sent. Only a raw text search reports it,
+    /// so the operator can see why an indexer stayed silent.
+    BackedOff {
+        until: Option<chrono::DateTime<chrono::Utc>>,
+    },
     Errored,
+}
+
+/// Why an indexer cannot answer a search at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum IndexerUnsupportedReason {
+    /// The indexer takes no text query, so a raw text search cannot reach it.
+    NoTextSearch,
+    /// The indexer has neither an id it can search the facet by nor a text
+    /// query for it.
+    NoSearchForFacet,
+    /// The indexer's capabilities are not known yet, and what is known offers
+    /// no way to search.
+    CapabilitiesUnknown,
 }
 
 impl IndexerSearchOutcome {
@@ -2589,7 +2610,7 @@ impl IndexerSearchOutcome {
     }
 
     pub fn is_unsupported(&self) -> bool {
-        matches!(self, Self::Unsupported)
+        matches!(self, Self::Unsupported { .. })
     }
 }
 
@@ -2612,6 +2633,18 @@ pub struct IndexerSearchResponse {
     /// (empty or not), were skipped/deferred, or errored. Empty for synthetic or
     /// no-eligible-indexer responses.
     pub indexer_outcomes: Vec<IndexerQueryOutcome>,
+}
+
+/// An operator's raw text search: the query exactly as typed, with no media
+/// facet, no ids and no structured coordinates. It asks every routed indexer
+/// that takes a text query at all, sends newznab categories only when the
+/// operator picked them, and leaves the results unfiltered by title.
+#[derive(Clone, Debug, Default)]
+pub struct RawTextSearchRequest {
+    pub query: String,
+    /// The operator's own category selection; `None` sends no categories.
+    pub newznab_categories: Option<Vec<String>>,
+    pub indexer_routing: Option<crate::IndexerRoutingPlan>,
 }
 
 /// One complete effective search strategy submitted to a plan-capable indexer.

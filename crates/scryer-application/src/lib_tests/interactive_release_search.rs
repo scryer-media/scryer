@@ -28,6 +28,8 @@ struct RecordedSearchCall {
 struct ScriptedIndexerClient {
     calls: Arc<Mutex<Vec<RecordedSearchCall>>>,
     releases: Arc<Mutex<HashMap<String, Vec<IndexerSearchResult>>>>,
+    /// Indexers that report this outcome instead of answering.
+    outcomes: Arc<Mutex<HashMap<String, crate::IndexerSearchOutcome>>>,
 }
 
 impl ScriptedIndexerClient {
@@ -36,6 +38,14 @@ impl ScriptedIndexerClient {
             .lock()
             .await
             .insert(indexer_id.to_string(), releases);
+        self
+    }
+
+    async fn with_outcome(self, indexer_id: &str, outcome: crate::IndexerSearchOutcome) -> Self {
+        self.outcomes
+            .lock()
+            .await
+            .insert(indexer_id.to_string(), outcome);
         self
     }
 
@@ -85,6 +95,20 @@ impl IndexerClient for ScriptedIndexerClient {
         let Some(indexer_id) = enabled_indexers.first().cloned() else {
             return Err(AppError::Repository("no indexer routed".to_string()));
         };
+        if let Some(outcome) = self.outcomes.lock().await.get(&indexer_id).copied() {
+            return Ok(IndexerSearchResponse {
+                results: Vec::new(),
+                completion: crate::IndexerSearchCompletion::Complete,
+                api_current: None,
+                api_max: None,
+                grab_current: None,
+                grab_max: None,
+                indexer_outcomes: vec![crate::IndexerQueryOutcome {
+                    indexer_id,
+                    outcome,
+                }],
+            });
+        }
         let results = self
             .releases
             .lock()
@@ -261,6 +285,228 @@ async fn a_raw_kind_query_sends_a_text_search_with_no_facet_and_no_categories() 
     assert_eq!(calls[0].facet, None, "raw kind must not send a facet");
     assert_eq!(calls[0].newznab_categories, None);
     assert_eq!(calls[0].query, "some odd pack", "query is trimmed");
+}
+
+#[tokio::test]
+async fn a_raw_query_reports_indexers_that_were_never_asked_as_skipped_with_a_reason() {
+    use crate::{IndexerSearchOutcome, IndexerUnsupportedReason, InteractiveIndexerSkipReason};
+
+    let backoff_until = Utc::now() + chrono::Duration::minutes(30);
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-answers",
+            vec![nzb_release("Example.Show.S01E05.1080p.WEB-DL-GROUP", "g1")],
+        )
+        .await
+        .with_outcome(
+            "idx-no-text",
+            IndexerSearchOutcome::Unsupported {
+                reason: IndexerUnsupportedReason::NoTextSearch,
+            },
+        )
+        .await
+        .with_outcome(
+            "idx-unknown",
+            IndexerSearchOutcome::Unsupported {
+                reason: IndexerUnsupportedReason::CapabilitiesUnknown,
+            },
+        )
+        .await
+        .with_outcome(
+            "idx-backed-off",
+            IndexerSearchOutcome::BackedOff {
+                until: Some(backoff_until),
+            },
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![
+            synthetic_direct_nab_indexer_config("idx-answers", "newznab"),
+            synthetic_direct_nab_indexer_config("idx-no-text", "newznab"),
+            synthetic_direct_nab_indexer_config("idx-unknown", "newznab"),
+            synthetic_direct_nab_indexer_config("idx-backed-off", "newznab"),
+        ],
+    );
+
+    let start = app
+        .start_interactive_release_search(
+            &user,
+            query_request("example show", InteractiveSearchKind::Raw),
+        )
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+
+    let answered = indexer_view(&done, "idx-answers");
+    assert_eq!(
+        answered.status,
+        InteractiveReleaseSearchIndexerStatus::Completed
+    );
+    assert_eq!(answered.skip_reason, None);
+
+    for (indexer_id, reason, until) in [
+        (
+            "idx-no-text",
+            InteractiveIndexerSkipReason::NoTextSearch,
+            None,
+        ),
+        (
+            "idx-unknown",
+            InteractiveIndexerSkipReason::CapabilitiesUnknown,
+            None,
+        ),
+        (
+            "idx-backed-off",
+            InteractiveIndexerSkipReason::BackedOff,
+            Some(backoff_until),
+        ),
+    ] {
+        let view = indexer_view(&done, indexer_id);
+        assert_eq!(
+            view.status,
+            InteractiveReleaseSearchIndexerStatus::Skipped,
+            "{indexer_id}: {view:?}"
+        );
+        assert_eq!(view.skip_reason, Some(reason), "{indexer_id}");
+        assert_eq!(view.skipped_until, until, "{indexer_id}");
+        assert_eq!(view.result_count, 0, "{indexer_id}");
+        assert!(
+            view.failure_reason
+                .as_deref()
+                .is_some_and(|text| !text.is_empty()),
+            "{indexer_id} carries a plain-text reason: {view:?}"
+        );
+        assert!(!view.rate_limited, "{indexer_id}");
+    }
+}
+
+#[tokio::test]
+async fn a_raw_query_keeps_distinct_look_alike_releases_and_drops_exact_duplicates() {
+    let mut idx_a = (1..=6)
+        .map(|n| nzb_release("Sample.Movie.2021.1080p.WEB-DL-GROUP", &format!("a{n}")))
+        .collect::<Vec<_>>();
+    idx_a.push(nzb_release("Sample.Movie.2021.1080p.WEB-DL-GROUP", "a1"));
+    let client = ScriptedIndexerClient::default()
+        .with_releases("idx-a", idx_a)
+        .await
+        .with_releases(
+            "idx-b",
+            vec![nzb_release("Sample.Movie.2021.2160p.WEB-DL-GROUP", "b1")],
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![
+            synthetic_direct_nab_indexer_config("idx-a", "newznab"),
+            synthetic_direct_nab_indexer_config("idx-b", "newznab"),
+        ],
+    );
+
+    let start = app
+        .start_interactive_release_search(
+            &user,
+            query_request("sample movie", InteractiveSearchKind::Raw),
+        )
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+
+    assert_eq!(done.results.len(), 7, "{:?}", done.results);
+    let mut guids = done
+        .results
+        .iter()
+        .filter_map(|result| result.guid.clone())
+        .collect::<Vec<_>>();
+    guids.sort();
+    assert_eq!(guids, ["a1", "a2", "a3", "a4", "a5", "a6", "b1"]);
+    assert_eq!(indexer_view(&done, "idx-a").result_count, 6);
+    assert_eq!(indexer_view(&done, "idx-b").result_count, 1);
+}
+
+#[tokio::test]
+async fn a_raw_query_lists_the_newest_releases_first_across_indexers() {
+    let dated = |title: &str, guid: &str, hours_ago: i64| {
+        let mut release = nzb_release(title, guid);
+        release.published_at = Some((Utc::now() - chrono::Duration::hours(hours_ago)).to_rfc3339());
+        release
+    };
+    let client = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-a",
+            vec![
+                dated("Example.Show.S01E01.1080p.WEB-DL-GROUP", "a-old", 50),
+                dated("Example.Show.S01E02.1080p.WEB-DL-GROUP", "a-newest", 1),
+                dated("Example.Show.S01E03.1080p.WEB-DL-GROUP", "a-third", 5),
+            ],
+        )
+        .await
+        .with_releases(
+            "idx-b",
+            vec![
+                dated("Example.Show.S01E04.1080p.WEB-DL-GROUP", "b-second", 3),
+                dated("Example.Show.S01E05.1080p.WEB-DL-GROUP", "b-old", 70),
+            ],
+        )
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![
+            synthetic_direct_nab_indexer_config("idx-a", "newznab"),
+            synthetic_direct_nab_indexer_config("idx-b", "newznab"),
+        ],
+    );
+
+    let mut request = query_request("example show", InteractiveSearchKind::Raw);
+    request.limit = Some(3);
+    let start = app
+        .start_interactive_release_search(&user, request)
+        .await
+        .expect("start");
+    let done = await_completion(&app, &user, &start.id).await;
+
+    assert_eq!(done.limit, Some(3));
+    let newest = done
+        .results
+        .iter()
+        .take(3)
+        .filter_map(|result| result.guid.as_deref())
+        .collect::<Vec<_>>();
+    assert_eq!(newest, ["a-newest", "b-second", "a-third"]);
+}
+
+#[tokio::test]
+async fn a_raw_query_without_a_limit_lists_up_to_two_hundred_results() {
+    let client = ScriptedIndexerClient::default();
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+
+    let start = app
+        .start_interactive_release_search(
+            &user,
+            query_request("example show", InteractiveSearchKind::Raw),
+        )
+        .await
+        .expect("start");
+    assert_eq!(start.limit, Some(200));
+
+    let faceted = app
+        .start_interactive_release_search(
+            &user,
+            query_request("example show", InteractiveSearchKind::Series),
+        )
+        .await
+        .expect("start");
+    assert_eq!(
+        faceted.limit, None,
+        "faceted searches keep their own default"
+    );
 }
 
 // ── Both subjects: indexer restriction ──────────────────────────────────────

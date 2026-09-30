@@ -558,6 +558,26 @@ pub fn from_interactive_release_search_snapshot(
                 .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
             rate_limited: indexer.rate_limited,
+            skip_reason: indexer.skip_reason.map(|reason| {
+                use scryer_application::InteractiveIndexerSkipReason as Reason;
+                match reason {
+                    Reason::IndexerDisabled => {
+                        InteractiveReleaseSearchSkipReasonValue::IndexerDisabled
+                    }
+                    Reason::TemporarilyDisabled => {
+                        InteractiveReleaseSearchSkipReasonValue::TemporarilyDisabled
+                    }
+                    Reason::BackedOff => InteractiveReleaseSearchSkipReasonValue::BackedOff,
+                    Reason::NoTextSearch => InteractiveReleaseSearchSkipReasonValue::NoTextSearch,
+                    Reason::NoSearchForFacet => {
+                        InteractiveReleaseSearchSkipReasonValue::NoSearchForFacet
+                    }
+                    Reason::CapabilitiesUnknown => {
+                        InteractiveReleaseSearchSkipReasonValue::CapabilitiesUnknown
+                    }
+                }
+            }),
+            skipped_until: indexer.skipped_until,
         })
         .collect();
     // Parity with the one-shot `searchReleases` resolver's limit handling.
