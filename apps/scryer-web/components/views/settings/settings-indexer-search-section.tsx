@@ -563,6 +563,37 @@ function QueryCard({
   );
 }
 
+/** Hover text for an indexer chip: the localized skip reason, else the raw failure text. */
+function indexerChipTitle(
+  entry: InteractiveSearchIndexerProgress,
+  t: ReturnType<typeof useTranslate>,
+  dateTimeFormat: ReturnType<typeof useUiDateTimeFormat>,
+): string | undefined {
+  const until = entry.skippedUntil
+    ? formatUiDateTime(entry.skippedUntil, dateTimeFormat)
+    : null;
+  switch (entry.skipReason) {
+    case "INDEXER_DISABLED":
+      return t("indexerSearch.skipReason.indexerDisabled");
+    case "TEMPORARILY_DISABLED":
+      return until
+        ? t("indexerSearch.skipReason.temporarilyDisabledUntil", { time: until })
+        : t("indexerSearch.skipReason.temporarilyDisabled");
+    case "BACKED_OFF":
+      return until
+        ? t("indexerSearch.skipReason.backedOffUntil", { time: until })
+        : t("indexerSearch.skipReason.backedOff");
+    case "NO_TEXT_SEARCH":
+      return t("indexerSearch.skipReason.noTextSearch");
+    case "NO_SEARCH_FOR_FACET":
+      return t("indexerSearch.skipReason.noSearchForFacet");
+    case "CAPABILITIES_UNKNOWN":
+      return t("indexerSearch.skipReason.capabilitiesUnknown");
+    default:
+      return entry.failureReason ?? undefined;
+  }
+}
+
 function HealthLine({
   indexers,
   matchedCount,
@@ -580,6 +611,7 @@ function HealthLine({
   | "searching"
 >) {
   const t = useTranslate();
+  const dateTimeFormat = useUiDateTimeFormat();
   const summary = summarizeIndexerHealth(indexers);
   const hasFailures = summary.failedIndexerIds.length > 0;
 
@@ -633,7 +665,7 @@ function HealthLine({
               key={entry.indexerId}
               id={selectorId("indexer-search-health", entry.name)}
               type="button"
-              title={entry.failureReason ?? undefined}
+              title={indexerChipTitle(entry, t, dateTimeFormat)}
               aria-pressed={active}
               onClick={() => onToggleFacet(facetKey)}
               className={cn(

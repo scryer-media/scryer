@@ -1330,6 +1330,8 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
       elapsedMs
       failureReason
       rateLimited
+      skipReason
+      skippedUntil
     }
     startedAt
     completedAt

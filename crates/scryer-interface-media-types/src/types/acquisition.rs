@@ -1708,6 +1708,24 @@ pub enum InteractiveReleaseSearchIndexerStatusValue {
     Skipped,
 }
 
+/// Why an interactive release search did not ask an indexer.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum InteractiveReleaseSearchSkipReasonValue {
+    /// The indexer is switched off.
+    IndexerDisabled,
+    /// The indexer's configuration disables it for a while.
+    TemporarilyDisabled,
+    /// The indexer is in a backoff after recent failures.
+    BackedOff,
+    /// The indexer takes no text query.
+    NoTextSearch,
+    /// The indexer cannot search this kind of media.
+    NoSearchForFacet,
+    /// The indexer's capabilities are not known yet.
+    CapabilitiesUnknown,
+}
+
 #[derive(SimpleObject, Clone)]
 /// Per-indexer progress and result count for an interactive release search.
 pub struct InteractiveReleaseSearchIndexerPayload {
@@ -1719,7 +1737,9 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     pub priority: i32,
     /// Current indexer lifecycle state.
     pub status: InteractiveReleaseSearchIndexerStatusValue,
-    /// The indexer's own result count (before cross-indexer dedup).
+    /// The indexer's result count. A title search counts its own batch, before
+    /// cross-indexer dedup; a query search counts what it contributed to the
+    /// listing, after exact duplicates are removed.
     pub result_count: i32,
     /// Wall time of this indexer's own call in milliseconds, or null before it answered.
     pub elapsed_ms: Option<i32>,
@@ -1728,6 +1748,10 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     /// True when the indexer asked Scryer to slow down rather than failing.
     /// Searching resumes on its own, so this reads as a cooldown, not an error.
     pub rate_limited: bool,
+    /// Why a skipped indexer was not asked, or null when it was not skipped.
+    pub skip_reason: Option<InteractiveReleaseSearchSkipReasonValue>,
+    /// UTC time a skip that lifts on its own ends, when known.
+    pub skipped_until: Option<DateTime<Utc>>,
 }
 
 #[derive(SimpleObject, Clone)]

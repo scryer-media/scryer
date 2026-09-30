@@ -552,7 +552,9 @@ pub(crate) fn incomplete_indexer_reason(outcome: IndexerSearchOutcome) -> Option
             ("indexer search was skipped", retry_after)
         }
         // Never asked: an indexer that cannot serve the facet is not a failure.
-        IndexerSearchOutcome::Unsupported => return None,
+        IndexerSearchOutcome::Unsupported { .. } | IndexerSearchOutcome::BackedOff { .. } => {
+            return None;
+        }
         IndexerSearchOutcome::Errored => ("indexer search failed", None),
     };
     Some(match retry_after {
@@ -2981,7 +2983,10 @@ mod structured_dispatch_query_tests {
             },
             IndexerSearchOutcome::Deferred { retry_after: None },
             IndexerSearchOutcome::Skipped { retry_after: None },
-            IndexerSearchOutcome::Unsupported,
+            IndexerSearchOutcome::Unsupported {
+                reason: crate::IndexerUnsupportedReason::NoSearchForFacet,
+            },
+            IndexerSearchOutcome::BackedOff { until: None },
             IndexerSearchOutcome::Errored,
         ];
 
@@ -3006,16 +3011,36 @@ mod structured_dispatch_query_tests {
         record_query_coverage_outcomes(
             &mut aggregate,
             &[
-                outcome("unsupported", IndexerSearchOutcome::Unsupported),
-                outcome("mixed", IndexerSearchOutcome::Unsupported),
-                outcome("once", IndexerSearchOutcome::Unsupported),
+                outcome(
+                    "unsupported",
+                    IndexerSearchOutcome::Unsupported {
+                        reason: crate::IndexerUnsupportedReason::NoSearchForFacet,
+                    },
+                ),
+                outcome(
+                    "mixed",
+                    IndexerSearchOutcome::Unsupported {
+                        reason: crate::IndexerUnsupportedReason::NoSearchForFacet,
+                    },
+                ),
+                outcome(
+                    "once",
+                    IndexerSearchOutcome::Unsupported {
+                        reason: crate::IndexerUnsupportedReason::NoSearchForFacet,
+                    },
+                ),
                 outcome("complete", IndexerSearchOutcome::Complete { empty: true }),
             ],
         );
         record_query_coverage_outcomes(
             &mut aggregate,
             &[
-                outcome("unsupported", IndexerSearchOutcome::Unsupported),
+                outcome(
+                    "unsupported",
+                    IndexerSearchOutcome::Unsupported {
+                        reason: crate::IndexerUnsupportedReason::NoSearchForFacet,
+                    },
+                ),
                 outcome(
                     "mixed",
                     IndexerSearchOutcome::Deferred { retry_after: None },

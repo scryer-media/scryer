@@ -5217,6 +5217,16 @@ const en: LocaleDictionary = {
   "indexerSearch.health.partial": "{{count}} · partial",
   "indexerSearch.health.skipped": "skipped",
   "indexerSearch.health.retryFailed": "Retry failed",
+  "indexerSearch.skipReason.indexerDisabled": "Indexer is disabled",
+  "indexerSearch.skipReason.temporarilyDisabled": "Temporarily disabled",
+  "indexerSearch.skipReason.temporarilyDisabledUntil":
+    "Temporarily disabled until {{time}}",
+  "indexerSearch.skipReason.backedOff": "In backoff after recent failures",
+  "indexerSearch.skipReason.backedOffUntil": "In backoff until {{time}}",
+  "indexerSearch.skipReason.noTextSearch": "Does not support text search",
+  "indexerSearch.skipReason.noSearchForFacet":
+    "Does not support this kind of search",
+  "indexerSearch.skipReason.capabilitiesUnknown": "Capabilities unknown",
   "indexerSearch.refine.title": "Refine",
   "indexerSearch.refine.reset": "Reset",
   "indexerSearch.facet.protocol": "Protocol",

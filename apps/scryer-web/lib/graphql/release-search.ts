@@ -30,7 +30,19 @@ export type InteractiveSearchIndexerProgress = {
    * its own, so the row reads as a cooldown rather than an error.
    */
   rateLimited: boolean;
+  /** Why a skipped indexer was not asked; null when it was not skipped. */
+  skipReason?: InteractiveSearchSkipReason | null;
+  /** When a skip that lifts on its own ends, if known. */
+  skippedUntil?: string | null;
 };
+
+export type InteractiveSearchSkipReason =
+  | "INDEXER_DISABLED"
+  | "TEMPORARILY_DISABLED"
+  | "BACKED_OFF"
+  | "NO_TEXT_SEARCH"
+  | "NO_SEARCH_FOR_FACET"
+  | "CAPABILITIES_UNKNOWN";
 
 export type InteractiveSearchProgress = {
   /**
