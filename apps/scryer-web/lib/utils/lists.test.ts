@@ -711,12 +711,13 @@ test("list providers with a shipped logo resolve to it; the rest keep their abbr
     tvdb: "/media-sites/tvdb.svg",
     mdblist: "/rating-sources/mdblist.avif",
     plex: "/auth-providers/plex.svg",
+    simkl: "/plugin-logos/svg/simkl.svg",
   };
   for (const [providerType, src] of Object.entries(expected)) {
     assert.equal(providerLogoSrc(providerType), src, providerType);
   }
 
-  for (const providerType of ["simkl", "custom", "some-future-plugin", "", "  "]) {
+  for (const providerType of ["custom", "some-future-plugin", "", "  "]) {
     assert.equal(providerLogoSrc(providerType), null, JSON.stringify(providerType));
   }
 });

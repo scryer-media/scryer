@@ -23,6 +23,7 @@ const PLUGIN_LOGO_SVG_SLUGS = [
   "rqbit",
   "sendgrid",
   "signal",
+  "simkl",
   "slack",
   "synology",
   "telegram",
