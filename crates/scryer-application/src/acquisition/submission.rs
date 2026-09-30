@@ -313,7 +313,7 @@ impl AppUseCase {
                 &title_id,
             )
             .await?;
-        tracing::info!(
+        tracing::debug!(
             title_id = %title_id,
             download_id = ?intent.request.download_id,
             stage = "guards_acquired",
@@ -620,7 +620,7 @@ impl AppUseCase {
         let _prepared_artifact = self
             .prepare_indexer_artifact_for_submission(&mut request, Some(title_id.clone()))
             .await?;
-        tracing::info!(
+        tracing::debug!(
             title_id = %title_id,
             download_id = %download_id,
             staged_nzb = request.staged_nzb.is_some(),
@@ -658,7 +658,7 @@ impl AppUseCase {
         self.runtime
             .acquisition
             .invalidate_download_registry_observations();
-        tracing::info!(
+        tracing::debug!(
             title_id = %title_id,
             download_id = %download_id,
             stage = "intent_recorded",
@@ -670,7 +670,7 @@ impl AppUseCase {
             .download_client
             .submit_download(&request)
             .await;
-        tracing::info!(
+        tracing::debug!(
             title_id = %title_id,
             download_id = %download_id,
             accepted = grab_result.is_ok(),
@@ -813,7 +813,7 @@ impl AppUseCase {
             .await
         {
             Ok(disposition) => {
-                tracing::info!(
+                tracing::debug!(
                     title_id = %title_id,
                     download_id = %download_id,
                     stage = "acceptance_recorded",

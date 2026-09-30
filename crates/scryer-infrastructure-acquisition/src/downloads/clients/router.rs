@@ -2719,7 +2719,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             // Fail-closed: a selected client whose proxy will not resolve is a
             // routing failure, not a client to use unproxied.
             let proxy_config = self.proxy_for_download_client(&config).await?;
-            info!(
+            debug!(
                 client_id = config.id.as_str(),
                 stage = "proxy_resolved",
                 "download client submit stage"
@@ -2806,14 +2806,14 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
             };
 
-            info!(
+            debug!(
                 client_id = config.id.as_str(),
                 staged_nzb = effective_request.staged_nzb.is_some(),
                 stage = "routing_applied",
                 "download client submit stage"
             );
             let submit_result = client.submit_download(&effective_request).await;
-            info!(
+            debug!(
                 client_id = config.id.as_str(),
                 accepted = submit_result.is_ok(),
                 stage = "client_returned",
