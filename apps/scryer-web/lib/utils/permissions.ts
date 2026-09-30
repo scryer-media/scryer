@@ -286,3 +286,16 @@ function libraryPermissionMatches(
       return explicit.has(permission);
   }
 }
+
+/**
+ * Carry over grants the picker does not show. An edit made through the visible
+ * options must not revoke a permission the editor could not see.
+ */
+export function withHiddenPermissionsKept(
+  next: readonly string[],
+  current: readonly string[],
+  hidden: readonly string[],
+): string[] {
+  const kept = current.filter((value) => hidden.includes(value) && !next.includes(value));
+  return [...next, ...kept];
+}

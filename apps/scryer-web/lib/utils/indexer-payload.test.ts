@@ -6,7 +6,9 @@ import type { IndexerDraft } from "@/lib/types/indexers";
 import {
   buildIndexerSavePayload,
   indexerQueryBudgetDraftValue,
+  indexerRateLimitSecondsDraftValue,
   parseIndexerQueryBudget,
+  parseIndexerRateLimitSeconds,
 } from "./indexer-payload.ts";
 
 function draft(overrides: Partial<IndexerDraft> = {}): IndexerDraft {
@@ -17,6 +19,7 @@ function draft(overrides: Partial<IndexerDraft> = {}): IndexerDraft {
     downloadClientId: null,
     seedingProfileId: null,
     storedSecretKeys: [],
+    rateLimitSeconds: "",
     maxQueriesPerMinute: "",
     isEnabled: true,
     enableInteractiveSearch: true,
@@ -52,4 +55,33 @@ test("only whole numbers of at least one are budgets", () => {
 test("a saved budget seeds the editor and a missing one leaves it blank", () => {
   assert.equal(indexerQueryBudgetDraftValue({ maxQueriesPerMinute: 45 }), "45");
   assert.equal(indexerQueryBudgetDraftValue({ maxQueriesPerMinute: null }), "");
+});
+
+test("the save payload carries the typed request interval", () => {
+  const payload = buildIndexerSavePayload(
+    draft({ rateLimitSeconds: " 15 " }),
+    "newznab",
+    undefined,
+  );
+  assert.equal(payload.rateLimitSeconds, 15);
+});
+
+test("a blank request interval saves as zero so an update clears it", () => {
+  const payload = buildIndexerSavePayload(draft(), "newznab", undefined);
+  assert.equal(payload.rateLimitSeconds, 0);
+});
+
+test("only whole non-negative numbers are request intervals", () => {
+  assert.deepEqual(parseIndexerRateLimitSeconds(""), { valid: true, value: 0 });
+  assert.deepEqual(parseIndexerRateLimitSeconds("0"), { valid: true, value: 0 });
+  assert.deepEqual(parseIndexerRateLimitSeconds("30"), { valid: true, value: 30 });
+  for (const raw of ["-3", "2.5", "ten", "1e3"]) {
+    assert.deepEqual(parseIndexerRateLimitSeconds(raw), { valid: false }, raw);
+  }
+});
+
+test("a saved interval seeds the editor and zero or none leaves it blank", () => {
+  assert.equal(indexerRateLimitSecondsDraftValue({ rateLimitSeconds: 15 }), "15");
+  assert.equal(indexerRateLimitSecondsDraftValue({ rateLimitSeconds: 0 }), "");
+  assert.equal(indexerRateLimitSecondsDraftValue({ rateLimitSeconds: null }), "");
 });

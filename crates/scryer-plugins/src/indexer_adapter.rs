@@ -4,9 +4,9 @@ use scryer_application::{
     IndexerErrorRecorder, IndexerResponseAttributes, IndexerRoutingPlan, IndexerSearchCompletion,
     IndexerSearchIncompleteReason as HostIncompleteReason, IndexerSearchPlanCapability,
     IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerStatsTracker,
-    NullIndexerStatsTracker, ResolvedDownloadArtifact, SearchMode, extract_magnet_info_hash,
-    is_valid_magnet_uri, normalize_release_password,
+    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
+    IndexerStatsTracker, NullIndexerStatsTracker, ResolvedDownloadArtifact, SearchMode,
+    extract_magnet_info_hash, is_valid_magnet_uri, normalize_release_password,
 };
 use scryer_domain::{IndexerConfig, ProxyConfig, TaggedAlias};
 use scryer_plugin_sdk::command::{
@@ -1161,6 +1161,49 @@ fn should_try_generic_search_fallback(request: &PluginSearchRequest) -> bool {
     !request.query.trim().is_empty() && !request.ids.is_empty()
 }
 
+/// The plugin request for one host search strategy, carrying the RSS
+/// catch-up marker when the host set one.
+fn plugin_search_request_from_strategy(
+    strategy: IndexerSearchStrategyRequest,
+    mode: SearchMode,
+) -> PluginSearchRequest {
+    let context = build_search_context(
+        &strategy.query,
+        &strategy.ids,
+        strategy.facet.as_deref(),
+        mode,
+        strategy.season,
+        strategy.episode,
+        strategy.absolute_episode,
+        strategy.year,
+    );
+    PluginSearchRequest {
+        query: strategy.query,
+        ids: strategy.ids,
+        facet: strategy.facet,
+        category: strategy.category,
+        categories: strategy.newznab_categories.unwrap_or_default(),
+        limit: 1000,
+        season: strategy.season,
+        episode: strategy.episode,
+        absolute_episode: strategy.absolute_episode,
+        tagged_aliases: strategy
+            .tagged_aliases
+            .into_iter()
+            .map(tagged_alias_to_sdk)
+            .collect(),
+        context: Some(context),
+        rss_catch_up: strategy
+            .rss_catch_up
+            .map(|marker| scryer_plugin_sdk::PluginRssCatchUp {
+                last_seen_published_at: marker
+                    .last_seen_published_at
+                    .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                last_seen_identity: marker.last_seen_identity,
+            }),
+    }
+}
+
 fn generic_search_fallback_request(
     request: &PluginSearchRequest,
     mode: SearchMode,
@@ -1538,6 +1581,52 @@ async fn forward_component_strategy_event(
     .map_err(|_| AppError::canceled("indexer strategy result channel closed"))
 }
 
+impl WasmIndexerClient {
+    /// Sends one search request, retrying a legacy adapter's empty or failed
+    /// identifier search once as a plain title search.
+    async fn search_with_request(
+        &self,
+        request: PluginSearchRequest,
+        mode: SearchMode,
+        operation: IndexerErrorOperation,
+        cancel_token: CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        let legacy_adapter_fallback = self.search_plan_capability().is_none();
+        let response = match self
+            .call_search_request(&request, operation, cancel_token.child_token())
+            .await
+        {
+            Ok(response)
+                if response.response.results.is_empty()
+                    && legacy_adapter_fallback
+                    && should_try_generic_search_fallback(&request) =>
+            {
+                let fallback_request = generic_search_fallback_request(&request, mode);
+                self.call_search_request(&fallback_request, operation, cancel_token.child_token())
+                    .await?
+            }
+            Ok(response) => response,
+            Err(primary_error)
+                if legacy_adapter_fallback && should_try_generic_search_fallback(&request) =>
+            {
+                if primary_error.is_canceled() {
+                    return Err(primary_error);
+                }
+                tracing::debug!(
+                    plugin = %self.descriptor.name,
+                    error = %primary_error,
+                    "plugin primary search failed; trying generic fallback"
+                );
+                let fallback_request = generic_search_fallback_request(&request, mode);
+                self.call_search_request(&fallback_request, operation, cancel_token.child_token())
+                    .await?
+            }
+            Err(error) => return Err(error),
+        };
+        Ok(host_search_response(self, response))
+    }
+}
+
 #[async_trait]
 impl IndexerClient for WasmIndexerClient {
     async fn probe_connection(&self) -> AppResult<bool> {
@@ -1615,38 +1704,10 @@ impl IndexerClient for WasmIndexerClient {
             strategies: request
                 .strategies
                 .into_iter()
-                .map(|strategy| {
-                    let context = build_search_context(
-                        &strategy.query,
-                        &strategy.ids,
-                        strategy.facet.as_deref(),
-                        mode,
-                        strategy.season,
-                        strategy.episode,
-                        strategy.absolute_episode,
-                        strategy.year,
-                    );
-                    PluginSearchStrategyRequest {
-                        strategy_id: strategy.strategy_id,
-                        labels: strategy.labels,
-                        request: PluginSearchRequest {
-                            query: strategy.query,
-                            ids: strategy.ids,
-                            facet: strategy.facet,
-                            category: strategy.category,
-                            categories: strategy.newznab_categories.unwrap_or_default(),
-                            limit: 1000,
-                            season: strategy.season,
-                            episode: strategy.episode,
-                            absolute_episode: strategy.absolute_episode,
-                            tagged_aliases: strategy
-                                .tagged_aliases
-                                .into_iter()
-                                .map(tagged_alias_to_sdk)
-                                .collect(),
-                            context: Some(context),
-                        },
-                    }
+                .map(|mut strategy| PluginSearchStrategyRequest {
+                    strategy_id: std::mem::take(&mut strategy.strategy_id),
+                    labels: std::mem::take(&mut strategy.labels),
+                    request: plugin_search_request_from_strategy(strategy, mode),
                 })
                 .collect(),
         };
@@ -1706,41 +1767,25 @@ impl IndexerClient for WasmIndexerClient {
                 .map(tagged_alias_to_sdk)
                 .collect(),
             context: Some(context),
+            rss_catch_up: None,
         };
-
-        let legacy_adapter_fallback = self.search_plan_capability().is_none();
-        let response = match self
-            .call_search_request(&request, operation, cancel_token.child_token())
+        self.search_with_request(request, mode, operation, cancel_token)
             .await
-        {
-            Ok(response)
-                if response.response.results.is_empty()
-                    && legacy_adapter_fallback
-                    && should_try_generic_search_fallback(&request) =>
-            {
-                let fallback_request = generic_search_fallback_request(&request, mode);
-                self.call_search_request(&fallback_request, operation, cancel_token.child_token())
-                    .await?
-            }
-            Ok(response) => response,
-            Err(primary_error)
-                if legacy_adapter_fallback && should_try_generic_search_fallback(&request) =>
-            {
-                if primary_error.is_canceled() {
-                    return Err(primary_error);
-                }
-                tracing::debug!(
-                    plugin = %self.descriptor.name,
-                    error = %primary_error,
-                    "plugin primary search failed; trying generic fallback"
-                );
-                let fallback_request = generic_search_fallback_request(&request, mode);
-                self.call_search_request(&fallback_request, operation, cancel_token.child_token())
-                    .await?
-            }
-            Err(error) => return Err(error),
-        };
-        Ok(host_search_response(self, response))
+    }
+
+    async fn search_strategy(
+        &self,
+        request: IndexerSearchStrategyRequest,
+        mode: SearchMode,
+        operation: IndexerErrorOperation,
+        cancel_token: CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        if cancel_token.is_cancelled() {
+            return Err(AppError::canceled("plugin indexer search canceled"));
+        }
+        let request = plugin_search_request_from_strategy(request, mode);
+        self.search_with_request(request, mode, operation, cancel_token)
+            .await
     }
 
     async fn search_stream(
@@ -1816,6 +1861,64 @@ impl IndexerClient for WasmIndexerClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rss_strategy(
+        rss_catch_up: Option<scryer_application::IndexerRssCatchUp>,
+    ) -> IndexerSearchStrategyRequest {
+        IndexerSearchStrategyRequest {
+            strategy_id: "rss-strategy".to_string(),
+            labels: vec!["rss".to_string()],
+            query: String::new(),
+            ids: std::collections::HashMap::new(),
+            category: None,
+            facet: None,
+            id_search_facet: None,
+            newznab_categories: Some(vec!["2000".to_string()]),
+            season: None,
+            episode: None,
+            absolute_episode: None,
+            year: None,
+            tagged_aliases: Vec::new(),
+            rss_catch_up,
+        }
+    }
+
+    #[test]
+    fn strategy_request_carries_the_rss_marker_to_the_plugin() {
+        let marker_at = chrono::DateTime::parse_from_rfc3339("2026-09-20T10:00:00Z")
+            .expect("fixture time should parse")
+            .with_timezone(&chrono::Utc);
+        let request = plugin_search_request_from_strategy(
+            rss_strategy(Some(scryer_application::IndexerRssCatchUp {
+                last_seen_published_at: marker_at,
+                last_seen_identity: Some("marker-guid".to_string()),
+            })),
+            SearchMode::Auto,
+        );
+
+        assert_eq!(
+            request.rss_catch_up,
+            Some(scryer_plugin_sdk::PluginRssCatchUp {
+                last_seen_published_at: "2026-09-20T10:00:00Z".to_string(),
+                last_seen_identity: Some("marker-guid".to_string()),
+            })
+        );
+        assert_eq!(request.categories, vec!["2000".to_string()]);
+        let wire = serde_json::to_value(&request).expect("request should serialize");
+        assert_eq!(
+            wire["rss_catch_up"]["last_seen_published_at"],
+            "2026-09-20T10:00:00Z"
+        );
+    }
+
+    #[test]
+    fn strategy_request_without_a_marker_omits_rss_catch_up() {
+        let request = plugin_search_request_from_strategy(rss_strategy(None), SearchMode::Auto);
+
+        assert_eq!(request.rss_catch_up, None);
+        let wire = serde_json::to_value(&request).expect("request should serialize");
+        assert!(wire.get("rss_catch_up").is_none());
+    }
 
     #[test]
     fn grab_magnet_payload_resolves_without_torrent_bytes() {

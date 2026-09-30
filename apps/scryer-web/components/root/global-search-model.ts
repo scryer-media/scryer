@@ -345,7 +345,8 @@ export function buildCatalogResultPresentation({
  * The add and request dialogs work from a metadata search result. A catalog
  * row already carries the same identity and the fields the add mutation sends,
  * so a title that is in one library can be offered to another without a second
- * metadata lookup. Null when the row has no metadata identity at all, since
+ * metadata lookup. A row known only by its TMDB id (a TMDB-primary series, for
+ * one) still counts. Null when the row has no metadata identity at all, since
  * nothing could be added or requested from it.
  */
 export function metadataSearchItemFromCatalogTitle(
@@ -353,9 +354,6 @@ export function metadataSearchItemFromCatalogTitle(
 ): MetadataTvdbSearchItem | null {
   const smgId = catalogTitleExternalId(title, "smg");
   const tvdbId = catalogTitleExternalId(title, "tvdb");
-  if (!smgId && !tvdbId) {
-    return null;
-  }
   // A series row's own TMDB id is the one kinded as a series (or unkinded);
   // an anime row also carries its mapped movies' ids as `tmdb:movie`.
   const tmdbId =
@@ -370,6 +368,9 @@ export function metadataSearchItemFromCatalogTitle(
           ?.value.trim() ?? null);
   const parsedSmgId = smgId ? Number(smgId) : Number.NaN;
   const parsedTmdbId = tmdbId ? Number(tmdbId) : Number.NaN;
+  if (!smgId && !tvdbId && !Number.isFinite(parsedTmdbId)) {
+    return null;
+  }
   return {
     tvdbId: tvdbId ?? "",
     smgId: Number.isFinite(parsedSmgId) ? parsedSmgId : null,

@@ -3290,6 +3290,10 @@ export const updateListProviderSettingsMutation = `mutation UpdateListProviderSe
       secret
       isSet
       value
+      options {
+        value
+        label
+      }
     }
   }
 }`;

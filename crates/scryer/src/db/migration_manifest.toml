@@ -2715,6 +2715,57 @@ file = "postgres/migrations/0264_full_admin_manage_lists.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 265
+description = "discard legacy migration monitoring snapshots"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0265_discard_legacy_monitor_snapshots.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0265_discard_legacy_monitor_snapshots.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 266
+description = "list exclusion external id kind"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0266_list_exclusion_external_id_kind.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0266_list_exclusion_external_id_kind.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 267
+description = "reopen pre air episode coverage"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0267_reopen_pre_air_episode_coverage.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0267_reopen_pre_air_episode_coverage.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

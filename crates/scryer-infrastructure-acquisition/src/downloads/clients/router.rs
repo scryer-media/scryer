@@ -2719,6 +2719,11 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             // Fail-closed: a selected client whose proxy will not resolve is a
             // routing failure, not a client to use unproxied.
             let proxy_config = self.proxy_for_download_client(&config).await?;
+            info!(
+                client_id = config.id.as_str(),
+                stage = "proxy_resolved",
+                "download client submit stage"
+            );
             let client = match Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
@@ -2801,7 +2806,20 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
             };
 
-            match client.submit_download(&effective_request).await {
+            info!(
+                client_id = config.id.as_str(),
+                staged_nzb = effective_request.staged_nzb.is_some(),
+                stage = "routing_applied",
+                "download client submit stage"
+            );
+            let submit_result = client.submit_download(&effective_request).await;
+            info!(
+                client_id = config.id.as_str(),
+                accepted = submit_result.is_ok(),
+                stage = "client_returned",
+                "download client submit stage"
+            );
+            match submit_result {
                 Ok(result) => {
                     self.delete_staged_nzb(
                         staged_nzb.as_ref().map(|lease| &lease.staged_nzb),

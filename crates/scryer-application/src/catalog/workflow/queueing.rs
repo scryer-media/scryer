@@ -655,6 +655,12 @@ impl AppUseCase {
                         source_password.clone(),
                     )
                     .await;
+                tracing::info!(
+                    title_id = %title.id,
+                    download_client_item_id = %grab.job_id,
+                    stage = "release_attempt_recorded",
+                    "grab queue stage"
+                );
                 grab
             }
             Err(error) => {
@@ -721,6 +727,12 @@ impl AppUseCase {
                 grab.client_id.as_deref(),
             )
             .await;
+        tracing::info!(
+            title_id = %title.id,
+            download_client_item_id = %grab.job_id,
+            stage = "release_facts_resolved",
+            "grab queue stage"
+        );
 
         self.append_domain_event(new_title_domain_event(
             actor,
@@ -736,6 +748,12 @@ impl AppUseCase {
             }),
         ))
         .await?;
+        tracing::info!(
+            title_id = %title.id,
+            download_client_item_id = %grab.job_id,
+            stage = "grab_event_appended",
+            "grab queue stage"
+        );
 
         Ok(QueueDownloadOutcome::Queued(QueuedDownloadResult {
             job_id: grab.job_id,

@@ -13,6 +13,8 @@ export type LocaleCode =
   | "por"
   | "kor"
   | "zho"
+  | "zh-HK"
+  | "zh-TW"
   | "jpn"
   | "rus"
   | "nld";
@@ -37,6 +39,12 @@ const LOCALE_ALIASES: Record<string, LocaleCode> = {
   ko: "kor",
   zh: "zho",
   "zh-cn": "zho",
+  "zh-hans": "zho",
+  "zh-hant": "zh-TW",
+  "zh-hk": "zh-HK",
+  "zh-tw": "zh-TW",
+  "zh-hant-hk": "zh-HK",
+  "zh-hant-tw": "zh-TW",
   ja: "jpn",
 
   ru: "rus",
@@ -54,6 +62,8 @@ const localeLoaders = new Map<DeferredLocaleCode, LocaleLoader>([
   ["por", () => import("./locales/pt_BR.ts")],
   ["kor", () => import("./locales/ko.ts")],
   ["zho", () => import("./locales/zh_CN.ts")],
+  ["zh-HK", () => import("./locales/zh_HK.ts")],
+  ["zh-TW", () => import("./locales/zh_TW.ts")],
   ["jpn", () => import("./locales/ja.ts")],
   ["rus", () => import("./locales/ru.ts")],
   ["nld", () => import("./locales/nl.ts")],
@@ -71,6 +81,8 @@ export const AVAILABLE_LANGUAGES: LanguageOption[] = [
   { code: "por", label: "Português (Brasil)" },
   { code: "kor", label: "한국어" },
   { code: "zho", label: "简体中文" },
+  { code: "zh-HK", label: "繁體中文（香港）" },
+  { code: "zh-TW", label: "繁體中文（台灣）" },
   { code: "jpn", label: "日本語" },
   { code: "rus", label: "Русский" },
   { code: "nld", label: "Nederlands" },
@@ -100,7 +112,12 @@ const METADATA_LANGUAGE_CODES = new Set([
 /** {@link AVAILABLE_LANGUAGES}, less the ones metadata cannot be fetched in. */
 export const METADATA_LANGUAGES: LanguageOption[] = AVAILABLE_LANGUAGES.filter(
   (language) => METADATA_LANGUAGE_CODES.has(language.code),
-);
+).map((language) => language.code === "zho" ? { ...language, label: "中文" } : language);
+
+export function metadataLanguageForUi(code: string): string {
+  const locale = normalizeLocale(code);
+  return locale === "zh-HK" || locale === "zh-TW" ? "zho" : locale;
+}
 
 export function getLanguageLabel(code: string): string {
   const normalized = normalizeLocale(code);
@@ -160,10 +177,14 @@ export function loadLocaleDictionary(
 }
 
 export function normalizeLocale(code?: string | null): LocaleCode {
-  const normalized = code?.toLowerCase().trim();
+  const normalized = code?.toLowerCase().trim().replaceAll("_", "-");
   if (!normalized) {
     return DEFAULT_LANGUAGE;
   }
+  const exact = AVAILABLE_LANGUAGES.find(({ code }) => code.toLowerCase() === normalized);
+  if (exact) return exact.code;
+  const exactAlias = LOCALE_ALIASES[normalized];
+  if (exactAlias) return exactAlias;
   const root = normalized.split("-")[0]!;
   if (AVAILABLE_LANGUAGES.some(({ code: localeCode }) => localeCode === root)) {
     return root as LocaleCode;

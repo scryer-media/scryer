@@ -8,6 +8,7 @@ import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { setMemberListPolicyMutation } from "@/lib/graphql/mutations";
 import { listMemberPoliciesQuery } from "@/lib/graphql/queries";
 import type { ListPolicy, MemberListPolicy } from "@/lib/types/lists";
+import { rollBackMemberListPolicy } from "@/lib/utils/lists";
 
 export function MemberListPoliciesContainer() {
   const client = useClient();
@@ -40,7 +41,7 @@ export function MemberListPoliciesContainer() {
 
   const change = React.useCallback(
     async (userId: string, policy: ListPolicy) => {
-      const previous = policies;
+      const previous = policies.find((entry) => entry.user.id === userId);
       setSavingUserId(userId);
       setPolicies((current) => current.map((entry) => (entry.user.id === userId ? { ...entry, policy } : entry)));
       try {
@@ -51,7 +52,9 @@ export function MemberListPoliciesContainer() {
           setPolicies((current) => current.map((entry) => (entry.user.id === userId ? saved : entry)));
         }
       } catch (saveError) {
-        setPolicies(previous);
+        if (previous) {
+          setPolicies((current) => rollBackMemberListPolicy(current, previous, policy));
+        }
         setGlobalStatus(userFacingGraphQlErrorMessage(saveError, t("status.failedToUpdate")));
       } finally {
         setSavingUserId(null);

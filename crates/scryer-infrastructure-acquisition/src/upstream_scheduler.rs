@@ -9,7 +9,7 @@ use scryer_application::{
     RssFreshnessContext, SchedulerAdmission, SchedulerBatchDecision, SchedulerBatchRequest,
     SchedulerCandidate, SchedulerFeedback, SchedulerFeedbackOutcome, SchedulerIntent,
     SchedulerLease, SchedulerOperation, SchedulerSnapshot, SchedulerSnapshotEntry,
-    SchedulerSnapshotFilter, SkipReason, UpstreamScheduler,
+    SchedulerSnapshotFilter, SkipReason, UpstreamScheduler, rss_poll_reached_marker,
 };
 use scryer_outbound_http::PersistedDestinationCooldown;
 use scryer_outbound_http::{DestinationKey, HostKey, RateLimitRegistry, RetryAfterSource};
@@ -291,27 +291,48 @@ impl UpstreamScheduler for InMemoryUpstreamScheduler {
                     feedback.outcome,
                     SchedulerFeedbackOutcome::Success | SchedulerFeedbackOutcome::EmptySuccess
                 ) {
+                    let previous_poll_at = cadence.last_successful_poll_at;
                     cadence.last_successful_poll_at = Some(feedback.observed_at);
                     cadence.estimated_feed_depth = feedback.rss_feed_result_count;
-                    if let Some(previous_identity) = cadence.last_seen_release_identity.as_ref()
-                        && !feedback.rss_seen_release_identities.is_empty()
-                        && !feedback
-                            .rss_seen_release_identities
-                            .iter()
-                            .any(|identity| identity == previous_identity)
-                    {
-                        cadence.last_feed_gap_start_at = cadence
-                            .last_seen_release_published_at
-                            .or(cadence.last_successful_poll_at);
+                    // A gap is only what the poll could not read back to: the
+                    // window between the previous newest release and the
+                    // oldest release this poll returned.
+                    if !rss_poll_reached_marker(
+                        cadence.last_seen_release_identity.as_deref(),
+                        cadence.last_seen_release_published_at,
+                        &feedback.rss_seen_release_identities,
+                        feedback.rss_oldest_release_published_at,
+                        feedback.rss_stopped_at_page_ceiling,
+                    ) {
+                        cadence.last_feed_gap_start_at =
+                            cadence.last_seen_release_published_at.or(previous_poll_at);
                         cadence.last_feed_gap_end_at = feedback
-                            .rss_last_seen_release_published_at
+                            .rss_oldest_release_published_at
+                            .or(feedback.rss_last_seen_release_published_at)
                             .or(Some(feedback.observed_at));
                     }
-                    if let Some(identity) = feedback.rss_last_seen_release_identity.clone() {
-                        cadence.last_seen_release_identity = Some(identity);
-                    }
-                    if let Some(published_at) = feedback.rss_last_seen_release_published_at {
-                        cadence.last_seen_release_published_at = Some(published_at);
+                    // The marker only moves forward, and its identity and
+                    // publish time always describe the same release. A
+                    // publish time after the poll itself is bogus and must
+                    // not become, or pin, the marker.
+                    match (
+                        feedback.rss_last_seen_release_published_at,
+                        cadence.last_seen_release_published_at,
+                    ) {
+                        (Some(newest), _) if newest > feedback.observed_at => {}
+                        (Some(newest), Some(previous)) if newest < previous => {}
+                        (Some(newest), _) => {
+                            cadence.last_seen_release_identity =
+                                feedback.rss_last_seen_release_identity.clone();
+                            cadence.last_seen_release_published_at = Some(newest);
+                        }
+                        (None, _) => {
+                            if let Some(identity) = feedback.rss_last_seen_release_identity.clone()
+                            {
+                                cadence.last_seen_release_identity = Some(identity);
+                                cadence.last_seen_release_published_at = None;
+                            }
+                        }
                     }
                 }
                 let target_interval = cadence.target_interval.unwrap_or_else(rss_target_interval);
@@ -1677,6 +1698,8 @@ mod tests {
             rss_last_seen_release_published_at: None,
             rss_feed_result_count: None,
             rss_seen_release_identities: Vec::new(),
+            rss_oldest_release_published_at: None,
+            rss_stopped_at_page_ceiling: false,
             observed_at,
         }
     }
@@ -2111,6 +2134,8 @@ mod tests {
                 rss_last_seen_release_published_at: None,
                 rss_feed_result_count: None,
                 rss_seen_release_identities: Vec::new(),
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at,
             })
             .await
@@ -2156,6 +2181,8 @@ mod tests {
                 rss_last_seen_release_published_at: None,
                 rss_feed_result_count: None,
                 rss_seen_release_identities: Vec::new(),
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: Utc::now(),
             })
             .await
@@ -2209,6 +2236,8 @@ mod tests {
                 rss_last_seen_release_published_at: None,
                 rss_feed_result_count: None,
                 rss_seen_release_identities: Vec::new(),
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: Utc::now(),
             })
             .await
@@ -2251,6 +2280,8 @@ mod tests {
                 rss_last_seen_release_published_at: None,
                 rss_feed_result_count: None,
                 rss_seen_release_identities: Vec::new(),
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: Utc::now(),
             })
             .await
@@ -2331,6 +2362,8 @@ mod tests {
                 rss_last_seen_release_published_at: None,
                 rss_feed_result_count: None,
                 rss_seen_release_identities: Vec::new(),
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: Utc::now(),
             })
             .await
@@ -2376,6 +2409,8 @@ mod tests {
                 rss_last_seen_release_published_at: None,
                 rss_feed_result_count: None,
                 rss_seen_release_identities: Vec::new(),
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: Utc::now(),
             })
             .await
@@ -2422,6 +2457,8 @@ mod tests {
                 rss_last_seen_release_published_at: None,
                 rss_feed_result_count: None,
                 rss_seen_release_identities: Vec::new(),
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: now - chrono::Duration::hours(25),
             })
             .await
@@ -2546,6 +2583,8 @@ mod tests {
                 rss_last_seen_release_published_at: None,
                 rss_feed_result_count: None,
                 rss_seen_release_identities: Vec::new(),
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: Utc::now(),
             })
             .await
@@ -2657,6 +2696,8 @@ mod tests {
                 rss_last_seen_release_published_at: Some(now),
                 rss_feed_result_count: Some(10),
                 rss_seen_release_identities: vec!["old-guid".to_string(), "older-guid".to_string()],
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: now,
             })
             .await
@@ -2680,6 +2721,8 @@ mod tests {
                 rss_last_seen_release_published_at: Some(later),
                 rss_feed_result_count: Some(5),
                 rss_seen_release_identities: vec!["new-guid".to_string(), "newer-guid".to_string()],
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: later,
             })
             .await
@@ -2697,6 +2740,177 @@ mod tests {
         assert_eq!(entry.rss_estimated_feed_depth, Some(5));
         assert_eq!(entry.rss_last_feed_gap_start_at, Some(now));
         assert_eq!(entry.rss_last_feed_gap_end_at, Some(later));
+    }
+
+    struct RssPoll<'a> {
+        newest: Option<(&'a str, DateTime<Utc>)>,
+        oldest: Option<DateTime<Utc>>,
+        seen: &'a [&'a str],
+        observed_at: DateTime<Utc>,
+    }
+
+    /// Admits one RSS candidate and records each poll as successful feedback
+    /// under its lease, returning the resulting snapshot entry.
+    async fn record_rss_polls(polls: &[RssPoll<'_>]) -> SchedulerSnapshotEntry {
+        let scheduler = InMemoryUpstreamScheduler::new();
+        let rss = candidate(SchedulerIntent::BackgroundRss, 1.0);
+        let decision = scheduler
+            .admit_batch(SchedulerBatchRequest {
+                batch_id: "batch".to_string(),
+                now: polls[0].observed_at,
+                candidates: vec![rss.clone()],
+            })
+            .await
+            .expect("admission should succeed");
+        let lease = match decision.decisions.into_iter().next() {
+            Some(SchedulerAdmission::Admit { lease, .. }) => lease,
+            other => panic!("expected RSS admit, got {other:?}"),
+        };
+        for poll in polls {
+            scheduler
+                .record_feedback(SchedulerFeedback {
+                    lease: Some(lease.clone()),
+                    host_key: rss.host_key.clone(),
+                    destination_key: rss.destination_key.clone(),
+                    account_quota_key: rss.account_quota_key.clone(),
+                    outcome: SchedulerFeedbackOutcome::Success,
+                    observed_api_current: None,
+                    observed_api_max: None,
+                    observed_grab_current: None,
+                    observed_grab_max: None,
+                    retry_after: None,
+                    cooldown_action: RateLimitCooldownAction::None,
+                    rss_last_seen_release_identity: poll
+                        .newest
+                        .map(|(identity, _)| identity.to_string()),
+                    rss_last_seen_release_published_at: poll.newest.map(|(_, at)| at),
+                    rss_feed_result_count: Some(poll.seen.len() as u32),
+                    rss_seen_release_identities: poll
+                        .seen
+                        .iter()
+                        .map(|identity| identity.to_string())
+                        .collect(),
+                    rss_oldest_release_published_at: poll.oldest,
+                    rss_stopped_at_page_ceiling: false,
+                    observed_at: poll.observed_at,
+                })
+                .await
+                .expect("feedback should record");
+        }
+        scheduler
+            .snapshot(SchedulerSnapshotFilter::default())
+            .await
+            .expect("snapshot should succeed")
+            .entries
+            .into_iter()
+            .next()
+            .expect("snapshot entry")
+    }
+
+    #[tokio::test]
+    async fn rss_poll_that_pages_back_past_the_marker_records_no_gap() {
+        let marker_at = Utc::now() - chrono::Duration::hours(2);
+        let later = marker_at + chrono::Duration::hours(1);
+        let entry = record_rss_polls(&[
+            RssPoll {
+                newest: Some(("marker-guid", marker_at)),
+                oldest: Some(marker_at - chrono::Duration::minutes(30)),
+                seen: &["marker-guid", "before-marker-guid"],
+                observed_at: marker_at,
+            },
+            // Several pages: the marker release itself was not returned (it
+            // may have been removed), but the oldest release predates it.
+            RssPoll {
+                newest: Some(("paged-newest-guid", later)),
+                oldest: Some(marker_at - chrono::Duration::minutes(5)),
+                seen: &[
+                    "paged-newest-guid",
+                    "paged-middle-guid",
+                    "paged-oldest-guid",
+                ],
+                observed_at: later,
+            },
+        ])
+        .await;
+
+        assert_eq!(
+            entry.rss_last_seen_release_identity.as_deref(),
+            Some("paged-newest-guid")
+        );
+        assert_eq!(entry.rss_last_seen_release_published_at, Some(later));
+        assert_eq!(entry.rss_estimated_feed_depth, Some(3));
+        assert_eq!(entry.rss_last_feed_gap_start_at, None);
+        assert_eq!(entry.rss_last_feed_gap_end_at, None);
+    }
+
+    #[tokio::test]
+    async fn rss_poll_that_stops_short_of_the_marker_records_the_uncovered_window() {
+        let marker_at = Utc::now() - chrono::Duration::hours(2);
+        let later = marker_at + chrono::Duration::hours(1);
+        let oldest_returned = marker_at + chrono::Duration::minutes(10);
+        let entry = record_rss_polls(&[
+            RssPoll {
+                newest: Some(("marker-guid", marker_at)),
+                oldest: Some(marker_at),
+                seen: &["marker-guid"],
+                observed_at: marker_at,
+            },
+            RssPoll {
+                newest: Some(("short-newest-guid", later)),
+                oldest: Some(oldest_returned),
+                seen: &["short-newest-guid", "short-oldest-guid"],
+                observed_at: later,
+            },
+        ])
+        .await;
+
+        assert_eq!(entry.rss_last_feed_gap_start_at, Some(marker_at));
+        assert_eq!(entry.rss_last_feed_gap_end_at, Some(oldest_returned));
+        assert_eq!(
+            entry.rss_last_seen_release_identity.as_deref(),
+            Some("short-newest-guid")
+        );
+        assert_eq!(entry.rss_last_seen_release_published_at, Some(later));
+    }
+
+    #[tokio::test]
+    async fn rss_marker_ignores_future_publish_times_and_never_moves_back() {
+        let marker_at = Utc::now() - chrono::Duration::hours(3);
+        let later = marker_at + chrono::Duration::hours(1);
+        let latest = later + chrono::Duration::hours(1);
+        let entry = record_rss_polls(&[
+            RssPoll {
+                newest: Some(("marker-guid", marker_at)),
+                oldest: Some(marker_at),
+                seen: &["marker-guid"],
+                observed_at: marker_at,
+            },
+            // A release claiming to be published after the poll ran.
+            RssPoll {
+                newest: Some(("future-dated-guid", later + chrono::Duration::days(1))),
+                oldest: Some(marker_at),
+                seen: &["future-dated-guid", "marker-guid"],
+                observed_at: later,
+            },
+            // An older newest than the stored marker leaves the marker alone.
+            RssPoll {
+                newest: Some((
+                    "older-release-guid",
+                    marker_at - chrono::Duration::minutes(1),
+                )),
+                oldest: Some(marker_at - chrono::Duration::minutes(1)),
+                seen: &["older-release-guid", "marker-guid"],
+                observed_at: latest,
+            },
+        ])
+        .await;
+
+        assert_eq!(
+            entry.rss_last_seen_release_identity.as_deref(),
+            Some("marker-guid")
+        );
+        assert_eq!(entry.rss_last_seen_release_published_at, Some(marker_at));
+        assert_eq!(entry.rss_last_feed_gap_start_at, None);
     }
 
     #[tokio::test]
@@ -2758,6 +2972,8 @@ mod tests {
                 rss_last_seen_release_published_at: Some(now),
                 rss_feed_result_count: Some(2),
                 rss_seen_release_identities: vec!["anime-old".to_string()],
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: now,
             })
             .await
@@ -2779,6 +2995,8 @@ mod tests {
                 rss_last_seen_release_published_at: Some(now),
                 rss_feed_result_count: Some(2),
                 rss_seen_release_identities: vec!["movie-old".to_string()],
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: now,
             })
             .await
@@ -2802,6 +3020,8 @@ mod tests {
                 rss_last_seen_release_published_at: Some(later),
                 rss_feed_result_count: Some(1),
                 rss_seen_release_identities: vec!["anime-new".to_string()],
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: later,
             })
             .await
@@ -2866,6 +3086,8 @@ mod tests {
                 rss_last_seen_release_published_at: Some(now),
                 rss_feed_result_count: Some(1),
                 rss_seen_release_identities: vec!["low-quota-guid".to_string()],
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: now,
             })
             .await
@@ -2900,6 +3122,8 @@ mod tests {
                 rss_last_seen_release_published_at: Some(exhausted_at),
                 rss_feed_result_count: Some(1),
                 rss_seen_release_identities: vec!["exhausted-quota-guid".to_string()],
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: exhausted_at,
             })
             .await
@@ -2934,6 +3158,8 @@ mod tests {
                 rss_last_seen_release_published_at: Some(healthy_at),
                 rss_feed_result_count: Some(1),
                 rss_seen_release_identities: vec!["healthy-quota-guid".to_string()],
+                rss_oldest_release_published_at: None,
+                rss_stopped_at_page_ceiling: false,
                 observed_at: healthy_at,
             })
             .await

@@ -279,6 +279,9 @@ impl LibraryRepository for MockLibraryRepo {
 #[derive(Default)]
 pub(super) struct MockShowRepo {
     pub(super) fail_monitoring: Mutex<bool>,
+    pub(super) fail_episode_monitoring_for: Mutex<HashSet<String>>,
+    pub(super) series_movie_read_gate:
+        Mutex<Option<(Arc<tokio::sync::Barrier>, Arc<tokio::sync::Barrier>)>>,
     /// Stands in for a transient store failure on the anime numbering bridge.
     pub(super) fail_anime_bridge: Mutex<bool>,
     /// Stands in for a transient store failure on a title's collections read.
@@ -358,6 +361,15 @@ impl ShowRepository for MockShowRepo {
         &self,
         title_id: &str,
     ) -> AppResult<Vec<scryer_domain::SeriesMovieLink>> {
+        let gate = self.series_movie_read_gate.lock().await.take();
+        if let Some((entered, release)) = gate {
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                entered.wait().await;
+                release.wait().await;
+            })
+            .await
+            .expect("series-movie read gate must be released");
+        }
         let links = self.series_movie_links.lock().await;
         Ok(links
             .iter()
@@ -808,6 +820,13 @@ impl ShowRepository for MockShowRepo {
         episode_ids: &[String],
         monitored: bool,
     ) -> AppResult<()> {
+        let failures = self.fail_episode_monitoring_for.lock().await;
+        if episode_ids.iter().any(|id| failures.contains(id)) {
+            return Err(AppError::Repository(
+                "injected episode monitoring write failure".into(),
+            ));
+        }
+        drop(failures);
         let wanted = episode_ids.iter().cloned().collect::<HashSet<_>>();
         let mut episodes = self.episodes.lock().await;
         for episode in episodes.iter_mut() {

@@ -5457,6 +5457,10 @@ export const listProvidersQuery =`query ListProviders {
       secret
       isSet
       value
+      options {
+        value
+        label
+      }
     }
     urlPatterns {
       pattern
@@ -5480,6 +5484,10 @@ const LIST_PROVIDER_SETTINGS_FIELDS = `
       secret
       isSet
       value
+      options {
+        value
+        label
+      }
     }`;
 
 export const listProviderSettingsQuery = `query ListProviderSettings {

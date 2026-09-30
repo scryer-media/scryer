@@ -128,3 +128,22 @@ export function queueScopeReplacesPrimary(
   }
   return false;
 }
+
+/// `queueScopeReplacesPrimary` judged from every media file the title holds,
+/// not only from the files an overview happened to load. A whole-title scope
+/// covers every episode, so any primary file linked to an episode counts.
+export function queueScopeReplacesPrimaryFromTitleFiles(
+  scope: QueueDownloadScopeInput,
+  episodesByCollection: Readonly<Record<string, readonly { id: string }[] | undefined>>,
+  titleFiles: readonly { episodeId: string | null; role?: string | null }[],
+): boolean {
+  const filesByEpisode: Record<string, { role?: string | null }[]> = {};
+  for (const file of titleFiles) {
+    if (!file.episodeId) continue;
+    (filesByEpisode[file.episodeId] ??= []).push(file);
+  }
+  if ("title" in scope) {
+    return Object.values(filesByEpisode).some(hasPrimaryMediaFile);
+  }
+  return queueScopeReplacesPrimary(scope, episodesByCollection, filesByEpisode);
+}

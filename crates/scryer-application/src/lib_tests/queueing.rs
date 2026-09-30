@@ -6301,6 +6301,85 @@ async fn stale_fingerprint_coverage_reopens_convergence() {
 }
 
 #[tokio::test]
+async fn pre_release_match_identity_differs_only_by_its_phase_suffix() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        settings,
+        Arc::new(MockIndexerClient),
+        vec![synthetic_direct_nab_indexer_config("indexer-a", "newznab")],
+    );
+    let (_, released) = convergence_test_title_and_subject(&app, &user).await;
+    assert!(!released.pre_release, "fixture: the subject is released");
+    let mut pre_release = released.clone();
+    pre_release.pre_release = true;
+
+    let released_identity = crate::acquisition::convergence::scope_match_identity(&released);
+    assert!(
+        !released_identity.contains("phase="),
+        "released identities are unchanged"
+    );
+    assert_eq!(
+        crate::acquisition::convergence::scope_match_identity(&pre_release),
+        format!("{released_identity};phase=pre")
+    );
+}
+
+#[tokio::test]
+async fn pre_release_coverage_does_not_cover_the_released_scope() {
+    // An empty search before air proves nothing about the released catalog;
+    // once the scope is released, every routed indexer is uncovered again.
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let configs = vec![
+        synthetic_direct_nab_indexer_config("indexer-a", "newznab"),
+        synthetic_direct_nab_indexer_config("indexer-b", "newznab"),
+    ];
+    let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        settings,
+        Arc::new(MockIndexerClient),
+        configs,
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+
+    let (title, released) = convergence_test_title_and_subject(&app, &user).await;
+    let mut pre_release = released.clone();
+    pre_release.pre_release = true;
+
+    app.record_search_coverage(
+        &title,
+        &pre_release,
+        &["indexer-a".to_string(), "indexer-b".to_string()],
+        &[],
+    )
+    .await;
+    assert!(
+        scope_is_converged(&app, &title, &pre_release).await,
+        "fixture: the pre-release search covered the scope"
+    );
+
+    let convergence = app
+        .resolve_scope_convergence(&title, &released)
+        .await
+        .expect("routed convergence coordinates");
+    let mut uncovered = app
+        .uncovered_indexers_for_scope(
+            &convergence.scope_key,
+            &convergence.facet,
+            &convergence.fingerprint,
+            &convergence.routed_indexer_ids,
+        )
+        .await
+        .expect("coverage read");
+    uncovered.sort();
+    assert_eq!(
+        uncovered,
+        vec!["indexer-a".to_string(), "indexer-b".to_string()],
+        "released scope is searched again on every routed indexer"
+    );
+}
+
+#[tokio::test]
 async fn coverage_excludes_disabled_indexers() {
     // A disabled indexer is never queried, so it must not be recorded as covered
     // (otherwise enabling it later would wrongly present as already-searched).
@@ -6347,6 +6426,61 @@ async fn coverage_excludes_disabled_indexers() {
     assert!(
         scope_is_converged(&app, &title, &subject).await,
         "scope converges over the enabled routed indexers only"
+    );
+}
+
+#[tokio::test]
+async fn routed_indexers_exclude_indexers_without_automatic_search() {
+    // The background search never queries an indexer with automatic search
+    // off, so it can never earn a receipt; routing a scope to it would keep
+    // that scope in the walk every cycle.
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let mut manual_only_b = synthetic_direct_nab_indexer_config("indexer-b", "newznab");
+    manual_only_b.enable_auto_search = false;
+    // indexer-c is searchable but unrouted, so it proves the plan is in force.
+    let configs = vec![
+        synthetic_direct_nab_indexer_config("indexer-a", "newznab"),
+        manual_only_b,
+        synthetic_direct_nab_indexer_config("indexer-c", "newznab"),
+    ];
+    let (app, user) = bootstrap_with_search_settings_indexer_and_configs(
+        settings.clone(),
+        Arc::new(MockIndexerClient),
+        configs,
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+
+    let (title, subject) = convergence_test_title_and_subject(&app, &user).await;
+    settings
+        .set_scoped_value(
+            crate::SETTINGS_SCOPE_SYSTEM,
+            crate::INDEXER_ROUTING_SETTINGS_KEY,
+            &title.library_id,
+            &serde_json::json!({
+                "indexer-a": { "enabled": true, "categories": [], "priority": 1 },
+                "indexer-b": { "enabled": true, "categories": [], "priority": 2 }
+            })
+            .to_string(),
+        )
+        .await;
+
+    let convergence = app
+        .resolve_scope_convergence(&title, &subject)
+        .await
+        .expect("routed convergence coordinates");
+    assert_eq!(
+        convergence.routed_indexer_ids,
+        vec!["indexer-a".to_string()],
+        "the plan routes both, but only the auto-search indexer is searchable"
+    );
+
+    app.record_search_coverage(&title, &subject, &["indexer-a".to_string()], &[])
+        .await;
+    assert!(
+        scope_is_converged(&app, &title, &subject).await,
+        "covering the auto-search indexer converges the scope"
     );
 }
 
@@ -7385,6 +7519,52 @@ impl AnidbSelectionFixture {
     }
 }
 
+/// Both the walk's subject and the interactive subject for an episode are
+/// pre-release until a day after it airs, and released after that.
+#[tokio::test]
+async fn episode_subjects_are_pre_release_until_a_day_after_air() {
+    let fixture = AnidbSelectionFixture::new(MediaFacet::Series, None).await;
+    let now = Utc::now();
+    let cases = [
+        (
+            (now + chrono::Duration::days(1)).date_naive().to_string(),
+            true,
+            "airs tomorrow",
+        ),
+        (
+            (now - chrono::Duration::hours(12)).to_rfc3339(),
+            true,
+            "aired twelve hours ago",
+        ),
+        (
+            (now - chrono::Duration::days(2)).date_naive().to_string(),
+            false,
+            "aired two days ago",
+        ),
+    ];
+    for (number, (air_date, expected, case)) in (1_u32..).zip(cases) {
+        let mut episode = fixture.episode(number).await;
+        episode.air_date = Some(air_date);
+        for stored in fixture.shows.episodes.lock().await.iter_mut() {
+            if stored.id == episode.id {
+                stored.air_date = episode.air_date.clone();
+            }
+        }
+
+        let walk = fixture.walk_subject(&episode, None).await;
+        assert_eq!(walk.pre_release, expected, "walk subject: {case}");
+        let interactive = fixture
+            .app
+            .resolve_release_search_subject_for_episode(&fixture.title, "1", &number.to_string())
+            .await
+            .expect("interactive subject");
+        assert_eq!(
+            interactive.pre_release, expected,
+            "interactive subject: {case}"
+        );
+    }
+}
+
 fn scoped_anidb_id(scope_id: &str, anidb_id: &str, source_scope: Option<&str>) -> ScopedExternalId {
     ScopedExternalId {
         scope_id: scope_id.to_string(),
@@ -7559,5 +7739,36 @@ async fn non_anime_episode_search_ignores_episode_scoped_and_cour_anidb_ids() {
     assert_eq!(
         fixture.anidb_ids(&episode).await,
         (expected.clone(), expected)
+    );
+}
+
+#[test]
+fn scan_blocked_facet_streaks_count_consecutive_cycles_and_reset_when_free() {
+    let mut streaks = crate::acquisition::workflow::ScanBlockedFacetStreaks::default();
+
+    assert_eq!(
+        streaks.observe(&[MediaFacet::Series]),
+        vec![(MediaFacet::Series, 1)]
+    );
+    assert_eq!(
+        streaks.observe(&[MediaFacet::Series, MediaFacet::Movie, MediaFacet::Series]),
+        vec![(MediaFacet::Series, 2), (MediaFacet::Movie, 1)],
+        "a facet listed twice in one cycle still counts once"
+    );
+    assert_eq!(
+        streaks.observe(&[MediaFacet::Series]),
+        vec![(MediaFacet::Series, 3)],
+        "a facet that was free this cycle drops out"
+    );
+    assert_eq!(
+        streaks.observe(&[MediaFacet::Movie, MediaFacet::Series]),
+        vec![(MediaFacet::Movie, 1), (MediaFacet::Series, 4)],
+        "a freed facet starts counting again from one"
+    );
+    assert!(streaks.observe(&[]).is_empty());
+    assert_eq!(
+        streaks.observe(&[MediaFacet::Series]),
+        vec![(MediaFacet::Series, 1)],
+        "a cycle with no active scan resets every streak"
     );
 }

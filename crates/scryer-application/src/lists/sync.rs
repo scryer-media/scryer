@@ -10,8 +10,9 @@
 //!
 //! A provider's "unchanged" answer skips the rest of the sync, unless the list
 //! still has work: settings edited since its last sync, items the per-sync cap
-//! left pending, or an on-leave action that has not run. Then the whole list
-//! is read again and processed.
+//! left pending, a title the list added that has since been deleted, or an
+//! on-leave action that has not run. Then the whole list is read again and
+//! processed.
 //!
 //! Subscriptions run one after another, so an instance never has two fetches
 //! in flight against the same provider.
@@ -28,7 +29,7 @@ use serde::Serialize;
 use super::act::{ListActions, act_on_candidate};
 use super::evaluate::{ItemDecision, count_states, edited_since_last_sync, evaluate};
 use super::fetch::{ListChartSource, ListFailure, ListFailureClass, fetch_list};
-use super::leave::{handle_departures, has_runnable_leave_action};
+use super::leave::{LeaveReport, handle_departures, has_runnable_leave_action};
 use super::plugin::ListPluginProvider;
 use super::ports::{
     ListExclusionRepository, ListMembershipRepository, ListSubscriptionRepository,
@@ -74,11 +75,14 @@ pub struct ListSyncContext<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SubscriptionSyncOutcome {
     Synced {
-        counts: ListCounts,
+        /// The outcomes of the adds and requests this sync made. Items an
+        /// earlier sync settled are not in it.
+        acted: ListCounts,
         departures_acted: u64,
     },
     Unchanged,
-    /// The owner's list policy is off; nothing was read.
+    /// The owner's list policy is off and nothing was read, or the list was
+    /// unfollowed while it synced and nothing more was done.
     Off,
     Failed(ListFailure),
 }
@@ -186,13 +190,13 @@ async fn sync_one_due(
     };
     match outcome {
         SubscriptionSyncOutcome::Synced {
-            counts,
+            acted,
             departures_acted,
         } => {
             report.synced += 1;
-            report.added += counts.added;
-            report.requested += counts.requested;
-            report.held += counts.held;
+            report.added += acted.added;
+            report.requested += acted.requested;
+            report.held += acted.held;
             report.departures_acted += departures_acted;
         }
         SubscriptionSyncOutcome::Unchanged => report.unchanged += 1,
@@ -218,15 +222,18 @@ pub async fn sync_subscription(
     let mut run = ListSyncRun::started(subscription.id.clone(), job_run_id);
     run.started_at = now;
 
-    if subscription.scope == ListScope::Personal
-        && context
-            .policies
-            .get(&subscription.owner_user_id)
-            .await?
-            .map(|policy| policy.policy)
-            .unwrap_or_default()
-            == ListPolicy::None
-    {
+    let owner_policy = match subscription.scope {
+        ListScope::Personal => Some(
+            context
+                .policies
+                .get(&subscription.owner_user_id)
+                .await?
+                .map(|policy| policy.policy)
+                .unwrap_or_default(),
+        ),
+        ListScope::Public => None,
+    };
+    if owner_policy == Some(ListPolicy::None) {
         let status = ListSyncStatus {
             state: ListSyncState::Off,
             next_at: Some(next_sync_at(subscription, now)),
@@ -234,7 +241,12 @@ pub async fn sync_subscription(
         };
         context
             .subscriptions
-            .record_sync(&subscription.id, &status, &subscription.counts)
+            .record_sync_outcome(
+                &subscription.id,
+                &subscription.sync,
+                &status,
+                &subscription.counts,
+            )
             .await?;
         run.outcome = ListSyncRunOutcome::Skipped;
         run.counts = subscription.counts;
@@ -315,12 +327,33 @@ pub async fn sync_subscription(
         .map(|row| (row.item_key.clone(), row))
         .collect::<HashMap<_, _>>();
     let exclusions = context.exclusions.list().await?;
-    let evaluated = evaluate(subscription, resolved, &exclusions, &existing);
+    // A title the list added and that has since been deleted from the library
+    // is weighed again as if new; only an exclusion keeps it out.
+    let deleted = deleted_additions(context.actions, &resolved, &existing).await;
+    let evaluated = evaluate(
+        subscription,
+        resolved,
+        &exclusions,
+        &without_rows(&existing, &deleted),
+    );
 
+    // A member whose list policy needs approval gets requests that wait for
+    // review, whatever their grants and the request rules would allow.
+    let hold_requests = owner_policy == Some(ListPolicy::Approval);
     let mut rows = Vec::with_capacity(evaluated.len());
+    let mut acted_states = Vec::new();
+    // Set once the list is found disabled mid-sync: no further add, request
+    // or on-leave action runs for it.
+    let mut stopped = false;
     for evaluated in evaluated {
         let previous = existing.get(&evaluated.item.item.item_key);
         let mut row = membership_row(subscription, &evaluated.item, previous, now);
+        if deleted.contains(&row.item_key) {
+            // The title the list added is gone, so the row no longer names it
+            // and the list no longer owns anything through it.
+            row.title_id = None;
+            row.added_by_list = false;
+        }
         match evaluated.decision {
             ItemDecision::Excluded => row.state = ListMembershipState::Excluded,
             ItemDecision::Filtered { reason } => {
@@ -341,8 +374,27 @@ pub async fn sync_subscription(
             ItemDecision::Unresolved => row.state = ListMembershipState::Unresolved,
             ItemDecision::Deferred => row.state = ListMembershipState::Pending,
             ItemDecision::Candidate => {
-                let outcome =
-                    act_on_candidate(context.actions, subscription, &evaluated.item).await;
+                if !stopped {
+                    match subscription_standing(context, &subscription.id).await? {
+                        SubscriptionStanding::Active => {}
+                        SubscriptionStanding::Disabled => stopped = true,
+                        SubscriptionStanding::Gone => return Ok(SubscriptionSyncOutcome::Off),
+                    }
+                }
+                if stopped {
+                    // Left for the sync after the list is enabled again.
+                    row.state = ListMembershipState::Pending;
+                    rows.push(row);
+                    continue;
+                }
+                let outcome = act_on_candidate(
+                    context.actions,
+                    subscription,
+                    &evaluated.item,
+                    hold_requests,
+                )
+                .await;
+                acted_states.push(outcome.state);
                 row.state = outcome.state;
                 row.state_reason = outcome.reason;
                 row.added_by_list |= outcome.added_by_list;
@@ -352,6 +404,13 @@ pub async fn sync_subscription(
                 if outcome.request_id.is_some() {
                     row.request_id = outcome.request_id;
                 }
+                // The action is done; record what it did before acting on the
+                // next item, so a sync cut short keeps `added_by_list` and
+                // the title and request it names.
+                context
+                    .memberships
+                    .upsert_many(std::slice::from_ref(&row))
+                    .await?;
             }
         }
         rows.push(row);
@@ -366,13 +425,24 @@ pub async fn sync_subscription(
         .memberships
         .mark_left(&subscription.id, now, now)
         .await?;
-    let leave = handle_departures(
-        subscription,
-        context.memberships,
-        context.subscriptions,
-        context.actions,
-    )
-    .await?;
+    if !stopped {
+        match subscription_standing(context, &subscription.id).await? {
+            SubscriptionStanding::Active => {}
+            SubscriptionStanding::Disabled => stopped = true,
+            SubscriptionStanding::Gone => return Ok(SubscriptionSyncOutcome::Off),
+        }
+    }
+    let leave = if stopped {
+        LeaveReport::default()
+    } else {
+        handle_departures(
+            subscription,
+            context.memberships,
+            context.subscriptions,
+            context.actions,
+        )
+        .await?
+    };
 
     let counts = count_states(rows.iter().map(|row| row.state));
     let status = ListSyncStatus {
@@ -386,14 +456,78 @@ pub async fn sync_subscription(
     };
     context
         .subscriptions
-        .record_sync(&subscription.id, &status, &counts)
+        .record_sync_outcome(&subscription.id, &subscription.sync, &status, &counts)
         .await?;
     run.counts = counts;
     finish_run(context, run, now).await?;
     Ok(SubscriptionSyncOutcome::Synced {
-        counts,
+        acted: count_states(acted_states),
         departures_acted: leave.acted,
     })
+}
+
+/// The item keys whose membership says the list added a title that is no
+/// longer in the library. Only rows still on the list and marked `Added` are
+/// checked, and only when the item did not already match that same title. A
+/// lookup that fails counts as the title being present, so a passing storage
+/// error never re-adds anything.
+pub(super) async fn deleted_additions(
+    actions: &dyn ListActions,
+    items: &[super::resolve::ResolvedItem],
+    existing: &HashMap<String, ListMembership>,
+) -> HashSet<String> {
+    let mut deleted = HashSet::new();
+    for item in items {
+        let Some(row) = existing.get(&item.item.item_key) else {
+            continue;
+        };
+        if row.left_at.is_some() || row.state != ListMembershipState::Added {
+            continue;
+        }
+        let Some(title_id) = row.title_id.as_deref() else {
+            continue;
+        };
+        if item.library_title_id.as_deref() == Some(title_id) {
+            continue;
+        }
+        if !actions.title_exists(title_id).await.unwrap_or(true) {
+            deleted.insert(row.item_key.clone());
+        }
+    }
+    deleted
+}
+
+/// `existing` without the rows named in `keys`.
+pub(super) fn without_rows(
+    existing: &HashMap<String, ListMembership>,
+    keys: &HashSet<String>,
+) -> HashMap<String, ListMembership> {
+    existing
+        .iter()
+        .filter(|(key, _)| !keys.contains(*key))
+        .map(|(key, row)| (key.clone(), row.clone()))
+        .collect()
+}
+
+/// Whether a list may still act, read again from the store: a sync runs long
+/// enough for its list to be disabled or unfollowed underneath it.
+enum SubscriptionStanding {
+    Active,
+    Disabled,
+    Gone,
+}
+
+async fn subscription_standing(
+    context: &ListSyncContext<'_>,
+    subscription_id: &str,
+) -> AppResult<SubscriptionStanding> {
+    Ok(
+        match context.subscriptions.get_by_id(subscription_id).await? {
+            Some(current) if current.enabled => SubscriptionStanding::Active,
+            Some(_) => SubscriptionStanding::Disabled,
+            None => SubscriptionStanding::Gone,
+        },
+    )
 }
 
 fn membership_row(
@@ -443,8 +577,9 @@ fn next_sync_at(subscription: &ListSubscription, now: DateTime<Utc>) -> DateTime
 
 /// Whether a list the provider reports as unchanged still has work a sync
 /// must do: settings edited since its last sync, items the per-sync cap left
-/// pending, or a departure whose on-leave action has not run and could run
-/// now. A departure another list still holds back is not work yet.
+/// pending, a title the list added that has since been deleted, or a
+/// departure whose on-leave action has not run and could run now. A departure
+/// another list still holds back is not work yet.
 async fn has_unfinished_work(
     context: &ListSyncContext<'_>,
     subscription: &ListSubscription,
@@ -461,6 +596,17 @@ async fn has_unfinished_work(
         .any(|row| row.left_at.is_none() && row.state == ListMembershipState::Pending)
     {
         return Ok(true);
+    }
+    // A title the list added was deleted from the library: the next sync
+    // weighs it again, so the list must be read.
+    for row in &rows {
+        if row.left_at.is_none()
+            && row.state == ListMembershipState::Added
+            && let Some(title_id) = row.title_id.as_deref()
+            && !context.actions.title_exists(title_id).await.unwrap_or(true)
+        {
+            return Ok(true);
+        }
     }
     has_runnable_leave_action(
         subscription,
@@ -491,7 +637,12 @@ async fn record_unchanged(
     };
     context
         .subscriptions
-        .record_sync(&subscription.id, &status, &subscription.counts)
+        .record_sync_outcome(
+            &subscription.id,
+            &subscription.sync,
+            &status,
+            &subscription.counts,
+        )
         .await?;
     run.counts = subscription.counts;
     finish_run(context, run, now).await?;
@@ -519,13 +670,18 @@ async fn record_empty_fetch(
     };
     context
         .subscriptions
-        .record_sync(&subscription.id, &status, &subscription.counts)
+        .record_sync_outcome(
+            &subscription.id,
+            &subscription.sync,
+            &status,
+            &subscription.counts,
+        )
         .await?;
     run.counts = subscription.counts;
     run.error_message = Some(LIST_SYNC_EMPTY_FETCH_NOTE.to_string());
     finish_run(context, run, now).await?;
     Ok(SubscriptionSyncOutcome::Synced {
-        counts: ListCounts::default(),
+        acted: ListCounts::default(),
         departures_acted: 0,
     })
 }
@@ -548,7 +704,12 @@ async fn record_storage_failure(
     };
     if let Err(error) = context
         .subscriptions
-        .record_sync(&subscription.id, &status, &subscription.counts)
+        .record_sync_outcome(
+            &subscription.id,
+            &subscription.sync,
+            &status,
+            &subscription.counts,
+        )
         .await
     {
         tracing::warn!(
@@ -609,7 +770,12 @@ async fn record_failure(
     };
     context
         .subscriptions
-        .record_sync(&subscription.id, &status, &subscription.counts)
+        .record_sync_outcome(
+            &subscription.id,
+            &subscription.sync,
+            &status,
+            &subscription.counts,
+        )
         .await?;
     run.outcome = ListSyncRunOutcome::Failed;
     run.counts = subscription.counts;

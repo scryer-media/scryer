@@ -13,6 +13,7 @@ import {
 } from "@/lib/hooks/use-auth";
 import { getRuntimeBasePath, getRuntimeGraphqlUrl } from "@/lib/runtime-config";
 import { wsClient } from "@/lib/graphql/ws-client";
+import { metadataLanguageForUi } from "@/lib/i18n";
 
 // ---------------------------------------------------------------------------
 // Shared language ref — updated by the Provider when uiLanguage changes
@@ -21,7 +22,7 @@ import { wsClient } from "@/lib/graphql/ws-client";
 let currentLanguage = "eng";
 
 export function setGraphqlLanguage(lang: string) {
-  currentLanguage = lang;
+  currentLanguage = metadataLanguageForUi(lang);
 }
 
 /**

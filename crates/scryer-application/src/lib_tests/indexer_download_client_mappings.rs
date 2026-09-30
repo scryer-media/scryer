@@ -372,6 +372,191 @@ async fn managed_child_mapping_survives_sync_and_foreign_client_id_stays_opaque(
     assert_eq!(metadata["downloadClientId"], 91);
 }
 
+fn managed_child_fixture() -> (
+    Vec<scryer_domain::IndexerConfig>,
+    Arc<dyn IndexerManagementClient>,
+) {
+    let parent = synthetic_direct_nab_indexer_config("prowlarr-parent", "prowlarr");
+    let mut child = synthetic_direct_nab_indexer_config("managed-child", "nzbgeek");
+    child.managed_parent_config_id = Some(parent.id.clone());
+    child.managed_child_key = Some("prowlarr-indexer-7".to_string());
+    child.enable_interactive_search = true;
+    child.enable_auto_search = true;
+    let management_client: Arc<dyn IndexerManagementClient> =
+        Arc::new(FixedIndexerManagementClient {
+            plan: IndexerSyncPlan {
+                children: vec![ManagedIndexerChildPlan {
+                    child_key: "prowlarr-indexer-7".to_string(),
+                    name: "Synced Child".to_string(),
+                    provider_type: "nzbgeek".to_string(),
+                    config_json: serde_json::json!({
+                        "base_url": "https://child.example.invalid/api",
+                        "api_key": "synced-secret"
+                    })
+                    .to_string(),
+                    is_enabled: true,
+                    enable_interactive_search: true,
+                    enable_auto_search: true,
+                    managed_metadata_json: None,
+                    caps_snapshot_json: None,
+                    routing_scopes: vec![],
+                }],
+            },
+        });
+    (vec![parent, child], management_client)
+}
+
+#[tokio::test]
+async fn managed_child_search_toggles_are_operator_owned_and_survive_sync() {
+    let (configs, management_client) = managed_child_fixture();
+    let (app, admin) = bootstrap_with_search_settings_indexer_configs_and_management(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockIndexerClient),
+        configs,
+        Some(management_client),
+    );
+
+    let toggled = app
+        .update_indexer_config(
+            &admin,
+            IndexerConfigUpdate {
+                id: "managed-child".to_string(),
+                enable_auto_search: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a managed child's search toggle should be accepted");
+    assert!(!toggled.enable_auto_search);
+    assert!(toggled.enable_interactive_search);
+    assert!(toggled.is_enabled);
+
+    app.sync_indexer_config(&admin, "prowlarr-parent")
+        .await
+        .expect("Prowlarr child sync should succeed");
+    let synced = app
+        .services
+        .integrations
+        .indexer_configs
+        .get_by_id("managed-child")
+        .await
+        .expect("child lookup should succeed")
+        .expect("child should remain");
+    assert_eq!(synced.name, "Synced Child");
+    assert!(
+        !synced.enable_auto_search,
+        "the sync must not undo the operator's auto search choice"
+    );
+    assert!(synced.enable_interactive_search);
+}
+
+#[tokio::test]
+async fn managed_child_rate_limits_are_operator_owned_and_survive_sync() {
+    let (configs, management_client) = managed_child_fixture();
+    let (app, admin) = bootstrap_with_search_settings_indexer_configs_and_management(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockIndexerClient),
+        configs,
+        Some(management_client),
+    );
+
+    let limited = app
+        .update_indexer_config(
+            &admin,
+            IndexerConfigUpdate {
+                id: "managed-child".to_string(),
+                rate_limit_seconds: Some(15),
+                max_queries_per_minute: Some(Some(4)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("a managed child's rate limits should be accepted");
+    assert_eq!(limited.rate_limit_seconds, Some(15));
+    assert_eq!(limited.max_queries_per_minute, Some(4));
+
+    let refused = app
+        .update_indexer_config(
+            &admin,
+            IndexerConfigUpdate {
+                id: "managed-child".to_string(),
+                max_queries_per_minute: Some(Some(0)),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a zero budget is refused on a managed child as it is elsewhere");
+    assert!(matches!(refused, AppError::Validation(_)), "{refused:?}");
+
+    let cleared = app
+        .update_indexer_config(
+            &admin,
+            IndexerConfigUpdate {
+                id: "managed-child".to_string(),
+                max_queries_per_minute: Some(None),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("clearing a managed child's budget should be accepted");
+    assert_eq!(cleared.max_queries_per_minute, None);
+    assert_eq!(cleared.rate_limit_seconds, Some(15));
+
+    app.sync_indexer_config(&admin, "prowlarr-parent")
+        .await
+        .expect("Prowlarr child sync should succeed");
+    let synced = app
+        .services
+        .integrations
+        .indexer_configs
+        .get_by_id("managed-child")
+        .await
+        .expect("child lookup should succeed")
+        .expect("child should remain");
+    assert_eq!(
+        synced.rate_limit_seconds,
+        Some(15),
+        "the sync must not reset the operator's request interval"
+    );
+}
+
+#[tokio::test]
+async fn managed_child_rejects_edits_beyond_its_local_fields() {
+    let (configs, management_client) = managed_child_fixture();
+    let (app, admin) = bootstrap_with_search_settings_indexer_configs_and_management(
+        Arc::new(StoredSettingsRepo::default()),
+        Arc::new(MockIndexerClient),
+        configs,
+        Some(management_client),
+    );
+
+    let error = app
+        .update_indexer_config(
+            &admin,
+            IndexerConfigUpdate {
+                id: "managed-child".to_string(),
+                name: Some("Renamed".to_string()),
+                enable_auto_search: Some(false),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("a rename mixed into a managed child update must be refused");
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    let unchanged = app
+        .services
+        .integrations
+        .indexer_configs
+        .get_by_id("managed-child")
+        .await
+        .expect("child lookup should succeed")
+        .expect("child should remain");
+    assert!(
+        unchanged.enable_auto_search,
+        "a refused update must not apply its local part"
+    );
+}
+
 #[tokio::test]
 async fn indexer_mapping_requires_system_settings_permission() {
     let (app, _admin) = bootstrap_with_search_settings_indexer_and_configs(

@@ -1893,7 +1893,24 @@ async fn bootstrap_application(
             "failed to build download-client category admission snapshot on startup; untracked observations will be deferred"
         );
     }
-    let auth_mode = resolve_auth_mode_from_env()?;
+    let bootstrap_admin = startup_auth::read_bootstrap_admin()?;
+    let auth_mode = resolve_auth_mode_from_env(bootstrap_admin.active())?;
+    if bootstrap_admin.active() {
+        app_use_case
+            .configure_bootstrap_admin(
+                bootstrap_admin.username.as_deref(),
+                bootstrap_admin.password.as_deref(),
+                bootstrap_admin.reset,
+                bootstrap_admin.disable_default,
+            )
+            .await
+            .map_err(|error| format!("failed to initialize admin credentials: {error}"))?;
+        if bootstrap_admin.reset {
+            tracing::warn!(
+                "SCRYER_ADMIN_PASSWORD_RESET is active: the supplied password is temporary again; remove this flag to preserve the replacement password across restarts. MFA is unchanged."
+            );
+        }
+    }
     app_use_case.set_recovery_admin_login_enabled(auth_mode.recovery_active());
     if auth_mode.recovery_active() {
         let recovery_password = normalize_env_option(RECOVERY_ADMIN_PASSWORD_ENV)
@@ -1920,16 +1937,19 @@ async fn bootstrap_application(
         auth_mode.effective_form_login_enabled(saved_security_settings.form_login_enabled);
     let effective_skip_login_for_local_ips = auth_mode
         .effective_skip_login_for_local_ips(saved_security_settings.skip_login_for_local_ips);
-    let auth_runtime = AuthRuntimeStateHandle::new(AuthRuntimeStateSnapshot {
-        form_login_enabled: saved_security_settings.form_login_enabled,
-        skip_login_for_local_ips: effective_skip_login_for_local_ips,
-        effective_form_login_enabled,
-        webauthn_configured,
-        passkey_enabled: webauthn_configured && effective_form_login_enabled,
-        env_override_active: auth_mode.env_override_active(),
-        env_override_description: auth_mode.env_override_description.clone(),
-        epoch: 0,
-    });
+    let auth_runtime = AuthRuntimeStateHandle::with_local_login_bypass_policy(
+        AuthRuntimeStateSnapshot {
+            form_login_enabled: saved_security_settings.form_login_enabled,
+            skip_login_for_local_ips: effective_skip_login_for_local_ips,
+            effective_form_login_enabled,
+            webauthn_configured,
+            passkey_enabled: webauthn_configured && effective_form_login_enabled,
+            env_override_active: auth_mode.env_override_active(),
+            env_override_description: auth_mode.env_override_description.clone(),
+            epoch: 0,
+        },
+        bootstrap_admin.active(),
+    );
     let log_buf_snapshot = log_ring_buffer.clone();
     let log_buf_subscribe = log_ring_buffer.clone();
     let schema = build_schema_with_log_buffer_and_restore_and_application_upgrade(
@@ -2996,13 +3016,46 @@ fn resolve_auth_mode(
     })
 }
 
-fn resolve_auth_mode_from_env() -> Result<AuthModeConfig, String> {
-    resolve_auth_mode(
+fn resolve_auth_mode_from_env(bootstrap_active: bool) -> Result<AuthModeConfig, String> {
+    resolve_bootstrap_auth_mode(
+        bootstrap_active,
         normalize_env_option("SCRYER_AUTH_ENABLED").as_deref(),
         normalize_env_option("SCRYER_DEV_AUTO_LOGIN").as_deref(),
         normalize_env_option(RECOVERY_ADMIN_PASSWORD_ENV).as_deref(),
         normalize_env_option(ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS_ENV).as_deref(),
     )
+}
+
+fn resolve_bootstrap_auth_mode(
+    bootstrap_active: bool,
+    auth_enabled: Option<&str>,
+    auto_login: Option<&str>,
+    recovery_password: Option<&str>,
+    public_access: Option<&str>,
+) -> Result<AuthModeConfig, String> {
+    let mut mode = resolve_auth_mode(auth_enabled, auto_login, recovery_password, public_access)?;
+    if bootstrap_active {
+        for (name, value) in [
+            ("SCRYER_AUTH_ENABLED", auth_enabled),
+            ("SCRYER_DEV_AUTO_LOGIN", auto_login),
+            (ALLOW_UNAUTHENTICATED_PUBLIC_ACCESS_ENV, public_access),
+        ] {
+            if value.is_some_and(|value| parse_env_bool_value(value).is_none()) {
+                return Err(format!("{name} must be a valid boolean"));
+            }
+        }
+        if mode.env_override_form_login_enabled == Some(false)
+            || auto_login.and_then(parse_env_bool_value) == Some(true)
+            || mode.allow_unauthenticated_public_access
+            || mode.recovery_active()
+        {
+            return Err("administrator bootstrap settings cannot be combined with disabled authentication, SCRYER_DEV_AUTO_LOGIN=true, unauthenticated public access, or recovery credentials; remove the conflicting settings before restarting".into());
+        }
+        mode.env_override_form_login_enabled = Some(true);
+        mode.env_override_description =
+            Some("administrator bootstrap environment settings are active".into());
+    }
+    Ok(mode)
 }
 
 fn parse_optional_setting_string(value_json: &str) -> Option<String> {
@@ -3963,6 +4016,27 @@ mod tests {
         ) -> AppResult<Option<TitleImageBlob>> {
             Ok(self.blob.clone())
         }
+    }
+
+    #[test]
+    fn bootstrap_auth_enables_login_and_rejects_conflicts() {
+        let mode = super::resolve_bootstrap_auth_mode(true, None, None, None, None).unwrap();
+        assert!(mode.effective_form_login_enabled(false));
+        assert!(!mode.recovery_active());
+        for (auth, auto, recovery, public) in [
+            (Some("false"), None, None, None),
+            (Some("true"), Some("true"), None, None),
+            (None, None, Some("recovery-secret"), None),
+            (None, None, None, Some("true")),
+        ] {
+            assert!(
+                super::resolve_bootstrap_auth_mode(true, auth, auto, recovery, public).is_err()
+            );
+        }
+        assert_eq!(
+            super::resolve_bootstrap_auth_mode(false, None, None, None, None).unwrap(),
+            resolve_auth_mode(None, None, None, None).unwrap()
+        );
     }
 
     #[test]

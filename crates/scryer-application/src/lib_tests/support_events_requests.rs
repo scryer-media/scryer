@@ -24,10 +24,33 @@ impl MockDomainEventRepo {
 #[derive(Default)]
 pub(super) struct MockExternalImportMonitorSnapshotRepo {
     pub(super) chunks: Arc<Mutex<Vec<ExternalImportMonitorSnapshotChunk>>>,
+    pub(super) fail_claim: AtomicBool,
+    pub(super) fail_cleanup: AtomicBool,
+    pub(super) fail_reads_after: Mutex<Option<i32>>,
 }
 
 #[async_trait]
 impl ExternalImportMonitorSnapshotRepository for MockExternalImportMonitorSnapshotRepo {
+    async fn claim_external_import_monitor_snapshot(
+        &self,
+        session_id: &str,
+        consumed_session_id: &str,
+        facet: MediaFacet,
+    ) -> AppResult<u64> {
+        if self.fail_claim.load(Ordering::SeqCst) {
+            return Err(AppError::Repository("injected claim failure".into()));
+        }
+        let mut chunks = self.chunks.lock().await;
+        let mut claimed = 0;
+        for chunk in chunks.iter_mut() {
+            if chunk.session_id == session_id && chunk.facet == facet {
+                chunk.session_id = consumed_session_id.to_string();
+                claimed += 1;
+            }
+        }
+        Ok(claimed)
+    }
+
     async fn append_external_import_monitor_snapshot_chunk(
         &self,
         chunk: &ExternalImportMonitorSnapshotChunk,
@@ -44,6 +67,11 @@ impl ExternalImportMonitorSnapshotRepository for MockExternalImportMonitorSnapsh
         after_chunk_index: Option<i32>,
         limit: i32,
     ) -> AppResult<Vec<ExternalImportMonitorSnapshotChunk>> {
+        if let Some(boundary) = *self.fail_reads_after.lock().await
+            && after_chunk_index.unwrap_or(-1) >= boundary
+        {
+            return Err(AppError::Repository("injected chunk read failure".into()));
+        }
         let chunks = self.chunks.lock().await;
         let mut matched = chunks
             .iter()
@@ -67,6 +95,9 @@ impl ExternalImportMonitorSnapshotRepository for MockExternalImportMonitorSnapsh
         session_id: &str,
         facet: MediaFacet,
     ) -> AppResult<()> {
+        if self.fail_cleanup.load(Ordering::SeqCst) {
+            return Err(AppError::Repository("injected cleanup failure".into()));
+        }
         let mut chunks = self.chunks.lock().await;
         chunks.retain(|chunk| chunk.session_id != session_id || chunk.facet != facet);
         Ok(())
@@ -77,6 +108,9 @@ impl ExternalImportMonitorSnapshotRepository for MockExternalImportMonitorSnapsh
         session_prefix: &str,
         facet: MediaFacet,
     ) -> AppResult<()> {
+        if self.fail_cleanup.load(Ordering::SeqCst) {
+            return Err(AppError::Repository("injected cleanup failure".into()));
+        }
         let mut chunks = self.chunks.lock().await;
         chunks
             .retain(|chunk| !chunk.session_id.starts_with(session_prefix) || chunk.facet != facet);
@@ -447,6 +481,8 @@ impl DomainEventRepository for MockDomainEventRepo {
 pub(super) struct MockMediaRequestRepo {
     pub(super) titles: Option<Arc<MockTitleRepo>>,
     pub(super) fail_policy_tag_rewrites: AtomicBool,
+    /// Stands in for a store failure while approving a request.
+    pub(super) fail_approvals: AtomicBool,
     pub(super) requests: Arc<Mutex<Vec<MediaRequest>>>,
     pub(super) domain_events: Option<Arc<MockDomainEventRepo>>,
 }
@@ -458,6 +494,7 @@ impl MockMediaRequestRepo {
             requests: Arc::new(Mutex::new(Vec::new())),
             domain_events: Some(domain_events),
             fail_policy_tag_rewrites: AtomicBool::new(false),
+            fail_approvals: AtomicBool::new(false),
         }
     }
 }
@@ -501,6 +538,11 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         MediaRequestResolutionResult,
         Option<DomainEvent>,
     )> {
+        if self.fail_approvals.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic request approval failure".into(),
+            ));
+        }
         let titles = self.titles.as_ref().expect("approval title store");
         let created = titles
             .create_or_get_existing_with_options_patch(title, options.clone())

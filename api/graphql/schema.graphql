@@ -10571,6 +10571,11 @@ type ListProviderSettingFieldPayload {
 	The stored value of a setting that is not secret, or null.
 	"""
 	value: String
+	"""
+	The choices of a select setting, in the provider's order. Empty for
+	every other type.
+	"""
+	options: [PluginConfigFieldOptionPayload!]!
 }
 
 """

@@ -48,6 +48,41 @@ impl UserRepository for UserStore {
         .await
     }
 
+    // Canonical baselines seed this passwordless row without permission records.
+    async fn bootstrap_seed_is_uninitialized(&self, id: &str) -> AppResult<bool> {
+        Ok(SqlRuntime::fetch_optional(self.datastore.read_exec(),
+            "SELECT id FROM users WHERE id = {} AND id = '00000000000000000000000000000001' AND username = 'admin' AND password_hash IS NULL AND auth_session_version IS NULL AND account_kind = 'local' AND status = 'active' AND NOT EXISTS (SELECT 1 FROM user_app_permission_masks WHERE user_id = users.id) AND NOT EXISTS (SELECT 1 FROM user_library_permission_masks WHERE user_id = users.id)",
+            &[SqlArg::Text(id.to_string())],
+        ).await?.is_some())
+    }
+
+    async fn create_bootstrap_admin(
+        &self,
+        user: User,
+        grants: Vec<LibraryGrant>,
+        initialize_seed: bool,
+    ) -> AppResult<User> {
+        SqlRuntime::run_in_transaction(&self.datastore, "create_bootstrap_admin", move |tx| {
+            let user = user.clone();
+            let grants = grants.clone();
+            Box::pin(async move {
+                if initialize_seed {
+                    let rows = tx.execute(
+                        "UPDATE users SET password_hash = {}, password_change_required = {} WHERE id = {} AND id = '00000000000000000000000000000001' AND username = 'admin' AND password_hash IS NULL AND auth_session_version IS NULL AND account_kind = 'local' AND status = 'active' AND NOT EXISTS (SELECT 1 FROM user_app_permission_masks WHERE user_id = users.id) AND NOT EXISTS (SELECT 1 FROM user_library_permission_masks WHERE user_id = users.id)",
+                        &[SqlArg::OptText(user.password_hash.clone()), SqlArg::Bool(true), SqlArg::Text(user.id.clone())],
+                    ).await?;
+                    if rows != 1 { return Err(AppError::Validation("default administrator seed changed during bootstrap".into())); }
+                } else {
+                    insert_user_tx(tx, &user).await?;
+                }
+                upsert_app_permission_mask_tx(tx, &user.id, user.authorization.app).await?;
+                replace_library_grants_tx(tx, &user.id, &grants).await?;
+                Ok(user)
+            })
+        })
+        .await
+    }
+
     async fn list_all(&self) -> AppResult<Vec<User>> {
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),

@@ -1925,9 +1925,12 @@ impl AppUseCase {
                     .await?;
                 Ok((title.clone(), subject, false))
             }
-            // A whole season searches as a season pack. Each release still
-            // binds to what it parses as covering, so an episode release that
-            // answers the season query stays an episode grab.
+            // A whole season searches as a season pack, and its list keeps
+            // only releases of several episodes that include the season:
+            // season, partial-season and multi-season packs, complete-series
+            // packs and batches. Single episodes that answer the season query
+            // are dropped. Each kept release still binds to what it parses as
+            // covering, so a partial pack stays a grab of its own episodes.
             (None, Some(season), None) => {
                 let subject = self
                     .resolve_release_search_subject_for_season(title, season)

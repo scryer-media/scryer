@@ -1957,11 +1957,13 @@ pub trait TitleRepository: Send + Sync {
         }
     }
     async fn find_by_external_id(&self, source: &str, value: &str) -> AppResult<Option<Title>>;
+    /// A title of `facet` carrying `id`. A kinded `id` never matches a title
+    /// whose id of the same source and value names a different kind; an id
+    /// without a kind, on either side, matches any kind.
     async fn find_by_external_id_in_facet(
         &self,
         facet: MediaFacet,
-        source: &str,
-        value: &str,
+        id: &ExternalId,
     ) -> AppResult<Option<Title>>;
     async fn find_by_external_id_in_library_and_facet(
         &self,
@@ -3264,6 +3266,19 @@ pub trait UserRepository: Send + Sync {
         }))
     }
     async fn create(&self, user: User) -> AppResult<User>;
+    async fn bootstrap_seed_is_uninitialized(&self, _id: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn create_bootstrap_admin(
+        &self,
+        _user: User,
+        _grants: Vec<LibraryGrant>,
+        _initialize_seed: bool,
+    ) -> AppResult<User> {
+        Err(AppError::Repository(
+            "atomic administrator bootstrap is not configured".into(),
+        ))
+    }
     async fn list_all(&self) -> AppResult<Vec<User>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>>;
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>>;
@@ -6574,6 +6589,15 @@ pub trait ImportRepository: Send + Sync {
 
 #[async_trait]
 pub trait ExternalImportMonitorSnapshotRepository: Send + Sync {
+    /// Atomically consume an exact library/facet session, returning its chunk count.
+    /// The caller must supply a unique destination that is never eligible for apply.
+    async fn claim_external_import_monitor_snapshot(
+        &self,
+        session_id: &str,
+        consumed_session_id: &str,
+        facet: MediaFacet,
+    ) -> AppResult<u64>;
+
     async fn append_external_import_monitor_snapshot_chunk(
         &self,
         chunk: &crate::ExternalImportMonitorSnapshotChunk,
@@ -8894,6 +8918,39 @@ pub trait IndexerClient: Send + Sync {
         Err(AppError::Repository(
             "indexer does not support strategy-plan search".to_string(),
         ))
+    }
+
+    /// Run one prepared strategy against this single indexer.
+    ///
+    /// The default forwards to [`Self::search`] and drops
+    /// `request.rss_catch_up`; an adapter that can hand the RSS catch-up
+    /// marker to its provider overrides this.
+    async fn search_strategy(
+        &self,
+        request: crate::IndexerSearchStrategyRequest,
+        mode: SearchMode,
+        operation: IndexerErrorOperation,
+        cancel_token: tokio_util::sync::CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        self.search(
+            request.query,
+            request.ids,
+            request.category,
+            request.facet,
+            request.id_search_facet,
+            request.newznab_categories,
+            None,
+            mode,
+            operation,
+            request.season,
+            request.episode,
+            request.absolute_episode,
+            request.year,
+            request.tagged_aliases,
+            None,
+            cancel_token,
+        )
+        .await
     }
 
     #[expect(

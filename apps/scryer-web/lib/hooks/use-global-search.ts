@@ -4,7 +4,7 @@ import type { MetadataTvdbSearchItem } from "@/lib/graphql/smg-queries";
 import type { ExternalId, Facet, TitleRecord } from "@/lib/types";
 import { metadataResultExternalIds } from "@/lib/utils/metadata-result-external-ids";
 import type { ViewCategoryId } from "@/lib/types/quality-profiles";
-import type { LocaleCode } from "@/lib/i18n";
+import { metadataLanguageForUi, type LocaleCode } from "@/lib/i18n";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { showCatalogAddToast } from "@/components/root/catalog-add-toast";
@@ -936,7 +936,7 @@ export function useGlobalSearch({
             input: {
               smgId: smgId ? Number(smgId) : undefined,
               tvdbId: tvdbId || undefined,
-              language: uiLanguage,
+              language: metadataLanguageForUi(uiLanguage),
             },
           }).toPromise();
           if (error || !data?.metadataMovie?.posterUrl) return title;
@@ -948,7 +948,7 @@ export function useGlobalSearch({
             smgId: smgId ? Number(smgId) : undefined,
             tvdbId: tvdbId || undefined,
             includeEpisodes: false,
-            language: uiLanguage,
+            language: metadataLanguageForUi(uiLanguage),
           },
         }).toPromise();
         if (error || !data?.metadataSeries?.posterUrl) return title;
@@ -1040,7 +1040,7 @@ export function useGlobalSearch({
           query,
           type: mapFacetToTvdbType(queueFacet),
           limit: 12,
-          language: uiLanguage,
+          language: metadataLanguageForUi(uiLanguage),
         }).toPromise();
         if (searchError) throw searchError;
         const rankedMatches = sortByRelevance(
@@ -1152,7 +1152,7 @@ export function useGlobalSearch({
       const metadataPromise = client.query(searchMetadataMultiQuery, {
         query: trimmed,
         limit: AUTOCOMPLETE_LIMIT,
-        language: uiLanguage,
+        language: metadataLanguageForUi(uiLanguage),
       }, { fetch: abortableFetch }).toPromise()
         .then(async ({ data, error }) => {
           if (error) throw error;

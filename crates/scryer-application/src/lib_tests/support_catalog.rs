@@ -21,6 +21,7 @@ pub(super) type PausedDownloadRequests = Arc<Mutex<Vec<PausedDownloadRequest>>>;
 #[derive(Default)]
 pub(super) struct MockTitleRepo {
     pub(super) store: Arc<Mutex<Vec<Title>>>,
+    pub(super) fail_monitoring_for: Mutex<HashSet<String>>,
     /// The title tag registry, in definition order. Mirrors the store's
     /// behaviour rather than its SQL: unique labels, a rename that rewrites
     /// every bag carrying the old label, and a delete that strips it.
@@ -796,18 +797,17 @@ impl TitleRepository for MockTitleRepo {
     async fn find_by_external_id_in_facet(
         &self,
         facet: MediaFacet,
-        source: &str,
-        value: &str,
+        id: &ExternalId,
     ) -> AppResult<Option<Title>> {
         let list = self.store.lock().await;
         Ok(list
             .iter()
             .find(|title| {
                 title.facet == facet
-                    && title.external_ids.iter().any(|external_id| {
-                        external_id.source.eq_ignore_ascii_case(source)
-                            && external_id.value == value
-                    })
+                    && title
+                        .external_ids
+                        .iter()
+                        .any(|external_id| external_id.same_entity_as(id))
             })
             .cloned())
     }
@@ -1170,6 +1170,11 @@ impl TitleRepository for MockTitleRepo {
     }
 
     async fn update_monitored(&self, id: &str, monitored: bool) -> AppResult<Title> {
+        if self.fail_monitoring_for.lock().await.contains(id) {
+            return Err(AppError::Repository(
+                "injected monitoring write failure".into(),
+            ));
+        }
         let mut list = self.store.lock().await;
         let title = list
             .iter_mut()

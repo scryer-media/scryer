@@ -27,7 +27,7 @@ export function readStoredLanguageCode(): LocaleCode {
 
   const stored = window.sessionStorage.getItem(UI_LANGUAGE_STORAGE_KEY);
   if (!stored) {
-    const browserLanguage = navigator.language.split("-")[0] ?? DEFAULT_LANGUAGE;
+    const browserLanguage = navigator.language;
     return normalizeLocale(browserLanguage);
   }
 

@@ -496,6 +496,91 @@ async fn submit_media_request_auto_approves_for_requester_with_auto_approve_perm
 }
 
 #[tokio::test]
+async fn auto_approved_media_request_queues_wanted_search_without_manage_titles() {
+    use futures_util::FutureExt;
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let requester = library_permission_user(
+        "auto-approved-searcher",
+        &library_id,
+        &[scryer_domain::LibraryPermission::AutoApproveRequests],
+    );
+    let wake = harness.app.runtime.acquisition.acquisition_wake.clone();
+    let _ = wake.notified().now_or_never();
+
+    harness
+        .app
+        .submit_media_request(&requester, media_request_input(library_id.clone(), 9031))
+        .await
+        .expect("request submission should auto-approve");
+
+    let title = harness.titles.store.lock().await[0].clone();
+    assert!(
+        harness
+            .app
+            .require_library_permission(
+                &requester,
+                &title.library_id,
+                scryer_domain::LibraryPermission::ManageTitles,
+            )
+            .await
+            .is_err(),
+        "the requester must lack ManageTitles for this to prove anything"
+    );
+    assert!(title.monitored);
+    assert!(
+        wake.notified().now_or_never().is_some(),
+        "the post-approval wanted search must queue the new title and wake acquisition"
+    );
+}
+
+#[tokio::test]
+async fn series_request_without_monitor_type_gets_default_monitoring() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let mut input = media_request_input(library_id.clone(), 9032);
+    input.facet = MediaFacet::Series;
+    input.requested_monitor_type = None;
+
+    harness
+        .app
+        .submit_media_request(&harness.user, input)
+        .await
+        .expect("series request should succeed");
+
+    let request = harness.media_requests.requests.lock().await[0].clone();
+    assert!(request.requested_monitor_type.is_none());
+
+    let outcome = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request.id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("approval should create the series title");
+
+    let titles = harness.titles.store.lock().await;
+    let title = titles
+        .iter()
+        .find(|title| title.id == outcome.title_id)
+        .expect("approved title should be stored");
+    assert!(title.monitored);
+    assert!(
+        !title
+            .tags
+            .iter()
+            .any(|tag| tag.starts_with("scryer:monitor-type:")),
+        "an absent monitor type must not narrow the title to future episodes"
+    );
+}
+
+#[tokio::test]
 async fn submit_media_request_uses_library_request_quality_profile_allowlist() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);

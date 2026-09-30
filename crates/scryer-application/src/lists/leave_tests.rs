@@ -94,6 +94,42 @@ async fn another_enabled_list_on_the_same_library_guards_the_title() {
 }
 
 #[tokio::test]
+async fn another_list_that_filters_or_excludes_the_title_does_not_guard_it() {
+    for state in [ListMembershipState::Filtered, ListMembershipState::Excluded] {
+        let mut list = subscription("list-a");
+        list.on_leave = ListOnLeave::Unmonitor;
+        let other = subscription("list-b");
+        let store = MemoryListStore::with_subscriptions(vec![list.clone(), other]);
+        let mut not_wanted = membership("list-b", "alpha", state);
+        not_wanted.title_id = Some("title-alpha".to_string());
+        store.insert_rows(vec![departed_added("list-a", "alpha"), not_wanted]);
+        let actions = RecordingActions::default();
+
+        assert!(
+            has_runnable_leave_action(&list, &store.rows("list-a"), &store, &store)
+                .await
+                .expect("guard check"),
+            "{state:?}"
+        );
+        let report = handle_departures(&list, &store, &store, &actions)
+            .await
+            .expect("leave step");
+
+        assert_eq!(report.guarded, 0, "{state:?}");
+        assert_eq!(report.acted, 1, "{state:?}");
+        assert!(store.row("list-a", "alpha").left_handled, "{state:?}");
+        assert_eq!(
+            actions.calls()[0],
+            RecordedAction::SetMonitored {
+                title_id: "title-alpha".to_string(),
+                monitored: false,
+            },
+            "{state:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_held_back_departure_runs_once_the_other_list_drops_the_title() {
     let mut list = subscription("list-a");
     list.on_leave = ListOnLeave::Unmonitor;

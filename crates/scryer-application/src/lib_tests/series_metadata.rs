@@ -150,6 +150,129 @@ async fn series_hydration_persists_and_clears_episode_image_url() {
 }
 
 #[tokio::test]
+async fn series_hydration_refreshes_episode_air_dates_and_keeps_them_when_upstream_drops_one() {
+    let (app, user) = bootstrap();
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Slated Later".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                tags: vec![],
+                external_ids: vec![ExternalId::new("tvdb_id", "880099")],
+                min_availability: None,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create title");
+
+    let seasons = vec![SeasonMetadata {
+        tvdb_id: 880_003,
+        tmdb_id: None,
+        number: 1,
+        label: "Season 1".into(),
+        episode_type: "official".into(),
+    }];
+    let episode = |number: i32, aired: &str| EpisodeMetadata {
+        tvdb_id: 880_300 + i64::from(number),
+        tmdb_id: None,
+        episode_number: number,
+        name: format!("Episode {number}"),
+        aired: aired.into(),
+        runtime_minutes: 24,
+        is_filler: false,
+        is_recap: false,
+        overview: String::new(),
+        absolute_number: number.to_string(),
+        contiguous_absolute_number: None,
+        season_number: 1,
+        image_url: String::new(),
+    };
+    let air_dates_by_number = |episodes: &[Episode]| {
+        let mut rows = episodes
+            .iter()
+            .map(|episode| {
+                (
+                    episode.episode_number.clone().unwrap_or_default(),
+                    episode.air_date.clone(),
+                )
+            })
+            .collect::<Vec<_>>();
+        rows.sort();
+        rows
+    };
+
+    // E01 is dated on first hydration; E02 is announced without a date.
+    app.create_series_seasons_and_episodes(
+        &title,
+        &seasons,
+        &[episode(1, "2026-03-01"), episode(2, "")],
+        &[],
+        &[],
+    )
+    .await;
+    let collection = app
+        .list_collections(&user, &title.id)
+        .await
+        .expect("list collections")
+        .into_iter()
+        .next()
+        .expect("collection created");
+    let hydrated = app
+        .list_episodes(&user, &collection.id)
+        .await
+        .expect("list episodes");
+    assert_eq!(
+        air_dates_by_number(&hydrated),
+        vec![
+            ("1".to_string(), Some("2026-03-01".to_string())),
+            ("2".to_string(), None),
+        ]
+    );
+
+    // The network reschedules E01 and finally dates E02.
+    app.create_series_seasons_and_episodes(
+        &title,
+        &seasons,
+        &[episode(1, "2026-03-08"), episode(2, "2026-03-15")],
+        &[],
+        &[],
+    )
+    .await;
+    let refreshed = app
+        .list_episodes(&user, &collection.id)
+        .await
+        .expect("list episodes after date refresh");
+    assert_eq!(
+        air_dates_by_number(&refreshed),
+        vec![
+            ("1".to_string(), Some("2026-03-08".to_string())),
+            ("2".to_string(), Some("2026-03-15".to_string())),
+        ]
+    );
+
+    // A later payload that omits E02's date leaves the stored date alone.
+    app.create_series_seasons_and_episodes(
+        &title,
+        &seasons,
+        &[episode(1, "2026-03-08"), episode(2, "")],
+        &[],
+        &[],
+    )
+    .await;
+    let retained = app
+        .list_episodes(&user, &collection.id)
+        .await
+        .expect("list episodes after date drop");
+    assert_eq!(
+        air_dates_by_number(&retained),
+        air_dates_by_number(&refreshed)
+    );
+}
+
+#[tokio::test]
 async fn series_hydration_clears_the_contiguous_number_of_episodes_it_no_longer_names() {
     let (app, user) = bootstrap();
     let title = app

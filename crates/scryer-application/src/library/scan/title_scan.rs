@@ -711,6 +711,55 @@ async fn normalize_episodic_file_roles_after_scan(
     title_updated
 }
 
+/// A monitored item whose imported file was confirmed gone must be searchable
+/// again: its coverage receipts describe searches made while it had a file,
+/// so they are forgotten and the acquisition walk is woken.
+async fn reopen_lost_file_coverage(
+    app: &AppUseCase,
+    title_id: &str,
+    scope_keys: impl IntoIterator<Item = String>,
+) {
+    let mut reopened = 0usize;
+    for scope_key in scope_keys {
+        app.prune_scope_key_coverage(&scope_key, None).await;
+        reopened += 1;
+    }
+    if reopened > 0 {
+        debug!(
+            title_id,
+            reopened, "re-opened search coverage for monitored items whose files were lost"
+        );
+        app.runtime.acquisition.acquisition_wake.notify_one();
+    }
+}
+
+/// Coverage keys for the monitored episodes a lost episodic file covered.
+fn lost_episode_file_scope_keys(
+    title: &Title,
+    episodes: &[Episode],
+    episode_ids: Option<&std::collections::BTreeSet<String>>,
+) -> Vec<String> {
+    let Some(episode_ids) = episode_ids.filter(|_| title.monitored) else {
+        return Vec::new();
+    };
+    episode_ids
+        .iter()
+        .filter(|episode_id| {
+            episodes
+                .iter()
+                .any(|episode| &episode.id == *episode_id && episode.monitored)
+        })
+        .filter_map(|episode_id| {
+            crate::acquisition::convergence::convergence_scope_key(
+                &SubmissionScope::Episode {
+                    episode_id: episode_id.clone(),
+                },
+                &title.id,
+            )
+        })
+        .collect()
+}
+
 async fn cleanup_missing_movie_title_records(
     app: &AppUseCase,
     title: &Title,
@@ -718,6 +767,7 @@ async fn cleanup_missing_movie_title_records(
     movie_scope: &MovieScanScope,
 ) -> bool {
     let mut title_updated = false;
+    let mut lost_file = false;
 
     let media_files = match app
         .services
@@ -773,7 +823,15 @@ async fn cleanup_missing_movie_title_records(
             );
         } else {
             title_updated = true;
+            lost_file = true;
         }
+    }
+    if lost_file && title.monitored {
+        let scope_key = crate::acquisition::convergence::convergence_scope_key(
+            &SubmissionScope::Title,
+            &title.id,
+        );
+        reopen_lost_file_coverage(app, &title.id, scope_key).await;
     }
 
     let collections = match app
@@ -3107,6 +3165,7 @@ impl AppUseCase {
                     &seen_paths,
                 )
                 .await?;
+                let mut lost_scope_keys = Vec::new();
                 for stale_path in remaining_existing_paths {
                     let Some(record) = existing_records_by_path.get(&stale_path).cloned() else {
                         continue;
@@ -3132,8 +3191,16 @@ impl AppUseCase {
                         );
                     } else {
                         title_updated_after_scan = true;
+                        lost_scope_keys.extend(lost_episode_file_scope_keys(
+                            &title,
+                            &title_episodes,
+                            stored_episode_ids_by_file.get(&record.id),
+                        ));
                     }
                 }
+                lost_scope_keys.sort_unstable();
+                lost_scope_keys.dedup();
+                reopen_lost_file_coverage(self, &title.id, lost_scope_keys).await;
 
                 if title.folder_path.as_deref() != Some(title_dir_str.as_str()) {
                     let db_started = Instant::now();

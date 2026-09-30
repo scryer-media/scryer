@@ -154,18 +154,17 @@ impl TitleRepository for TestTitleRepo {
     async fn find_by_external_id_in_facet(
         &self,
         facet: MediaFacet,
-        source: &str,
-        value: &str,
+        id: &scryer_domain::ExternalId,
     ) -> AppResult<Option<Title>> {
         let titles = self.titles.lock().await;
         Ok(titles
             .iter()
             .find(|title| {
                 title.facet == facet
-                    && title.external_ids.iter().any(|external_id| {
-                        external_id.source.eq_ignore_ascii_case(source)
-                            && external_id.value == value
-                    })
+                    && title
+                        .external_ids
+                        .iter()
+                        .any(|external_id| external_id.same_entity_as(id))
             })
             .cloned())
     }

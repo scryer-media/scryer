@@ -1044,6 +1044,10 @@ pub struct AppRuntimeAcquisitionState {
     /// [`AcquisitionTitleWalkLocks`] for why the two callers take it
     /// differently.
     pub(crate) title_walk_locks: AcquisitionTitleWalkLocks,
+    /// Consecutive background cycles each facet was deferred behind an active
+    /// library scan, reported so a starved facet is visible in the logs.
+    pub(crate) scan_blocked_facet_streaks:
+        Arc<std::sync::Mutex<crate::acquisition::workflow::ScanBlockedFacetStreaks>>,
     pub(crate) release_candidate_passwords:
         Arc<std::sync::Mutex<HashMap<String, ReleaseCandidatePasswordTicket>>>,
     pub(crate) release_candidate_listings: Arc<std::sync::Mutex<ReleaseCandidateListingTickets>>,
@@ -2467,6 +2471,7 @@ impl NavigationBadgeSection {
 
 #[derive(Clone)]
 pub struct AppRuntimeSecurityState {
+    pub(crate) default_admin_disabled: Arc<std::sync::atomic::AtomicBool>,
     pub(super) recovery_admin_login_enabled: Arc<std::sync::atomic::AtomicBool>,
     pub(crate) trusted_proxies: crate::rate_limit_proxy_policy::TrustedProxyRuntime,
     pub(crate) service_settings_lock: Arc<tokio::sync::Mutex<()>>,
@@ -2513,6 +2518,7 @@ impl AppRuntimeState {
                 supported_plugin_required_features,
             ),
             security: AppRuntimeSecurityState {
+                default_admin_disabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 recovery_admin_login_enabled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                 trusted_proxies: Default::default(),
                 service_settings_lock: Default::default(),
@@ -2555,6 +2561,7 @@ impl AppRuntimeState {
                 download_submission_guards: DownloadSubmissionGuardTable::default(),
                 download_failure_guards: DownloadFailureGuardTable::default(),
                 title_walk_locks: AcquisitionTitleWalkLocks::default(),
+                scan_blocked_facet_streaks: Arc::default(),
                 release_candidate_passwords: Arc::new(std::sync::Mutex::new(HashMap::new())),
                 release_candidate_listings: Arc::new(std::sync::Mutex::new(
                     ReleaseCandidateListingTickets::default(),

@@ -157,6 +157,9 @@ pub(crate) struct MemoryListStore {
     /// Sync outcomes for these subscription ids cannot be saved, so they stay
     /// due.
     pub fail_record_sync_for: Mutex<HashSet<String>>,
+    /// When set, this many subscription reads by id succeed and every later
+    /// one fails, as a store that breaks partway through a sync would.
+    pub subscription_reads_left: Mutex<Option<usize>>,
 }
 
 impl MemoryListStore {
@@ -219,6 +222,12 @@ impl ListSubscriptionRepository for MemoryListStore {
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<ListSubscription>> {
+        if let Some(left) = self.subscription_reads_left.lock().unwrap().as_mut() {
+            if *left == 0 {
+                return Err(AppError::Repository("fixture store failure".into()));
+            }
+            *left -= 1;
+        }
         Ok(self
             .subscriptions
             .lock()
@@ -258,6 +267,29 @@ impl ListSubscriptionRepository for MemoryListStore {
         let mut rows = self.subscriptions.lock().unwrap();
         if let Some(row) = rows.iter_mut().find(|row| row.id == id) {
             row.sync = sync.clone();
+            row.counts = *counts;
+        }
+        Ok(())
+    }
+
+    async fn record_sync_outcome(
+        &self,
+        id: &str,
+        read: &ListSyncStatus,
+        sync: &ListSyncStatus,
+        counts: &ListCounts,
+    ) -> AppResult<()> {
+        if self.fail_record_sync_for.lock().unwrap().contains(id) {
+            return Err(AppError::Repository("fixture store failure".into()));
+        }
+        let mut rows = self.subscriptions.lock().unwrap();
+        if let Some(row) = rows.iter_mut().find(|row| row.id == id) {
+            let mut sync = sync.clone();
+            if row.sync.next_at != read.next_at {
+                sync.next_at = row.sync.next_at;
+                sync.fetch_fingerprint = row.sync.fetch_fingerprint.clone();
+            }
+            row.sync = sync;
             row.counts = *counts;
         }
         Ok(())

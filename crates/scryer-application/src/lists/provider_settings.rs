@@ -57,6 +57,8 @@ pub struct ListProviderSettingField {
     pub secret: bool,
     pub is_set: bool,
     pub value: Option<String>,
+    /// The choices of a select field, in the provider's order.
+    pub options: Vec<scryer_domain::ConfigFieldOption>,
 }
 
 /// A provider's server-wide fields.
@@ -126,6 +128,15 @@ fn field_view(field: &ConfigFieldDef, stored_value: Option<&String>) -> ListProv
         secret,
         is_set: stored_value.is_some(),
         value: if secret { None } else { stored_value.cloned() },
+        options: field
+            .options
+            .iter()
+            .map(|option| scryer_domain::ConfigFieldOption {
+                value: option.value.clone(),
+                label: option.label.clone(),
+                config_overrides: option.config_overrides.clone(),
+            })
+            .collect(),
     }
 }
 

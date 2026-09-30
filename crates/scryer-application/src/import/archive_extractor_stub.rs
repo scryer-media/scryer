@@ -28,14 +28,18 @@ impl ArchiveExtractionDestination {
 
 pub async fn extract_archives_if_needed(
     _dir: &Path,
+    _is_sample: fn(&Path) -> bool,
     _destination: Option<ArchiveExtractionDestination>,
-    _password: Option<&str>,
+    _passwords: &crate::import::archive_passwords::ArchivePasswordCandidates,
     _archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 ) -> AppResult<Option<PathBuf>> {
     Ok(None)
 }
 
-pub fn archive_extraction_would_be_needed(_dir: &Path) -> AppResult<bool> {
+pub fn archive_extraction_would_be_needed(
+    _dir: &Path,
+    _is_sample: fn(&Path) -> bool,
+) -> AppResult<bool> {
     Ok(false)
 }
 

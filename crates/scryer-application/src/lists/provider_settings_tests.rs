@@ -119,3 +119,31 @@ fn configs_are_found_by_any_casing_of_the_provider_type() {
     );
     assert!(configs.for_provider(&provider, "unknown").is_empty());
 }
+
+#[test]
+fn select_fields_carry_their_choices() {
+    let mut region = field("region", ConfigFieldType::Select);
+    region.options = serde_json::from_value(serde_json::json!([
+        { "value": "north", "label": "North" },
+        { "value": "south", "label": "South" },
+    ]))
+    .expect("options");
+    let descriptor = ScriptedProvider(ScriptedLists::with_config_fields(vec![region]))
+        .descriptors()
+        .remove(0);
+
+    let stored = BTreeMap::from([("region".to_string(), "south".to_string())]);
+    for view in [
+        declared_server_fields(&descriptor).remove(0),
+        settings_view(PROVIDER.to_string(), &descriptor, &stored)
+            .fields
+            .remove(0),
+    ] {
+        let choices = view
+            .options
+            .iter()
+            .map(|option| (option.value.as_str(), option.label.as_str()))
+            .collect::<Vec<_>>();
+        assert_eq!(choices, vec![("north", "North"), ("south", "South")]);
+    }
+}

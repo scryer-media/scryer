@@ -2,7 +2,10 @@
 //! their memberships and sync history, previews, exclusions, and members'
 //! list policies. Personal lists have no type here.
 
-use super::{ExternalIdInput, ExternalIdPayload, MediaFacetValue, PluginConfigFieldTypeValue};
+use super::{
+    ExternalIdInput, ExternalIdPayload, MediaFacetValue, PluginConfigFieldOptionPayload,
+    PluginConfigFieldTypeValue,
+};
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 use scryer_application::lists::catalog::{ListAuthBadge, ListNoteTone, ListSourceParamType};
@@ -500,6 +503,9 @@ pub struct ListProviderSettingFieldPayload {
     pub is_set: bool,
     /// The stored value of a setting that is not secret, or null.
     pub value: Option<String>,
+    /// The choices of a select setting, in the provider's order. Empty for
+    /// every other type.
+    pub options: Vec<PluginConfigFieldOptionPayload>,
 }
 
 /// A list provider's server-wide settings.

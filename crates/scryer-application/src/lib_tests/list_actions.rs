@@ -368,8 +368,13 @@ async fn act_for_owner(
     let mut item = resolved_item("alpha");
     item.external_ids = vec![ExternalId::new("tvdb", tvdb_id.to_string())];
 
-    let outcome =
-        crate::lists::act::act_on_candidate(&AppListActions::new(&harness.app), &list, &item).await;
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &item,
+        false,
+    )
+    .await;
     (harness, outcome)
 }
 
@@ -417,6 +422,52 @@ async fn a_request_list_owner_who_may_only_request_files_a_request() {
     assert!(outcome.request_id.is_some());
     assert_eq!(outcome.title_id, None);
     assert_eq!(harness.media_requests.requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_list_request_keeps_its_id_when_approving_it_fails() {
+    let harness = bootstrap_media_request_app();
+    harness
+        .media_requests
+        .fail_approvals
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let owner = library_permission_user(
+        "list-owner",
+        &library_id,
+        &[
+            LibraryPermission::Request,
+            LibraryPermission::AutoApproveRequests,
+        ],
+    );
+    harness.users.store.lock().await.push(owner.clone());
+    let mut list = subscription("public-list-one");
+    list.owner_user_id = owner.id.clone();
+    list.mode = ListMode::Request;
+    list.routes = vec![crate::lists::test_support::route(
+        MediaFacet::Movie,
+        &library_id,
+    )];
+    let mut item = resolved_item("alpha");
+    item.external_ids = vec![ExternalId::new("tvdb", "9070".to_string())];
+
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &item,
+        false,
+    )
+    .await;
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests.len(), 1, "the request was filed once");
+    assert_eq!(requests[0].status, MediaRequestStatus::Pending);
+    assert_eq!(
+        outcome.request_id.as_ref(),
+        Some(&requests[0].id),
+        "the membership keeps the filed request"
+    );
+    assert_eq!(outcome.state, ListMembershipState::Requested);
 }
 
 #[tokio::test]

@@ -23,7 +23,7 @@ use std::time::Duration;
 use tokio::fs::File;
 use tokio::sync::Semaphore;
 use tokio_util::io::ReaderStream;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::{
     parse_download_client_config_json, read_config_string, resolve_download_client_base_url,
@@ -679,9 +679,20 @@ impl WeaverDownloadClient {
             })?;
 
         let status = response.status();
+        info!(
+            request_label,
+            status = status.as_u16(),
+            stage = "response_headers_received",
+            "weaver submit stage"
+        );
         let body = response.text().await.map_err(|err| {
             AppError::Repository(format!("weaver multipart response read failed: {err}"))
         })?;
+        info!(
+            request_label,
+            stage = "response_body_read",
+            "weaver submit stage"
+        );
 
         Self::parse_graphql_response(status, &body)
     }
@@ -1393,6 +1404,11 @@ impl DownloadClient for WeaverDownloadClient {
             request,
         )
         .await?;
+        info!(
+            download_id = ?request.download_id,
+            stage = "staged_nzb_resolved",
+            "weaver submit stage"
+        );
 
         let password = request
             .source_password

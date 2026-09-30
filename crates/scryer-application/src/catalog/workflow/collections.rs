@@ -696,12 +696,19 @@ impl AppUseCase {
                 let new_contiguous_absolute_number = ep.contiguous_absolute_number;
                 let contiguous_changed =
                     new_contiguous_absolute_number != existing.contiguous_absolute_number;
+                // Upcoming episodes are often announced without a date and
+                // dated (or rescheduled) later; the acquisition walk only
+                // targets dated episodes, so the refresh must carry the date
+                // forward. An absent upstream date leaves the stored one alone.
+                let air_date_changed =
+                    air_date.is_some() && air_date.as_deref() != existing.air_date.as_deref();
                 if (title_changed
                     || overview_changed
                     || tvdb_id_changed
                     || tmdb_id_changed
                     || image_url_changed
-                    || contiguous_changed)
+                    || contiguous_changed
+                    || air_date_changed)
                     && let Err(err) = self
                         .services
                         .catalog
@@ -715,6 +722,11 @@ impl AppUseCase {
                                     None
                                 },
                                 title: if title_changed { new_title } else { None },
+                                air_date: if air_date_changed {
+                                    air_date.clone()
+                                } else {
+                                    None
+                                },
                                 overview: if overview_changed { new_overview } else { None },
                                 tvdb_id: if tvdb_id_changed { new_tvdb_id } else { None },
                                 tmdb_id: if tmdb_id_changed { new_tmdb_id } else { None },

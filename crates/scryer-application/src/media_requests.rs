@@ -194,12 +194,34 @@ fn apply_admission_floor(
     }
 }
 
+/// A submission whose request row was committed, and what acting on the
+/// verdict came to. The request exists even when that action failed.
+pub(crate) struct CommittedMediaRequest {
+    pub request_id: String,
+    pub decision: AppResult<()>,
+}
+
 impl AppUseCase {
     pub async fn submit_media_request(
         &self,
         actor: &User,
         input: SubmitMediaRequestInput,
     ) -> AppResult<SubmitMediaRequestOutcome> {
+        let committed = self.submit_media_request_committed(actor, input).await?;
+        committed.decision?;
+        Ok(SubmitMediaRequestOutcome {
+            request_id: committed.request_id,
+        })
+    }
+
+    /// Submit a request and report its id once the row is committed, even
+    /// when approving or denying it afterwards fails. A caller that records
+    /// the id can then find the request again instead of filing another.
+    pub(crate) async fn submit_media_request_committed(
+        &self,
+        actor: &User,
+        input: SubmitMediaRequestInput,
+    ) -> AppResult<CommittedMediaRequest> {
         let title = input.title.trim().to_string();
         if title.is_empty() {
             return Err(AppError::Validation("request title is required".into()));
@@ -352,10 +374,14 @@ impl AppUseCase {
         self.publish_stored_domain_event(&submission.event).await;
         let submitted_request = submission.request;
         self.stamp_request_decision(&request_id, &evaluation).await;
-        self.act_on_request_decision(actor, submitted_request, &evaluation)
-            .await?;
+        let decision = self
+            .act_on_request_decision(actor, submitted_request, &evaluation)
+            .await;
 
-        Ok(SubmitMediaRequestOutcome { request_id })
+        Ok(CommittedMediaRequest {
+            request_id,
+            decision,
+        })
     }
 
     /// The grant a submission needs. Every request needs Request, except a
@@ -1000,9 +1026,10 @@ impl AppUseCase {
         )
         .await;
 
+        // Request policy already authorized this add; the requester usually
+        // lacks ManageTitles, so the post-add search runs with system authority.
         if let Err(error) = self
-            .trigger_title_wanted_search(
-                actor,
+            .trigger_title_wanted_search_unchecked(
                 &outcome.title.id,
                 SubmissionConflictPolicy::from_replace_flag(false),
             )
@@ -2251,11 +2278,10 @@ fn normalize_requested_monitor_type(
     facet: &MediaFacet,
     value: Option<String>,
 ) -> AppResult<Option<String>> {
+    // No requested monitor type means the title gets the default monitoring,
+    // not a narrower pick the requester never made.
     let Some(value) = normalized_optional_string(value) else {
-        return Ok(match facet {
-            MediaFacet::Movie => None,
-            MediaFacet::Series | MediaFacet::Anime => Some("futureepisodes".to_string()),
-        });
+        return Ok(None);
     };
     let normalized = value
         .chars()

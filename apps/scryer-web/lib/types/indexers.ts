@@ -68,6 +68,8 @@ export type IndexerDraft = {
   downloadClientId: string | null;
   seedingProfileId: string | null;
   storedSecretKeys: string[];
+  /** Minimum seconds between queries as typed; blank means no interval. */
+  rateLimitSeconds: string;
   /** Query budget per minute as typed; blank means no budget. */
   maxQueriesPerMinute: string;
   isEnabled: boolean;

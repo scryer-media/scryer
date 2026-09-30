@@ -2666,6 +2666,17 @@
               "type": "null"
             }
           ]
+        },
+        "rss_catch_up": {
+          "description": "Where the previous successful RSS poll of this indexer stopped. Present\nonly on an RSS (recent-releases) request the host has a marker for; a\nplugin that pages its feed reads older pages until it reaches the\nmarker, and a plugin that does not page ignores it. Absent means \"read\nthe newest page only\", which is also what every host before SDK 3.13\nasked for.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginRssCatchUp"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2792,6 +2803,26 @@
         "id",
         "aggregate_id",
         "fallback"
+      ]
+    },
+    "PluginRssCatchUp": {
+      "description": "The newest release the host saw on the previous successful RSS poll of one\nindexer.\n\nA plugin has caught up once a page contains `last_seen_identity`, or once\nthe oldest release on a page was published before `last_seen_published_at`.\nWhen it stops paging for its own page ceiling first, it reports the run as\nincomplete with the releases it did read, so the host records the period\nit could not cover.",
+      "type": "object",
+      "properties": {
+        "last_seen_published_at": {
+          "description": "RFC 3339 publish time of the newest release the host saw on the previous successful RSS poll.",
+          "type": "string"
+        },
+        "last_seen_identity": {
+          "description": "The same release's identity, as the host derives it from a\n[`PluginSearchResult`] the plugin returned: its `guid` verbatim when\npresent, otherwise its `link`, otherwise its `download_url`, otherwise\nits `title`. A plugin matches it against the same fields in the same\norder. Absent when the host holds only a publish time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "last_seen_published_at"
       ]
     },
     "PluginActionRequest": {

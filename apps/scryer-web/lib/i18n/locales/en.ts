@@ -1875,6 +1875,7 @@ const en: LocaleDictionary = {
   "settings.managedIndexerReadOnly":
     "Managed indexers are controlled by their parent sync and cannot be edited directly.",
   "settings.managedIndexerReadOnlyShort": "Read-only",
+  "settings.indexerRateLimits": "Rate limits",
   "settings.indexerDownloadClient": "Download client",
   "settings.indexerDownloadClientLabel": "Download client for {{name}}",
   "settings.indexerDownloadClientAutomatic": "Automatic",
@@ -2500,6 +2501,10 @@ const en: LocaleDictionary = {
   "status.catalogRefreshed": "Plugin catalog refreshed.",
 
   "form.indexerNamePlaceholder": "My Newznab Indexer",
+  "form.indexerRateLimitSeconds": "Minimum seconds between queries",
+  "form.indexerRateLimitSecondsPlaceholder": "No delay",
+  "form.indexerRateLimitSecondsInvalid":
+    "Minimum seconds between queries must be a whole number, or empty for no delay.",
   "form.indexerMaxQueriesPerMinute": "Max queries per minute",
   "form.indexerMaxQueriesPerMinutePlaceholder": "No limit",
   "form.indexerMaxQueriesPerMinuteInvalid":

@@ -53,6 +53,33 @@ impl Harness {
     }
 }
 
+impl Harness {
+    /// Sync one subscription as a pass that read it as `read` would.
+    async fn sync_one_at(
+        &self,
+        read: &ListSubscription,
+        now: DateTime<Utc>,
+    ) -> SubscriptionSyncOutcome {
+        let provider = ScriptedProvider(self.lists.clone());
+        let charts = ScriptedCharts::default();
+        let context = ListSyncContext {
+            subscriptions: &self.store,
+            memberships: &self.store,
+            exclusions: &self.store,
+            accounts: &self.store,
+            policies: &self.store,
+            plugins: &provider,
+            charts: &charts,
+            resolver: &self.resolver,
+            actions: &self.actions,
+            provider_configs: &self.provider_configs,
+        };
+        sync_subscription(&context, read, now, None)
+            .await
+            .expect("sync one subscription")
+    }
+}
+
 fn rate_limited(retry_after_seconds: Option<i64>) -> PluginError {
     PluginError {
         code: PluginErrorCode::RateLimited,
@@ -310,6 +337,22 @@ async fn a_rate_limit_pauses_until_retry_after_capped_at_a_day() {
 }
 
 #[tokio::test]
+async fn a_sync_reports_only_the_adds_it_made() {
+    let mut list = subscription("list-a");
+    list.interval_seconds = 60;
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha", "beta"]);
+    harness.sync_at(at(0)).await;
+    harness.lists.serve("list-a", &["alpha", "beta", "gamma"]);
+
+    let report = harness.sync_at(at(10)).await;
+
+    assert_eq!(report.synced, 1);
+    assert_eq!(report.added, 1, "only gamma was added by this sync");
+    assert_eq!(harness.store.subscription("list-a").counts.added, 3);
+}
+
+#[tokio::test]
 async fn an_unchanged_list_touches_only_its_timestamps() {
     let mut list = subscription("list-a");
     list.interval_seconds = 60;
@@ -351,6 +394,86 @@ async fn a_member_with_lists_turned_off_is_not_read() {
         harness.store.subscription("list-a").sync.state,
         ListSyncState::Off
     );
+}
+
+/// A personal Request list with a linked account for its owner.
+fn personal_request_harness(policy: Option<ListPolicy>) -> Harness {
+    let list = ListSubscription {
+        scope: ListScope::Personal,
+        mode: ListMode::Request,
+        credential_id: Some("account-one".to_string()),
+        ..subscription("list-a")
+    };
+    let harness = Harness::new(vec![list]);
+    harness
+        .store
+        .accounts
+        .lock()
+        .unwrap()
+        .push(scryer_domain::UserListAccount {
+            id: "account-one".to_string(),
+            user_id: "owner-one".to_string(),
+            provider: crate::lists::test_support::PROVIDER.to_string(),
+            external_user_id: "external-one".to_string(),
+            username: "fixture-member".to_string(),
+            display_name: None,
+            credential: scryer_domain::ListAccountCredential {
+                access_token: "fixture-token".to_string(),
+                ..scryer_domain::ListAccountCredential::default()
+            },
+            status: scryer_domain::UserListAccountStatus::Active,
+            error_message: None,
+            linked_at: at(0),
+            last_used_at: None,
+            last_refresh_at: None,
+            updated_at: at(0),
+        });
+    if let Some(policy) = policy {
+        harness.store.policies.lock().unwrap().push(UserListPolicy {
+            user_id: "owner-one".to_string(),
+            policy,
+            updated_by_user_id: None,
+            updated_at: at(0),
+        });
+    }
+    harness.lists.serve("list-a", &["alpha"]);
+    harness
+}
+
+fn request_holds(harness: &Harness) -> Vec<bool> {
+    harness
+        .actions
+        .calls()
+        .into_iter()
+        .filter_map(|call| match call {
+            RecordedAction::Request { hold, .. } => Some(hold),
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_member_whose_list_policy_needs_approval_gets_held_requests() {
+    for policy in [None, Some(ListPolicy::Approval)] {
+        let harness = personal_request_harness(policy);
+
+        harness.sync_at(at(0)).await;
+
+        assert_eq!(request_holds(&harness), vec![true], "policy {policy:?}");
+        assert_eq!(
+            harness.store.row("list-a", "alpha").state,
+            ListMembershipState::Requested
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_member_whose_list_policy_auto_approves_gets_evaluated_requests() {
+    let harness = personal_request_harness(Some(ListPolicy::Auto));
+
+    harness.sync_at(at(0)).await;
+
+    assert_eq!(request_holds(&harness), vec![false]);
 }
 
 #[tokio::test]
@@ -440,6 +563,7 @@ async fn a_personal_add_list_submits_requests_instead() {
         &actions,
         &list,
         &crate::lists::test_support::resolved_item("alpha"),
+        false,
     )
     .await;
     assert_eq!(outcome.state, ListMembershipState::Requested);
@@ -1027,4 +1151,211 @@ async fn a_list_that_stays_due_is_tried_once_and_does_not_hide_the_rest() {
             ListMembershipState::Added
         );
     }
+}
+
+#[tokio::test]
+async fn a_sync_requested_while_a_sync_runs_survives_that_sync() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(0)).await;
+    // The pass reads the list when it is next due...
+    let read = harness.store.subscription("list-a");
+    assert!(read.sync.fetch_fingerprint.is_some());
+
+    // ...and "sync now" makes it due again and drops the fingerprint before
+    // that pass finishes.
+    let requested = ListSyncStatus {
+        next_at: Some(at(400)),
+        fetch_fingerprint: None,
+        ..read.sync.clone()
+    };
+    harness
+        .store
+        .record_sync("list-a", &requested, &read.counts)
+        .await
+        .expect("sync now");
+
+    harness.sync_one_at(&read, at(401)).await;
+
+    let list = harness.store.subscription("list-a");
+    assert_eq!(list.sync.next_at, Some(at(400)), "the request is still due");
+    assert_eq!(list.sync.fetch_fingerprint, None);
+    assert_eq!(
+        list.sync.last_at,
+        Some(at(401)),
+        "the finished sync is recorded"
+    );
+}
+
+#[tokio::test]
+async fn a_sync_nobody_raced_moves_the_next_sync_on() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(0)).await;
+    let read = harness.store.subscription("list-a");
+
+    harness.sync_one_at(&read, at(401)).await;
+
+    let list = harness.store.subscription("list-a");
+    assert_eq!(
+        list.sync.next_at,
+        Some(at(401) + chrono::Duration::hours(6))
+    );
+}
+
+#[tokio::test]
+async fn a_list_disabled_while_it_syncs_takes_no_further_action() {
+    let mut list = subscription("list-a");
+    list.on_leave = ListOnLeave::Unmonitor;
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(0)).await;
+    let read = harness.store.subscription("list-a");
+    let calls_before = harness.actions.calls().len();
+    // Disabled after this sync read the list; alpha left and beta is new.
+    for row in harness.store.subscriptions.lock().unwrap().iter_mut() {
+        row.enabled = false;
+    }
+    harness.lists.serve("list-a", &["beta"]);
+
+    harness.sync_one_at(&read, at(10)).await;
+
+    assert_eq!(
+        harness.actions.calls().len(),
+        calls_before,
+        "nothing is added and no on-leave action runs"
+    );
+    assert_eq!(
+        harness.store.row("list-a", "beta").state,
+        ListMembershipState::Pending,
+        "the new item waits for the list to be enabled again"
+    );
+    assert!(!harness.store.row("list-a", "alpha").left_handled);
+}
+
+#[tokio::test]
+async fn a_list_unfollowed_while_it_syncs_takes_no_action() {
+    let harness = Harness::new(Vec::new());
+    harness.lists.serve("list-a", &["alpha"]);
+
+    let outcome = harness.sync_one_at(&subscription("list-a"), at(0)).await;
+
+    assert_eq!(outcome, SubscriptionSyncOutcome::Off);
+    assert!(harness.actions.calls().is_empty());
+    assert!(harness.store.rows("list-a").is_empty());
+}
+
+#[tokio::test]
+async fn an_add_is_recorded_even_when_the_sync_breaks_off_after_it() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["alpha", "beta"]);
+    // The store breaks after the check made before alpha's add.
+    *harness.store.subscription_reads_left.lock().unwrap() = Some(1);
+
+    let report = harness.sync_at(at(0)).await;
+
+    assert_eq!(report.failed, 1);
+    let row = harness.store.row("list-a", "alpha");
+    assert_eq!(row.state, ListMembershipState::Added);
+    assert!(row.added_by_list, "the list's add is remembered");
+    assert_eq!(row.title_id.as_deref(), Some("title-alpha"));
+}
+
+fn movie_exclusion(key: &str) -> scryer_domain::ListExclusion {
+    scryer_domain::ListExclusion {
+        id: format!("exclusion-{key}"),
+        kind: scryer_domain::MediaFacet::Movie,
+        external_ids: vec![crate::lists::test_support::tmdb(&format!("{key}-id"))],
+        display_title: format!("Fixture Title {key}"),
+        year: None,
+        scope: scryer_domain::ListExclusionScope::AllLists,
+        created_by_user_id: None,
+        created_at: at(0),
+    }
+}
+
+#[tokio::test]
+async fn a_title_deleted_without_an_exclusion_is_added_again_on_the_next_sync() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["alpha", "beta"]);
+    harness.sync_at(at(0)).await;
+    assert_eq!(add_calls(&harness.actions), 2);
+
+    harness
+        .actions
+        .missing_titles
+        .lock()
+        .unwrap()
+        .insert("title-alpha".to_string());
+    // The provider reports the list unchanged; the deleted title is still work.
+    let report = harness.sync_at(at(6 * 60)).await;
+
+    let added_again = harness
+        .actions
+        .calls()
+        .into_iter()
+        .filter(|call| matches!(call, RecordedAction::Add { item_key, .. } if item_key == "alpha"))
+        .count();
+    assert_eq!(added_again, 2);
+    assert_eq!(add_calls(&harness.actions), 3, "beta is still there");
+    assert_eq!(report.added, 1);
+    let row = harness.store.row("list-a", "alpha");
+    assert_eq!(row.state, ListMembershipState::Added);
+    assert_eq!(row.title_id.as_deref(), Some("title-alpha"));
+    assert!(row.added_by_list);
+}
+
+#[tokio::test]
+async fn a_title_deleted_with_an_exclusion_stays_gone() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(0)).await;
+
+    harness
+        .actions
+        .missing_titles
+        .lock()
+        .unwrap()
+        .insert("title-alpha".to_string());
+    harness
+        .store
+        .exclusions
+        .lock()
+        .unwrap()
+        .push(movie_exclusion("alpha"));
+    harness.sync_at(at(6 * 60)).await;
+
+    assert_eq!(add_calls(&harness.actions), 1);
+    let row = harness.store.row("list-a", "alpha");
+    assert_eq!(row.state, ListMembershipState::Excluded);
+    assert_eq!(row.title_id, None);
+    assert!(
+        !row.added_by_list,
+        "the list no longer owns a deleted title"
+    );
+}
+
+#[tokio::test]
+async fn a_title_the_list_added_that_is_still_present_is_not_added_twice() {
+    let harness = Harness::new(vec![subscription("list-a")]);
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(0)).await;
+
+    // Unchanged list, title still in the library: nothing to read again.
+    harness.sync_at(at(6 * 60)).await;
+    // A changed list reads alpha again; its title is still there.
+    harness.lists.serve("list-a", &["alpha", "beta"]);
+    harness.sync_at(at(12 * 60)).await;
+
+    let alpha_adds = harness
+        .actions
+        .calls()
+        .into_iter()
+        .filter(|call| matches!(call, RecordedAction::Add { item_key, .. } if item_key == "alpha"))
+        .count();
+    assert_eq!(alpha_adds, 1);
+    let row = harness.store.row("list-a", "alpha");
+    assert_eq!(row.state, ListMembershipState::Added);
+    assert_eq!(row.title_id.as_deref(), Some("title-alpha"));
+    assert!(row.added_by_list);
 }

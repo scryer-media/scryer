@@ -43,7 +43,7 @@ const QUALITY_EDITOR_SECTION_BODY_CLASS =
 const QUALITY_EDITOR_LIST_CLASS =
   "max-h-60 overflow-auto rounded-[10px] border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-2";
 const QUALITY_EDITOR_LIST_ITEM_CLASS =
-  "mb-1 flex items-center justify-between rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-card2)] px-2 py-1.5 text-[var(--scry-ink2)] hover:bg-[var(--scry-hover)]";
+  "mb-1 flex items-center justify-between gap-2 rounded-[9px] border border-[var(--scry-border3)] bg-[var(--scry-card2)] px-2 py-1.5 text-[var(--scry-ink2)] hover:bg-[var(--scry-hover)]";
 
 type ViewCategoryId = "MOVIE" | "SERIES" | "ANIME";
 
@@ -320,7 +320,7 @@ function ProfileListEditor({
               sortedAllowed.map((option) => (
                 <div
                   key={option.value}
-                  className="mb-1 flex items-center justify-between rounded-[9px] border border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] px-2 py-1.5 text-[var(--scry-ink2)] ring-1 ring-inset ring-[var(--scry-success-border)] hover:border-[var(--scry-success-border-strong)]"
+                  className="mb-1 flex items-center justify-between gap-2 rounded-[9px] border border-[var(--scry-success-border)] bg-[var(--scry-success-bg)] px-2 py-1.5 text-[var(--scry-ink2)] ring-1 ring-inset ring-[var(--scry-success-border)] hover:border-[var(--scry-success-border-strong)]"
                 >
                   <span className="text-xs">{option.label}</span>
                   <Button
@@ -348,7 +348,7 @@ function ProfileListEditor({
               sortedDenied.map((option) => (
                 <div
                   key={option.value}
-                  className="mb-1 flex items-center justify-between rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-2 py-1.5 text-[var(--scry-ink2)] ring-1 ring-inset ring-[color:var(--scry-danger-border)] hover:border-[var(--scry-danger-border-strong)]"
+                  className="mb-1 flex items-center justify-between gap-2 rounded-[9px] border border-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)] px-2 py-1.5 text-[var(--scry-ink2)] ring-1 ring-inset ring-[color:var(--scry-danger-border)] hover:border-[var(--scry-danger-border-strong)]"
                 >
                   <span className="text-xs">{option.label}</span>
                   <Button

@@ -34,7 +34,7 @@ pub fn build_release_dedup_key(parsed: &ParsedReleaseMetadata) -> String {
         if let Some(air_date) = ep.air_date {
             format!("air{}", air_date.format("%Y-%m-%d"))
         } else if ep.release_type == crate::ParsedEpisodeReleaseType::SeasonPack {
-            format!("s{}pack", ep.season.unwrap_or(0))
+            season_pack_key(ep)
         } else if let Some(season) = ep.season {
             let eps = ep
                 .episode_numbers
@@ -93,6 +93,88 @@ pub fn build_release_dedup_key(parsed: &ParsedReleaseMetadata) -> String {
         stereo.sampling.map_or("", |value| value.as_str()),
         stereo.encoding.map_or("", |value| value.as_str())
     )
+}
+
+/// Key of a season pack: the season, plus whatever makes the pack a
+/// different set of episodes than the plain full-season pack. A part of a
+/// season, a pack of several seasons, a complete-series pack and a season's
+/// extras are each their own release, never a copy of the full-season pack.
+/// A plain full-season pack keeps the bare `s{season}pack` form.
+fn season_pack_key(ep: &crate::ParsedEpisodeMetadata) -> String {
+    let mut key = format!("s{}pack", ep.season.unwrap_or(0));
+    if ep.season_numbers.len() > 1 {
+        let seasons = ep
+            .season_numbers
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        key.push_str(&format!(":seasons{seasons}"));
+    } else if ep.is_series_pack || ep.is_multi_season {
+        key.push_str(":series");
+    }
+    if let Some(part) = ep.season_part {
+        key.push_str(&format!(":part{part}"));
+    } else if ep.is_partial_season {
+        let eps = ep
+            .episode_numbers
+            .iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(",");
+        key.push_str(&format!(":partial{eps}"));
+    }
+    if ep.is_season_extra {
+        key.push_str(":extras");
+    }
+    key
+}
+
+#[cfg(test)]
+mod season_pack_key_tests {
+    use super::*;
+    use scryer_release_parser::{ContextFacetHint, ContextTitle, ReleaseParseContext};
+
+    fn key(release: &str) -> String {
+        let context = ReleaseParseContext {
+            facet_hint: ContextFacetHint::Series,
+            title: ContextTitle {
+                name: "Glass Harbor".into(),
+            },
+            aliases: Vec::new(),
+            known_years: Vec::new(),
+            imdb_ids: Vec::new(),
+            episodes: Vec::new(),
+        };
+        build_release_dedup_key(&crate::parse_release_metadata_for_target(release, &context))
+    }
+
+    #[test]
+    fn the_same_full_season_pack_shares_one_key() {
+        let full = key("Glass.Harbor.S02.1080p.WEB-DL.H.264-QUILLFOX");
+        assert!(full.contains("|s2pack|"), "{full}");
+        assert_eq!(full, key("Glass Harbor S02 1080p WEB-DL H.264-QUILLFOX"));
+    }
+
+    #[test]
+    fn packs_holding_different_episodes_never_share_a_key() {
+        let releases = [
+            "Glass.Harbor.S02.1080p.WEB-DL.H.264-QUILLFOX",
+            "Glass.Harbor.S02.Part.1.1080p.WEB-DL.H.264-QUILLFOX",
+            "Glass.Harbor.S02.Part.2.1080p.WEB-DL.H.264-QUILLFOX",
+            "Glass.Harbor.S02.Extras.1080p.WEB-DL.H.264-QUILLFOX",
+            "Glass.Harbor.S02-S04.1080p.WEB-DL.H.264-QUILLFOX",
+            "Glass.Harbor.S02-S03.1080p.WEB-DL.H.264-QUILLFOX",
+        ];
+        let mut seen = std::collections::HashMap::new();
+        for release in releases {
+            let key = key(release);
+            assert!(!key.is_empty(), "{release} has no key");
+            if let Some(other) = seen.insert(key.clone(), release) {
+                panic!("{release} and {other} share the key {key}");
+            }
+        }
+    }
 }
 
 #[cfg(test)]

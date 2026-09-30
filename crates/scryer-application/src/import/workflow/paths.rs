@@ -202,6 +202,15 @@ impl ReleaseEvidence {
         }
     }
 
+    /// The indexer release title a Scryer grab persisted, exactly as stored;
+    /// `None` for adopted downloads and grabs recorded without one.
+    pub(crate) fn submission_source_title(&self) -> Option<&str> {
+        match self {
+            Self::ScryerSubmission { source_title, .. } => source_title.as_deref(),
+            Self::DownloaderObservation { .. } => None,
+        }
+    }
+
     pub(crate) fn purpose(&self) -> crate::DownloadSubmissionPurpose {
         match self {
             Self::ScryerSubmission { purpose, .. } => *purpose,

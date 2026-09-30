@@ -560,6 +560,69 @@ async fn a_season_only_title_search_asks_indexers_for_the_season_and_no_episode(
     );
 }
 
+#[tokio::test]
+async fn a_season_only_title_search_lists_only_multi_episode_releases_of_that_season() {
+    let kept = [
+        "Glass.Harbor.S02.1080p.WEB-DL-QUILLFOX",
+        // Same group and quality as the full pack: a part of the season is
+        // its own release and must not fold into it as a duplicate.
+        "Glass.Harbor.S02.Part.1.1080p.WEB-DL-QUILLFOX",
+        "Glass.Harbor.S02E01E02.1080p.WEB-DL-QUILLFOX",
+        "Glass.Harbor.S01-S03.1080p.BluRay.x264-QUILLFOX",
+    ];
+    let dropped = [
+        "Glass.Harbor.S02E01.1080p.WEB-DL-QUILLFOX",
+        "Glass.Harbor.S03.1080p.WEB-DL-QUILLFOX",
+    ];
+    let releases = kept
+        .iter()
+        .chain(dropped.iter())
+        .enumerate()
+        .map(|(index, name)| {
+            // No download client is configured here, so an announced source
+            // kind would be dropped as unroutable before scoring.
+            let mut release = nzb_release(name, &format!("release-{index}"));
+            release.source_kind = None;
+            release
+        })
+        .collect();
+    let client = ScriptedIndexerClient::default()
+        .with_releases("idx-a", releases)
+        .await;
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        client,
+        vec![synthetic_direct_nab_indexer_config("idx-a", "newznab")],
+    );
+    let (title, _) = series_with_second_season(&app, &user).await;
+
+    let start = app
+        .start_interactive_release_search(
+            &user,
+            InteractiveReleaseSearchRequest {
+                season: Some("2".into()),
+                ..title_request(&title.id)
+            },
+        )
+        .await
+        .expect("start season search");
+    let done = await_completion(&app, &user, &start.id).await;
+    assert_eq!(done.state, InteractiveReleaseSearchState::Completed);
+
+    let mut listed = done
+        .results
+        .iter()
+        .map(|result| result.title.as_str())
+        .collect::<Vec<_>>();
+    listed.sort_unstable();
+    let mut expected = kept.to_vec();
+    expected.sort_unstable();
+    assert_eq!(
+        listed, expected,
+        "only multi-episode releases that include season 2 are listed: {done:?}"
+    );
+}
+
 // ── Query subject: context-free rejections ─────────────────────────────
 
 #[tokio::test]

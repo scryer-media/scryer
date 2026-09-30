@@ -1850,12 +1850,19 @@ pub async fn begin_manual_import_selection(
     let mut preview_root = download_root.clone();
     let mut trusted_root = download_root;
     let mut archive_workspace_root = None;
+    // Samples by name only, as everywhere in manual import: a sample-named
+    // video alone does not make the archives redundant, a small real one does.
     let mut archive_extraction_needed =
-        crate::archive_extractor::archive_extraction_would_be_needed(&preview_root)?;
+        crate::archive_extractor::archive_extraction_would_be_needed(
+            &preview_root,
+            is_sample_named_file,
+        )?;
 
     if archive_extraction_needed && extract_archives {
         let destination =
             archive_extraction_destination_for_title(app, &selection_id, &authorized.title).await?;
+        let passwords =
+            archive_password_candidates(app, &completed, &release_evidence, None).await;
         let extracted_root = {
             let _archive_extraction_permit = app
                 .runtime
@@ -1865,8 +1872,9 @@ pub async fn begin_manual_import_selection(
                 .await;
             crate::archive_extractor::extract_archives_if_needed(
                 &preview_root,
+                is_sample_named_file,
                 Some(destination),
-                None,
+                &passwords,
                 app.services
                     .integrations
                     .archive_extractor_plugin_provider

@@ -160,6 +160,53 @@ fn source_kind_matches_preference(result: &IndexerSearchResult, preferred: &str)
     }
 }
 
+/// Whether a release belongs in an operator's whole-season search for
+/// `season`: a release of several episodes that includes that season. Season
+/// packs, partial-season and multi-episode releases, multi-season packs that
+/// name the season and complete-series packs qualify; single episodes, daily
+/// episodes, season extras and packs that name only other seasons do not.
+///
+/// A multi-episode release that names no season at all (an absolute-numbered
+/// anime batch) is kept: the season is not contradicted, and the title and
+/// numbering checks that run beside this one have already placed it. A
+/// release with no episode numbering parsed at all is kept for the same
+/// reason the ordinary season check keeps it — nothing parsed says it is a
+/// single episode or another season.
+pub(crate) fn release_is_multi_episode_for_season(
+    episode: Option<&crate::ParsedEpisodeMetadata>,
+    season: u32,
+) -> bool {
+    let Some(episode) = episode else {
+        return true;
+    };
+    if episode.is_season_extra {
+        return false;
+    }
+    let multi_episode = match episode.release_type {
+        crate::ParsedEpisodeReleaseType::SeasonPack
+        | crate::ParsedEpisodeReleaseType::RangePack
+        | crate::ParsedEpisodeReleaseType::MultiEpisode => true,
+        crate::ParsedEpisodeReleaseType::SingleEpisode | crate::ParsedEpisodeReleaseType::Daily => {
+            false
+        }
+        crate::ParsedEpisodeReleaseType::Unknown => {
+            episode.full_season
+                || episode.is_partial_season
+                || episode.is_multi_season
+                || episode.is_series_pack
+                || episode.episode_numbers.len() > 1
+                || episode.absolute_episode_numbers.len() > 1
+        }
+    };
+    if !multi_episode {
+        return false;
+    }
+    if !episode.season_numbers.is_empty() {
+        return episode.season_numbers.contains(&season);
+    }
+    episode.season.is_none_or(|named| named == season)
+}
+
 #[cfg(test)]
 pub(crate) fn extract_http_status_from_message(message: &str) -> Option<u16> {
     let marker = "status ";
@@ -918,6 +965,7 @@ impl AppUseCase {
             absolute_episode,
             &mut prepared,
             false,
+            None,
             now,
         )
         .await
@@ -947,6 +995,11 @@ impl AppUseCase {
         absolute_episode: Option<u32>,
         prepared: &mut Option<PreparedReleaseScoringInputs>,
         preserve_duplicate_sources: bool,
+        // Set only for an operator's whole-season search: the season whose
+        // multi-episode releases are the only ones kept. Applied here, before
+        // the result list is truncated, so single episodes that would be
+        // dropped cannot crowd the packs out of it.
+        multi_episode_season: Option<u32>,
         // The lane's clock: listing age is read against it, and the snapshot a
         // grab or park persists is captured at it.
         now: chrono::DateTime<chrono::Utc>,
@@ -1172,7 +1225,17 @@ impl AppUseCase {
                 runtime_minutes,
             );
 
-            if requested_episode.is_none()
+            if let Some(wanted_season) = multi_episode_season {
+                // Replaces the single-season check below, which passes any
+                // release that names no single season: a multi-season pack of
+                // other seasons as well as one that holds this season.
+                if !release_is_multi_episode_for_season(
+                    scored_release_metadata.episode.as_ref(),
+                    wanted_season,
+                ) {
+                    continue;
+                }
+            } else if requested_episode.is_none()
                 && let Some(ref ep_meta) = scored_release_metadata.episode
                 && let Some(wanted_season) = season
                 && let Some(parsed_season) = ep_meta.season
@@ -1382,6 +1445,7 @@ impl AppUseCase {
             year,
             tagged_aliases,
             search_subject_kind,
+            multi_episode_season,
             cancel_token,
             restrict_to_indexer_ids,
             background_value,
@@ -1618,6 +1682,7 @@ impl AppUseCase {
                                     absolute_episode,
                                     &mut scoring_inputs,
                                     mode == SearchMode::Auto,
+                                    multi_episode_season,
                                     scoring_now,
                                 )
                                 .await?;
@@ -1896,6 +1961,13 @@ impl AppUseCase {
                 .flatten(),
             tagged_aliases: &tagged_aliases,
             search_subject_kind: subject.subject_kind,
+            // Only an operator's whole-season search narrows its list to
+            // multi-episode releases; the automatic season-pack walk applies
+            // its own pack check when it picks a grab.
+            multi_episode_season: (mode == SearchMode::Interactive
+                && subject.subject_kind == ReleaseSearchSubjectKind::Season)
+                .then_some(subject.season)
+                .flatten(),
             parse_context: &subject.title_evidence.parse_context,
             cancel_token,
             restrict_to_indexer_ids,
@@ -2356,6 +2428,9 @@ pub(crate) struct ReleaseSearchRequest<'a> {
     pub(crate) year: Option<i32>,
     pub(crate) tagged_aliases: &'a [TaggedAlias],
     pub(crate) search_subject_kind: ReleaseSearchSubjectKind,
+    /// An operator's whole-season search: keep only releases of several
+    /// episodes that include this season. `None` for every other search.
+    pub(crate) multi_episode_season: Option<u32>,
     pub(crate) parse_context: &'a ReleaseParseContext,
     pub(crate) cancel_token: CancellationToken,
     /// When set, only these indexer ids are queried (the convergence cursor's
@@ -2963,3 +3038,109 @@ mod structured_dispatch_query_tests {
 #[cfg(test)]
 #[path = "app_usecase_discovery_tests.rs"]
 mod app_usecase_discovery_tests;
+
+#[cfg(test)]
+mod season_multi_episode_filter_tests {
+    use super::release_is_multi_episode_for_season;
+    use scryer_release_parser::{ContextFacetHint, ContextTitle, ReleaseParseContext};
+
+    fn parse(release: &str, facet_hint: ContextFacetHint) -> crate::ParsedReleaseMetadata {
+        let context = ReleaseParseContext {
+            facet_hint,
+            title: ContextTitle {
+                name: "Glass Harbor".into(),
+            },
+            aliases: Vec::new(),
+            known_years: Vec::new(),
+            imdb_ids: Vec::new(),
+            episodes: Vec::new(),
+        };
+        crate::parse_release_metadata_for_target(release, &context)
+    }
+
+    fn kept_in_season_two(release: &str, facet_hint: ContextFacetHint) -> bool {
+        release_is_multi_episode_for_season(parse(release, facet_hint).episode.as_ref(), 2)
+    }
+
+    #[test]
+    fn season_search_keeps_releases_of_several_episodes_that_include_the_season() {
+        for release in [
+            "Glass.Harbor.S02.1080p.WEB-DL.DDP5.1.H.264-QUILLFOX",
+            "Glass Harbor Season 2 1080p WEB-DL-QUILLFOX",
+            "Glass.Harbor.S02E01-E06.1080p.WEB-DL-QUILLFOX",
+            "Glass.Harbor.S02E01E02.1080p.WEB-DL-QUILLFOX",
+            "Glass.Harbor.S02.Part.1.1080p.WEB-DL-QUILLFOX",
+            "Glass.Harbor.S01-S03.1080p.BluRay.x264-QUILLFOX",
+            "Glass Harbor Complete Series 1080p BluRay x264-QUILLFOX",
+        ] {
+            assert!(
+                kept_in_season_two(release, ContextFacetHint::Series),
+                "{release} should be kept: {:?}",
+                parse(release, ContextFacetHint::Series).episode
+            );
+        }
+    }
+
+    #[test]
+    fn season_search_keeps_an_absolute_numbered_batch_that_names_no_season() {
+        let release = "[Lanternfish] Glass Harbor - 01-12 [1080p]";
+        let parsed = parse(release, ContextFacetHint::Anime);
+        let episode = parsed.episode.as_ref().expect("batch numbering");
+        assert_eq!(
+            episode.release_type,
+            crate::ParsedEpisodeReleaseType::RangePack
+        );
+        assert!(release_is_multi_episode_for_season(Some(episode), 2));
+    }
+
+    #[test]
+    fn season_search_drops_single_episodes_extras_and_other_seasons() {
+        for (release, facet_hint) in [
+            (
+                "Glass.Harbor.S02E05.1080p.WEB-DL-QUILLFOX",
+                ContextFacetHint::Series,
+            ),
+            (
+                "Glass.Harbor.2024.03.15.1080p.WEB-DL-QUILLFOX",
+                ContextFacetHint::Series,
+            ),
+            (
+                "[Lanternfish] Glass Harbor - 05 [1080p]",
+                ContextFacetHint::Anime,
+            ),
+            (
+                "Glass.Harbor.S02.Extras.1080p.BluRay-QUILLFOX",
+                ContextFacetHint::Series,
+            ),
+            (
+                "Glass.Harbor.S03.1080p.WEB-DL-QUILLFOX",
+                ContextFacetHint::Series,
+            ),
+            (
+                "Glass.Harbor.S03E01-E06.1080p.WEB-DL-QUILLFOX",
+                ContextFacetHint::Series,
+            ),
+            (
+                "Glass.Harbor.S03-S05.1080p.BluRay.x264-QUILLFOX",
+                ContextFacetHint::Series,
+            ),
+        ] {
+            assert!(
+                !kept_in_season_two(release, facet_hint),
+                "{release} should be dropped: {:?}",
+                parse(release, facet_hint).episode
+            );
+        }
+    }
+
+    #[test]
+    fn season_search_keeps_a_release_with_no_episode_numbering() {
+        let release = "Glass.Harbor.1080p.WEB-DL-QUILLFOX";
+        let parsed = parse(release, ContextFacetHint::Series);
+        assert!(parsed.episode.is_none(), "{:?}", parsed.episode);
+        assert!(release_is_multi_episode_for_season(
+            parsed.episode.as_ref(),
+            2
+        ));
+    }
+}

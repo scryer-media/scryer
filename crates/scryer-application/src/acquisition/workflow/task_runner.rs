@@ -71,6 +71,7 @@ async fn blocked_acquisition_facets_after_quiet_wait(app: &AppUseCase) -> Vec<Me
         .active_facets()
         .await;
     if blocked_facets.is_empty() {
+        observe_scan_blocked_facets(app, &[]);
         return Vec::new();
     }
 
@@ -97,14 +98,47 @@ async fn blocked_acquisition_facets_after_quiet_wait(app: &AppUseCase) -> Vec<Me
         .active_facets()
         .await;
 
-    if !blocked_facets.is_empty() {
-        debug!(
-            blocked_facets = ?active_scan_facet_labels(&blocked_facets),
-            "background acquisition: deferring due wanted items for actively scanning facets"
+    for (facet, consecutive_cycles) in observe_scan_blocked_facets(app, &blocked_facets) {
+        info!(
+            facet = facet.as_str(),
+            consecutive_cycles,
+            "background acquisition: deferring due wanted items for actively scanning facet"
         );
     }
 
     blocked_facets
+}
+
+fn observe_scan_blocked_facets(app: &AppUseCase, blocked: &[MediaFacet]) -> Vec<(MediaFacet, u32)> {
+    match app.runtime.acquisition.scan_blocked_facet_streaks.lock() {
+        Ok(mut streaks) => streaks.observe(blocked),
+        Err(poisoned) => poisoned.into_inner().observe(blocked),
+    }
+}
+
+/// How many consecutive background cycles each facet has been deferred behind
+/// an active library scan. A facet's count resets the first cycle it is free.
+#[derive(Debug, Default)]
+pub(crate) struct ScanBlockedFacetStreaks {
+    streaks: HashMap<MediaFacet, u32>,
+}
+
+impl ScanBlockedFacetStreaks {
+    /// Records one cycle's blocked facets and returns each with its streak,
+    /// including this cycle. Facets absent from `blocked` are reset.
+    pub(crate) fn observe(&mut self, blocked: &[MediaFacet]) -> Vec<(MediaFacet, u32)> {
+        self.streaks.retain(|facet, _| blocked.contains(facet));
+        let mut observed: Vec<(MediaFacet, u32)> = Vec::with_capacity(blocked.len());
+        for facet in blocked {
+            if observed.iter().any(|(seen, _)| seen == facet) {
+                continue;
+            }
+            let streak = self.streaks.entry(facet.clone()).or_insert(0);
+            *streak = streak.saturating_add(1);
+            observed.push((facet.clone(), *streak));
+        }
+        observed
+    }
 }
 /// Run one background acquisition cycle: recover failed downloads, derive the
 /// missing-media target set, rotate the cursor, and process at most four titles
@@ -246,7 +280,7 @@ pub(crate) async fn run_background_acquisition_cycle_with_blocked_facets(
 
     // Scheduler availability, resolved once per cycle for the pre-skip.
     let availability = app.scheduler_availability().await;
-    let indexer_hosts = app.indexer_scheduler_host_keys().await;
+    let indexer_hosts = app.indexer_scheduler_destination_keys().await;
 
     let cycle = Arc::new(BackgroundAcquisitionCycleCoordinator::default());
 
@@ -3124,7 +3158,7 @@ where
     // the walk shares one code path with the cycle, so the input still has to
     // exist.
     let availability = app.scheduler_availability().await;
-    let indexer_hosts = app.indexer_scheduler_host_keys().await;
+    let indexer_hosts = app.indexer_scheduler_destination_keys().await;
     let dl_snapshot = DownloadClientSnapshot::fetch(app).await;
     let cycle = BackgroundAcquisitionCycleCoordinator::default();
 

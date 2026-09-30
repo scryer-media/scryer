@@ -559,10 +559,9 @@ impl ListExclusion {
             return false;
         }
         external_ids.iter().any(|candidate| {
-            self.external_ids.iter().any(|excluded| {
-                excluded.source.eq_ignore_ascii_case(&candidate.source)
-                    && excluded.value.eq_ignore_ascii_case(&candidate.value)
-            })
+            self.external_ids
+                .iter()
+                .any(|excluded| excluded.same_entity_as(candidate))
         })
     }
 }
@@ -842,6 +841,25 @@ mod tests {
         assert!(!excluded.matches(MediaFacet::Series, &same_id, "sub-a"));
         let other_id = vec![ExternalId::new("tmdb", "1")];
         assert!(!excluded.matches(MediaFacet::Movie, &other_id, "sub-a"));
+    }
+
+    #[test]
+    fn exclusion_ids_with_different_kinds_do_not_match() {
+        let mut excluded = exclusion(ListExclusionScope::AllLists);
+        excluded.external_ids = vec![ExternalId::with_kind("tmdb", "movie", "424242")];
+        let other_kind = vec![ExternalId::with_kind("tmdb", "tv", "424242")];
+        assert!(!excluded.matches(MediaFacet::Movie, &other_kind, "sub-a"));
+        let same_kind = vec![ExternalId::with_kind("TMDB", "Movie", "424242")];
+        assert!(excluded.matches(MediaFacet::Movie, &same_kind, "sub-a"));
+        let kindless = vec![ExternalId::new("tmdb", "424242")];
+        assert!(excluded.matches(MediaFacet::Movie, &kindless, "sub-a"));
+    }
+
+    #[test]
+    fn kindless_exclusion_ids_match_any_kind() {
+        let excluded = exclusion(ListExclusionScope::AllLists);
+        let kinded = vec![ExternalId::with_kind("tmdb", "movie", "424242")];
+        assert!(excluded.matches(MediaFacet::Movie, &kinded, "sub-a"));
     }
 
     #[test]

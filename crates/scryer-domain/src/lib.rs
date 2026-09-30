@@ -927,6 +927,23 @@ impl ExternalId {
         self.kind.as_deref().and_then(normalize_external_id_kind)
     }
 
+    /// Whether `self` and `other` can name the same entity: the same source
+    /// and value, and kinds that do not disagree. An id without a kind matches
+    /// any kind, as user, plugin and pre-kind ids always have; two kinded ids
+    /// match only when their kinds are equal (tvdb movie 7373 is not tvdb
+    /// series 7373).
+    pub fn same_entity_as(&self, other: &ExternalId) -> bool {
+        if !self.source.trim().eq_ignore_ascii_case(other.source.trim())
+            || !self.value.trim().eq_ignore_ascii_case(other.value.trim())
+        {
+            return false;
+        }
+        match (self.normalized_kind(), other.normalized_kind()) {
+            (Some(left), Some(right)) => left == right,
+            _ => true,
+        }
+    }
+
     /// `source:kind:id`, with the kind segment omitted when it is unknown.
     pub fn key(&self) -> String {
         let source = self.source.trim().to_ascii_lowercase();

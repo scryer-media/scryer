@@ -89,6 +89,39 @@ fn viewers_without_manage_lists_do_not_see_failure_text() {
 }
 
 #[test]
+fn viewers_without_manage_lists_do_not_see_source_credentials() {
+    let mut followed = subscription("public-a");
+    followed.provider_url =
+        Some("https://feeduser:s3cret@lists.invalid/feed?token=abc&page=1".into());
+    followed.source.params.insert(
+        "url".into(),
+        "https://lists.invalid/feed?apikey=live-key&page=1".into(),
+    );
+    followed
+        .source
+        .params
+        .insert("list_id".into(), "synthetic-list".into());
+
+    let viewer = redact_for_viewer(followed.clone(), false);
+    assert_eq!(
+        viewer.provider_url.as_deref(),
+        Some("https://[redacted]@lists.invalid/feed?token=[redacted]&page=1")
+    );
+    assert_eq!(
+        viewer.source.params.get("url").map(String::as_str),
+        Some("https://lists.invalid/feed?apikey=[redacted]&page=1")
+    );
+    assert_eq!(
+        viewer.source.params.get("list_id").map(String::as_str),
+        Some("synthetic-list")
+    );
+
+    let manager = redact_for_viewer(followed.clone(), true);
+    assert_eq!(manager.provider_url, followed.provider_url);
+    assert_eq!(manager.source.params, followed.source.params);
+}
+
+#[test]
 fn membership_pages_follow_list_order() {
     let mut rows = Vec::new();
     for (key, rank) in [("c", None), ("b", Some(2)), ("a", Some(1))] {

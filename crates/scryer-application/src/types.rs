@@ -2632,6 +2632,17 @@ pub struct IndexerSearchStrategyRequest {
     /// year the host can vouch for.
     pub year: Option<i32>,
     pub tagged_aliases: Vec<TaggedAlias>,
+    /// Where the previous successful RSS poll of this indexer stopped. Set only
+    /// on an RSS strategy the scheduler holds a marker for.
+    pub rss_catch_up: Option<IndexerRssCatchUp>,
+}
+
+/// The newest release the scheduler recorded on an indexer's previous
+/// successful RSS poll: a paging indexer reads back until it reaches it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexerRssCatchUp {
+    pub last_seen_published_at: chrono::DateTime<chrono::Utc>,
+    pub last_seen_identity: Option<String>,
 }
 
 /// A tier of strategies that one indexer component may execute concurrently.

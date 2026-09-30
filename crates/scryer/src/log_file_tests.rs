@@ -711,3 +711,79 @@ fn shutdown_while_parked_returns_and_preserves_the_collision() {
     assert_eq!(gzip(&archive), "unrelated");
     assert_preserved(&unrelated);
 }
+
+fn marked_archives(path: &Path) -> Vec<PathBuf> {
+    managed_files(path, "gz")
+        .unwrap()
+        .into_iter()
+        .filter(|archive| rotated_here(archive))
+        .collect()
+}
+
+#[test]
+fn retention_never_removes_archives_it_did_not_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scryer.log");
+    // A gzip that follows the naming pattern but carries no rotation mark, as
+    // an archive written by something else would.
+    let unmarked = segment(&path, 0).with_extension("gz");
+    let mut encoder = flate2::write::GzEncoder::new(
+        File::create(&unmarked).unwrap(),
+        flate2::Compression::default(),
+    );
+    encoder.write_all(b"someone else's log\n").unwrap();
+    encoder.finish().unwrap();
+    let unmarked_bytes = fs::read(&unmarked).unwrap();
+    // Not gzip at all, same pattern.
+    let lookalike = segment(&path, 1).with_extension("gz");
+    fs::write(&lookalike, b"not a log").unwrap();
+
+    let (_, clock) = clock();
+    let (writer, guard) = open_with_clock(&path, policy(1, 1), clock).unwrap();
+    for id in 0..4 {
+        event(&writer, &format!("{id}\n"));
+        idle(&writer);
+    }
+    drop(guard);
+
+    assert_eq!(fs::read(&unmarked).unwrap(), unmarked_bytes);
+    assert_eq!(fs::read(&lookalike).unwrap(), b"not a log");
+    let marked = marked_archives(&path);
+    assert_eq!(
+        marked.len(),
+        1,
+        "retention still applies to its own archives"
+    );
+    assert_eq!(gzip(&marked[0]), "2\n");
+    assert_eq!(fs::read_to_string(&path).unwrap(), "3\n");
+}
+
+#[test]
+fn an_archive_whose_mark_cannot_be_read_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("scryer.log");
+    let work = work(&path, 1);
+    let mut archives: Vec<PathBuf> = Vec::new();
+    let mut damaged = Vec::new();
+    for id in 0..2 {
+        let sealed = segment(&path, id);
+        fs::write(&sealed, format!("{id}")).unwrap();
+        let mut job = Job {
+            source: Some(sealed.clone()),
+        };
+        if id == 1 {
+            // The older archive is cut short inside its header, so its mark
+            // can no longer be read.
+            damaged = fs::read(&archives[0]).unwrap()[..6].to_vec();
+            fs::write(&archives[0], &damaged).unwrap();
+        }
+        process_job(&mut job, &work).unwrap();
+        archives.push(sealed.with_extension("gz"));
+    }
+    assert_eq!(
+        fs::read(&archives[0]).unwrap(),
+        damaged,
+        "the damaged archive is kept"
+    );
+    assert_eq!(gzip(&archives[1]), "1");
+}

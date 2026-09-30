@@ -235,7 +235,7 @@ pub use upstream_scheduler::{
     SchedulerBatchRequest, SchedulerCandidate, SchedulerCandidateId, SchedulerFeedback,
     SchedulerFeedbackOutcome, SchedulerIntent, SchedulerLease, SchedulerOperation,
     SchedulerPluginKind, SchedulerSnapshot, SchedulerSnapshotEntry, SchedulerSnapshotFilter,
-    SearchLearningContext, SkipReason, UpstreamScheduler, rss_poll_is_due,
+    SearchLearningContext, SkipReason, UpstreamScheduler, rss_poll_is_due, rss_poll_reached_marker,
 };
 pub const SCRYER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const LIBRARY_SCAN_MAX_RECURSIVE_DEPTH: usize =
@@ -645,6 +645,7 @@ pub use quality_profile::{
     QualityProfileDecision, REQUEST_QUALITY_PROFILE_IDS_KEY, ScoringConfig, ScoringEntry,
     ScoringEntryKind, ScoringSource, builtin_4k_profile, builtin_8k_profile, builtin_1080p_profile,
     builtin_anime_profile, builtin_default_quality_profile, parse_profile_catalog_from_json,
+    parse_published_at,
 };
 pub use rate_limit_signal::{RateLimitSignal, RateLimitSignalSource, destination_cooldown_until};
 pub use services::{
@@ -763,12 +764,13 @@ pub use types::{
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,
     IndexerErrorClassification, IndexerErrorDetail, IndexerErrorOperation, IndexerErrorPage,
-    IndexerErrorSummary, IndexerQueryOutcome, IndexerResponseAttributes, IndexerSearchCompletion,
-    IndexerSearchIncompleteReason, IndexerSearchOutcome, IndexerSearchPage,
-    IndexerSearchPageReservation, IndexerSearchPageSink, IndexerSearchPlanCapability,
-    IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
-    NewIndexerError, ReleaseCandidateProvenance, ReleaseSearchSubjectKind, ReleaseStrategyKind,
+    IndexerErrorSummary, IndexerQueryOutcome, IndexerResponseAttributes, IndexerRssCatchUp,
+    IndexerSearchCompletion, IndexerSearchIncompleteReason, IndexerSearchOutcome,
+    IndexerSearchPage, IndexerSearchPageReservation, IndexerSearchPageSink,
+    IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
+    IndexerSearchResponse, IndexerSearchResult, IndexerSearchStrategyEvent,
+    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, NewIndexerError,
+    ReleaseCandidateProvenance, ReleaseSearchSubjectKind, ReleaseStrategyKind,
     extract_magnet_info_hash, indexer_search_identity, is_valid_magnet_uri,
     search_relevant_indexer_caps, search_relevant_managed_indexer_metadata,
 };

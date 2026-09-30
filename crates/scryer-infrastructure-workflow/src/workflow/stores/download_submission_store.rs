@@ -170,6 +170,12 @@ pub(super) async fn claim_or_create_binding_download_id_tx(
     claim: BindingClaim,
 ) -> AppResult<DownloadId> {
     let requested_download_id = claim.requested_download_id();
+    // Take the requested id's binding row before this claim writes anything,
+    // and before the locator is looked up: an observer attaching that row
+    // could otherwise commit between the lookup and the writes below.
+    if let Some(download_id) = requested_download_id.as_ref() {
+        lock_binding_row_tx(tx, download_id).await?;
+    }
     if let Some(download_id) = active_binding_download_id(SqlExec::Tx(tx), locator).await? {
         // Re-claiming the same identity is not a stale adopt: there is no other
         // download's history to inherit, and the binding row is that identity's
@@ -232,10 +238,27 @@ pub(super) async fn claim_or_create_binding_download_id_tx(
         )
         .await?;
     }
+    bind_download_to_locator_tx(tx, &download_id, locator, claim, now).await?;
+    Ok(download_id)
+}
+
+/// Bind `download_id` to `locator`, the last step of
+/// [`claim_or_create_binding_download_id_tx`] once it has decided the locator
+/// is unbound.
+async fn bind_download_to_locator_tx(
+    tx: &mut SqlTx<'_>,
+    download_id: &DownloadId,
+    locator: &ClientJobLocator,
+    claim: BindingClaim,
+    now: chrono::DateTime<Utc>,
+) -> AppResult<()> {
     let client_name_snapshot = client_name_snapshot_tx(tx, locator).await?;
     // A grab records its intent under its pre-allocated id before submitting,
     // leaving an active binding with no client job yet. Acceptance binds that
-    // row to the job instead of inserting a second binding for the id.
+    // row to the job instead of inserting a second binding for the id. The
+    // download queue observer can bind the same row first, from the job's wire
+    // token: a row it already bound to this very locator is this claim's
+    // binding, not a conflict.
     if claim.claims_scryer_provenance() {
         let bound = SqlRuntime::execute(
             SqlExec::Tx(tx),
@@ -243,8 +266,11 @@ pub(super) async fn claim_or_create_binding_download_id_tx(
              SET client_config_id = {}, client_type_snapshot = {},
                  client_name_snapshot = {}, native_item_id = {}, last_seen_at = {}
              WHERE download_id = {}
-               AND native_item_id IS NULL
-               AND ended_at IS NULL",
+               AND ended_at IS NULL
+               AND (native_item_id IS NULL
+                    OR (native_item_id = {}
+                        AND COALESCE(client_config_id, '') = {}
+                        AND LOWER(TRIM(COALESCE(client_type_snapshot, ''))) = {}))",
             &[
                 SqlArg::OptText(locator.client_id.clone()),
                 SqlArg::Text(locator.client_type.clone()),
@@ -252,19 +278,23 @@ pub(super) async fn claim_or_create_binding_download_id_tx(
                 SqlArg::Text(locator.item_id.clone()),
                 SqlArg::Timestamp(now),
                 SqlArg::Text(download_id.to_string()),
+                SqlArg::Text(locator.item_id.clone()),
+                SqlArg::Text(locator.client_id.clone().unwrap_or_default()),
+                SqlArg::Text(locator.client_type.clone()),
             ],
         )
         .await?;
         if bound == 1 {
-            return Ok(download_id);
+            return Ok(());
         }
     }
-    SqlRuntime::execute(
+    let inserted = SqlRuntime::execute(
         SqlExec::Tx(tx),
         "INSERT INTO download_client_bindings (
             download_id, client_config_id, client_type_snapshot, client_name_snapshot,
             native_item_id, created_at, last_seen_at, ended_at
-         ) VALUES ({}, {}, {}, {}, {}, {}, {}, NULL)",
+         ) VALUES ({}, {}, {}, {}, {}, {}, {}, NULL)
+         ON CONFLICT(download_id) DO NOTHING",
         &[
             SqlArg::Text(download_id.to_string()),
             SqlArg::OptText(locator.client_id.clone()),
@@ -276,7 +306,86 @@ pub(super) async fn claim_or_create_binding_download_id_tx(
         ],
     )
     .await?;
-    Ok(download_id)
+    if inserted == 0 {
+        resolve_existing_binding_row_tx(tx, download_id, locator).await?;
+    }
+    Ok(())
+}
+
+/// Lock a download's binding row for the rest of the transaction.
+///
+/// The download queue observer binds a grab's pending intent by updating its
+/// binding row and only then touching the `downloads` row. A claim that wrote
+/// `downloads` first and the binding second took the same two rows in the
+/// opposite order, and on postgres the two transactions deadlocked. Locking
+/// the binding first puts every writer of a canonical download in one order:
+/// binding, then the rest. Sqlite's writer gate already serializes whole
+/// transactions, and sqlite has no row locks to take.
+async fn lock_binding_row_tx(tx: &mut SqlTx<'_>, download_id: &DownloadId) -> AppResult<()> {
+    if !matches!(tx, SqlTx::Postgres(_)) {
+        return Ok(());
+    }
+    SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT download_id
+         FROM download_client_bindings
+         WHERE download_id = {}
+         FOR UPDATE",
+        &[SqlArg::Text(download_id.to_string())],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Settle a binding insert that found the download's binding row already
+/// present (`download_id` is the bindings primary key).
+///
+/// A row already bound to this locator is the claim's own binding and the
+/// claim succeeds. Anything else — a row bound to a different client job, an
+/// ended row, a row this claim could not bind — is a real conflict and fails
+/// the claim with an error that says so, rather than with the raw
+/// primary-key violation the insert used to raise.
+async fn resolve_existing_binding_row_tx(
+    tx: &mut SqlTx<'_>,
+    download_id: &DownloadId,
+    locator: &ClientJobLocator,
+) -> AppResult<()> {
+    let row = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT client_config_id, client_type_snapshot, native_item_id, ended_at
+         FROM download_client_bindings
+         WHERE download_id = {}",
+        &[SqlArg::Text(download_id.to_string())],
+    )
+    .await?
+    .ok_or_else(|| {
+        AppError::Repository(format!(
+            "canonical download binding {download_id} vanished while it was being claimed"
+        ))
+    })?;
+    let client_config_id = row.opt_text("client_config_id")?.unwrap_or_default();
+    let client_type = row
+        .opt_text("client_type_snapshot")?
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    let native_item_id = row.opt_text("native_item_id")?;
+    let ended = opt_timestamp_string(&row, "ended_at")?.is_some();
+    if !ended
+        && native_item_id.as_deref() == Some(locator.item_id.as_str())
+        && client_config_id == locator.client_id.clone().unwrap_or_default()
+        && client_type == locator.client_type
+    {
+        return Ok(());
+    }
+    Err(AppError::Repository(format!(
+        "canonical download {download_id} is already bound to another client job \
+         (client {client_config_id:?}, type {client_type:?}, item {native_item_id:?}, \
+         ended {ended}); cannot bind it to client {:?}, type {:?}, item {:?}",
+        locator.client_id.as_deref().unwrap_or_default(),
+        locator.client_type,
+        locator.item_id,
+    )))
 }
 
 /// Did this download already reach a terminal outcome?
@@ -2929,6 +3038,216 @@ mod seed_goal_tests {
                 .await
                 .expect("active binding should load"),
             Some(accepted_id)
+        );
+    }
+
+    /// The download queue observer resolving a job by the grab's wire token,
+    /// the way it binds a pending intent before the client answers the submit.
+    async fn observe_by_token(
+        store: &DownloadSubmissionStore,
+        download_id: DownloadId,
+        item_id: &str,
+    ) -> scryer_application::ObservationResolution {
+        use scryer_application::DownloadRegistryRepository;
+        super::super::DownloadRegistryStore::new(store.datastore.clone())
+            .resolve_observation(&scryer_application::ObservedClientJob {
+                locator: ClientJobLocator::new(Some("primary"), "qbittorrent", item_id),
+                wire_token: Some(download_id.to_wire()),
+                observed_name: Some("Release job-1".to_string()),
+                observed_at: Utc::now(),
+            })
+            .await
+            .expect("the observer should resolve the job")
+    }
+
+    async fn binding_native_item_id(
+        store: &DownloadSubmissionStore,
+        download_id: DownloadId,
+    ) -> Option<String> {
+        SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT native_item_id FROM download_client_bindings WHERE download_id = {}",
+            &[SqlArg::Text(download_id.to_string())],
+        )
+        .await
+        .expect("binding should read")
+        .expect("binding should exist")
+        .opt_text("native_item_id")
+        .expect("native item id should decode")
+    }
+
+    #[tokio::test]
+    async fn acceptance_after_the_observer_bound_the_intent_to_the_same_job_succeeds() {
+        let store = store().await;
+        let download_id = DownloadId::new();
+        store
+            .record_pending_submission(pending_intent(download_id))
+            .await
+            .expect("the intent should persist");
+        assert_eq!(
+            observe_by_token(&store, download_id, "job-1").await,
+            scryer_application::ObservationResolution::Resolved {
+                download_id,
+                newly_foreign: false,
+                attached: true,
+            }
+        );
+
+        let disposition = store
+            .record_submission_with_identity(
+                accepted(download_id),
+                submission_identity(download_id),
+                None,
+            )
+            .await
+            .expect("acceptance of the job the observer already bound should succeed");
+
+        assert_eq!(disposition, CanonicalDownloadIdentityDisposition::Requested);
+        assert_eq!(
+            row_count(
+                &store,
+                "download_client_bindings",
+                "download_id",
+                download_id
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            active_binding_download_id(store.datastore.read_exec(), &identity())
+                .await
+                .expect("active binding should load"),
+            Some(download_id)
+        );
+        let recorded = store
+            .find_by_canonical_download_id(&download_id)
+            .await
+            .expect("submission should load")
+            .expect("the intent becomes the submission");
+        assert_eq!(recorded.download_client_item_id, "job-1");
+        assert_eq!(recorded.purpose, DownloadSubmissionPurpose::AdditionalFile);
+    }
+
+    /// The observer bound the intent to one client job and the client then
+    /// answered the submit with another. That is a genuine conflict: the claim
+    /// fails and the observer's binding stands. Before the fix the same
+    /// failure surfaced as a raw primary-key violation from the fallback
+    /// insert (retried once, then returned); it now names the conflict.
+    #[tokio::test]
+    async fn acceptance_after_the_observer_bound_the_intent_to_another_job_fails() {
+        let store = store().await;
+        let download_id = DownloadId::new();
+        store
+            .record_pending_submission(pending_intent(download_id))
+            .await
+            .expect("the intent should persist");
+        observe_by_token(&store, download_id, "job-observed").await;
+
+        let error = store
+            .record_submission_with_identity(
+                accepted(download_id),
+                submission_identity(download_id),
+                None,
+            )
+            .await
+            .expect_err("a binding held by another client job must not be overwritten");
+
+        assert!(
+            !super::super::unique_violation::is_unique_violation(&error),
+            "the conflict should be reported, not raised as a key violation: {error}"
+        );
+        assert!(
+            error
+                .to_string()
+                .contains("already bound to another client job"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(
+            binding_native_item_id(&store, download_id).await.as_deref(),
+            Some("job-observed")
+        );
+    }
+
+    /// The race window the postgres lane hit: the observer commits its binding
+    /// after the claim looked the locator up and found it unbound. Sqlite's
+    /// writer gate cannot interleave the two, so the claim's binding step runs
+    /// directly against a row the observer already bound.
+    #[tokio::test]
+    async fn binding_step_accepts_a_row_already_bound_to_the_same_locator() {
+        let store = store().await;
+        let download_id = DownloadId::new();
+        store
+            .record_pending_submission(pending_intent(download_id))
+            .await
+            .expect("the intent should persist");
+        observe_by_token(&store, download_id, "job-1").await;
+
+        for claim in [
+            // Acceptance: the bind-the-intent update matches the bound row.
+            BindingClaim::Submission(download_id),
+            // No update step: the fallback insert finds the row and re-reads it.
+            BindingClaim::Observation(Some(download_id)),
+        ] {
+            SqlRuntime::run_in_transaction(&store.datastore, "bind_step_test", move |tx| {
+                Box::pin(async move {
+                    bind_download_to_locator_tx(tx, &download_id, &identity(), claim, Utc::now())
+                        .await
+                })
+            })
+            .await
+            .unwrap_or_else(|error| panic!("{claim:?} should bind the same locator: {error}"));
+        }
+
+        assert_eq!(
+            row_count(
+                &store,
+                "download_client_bindings",
+                "download_id",
+                download_id
+            )
+            .await,
+            1
+        );
+        assert_eq!(
+            active_binding_download_id(store.datastore.read_exec(), &identity())
+                .await
+                .expect("active binding should load"),
+            Some(download_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn binding_step_fallback_insert_rejects_a_row_bound_to_another_locator() {
+        let store = store().await;
+        let download_id = DownloadId::new();
+        store
+            .record_pending_submission(pending_intent(download_id))
+            .await
+            .expect("the intent should persist");
+        observe_by_token(&store, download_id, "job-observed").await;
+
+        let error = SqlRuntime::run_in_transaction(&store.datastore, "bind_step_test", move |tx| {
+            Box::pin(async move {
+                bind_download_to_locator_tx(
+                    tx,
+                    &download_id,
+                    &identity(),
+                    BindingClaim::Observation(Some(download_id)),
+                    Utc::now(),
+                )
+                .await
+            })
+        })
+        .await
+        .expect_err("a row bound to another job is a conflict");
+
+        assert!(
+            !super::super::unique_violation::is_unique_violation(&error),
+            "the fallback insert must not raise a key violation: {error}"
+        );
+        assert_eq!(
+            binding_native_item_id(&store, download_id).await.as_deref(),
+            Some("job-observed")
         );
     }
 

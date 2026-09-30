@@ -2,6 +2,7 @@ import * as React from "react";
 import {
   ChevronRight,
   Edit,
+  Gauge,
   Logs,
   Lock,
   Plus,
@@ -28,6 +29,11 @@ import {
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -83,6 +89,10 @@ import {
 } from "@/lib/utils/seeding-profiles";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
+import {
+  indexerQueryBudgetDraftValue,
+  indexerRateLimitSecondsDraftValue,
+} from "@/lib/utils/indexer-payload";
 
 type SettingsIndexersSectionProps = {
   /// Which pane of the Indexers page to render; the page's rail owns the choice.
@@ -137,6 +147,10 @@ type SettingsIndexersSectionProps = {
       >
     >,
   ) => Promise<void> | void;
+  updateIndexerRateLimits: (
+    indexer: IndexerRecord,
+    draft: { rateLimitSeconds: string; maxQueriesPerMinute: string },
+  ) => Promise<boolean>;
   deleteIndexer: (indexer: IndexerRecord) => Promise<void> | void;
   syncIndexer: (indexer: IndexerRecord) => Promise<void> | void;
   providerTypes: ProviderTypeInfo[];
@@ -213,6 +227,126 @@ function IndexerActionButton({
     <IconButton label={label} tone={tone} className={className} {...props}>
       {children}
     </IconButton>
+  );
+}
+
+/**
+ * Row-level rate limit editor for a managed child. The full editor is closed
+ * to managed rows because the parent sync owns everything else on them, but
+ * the request interval and query budget are the operator's, so they get a
+ * small form of their own.
+ */
+function ManagedIndexerRateLimitsPopover({
+  indexer,
+  busy,
+  onSave,
+}: {
+  indexer: IndexerRecord;
+  busy: boolean;
+  onSave: (draft: {
+    rateLimitSeconds: string;
+    maxQueriesPerMinute: string;
+  }) => Promise<boolean>;
+}) {
+  const t = useTranslate();
+  const [open, setOpen] = React.useState(false);
+  const [rateLimitSeconds, setRateLimitSeconds] = React.useState("");
+  const [maxQueriesPerMinute, setMaxQueriesPerMinute] = React.useState("");
+  const intervalId = selectorId(
+    "settings-indexer-rate-limit-seconds",
+    indexer.name,
+  );
+  const budgetId = selectorId(
+    "settings-indexer-max-queries-per-minute",
+    indexer.name,
+  );
+
+  const handleOpenChange = (nextOpen: boolean) => {
+    if (nextOpen) {
+      setRateLimitSeconds(indexerRateLimitSecondsDraftValue(indexer));
+      setMaxQueriesPerMinute(indexerQueryBudgetDraftValue(indexer));
+    }
+    setOpen(nextOpen);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={handleOpenChange}>
+      <PopoverTrigger asChild>
+        <IndexerActionButton
+          id={selectorId("settings-indexer-rate-limits", indexer.name)}
+          tone="edit"
+          label={t("settings.indexerRateLimits")}
+          disabled={busy}
+        >
+          <Gauge className="h-4 w-4" />
+        </IndexerActionButton>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-[280px] p-3">
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void onSave({ rateLimitSeconds, maxQueriesPerMinute }).then(
+              (saved) => {
+                if (saved) {
+                  setOpen(false);
+                }
+              },
+            );
+          }}
+        >
+          <p className="text-sm font-medium">{t("settings.indexerRateLimits")}</p>
+          <label className="block">
+            <Label className="mb-2 block" htmlFor={intervalId}>
+              {t("form.indexerRateLimitSeconds")}
+            </Label>
+            <Input
+              id={intervalId}
+              type="number"
+              inputMode="numeric"
+              min={0}
+              step={1}
+              value={rateLimitSeconds}
+              onChange={(event) => setRateLimitSeconds(event.target.value)}
+              placeholder={t("form.indexerRateLimitSecondsPlaceholder")}
+            />
+          </label>
+          <label className="block">
+            <Label className="mb-2 block" htmlFor={budgetId}>
+              {t("form.indexerMaxQueriesPerMinute")}
+            </Label>
+            <Input
+              id={budgetId}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              step={1}
+              value={maxQueriesPerMinute}
+              onChange={(event) => setMaxQueriesPerMinute(event.target.value)}
+              placeholder={t("form.indexerMaxQueriesPerMinutePlaceholder")}
+            />
+          </label>
+          <div className="flex justify-end gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setOpen(false)}
+            >
+              {t("label.cancel")}
+            </Button>
+            <Button
+              id={selectorId("settings-indexer-rate-limits-save", indexer.name)}
+              type="submit"
+              size="sm"
+              disabled={busy}
+            >
+              {busy ? <LoadingMark className="h-4 w-4" /> : t("label.save")}
+            </Button>
+          </div>
+        </form>
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -1000,6 +1134,7 @@ export function SettingsIndexersSection({
   updateIndexerRoutingForScope,
   editIndexer,
   updateIndexerToggles,
+  updateIndexerRateLimits,
   deleteIndexer,
   syncIndexer,
   providerTypes,
@@ -1606,10 +1741,19 @@ export function SettingsIndexersSection({
                                 </IndexerActionButton>
                               ) : null}
                               {indexer.isManaged ? (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
-                                  <Lock className="h-3 w-3" />
-                                  {t("settings.managedIndexerBadge")}
-                                </span>
+                                <>
+                                  <ManagedIndexerRateLimitsPopover
+                                    indexer={indexer}
+                                    busy={mutatingIndexerId === indexer.id}
+                                    onSave={(draft) =>
+                                      updateIndexerRateLimits(indexer, draft)
+                                    }
+                                  />
+                                  <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground">
+                                    <Lock className="h-3 w-3" />
+                                    {t("settings.managedIndexerBadge")}
+                                  </span>
+                                </>
                               ) : (
                                 <>
                                   <IndexerActionButton
@@ -1798,6 +1942,33 @@ export function SettingsIndexersSection({
                             placeholder={t("form.indexerNamePlaceholder")}
                           />
                         </label>
+                        {!isManagedSyncProvider ? (
+                          <label>
+                            <Label
+                              className="mb-2 block"
+                              htmlFor="settings-indexer-rate-limit-seconds"
+                            >
+                              {t("form.indexerRateLimitSeconds")}
+                            </Label>
+                            <Input
+                              id="settings-indexer-rate-limit-seconds"
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              step={1}
+                              value={indexerDraft.rateLimitSeconds}
+                              onChange={(event) =>
+                                setIndexerDraft((prev: IndexerDraft) => ({
+                                  ...prev,
+                                  rateLimitSeconds: event.target.value,
+                                }))
+                              }
+                              placeholder={t(
+                                "form.indexerRateLimitSecondsPlaceholder",
+                              )}
+                            />
+                          </label>
+                        ) : null}
                         {!isManagedSyncProvider ? (
                           <label>
                             <Label

@@ -43,7 +43,7 @@ pub use notification::{
     PluginNotificationTargetResult, coalesce_media_updates, rich_embed_from_request,
     to_script_environment, to_webhook_json,
 };
-pub const SDK_VERSION: &str = "3.12.0";
+pub const SDK_VERSION: &str = "3.13.0";
 
 pub fn current_sdk_constraint() -> String {
     legacy_sdk_constraint(SDK_VERSION)
@@ -2796,6 +2796,55 @@ pub struct PluginSearchRequest {
     pub tagged_aliases: Vec<TaggedAlias>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context: Option<PluginSearchContext>,
+    /// Where the previous successful RSS poll of this indexer stopped. Present
+    /// only on an RSS (recent-releases) request the host has a marker for; a
+    /// plugin that pages its feed reads older pages until it reaches the
+    /// marker, and a plugin that does not page ignores it. Absent means "read
+    /// the newest page only", which is also what every host before SDK 3.13
+    /// asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rss_catch_up: Option<PluginRssCatchUp>,
+}
+
+/// The newest release the host saw on the previous successful RSS poll of one
+/// indexer.
+///
+/// A plugin has caught up once a page contains `last_seen_identity`, or once
+/// the oldest release on a page was published before `last_seen_published_at`.
+/// When it stops paging for its own page ceiling first, it reports the run as
+/// incomplete with the releases it did read, so the host records the period
+/// it could not cover.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PluginRssCatchUp {
+    /// RFC 3339 publish time of the newest release the host saw on the previous successful RSS poll.
+    pub last_seen_published_at: String,
+    /// The same release's identity, as the host derives it from a
+    /// [`PluginSearchResult`] the plugin returned: its `guid` verbatim when
+    /// present, otherwise its `link`, otherwise its `download_url`, otherwise
+    /// its `title`. A plugin matches it against the same fields in the same
+    /// order. Absent when the host holds only a publish time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_seen_identity: Option<String>,
+}
+
+impl PluginRssCatchUp {
+    /// The identity the host records for `result`, for comparison with
+    /// [`Self::last_seen_identity`].
+    pub fn identity_of(result: &PluginSearchResult) -> &str {
+        result
+            .guid
+            .as_deref()
+            .or(result.link.as_deref())
+            .or(result.download_url.as_deref())
+            .unwrap_or(result.title.as_str())
+    }
+
+    /// Whether `result` is the release this marker names.
+    pub fn names(&self, result: &PluginSearchResult) -> bool {
+        self.last_seen_identity
+            .as_deref()
+            .is_some_and(|identity| identity == Self::identity_of(result))
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -3178,6 +3227,7 @@ mod tests {
                     absolute_episode: None,
                     tagged_aliases: vec![],
                     context: None,
+                    rss_catch_up: None,
                 },
             }],
         };
@@ -3966,6 +4016,95 @@ mod tests {
         legacy.as_object_mut().unwrap().remove("title_move");
         let parsed: PluginNotificationRequest = serde_json::from_value(legacy).unwrap();
         assert!(parsed.title_move.is_none());
+    }
+
+    #[test]
+    fn search_request_without_rss_catch_up_keeps_its_wire_shape() {
+        let request = PluginSearchRequest {
+            categories: vec!["5000".into()],
+            limit: 100,
+            ..PluginSearchRequest::default()
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert!(
+            json.get("rss_catch_up").is_none(),
+            "an absent marker must not reach plugins built against an older SDK"
+        );
+
+        // A request serialized before the field existed still decodes.
+        let parsed: PluginSearchRequest =
+            serde_json::from_value(serde_json::json!({"query": "", "categories": ["5000"]}))
+                .unwrap();
+        assert!(parsed.rss_catch_up.is_none());
+    }
+
+    #[test]
+    fn search_request_rss_catch_up_round_trips() {
+        let request = PluginSearchRequest {
+            categories: vec!["5000".into()],
+            rss_catch_up: Some(PluginRssCatchUp {
+                last_seen_published_at: "2026-01-02T03:04:05+00:00".into(),
+                last_seen_identity: Some("guid-sample-1".into()),
+            }),
+            ..PluginSearchRequest::default()
+        };
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(
+            json["rss_catch_up"],
+            serde_json::json!({
+                "last_seen_published_at": "2026-01-02T03:04:05+00:00",
+                "last_seen_identity": "guid-sample-1",
+            })
+        );
+        let parsed: PluginSearchRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(parsed.rss_catch_up, request.rss_catch_up);
+
+        // The identity is optional on the wire.
+        let date_only: PluginRssCatchUp = serde_json::from_value(
+            serde_json::json!({"last_seen_published_at": "2026-01-02T03:04:05+00:00"}),
+        )
+        .unwrap();
+        assert!(date_only.last_seen_identity.is_none());
+        assert!(
+            !serde_json::to_string(&date_only)
+                .unwrap()
+                .contains("last_seen_identity")
+        );
+    }
+
+    #[test]
+    fn rss_catch_up_identity_follows_the_host_field_order() {
+        let mut result = PluginSearchResult {
+            title: "Sample.Show.S01E01.1080p".into(),
+            ..PluginSearchResult::default()
+        };
+        assert_eq!(
+            PluginRssCatchUp::identity_of(&result),
+            "Sample.Show.S01E01.1080p"
+        );
+        result.download_url = Some("https://indexer.invalid/get/1".into());
+        assert_eq!(
+            PluginRssCatchUp::identity_of(&result),
+            "https://indexer.invalid/get/1"
+        );
+        result.link = Some("https://indexer.invalid/details/1".into());
+        assert_eq!(
+            PluginRssCatchUp::identity_of(&result),
+            "https://indexer.invalid/details/1"
+        );
+        result.guid = Some("guid-sample-1".into());
+        assert_eq!(PluginRssCatchUp::identity_of(&result), "guid-sample-1");
+
+        let marker = PluginRssCatchUp {
+            last_seen_published_at: "2026-01-02T03:04:05+00:00".into(),
+            last_seen_identity: Some("guid-sample-1".into()),
+        };
+        assert!(marker.names(&result));
+        let date_only = PluginRssCatchUp {
+            last_seen_identity: None,
+            ..marker
+        };
+        assert!(!date_only.names(&result));
     }
 
     #[test]

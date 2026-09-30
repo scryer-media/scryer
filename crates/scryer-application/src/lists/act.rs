@@ -110,10 +110,14 @@ impl ActOutcome {
 /// leaves the item `Pending`, tried again next sync; a refusal settles it as
 /// `Rejected` (see [`failed_action_state`]); and it is `BlockedPermission`
 /// when the owner may not add or request into the routed library.
+///
+/// `hold_requests` makes a request the Request mode submits wait for review,
+/// as a personal list does for a member whose list policy needs approval.
 pub async fn act_on_candidate(
     actions: &dyn ListActions,
     subscription: &ListSubscription,
     item: &ResolvedItem,
+    hold_requests: bool,
 ) -> ActOutcome {
     let Some(route) = item
         .kind
@@ -154,7 +158,7 @@ pub async fn act_on_candidate(
             match actions.owner_manages_titles(subscription, route).await {
                 Ok(true) => add_outcome(actions, subscription, route, item, true).await,
                 Ok(false) => actions
-                    .submit_request(subscription, route, item, false)
+                    .submit_request(subscription, route, item, hold_requests)
                     .await
                     .map(|request_id| ActOutcome {
                         request_id: Some(request_id),

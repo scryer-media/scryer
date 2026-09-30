@@ -67,7 +67,9 @@ import { getDefaultIndexerRouting } from "@/lib/constants/indexers";
 import {
   buildIndexerSavePayload,
   indexerQueryBudgetDraftValue,
+  indexerRateLimitSecondsDraftValue,
   parseIndexerQueryBudget,
+  parseIndexerRateLimitSeconds,
 } from "@/lib/utils/indexer-payload";
 
 type SettingsIndexersSectionProps = ComponentProps<
@@ -81,6 +83,7 @@ const INDEXER_INITIAL_DRAFT = {
   downloadClientId: null as string | null,
   seedingProfileId: null as string | null,
   storedSecretKeys: [] as string[],
+  rateLimitSeconds: "",
   maxQueriesPerMinute: "",
   isEnabled: true,
   enableInteractiveSearch: true,
@@ -723,6 +726,11 @@ export function SettingsIndexersContainer({
       return;
     }
 
+    if (!parseIndexerRateLimitSeconds(indexerDraft.rateLimitSeconds).valid) {
+      setGlobalStatus(t("form.indexerRateLimitSecondsInvalid"));
+      return;
+    }
+
     if (!parseIndexerQueryBudget(indexerDraft.maxQueriesPerMinute).valid) {
       setGlobalStatus(t("form.indexerMaxQueriesPerMinuteInvalid"));
       return;
@@ -767,6 +775,7 @@ export function SettingsIndexersContainer({
               name: payload.name,
               providerType: payload.providerType,
               proxyConfigId: payload.proxyConfigId,
+              rateLimitSeconds: payload.rateLimitSeconds,
               maxQueriesPerMinute: payload.maxQueriesPerMinute,
               isEnabled: payload.isEnabled,
               enableInteractiveSearch: payload.enableInteractiveSearch,
@@ -799,6 +808,7 @@ export function SettingsIndexersContainer({
               name: payload.name,
               providerType: payload.providerType,
               proxyConfigId: payload.proxyConfigId,
+              rateLimitSeconds: payload.rateLimitSeconds,
               maxQueriesPerMinute: payload.maxQueriesPerMinute,
               isEnabled: payload.isEnabled,
               enableInteractiveSearch: payload.enableInteractiveSearch,
@@ -857,6 +867,7 @@ export function SettingsIndexersContainer({
         downloadClientId: indexer.downloadClientId ?? null,
         seedingProfileId: indexer.seedingProfileId ?? null,
         storedSecretKeys: indexer.storedSecretKeys,
+        rateLimitSeconds: indexerRateLimitSecondsDraftValue(indexer),
         maxQueriesPerMinute: indexerQueryBudgetDraftValue(indexer),
         isEnabled: indexer.isEnabled,
         enableInteractiveSearch: indexer.enableInteractiveSearch,
@@ -1180,6 +1191,51 @@ export function SettingsIndexersContainer({
     [client, refreshIndexers, setGlobalStatus, t],
   );
 
+  // Managed children take their rate limits from the row rather than the
+  // editor, which the parent sync owns. Returns whether the save landed so
+  // the row control knows when to close.
+  const updateIndexerRateLimits = useCallback(
+    async (
+      indexer: IndexerRecord,
+      draft: { rateLimitSeconds: string; maxQueriesPerMinute: string },
+    ): Promise<boolean> => {
+      const interval = parseIndexerRateLimitSeconds(draft.rateLimitSeconds);
+      if (!interval.valid) {
+        setGlobalStatus(t("form.indexerRateLimitSecondsInvalid"));
+        return false;
+      }
+      const budget = parseIndexerQueryBudget(draft.maxQueriesPerMinute);
+      if (!budget.valid) {
+        setGlobalStatus(t("form.indexerMaxQueriesPerMinuteInvalid"));
+        return false;
+      }
+      setMutatingIndexerId(indexer.id);
+      try {
+        const { error } = await client
+          .mutation(updateIndexerMutation, {
+            input: {
+              id: indexer.id,
+              rateLimitSeconds: interval.value,
+              maxQueriesPerMinute: budget.value,
+            },
+          })
+          .toPromise();
+        if (error) throw error;
+        setGlobalStatus(t("status.indexerUpdated"));
+        await refreshIndexers();
+        return true;
+      } catch (error) {
+        setGlobalStatus(
+          userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")),
+        );
+        return false;
+      } finally {
+        setMutatingIndexerId(null);
+      }
+    },
+    [client, refreshIndexers, setGlobalStatus, t],
+  );
+
   const syncIndexer = useCallback(
     async (indexer: IndexerRecord) => {
       if (!indexer.supportsManagedChildrenSync || indexer.isManaged) {
@@ -1353,6 +1409,7 @@ export function SettingsIndexersContainer({
         updateIndexerRoutingForScope={updateIndexerRoutingForScope}
         editIndexer={requestEditIndexer}
         updateIndexerToggles={updateIndexerToggles}
+        updateIndexerRateLimits={updateIndexerRateLimits}
         deleteIndexer={deleteIndexer}
         syncIndexer={syncIndexer}
         providerTypes={providerTypes}

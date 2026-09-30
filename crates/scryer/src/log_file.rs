@@ -565,7 +565,9 @@ fn publish(source: &Path, faults: &Faults) -> io::Result<()> {
     preserve_create_mode(&mut options, Some(&input.metadata()?.permissions()));
     let output = options.open(&temporary)?;
     let result = (|| {
-        let mut encoder = flate2::write::GzEncoder::new(output, flate2::Compression::default());
+        let mut encoder = flate2::GzBuilder::new()
+            .comment(ROTATION_MARKER)
+            .write(output, flate2::Compression::default());
         faults.check("compression")?;
         io::copy(&mut input, &mut encoder)?;
         encoder.finish()?.sync_all()?;
@@ -592,6 +594,23 @@ fn publish(source: &Path, faults: &Faults) -> io::Result<()> {
     result
 }
 
+/// Written as the gzip comment of every archive this rotation publishes, so
+/// retention can tell its own archives from files that only share the name
+/// pattern.
+const ROTATION_MARKER: &str = "scryer-log-rotation";
+
+/// Whether `archive` is a regular file whose gzip header carries
+/// [`ROTATION_MARKER`]. Anything that cannot be read counts as not ours.
+fn rotated_here(archive: &Path) -> bool {
+    let Ok(file) = open_regular(archive) else {
+        return false;
+    };
+    flate2::read::GzDecoder::new(file)
+        .header()
+        .and_then(|header| header.comment())
+        == Some(ROTATION_MARKER.as_bytes())
+}
+
 fn sync_directory(path: &Path) -> io::Result<()> {
     #[cfg(unix)]
     File::open(path)?.sync_all()?;
@@ -607,7 +626,13 @@ fn process_job(job: &mut Job, work: &Work) -> io::Result<()> {
         fs::remove_file(source)?;
         job.source = None;
     }
-    let archives = managed_files(&work.active_path, "gz")?;
+    // Only archives that carry this rotation's mark count toward retention
+    // or are ever removed. A file that merely follows the naming pattern, or
+    // whose mark cannot be read, is left alone.
+    let archives = managed_files(&work.active_path, "gz")?
+        .into_iter()
+        .filter(|archive| rotated_here(archive))
+        .collect::<Vec<_>>();
     let expired = archives.len().saturating_sub(work.max_files);
     for archive in archives.into_iter().take(expired) {
         regular(&archive)?;

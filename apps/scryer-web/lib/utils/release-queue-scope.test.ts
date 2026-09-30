@@ -6,6 +6,7 @@ import {
   hasPrimaryMediaFile,
   queueScopeAcceptsAdditionalFile,
   queueScopeReplacesPrimary,
+  queueScopeReplacesPrimaryFromTitleFiles,
   releaseCoversMultipleEpisodes,
   releaseSupportsAdditionalFileQueue,
 } from "./release-queue-scope.ts";
@@ -143,4 +144,31 @@ test("a season grab replaces only primary files inside its queue scope", () => {
   assert.equal(replaces({ episode: "s1e2" }), false);
   assert.equal(replaces({ episodeSet: ["s1e2"] }), false);
   assert.equal(replaces({ collection: "season-2" }), false);
+});
+
+test("a scope replaces a primary judged from every file the title holds", () => {
+  const episodesByCollection = {
+    "season-1": [{ id: "episode-1" }, { id: "episode-2" }],
+    "season-2": [{ id: "episode-3" }],
+  };
+  const titleFiles = [
+    { episodeId: "episode-2", role: "primary" },
+    { episodeId: "episode-3", role: "additional" },
+    { episodeId: null, role: "primary" },
+  ];
+  const replaces = (scope: Parameters<typeof queueScopeReplacesPrimaryFromTitleFiles>[0]) =>
+    queueScopeReplacesPrimaryFromTitleFiles(scope, episodesByCollection, titleFiles);
+
+  assert.equal(replaces({ collection: "season-1" }), true);
+  assert.equal(replaces({ collection: "season-2" }), false);
+  assert.equal(replaces({ episode: "episode-1" }), false);
+  assert.equal(replaces({ episodeSet: ["episode-1", "episode-2"] }), true);
+  assert.equal(replaces({ title: true }), true);
+  assert.equal(
+    queueScopeReplacesPrimaryFromTitleFiles({ title: true }, episodesByCollection, [
+      { episodeId: "episode-3", role: "additional" },
+      { episodeId: null, role: "primary" },
+    ]),
+    false,
+  );
 });

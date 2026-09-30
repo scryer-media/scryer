@@ -7,6 +7,7 @@ import type {
   ListSourceDraft,
   ListSubscription,
   ListSubscriptionDraft,
+  MemberListPolicy,
   TitleListMembership,
 } from "../types/lists.ts";
 import {
@@ -26,6 +27,7 @@ import {
   listIntervalParts,
   listProviderSettingChanges,
   listProviderSettingsMissing,
+  rollBackMemberListPolicy,
   titleListProvenance,
   listMembershipStateLabelKey,
   listMembershipStateTone,
@@ -414,6 +416,7 @@ function settingField(overrides: Partial<ListProviderSettingField> = {}): ListPr
     secret: false,
     isSet: false,
     value: null,
+    options: [],
     ...overrides,
   };
 }
@@ -675,4 +678,24 @@ test("a title's list line refreshes when a list adds or drops that title", () =>
   assert.equal(changed(event("TITLE_UPDATED", "title-7")), false);
   assert.equal(changed(event("LIST_TITLE_LEFT", null)), false);
   assert.equal(titleListMembershipChanged(null)(event("LIST_TITLE_ADDED", "title-7")), false);
+});
+
+test("a failed policy change rolls back only that member's row", () => {
+  const member = (id: string, policy: MemberListPolicy["policy"]): MemberListPolicy => ({
+    user: { id, username: `member-${id}` },
+    policy,
+    listRequestsLast30d: 0,
+  });
+  const before = member("a", "APPROVAL");
+  // Member a's change to AUTO is in flight while member b's change has already saved.
+  const current = [member("a", "AUTO"), member("b", "NONE")];
+
+  assert.deepEqual(rollBackMemberListPolicy(current, before, "AUTO"), [
+    member("a", "APPROVAL"),
+    member("b", "NONE"),
+  ]);
+
+  // A later change to the same member that already landed is not undone.
+  const later = [member("a", "NONE"), member("b", "NONE")];
+  assert.deepEqual(rollBackMemberListPolicy(later, before, "AUTO"), later);
 });

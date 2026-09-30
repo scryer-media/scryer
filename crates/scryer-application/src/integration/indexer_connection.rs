@@ -5367,7 +5367,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn managed_child_indexers_allow_only_global_enable_updates() {
+    async fn managed_child_indexers_allow_only_local_field_updates() {
         let indexer_repo = Arc::new(RecordingIndexerConfigRepo::new());
         let now = Utc::now();
         indexer_repo
@@ -5494,23 +5494,26 @@ mod tests {
             Some(r#"{"locally_disabled_children":["child"]}"#)
         );
 
-        let rate_limit_error = app
+        // Rate limits and search flags are the child's own, alongside enabled.
+        let rate_limited = app
             .update_indexer_config(
                 &test_admin(),
                 IndexerConfigUpdate {
                     id: "child".to_string(),
                     rate_limit_seconds: Some(15),
                     rate_limit_burst: Some(3),
-                    max_queries_per_minute: None,
+                    enable_auto_search: Some(false),
                     ..Default::default()
                 },
             )
             .await
-            .unwrap_err();
+            .unwrap();
+        assert_eq!(rate_limited.rate_limit_seconds, Some(15));
+        assert_eq!(rate_limited.rate_limit_burst, Some(3));
+        assert!(!rate_limited.enable_auto_search);
         assert!(
-            rate_limit_error
-                .to_string()
-                .contains("managed child indexers are controlled by their parent sync")
+            !rate_limited.is_enabled,
+            "a local edit leaves enabled alone"
         );
 
         let update_error = app

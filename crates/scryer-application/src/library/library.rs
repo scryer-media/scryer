@@ -1233,28 +1233,27 @@ impl AppUseCase {
                 .await;
             Ok(StartedLibraryScanOutcome::Canceled(summary))
         } else {
-            if should_apply_import_monitor_snapshot
-                && let Err(error) = self
+            if should_apply_import_monitor_snapshot {
+                let warning_message = match self
                     .apply_pending_external_import_monitor_snapshot_for_library(
-                        &request.facet,
-                        &request.library_id,
-                    )
-                    .await
-            {
-                let warning_message =
-                    "Imported Sonarr/Radarr monitored state could not be applied after this scan. Scryer will retry on the next full scan.".to_string();
-                let _ = self
-                    .runtime
-                    .library
-                    .library_scan_tracker
-                    .set_warning_message(&request.session_id, Some(warning_message))
-                    .await;
-                warn!(
-                    facet = request.facet.as_str(),
-                    session_id = %request.session_id,
-                    error = %error,
-                    "failed to apply pending external import monitoring snapshot after full scan"
-                );
+                        &request.facet, &request.library_id,
+                    ).await {
+                    Ok(report) if report.has_failures() => Some(format!(
+                        "Imported monitoring state had failures ({} entries failed, {} chunks unprocessed{}). Failed or interrupted items will not be retried.",
+                        report.failed_entries, report.unprocessed_chunks,
+                        if report.cleanup_failed { "; snapshot cleanup failed" } else { "" },
+                    )),
+                    Err(_) => Some("Imported monitoring state could not be consumed; no monitoring changes were attempted.".to_string()),
+                    Ok(_) => None,
+                };
+                if warning_message.is_some() {
+                    let _ = self
+                        .runtime
+                        .library
+                        .library_scan_tracker
+                        .set_warning_message(&request.session_id, warning_message)
+                        .await;
+                }
             }
             self.finalize_started_library_scan_session(&request.session_id, &summary)
                 .await;

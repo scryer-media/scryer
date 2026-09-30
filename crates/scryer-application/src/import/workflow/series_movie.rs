@@ -364,8 +364,32 @@ fn media_facet_from_archive_hint(value: &str) -> Option<MediaFacet> {
     }
 }
 
-fn archive_extraction_would_be_needed_best_effort(dir: &Path) -> bool {
-    match crate::archive_extractor::archive_extraction_would_be_needed(dir) {
+/// The sample rule the automatic import scan applies to a facet's download,
+/// which archive planning must share: series and anime drop sample-named and
+/// sample-sized videos, while the movie scan has no size heuristic, so only a
+/// sample-named video leaves a movie download still needing its archives.
+fn automatic_scan_sample_rule(facet: &MediaFacet) -> fn(&Path) -> bool {
+    if matches!(facet, MediaFacet::Series | MediaFacet::Anime) {
+        is_sample_file
+    } else {
+        is_sample_named_file
+    }
+}
+
+/// The sample rule for a download whose title is not known yet: the facet
+/// hint the titleless archive probe itself uses, else the name-only rule every
+/// facet agrees on.
+fn titleless_sample_rule(completed: &CompletedDownload) -> fn(&Path) -> bool {
+    archive_probe_facet_from_completed(completed)
+        .map(|facet| automatic_scan_sample_rule(&facet))
+        .unwrap_or(is_sample_named_file)
+}
+
+fn archive_extraction_would_be_needed_best_effort(
+    dir: &Path,
+    is_sample: fn(&Path) -> bool,
+) -> bool {
+    match crate::archive_extractor::archive_extraction_would_be_needed(dir, is_sample) {
         Ok(needed) => needed,
         Err(error) => {
             tracing::warn!(
@@ -388,15 +412,57 @@ async fn mark_import_extracting(app: &AppUseCase, import_id: &str) -> AppResult<
     .await
 }
 
+/// Password candidates for this download's archives, in the order they are
+/// tried after a password-free attempt is refused: the operator's retry
+/// password, the password the indexer announced for this grab, then one
+/// carried in the client-reported release or job name.
+///
+/// The stored password is looked up only for a Scryer grab, by its title and
+/// persisted release title, so it can only be the one announced for this
+/// release. A failed lookup costs that candidate, never the import.
+async fn archive_password_candidates(
+    app: &AppUseCase,
+    completed: &CompletedDownload,
+    release_evidence: &ReleaseEvidence,
+    operator_password: Option<&str>,
+) -> crate::import::archive_passwords::ArchivePasswordCandidates {
+    let mut candidates = crate::import::archive_passwords::ArchivePasswordCandidates::default();
+    candidates.push_operator(operator_password);
+    if let (Some(title_id), Some(source_title)) = (
+        release_evidence.title_id(),
+        release_evidence.submission_source_title(),
+    ) {
+        match app
+            .services
+            .workflow
+            .release_attempts
+            .get_latest_source_password(Some(title_id), None, Some(source_title))
+            .await
+        {
+            Ok(password) => candidates.push_indexer(password.as_deref()),
+            Err(error) => tracing::warn!(
+                error = %error,
+                title_id,
+                "failed to read the stored indexer archive password; continuing without it"
+            ),
+        }
+    }
+    candidates.push_release_name(completed.release_name.as_deref());
+    candidates.push_release_name(Some(&completed.name));
+    candidates
+}
+
 async fn try_match_titleless_archive_from_inner_video(
     app: &AppUseCase,
     import_id: &str,
     completed: &CompletedDownload,
     dest_dir: &Path,
+    release_evidence: &ReleaseEvidence,
     archive_password: Option<&str>,
     resolved_title_authorization: Option<&User>,
 ) -> AppResult<Option<TitlelessArchiveMatch>> {
-    if !archive_extraction_would_be_needed_best_effort(dest_dir) {
+    let is_sample = titleless_sample_rule(completed);
+    if !archive_extraction_would_be_needed_best_effort(dest_dir, is_sample) {
         return Ok(None);
     }
     let Some((destination, facet)) =
@@ -405,6 +471,8 @@ async fn try_match_titleless_archive_from_inner_video(
         return Ok(None);
     };
 
+    let passwords =
+        archive_password_candidates(app, completed, release_evidence, archive_password).await;
     let archive_provider = app
         .services
         .integrations
@@ -422,8 +490,9 @@ async fn try_match_titleless_archive_from_inner_video(
             .await;
         crate::archive_extractor::extract_archives_if_needed(
             dest_dir,
+            is_sample,
             Some(destination),
-            archive_password,
+            &passwords,
             archive_provider.clone(),
         )
         .await?
@@ -490,8 +559,9 @@ async fn try_match_titleless_archive_from_inner_video(
                             .await;
                         crate::archive_extractor::extract_archives_if_needed(
                             dest_dir,
+                            is_sample,
                             Some(destination),
-                            archive_password,
+                            &passwords,
                             archive_provider.clone(),
                         )
                         .await?
@@ -586,6 +656,7 @@ async fn resolve_completed_import_target(
             import_id,
             completed,
             dest_dir,
+            release_evidence,
             archive_password,
             resolved_title_authorization,
         )
@@ -650,7 +721,10 @@ async fn resolve_completed_import_target(
     let title = match title {
         Some(t) => t,
         None => {
-            let archive_message = if archive_extraction_would_be_needed_best_effort(dest_dir) {
+            let archive_message = if archive_extraction_would_be_needed_best_effort(
+                dest_dir,
+                titleless_sample_rule(completed),
+            ) {
                 "; archived downloads require a facet/category hint and configured library root before Scryer can stage extraction under the import destination"
             } else {
                 ""
@@ -703,10 +777,18 @@ async fn resolve_completed_import_target(
     // 3. FIND VIDEO FILES (extract archives first if needed)
     let is_series = matches!(title.facet, MediaFacet::Series | MediaFacet::Anime);
     if extracted_dir.is_none() {
-        let extraction_destination = if archive_extraction_would_be_needed_best_effort(dest_dir) {
+        let extraction_destination = if archive_extraction_would_be_needed_best_effort(
+            dest_dir,
+            automatic_scan_sample_rule(&title.facet),
+        ) {
             Some(archive_extraction_destination_for_title(app, import_id, &title).await?)
         } else {
             None
+        };
+        let passwords = if extraction_destination.is_some() {
+            archive_password_candidates(app, completed, release_evidence, archive_password).await
+        } else {
+            Default::default()
         };
         if extraction_destination.is_some() {
             mark_import_extracting(app, import_id).await?;
@@ -741,8 +823,9 @@ async fn resolve_completed_import_target(
             }
             crate::archive_extractor::extract_archives_if_needed(
                 dest_dir,
+                automatic_scan_sample_rule(&title.facet),
                 extraction_destination,
-                archive_password,
+                &passwords,
                 app.services
                     .integrations
                     .archive_extractor_plugin_provider

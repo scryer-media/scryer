@@ -19,6 +19,7 @@ import type {
   ListSubscriptionDraft,
   ListSyncRunOutcome,
   ListSyncState,
+  MemberListPolicy,
   TitleListMembership,
 } from "../types/lists.ts";
 import type { ExternalId, Facet } from "../types/titles.ts";
@@ -708,4 +709,19 @@ export function titleListProvenance(memberships: readonly TitleListMembership[])
     (membership.leftAt ?? "") > (best.leftAt ?? "") ? membership : best,
   );
   return { kind: "left", name: latest.name };
+}
+
+/**
+ * Undo one member's failed policy change without touching anyone else's row.
+ * The row is put back only while it still shows the value that failed, so a
+ * change that has since succeeded, for this member or another, is kept.
+ */
+export function rollBackMemberListPolicy(
+  current: readonly MemberListPolicy[],
+  previous: MemberListPolicy,
+  attempted: MemberListPolicy["policy"],
+): MemberListPolicy[] {
+  return current.map((entry) =>
+    entry.user.id === previous.user.id && entry.policy === attempted ? previous : entry,
+  );
 }

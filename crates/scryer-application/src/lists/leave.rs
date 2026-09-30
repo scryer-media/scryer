@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 
-use scryer_domain::{ListMembership, ListOnLeave, ListSubscription};
+use scryer_domain::{ListMembership, ListMembershipState, ListOnLeave, ListSubscription};
 
 use super::act::ListActions;
 use super::ports::{ListMembershipRepository, ListSubscriptionRepository};
@@ -240,6 +240,14 @@ impl<'a> LeaveGuard<'a> {
         let others = self.by_title.get(title_id).cloned().unwrap_or_default();
         for other in others {
             if other.subscription_id == subscription.id || other.left_at.is_some() {
+                continue;
+            }
+            // A list that filters or excludes the title still shows it, but
+            // does not want it in the library, so it holds nothing back.
+            if matches!(
+                other.state,
+                ListMembershipState::Filtered | ListMembershipState::Excluded
+            ) {
                 continue;
             }
             if !self.loaded.contains_key(&other.subscription_id) {

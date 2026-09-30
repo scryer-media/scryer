@@ -171,9 +171,9 @@ impl ListActions for AppListActions<'_> {
         hold: bool,
     ) -> AppResult<String> {
         let owner = self.list_owner(subscription).await?;
-        let outcome = self
+        let committed = self
             .app
-            .submit_media_request(
+            .submit_media_request_committed(
                 &owner,
                 SubmitMediaRequestInput {
                     library_id: route.library_id.clone(),
@@ -203,13 +203,24 @@ impl ListActions for AppListActions<'_> {
                 },
             )
             .await?;
+        // The request is committed. A failure to approve or deny it leaves it
+        // for a person to decide; the membership keeps its id so a later sync
+        // follows that request instead of filing another.
+        if let Err(error) = &committed.decision {
+            tracing::warn!(
+                subscription_id = %subscription.id,
+                request_id = %committed.request_id,
+                error = %error,
+                "a list request was filed but acting on its verdict failed"
+            );
+        }
         if !subscription.is_personal() {
             self.app
                 .append_list_event(new_global_domain_event(
                     &User::system_execution_actor(),
                     DomainEventPayload::ListRequestSubmitted(ListRequestSubmittedEventData {
                         list: ListEventSubject::of(subscription),
-                        request_id: outcome.request_id.clone(),
+                        request_id: committed.request_id.clone(),
                         library_id: route.library_id.clone(),
                         facet: route.kind.clone(),
                         title_name: item_name(item),
@@ -219,7 +230,7 @@ impl ListActions for AppListActions<'_> {
                 ))
                 .await;
         }
-        Ok(outcome.request_id)
+        Ok(committed.request_id)
     }
 
     async fn set_title_monitored(&self, title_id: &str, monitored: bool) -> AppResult<()> {
@@ -334,7 +345,7 @@ impl ListLibraryLookup for AppListLibraryLookup<'_> {
                 .services
                 .catalog
                 .titles
-                .find_by_external_id_in_facet(kind.clone(), &id.source, &id.value)
+                .find_by_external_id_in_facet(kind.clone(), id)
                 .await?
             {
                 return Ok(Some(title.id));
