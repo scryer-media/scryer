@@ -5407,9 +5407,12 @@ mod tests {
         assert_eq!(target_hits.load(Ordering::SeqCst), 0);
     }
 
+    /// The fixture servers answer one request per connection and then close it,
+    /// so the response says so; otherwise the client pools a connection the
+    /// server has already shut down and a later request can land on it.
     fn http_response(status: u16, headers: &[(&str, &str)], body: &str) -> String {
         let mut response = format!(
-            "HTTP/1.1 {status} Test\r\nContent-Length: {}\r\n",
+            "HTTP/1.1 {status} Test\r\nConnection: close\r\nContent-Length: {}\r\n",
             body.len()
         );
         for (name, value) in headers {
