@@ -6,6 +6,7 @@ import {
   attentionTotal,
   compareProviderRows,
   formatCompactAge,
+  formatStorageSize,
   formatTerabytes,
   groupStorageRootsByLibrary,
   isBreakingVersionChange,
@@ -43,6 +44,19 @@ test("terabytes keep one decimal and unknown sizes stay unknown", () => {
   assert.equal(formatTerabytes(0), "0.0");
   assert.equal(formatTerabytes(null), null);
   assert.equal(formatTerabytes(-1), null);
+});
+
+test("storage sizes use GB below one TB and TB at or above one TB", () => {
+  assert.deepEqual(formatStorageSize(999_000_000_000), {
+    value: "999.0",
+    unit: "GB",
+  });
+  assert.deepEqual(formatStorageSize(1_000_000_000_000), {
+    value: "1.0",
+    unit: "TB",
+  });
+  assert.equal(formatStorageSize(null), null);
+  assert.equal(formatStorageSize(-1), null);
 });
 
 test("compact ages bucket into minutes, hours and days", () => {

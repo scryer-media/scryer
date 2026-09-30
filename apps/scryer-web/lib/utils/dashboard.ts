@@ -76,6 +76,23 @@ export function formatTerabytes(bytes: number | null | undefined): string | null
   return (bytes / 1_000_000_000_000).toFixed(1);
 }
 
+export type FormattedStorageSize = {
+  value: string;
+  unit: "GB" | "TB";
+};
+
+export function formatStorageSize(
+  bytes: number | null | undefined,
+): FormattedStorageSize | null {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes) || bytes < 0) {
+    return null;
+  }
+  if (bytes < 1_000_000_000_000) {
+    return { value: (bytes / 1_000_000_000).toFixed(1), unit: "GB" };
+  }
+  return { value: (bytes / 1_000_000_000_000).toFixed(1), unit: "TB" };
+}
+
 /**
  * Compact age of an instant: `41m`, `6h`, `3d`. Used where a row has room for a
  * couple of characters only; the full timestamp goes in the element's title.

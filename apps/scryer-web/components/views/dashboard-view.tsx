@@ -85,6 +85,7 @@ import {
   compareProviderRows,
   formatCompactAge,
   formatCompactCountdown,
+  formatStorageSize,
   formatTerabytes,
   groupStorageRootsByLibrary,
   isProviderCoolingDown,
@@ -1432,9 +1433,9 @@ function StorageRootTile({
   const tagKey = percent === null ? null : usageTagLabelKey(tag);
   const usedTb = formatTerabytes(root.usedBytes);
   const totalTb = formatTerabytes(root.totalBytes);
-  const freeTb =
+  const freeStorage =
     root.usedBytes !== null && root.totalBytes !== null
-      ? formatTerabytes(Math.max(0, root.totalBytes - root.usedBytes))
+      ? formatStorageSize(Math.max(0, root.totalBytes - root.usedBytes))
       : null;
   const Icon = facetById(root.facet)?.icon;
 
@@ -1488,7 +1489,11 @@ function StorageRootTile({
                   tag === "crit" ? { color: "var(--scry-danger-text)" } : undefined
                 }
               >
-                {t("dashboard.storageFree", { size: `${freeTb ?? "—"} TB` })}
+                {t("dashboard.storageFree", {
+                  size: freeStorage
+                    ? `${freeStorage.value} ${freeStorage.unit}`
+                    : "—",
+                })}
               </span>
             </>
           )}
