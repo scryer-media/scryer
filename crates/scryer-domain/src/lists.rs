@@ -167,10 +167,6 @@ pub enum ListSourceOrigin {
     SmgChart { chart_key: String, scope: String },
     /// Fetched by the provider plugin with the subscription's parameters.
     ProviderFetch,
-    /// A public IMDb list the metadata gateway proxies; IMDb has no API and
-    /// the instance never reads it directly. The list id is the source's
-    /// `list_id` parameter.
-    SmgImdbList,
 }
 
 impl ListSourceOrigin {
@@ -178,13 +174,9 @@ impl ListSourceOrigin {
         match self {
             Self::SmgChart { .. } => "smg_chart",
             Self::ProviderFetch => "provider_fetch",
-            Self::SmgImdbList => "smg_imdb_list",
         }
     }
 }
-
-/// The source parameter naming a proxied IMDb list.
-pub const LIST_SOURCE_IMDB_LIST_ID_PARAM: &str = "list_id";
 
 /// A provider plus the concrete thing to read from it.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

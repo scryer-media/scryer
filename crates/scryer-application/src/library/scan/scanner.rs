@@ -978,18 +978,6 @@ pub trait MetadataGateway: Send + Sync {
         ))
     }
 
-    /// A public IMDb list, proxied by the gateway, in list order. Entries the
-    /// gateway has no title for come back unresolved with their IMDb id only.
-    async fn list_imdb_user_list(
-        &self,
-        list_id: &str,
-    ) -> AppResult<Vec<crate::lists::gateway::ListChartItem>> {
-        let _ = list_id;
-        Err(AppError::Repository(
-            "metadata gateway listImdbUserList is not implemented".into(),
-        ))
-    }
-
     async fn search_titles(
         &self,
         query: &str,

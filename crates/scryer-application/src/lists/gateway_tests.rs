@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use scryer_domain::{ExternalId, LIST_SOURCE_IMDB_LIST_ID_PARAM, ListSourceOrigin, MediaFacet};
+use scryer_domain::{ExternalId, ListSourceOrigin, MediaFacet};
 use scryer_plugin_sdk::ListMediaKind;
 
 use super::*;
@@ -43,13 +43,10 @@ fn chart_item(rank: i64, title_id: Option<i64>, imdb: Option<&str>) -> ListChart
 
 #[test]
 fn chart_entries_are_keyed_by_gateway_title_and_carry_that_id() {
-    let items = chart_items_to_plugin_items(
-        vec![
-            chart_item(1, Some(41), Some("tt0000041")),
-            chart_item(2, None, Some("tt0000042")),
-        ],
-        ChartItemKey::GatewayTitle,
-    );
+    let items = chart_items_to_plugin_items(vec![
+        chart_item(1, Some(41), Some("tt0000041")),
+        chart_item(2, None, Some("tt0000042")),
+    ]);
 
     assert_eq!(items.len(), 1, "an entry with no gateway title has no key");
     let (item, poster) = &items[0];
@@ -66,65 +63,10 @@ fn chart_entries_are_keyed_by_gateway_title_and_carry_that_id() {
 }
 
 #[test]
-fn imdb_entries_keep_their_imdb_key_whether_or_not_they_resolved() {
-    let items = chart_items_to_plugin_items(
-        vec![
-            chart_item(1, Some(41), Some("tt0000041")),
-            chart_item(2, None, Some("tt0000042")),
-            chart_item(3, None, None),
-        ],
-        ChartItemKey::Imdb,
-    );
-
-    let keys = items
-        .iter()
-        .map(|(item, _)| item.item_key.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(keys, vec!["imdb:tt0000041", "imdb:tt0000042"]);
-    assert_eq!(items[1].0.kind_hint, None, "an unknown kind stays unknown");
-}
-
-#[test]
 fn a_gateway_title_id_becomes_the_ref_id() {
     let reference = title_ref(&[id("smg", "77"), id("trakt", "9001")]);
     assert_eq!(reference.smg_id, Some(77));
     assert_eq!(reference.external_ids, vec![id("trakt", "9001")]);
-}
-
-#[tokio::test]
-async fn an_imdb_list_reads_through_the_gateway_by_its_list_id() {
-    let charts = ScriptedCharts::default();
-    charts.imdb_lists.lock().unwrap().insert(
-        "ls000000001".to_string(),
-        vec![
-            chart_item(1, Some(41), Some("tt0000041")),
-            chart_item(2, None, Some("tt0000042")),
-        ],
-    );
-    let plugins = ScriptedProvider(ScriptedLists::new());
-    let mut list = subscription("list-imdb");
-    list.source.provider = "imdb".to_string();
-    list.source.origin = ListSourceOrigin::SmgImdbList;
-    list.source.params.insert(
-        LIST_SOURCE_IMDB_LIST_ID_PARAM.to_string(),
-        "ls000000001".to_string(),
-    );
-
-    let fetched = fetch_list(&list, &plugins, &charts, None, &Default::default())
-        .await
-        .expect("imdb list");
-
-    assert_eq!(fetched.items.len(), 2);
-    assert_eq!(
-        fetched.posters.get("imdb:tt0000042").map(String::as_str),
-        Some("https://images.invalid/2.jpg")
-    );
-
-    list.source.params.clear();
-    let failure = fetch_list(&list, &plugins, &charts, None, &Default::default())
-        .await
-        .expect_err("no list id");
-    assert_eq!(failure.class, ListFailureClass::NotFound);
 }
 
 #[tokio::test]

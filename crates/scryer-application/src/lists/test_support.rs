@@ -902,12 +902,11 @@ pub(crate) fn keys_of(rows: &[ListMembership]) -> HashSet<String> {
 
 // ── Gateway charts ─────────────────────────────────────────────────────────
 
-/// Serves scripted chart and IMDb list entries; anything not scripted is
+/// Serves scripted chart entries; anything not scripted is
 /// unavailable, as a gateway outage would be.
 #[derive(Default)]
 pub(crate) struct ScriptedCharts {
     pub charts: Mutex<HashMap<String, Vec<super::gateway::ListChartItem>>>,
-    pub imdb_lists: Mutex<HashMap<String, Vec<super::gateway::ListChartItem>>>,
 }
 
 #[async_trait]
@@ -928,20 +927,6 @@ impl super::fetch::ListChartSource for ScriptedCharts {
                     super::fetch::ListFailureClass::Unavailable,
                     "The metadata service",
                 )
-            })
-    }
-
-    async fn imdb_user_list(
-        &self,
-        list_id: &str,
-    ) -> Result<Vec<super::gateway::ListChartItem>, super::fetch::ListFailure> {
-        self.imdb_lists
-            .lock()
-            .unwrap()
-            .get(list_id)
-            .cloned()
-            .ok_or_else(|| {
-                super::fetch::ListFailure::new(super::fetch::ListFailureClass::NotFound, "IMDb")
             })
     }
 }
