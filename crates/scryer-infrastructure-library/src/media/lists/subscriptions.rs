@@ -438,7 +438,7 @@ fn subscription_insert_args(subscription: &ListSubscription) -> AppResult<Vec<Sq
         ListSourceOrigin::SmgChart { chart_key, scope } => {
             (Some(chart_key.clone()), Some(scope.clone()))
         }
-        ListSourceOrigin::ProviderFetch | ListSourceOrigin::SmgImdbList => (None, None),
+        ListSourceOrigin::ProviderFetch => (None, None),
     };
     let sync = &subscription.sync;
     let counts = &subscription.counts;
@@ -562,7 +562,6 @@ fn row_to_subscription(row: &SqlRow) -> AppResult<ListSubscription> {
             scope: row.opt_text("chart_scope")?.unwrap_or_default(),
         },
         "provider_fetch" => ListSourceOrigin::ProviderFetch,
-        "smg_imdb_list" => ListSourceOrigin::SmgImdbList,
         other => {
             return Err(AppError::Repository(format!(
                 "unknown source_origin value '{other}'"

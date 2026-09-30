@@ -12,6 +12,8 @@ pub mod event_storage;
 #[path = "full_admin_manage_lists_upgrade_tests.rs"]
 mod full_admin_manage_lists_upgrade_tests;
 pub mod hook_ids;
+#[cfg(test)]
+mod imdb_user_list_follows_upgrade_tests;
 pub mod known_bad;
 #[cfg(test)]
 mod legacy_monitor_snapshot_upgrade_tests;

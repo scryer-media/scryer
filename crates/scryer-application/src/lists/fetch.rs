@@ -1,10 +1,9 @@
 //! Fetch: one subscription's source → the items it lists right now.
 //!
-//! Three origins exist. A chart the metadata gateway already ingests, and a
-//! public IMDb list the gateway proxies, are read from the gateway; everything
-//! else is a list-provider plugin call, paged until the provider stops handing
-//! back a cursor. All return the same item shape, so resolve and evaluate
-//! never know which one ran.
+//! Two origins exist. A chart the metadata gateway already ingests is read
+//! from the gateway; everything else is a list-provider plugin call, paged
+//! until the provider stops handing back a cursor. Both return the same item
+//! shape, so resolve and evaluate never know which one ran.
 //!
 //! Every failure here is classified into a [`ListFailure`]: the sync records
 //! it in plain words on the subscription and, as the rule this module exists
@@ -14,13 +13,13 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use async_trait::async_trait;
-use scryer_domain::{LIST_SOURCE_IMDB_LIST_ID_PARAM, ListSourceOrigin, ListSubscription};
+use scryer_domain::{ListSourceOrigin, ListSubscription};
 use scryer_plugin_sdk::{
     ListCredential, ListPluginFetchRequest, ListPluginItem, PluginError, PluginErrorCode,
     PluginResult,
 };
 
-use super::gateway::{ChartItemKey, ListChartItem, chart_items_to_plugin_items};
+use super::gateway::{ListChartItem, chart_items_to_plugin_items};
 use super::plugin::ListPluginProvider;
 use crate::AppError;
 
@@ -194,9 +193,9 @@ impl FetchedList {
         self.items.retain(|item| seen.insert(item.item_key.clone()));
     }
 
-    fn from_gateway(items: Vec<ListChartItem>, key: ChartItemKey) -> Self {
+    fn from_gateway(items: Vec<ListChartItem>) -> Self {
         let mut fetched = Self::default();
-        for (item, poster) in chart_items_to_plugin_items(items, key) {
+        for (item, poster) in chart_items_to_plugin_items(items) {
             if let Some(poster) = poster {
                 fetched.posters.insert(item.item_key.clone(), poster);
             }
@@ -207,7 +206,7 @@ impl FetchedList {
 }
 
 /// Lists the metadata gateway serves: ingested charts, read as resolved items
-/// in chart order, and proxied public IMDb lists.
+/// in chart order.
 #[async_trait]
 pub trait ListChartSource: Send + Sync {
     async fn chart_items(
@@ -216,8 +215,6 @@ pub trait ListChartSource: Send + Sync {
         chart_key: &str,
         scope: &str,
     ) -> Result<Vec<ListChartItem>, ListFailure>;
-
-    async fn imdb_user_list(&self, list_id: &str) -> Result<Vec<ListChartItem>, ListFailure>;
 }
 
 /// Read every item of one subscription's source.
@@ -254,18 +251,7 @@ pub(crate) async fn fetch_list_with_limits(
     match &subscription.source.origin {
         ListSourceOrigin::SmgChart { chart_key, scope } => {
             let items = charts.chart_items(provider, chart_key, scope).await?;
-            Ok(FetchedList::from_gateway(items, ChartItemKey::GatewayTitle))
-        }
-        ListSourceOrigin::SmgImdbList => {
-            let list_id = subscription
-                .source
-                .params
-                .get(LIST_SOURCE_IMDB_LIST_ID_PARAM)
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| ListFailure::new(ListFailureClass::NotFound, provider))?;
-            let items = charts.imdb_user_list(list_id).await?;
-            Ok(FetchedList::from_gateway(items, ChartItemKey::Imdb))
+            Ok(FetchedList::from_gateway(items))
         }
         ListSourceOrigin::ProviderFetch => {
             let client = plugins

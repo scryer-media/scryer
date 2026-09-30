@@ -36,7 +36,6 @@ mod library_scan;
 mod list_actions;
 mod list_experimental_gate;
 mod list_provider_settings;
-mod list_withheld_providers;
 mod maintenance_action_sequences;
 mod maintenance_claims;
 mod maintenance_evaluation;

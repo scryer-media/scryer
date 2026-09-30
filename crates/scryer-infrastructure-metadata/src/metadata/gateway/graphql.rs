@@ -52,5 +52,3 @@ pub const ACKNOWLEDGE_DISCOVERY_CONTEXT_SNAPSHOT_QUERY: &str =
 pub const LIST_CHART_CATALOG_QUERY: &str =
     include_str!("metadata_gateway/list_chart_catalog.graphql");
 pub const LIST_CHART_ITEMS_QUERY: &str = include_str!("metadata_gateway/list_chart_items.graphql");
-pub const LIST_IMDB_USER_LIST_QUERY: &str =
-    include_str!("metadata_gateway/list_imdb_user_list.graphql");

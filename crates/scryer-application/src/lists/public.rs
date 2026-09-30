@@ -23,8 +23,7 @@ use scryer_domain::{
 
 use super::catalog::{
     ClassifiedSource, ListProviderManifest, RecognizedListUrl, classify_public_source,
-    is_withheld_list_provider, member_only_providers, merge_provider_catalog,
-    merge_provider_catalog_with_withheld, recognize_url, withheld_list_provider_error,
+    member_only_providers, merge_provider_catalog, recognize_url,
 };
 use super::evaluate::{ItemDecision, evaluate};
 use super::fetch::{FetchedList, fetch_list};
@@ -484,9 +483,6 @@ impl AppUseCase {
         let plugins = self.services.lists.plugins.descriptors();
         let charts = self.list_chart_catalog().await;
         let manifests = merge_provider_catalog(&plugins, &charts);
-        // A link to a withheld provider is still recognised, so the follow is
-        // refused by name below rather than answered as an unknown link.
-        let recognizable = merge_provider_catalog_with_withheld(&plugins, &charts);
         let member_only = member_only_providers(&plugins);
         let (provider, source_type, params, recognized) =
             match (trimmed(provider), trimmed(source_type)) {
@@ -499,7 +495,7 @@ impl AppUseCase {
                             "name a provider and a list, or paste a link".to_string(),
                         ));
                     };
-                    let Some(recognized) = recognize_url(&recognizable, &url) else {
+                    let Some(recognized) = recognize_url(&manifests, &url) else {
                         return Ok(None);
                     };
                     (
@@ -682,11 +678,6 @@ impl AppUseCase {
         subscription: &ListSubscription,
         existing: HashMap<String, ListMembership>,
     ) -> AppResult<ListPreview> {
-        // Every preview comes through here, including one of a list followed
-        // before its provider was withheld.
-        if is_withheld_list_provider(&subscription.source.provider) {
-            return Err(withheld_list_provider_error(&subscription.source.provider));
-        }
         let lists = &self.services.lists;
         let gateway = self.services.library.metadata_gateway.clone();
         let charts = GatewayListChartSource::new(gateway.clone());
@@ -859,22 +850,17 @@ impl AppUseCase {
         let mut subscription = self.public_subscription(id).await?;
         // The kinds a source declares are the ceiling; a follow may narrow
         // them and widen them back.
-        let declared = match &subscription.source.origin {
-            scryer_domain::ListSourceOrigin::SmgImdbList => {
-                vec![MediaFacet::Movie, MediaFacet::Series]
-            }
-            _ => match self
-                .classify_source(
-                    Some(&subscription.source.provider),
-                    Some(&subscription.source.source_type),
-                    &subscription.source.params,
-                    None,
-                )
-                .await
-            {
-                Ok(Some((classified, _))) => classified.kinds,
-                _ => subscription.kinds.clone(),
-            },
+        let declared = match self
+            .classify_source(
+                Some(&subscription.source.provider),
+                Some(&subscription.source.source_type),
+                &subscription.source.params,
+                None,
+            )
+            .await
+        {
+            Ok(Some((classified, _))) => classified.kinds,
+            _ => subscription.kinds.clone(),
         };
         let mode = patch.mode.unwrap_or(subscription.mode);
         let routes = patch.routes.unwrap_or_else(|| subscription.routes.clone());
