@@ -12,6 +12,7 @@ import type {
 } from "../types/lists.ts";
 import {
   DEFAULT_LIST_MAX_PER_SYNC,
+  providerLogoSrc,
   defaultListRoute,
   draftToSubscribeInput,
   emptyListDraft,
@@ -698,4 +699,24 @@ test("a failed policy change rolls back only that member's row", () => {
   // A later change to the same member that already landed is not undone.
   const later = [member("a", "NONE"), member("b", "NONE")];
   assert.deepEqual(rollBackMemberListPolicy(later, before, "AUTO"), later);
+});
+
+test("list providers with a shipped logo resolve to it; the rest keep their abbreviation", () => {
+  const expected: Record<string, string> = {
+    tmdb: "/rating-sources/tmdb.svg",
+    imdb: "/rating-sources/imdb.svg",
+    trakt: "/rating-sources/trakt.svg",
+    anilist: "/media-sites/anilist.svg",
+    mal: "/media-sites/mal.svg",
+    tvdb: "/media-sites/tvdb.svg",
+    mdblist: "/rating-sources/mdblist.avif",
+    plex: "/auth-providers/plex.svg",
+  };
+  for (const [providerType, src] of Object.entries(expected)) {
+    assert.equal(providerLogoSrc(providerType), src, providerType);
+  }
+
+  for (const providerType of ["simkl", "custom", "some-future-plugin", "", "  "]) {
+    assert.equal(providerLogoSrc(providerType), null, JSON.stringify(providerType));
+  }
 });
