@@ -81,8 +81,24 @@ fn plugin(provider_type: &str, personal: bool, member_only: bool) -> PluginDescr
     }
 }
 
+fn imdb_charts() -> Vec<ListChartCatalogEntry> {
+    vec![
+        chart("imdb", "imdb.top250.movies", "global"),
+        chart("imdb", "imdb.moviemeter.movies", "global"),
+        chart("IMDb", "imdb.toptv.series", "global"),
+        chart("imdb", "imdb.tvmeter.series", "global"),
+    ]
+}
+
+fn provider_types(manifests: &[ListProviderManifest]) -> Vec<&str> {
+    manifests
+        .iter()
+        .map(|manifest| manifest.provider_type.as_str())
+        .collect()
+}
+
 #[test]
-fn charts_join_their_provider_and_imdb_lists_are_always_offered() {
+fn charts_join_their_provider_and_withheld_providers_are_left_out() {
     let manifests = merge_provider_catalog(
         &[plugin("fixturelists", false, false)],
         &[
@@ -90,11 +106,7 @@ fn charts_join_their_provider_and_imdb_lists_are_always_offered() {
             chart("tmdb", "popular", "movie"),
         ],
     );
-    let names = manifests
-        .iter()
-        .map(|manifest| manifest.provider_type.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(names, vec!["fixturelists", "imdb", "tmdb"]);
+    assert_eq!(provider_types(&manifests), vec!["fixturelists", "tmdb"]);
 
     let fixture = &manifests[0];
     assert_eq!(fixture.name, "Fixture Lists");
@@ -106,12 +118,56 @@ fn charts_join_their_provider_and_imdb_lists_are_always_offered() {
     assert!(fixture.coverage.contains(&MediaFacet::Movie));
     assert!(fixture.coverage.contains(&MediaFacet::Series));
 
-    let tmdb = &manifests[2];
+    let tmdb = &manifests[1];
     assert_eq!(tmdb.name, "TMDb");
     assert!(find_item(tmdb, "smg_chart:popular:movie").is_some());
 
-    let imdb = &manifests[1];
+    // The public IMDb list source stays built, so offering IMDb again is a
+    // one-line change; it is just never shown.
+    let with_withheld = merge_provider_catalog_with_withheld(
+        &[plugin("fixturelists", false, false)],
+        &[chart("tmdb", "popular", "movie")],
+    );
+    let imdb = with_withheld
+        .iter()
+        .find(|manifest| manifest.provider_type == LIST_PROVIDER_IMDB)
+        .expect("the IMDb source is still built");
     assert!(find_item(imdb, LIST_SOURCE_TYPE_IMDB_USER_LIST).is_some());
+}
+
+#[test]
+fn gateway_imdb_charts_never_reach_the_catalog() {
+    let mut charts = imdb_charts();
+    charts.push(chart("tmdb", "popular", "movie"));
+    let manifests = merge_provider_catalog(&[plugin("fixturelists", false, false)], &charts);
+
+    assert_eq!(provider_types(&manifests), vec!["fixturelists", "tmdb"]);
+    let items = manifests
+        .iter()
+        .flat_map(|manifest| &manifest.groups)
+        .flat_map(|group| &group.items)
+        .collect::<Vec<_>>();
+    assert!(
+        items
+            .iter()
+            .all(|item| !item.id.contains("imdb") && !item.source_type.contains("imdb")),
+        "no IMDb chart or public IMDb list is offered: {items:?}"
+    );
+    assert!(
+        manifests
+            .iter()
+            .flat_map(|manifest| &manifest.url_patterns)
+            .all(|pattern| !pattern.pattern.contains("imdb")),
+        "no imdb.com link is recognised"
+    );
+}
+
+#[test]
+fn every_withheld_provider_is_matched_whatever_its_case() {
+    assert!(is_withheld_list_provider("imdb"));
+    assert!(is_withheld_list_provider(" IMDb "));
+    assert!(!is_withheld_list_provider("tmdb"));
+    assert!(!is_withheld_list_provider("fixturelists"));
 }
 
 #[test]
@@ -136,7 +192,13 @@ fn urls_are_recognised_by_manifest_patterns() {
         Some("fixture-one")
     );
 
-    let imdb = recognize_url(&manifests, "https://www.imdb.com/list/ls000000123/").unwrap();
+    assert!(
+        recognize_url(&manifests, "https://www.imdb.com/list/ls000000123/").is_none(),
+        "the shown catalog does not recognise a withheld provider's link"
+    );
+    let with_withheld =
+        merge_provider_catalog_with_withheld(&[plugin("fixturelists", false, false)], &[]);
+    let imdb = recognize_url(&with_withheld, "https://www.imdb.com/list/ls000000123/").unwrap();
     assert_eq!(imdb.provider, "imdb");
     assert_eq!(
         imdb.params
@@ -172,17 +234,6 @@ fn public_sources_are_classified_by_origin() {
         }
     );
     assert_eq!(chart.kinds, vec![MediaFacet::Movie]);
-
-    let imdb = classify_public_source(
-        &manifests,
-        &charts,
-        &member_only,
-        "imdb",
-        "user_list",
-        &BTreeMap::from([("list_id".to_string(), "ls000000123".to_string())]),
-    )
-    .unwrap();
-    assert_eq!(imdb.source.origin, ListSourceOrigin::SmgImdbList);
 
     let fetched = classify_public_source(
         &manifests,
@@ -258,4 +309,49 @@ fn public_sources_reject_what_they_cannot_follow() {
         &BTreeMap::from([("slug".to_string(), "fixture-one".to_string())]),
     );
     assert!(member_only_item.is_err());
+}
+
+fn refused_as_withheld(result: AppResult<ClassifiedSource>) {
+    match result {
+        Err(AppError::Validation(message)) => assert_eq!(
+            message, "IMDb lists are not available in Scryer right now",
+            "unexpected refusal"
+        ),
+        other => panic!("expected the IMDb refusal, got {other:?}"),
+    }
+}
+
+#[test]
+fn withheld_providers_cannot_be_followed_even_when_the_gateway_lists_them() {
+    let plugins = [plugin("fixturelists", false, false)];
+    let charts = imdb_charts();
+    let member_only = member_only_providers(&plugins);
+    // Classified against the full catalog too, so the refusal does not rest
+    // on the provider merely being missing from what is shown.
+    for manifests in [
+        merge_provider_catalog(&plugins, &charts),
+        merge_provider_catalog_with_withheld(&plugins, &charts),
+    ] {
+        for provider in ["imdb", "IMDb"] {
+            refused_as_withheld(classify_public_source(
+                &manifests,
+                &charts,
+                &member_only,
+                provider,
+                &smg_chart_source_type("imdb.top250.movies", "global"),
+                &BTreeMap::new(),
+            ));
+        }
+        refused_as_withheld(classify_public_source(
+            &manifests,
+            &charts,
+            &member_only,
+            LIST_PROVIDER_IMDB,
+            LIST_SOURCE_TYPE_IMDB_USER_LIST,
+            &BTreeMap::from([(
+                scryer_domain::LIST_SOURCE_IMDB_LIST_ID_PARAM.to_string(),
+                "ls000000123".to_string(),
+            )]),
+        ));
+    }
 }

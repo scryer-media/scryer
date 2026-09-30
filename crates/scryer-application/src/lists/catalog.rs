@@ -4,7 +4,8 @@
 //! The metadata gateway adds two things no plugin serves: the public charts it
 //! ingests, and public IMDb lists it proxies. Both are merged into the
 //! manifest of the provider they belong to, so the Lists page shows one tile
-//! per provider whatever serves it.
+//! per provider whatever serves it. A provider in [`WITHHELD_LIST_PROVIDERS`]
+//! is left out of the catalog and cannot be followed or previewed.
 //!
 //! A gateway chart is named by its source type alone
 //! (`smg_chart:{chart_key}:{scope}`), so a follow needs no parameters; a public
@@ -37,6 +38,28 @@ pub const LIST_IMDB_LIST_INTERVAL_SECONDS: u64 = 6 * 60 * 60;
 
 const IMDB_LIST_URL_PATTERN: &str =
     r"^https?://(?:www\.|m\.)?imdb\.com/list/(?P<list_id>ls\d{6,12})/?(?:[?#].*)?$";
+
+/// List providers kept off the Lists surface: not in the catalog, and refused
+/// when a follow or a preview names them. IMDb is withheld because the
+/// metadata gateway cannot currently fetch its charts or public lists; remove
+/// it from this list to offer IMDb again.
+pub const WITHHELD_LIST_PROVIDERS: &[&str] = &[LIST_PROVIDER_IMDB];
+
+/// Whether `provider` is one of [`WITHHELD_LIST_PROVIDERS`].
+pub fn is_withheld_list_provider(provider: &str) -> bool {
+    let provider = provider.trim();
+    WITHHELD_LIST_PROVIDERS
+        .iter()
+        .any(|withheld| withheld.eq_ignore_ascii_case(provider))
+}
+
+/// The refusal a follow or a preview of a withheld provider gets.
+pub fn withheld_list_provider_error(provider: &str) -> AppError {
+    AppError::Validation(format!(
+        "{} lists are not available in Scryer right now",
+        provider_display_name(&provider.trim().to_ascii_lowercase())
+    ))
+}
 
 /// One provider as the Lists page shows it.
 #[derive(Clone, Debug)]
@@ -209,8 +232,22 @@ fn add_coverage(manifest: &mut ListProviderManifest, kinds: &[ListMediaKind]) {
 }
 
 /// Merge installed plugins and the gateway's charts into one manifest per
-/// provider, sorted by provider type.
+/// provider, sorted by provider type. Withheld providers are left out,
+/// whatever serves them.
 pub fn merge_provider_catalog(
+    plugins: &[PluginDescriptor],
+    charts: &[ListChartCatalogEntry],
+) -> Vec<ListProviderManifest> {
+    merge_provider_catalog_with_withheld(plugins, charts)
+        .into_iter()
+        .filter(|manifest| !is_withheld_list_provider(&manifest.provider_type))
+        .collect()
+}
+
+/// [`merge_provider_catalog`] including withheld providers. Used only to
+/// recognise a pasted link to a withheld provider, so the follow can be
+/// refused by name instead of as an unknown link; never shown.
+pub fn merge_provider_catalog_with_withheld(
     plugins: &[PluginDescriptor],
     charts: &[ListChartCatalogEntry],
 ) -> Vec<ListProviderManifest> {
@@ -368,9 +405,10 @@ fn check_required_params(
 
 /// Name the origin and the manifest facts of a public source.
 ///
-/// A gateway chart must be in the gateway's catalog; an IMDb list needs an
-/// `ls` id; anything else must be a non-personal item of an installed
-/// provider whose fetch does not need a member's account.
+/// A withheld provider is refused outright. A gateway chart must be in the
+/// gateway's catalog; an IMDb list needs an `ls` id; anything else must be a
+/// non-personal item of an installed provider whose fetch does not need a
+/// member's account.
 pub fn classify_public_source(
     manifests: &[ListProviderManifest],
     charts: &[ListChartCatalogEntry],
@@ -386,6 +424,10 @@ pub fn classify_public_source(
         .map(|(key, value)| (key.trim().to_string(), value.trim().to_string()))
         .filter(|(key, value)| !key.is_empty() && !value.is_empty())
         .collect::<BTreeMap<_, _>>();
+
+    if is_withheld_list_provider(&provider) {
+        return Err(withheld_list_provider_error(&provider));
+    }
 
     if let Some((chart_key, scope)) = parse_smg_chart_source_type(source_type) {
         let chart = charts
