@@ -741,10 +741,35 @@ impl ListItemResolver for FixtureResolver {
 
 // ── Plugin ─────────────────────────────────────────────────────────────────
 
+/// A provider with one public `user_list` source named by `list_id`, the
+/// source [`subscription`] follows.
 fn fixture_descriptor() -> PluginDescriptor {
-    let provider: ListProviderDescriptor =
+    use scryer_plugin_sdk::{
+        ListAuthBadge, ListProviderGroup, ListProviderItem, ListSourceParam, ListSourceParamType,
+    };
+    let mut provider: ListProviderDescriptor =
         serde_json::from_value(serde_json::json!({ "provider_type": PROVIDER }))
             .expect("minimal list descriptor");
+    provider.groups = vec![ListProviderGroup {
+        label: "Lists".to_string(),
+        auth_badge: ListAuthBadge::NoAccountNeedsValue,
+        items: vec![ListProviderItem {
+            id: format!("{PROVIDER}:user_list"),
+            name: "Fixture public list".to_string(),
+            description: None,
+            kinds: vec![ListMediaKind::Movie],
+            source_type: "user_list".to_string(),
+            params: vec![ListSourceParam {
+                key: "list_id".to_string(),
+                label: "List ID".to_string(),
+                param_type: ListSourceParamType::Text,
+                options: Vec::new(),
+                required: true,
+            }],
+            personal: false,
+            default_interval_seconds: 6 * 3600,
+        }],
+    }];
     PluginDescriptor {
         id: PROVIDER.to_string(),
         name: "Fixture Lists".to_string(),

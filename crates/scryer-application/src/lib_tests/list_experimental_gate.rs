@@ -107,19 +107,27 @@ async fn sync_now_clears_the_stored_fingerprint_so_the_list_is_read_in_full() {
     assert_eq!(list_sync_starts(&harness).await, 1);
 }
 
+/// A harness with the fixture list provider installed, so a list can be
+/// followed.
+fn bootstrap_with_fixture_lists() -> MediaRequestTestHarness {
+    bootstrap_media_request_app_with_list_plugins(Arc::new(
+        crate::lists::test_support::ScriptedProvider(
+            crate::lists::test_support::ScriptedLists::new(),
+        ),
+    ))
+}
+
 async fn follow_fixture_list(harness: &MediaRequestTestHarness) -> scryer_domain::ListSubscription {
     harness
         .app
         .subscribe_public_list(
             &list_manager(),
             crate::lists::public::PublicListInput {
-                provider: Some(crate::lists::catalog::LIST_PROVIDER_IMDB.to_string()),
-                source_type: Some(
-                    crate::lists::catalog::LIST_SOURCE_TYPE_IMDB_USER_LIST.to_string(),
-                ),
+                provider: Some(crate::lists::test_support::PROVIDER.to_string()),
+                source_type: Some("user_list".to_string()),
                 params: std::collections::BTreeMap::from([(
-                    scryer_domain::LIST_SOURCE_IMDB_LIST_ID_PARAM.to_string(),
-                    "ls0000001".to_string(),
+                    "list_id".to_string(),
+                    "followed-fixture-source".to_string(),
                 )]),
                 mode: scryer_domain::ListMode::Add,
                 ..Default::default()
@@ -161,7 +169,7 @@ fn sync_runs_of(harness: &MediaRequestTestHarness, subscription_id: &str) -> usi
 
 #[tokio::test]
 async fn following_a_list_starts_its_first_sync_at_once() {
-    let harness = bootstrap_media_request_app();
+    let harness = bootstrap_with_fixture_lists();
     set_experimental_features(&harness, true).await;
     let mut runs = harness.app.runtime.jobs.job_run_tracker.subscribe();
 
@@ -180,7 +188,7 @@ async fn following_a_list_starts_its_first_sync_at_once() {
 
 #[tokio::test]
 async fn a_list_followed_while_a_sync_is_running_is_synced_when_that_sync_ends() {
-    let harness = bootstrap_media_request_app();
+    let harness = bootstrap_with_fixture_lists();
     set_experimental_features(&harness, true).await;
     let app = &harness.app;
     let tracker = &app.runtime.jobs.job_run_tracker;
