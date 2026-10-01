@@ -1203,13 +1203,29 @@ pub async fn cleanup_extracted_dir(dir: &Path) {
     }
 }
 
-/// Whether `path` lies inside one of the extractor's own workspaces.
+/// Whether `path` lies inside the output directory of one of the extractor's
+/// own workspaces. Matches only the exact name the extractor generates, so a
+/// download folder that merely shares the prefix is never treated as scratch.
 pub fn is_archive_workspace_output(path: &Path) -> bool {
     path.ancestors().skip(1).any(|dir| {
         dir.file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(ARCHIVE_STAGING_PREFIX))
+            .is_some_and(|name| name == ARCHIVE_STAGING_OUTPUT_DIR)
+            && dir
+                .parent()
+                .and_then(Path::file_name)
+                .and_then(|name| name.to_str())
+                .is_some_and(is_archive_workspace_name)
     })
+}
+
+fn is_archive_workspace_name(name: &str) -> bool {
+    name.strip_prefix(ARCHIVE_STAGING_PREFIX)
+        .is_some_and(|suffix| {
+            suffix.len() == 16
+                && suffix
+                    .bytes()
+                    .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+        })
 }
 
 fn is_archive_staging_dir(dir: &Path) -> bool {
@@ -1546,6 +1562,26 @@ mod tests {
         assert!(!is_archive_workspace_output(
             &title.join(format!("{ARCHIVE_STAGING_PREFIX}notes.mkv"))
         ));
+        // Only the generated name, and only its output directory, counts.
+        assert!(!is_archive_workspace_output(
+            &workspace.join("Quiet.Harbor.S02E03.mkv")
+        ));
+        let downloads = Path::new("/downloads");
+        for lookalike in [
+            format!("{ARCHIVE_STAGING_PREFIX}downloads"),
+            format!("{ARCHIVE_STAGING_PREFIX}0123456789ABCDEF"),
+            format!("{ARCHIVE_STAGING_PREFIX}0123456789abcde"),
+            format!("{ARCHIVE_STAGING_PREFIX}0123456789abcdef0"),
+        ] {
+            assert!(
+                !is_archive_workspace_output(
+                    &downloads
+                        .join(&lookalike)
+                        .join("out/Quiet.Harbor.S02E03.mkv")
+                ),
+                "{lookalike} is not an extractor workspace"
+            );
+        }
     }
 
     #[tokio::test]

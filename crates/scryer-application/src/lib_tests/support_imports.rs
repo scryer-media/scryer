@@ -146,6 +146,7 @@ impl FileImporter for CopyingFileImporter {
             dest_path: dest.to_path_buf(),
             size_bytes,
             destination_disposition: scryer_domain::ImportDestinationDisposition::Created,
+            source_disposition: scryer_domain::ImportSourceDisposition::Retained,
             source_cleanup: None,
             verification: None,
         })

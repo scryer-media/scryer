@@ -3260,6 +3260,19 @@ pub enum ImportDestinationDisposition {
     AlreadyPresent,
 }
 
+/// Where the import left its source.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportSourceDisposition {
+    /// The source is still at its path; a move import removes it later through
+    /// its cleanup guard.
+    #[default]
+    Retained,
+    /// The source was archive extraction output and was renamed into place, so
+    /// nothing is left at its path and there is nothing to clean up.
+    RenamedIntoPlace,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImportFileResult {
     pub strategy: ImportStrategy,
@@ -3268,6 +3281,8 @@ pub struct ImportFileResult {
     pub size_bytes: u64,
     #[serde(default)]
     pub destination_disposition: ImportDestinationDisposition,
+    #[serde(default)]
+    pub source_disposition: ImportSourceDisposition,
     pub source_cleanup: Option<ImportSourceCleanupGuard>,
     /// What proving the destination concluded, for the placements that copied
     /// bytes (FR-045). `None` for a rename, hardlink, or symlink placement:
