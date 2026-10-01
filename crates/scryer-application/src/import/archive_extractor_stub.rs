@@ -52,3 +52,7 @@ pub fn is_timeout_error(error: &AppError) -> bool {
 }
 
 pub async fn cleanup_extracted_dir(_dir: &Path) {}
+
+pub fn is_archive_workspace_output(_path: &Path) -> bool {
+    false
+}

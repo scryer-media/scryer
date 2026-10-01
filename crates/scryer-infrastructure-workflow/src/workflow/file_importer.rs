@@ -12,7 +12,7 @@ use scryer_domain::{
     VerificationDepth,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io::{self, BufRead, Read, Write};
@@ -115,11 +115,43 @@ impl KeyedImportPermitTable {
     }
 }
 
+/// Destination volumes where a successful hard link could not be verified to
+/// share its source's file identity. Later imports to such a volume skip the
+/// link attempt and copy. Held for the process lifetime only, so a remount or
+/// restart probes the volume again.
+#[derive(Clone, Default)]
+struct UnverifiableHardLinkVolumes {
+    volumes: Arc<std::sync::Mutex<HashSet<String>>>,
+}
+
+impl UnverifiableHardLinkVolumes {
+    fn shared() -> Self {
+        static SHARED: OnceLock<UnverifiableHardLinkVolumes> = OnceLock::new();
+        SHARED.get_or_init(Self::default).clone()
+    }
+
+    fn contains(&self, volume_key: &str) -> bool {
+        self.volumes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .contains(volume_key)
+    }
+
+    /// Returns whether the volume was newly recorded.
+    fn insert(&self, volume_key: &str) -> bool {
+        self.volumes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(volume_key.to_string())
+    }
+}
+
 #[derive(Clone)]
 struct ImportPlacementCoordinator {
     preparation: Arc<tokio::sync::Semaphore>,
     fast: KeyedImportPermitTable,
     copy: scryer_application::location::transfer::CopyCoordinator,
+    unverifiable_hard_link_volumes: UnverifiableHardLinkVolumes,
 }
 
 impl ImportPlacementCoordinator {
@@ -140,6 +172,7 @@ impl ImportPlacementCoordinator {
         });
         let mut coordinator = Self::new(fast_workers, copy_workers);
         coordinator.copy = scryer_application::location::transfer::CopyCoordinator::shared();
+        coordinator.unverifiable_hard_link_volumes = UnverifiableHardLinkVolumes::shared();
         coordinator
     }
 
@@ -150,6 +183,45 @@ impl ImportPlacementCoordinator {
             copy: scryer_application::location::transfer::CopyCoordinator::new(
                 copy_workers_per_volume,
             ),
+            unverifiable_hard_link_volumes: UnverifiableHardLinkVolumes::default(),
+        }
+    }
+
+    /// Carries what this process knows about the placement into the fast lane,
+    /// which may run in a separate worker process.
+    fn ready_fast_placement(
+        &self,
+        prepared: &mut PreparedImportPlacement,
+        archive_workspace_source: bool,
+    ) {
+        prepared.archive_workspace_source = archive_workspace_source;
+        prepared.hard_link_identity_unverifiable = self
+            .unverifiable_hard_link_volumes
+            .contains(&prepared.volume_key);
+    }
+
+    fn record_hard_link_identity_mismatch(
+        &self,
+        volume_key: &str,
+        dest: &Path,
+        mismatch: &HardLinkIdentityMismatch,
+    ) {
+        if self.unverifiable_hard_link_volumes.insert(volume_key) {
+            tracing::warn!(
+                volume_key = %opaque_lane_key(volume_key),
+                dest = %dest.display(),
+                source_identity = %file_identity_label(&mismatch.source),
+                linked_identity = %file_identity_label(&mismatch.linked),
+                "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), so imports to this volume copy instead of hard linking until restart"
+            );
+        } else {
+            tracing::debug!(
+                volume_key = %opaque_lane_key(volume_key),
+                dest = %dest.display(),
+                source_identity = %file_identity_label(&mismatch.source),
+                linked_identity = %file_identity_label(&mismatch.linked),
+                "hard link identity is unverifiable on this volume; copying"
+            );
         }
     }
 
@@ -535,27 +607,51 @@ fn ensure_same_source(path: &Path, expected: &ImportSourceFingerprint) -> AppRes
 }
 
 #[cfg(unix)]
-fn ensure_same_file_identity(path: &Path, expected: &FileFingerprint) -> AppResult<()> {
-    let actual = fingerprint_import_source(path)?.file;
-    if actual.dev != expected.dev || actual.ino != expected.ino {
-        return Err(AppError::Repository(format!(
-            "import destination is not linked to the expected source: {}",
-            path.display()
-        )));
-    }
-    Ok(())
+fn same_file_identity(actual: &FileFingerprint, expected: &FileFingerprint) -> bool {
+    actual.dev == expected.dev && actual.ino == expected.ino
 }
 
 #[cfg(not(unix))]
-fn ensure_same_file_identity(path: &Path, expected: &FileFingerprint) -> AppResult<()> {
-    let actual = fingerprint_import_source(path)?.file;
-    if actual != *expected {
-        return Err(AppError::Repository(format!(
-            "import destination does not match the expected source: {}",
-            path.display()
-        )));
+fn same_file_identity(actual: &FileFingerprint, expected: &FileFingerprint) -> bool {
+    actual == expected
+}
+
+#[cfg(unix)]
+fn file_identity_label(fingerprint: &FileFingerprint) -> String {
+    format!("dev={} ino={}", fingerprint.dev, fingerprint.ino)
+}
+
+#[cfg(not(unix))]
+fn file_identity_label(fingerprint: &FileFingerprint) -> String {
+    format!("{fingerprint:?}")
+}
+
+/// A hard link that succeeded but whose destination reports a different file
+/// identity than its source.
+///
+/// Filesystems that synthesise inode numbers per path (sshfs and other FUSE
+/// mounts, CIFS without `serverino`, mergerfs `inodecalc=path-hash`) report this
+/// for a genuine link, so the mismatch proves only that the link cannot be
+/// verified. The link is never trusted; the import goes to the copy lane.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct HardLinkIdentityMismatch {
+    source: FileFingerprint,
+    linked: FileFingerprint,
+}
+
+fn linked_file_identity_mismatch(
+    dest: &Path,
+    expected: &FileFingerprint,
+    options: &ImportFileOptions,
+) -> AppResult<Option<HardLinkIdentityMismatch>> {
+    let linked = linked_file_fingerprint(dest, options)?;
+    if same_file_identity(&linked, expected) {
+        return Ok(None);
     }
-    Ok(())
+    Ok(Some(HardLinkIdentityMismatch {
+        source: expected.clone(),
+        linked,
+    }))
 }
 
 fn io_other(error: impl ToString) -> io::Error {
@@ -641,6 +737,54 @@ struct ImportFileOptions {
     force_foreign_source_uid: bool,
     #[cfg(all(test, unix))]
     force_destination_uid_mismatch: bool,
+    /// Make a successful hard link report a different file identity, as a
+    /// filesystem that synthesises inode numbers per path does.
+    #[cfg(test)]
+    force_hard_link_identity_mismatch: bool,
+    #[cfg(test)]
+    force_rename_failure: bool,
+}
+
+#[cfg(test)]
+fn linked_file_fingerprint(dest: &Path, options: &ImportFileOptions) -> AppResult<FileFingerprint> {
+    let mut linked = fingerprint_import_source(dest)?.file;
+    if options.force_hard_link_identity_mismatch {
+        #[cfg(unix)]
+        {
+            linked.ino = linked.ino.wrapping_add(1);
+        }
+        #[cfg(not(unix))]
+        {
+            linked.len = linked.len.wrapping_add(1);
+        }
+    }
+    Ok(linked)
+}
+
+#[cfg(not(test))]
+fn linked_file_fingerprint(dest: &Path, _: &ImportFileOptions) -> AppResult<FileFingerprint> {
+    Ok(fingerprint_import_source(dest)?.file)
+}
+
+#[cfg(test)]
+thread_local! {
+    static HARD_LINK_ATTEMPTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+fn hard_link_import_source(source: &Path, dest: &Path) -> io::Result<()> {
+    #[cfg(test)]
+    HARD_LINK_ATTEMPTS.with(|attempts| attempts.set(attempts.get() + 1));
+    std::fs::hard_link(source, dest)
+}
+
+#[cfg(test)]
+fn force_rename_failure(options: &ImportFileOptions) -> bool {
+    options.force_rename_failure
+}
+
+#[cfg(not(test))]
+fn force_rename_failure(_: &ImportFileOptions) -> bool {
+    false
 }
 
 #[cfg(test)]
@@ -1659,11 +1803,22 @@ struct PreparedImportPlacement {
     size: u64,
     destination_guard: ImportDestinationGuard,
     volume_key: String,
+    /// The source is output the archive extractor wrote into its own
+    /// workspace, which is Scryer's scratch and may be placed by rename.
+    #[serde(default)]
+    archive_workspace_source: bool,
+    /// A hard link to this destination volume already proved unverifiable in
+    /// this process, so the fast lane hands straight to the copy lane.
+    #[serde(default)]
+    hard_link_identity_unverifiable: bool,
 }
 
 enum FastPlacementResult {
     Finished(ImportFileResult),
-    CopyRequired(PreparedImportPlacement),
+    CopyRequired {
+        prepared: PreparedImportPlacement,
+        hard_link_identity_mismatch: Option<HardLinkIdentityMismatch>,
+    },
 }
 
 #[expect(
@@ -1697,6 +1852,8 @@ fn prepare_import_placement_blocking(
         size,
         destination_guard,
         volume_key,
+        archive_workspace_source: false,
+        hard_link_identity_unverifiable: false,
     })
 }
 
@@ -1775,44 +1932,66 @@ fn try_fast_import_placement_blocking(
 
     let hardlink_uid_safe =
         source_uid_matches_scryer(&prepared.source_fingerprint, &prepared.options);
+    // A move import keeps its verified-cleanup path: the guard that removes the
+    // source has nothing to prove against once the source is renamed away.
+    if prepared.archive_workspace_source
+        && !prepared.source_cleanup_required
+        && hardlink_uid_safe
+        && rename_archive_workspace_output(&prepared)?
+    {
+        return finish_prepared_import(prepared, ImportStrategy::Move)
+            .map(FastPlacementResult::Finished);
+    }
+
     let mut partial_destination_created = false;
-    if !force_cross_device_move(&prepared.options) && hardlink_uid_safe {
-        match std::fs::hard_link(&prepared.source, &prepared.dest) {
+    let mut hard_link_identity_mismatch = None;
+    if prepared.hard_link_identity_unverifiable {
+        tracing::debug!(
+            volume_key = %opaque_lane_key(&prepared.volume_key),
+            "hard link identity is unverifiable on this volume; handing import to copy lane"
+        );
+    } else if !force_cross_device_move(&prepared.options) && hardlink_uid_safe {
+        match hard_link_import_source(&prepared.source, &prepared.dest) {
             Ok(()) => {
                 partial_destination_created = true;
-                if let Err(error) = ensure_same_source(
-                    &prepared.source,
-                    &prepared.source_fingerprint,
-                )
-                .and_then(|_| {
-                    ensure_same_file_identity(&prepared.dest, &prepared.source_fingerprint.file)
-                }) {
-                    let _ = std::fs::remove_file(&prepared.dest);
-                    return Err(error);
-                }
-                match std::fs::metadata(&prepared.dest) {
-                    Ok(dest_meta) if dest_meta.len() == prepared.size => {
-                        validate_import_destination_guard_after_placement(
-                            &prepared.destination_guard,
+                let identity = ensure_same_source(&prepared.source, &prepared.source_fingerprint)
+                    .and_then(|_| {
+                        linked_file_identity_mismatch(
                             &prepared.dest,
-                        )?;
-                        finalize_imported_regular_destination(
-                            &prepared.dest,
+                            &prepared.source_fingerprint.file,
                             &prepared.options,
-                            &prepared.permissions,
-                        )?;
-                        return finish_prepared_import(prepared, ImportStrategy::HardLink)
-                            .map(FastPlacementResult::Finished);
+                        )
+                    });
+                match identity {
+                    Err(error) => {
+                        let _ = std::fs::remove_file(&prepared.dest);
+                        return Err(error);
                     }
-                    Ok(dest_meta) => tracing::warn!(
-                        source_size = prepared.size,
-                        destination_size = dest_meta.len(),
-                        "hard link size mismatch; handing import to copy lane"
-                    ),
-                    Err(error) => tracing::warn!(
-                        error = %error,
-                        "hard link destination stat failed; handing import to copy lane"
-                    ),
+                    Ok(Some(mismatch)) => hard_link_identity_mismatch = Some(mismatch),
+                    Ok(None) => match std::fs::metadata(&prepared.dest) {
+                        Ok(dest_meta) if dest_meta.len() == prepared.size => {
+                            validate_import_destination_guard_after_placement(
+                                &prepared.destination_guard,
+                                &prepared.dest,
+                            )?;
+                            finalize_imported_regular_destination(
+                                &prepared.dest,
+                                &prepared.options,
+                                &prepared.permissions,
+                            )?;
+                            return finish_prepared_import(prepared, ImportStrategy::HardLink)
+                                .map(FastPlacementResult::Finished);
+                        }
+                        Ok(dest_meta) => tracing::warn!(
+                            source_size = prepared.size,
+                            destination_size = dest_meta.len(),
+                            "hard link size mismatch; handing import to copy lane"
+                        ),
+                        Err(error) => tracing::warn!(
+                            error = %error,
+                            "hard link destination stat failed; handing import to copy lane"
+                        ),
+                    },
                 }
             }
             Err(error) if scryer_application::fs_safety::is_cross_device_error(&error) => {
@@ -1833,7 +2012,73 @@ fn try_fast_import_placement_blocking(
         })?;
     }
     ensure_import_destination_absent(&prepared.dest)?;
-    Ok(FastPlacementResult::CopyRequired(prepared))
+    Ok(FastPlacementResult::CopyRequired {
+        prepared,
+        hard_link_identity_mismatch,
+    })
+}
+
+/// Places a file the archive extractor wrote into its own workspace by renaming
+/// it. The workspace is staged under the title folder, so the rename stays on
+/// one volume and needs no link identity. `Ok(false)` hands the import to the
+/// hard-link and copy lanes unchanged.
+fn rename_archive_workspace_output(prepared: &PreparedImportPlacement) -> AppResult<bool> {
+    ensure_same_source(&prepared.source, &prepared.source_fingerprint)?;
+    let renamed = if force_rename_failure(&prepared.options) {
+        Err(io::Error::new(
+            io::ErrorKind::CrossesDevices,
+            "forced rename failure",
+        ))
+    } else {
+        scryer_application::fs_safety::rename_into_claimed_destination_blocking(
+            &prepared.source,
+            &prepared.dest,
+        )
+    };
+    if let Err(error) = renamed {
+        tracing::debug!(
+            error = %error,
+            cross_device = scryer_application::fs_safety::is_cross_device_error(&error),
+            "archive workspace rename is ineligible; trying the link and copy lanes"
+        );
+        return Ok(false);
+    }
+
+    let placed = validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)
+        .and_then(|()| {
+            let metadata = std::fs::metadata(&prepared.dest).map_err(|error| {
+                AppError::Repository(format!(
+                    "failed to inspect renamed import destination {}: {error}",
+                    prepared.dest.display()
+                ))
+            })?;
+            if !metadata.is_file() || metadata.len() != prepared.size {
+                return Err(AppError::Repository(format!(
+                    "renamed import destination {} is {} bytes, expected {}",
+                    prepared.dest.display(),
+                    metadata.len(),
+                    prepared.size
+                )));
+            }
+            Ok(())
+        })
+        .and_then(|()| verify_imported_regular_file_uid(&prepared.dest, &prepared.options));
+    let Err(error) = placed else {
+        apply_file_permissions_best_effort(&prepared.dest, &prepared.permissions);
+        return Ok(true);
+    };
+
+    // Put the file back rather than leave an unverified placement behind.
+    match scryer_application::fs_safety::rename_into_claimed_destination_blocking(
+        &prepared.dest,
+        &prepared.source,
+    ) {
+        Ok(()) => Err(error),
+        Err(restore_error) => Err(AppError::ManualReconciliationRequired(format!(
+            "{error}; additionally failed to return the archive output to {}: {restore_error}",
+            prepared.source.display()
+        ))),
+    }
 }
 
 fn reconcile_existing_destination(
@@ -1998,59 +2243,71 @@ fn import_hardlink_or_copy_blocking(
     }
 
     if !force_cross_device_move(&options) && hardlink_uid_safe {
-        match std::fs::hard_link(&source, &dest) {
+        match hard_link_import_source(&source, &dest) {
             Ok(()) => {
-                if let Err(error) = ensure_same_source(&source, &source_fingerprint)
-                    .and_then(|_| ensure_same_file_identity(&dest, &source_fingerprint.file))
-                {
-                    let _ = std::fs::remove_file(&dest);
-                    return Err(error);
-                }
-                match std::fs::metadata(&dest) {
-                    Ok(dest_meta) if dest_meta.len() == size => {
-                        validate_import_destination_guard_after_placement(
-                            &destination_guard,
-                            &dest,
-                        )?;
-                        if file_permission_metadata_changes(&permissions) {
-                            tracing::info!(
-                                source = %source.display(),
-                                dest = %dest.display(),
-                                "applying import permissions to hardlink; metadata changes affect the shared download-side inode"
-                            );
-                        }
-                        finalize_imported_regular_destination(&dest, &options, &permissions)?;
-                        let source_cleanup = cleanup_guard_after_placement(
-                            source_cleanup_required,
-                            &source,
-                            &dest,
-                            &source_fingerprint,
-                            size,
-                        )?;
-                        return Ok(ImportFileResult {
-                            strategy: ImportStrategy::HardLink,
-                            source_path: source,
-                            dest_path: dest,
-                            size_bytes: size,
-                            destination_disposition: ImportDestinationDisposition::Created,
-                            source_cleanup,
-                            verification: None,
-                        });
+                let identity = ensure_same_source(&source, &source_fingerprint).and_then(|_| {
+                    linked_file_identity_mismatch(&dest, &source_fingerprint.file, &options)
+                });
+                match identity {
+                    Err(error) => {
+                        let _ = std::fs::remove_file(&dest);
+                        return Err(error);
                     }
-                    Ok(dest_meta) => {
+                    Ok(Some(mismatch)) => {
                         let _ = std::fs::remove_file(&dest);
                         tracing::warn!(
-                            "hard link size mismatch: source={} dest={}, falling back to copy",
-                            size,
-                            dest_meta.len()
+                            dest = %dest.display(),
+                            source_identity = %file_identity_label(&mismatch.source),
+                            linked_identity = %file_identity_label(&mismatch.linked),
+                            "hard link succeeded but the destination reports a different file identity; this filesystem does not expose stable file identity across paths (FUSE/sshfs, CIFS without serverino, mergerfs path-hash inodes), falling back to copy"
                         );
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            "hard link created but dest stat failed: {}, falling back to copy",
-                            e
-                        );
-                    }
+                    Ok(None) => match std::fs::metadata(&dest) {
+                        Ok(dest_meta) if dest_meta.len() == size => {
+                            validate_import_destination_guard_after_placement(
+                                &destination_guard,
+                                &dest,
+                            )?;
+                            if file_permission_metadata_changes(&permissions) {
+                                tracing::info!(
+                                    source = %source.display(),
+                                    dest = %dest.display(),
+                                    "applying import permissions to hardlink; metadata changes affect the shared download-side inode"
+                                );
+                            }
+                            finalize_imported_regular_destination(&dest, &options, &permissions)?;
+                            let source_cleanup = cleanup_guard_after_placement(
+                                source_cleanup_required,
+                                &source,
+                                &dest,
+                                &source_fingerprint,
+                                size,
+                            )?;
+                            return Ok(ImportFileResult {
+                                strategy: ImportStrategy::HardLink,
+                                source_path: source,
+                                dest_path: dest,
+                                size_bytes: size,
+                                destination_disposition: ImportDestinationDisposition::Created,
+                                source_cleanup,
+                                verification: None,
+                            });
+                        }
+                        Ok(dest_meta) => {
+                            let _ = std::fs::remove_file(&dest);
+                            tracing::warn!(
+                                "hard link size mismatch: source={} dest={}, falling back to copy",
+                                size,
+                                dest_meta.len()
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "hard link created but dest stat failed: {}, falling back to copy",
+                                e
+                            );
+                        }
+                    },
                 }
             }
             Err(e) if scryer_application::fs_safety::is_cross_device_error(&e) => {
@@ -2218,6 +2475,8 @@ enum ImportFileWorkerEvent {
     CopyRequired {
         nonce: u64,
         volume_key: String,
+        #[serde(default)]
+        hard_link_identity_mismatch: Option<HardLinkIdentityMismatch>,
     },
     Progress {
         nonce: u64,
@@ -2476,11 +2735,15 @@ pub fn run_import_file_worker() -> i32 {
                         &ImportFileWorkerEvent::ImportFinished { nonce, result },
                     )
                     .map_err(ImportFileWorkerError::from),
-                    FastPlacementResult::CopyRequired(prepared) => write_import_worker_event(
+                    FastPlacementResult::CopyRequired {
+                        prepared,
+                        hard_link_identity_mismatch,
+                    } => write_import_worker_event(
                         &output,
                         &ImportFileWorkerEvent::CopyRequired {
                             nonce,
                             volume_key: prepared.volume_key,
+                            hard_link_identity_mismatch,
                         },
                     )
                     .map_err(ImportFileWorkerError::from),
@@ -3098,7 +3361,7 @@ impl FsFileImporter {
                 verification_depth,
             };
             let mut session = spawn_import_file_worker(executable, &prepare_request).await?;
-            let prepared = loop {
+            let mut prepared = loop {
                 match next_import_worker_event_or_cancel(&mut session, cancellation.as_ref())
                     .await?
                 {
@@ -3119,6 +3382,8 @@ impl FsFileImporter {
                 }
             };
             drop(preparation_permit);
+            self.placement
+                .ready_fast_placement(&mut prepared, context.archive_workspace_source());
 
             let client_key = context.client_lane_key().to_string();
             let mut fast_permit = Some(
@@ -3177,6 +3442,7 @@ impl FsFileImporter {
                     }
                     ImportFileWorkerEvent::CopyRequired {
                         volume_key: reported_volume_key,
+                        hard_link_identity_mismatch,
                         ..
                     } => {
                         if reported_volume_key != volume_key {
@@ -3184,6 +3450,13 @@ impl FsFileImporter {
                                 "filesystem worker changed destination volume identity; inspect the destination before retrying"
                                     .to_string(),
                             ));
+                        }
+                        if let Some(mismatch) = &hard_link_identity_mismatch {
+                            self.placement.record_hard_link_identity_mismatch(
+                                &volume_key,
+                                dest,
+                                mismatch,
+                            );
                         }
                         wait_for_import_worker_exit(&mut session, "after requesting copy").await?;
                         drop(fast_permit.take());
@@ -3262,6 +3535,8 @@ impl FsFileImporter {
         .await?;
         context.mark_active_import_placing().await;
         prepared.cancellation = cancellation.clone();
+        self.placement
+            .ready_fast_placement(&mut prepared, context.archive_workspace_source());
         let fast_result =
             tokio::task::spawn_blocking(move || try_fast_import_placement_blocking(prepared))
                 .await
@@ -3271,8 +3546,18 @@ impl FsFileImporter {
 
         match fast_result {
             FastPlacementResult::Finished(result) => Ok(result),
-            FastPlacementResult::CopyRequired(mut prepared) => {
+            FastPlacementResult::CopyRequired {
+                mut prepared,
+                hard_link_identity_mismatch,
+            } => {
                 let volume_key = prepared.volume_key.clone();
+                if let Some(mismatch) = &hard_link_identity_mismatch {
+                    self.placement.record_hard_link_identity_mismatch(
+                        &volume_key,
+                        &prepared.dest,
+                        mismatch,
+                    );
+                }
                 drop(fast_permit);
                 tracing::debug!(
                     client_key = %opaque_lane_key(&client_key),
@@ -3582,6 +3867,299 @@ mod tests {
             std::fs::read(&dest).expect("read destination"),
             b"foreign destination"
         );
+    }
+
+    const SYNTHETIC_PAYLOAD: &[u8] = b"synthetic video payload";
+
+    fn hard_links_supported(dir: &Path) -> bool {
+        let probe_source = dir.join("link-probe-source");
+        let probe_link = dir.join("link-probe-link");
+        std::fs::write(&probe_source, b"probe").expect("write link probe");
+        let supported = std::fs::hard_link(&probe_source, &probe_link).is_ok();
+        let _ = std::fs::remove_file(&probe_link);
+        std::fs::remove_file(&probe_source).expect("remove link probe");
+        supported
+    }
+
+    fn prepare_in_process(
+        source: &Path,
+        dest: &Path,
+        options: ImportFileOptions,
+        source_cleanup_required: bool,
+    ) -> PreparedImportPlacement {
+        prepare_import_placement_blocking(
+            source.to_path_buf(),
+            dest.to_path_buf(),
+            options,
+            VerificationDepth::default(),
+            source_cleanup_required,
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("prepare placement")
+    }
+
+    fn hard_link_attempts() -> usize {
+        HARD_LINK_ATTEMPTS.with(std::cell::Cell::get)
+    }
+
+    /// Runs the fast lane the way the parent does and, when it hands off,
+    /// records what it reported and lands the file through the copy lane.
+    fn place_in_process(
+        coordinator: &ImportPlacementCoordinator,
+        mut prepared: PreparedImportPlacement,
+        archive_workspace_source: bool,
+    ) -> (ImportFileResult, Option<HardLinkIdentityMismatch>) {
+        coordinator.ready_fast_placement(&mut prepared, archive_workspace_source);
+        match try_fast_import_placement_blocking(prepared).expect("fast placement") {
+            FastPlacementResult::Finished(result) => (result, None),
+            FastPlacementResult::CopyRequired {
+                prepared,
+                hard_link_identity_mismatch,
+            } => {
+                assert!(
+                    !prepared.dest.exists(),
+                    "the copy lane must start from an absent destination"
+                );
+                if let Some(mismatch) = &hard_link_identity_mismatch {
+                    coordinator.record_hard_link_identity_mismatch(
+                        &prepared.volume_key,
+                        &prepared.dest,
+                        mismatch,
+                    );
+                }
+                let result = copy_prepared_import_blocking(prepared).expect("copy lane");
+                (result, hard_link_identity_mismatch)
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    fn assert_no_stray_link(source: &Path) {
+        assert_eq!(
+            std::fs::metadata(source).expect("source metadata").nlink(),
+            1,
+            "no link to the source may survive an unverifiable hard link"
+        );
+    }
+
+    #[test]
+    fn unverifiable_hard_link_identity_hands_import_to_copy_lane() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        if !hard_links_supported(temp.path()) {
+            return;
+        }
+        let source = temp.path().join("source.mkv");
+        let dest = temp.path().join("library/title.mkv");
+        std::fs::write(&source, SYNTHETIC_PAYLOAD).expect("write source");
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let options = ImportFileOptions {
+            force_hard_link_identity_mismatch: true,
+            ..Default::default()
+        };
+
+        let attempts_before = hard_link_attempts();
+        let (result, mismatch) = place_in_process(
+            &coordinator,
+            prepare_in_process(&source, &dest, options, false),
+            false,
+        );
+
+        assert_eq!(hard_link_attempts(), attempts_before + 1);
+        assert!(mismatch.is_some(), "the identity mismatch must be reported");
+        assert_eq!(result.strategy, ImportStrategy::Copy);
+        assert!(result.verification.is_some());
+        assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
+        assert_eq!(
+            std::fs::read(&source).expect("read source"),
+            SYNTHETIC_PAYLOAD
+        );
+        #[cfg(unix)]
+        assert_no_stray_link(&source);
+    }
+
+    #[test]
+    fn a_volume_with_unverifiable_link_identity_skips_the_hard_link() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        if !hard_links_supported(temp.path()) {
+            return;
+        }
+        let first_source = temp.path().join("first.mkv");
+        let second_source = temp.path().join("second.mkv");
+        std::fs::write(&first_source, SYNTHETIC_PAYLOAD).expect("write first source");
+        std::fs::write(&second_source, SYNTHETIC_PAYLOAD).expect("write second source");
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let mismatching = ImportFileOptions {
+            force_hard_link_identity_mismatch: true,
+            ..Default::default()
+        };
+        let first = prepare_in_process(
+            &first_source,
+            &temp.path().join("library/first.mkv"),
+            mismatching,
+            false,
+        );
+        let volume_key = first.volume_key.clone();
+        let _ = place_in_process(&coordinator, first, false);
+
+        // The second placement links normally if attempted, so only the
+        // remembered volume keeps it off the hard-link lane.
+        let second_dest = temp.path().join("library/second.mkv");
+        let second = prepare_in_process(
+            &second_source,
+            &second_dest,
+            ImportFileOptions::default(),
+            false,
+        );
+        assert_eq!(second.volume_key, volume_key);
+        let attempts_before = hard_link_attempts();
+        let (result, mismatch) = place_in_process(&coordinator, second, false);
+
+        assert_eq!(
+            hard_link_attempts(),
+            attempts_before,
+            "a remembered volume must not attempt a hard link"
+        );
+        assert!(mismatch.is_none());
+        assert_eq!(result.strategy, ImportStrategy::Copy);
+        assert_eq!(
+            std::fs::read(&second_dest).expect("read dest"),
+            SYNTHETIC_PAYLOAD
+        );
+        #[cfg(unix)]
+        assert_no_stray_link(&second_source);
+
+        let fresh = ImportPlacementCoordinator::new(1, 2);
+        let third_dest = temp.path().join("library/third.mkv");
+        let (result, _) = place_in_process(
+            &fresh,
+            prepare_in_process(
+                &second_source,
+                &third_dest,
+                ImportFileOptions::default(),
+                false,
+            ),
+            false,
+        );
+        assert_eq!(
+            result.strategy,
+            ImportStrategy::HardLink,
+            "another coordinator has not seen the volume"
+        );
+    }
+
+    #[test]
+    fn single_process_import_copies_when_hard_link_identity_is_unverifiable() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        if !hard_links_supported(temp.path()) {
+            return;
+        }
+        let source = temp.path().join("source.mkv");
+        let dest = temp.path().join("library/title.mkv");
+        std::fs::write(&source, SYNTHETIC_PAYLOAD).expect("write source");
+
+        let result = import_file_blocking(
+            source.clone(),
+            dest.clone(),
+            ImportMode::HardlinkOrCopy,
+            ImportFileOptions {
+                force_hard_link_identity_mismatch: true,
+                ..Default::default()
+            },
+            None,
+            None,
+            ImportFilePermissions::default(),
+        )
+        .expect("import file");
+
+        assert_eq!(result.strategy, ImportStrategy::Copy);
+        assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
+        assert_eq!(
+            std::fs::read(&source).expect("read source"),
+            SYNTHETIC_PAYLOAD
+        );
+        #[cfg(unix)]
+        assert_no_stray_link(&source);
+    }
+
+    fn archive_workspace_fixture(temp: &Path) -> (PathBuf, PathBuf) {
+        let title_dir = temp.join("Synthetic Show (2026)");
+        let output_dir = title_dir.join(".scryer-ax-0123456789abcdef/out");
+        std::fs::create_dir_all(&output_dir).expect("create workspace output");
+        let source = output_dir.join("Synthetic.Show.S01E01.1080p.mkv");
+        std::fs::write(&source, SYNTHETIC_PAYLOAD).expect("write workspace output");
+        let dest = title_dir.join("Season 01/Synthetic Show - S01E01 - 1080p.mkv");
+        (source, dest)
+    }
+
+    #[test]
+    fn archive_workspace_output_is_placed_by_rename() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = archive_workspace_fixture(temp.path());
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+
+        let attempts_before = hard_link_attempts();
+        let (result, _) = place_in_process(
+            &coordinator,
+            prepare_in_process(&source, &dest, ImportFileOptions::default(), false),
+            true,
+        );
+
+        assert_eq!(result.strategy, ImportStrategy::Move);
+        assert_eq!(hard_link_attempts(), attempts_before);
+        assert!(result.source_cleanup.is_none());
+        assert!(result.verification.is_none());
+        assert!(!source.exists(), "the workspace file is moved, not linked");
+        assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
+    }
+
+    #[test]
+    fn archive_workspace_rename_failure_falls_through_to_the_link_lane() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = archive_workspace_fixture(temp.path());
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let options = ImportFileOptions {
+            force_rename_failure: true,
+            ..Default::default()
+        };
+
+        let (result, _) = place_in_process(
+            &coordinator,
+            prepare_in_process(&source, &dest, options, false),
+            true,
+        );
+
+        assert!(matches!(
+            result.strategy,
+            ImportStrategy::HardLink | ImportStrategy::Copy
+        ));
+        assert_eq!(
+            std::fs::read(&source).expect("read source"),
+            SYNTHETIC_PAYLOAD
+        );
+        assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
+    }
+
+    #[test]
+    fn move_imports_of_archive_workspace_output_keep_the_cleanup_guard() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = archive_workspace_fixture(temp.path());
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+
+        let (result, _) = place_in_process(
+            &coordinator,
+            prepare_in_process(&source, &dest, ImportFileOptions::default(), true),
+            true,
+        );
+
+        assert!(matches!(
+            result.strategy,
+            ImportStrategy::HardLink | ImportStrategy::Copy
+        ));
+        assert!(result.source_cleanup.is_some());
+        assert!(source.exists(), "the cleanup guard owns source removal");
+        assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
     }
 
     #[cfg(unix)]
