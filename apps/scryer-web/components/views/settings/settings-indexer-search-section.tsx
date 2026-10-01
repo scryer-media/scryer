@@ -60,9 +60,9 @@ import {
   indexerHealthTone,
   indexerSearchRowKey,
   isDownloadableRelease,
-  isReleaseRejected,
+  RAW_SEARCH_DEFAULT_PAGE_SIZE,
+  RAW_SEARCH_MAX_PAGE_SIZE,
   releaseAgeMs,
-  releaseBlockCode,
   releaseProtocol,
   summarizeIndexerHealth,
   totalReleaseBytes,
@@ -116,9 +116,7 @@ export type SettingsIndexerSearchSectionProps = {
   sort: IndexerSearchSortKey;
   onSortChange: (sort: IndexerSearchSortKey) => void;
   matchedCount: number;
-  passingCount: number;
   rows: Release[];
-  priorityByIndexer: ReadonlyMap<string, number>;
   nowMs: number;
   selectedRowKeys: string[];
   onToggleRow: (release: Release) => void;
@@ -158,7 +156,7 @@ const HEALTH_COUNT_CLASS: Record<IndexerHealthTone, string> = {
   cooling: "text-[var(--scry-muted3)]",
 };
 
-type BadgeTone = "neutral" | "accent" | "success" | "warning" | "danger";
+type BadgeTone = "neutral" | "accent" | "success" | "warning";
 
 const BADGE_TONE_CLASS: Record<BadgeTone, string> = {
   neutral:
@@ -169,8 +167,6 @@ const BADGE_TONE_CLASS: Record<BadgeTone, string> = {
     "bg-[var(--scry-success-bg)] border-[var(--scry-success-border)] text-[var(--scry-success-text-soft)]",
   warning:
     "bg-[var(--scry-warning-bg)] border-[var(--scry-warning-border)] text-[var(--scry-warning-text)]",
-  danger:
-    "bg-[var(--scry-danger-bg)] border-[var(--scry-danger-border)] text-[var(--scry-danger-text-soft)]",
 };
 
 const RESULT_GRID_CLASS =
@@ -219,13 +215,6 @@ function ProtocolBadge({ release }: { release: Release }) {
 function useReleaseBadges(release: Release): { text: string; tone: BadgeTone }[] {
   const t = useTranslate();
   const badges: { text: string; tone: BadgeTone }[] = [];
-  const blockCode = releaseBlockCode(release);
-  if (blockCode) {
-    badges.push({
-      text: t("indexerSearch.row.rejected", { code: blockCode }),
-      tone: "danger",
-    });
-  }
   const parsed = release.parsedRelease;
   if (parsed?.quality) {
     badges.push({ text: parsed.quality, tone: "accent" });
@@ -258,12 +247,16 @@ function AdvancedField({
   unitKey,
   value,
   onChange,
+  ...bounds
 }: {
   id: string;
   labelKey: string;
   unitKey?: string;
   value: string;
   onChange: (value: string) => void;
+  min?: number;
+  max?: number;
+  placeholder?: string;
 }) {
   const t = useTranslate();
   return (
@@ -280,6 +273,7 @@ function AdvancedField({
           type="number"
           inputMode="numeric"
           min={0}
+          {...bounds}
           value={value}
           onChange={(event) => onChange(event.target.value)}
           className="h-auto w-full border-0 bg-transparent p-0 text-[13px] tabular-nums shadow-none focus-visible:ring-0"
@@ -554,6 +548,9 @@ function QueryCard({
             id="indexer-search-limit"
             labelKey="indexerSearch.advanced.limit"
             unitKey="indexerSearch.unit.perIndexer"
+            min={1}
+            max={RAW_SEARCH_MAX_PAGE_SIZE}
+            placeholder={String(RAW_SEARCH_DEFAULT_PAGE_SIZE)}
             value={advanced.limit}
             onChange={(value) => onAdvancedChange({ ...advanced, limit: value })}
           />
@@ -585,10 +582,6 @@ function indexerChipTitle(
         : t("indexerSearch.skipReason.backedOff");
     case "NO_TEXT_SEARCH":
       return t("indexerSearch.skipReason.noTextSearch");
-    case "NO_SEARCH_FOR_FACET":
-      return t("indexerSearch.skipReason.noSearchForFacet");
-    case "CAPABILITIES_UNKNOWN":
-      return t("indexerSearch.skipReason.capabilitiesUnknown");
     default:
       return entry.failureReason ?? undefined;
   }
@@ -911,7 +904,6 @@ function ReleaseRow({
   release,
   selected,
   expanded,
-  priority,
   nowMs,
   onToggleRow,
   onToggleExpanded,
@@ -922,7 +914,6 @@ function ReleaseRow({
   release: Release;
   selected: boolean;
   expanded: boolean;
-  priority: number | undefined;
   nowMs: number;
   onToggleRow: (release: Release) => void;
   onToggleExpanded: (release: Release) => void;
@@ -932,7 +923,6 @@ function ReleaseRow({
 }) {
   const t = useTranslate();
   const badges = useReleaseBadges(release);
-  const rejected = isReleaseRejected(release);
   const downloadable = isDownloadableRelease(release);
   const age = formatReleaseAge(releaseAgeMs(release, nowMs));
   const peers =
@@ -950,7 +940,6 @@ function ReleaseRow({
         className={cn(
           RESULT_GRID_CLASS,
           "border-b border-l-2 border-b-[var(--scry-line2)] border-l-transparent py-3 hover:bg-[var(--scry-rowHover)]",
-          rejected && "border-l-[var(--scry-danger-border)] bg-[var(--scry-danger-bg)]",
           selected &&
             "border-l-[var(--scry-accent)] bg-[rgba(var(--scry-accent-rgb),0.07)]",
         )}
@@ -985,15 +974,8 @@ function ReleaseRow({
             </div>
           ) : null}
         </div>
-        <div role="cell" className="min-w-0">
-          <div className="truncate text-[12.5px] text-[var(--scry-text2)]">
-            {release.source ?? "—"}
-          </div>
-          {priority != null ? (
-            <div className="mt-1 text-[11px] text-[var(--scry-faint2)]">
-              {t("indexerSearch.row.priority", { value: priority })}
-            </div>
-          ) : null}
+        <div role="cell" className="min-w-0 truncate text-[12.5px] text-[var(--scry-text2)]">
+          {release.source ?? "—"}
         </div>
         <span role="cell" className="text-right text-[13px] font-semibold tabular-nums text-[var(--scry-ink3)]">
           {formatReleaseSize(release.sizeBytes)}
@@ -1001,14 +983,7 @@ function ReleaseRow({
         <span role="cell" className="text-right text-[12.5px] tabular-nums text-[var(--scry-muted2)]">
           {age ? t(age.unitKey, { count: age.value }) : "—"}
         </span>
-        <span role="cell"
-          className={cn(
-            "text-right text-[12.5px] tabular-nums",
-            rejected
-              ? "text-[var(--scry-danger-text-soft)]"
-              : "text-[var(--scry-muted2)]",
-          )}
-        >
+        <span role="cell" className="text-right text-[12.5px] tabular-nums text-[var(--scry-muted2)]">
           {peers}
         </span>
         <div role="cell" className="flex justify-end gap-1.5">
@@ -1068,11 +1043,9 @@ export function SettingsIndexerSearchSection(
     searching,
     indexers,
     matchedCount,
-    passingCount,
     rows,
     sort,
     onSortChange,
-    priorityByIndexer,
     nowMs,
     selectedRowKeys,
     onToggleRow,
@@ -1107,12 +1080,10 @@ export function SettingsIndexerSearchSection(
               className="text-[13px] text-[var(--scry-text3)]"
             >
               {t("indexerSearch.results.matched", { count: matchedCount })}
-              {" · "}
-              {t("indexerSearch.results.passing", { count: passingCount })}
             </span>
             <div className="min-w-2 flex-1" />
             <Select
-              value={sort === "newest" ? "age-asc" : sort}
+              value={sort}
               onValueChange={(value) =>
                 onSortChange(value as IndexerSearchSortKey)
               }
@@ -1147,9 +1118,8 @@ export function SettingsIndexerSearchSection(
               >
                 <span role="columnheader" />
                 {SORT_COLUMNS.map((column) => {
-                  const current = sort === "newest" ? "age-asc" : sort;
-                  const active = current.startsWith(`${column}-`);
-                  const descending = current.endsWith("-desc");
+                  const active = sort.startsWith(`${column}-`);
+                  const descending = sort.endsWith("-desc");
                   return (
                     <div key={column} role="columnheader"
                       aria-sort={active ? descending ? "descending" : "ascending" : "none"}
@@ -1171,7 +1141,6 @@ export function SettingsIndexerSearchSection(
                     release={release}
                     selected={selectedKeys.has(key)}
                     expanded={expandedRowKey === key}
-                    priority={priorityByIndexer.get(release.source ?? "")}
                     nowMs={nowMs}
                     onToggleRow={onToggleRow}
                     onToggleExpanded={onToggleExpanded}

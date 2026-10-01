@@ -755,21 +755,6 @@ pub struct SubtitleProviderConfigPayload {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-/// What a title-less interactive search looks for; picks the search facet and
-/// the default newznab categories.
-pub enum InteractiveSearchKindValue {
-    /// Movie facet search.
-    Movie,
-    /// Series facet search.
-    Series,
-    /// Anime facet search.
-    Anime,
-    /// Plain text search with no facet.
-    Raw,
-}
-
 #[derive(InputObject)]
 /// Filters for an interactive release search. Exactly one of `titleId` and
 /// `query` names the subject.
@@ -784,15 +769,15 @@ pub struct SearchReleasesInput {
     pub season: Option<String>,
     /// Optional episode label or number to search; requires `season`.
     pub episode: Option<String>,
-    /// Optional result limit; the resolver applies its own default and cap.
+    /// Optional limit. A title search lists at most this many results
+    /// (default 50, max 200); a `query` search asks each indexer for this many
+    /// (default 100, 1 to 500) and lists everything returned.
     pub limit: Option<i32>,
-    /// Raw operator query searched without a catalog title.
+    /// Raw operator query sent as typed to each indexer, without a catalog title.
     pub query: Option<String>,
-    /// Search kind; required with `query`.
-    pub kind: Option<InteractiveSearchKindValue>,
     /// Optional indexer configuration identities to restrict the search to.
     pub indexer_ids: Option<Vec<ID>>,
-    /// Optional newznab categories; the kind's defaults apply when omitted.
+    /// Optional newznab categories a `query` search sends as given; none when omitted.
     pub categories: Option<Vec<String>>,
 }
 
@@ -1720,10 +1705,6 @@ pub enum InteractiveReleaseSearchSkipReasonValue {
     BackedOff,
     /// The indexer takes no text query.
     NoTextSearch,
-    /// The indexer cannot search this kind of media.
-    NoSearchForFacet,
-    /// The indexer's capabilities are not known yet.
-    CapabilitiesUnknown,
 }
 
 #[derive(SimpleObject, Clone)]

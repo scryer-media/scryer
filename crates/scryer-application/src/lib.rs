@@ -95,7 +95,7 @@ pub use ports::ObservationTouch;
 pub use ports::UnfinishedLibraryScanSession;
 pub use ports::{
     AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord,
-    IndexerSearchNumberingContext, TitleOptionsPatch, collect_streamed_indexer_search,
+    IndexerSearchNumberingContext, TitleOptionsPatch,
 };
 pub use ports::{DownloadCleanupClaim, DownloadCleanupRecord, DownloadClientObservation};
 pub use ports::{DownloadTitleReassignment, DownloadTitleReferences};
@@ -310,8 +310,7 @@ pub use catalog::interactive_release_search::{
     InteractiveIndexerSkipReason, InteractiveReleaseSearchIndexerStatus,
     InteractiveReleaseSearchIndexerView, InteractiveReleaseSearchRequest,
     InteractiveReleaseSearchSnapshot, InteractiveReleaseSearchState,
-    InteractiveSearchArtifactBundle, InteractiveSearchArtifactTarget, InteractiveSearchKind,
-    QueueUnlinkedReleaseOutcome,
+    InteractiveSearchArtifactBundle, InteractiveSearchArtifactTarget, QueueUnlinkedReleaseOutcome,
 };
 pub use catalog::release_search::release_candidate_fingerprint;
 pub use catalog::title_hydration::start_background_title_hydration_loop;
@@ -770,8 +769,8 @@ pub use types::{
     IndexerSearchPage, IndexerSearchPageReservation, IndexerSearchPageSink,
     IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
     IndexerSearchResponse, IndexerSearchResult, IndexerSearchStrategyEvent,
-    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, IndexerUnsupportedReason,
-    NewIndexerError, RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
+    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, NewIndexerError,
+    RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
     ReleaseStrategyKind, extract_magnet_info_hash, indexer_search_identity, is_valid_magnet_uri,
     search_relevant_indexer_caps, search_relevant_managed_indexer_metadata,
 };

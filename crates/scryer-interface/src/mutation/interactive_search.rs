@@ -16,7 +16,7 @@ impl InteractiveSearchMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Either a title (with an optional series-movie link, a season alone for the whole season, or a season and episode) or a raw query and kind, plus an optional indexer restriction, categories and result limit."
+            desc = "Either a title (with an optional series-movie link, a season alone for the whole season, or a season and episode) or a raw query, plus an optional indexer restriction, categories and limit."
         )]
         input: SearchReleasesInput,
     ) -> GqlResult<InteractiveReleaseSearchPayload> {
@@ -29,7 +29,6 @@ impl InteractiveSearchMutations {
             episode,
             limit,
             query,
-            kind,
             indexer_ids,
             categories,
         } = input;
@@ -40,7 +39,6 @@ impl InteractiveSearchMutations {
             episode,
             limit,
             query,
-            kind: kind.map(interactive_search_kind_from_value),
             indexer_ids: indexer_ids
                 .map(|ids| ids.into_iter().map(String::from).collect::<Vec<_>>()),
             categories,
@@ -132,17 +130,5 @@ impl InteractiveSearchMutations {
             client_name: outcome.client_name,
             source_title: outcome.source_title,
         })
-    }
-}
-
-/// GraphQL search kinds map one-to-one onto the application's.
-fn interactive_search_kind_from_value(
-    value: InteractiveSearchKindValue,
-) -> scryer_application::InteractiveSearchKind {
-    match value {
-        InteractiveSearchKindValue::Movie => scryer_application::InteractiveSearchKind::Movie,
-        InteractiveSearchKindValue::Series => scryer_application::InteractiveSearchKind::Series,
-        InteractiveSearchKindValue::Anime => scryer_application::InteractiveSearchKind::Anime,
-        InteractiveSearchKindValue::Raw => scryer_application::InteractiveSearchKind::Raw,
     }
 }

@@ -8869,39 +8869,6 @@ pub struct AnimeSearchNumberingContext {
     pub official_episode: u32,
 }
 
-/// Drive a streaming indexer search to completion and gather its pages into
-/// one response. `produce` receives the page sink the stream reports into.
-pub async fn collect_streamed_indexer_search<F, Fut>(produce: F) -> AppResult<IndexerSearchResponse>
-where
-    F: FnOnce(crate::IndexerSearchPageSink) -> Fut,
-    Fut: std::future::Future<Output = AppResult<IndexerSearchResponse>>,
-{
-    let (page_tx, mut page_rx) = tokio::sync::mpsc::channel(2);
-    let page_sink = crate::IndexerSearchPageSink::new(page_tx, 2);
-    let producer = produce(page_sink);
-    tokio::pin!(producer);
-
-    let mut results = Vec::new();
-    let mut page_source_open = true;
-    let mut response = loop {
-        tokio::select! {
-            response = &mut producer => break response?,
-            page = page_rx.recv(), if page_source_open => match page {
-                Some(page) => results.extend(page.results),
-                None => page_source_open = false,
-            },
-        }
-    };
-    while let Some(page) = page_rx.recv().await {
-        results.extend(page.results);
-    }
-    if results.is_empty() {
-        results = std::mem::take(&mut response.results);
-    }
-    response.results = results;
-    Ok(response)
-}
-
 #[async_trait]
 pub trait IndexerClient: Send + Sync {
     /// Run a provider-specific connection probe when the component implements
@@ -9012,34 +8979,54 @@ pub trait IndexerClient: Send + Sync {
         learning_context: Option<IndexerSearchLearningContext>,
         cancel_token: tokio_util::sync::CancellationToken,
     ) -> AppResult<IndexerSearchResponse> {
-        collect_streamed_indexer_search(|page_sink| {
-            self.search_stream(
-                query,
-                ids,
-                category,
-                facet,
-                id_search_facet,
-                newznab_categories,
-                indexer_routing,
-                mode,
-                operation,
-                season,
-                episode,
-                absolute_episode,
-                year,
-                tagged_aliases,
-                learning_context,
-                cancel_token,
-                page_sink,
-            )
-        })
-        .await
+        let (page_tx, mut page_rx) = tokio::sync::mpsc::channel(2);
+        let page_sink = crate::IndexerSearchPageSink::new(page_tx, 2);
+        let producer = self.search_stream(
+            query,
+            ids,
+            category,
+            facet,
+            id_search_facet,
+            newznab_categories,
+            indexer_routing,
+            mode,
+            operation,
+            season,
+            episode,
+            absolute_episode,
+            year,
+            tagged_aliases,
+            learning_context,
+            cancel_token,
+            page_sink,
+        );
+        tokio::pin!(producer);
+
+        let mut results = Vec::new();
+        let mut page_source_open = true;
+        let mut response = loop {
+            tokio::select! {
+                response = &mut producer => break response?,
+                page = page_rx.recv(), if page_source_open => match page {
+                    Some(page) => results.extend(page.results),
+                    None => page_source_open = false,
+                },
+            }
+        };
+        while let Some(page) = page_rx.recv().await {
+            results.extend(page.results);
+        }
+        if results.is_empty() {
+            results = std::mem::take(&mut response.results);
+        }
+        response.results = results;
+        Ok(response)
     }
 
-    /// An operator's raw text search (the Indexers page's raw kind). The
-    /// default forwards to [`Self::search`] with no facet; the multi-indexer
-    /// client overrides it so no facet is borrowed for capability gating,
-    /// category defaults or the title guard.
+    /// An operator's raw text search. The multi-indexer client dispatches it
+    /// to each eligible indexer; a single-indexer adapter answers it itself,
+    /// and this default asks [`Self::search`] for the bare query, which
+    /// cannot carry the page size.
     async fn search_raw_text(
         &self,
         request: crate::RawTextSearchRequest,
@@ -9051,8 +9038,8 @@ pub trait IndexerClient: Send + Sync {
             None,
             None,
             None,
-            request.newznab_categories,
-            request.indexer_routing,
+            Some(request.categories).filter(|categories| !categories.is_empty()),
+            None,
             SearchMode::Interactive,
             IndexerErrorOperation::InteractiveSearch,
             None,

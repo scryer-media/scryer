@@ -247,50 +247,6 @@ test("advanced limits filter on size, seeders and age", () => {
   assert.equal(usenetOnly.length, 1);
 });
 
-test("sorting covers every offered order", () => {
-  const releases = [
-    release({
-      title: "old-big",
-      sizeBytes: 50 * GIB,
-      publishedAt: "2026-01-01T00:00:00Z",
-      source: "slow-indexer",
-      seeders: 2,
-    }),
-    release({
-      title: "new-small",
-      sizeBytes: 5 * GIB,
-      publishedAt: "2026-08-01T00:00:00Z",
-      source: "fast-indexer",
-      seeders: 40,
-    }),
-  ];
-  const priorities = new Map([
-    ["fast-indexer", 5],
-    ["slow-indexer", 1],
-  ]);
-
-  assert.equal(
-    sortIndexerSearchReleases(releases, "newest", priorities)[0]?.title,
-    "new-small",
-  );
-  assert.equal(
-    sortIndexerSearchReleases(releases, "age", priorities)[0]?.title,
-    "old-big",
-  );
-  assert.equal(
-    sortIndexerSearchReleases(releases, "size", priorities)[0]?.title,
-    "old-big",
-  );
-  assert.equal(
-    sortIndexerSearchReleases(releases, "seeders", priorities)[0]?.title,
-    "new-small",
-  );
-  assert.equal(
-    sortIndexerSearchReleases(releases, "priority", priorities)[0]?.title,
-    "old-big",
-  );
-});
-
 test("a retry merges rows onto their own identity and appends new ones", () => {
   const first = release({ title: "known", sizeBytes: 1 * GIB });
   const retried = release({ title: "known", sizeBytes: 1 * GIB, seeders: 12 });
@@ -418,19 +374,16 @@ test("category lists accept commas, spaces and duplicates", () => {
 test("saved searches are newest-first, deduplicated and capped", () => {
   let saved = addSavedIndexerSearch([], {
     query: "dune",
-    kind: "MOVIE",
     indexerIds: [],
     categories: [],
   });
   saved = addSavedIndexerSearch(saved, {
     query: "expanse",
-    kind: "SERIES",
     indexerIds: ["a"],
     categories: ["5000"],
   });
   saved = addSavedIndexerSearch(saved, {
     query: "dune",
-    kind: "MOVIE",
     indexerIds: ["b"],
     categories: [],
   });
@@ -445,7 +398,6 @@ test("saved searches are newest-first, deduplicated and capped", () => {
   for (let index = 0; index < MAX_SAVED_INDEXER_SEARCHES + 5; index += 1) {
     capped = addSavedIndexerSearch(capped, {
       query: `query-${index}`,
-      kind: "RAW",
       indexerIds: [],
       categories: [],
     });
@@ -456,7 +408,6 @@ test("saved searches are newest-first, deduplicated and capped", () => {
   assert.deepEqual(
     addSavedIndexerSearch(saved, {
       query: "   ",
-      kind: "RAW",
       indexerIds: [],
       categories: [],
     }),
@@ -475,7 +426,7 @@ test("stored saved searches survive junk in localStorage", () => {
         { query: "", kind: "MOVIE" },
       ]),
     ),
-    [{ query: "dune", kind: "RAW", indexerIds: ["a"], categories: [] }],
+    [{ query: "dune", indexerIds: ["a"], categories: [] }],
   );
 });
 
@@ -519,8 +470,8 @@ test("every data column sorts in both directions with missing values last", () =
   const b = release({ title: "Beta", source: "Beta", sizeBytes: 10, publishedAt: "2026-01-01", grabs: 10 });
   const missing = release({ title: "", source: null, sizeBytes: null, publishedAt: "invalid" });
   for (const column of ["release", "indexer", "size", "age", "peers"] as const) {
-    assert.deepEqual(sortIndexerSearchReleases([missing, b, a], `${column}-asc`, new Map()), [a, b, missing], column);
-    assert.deepEqual(sortIndexerSearchReleases([a, missing, b], `${column}-desc`, new Map()), [b, a, missing], column);
+    assert.deepEqual(sortIndexerSearchReleases([missing, b, a], `${column}-asc`), [a, b, missing], column);
+    assert.deepEqual(sortIndexerSearchReleases([a, missing, b], `${column}-desc`), [b, a, missing], column);
   }
 });
 
@@ -528,13 +479,6 @@ test("ties use row identity independently of arrival order", () => {
   const a = release({ title: "same", downloadUrl: "https://example.test/a" });
   const b = release({ title: "same", downloadUrl: "https://example.test/b" });
   for (const key of ["release-asc", "release-desc", "size-asc", "size-desc"] as const) {
-    assert.deepEqual(sortIndexerSearchReleases([b, a], key, new Map()), sortIndexerSearchReleases([a, b], key, new Map()));
-  }
-});
-
-test("saved media searches become raw while retaining explicit scope", () => {
-  for (const kind of ["MOVIE", "SERIES", "ANIME", "RAW"]) {
-    assert.deepEqual(parseSavedIndexerSearches(JSON.stringify([{ query: "example", kind, indexerIds: ["one"], categories: ["2000"] }])),
-      [{ query: "example", kind: "RAW", indexerIds: ["one"], categories: ["2000"] }]);
+    assert.deepEqual(sortIndexerSearchReleases([b, a], key), sortIndexerSearchReleases([a, b], key));
   }
 });
