@@ -270,3 +270,80 @@ async fn a_gateway_error_fails_the_whole_resolve() {
         AppError::Repository(_) | AppError::Validation(_)
     ));
 }
+
+fn gateway_chart_item(rank: i64, title_id: i64, kind: &str) -> ListChartItem {
+    ListChartItem {
+        rank,
+        title_id: Some(title_id),
+        resolved: true,
+        kind: kind.to_string(),
+        external_ids: vec![id("tvdb", &format!("tvdb-{title_id}"))],
+        display_title: format!("Fixture Title {rank}"),
+        year: Some(2030),
+        poster_url: None,
+    }
+}
+
+fn chart_subscription(kinds: Vec<MediaFacet>) -> scryer_domain::ListSubscription {
+    let mut subscription = subscription("anime-chart");
+    subscription.source.origin = ListSourceOrigin::SmgChart {
+        chart_key: "fixture.trending".to_string(),
+        scope: "trending".to_string(),
+    };
+    subscription.kinds = kinds;
+    subscription
+}
+
+#[tokio::test]
+async fn a_gateway_series_on_an_anime_list_resolves_as_anime() {
+    // The gateway has no anime kind: its anime charts list every show as a
+    // series, and an anime movie as a movie.
+    let items = chart_items_to_plugin_items(vec![
+        gateway_chart_item(1, 41, "series"),
+        gateway_chart_item(2, 42, "movie"),
+    ])
+    .into_iter()
+    .map(|(item, _)| item)
+    .collect::<Vec<_>>();
+    let gateway = Arc::new(RecordingResolveGateway::default());
+    let resolver = GatewayListItemResolver::new(gateway.clone(), FixtureLibrary(HashMap::new()));
+
+    let resolved = crate::lists::resolve::resolve_items(
+        &chart_subscription(vec![MediaFacet::Anime]),
+        items,
+        &resolver,
+    )
+    .await
+    .expect("resolve");
+
+    let calls = gateway.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "anime");
+    assert_eq!(calls[0].1[0].smg_id, Some(41));
+    assert_eq!(resolved[0].kind, Some(MediaFacet::Anime));
+    assert!(resolved[0].resolved);
+    assert_eq!(resolved[0].smg_title_id, Some(41));
+    assert_eq!(resolved[1].kind, None, "an anime list has no movie route");
+    assert!(!resolved[1].resolved);
+}
+
+#[tokio::test]
+async fn a_gateway_series_on_a_list_that_follows_series_stays_a_series() {
+    let items = chart_items_to_plugin_items(vec![gateway_chart_item(1, 41, "series")])
+        .into_iter()
+        .map(|(item, _)| item)
+        .collect::<Vec<_>>();
+    let gateway = Arc::new(RecordingResolveGateway::default());
+    let resolver = GatewayListItemResolver::new(gateway.clone(), FixtureLibrary(HashMap::new()));
+
+    let resolved = crate::lists::resolve::resolve_items(
+        &chart_subscription(vec![MediaFacet::Series, MediaFacet::Anime]),
+        items,
+        &resolver,
+    )
+    .await
+    .expect("resolve");
+
+    assert_eq!(gateway.calls.lock().unwrap()[0].0, "series");
+    assert_eq!(resolved[0].kind, Some(MediaFacet::Series));
+}
