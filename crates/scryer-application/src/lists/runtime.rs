@@ -13,7 +13,7 @@ use scryer_domain::{
     DomainEventPayload, ExternalId, LibraryPermission, ListEventSubject, ListOnLeave,
     ListRequestSubmittedEventData, ListRoute, ListSubscription, ListSyncFailedEventData,
     ListTitleAddedEventData, ListTitleLeftEventData, MediaFacet, MediaRequest, MediaRequestOrigin,
-    NewDomainEvent, NewTitle, User,
+    NewDomainEvent, NewTitle, ReleaseNumbering, User,
 };
 
 use super::act::{AddedTitle, ListActions};
@@ -21,6 +21,7 @@ use super::fetch::ListFailure;
 use super::gateway::{GatewayListChartSource, GatewayListItemResolver, ListLibraryLookup};
 use super::rejection::remember_rejected_request;
 use super::resolve::ResolvedItem;
+use super::route_options::{route_monitor_type, route_option_tags};
 use super::sync::{ListSyncContext, ListSyncReport, sync_due_subscriptions};
 use crate::events::domain_events::{
     new_global_domain_event, new_title_domain_event, title_context_snapshot,
@@ -85,11 +86,18 @@ impl ListActions for AppListActions<'_> {
         search: bool,
     ) -> AppResult<AddedTitle> {
         let actor = User::system_execution_actor();
+        let monitor_type = route_monitor_type(route);
+        // A new title takes its options from its tags, as the add dialog's
+        // titles do; the patch below only reaches a title that already exists.
+        let mut tags = route_option_tags(route);
+        tags.extend(route.tags.iter().cloned());
         let request = NewTitle {
             name: item_name(item),
             facet: route.kind.clone(),
-            monitored: true,
-            tags: route.tags.clone(),
+            monitored: monitor_type
+                .as_deref()
+                .is_none_or(crate::media_requests::monitor_type_to_monitored),
+            tags,
             external_ids: item.external_ids.clone(),
             root_folder_id: route.root_folder_id.clone(),
             min_availability: route.min_availability.clone(),
@@ -98,9 +106,12 @@ impl ListActions for AppListActions<'_> {
         };
         let patch = TitleOptionsPatch {
             quality_profile_id: route.quality_profile_id.clone().map(Some),
-            monitor_type: non_empty(&route.monitor_type).map(Some),
+            monitor_type: monitor_type.map(Some),
             use_season_folders: route.use_season_folders.map(Some),
-            release_numbering: route.release_numbering.clone().map(Some),
+            release_numbering: route.release_numbering.as_deref().map(|value| {
+                let numbering = ReleaseNumbering::from_str_or_default(value);
+                (numbering != ReleaseNumbering::Auto).then(|| numbering.as_str().to_string())
+            }),
             ..TitleOptionsPatch::default()
         };
         let outcome = self
