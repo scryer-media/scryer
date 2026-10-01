@@ -40,9 +40,7 @@ export type InteractiveSearchSkipReason =
   | "INDEXER_DISABLED"
   | "TEMPORARILY_DISABLED"
   | "BACKED_OFF"
-  | "NO_TEXT_SEARCH"
-  | "NO_SEARCH_FOR_FACET"
-  | "CAPABILITIES_UNKNOWN";
+  | "NO_TEXT_SEARCH";
 
 export type InteractiveSearchProgress = {
   /**
@@ -61,7 +59,6 @@ export type InteractiveSearchProgress = {
 export {
   titleReleaseSearchInput,
   type InteractiveReleaseSearchInput,
-  type InteractiveSearchKind,
   type TitleReleaseSearchScope,
 } from "./release-search-input";
 type InteractiveReleaseSearchJobPayload = {
