@@ -1203,18 +1203,26 @@ pub async fn cleanup_extracted_dir(dir: &Path) {
     }
 }
 
-/// Whether `path` lies inside the output directory of one of the extractor's
-/// own workspaces. Matches only the exact name the extractor generates, so a
-/// download folder that merely shares the prefix is never treated as scratch.
-pub fn is_archive_workspace_output(path: &Path) -> bool {
-    path.ancestors().skip(1).any(|dir| {
-        dir.file_name()
-            .is_some_and(|name| name == ARCHIVE_STAGING_OUTPUT_DIR)
-            && dir
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
-                .is_some_and(is_archive_workspace_name)
+/// Whether `source` lies inside an output directory of one of the extractor's
+/// own workspaces, staged in a folder that also holds `dest`. Workspaces are
+/// only ever staged in the title folder the output is imported into, so a
+/// download that merely carries the generated names is never treated as
+/// scratch.
+pub fn is_archive_workspace_output(source: &Path, dest: &Path) -> bool {
+    source.ancestors().skip(1).any(|output_dir| {
+        output_dir
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(is_workspace_output_dir_name)
+            && output_dir.parent().is_some_and(|workspace| {
+                workspace
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(is_archive_workspace_name)
+                    && workspace.parent().is_some_and(|staging_parent| {
+                        !staging_parent.as_os_str().is_empty() && dest.starts_with(staging_parent)
+                    })
+            })
     })
 }
 
@@ -1548,24 +1556,37 @@ mod tests {
     #[test]
     fn archive_workspace_output_is_recognised_only_inside_a_workspace() {
         let title = Path::new("/library/Quiet Harbor (2026)");
+        let dest = title.join("Season 02/Quiet Harbor - S02E03.mkv");
         let workspace = title.join(format!("{ARCHIVE_STAGING_PREFIX}0123456789abcdef"));
-        assert!(is_archive_workspace_output(
-            &workspace.join("out/Quiet.Harbor.S02E03.mkv")
-        ));
-        assert!(is_archive_workspace_output(
-            &workspace.join("out/Subs/Quiet.Harbor.S02E03.mkv")
-        ));
-        assert!(!is_archive_workspace_output(&workspace));
+        for output in [
+            "out/Quiet.Harbor.S02E03.mkv",
+            "out/Subs/Quiet.Harbor.S02E03.mkv",
+            "out-2/Quiet.Harbor.S02E03.mkv",
+            "nested-1-1/Quiet.Harbor.S02E03.mkv",
+        ] {
+            assert!(
+                is_archive_workspace_output(&workspace.join(output), &dest),
+                "{output} is extractor output"
+            );
+        }
+        assert!(!is_archive_workspace_output(&workspace, &dest));
+        assert!(!is_archive_workspace_output(&dest, &dest));
         assert!(!is_archive_workspace_output(
-            &title.join("Season 02/Quiet Harbor - S02E03.mkv")
+            &title.join(format!("{ARCHIVE_STAGING_PREFIX}notes.mkv")),
+            &dest
         ));
-        assert!(!is_archive_workspace_output(
-            &title.join(format!("{ARCHIVE_STAGING_PREFIX}notes.mkv"))
-        ));
-        // Only the generated name, and only its output directory, counts.
-        assert!(!is_archive_workspace_output(
-            &workspace.join("Quiet.Harbor.S02E03.mkv")
-        ));
+        // Only the generated name, and only its output directories, count.
+        for not_output in [
+            "Quiet.Harbor.S02E03.mkv",
+            "output/Quiet.Harbor.S02E03.mkv",
+            "out-/Quiet.Harbor.S02E03.mkv",
+            "nested-/Quiet.Harbor.S02E03.mkv",
+        ] {
+            assert!(
+                !is_archive_workspace_output(&workspace.join(not_output), &dest),
+                "{not_output} is not extractor output"
+            );
+        }
         let downloads = Path::new("/downloads");
         for lookalike in [
             format!("{ARCHIVE_STAGING_PREFIX}downloads"),
@@ -1577,11 +1598,37 @@ mod tests {
                 !is_archive_workspace_output(
                     &downloads
                         .join(&lookalike)
-                        .join("out/Quiet.Harbor.S02E03.mkv")
+                        .join("out/Quiet.Harbor.S02E03.mkv"),
+                    &dest
                 ),
                 "{lookalike} is not an extractor workspace"
             );
         }
+    }
+
+    #[test]
+    fn workspace_names_outside_the_destination_title_folder_are_not_scratch() {
+        let title = Path::new("/library/Quiet Harbor (2026)");
+        let dest = title.join("Season 02/Quiet Harbor - S02E03.mkv");
+        let generated = format!("{ARCHIVE_STAGING_PREFIX}0123456789abcdef");
+        // A download that carries the generated names is still a download.
+        assert!(!is_archive_workspace_output(
+            &Path::new("/downloads/Quiet.Harbor.S02")
+                .join(&generated)
+                .join("out/Quiet.Harbor.S02E03.mkv"),
+            &dest
+        ));
+        // Another title's workspace is not this import's scratch.
+        assert!(!is_archive_workspace_output(
+            &Path::new("/library/Other Harbor (2026)")
+                .join(&generated)
+                .join("out/Quiet.Harbor.S02E03.mkv"),
+            &dest
+        ));
+        assert!(!is_archive_workspace_output(
+            &Path::new(&generated).join("out/Quiet.Harbor.S02E03.mkv"),
+            Path::new("Quiet Harbor - S02E03.mkv")
+        ));
     }
 
     #[tokio::test]

@@ -742,7 +742,25 @@ struct ImportFileOptions {
     #[cfg(test)]
     force_hard_link_identity_mismatch: bool,
     #[cfg(test)]
-    force_rename_failure: bool,
+    rename_fault: RenameFault,
+}
+
+/// A fault the archive-output rename lane is made to hit.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RenameFault {
+    #[default]
+    None,
+    /// The rename is refused and does not happen.
+    Refused,
+    /// The rename is refused after another writer filled the reservation.
+    RefusedAfterReservationFilled,
+    /// The rename happens but reports failure, as a network filesystem can
+    /// when its reply is lost and the retried request finds no source.
+    ReportedAfterTakingEffect,
+    /// The rename happens, then the renamed file is moved aside and the
+    /// destination path comes to name an unrelated file before it is checked.
+    DestinationReplacedAfterRename,
 }
 
 #[cfg(test)]
@@ -778,13 +796,37 @@ fn hard_link_import_source(source: &Path, dest: &Path) -> io::Result<()> {
 }
 
 #[cfg(test)]
-fn force_rename_failure(options: &ImportFileOptions) -> bool {
-    options.force_rename_failure
+fn rename_archive_output(
+    source: &Path,
+    dest: &Path,
+    options: &ImportFileOptions,
+) -> io::Result<()> {
+    let refused = || io::Error::new(io::ErrorKind::CrossesDevices, "forced rename failure");
+    match options.rename_fault {
+        RenameFault::Refused => Err(refused()),
+        RenameFault::RefusedAfterReservationFilled => {
+            std::fs::write(dest, b"another writer")?;
+            Err(refused())
+        }
+        RenameFault::ReportedAfterTakingEffect => {
+            std::fs::rename(source, dest)?;
+            Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "forced failure reported for a rename that took effect",
+            ))
+        }
+        RenameFault::DestinationReplacedAfterRename => {
+            std::fs::rename(source, dest)?;
+            std::fs::rename(dest, dest.with_extension("moved-aside"))?;
+            std::fs::write(dest, b"unrelated file")
+        }
+        RenameFault::None => std::fs::rename(source, dest),
+    }
 }
 
 #[cfg(not(test))]
-fn force_rename_failure(_: &ImportFileOptions) -> bool {
-    false
+fn rename_archive_output(source: &Path, dest: &Path, _: &ImportFileOptions) -> io::Result<()> {
+    std::fs::rename(source, dest)
 }
 
 #[cfg(test)]
@@ -2036,26 +2078,32 @@ fn try_fast_import_placement_blocking(
 /// it. The workspace is staged under the title folder, so the rename stays on
 /// one volume and needs no link identity. `Ok(false)` hands the import to the
 /// hard-link and copy lanes unchanged.
+///
+/// Once the rename has happened the destination holds the only copy of the
+/// output, so nothing here removes or moves it again.
 fn rename_archive_workspace_output(prepared: &PreparedImportPlacement) -> AppResult<bool> {
     ensure_same_source(&prepared.source, &prepared.source_fingerprint)?;
-    let renamed = if force_rename_failure(&prepared.options) {
-        Err(io::Error::new(
-            io::ErrorKind::CrossesDevices,
-            "forced rename failure",
-        ))
-    } else {
-        scryer_application::fs_safety::rename_into_claimed_destination_blocking(
-            &prepared.source,
-            &prepared.dest,
-        )
+    // Reserve the name so a file that appeared since the destination was
+    // checked is never replaced by the rename.
+    let reservation = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&prepared.dest)
+    {
+        Ok(file) => file
+            .metadata()
+            .ok()
+            .and_then(|metadata| fingerprint_from_metadata(&metadata).ok()),
+        Err(error) => {
+            tracing::debug!(
+                error = %error,
+                "archive workspace rename could not reserve the destination; trying the link and copy lanes"
+            );
+            return Ok(false);
+        }
     };
-    if let Err(error) = renamed {
-        tracing::debug!(
-            error = %error,
-            cross_device = scryer_application::fs_safety::is_cross_device_error(&error),
-            "archive workspace rename is ineligible; trying the link and copy lanes"
-        );
-        return Ok(false);
+    if let Err(error) = rename_archive_output(&prepared.source, &prepared.dest, &prepared.options) {
+        return release_archive_rename_reservation(prepared, reservation.as_ref(), &error);
     }
 
     let placed = validate_import_destination_parent(&prepared.destination_guard, &prepared.dest)
@@ -2082,17 +2130,69 @@ fn rename_archive_workspace_output(prepared: &PreparedImportPlacement) -> AppRes
         return Ok(true);
     };
 
-    // Put the file back rather than leave an unverified placement behind.
-    match scryer_application::fs_safety::rename_into_claimed_destination_blocking(
-        &prepared.dest,
-        &prepared.source,
-    ) {
-        Ok(()) => Err(error),
-        Err(restore_error) => Err(AppError::ManualReconciliationRequired(format!(
-            "{error}; additionally failed to return the archive output to {}: {restore_error}",
-            prepared.source.display()
-        ))),
+    // A failed check can mean the destination path no longer names the file
+    // that was renamed, and the workspace is removed after the import, so
+    // moving whatever is there back into it could cost an unrelated file.
+    Err(AppError::ManualReconciliationRequired(format!(
+        "archive output was renamed to {} but the placement could not be verified, so it was left in place: {error}",
+        prepared.dest.display()
+    )))
+}
+
+/// Settles a rename that reported failure. The empty reservation is removed
+/// only while the source is provably still in place: a network filesystem can
+/// report failure for a rename that took effect, and the destination is then
+/// the only copy of the output.
+fn release_archive_rename_reservation(
+    prepared: &PreparedImportPlacement,
+    reservation: Option<&FileFingerprint>,
+    rename_error: &io::Error,
+) -> AppResult<bool> {
+    if let Err(source_error) = ensure_same_source(&prepared.source, &prepared.source_fingerprint) {
+        return Err(AppError::ManualReconciliationRequired(format!(
+            "renaming archive output {} to {} reported failure ({rename_error}) but the source did not stay in place ({source_error}); nothing was removed",
+            prepared.source.display(),
+            prepared.dest.display()
+        )));
     }
+    match std::fs::symlink_metadata(&prepared.dest) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Ok(metadata) if is_unused_rename_reservation(&metadata, reservation) => {
+            match std::fs::remove_file(&prepared.dest) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(AppError::Repository(format!(
+                        "failed to release destination reservation {}: {error}",
+                        prepared.dest.display()
+                    )));
+                }
+            }
+        }
+        _ => {
+            return Err(AppError::ManualReconciliationRequired(format!(
+                "destination {} changed while archive output was being renamed into it; nothing was removed",
+                prepared.dest.display()
+            )));
+        }
+    }
+    tracing::debug!(
+        error = %rename_error,
+        cross_device = scryer_application::fs_safety::is_cross_device_error(rename_error),
+        "archive workspace rename is ineligible; trying the link and copy lanes"
+    );
+    Ok(false)
+}
+
+/// The destination is still the empty file the rename lane reserved.
+fn is_unused_rename_reservation(
+    metadata: &std::fs::Metadata,
+    reservation: Option<&FileFingerprint>,
+) -> bool {
+    fingerprint_from_metadata(metadata).is_ok_and(|current| {
+        current.len == 0
+            && reservation.is_none_or(|reserved| same_file_identity(&current, reserved))
+    })
 }
 
 fn reconcile_existing_destination(
@@ -4142,7 +4242,7 @@ mod tests {
         let (source, dest) = archive_workspace_fixture(temp.path());
         let coordinator = ImportPlacementCoordinator::new(1, 2);
         let options = ImportFileOptions {
-            force_rename_failure: true,
+            rename_fault: RenameFault::Refused,
             ..Default::default()
         };
 
@@ -4204,7 +4304,7 @@ mod tests {
         let (source, dest) = archive_workspace_fixture(temp.path());
         let coordinator = ImportPlacementCoordinator::new(1, 2);
         let options = ImportFileOptions {
-            force_rename_failure: true,
+            rename_fault: RenameFault::Refused,
             ..Default::default()
         };
 
@@ -4246,6 +4346,89 @@ mod tests {
         assert_eq!(result.source_disposition, ImportSourceDisposition::Retained);
         assert!(result.source_cleanup.is_some());
         assert!(source.exists(), "the cleanup guard owns source removal");
+    }
+
+    fn rename_lane_error(source: &Path, dest: &Path, fault: RenameFault) -> AppError {
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let options = ImportFileOptions {
+            rename_fault: fault,
+            ..Default::default()
+        };
+        let mut prepared = prepare_in_process(source, dest, options, true);
+        coordinator.ready_fast_placement(&mut prepared, true);
+        match try_fast_import_placement_blocking(prepared) {
+            Ok(_) => panic!("the rename lane must stop the import"),
+            Err(error) => error,
+        }
+    }
+
+    #[test]
+    fn renamed_archive_output_failing_its_check_is_left_in_place() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = archive_workspace_fixture(temp.path());
+
+        let attempts_before = hard_link_attempts();
+        let error = rename_lane_error(&source, &dest, RenameFault::DestinationReplacedAfterRename);
+
+        assert!(
+            matches!(error, AppError::ManualReconciliationRequired(_)),
+            "{error}"
+        );
+        assert_eq!(hard_link_attempts(), attempts_before);
+        assert_eq!(
+            std::fs::read(&dest).expect("read dest"),
+            b"unrelated file",
+            "the file the destination path now names is not moved"
+        );
+        assert!(
+            !source.exists(),
+            "nothing is moved back into the workspace, which is removed after the import"
+        );
+        assert_eq!(
+            std::fs::read(dest.with_extension("moved-aside")).expect("read renamed output"),
+            SYNTHETIC_PAYLOAD
+        );
+    }
+
+    #[test]
+    fn rename_reported_failed_after_taking_effect_removes_nothing() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = archive_workspace_fixture(temp.path());
+
+        let attempts_before = hard_link_attempts();
+        let error = rename_lane_error(&source, &dest, RenameFault::ReportedAfterTakingEffect);
+
+        assert!(
+            matches!(error, AppError::ManualReconciliationRequired(_)),
+            "{error}"
+        );
+        assert_eq!(hard_link_attempts(), attempts_before);
+        assert!(!source.exists());
+        assert_eq!(
+            std::fs::read(&dest).expect("read dest"),
+            SYNTHETIC_PAYLOAD,
+            "the only copy of the output stays at the destination"
+        );
+    }
+
+    #[test]
+    fn filled_rename_reservation_is_left_alone() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = archive_workspace_fixture(temp.path());
+
+        let attempts_before = hard_link_attempts();
+        let error = rename_lane_error(&source, &dest, RenameFault::RefusedAfterReservationFilled);
+
+        assert!(
+            matches!(error, AppError::ManualReconciliationRequired(_)),
+            "{error}"
+        );
+        assert_eq!(hard_link_attempts(), attempts_before);
+        assert_eq!(std::fs::read(&dest).expect("read dest"), b"another writer");
+        assert_eq!(
+            std::fs::read(&source).expect("read source"),
+            SYNTHETIC_PAYLOAD
+        );
     }
 
     #[cfg(unix)]
