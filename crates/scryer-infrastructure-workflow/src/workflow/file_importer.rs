@@ -7,9 +7,9 @@ use scryer_application::{
 };
 use scryer_domain::{
     ImportDestinationDisposition, ImportFileIdentity, ImportFileResult, ImportMode,
-    ImportSourceCleanupGuard, ImportSourceIdentity, ImportSourceIdentityKind, ImportSourceSnapshot,
-    ImportStrategy, ImportTransferPhase, ImportVerification, StreamedContentHashes,
-    VerificationDepth,
+    ImportSourceCleanupGuard, ImportSourceDisposition, ImportSourceIdentity,
+    ImportSourceIdentityKind, ImportSourceSnapshot, ImportStrategy, ImportTransferPhase,
+    ImportVerification, StreamedContentHashes, VerificationDepth,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -1892,11 +1892,27 @@ fn finish_prepared_import(
         dest_path: prepared.dest,
         size_bytes: prepared.size,
         destination_disposition: ImportDestinationDisposition::Created,
+        source_disposition: ImportSourceDisposition::Retained,
         source_cleanup,
         // A rename, hardlink, or symlink placement copies no bytes (FR-032):
         // there is nothing to verify and nothing to hash.
         verification: None,
     })
+}
+
+/// Archive output renamed into place leaves nothing at its source path, so a
+/// move import has no source left to clean up and builds no guard.
+fn finish_renamed_archive_output(prepared: PreparedImportPlacement) -> ImportFileResult {
+    ImportFileResult {
+        strategy: ImportStrategy::Move,
+        source_path: prepared.source,
+        dest_path: prepared.dest,
+        size_bytes: prepared.size,
+        destination_disposition: ImportDestinationDisposition::Created,
+        source_disposition: ImportSourceDisposition::RenamedIntoPlace,
+        source_cleanup: None,
+        verification: None,
+    }
 }
 
 fn try_fast_import_placement_blocking(
@@ -1932,15 +1948,13 @@ fn try_fast_import_placement_blocking(
 
     let hardlink_uid_safe =
         source_uid_matches_scryer(&prepared.source_fingerprint, &prepared.options);
-    // A move import keeps its verified-cleanup path: the guard that removes the
-    // source has nothing to prove against once the source is renamed away.
     if prepared.archive_workspace_source
-        && !prepared.source_cleanup_required
         && hardlink_uid_safe
         && rename_archive_workspace_output(&prepared)?
     {
-        return finish_prepared_import(prepared, ImportStrategy::Move)
-            .map(FastPlacementResult::Finished);
+        return Ok(FastPlacementResult::Finished(
+            finish_renamed_archive_output(prepared),
+        ));
     }
 
     let mut partial_destination_created = false;
@@ -2149,6 +2163,7 @@ fn reconcile_existing_destination(
         dest_path: dest.to_path_buf(),
         size_bytes: size,
         destination_disposition: ImportDestinationDisposition::AlreadyPresent,
+        source_disposition: ImportSourceDisposition::Retained,
         source_cleanup,
         // This call copied nothing: the destination was already there and was
         // proved equal to the source by the sampled proof above.
@@ -2228,6 +2243,7 @@ fn import_hardlink_or_copy_blocking(
             dest_path: dest,
             size_bytes: size,
             destination_disposition: ImportDestinationDisposition::Created,
+            source_disposition: ImportSourceDisposition::Retained,
             source_cleanup,
             verification: None,
         });
@@ -2289,6 +2305,7 @@ fn import_hardlink_or_copy_blocking(
                                 dest_path: dest,
                                 size_bytes: size,
                                 destination_disposition: ImportDestinationDisposition::Created,
+                                source_disposition: ImportSourceDisposition::Retained,
                                 source_cleanup,
                                 verification: None,
                             });
@@ -2354,6 +2371,7 @@ fn import_hardlink_or_copy_blocking(
         dest_path: dest,
         size_bytes: size,
         destination_disposition: ImportDestinationDisposition::Created,
+        source_disposition: ImportSourceDisposition::Retained,
         source_cleanup,
         verification: Some(verification),
     })
@@ -4107,6 +4125,10 @@ mod tests {
         );
 
         assert_eq!(result.strategy, ImportStrategy::Move);
+        assert_eq!(
+            result.source_disposition,
+            ImportSourceDisposition::RenamedIntoPlace
+        );
         assert_eq!(hard_link_attempts(), attempts_before);
         assert!(result.source_cleanup.is_none());
         assert!(result.verification.is_none());
@@ -4142,14 +4164,53 @@ mod tests {
     }
 
     #[test]
-    fn move_imports_of_archive_workspace_output_keep_the_cleanup_guard() {
+    fn move_imports_of_archive_workspace_output_are_placed_by_rename() {
         let temp = tempfile::tempdir().expect("tempdir");
         let (source, dest) = archive_workspace_fixture(temp.path());
+        let sibling = source.with_file_name("Synthetic.Show.S01E02.1080p.mkv");
+        std::fs::write(&sibling, b"sibling payload").expect("write sibling output");
         let coordinator = ImportPlacementCoordinator::new(1, 2);
 
+        let attempts_before = hard_link_attempts();
         let (result, _) = place_in_process(
             &coordinator,
             prepare_in_process(&source, &dest, ImportFileOptions::default(), true),
+            true,
+        );
+
+        assert_eq!(result.strategy, ImportStrategy::Move);
+        assert_eq!(
+            result.source_disposition,
+            ImportSourceDisposition::RenamedIntoPlace
+        );
+        assert!(
+            result.source_cleanup.is_none(),
+            "nothing is left at the source path for a guard to remove"
+        );
+        assert!(result.verification.is_none());
+        assert_eq!(hard_link_attempts(), attempts_before);
+        assert!(!source.exists(), "the workspace file is moved, not copied");
+        assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
+        assert_eq!(
+            std::fs::read(&sibling).expect("read sibling"),
+            b"sibling payload",
+            "other extraction output is untouched"
+        );
+    }
+
+    #[test]
+    fn move_import_whose_rename_fails_keeps_the_cleanup_guard() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let (source, dest) = archive_workspace_fixture(temp.path());
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+        let options = ImportFileOptions {
+            force_rename_failure: true,
+            ..Default::default()
+        };
+
+        let (result, _) = place_in_process(
+            &coordinator,
+            prepare_in_process(&source, &dest, options, true),
             true,
         );
 
@@ -4157,9 +4218,34 @@ mod tests {
             result.strategy,
             ImportStrategy::HardLink | ImportStrategy::Copy
         ));
+        assert_eq!(result.source_disposition, ImportSourceDisposition::Retained);
         assert!(result.source_cleanup.is_some());
         assert!(source.exists(), "the cleanup guard owns source removal");
         assert_eq!(std::fs::read(&dest).expect("read dest"), SYNTHETIC_PAYLOAD);
+    }
+
+    #[test]
+    fn move_import_outside_an_extractor_workspace_keeps_the_cleanup_guard() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let source = temp
+            .path()
+            .join("downloads/Synthetic.Show.S01E01.1080p.mkv");
+        std::fs::create_dir_all(source.parent().expect("parent")).expect("create downloads");
+        std::fs::write(&source, SYNTHETIC_PAYLOAD).expect("write download");
+        let dest = temp
+            .path()
+            .join("library/Season 01/Synthetic Show - S01E01 - 1080p.mkv");
+        let coordinator = ImportPlacementCoordinator::new(1, 2);
+
+        let (result, _) = place_in_process(
+            &coordinator,
+            prepare_in_process(&source, &dest, ImportFileOptions::default(), true),
+            false,
+        );
+
+        assert_eq!(result.source_disposition, ImportSourceDisposition::Retained);
+        assert!(result.source_cleanup.is_some());
+        assert!(source.exists(), "the cleanup guard owns source removal");
     }
 
     #[cfg(unix)]

@@ -2292,15 +2292,22 @@ async fn skip_reason_for_import_check_rejection(
     Ok(skip_reason_for_import_check_code(code))
 }
 
-async fn finalize_import_source_cleanup(
-    app: &AppUseCase,
-    import_mode: scryer_domain::ImportMode,
+/// The guard a move import must hand to source removal, or `None` when the
+/// source was renamed into place and nothing is left at its path.
+fn move_import_source_cleanup_guard(
     file_result: &scryer_domain::ImportFileResult,
-    final_dest_path: &Path,
-    completed: Option<&scryer_domain::CompletedDownload>,
-) -> AppResult<scryer_domain::ImportStrategy> {
-    if import_mode != scryer_domain::ImportMode::Move {
-        return Ok(file_result.strategy);
+) -> AppResult<Option<scryer_domain::ImportSourceCleanupGuard>> {
+    // Archive extraction output renamed into place: the move already happened.
+    // Only that rename sets this disposition, and it never comes with a guard
+    // or a copy to verify, so either one means the result cannot be trusted.
+    if file_result.source_disposition == scryer_domain::ImportSourceDisposition::RenamedIntoPlace {
+        if file_result.source_cleanup.is_some() || file_result.verification.is_some() {
+            return Err(AppError::Repository(format!(
+                "move import of {} reported a rename together with a source cleanup or copy verification",
+                file_result.source_path.display()
+            )));
+        }
+        return Ok(None);
     }
 
     // FR-044, at the application-level gate as well as inside the copy. The
@@ -2318,12 +2325,28 @@ async fn finalize_import_source_cleanup(
         )));
     }
 
-    let guard = file_result.source_cleanup.clone().ok_or_else(|| {
+    file_result.source_cleanup.clone().map(Some).ok_or_else(|| {
         AppError::Repository(format!(
             "move import did not return a source cleanup guard for {}",
             file_result.source_path.display()
         ))
-    })?;
+    })
+}
+
+async fn finalize_import_source_cleanup(
+    app: &AppUseCase,
+    import_mode: scryer_domain::ImportMode,
+    file_result: &scryer_domain::ImportFileResult,
+    final_dest_path: &Path,
+    completed: Option<&scryer_domain::CompletedDownload>,
+) -> AppResult<scryer_domain::ImportStrategy> {
+    if import_mode != scryer_domain::ImportMode::Move {
+        return Ok(file_result.strategy);
+    }
+
+    let Some(guard) = move_import_source_cleanup_guard(file_result)? else {
+        return Ok(scryer_domain::ImportStrategy::Move);
+    };
 
     if let Some(verification) = file_result.verification.as_ref() {
         // FR-043: the applied depth is recorded wherever the import surface can
@@ -2427,5 +2450,106 @@ fn completed_import_status_for_result(
         ImportStatus::Pending
     } else {
         fallback_status
+    }
+}
+
+#[cfg(test)]
+mod move_import_source_cleanup_gate_tests {
+    use super::move_import_source_cleanup_guard;
+    use scryer_domain::{
+        ImportContentProof, ImportDestinationDisposition, ImportFileIdentity, ImportFileResult,
+        ImportSourceCleanupGuard, ImportSourceDisposition, ImportSourceIdentity,
+        ImportSourceIdentityKind, ImportStrategy,
+    };
+    use std::path::PathBuf;
+
+    fn proof() -> ImportContentProof {
+        ImportContentProof {
+            size_bytes: 23,
+            sample_bytes: 23,
+            sample_blake3: "synthetic".to_string(),
+        }
+    }
+
+    fn guard() -> ImportSourceCleanupGuard {
+        ImportSourceCleanupGuard {
+            source_path: PathBuf::from("/downloads/Synthetic.Show.S01E01.mkv"),
+            dest_path: PathBuf::from("/library/Synthetic Show/Season 01/S01E01.mkv"),
+            size_bytes: 23,
+            source_identity: ImportSourceIdentity {
+                file: ImportFileIdentity {
+                    len: 23,
+                    modified: None,
+                    #[cfg(unix)]
+                    dev: 1,
+                    #[cfg(unix)]
+                    ino: 2,
+                },
+                kind: ImportSourceIdentityKind::Regular,
+            },
+            source_proof: proof(),
+            dest_proof: proof(),
+        }
+    }
+
+    fn result(
+        source_disposition: ImportSourceDisposition,
+        source_cleanup: Option<ImportSourceCleanupGuard>,
+    ) -> ImportFileResult {
+        ImportFileResult {
+            strategy: ImportStrategy::Move,
+            source_path: PathBuf::from("/downloads/Synthetic.Show.S01E01.mkv"),
+            dest_path: PathBuf::from("/library/Synthetic Show/Season 01/S01E01.mkv"),
+            size_bytes: 23,
+            destination_disposition: ImportDestinationDisposition::Created,
+            source_disposition,
+            source_cleanup,
+            verification: None,
+        }
+    }
+
+    #[test]
+    fn a_renamed_source_needs_no_cleanup_guard() {
+        let guard = move_import_source_cleanup_guard(&result(
+            ImportSourceDisposition::RenamedIntoPlace,
+            None,
+        ))
+        .expect("a rename completes the move");
+        assert!(guard.is_none(), "nothing is left at the source to remove");
+    }
+
+    #[test]
+    fn a_retained_source_without_a_guard_is_still_refused() {
+        let error =
+            move_import_source_cleanup_guard(&result(ImportSourceDisposition::Retained, None))
+                .expect_err("a retained source must come with its guard");
+        assert!(
+            error
+                .to_string()
+                .contains("did not return a source cleanup guard"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_retained_source_hands_its_guard_to_removal() {
+        let returned = move_import_source_cleanup_guard(&result(
+            ImportSourceDisposition::Retained,
+            Some(guard()),
+        ))
+        .expect("guarded move");
+        assert_eq!(
+            returned.map(|guard| guard.source_path),
+            Some(PathBuf::from("/downloads/Synthetic.Show.S01E01.mkv"))
+        );
+    }
+
+    #[test]
+    fn a_rename_that_also_carries_a_guard_is_refused() {
+        move_import_source_cleanup_guard(&result(
+            ImportSourceDisposition::RenamedIntoPlace,
+            Some(guard()),
+        ))
+        .expect_err("a rename never builds a guard, so this result is inconsistent");
     }
 }
