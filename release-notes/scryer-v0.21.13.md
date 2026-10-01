@@ -9,5 +9,6 @@ These notes cover what's changed since **0.21.12**.
 
 ## Included fixes
 
+- **Imports on sshfs, FUSE, CIFS and mergerfs path-hash volumes:** an import no longer fails with "import destination is not linked to the expected source" on filesystems that report a different inode for each path. When a hard link succeeds but its identity cannot be verified, Scryer removes the link and copies the file instead, logs one warning naming the volume, and skips the link attempt for later imports to that volume until restart. Files the archive extractor wrote into its own workspace are now placed by rename in hard-link-or-copy mode, so they never need a link at all. The strict check itself is unchanged: a verified mismatch of the source is still an error.
 - **Dashboard:** free space below 1 TB is shown in gigabytes instead of a fraction of a terabyte.
 - **Release validation:** a test fixture for outbound HTTP cooldown handling closed its connections without saying so, which could make a later request in the same test land on a stale pooled connection and fail intermittently. The fixture now marks each response `Connection: close`.
