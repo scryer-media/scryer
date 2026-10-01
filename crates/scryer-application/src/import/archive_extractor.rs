@@ -1203,6 +1203,15 @@ pub async fn cleanup_extracted_dir(dir: &Path) {
     }
 }
 
+/// Whether `path` lies inside one of the extractor's own workspaces.
+pub fn is_archive_workspace_output(path: &Path) -> bool {
+    path.ancestors().skip(1).any(|dir| {
+        dir.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(ARCHIVE_STAGING_PREFIX))
+    })
+}
+
 fn is_archive_staging_dir(dir: &Path) -> bool {
     dir.file_name()
         .and_then(|name| name.to_str())
@@ -1518,6 +1527,25 @@ mod tests {
         candidates.push_indexer(Some("indexer-secret"));
         candidates.push_release_name(Some("Quiet.Harbor.S02E03{{name-secret}}"));
         candidates
+    }
+
+    #[test]
+    fn archive_workspace_output_is_recognised_only_inside_a_workspace() {
+        let title = Path::new("/library/Quiet Harbor (2026)");
+        let workspace = title.join(format!("{ARCHIVE_STAGING_PREFIX}0123456789abcdef"));
+        assert!(is_archive_workspace_output(
+            &workspace.join("out/Quiet.Harbor.S02E03.mkv")
+        ));
+        assert!(is_archive_workspace_output(
+            &workspace.join("out/Subs/Quiet.Harbor.S02E03.mkv")
+        ));
+        assert!(!is_archive_workspace_output(&workspace));
+        assert!(!is_archive_workspace_output(
+            &title.join("Season 02/Quiet Harbor - S02E03.mkv")
+        ));
+        assert!(!is_archive_workspace_output(
+            &title.join(format!("{ARCHIVE_STAGING_PREFIX}notes.mkv"))
+        ));
     }
 
     #[tokio::test]

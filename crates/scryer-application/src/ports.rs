@@ -6831,6 +6831,7 @@ pub struct ImportFilePermissions {
 pub struct ImportFileExecutionContext {
     client_lane_key: String,
     active_import_stream: Option<crate::ActiveImportStreamHandle>,
+    archive_workspace_source: bool,
 }
 
 impl ImportFileExecutionContext {
@@ -6844,11 +6845,24 @@ impl ImportFileExecutionContext {
         Self {
             client_lane_key,
             active_import_stream: None,
+            archive_workspace_source: false,
         }
     }
 
     pub fn client_lane_key(&self) -> &str {
         &self.client_lane_key
+    }
+
+    /// Marks the source as output the archive extractor wrote into its own
+    /// workspace. That file is Scryer's scratch, so the importer may place it
+    /// by rename instead of linking or copying it.
+    pub fn with_archive_workspace_source(mut self, archive_workspace_source: bool) -> Self {
+        self.archive_workspace_source = archive_workspace_source;
+        self
+    }
+
+    pub fn archive_workspace_source(&self) -> bool {
+        self.archive_workspace_source
     }
 
     pub fn with_active_import_stream(
