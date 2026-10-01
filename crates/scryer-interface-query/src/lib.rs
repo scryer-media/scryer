@@ -569,19 +569,13 @@ pub fn from_interactive_release_search_snapshot(
                     }
                     Reason::BackedOff => InteractiveReleaseSearchSkipReasonValue::BackedOff,
                     Reason::NoTextSearch => InteractiveReleaseSearchSkipReasonValue::NoTextSearch,
-                    Reason::NoSearchForFacet => {
-                        InteractiveReleaseSearchSkipReasonValue::NoSearchForFacet
-                    }
-                    Reason::CapabilitiesUnknown => {
-                        InteractiveReleaseSearchSkipReasonValue::CapabilitiesUnknown
-                    }
                 }
             }),
             skipped_until: indexer.skipped_until,
         })
         .collect();
-    // Parity with the one-shot `searchReleases` resolver's limit handling.
-    let safe_limit = snapshot.limit.unwrap_or(50).clamp(1, 200) as usize;
+    // A title search's limit is already capped; a raw query lists everything.
+    let safe_limit = snapshot.limit.map_or(usize::MAX, |limit| limit as usize);
     InteractiveReleaseSearchPayload {
         id: snapshot.id.into(),
         state,

@@ -1788,6 +1788,41 @@ impl IndexerClient for WasmIndexerClient {
             .await
     }
 
+    async fn search_raw_text(
+        &self,
+        request: scryer_application::RawTextSearchRequest,
+        cancel_token: CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        if cancel_token.is_cancelled() {
+            return Err(AppError::canceled("plugin indexer search canceled"));
+        }
+        let mode = SearchMode::Interactive;
+        let context = build_search_context(
+            &request.query,
+            &Default::default(),
+            None,
+            mode,
+            None,
+            None,
+            None,
+            None,
+        );
+        let request = PluginSearchRequest {
+            query: request.query,
+            categories: request.categories,
+            limit: request.limit.unwrap_or(100) as usize,
+            context: Some(context),
+            ..PluginSearchRequest::default()
+        };
+        self.search_with_request(
+            request,
+            mode,
+            IndexerErrorOperation::InteractiveSearch,
+            cancel_token,
+        )
+        .await
+    }
+
     async fn search_stream(
         &self,
         query: String,

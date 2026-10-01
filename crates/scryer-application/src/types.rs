@@ -2579,9 +2579,7 @@ pub enum IndexerSearchOutcome {
     /// sent. Asking again gives the same answer until the indexer's config,
     /// caps, or plugin changes, so convergence records it under a fingerprint
     /// that includes the provider's declared capabilities.
-    Unsupported {
-        reason: IndexerUnsupportedReason,
-    },
+    Unsupported,
     /// The indexer was left out because it is in an operational backoff after
     /// recent failures. Nothing was sent. Only a raw text search reports it,
     /// so the operator can see why an indexer stayed silent.
@@ -2591,26 +2589,13 @@ pub enum IndexerSearchOutcome {
     Errored,
 }
 
-/// Why an indexer cannot answer a search at all.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IndexerUnsupportedReason {
-    /// The indexer takes no text query, so a raw text search cannot reach it.
-    NoTextSearch,
-    /// The indexer has neither an id it can search the facet by nor a text
-    /// query for it.
-    NoSearchForFacet,
-    /// The indexer's capabilities are not known yet, and what is known offers
-    /// no way to search.
-    CapabilitiesUnknown,
-}
-
 impl IndexerSearchOutcome {
     pub fn coverage_eligible(&self) -> bool {
         matches!(self, Self::Complete { .. })
     }
 
     pub fn is_unsupported(&self) -> bool {
-        matches!(self, Self::Unsupported { .. })
+        matches!(self, Self::Unsupported)
     }
 }
 
@@ -2635,16 +2620,17 @@ pub struct IndexerSearchResponse {
     pub indexer_outcomes: Vec<IndexerQueryOutcome>,
 }
 
-/// An operator's raw text search: the query exactly as typed, with no media
-/// facet, no ids and no structured coordinates. It asks every routed indexer
-/// that takes a text query at all, sends newznab categories only when the
-/// operator picked them, and leaves the results unfiltered by title.
+/// An operator's raw text search (Prowlarr's manual search): the query as
+/// typed with no facet, ids or structured coordinates, the operator's own
+/// categories (empty sends none) and results left unfiltered by title.
 #[derive(Clone, Debug, Default)]
 pub struct RawTextSearchRequest {
     pub query: String,
-    /// The operator's own category selection; `None` sends no categories.
-    pub newznab_categories: Option<Vec<String>>,
-    pub indexer_routing: Option<crate::IndexerRoutingPlan>,
+    pub categories: Vec<String>,
+    /// Only these enabled indexers; `None` asks every enabled one.
+    pub indexer_ids: Option<std::collections::HashSet<String>>,
+    /// Page size each indexer is asked for.
+    pub limit: Option<u32>,
 }
 
 /// One complete effective search strategy submitted to a plan-capable indexer.
