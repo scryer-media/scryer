@@ -391,8 +391,8 @@ pub struct MediaRequest {
     pub decision_id: Option<String>,
     /// Rule sets that voted for the effective outcome.
     pub decided_by_rule_set_ids: Vec<String>,
-    /// Tags the rules emitted, merged onto the created title at approval
-    /// (spec 0003 FR-050).
+    /// Tags the rules emitted, and the labels a list request's route applies,
+    /// merged onto the created title at approval (spec 0003 FR-050).
     pub policy_tags: Vec<String>,
     /// Versioned metadata snapshot captured at submit (spec 0003 FR-030).
     /// A raw JSON string here: the typed snapshot lives in the application
