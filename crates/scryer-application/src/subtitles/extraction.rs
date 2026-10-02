@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use flate2::read::GzDecoder;
 use scryer_plugin_sdk::{
-    ArchivePluginFormat, ArchivePluginOperation, ArchivePluginProcessRequest,
-    ArchivePluginProcessResponse, ArchivePluginStatus,
+    ArchiveExtractionLimits, ArchivePluginFormat, ArchivePluginOperation,
+    ArchivePluginProcessRequest, ArchivePluginProcessResponse, ArchivePluginStatus,
 };
 
 use super::provider::SubtitleFile;
@@ -62,27 +62,110 @@ pub async fn normalize_downloaded_subtitle_with_archive_provider(
     context: SubtitleExtractionContext,
     archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 ) -> AppResult<SubtitleFile> {
-    if let Some((archive_type, format)) = plugin_subtitle_archive_format(&file)
-        && let Some(client) =
-            archive_provider.and_then(|provider| provider.client_for_format(format))
-    {
-        return normalize_with_archive_plugin(file, context, archive_type, format, client).await;
-    }
+    normalize_recursive(file, &context, archive_provider.as_ref(), 0, &mut 0, &mut 0)
+        .await?
+        .ok_or_else(|| {
+            AppError::Validation(
+                "subtitle archive did not contain a supported subtitle file".into(),
+            )
+        })
+}
 
-    tokio::task::spawn_blocking(move || normalize_sync(file, &context, 0))
+async fn normalize_recursive(
+    file: SubtitleFile,
+    context: &SubtitleExtractionContext,
+    provider: Option<&Arc<dyn ArchiveExtractorPluginProvider>>,
+    depth: usize,
+    expanded: &mut usize,
+    entries: &mut usize,
+) -> AppResult<Option<SubtitleFile>> {
+    if depth > MAX_RECURSION_DEPTH || file.content.len() > MAX_ARTIFACT_BYTES {
+        return Err(AppError::Validation(
+            "subtitle artifact exceeds nesting or input limits".into(),
+        ));
+    }
+    let candidates = if let Some((kind, format)) = plugin_subtitle_archive_format(&file) {
+        let client = provider
+            .and_then(|p| p.client_for_format(format))
+            .ok_or_else(|| AppError::archive_extraction_plugin_required(None))?;
+        normalize_with_archive_plugin(
+            file,
+            kind,
+            format,
+            client,
+            MAX_EXPANDED_BYTES.saturating_sub(*expanded),
+            MAX_ARCHIVE_FILES.saturating_sub(*entries),
+        )
+        .await?
+    } else {
+        let Some(kind) = detect_artifact_kind(&file) else {
+            if depth > 0 && final_subtitle_format(&file).is_none() {
+                return Ok(None);
+            }
+            return finalize_subtitle(file).map(Some);
+        };
+        tokio::task::spawn_blocking(move || -> AppResult<Vec<ArchiveCandidate>> {
+            if kind == ArtifactKind::Tar {
+                return extract_tar_candidates(file.content);
+            }
+            let suffix = if kind == ArtifactKind::Gzip {
+                ".gz"
+            } else {
+                ".zst"
+            };
+            let content = if kind == ArtifactKind::Gzip {
+                read_limited(GzDecoder::new(Cursor::new(file.content)))?
+            } else {
+                let decoder = zstd::stream::read::Decoder::new(Cursor::new(file.content))
+                    .map_err(|e| AppError::Repository(format!("invalid subtitle stream: {e}")))?;
+                read_limited(decoder)?
+            };
+            let inner = inner_file_from_parts(file.filename, file.format, content, suffix);
+            Ok(vec![ArchiveCandidate {
+                filename: inner.filename.clone().unwrap_or_default(),
+                file: inner,
+            }])
+        })
         .await
-        .map_err(|error| {
-            AppError::Repository(format!("subtitle extraction task failed: {error}"))
-        })?
+        .map_err(|e| AppError::Repository(format!("subtitle extraction task failed: {e}")))??
+    };
+    let mut normalized = Vec::new();
+    for candidate in candidates {
+        *expanded = checked_expanded_size(*expanded, candidate.file.content.len())?;
+        *entries += 1;
+        if *entries > MAX_ARCHIVE_FILES {
+            return Err(AppError::Validation(
+                "subtitle artifacts contain too many files".into(),
+            ));
+        }
+        let file = Box::pin(normalize_recursive(
+            candidate.file,
+            context,
+            provider,
+            depth + 1,
+            expanded,
+            entries,
+        ))
+        .await?;
+        if let Some(file) = file {
+            normalized.push((candidate.filename, file));
+        }
+    }
+    if normalized.is_empty() {
+        Ok(None)
+    } else {
+        select_normalized_candidate(normalized, context).map(Some)
+    }
 }
 
 async fn normalize_with_archive_plugin(
     file: SubtitleFile,
-    context: SubtitleExtractionContext,
     archive_type: ArtifactKind,
     format: ArchivePluginFormat,
     client: Arc<dyn ArchiveExtractorClient>,
-) -> AppResult<SubtitleFile> {
+    remaining_bytes: usize,
+    remaining_entries: usize,
+) -> AppResult<Vec<ArchiveCandidate>> {
     let temp_dir = tempfile::tempdir().map_err(|error| {
         AppError::Repository(format!(
             "failed to create subtitle archive scratch dir: {error}"
@@ -103,14 +186,23 @@ async fn normalize_with_archive_plugin(
     })?;
 
     let response = client
-        .process(ArchivePluginProcessRequest {
-            operation: ArchivePluginOperation::ExtractArchive {
-                archive_path: input_path.to_string_lossy().into_owned(),
-                output_dir: output_dir.to_string_lossy().into_owned(),
-                format,
-                password: None,
+        .process_with_limits(
+            ArchivePluginProcessRequest {
+                operation: ArchivePluginOperation::ExtractArchive {
+                    archive_path: input_path.to_string_lossy().into_owned(),
+                    output_dir: output_dir.to_string_lossy().into_owned(),
+                    format,
+                    password: None,
+                },
             },
-        })
+            ArchiveExtractionLimits {
+                max_input_bytes: MAX_ARTIFACT_BYTES as u64,
+                max_output_bytes: remaining_bytes as u64,
+                max_entries: remaining_entries as u64,
+                max_directories: MAX_ARCHIVE_FILES as u64,
+                max_scratch_bytes: MAX_EXPANDED_BYTES as u64,
+            },
+        )
         .await?;
     handle_subtitle_archive_plugin_response(response)?;
 
@@ -123,7 +215,7 @@ async fn normalize_with_archive_plugin(
         AppError::Repository(format!("subtitle archive candidate task failed: {error}"))
     })??;
 
-    select_archive_candidate(candidates, &context, 0)
+    Ok(candidates)
 }
 
 fn plugin_subtitle_archive_format(
@@ -186,61 +278,6 @@ fn handle_subtitle_archive_plugin_response(
     }
 }
 
-fn normalize_sync(
-    file: SubtitleFile,
-    context: &SubtitleExtractionContext,
-    depth: usize,
-) -> AppResult<SubtitleFile> {
-    if depth > MAX_RECURSION_DEPTH {
-        return Err(AppError::Validation(
-            "subtitle artifact nesting is too deep".to_string(),
-        ));
-    }
-    if file.content.len() > MAX_ARTIFACT_BYTES {
-        return Err(AppError::Validation(format!(
-            "subtitle artifact is too large: {} bytes",
-            file.content.len()
-        )));
-    }
-
-    match detect_artifact_kind(&file) {
-        Some(ArtifactKind::Gzip) => {
-            let filename = file.filename;
-            let format = file.format;
-            let content = read_limited(GzDecoder::new(Cursor::new(file.content)))?;
-            normalize_sync(
-                inner_file_from_parts(filename, format, content, ".gz"),
-                context,
-                depth + 1,
-            )
-        }
-        Some(ArtifactKind::Zstd) => {
-            let filename = file.filename;
-            let format = file.format;
-            let decoder =
-                zstd::stream::read::Decoder::new(Cursor::new(file.content)).map_err(|error| {
-                    AppError::Repository(format!(
-                        "failed to initialize Zstandard subtitle decoder: {error}"
-                    ))
-                })?;
-            let content = read_limited(decoder)?;
-            normalize_sync(
-                inner_file_from_parts(filename, format, content, ".zst"),
-                context,
-                depth + 1,
-            )
-        }
-        Some(ArtifactKind::Xz) => Err(AppError::archive_extraction_plugin_required(None)),
-        Some(ArtifactKind::Zip) => Err(AppError::archive_extraction_plugin_required(None)),
-        Some(ArtifactKind::Tar) => {
-            select_archive_candidate(extract_tar_candidates(file.content)?, context, depth)
-        }
-        Some(ArtifactKind::SevenZip) => Err(AppError::archive_extraction_plugin_required(None)),
-        Some(ArtifactKind::Rar) => Err(AppError::archive_extraction_plugin_required(None)),
-        None => finalize_subtitle(file),
-    }
-}
-
 fn finalize_subtitle(mut file: SubtitleFile) -> AppResult<SubtitleFile> {
     let Some(format) = final_subtitle_format(&file) else {
         return Err(AppError::Validation(format!(
@@ -263,18 +300,10 @@ fn finalize_subtitle(mut file: SubtitleFile) -> AppResult<SubtitleFile> {
     Ok(file)
 }
 
-fn select_archive_candidate(
-    candidates: Vec<ArchiveCandidate>,
+fn select_normalized_candidate(
+    mut normalized: Vec<(String, SubtitleFile)>,
     context: &SubtitleExtractionContext,
-    depth: usize,
 ) -> AppResult<SubtitleFile> {
-    let mut normalized = Vec::new();
-    for candidate in candidates {
-        if let Ok(file) = normalize_sync(candidate.file, context, depth + 1) {
-            normalized.push((candidate.filename, file));
-        }
-    }
-
     if normalized.is_empty() {
         return Err(AppError::Validation(
             "subtitle archive did not contain a supported subtitle file".to_string(),
@@ -805,6 +834,95 @@ mod tests {
         operation: Arc<Mutex<Option<ArchivePluginOperation>>>,
     }
 
+    struct NestedArchiveClient(Arc<Mutex<Vec<(ArchivePluginFormat, ArchiveExtractionLimits)>>>);
+
+    #[async_trait::async_trait]
+    impl ArchiveExtractorClient for NestedArchiveClient {
+        async fn process(
+            &self,
+            _: ArchivePluginProcessRequest,
+        ) -> AppResult<ArchivePluginProcessResponse> {
+            panic!("subtitle extraction must pass its budget")
+        }
+
+        async fn process_with_limits(
+            &self,
+            request: ArchivePluginProcessRequest,
+            limits: ArchiveExtractionLimits,
+        ) -> AppResult<ArchivePluginProcessResponse> {
+            let ArchivePluginOperation::ExtractArchive {
+                output_dir, format, ..
+            } = request.operation
+            else {
+                panic!("expected extraction")
+            };
+            self.0.lock().unwrap().push((format, limits));
+            let (name, bytes): (&str, &[u8]) = if format == ArchivePluginFormat::Zip {
+                ("subtitles.rar", b"Rar!\x1a\x07\x00")
+            } else {
+                ("Show.S01E17.eng.srt", SRT_CONTENT)
+            };
+            fs::write(Path::new(&output_dir).join(name), bytes).unwrap();
+            Ok(ArchivePluginProcessResponse {
+                status: ArchivePluginStatus::Ok,
+                files: Vec::new(),
+                replaced_source_paths: Vec::new(),
+                processed_recovery_paths: Vec::new(),
+                expanded_bytes: Some(bytes.len() as u64),
+                copied_bytes: None,
+                staged_bytes: None,
+                error_code: None,
+                message: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn tar_zip_rar_subtitle_retains_provider_and_shared_budget() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(RecordingArchiveProvider {
+            client: Arc::new(NestedArchiveClient(calls.clone())),
+            formats: vec![ArchivePluginFormat::Zip, ArchivePluginFormat::Rar],
+        });
+        let file = SubtitleFile {
+            content: tar_with_entry("subtitles.zip", b"PK\x03\x04"),
+            format: "tar".into(),
+            filename: Some("subtitles.tar".into()),
+            content_type: None,
+        };
+        let result = normalize_downloaded_subtitle_with_archive_provider(
+            file,
+            SubtitleExtractionContext::default(),
+            Some(provider),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.content, SRT_CONTENT);
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].0, ArchivePluginFormat::Zip);
+        assert_eq!(calls[1].0, ArchivePluginFormat::Rar);
+        assert!(calls[1].1.max_output_bytes < calls[0].1.max_output_bytes);
+        assert!(calls[1].1.max_entries < calls[0].1.max_entries);
+    }
+
+    #[tokio::test]
+    async fn nested_archive_preserves_missing_provider_diagnosis() {
+        let file = SubtitleFile {
+            content: tar_with_entry("subtitles.rar", b"Rar!\x1a\x07\x00"),
+            format: "tar".into(),
+            filename: Some("subtitles.tar".into()),
+            content_type: None,
+        };
+        let error = normalize_downloaded_subtitle(file, SubtitleExtractionContext::default())
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AppError::ArchiveExtractionPluginRequired { .. }
+        ));
+    }
+
     #[async_trait::async_trait]
     impl ArchiveExtractorClient for RecordingArchiveClient {
         async fn process(
@@ -817,6 +935,8 @@ mod tests {
                     return Ok(ArchivePluginProcessResponse {
                         status: ArchivePluginStatus::Failed,
                         files: Vec::new(),
+                        replaced_source_paths: Vec::new(),
+                        processed_recovery_paths: Vec::new(),
                         expanded_bytes: None,
                         copied_bytes: None,
                         staged_bytes: None,
@@ -832,6 +952,8 @@ mod tests {
             Ok(ArchivePluginProcessResponse {
                 status: ArchivePluginStatus::Ok,
                 files: Vec::new(),
+                replaced_source_paths: Vec::new(),
+                processed_recovery_paths: Vec::new(),
                 expanded_bytes: Some(SRT_CONTENT.len() as u64),
                 copied_bytes: None,
                 staged_bytes: None,
@@ -1030,6 +1152,35 @@ mod tests {
 
         assert_eq!(normalized.format, "srt");
         assert_eq!(normalized.content, SRT_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn nested_archive_without_subtitles_does_not_hide_supported_sibling() {
+        let fonts = tar_with_entry("font.ttf", b"font data");
+        let mut outer = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut outer);
+            for (name, content) in [
+                ("Show.S01E17.eng.srt", SRT_CONTENT),
+                ("fonts.tar", fonts.as_slice()),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(content.len() as u64);
+                header.set_cksum();
+                builder.append_data(&mut header, name, content).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        let normalized =
+            normalize_downloaded_subtitle(subtitle_file("release.tar", outer), context())
+                .await
+                .unwrap();
+        assert_eq!(normalized.content, SRT_CONTENT);
+        assert!(
+            normalize_downloaded_subtitle(subtitle_file("fonts.tar", fonts), context())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

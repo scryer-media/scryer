@@ -670,6 +670,9 @@ pub struct ArchiveExtractorDescriptor {
 pub struct ArchiveExtractorCapabilities {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<ArchivePluginFormat>,
+    /// Enforces the caller's `limits` envelope while extracting and staging.
+    #[serde(default)]
+    pub enforced_limits: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1169,6 +1172,30 @@ pub struct ArchivePluginProcessRequest {
     pub operation: ArchivePluginOperation,
 }
 
+/// Optional top-level `limits` envelope on an archive process request. Hosts
+/// require the matching capability before relying on these limits. Zero is a
+/// zero budget, never an alias for unlimited. Scratch and output are separate.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct ArchiveExtractionLimits {
+    pub max_input_bytes: u64,
+    pub max_output_bytes: u64,
+    pub max_entries: u64,
+    pub max_directories: u64,
+    pub max_scratch_bytes: u64,
+}
+
+impl Default for ArchiveExtractionLimits {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: 2 * 1024 * 1024 * 1024 * 1024,
+            max_output_bytes: 2 * 1024 * 1024 * 1024 * 1024,
+            max_entries: 20_000,
+            max_directories: 20_000,
+            max_scratch_bytes: 2 * 1024 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 // PAR2 recovery is deliberately absent here. Verifying and repairing a PAR2 set
@@ -1194,6 +1221,12 @@ pub enum ArchivePluginOperation {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ArchivePluginProcessResponse {
     pub status: ArchivePluginStatus,
+    /// Actual source-relative files superseded by successfully placed plain media.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced_source_paths: Vec<String>,
+    /// Source-relative recovery metadata already handled by this invocation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processed_recovery_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<ArchivePluginExtractedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

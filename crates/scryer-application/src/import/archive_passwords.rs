@@ -16,6 +16,8 @@ pub enum ArchivePasswordSource {
     Indexer,
     /// Embedded in the client-reported release name as `Name{{password}}`.
     ReleaseName,
+    /// Supplied by the operator in a runtime-only secret file.
+    PasswordFile,
 }
 
 #[cfg_attr(not(feature = "runtime-archives"), allow(dead_code))]
@@ -25,6 +27,7 @@ impl ArchivePasswordSource {
             Self::Operator => "operator",
             Self::Indexer => "indexer",
             Self::ReleaseName => "release name",
+            Self::PasswordFile => "password file",
         }
     }
 }
@@ -86,6 +89,40 @@ impl ArchivePasswordCandidates {
     pub fn push_release_name(&mut self, name: Option<&str>) {
         if let Some(value) = name.and_then(release_name_password) {
             self.push(ArchivePasswordSource::ReleaseName, value);
+        }
+    }
+
+    /// Load a bounded external list without exposing its contents in diagnostics.
+    /// This file is operator-managed and is never bundled with the application.
+    pub fn extend_from_file(&mut self, path: &std::path::Path) -> std::io::Result<()> {
+        use std::io::Read;
+        const MAX_BYTES: u64 = 64 * 1024;
+        let mut content = String::new();
+        std::fs::File::open(path)?
+            .take(MAX_BYTES + 1)
+            .read_to_string(&mut content)?;
+        let lines: Vec<_> = content
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .collect();
+        if content.len() as u64 > MAX_BYTES
+            || lines.len() > 256
+            || lines.iter().any(|line| line.len() > 1024)
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "archive password file exceeds its limits",
+            ));
+        }
+        for line in lines {
+            self.push(ArchivePasswordSource::PasswordFile, line.to_string());
+        }
+        Ok(())
+    }
+
+    pub fn extend(&mut self, other: Self) {
+        for candidate in other.candidates {
+            self.push(candidate.source, candidate.value);
         }
     }
 
@@ -152,6 +189,29 @@ mod tests {
             .iter()
             .map(|candidate| (candidate.source(), candidate.value()))
             .collect()
+    }
+
+    #[test]
+    fn external_passwords_are_bounded_deduplicated_and_redacted() {
+        let directory = tempfile::tempdir().unwrap();
+        let file = directory.path().join("passwords.txt");
+        std::fs::write(&file, "synthetic-one\r\nsynthetic-two\nsynthetic-one\n").unwrap();
+        let mut candidates = ArchivePasswordCandidates::default();
+        candidates.push_operator(Some("synthetic-one"));
+        candidates.extend_from_file(&file).unwrap();
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(
+            candidates.iter().last().unwrap().source(),
+            ArchivePasswordSource::PasswordFile
+        );
+        assert!(!format!("{candidates:?}").contains("synthetic"));
+        std::fs::write(&file, "synthetic\n".repeat(257)).unwrap();
+        assert!(candidates.extend_from_file(&file).is_err());
+        assert_eq!(
+            candidates.len(),
+            2,
+            "invalid lists must not partially apply"
+        );
     }
 
     #[test]

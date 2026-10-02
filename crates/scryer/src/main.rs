@@ -1140,6 +1140,7 @@ async fn bootstrap_application(
     application_upgrade_assessment: scryer_application::application_upgrade::InstallationAssessment,
 ) -> Result<Router, Box<dyn std::error::Error + Send + Sync>> {
     let bootstrap_start = std::time::Instant::now();
+    scryer_application::initialize_archive_workspace_ownership(&data_dir)?;
 
     let t = std::time::Instant::now();
     let backup_datastore_config = datastore_config.clone();

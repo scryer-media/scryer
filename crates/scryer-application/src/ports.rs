@@ -9907,6 +9907,14 @@ pub trait ArchiveExtractorClient: Send + Sync {
         &self,
         request: ArchivePluginProcessRequest,
     ) -> AppResult<ArchivePluginProcessResponse>;
+
+    async fn process_with_limits(
+        &self,
+        request: ArchivePluginProcessRequest,
+        _limits: scryer_plugin_sdk::ArchiveExtractionLimits,
+    ) -> AppResult<ArchivePluginProcessResponse> {
+        self.process(request).await
+    }
 }
 
 pub trait ArchiveExtractorPluginProvider: Send + Sync {

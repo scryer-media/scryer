@@ -138,6 +138,7 @@ pub(crate) use events::activity;
 pub(crate) use events::domain_events;
 pub(crate) use events::event_views;
 pub(crate) use import::archive_extractor;
+pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
 pub(crate) use import::import as import_workflow;
@@ -897,6 +898,10 @@ pub enum AppError {
 
     #[error("{message}")]
     ArchiveExtractionTimedOut { message: String },
+
+    /// The archive data or extraction policy requires operator intervention.
+    #[error("{message}")]
+    ArchiveExtractionFailed { message: String },
 
     #[error("{message}")]
     TemporaryUnavailable {

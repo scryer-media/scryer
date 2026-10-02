@@ -677,14 +677,23 @@ fn extract_archive(
     })?;
 
     let response = runtime
-        .block_on(client.process(ArchivePluginProcessRequest {
-            operation: ArchivePluginOperation::ExtractArchive {
-                archive_path: archive_path.to_string_lossy().into_owned(),
-                output_dir: output_dir.to_string_lossy().into_owned(),
-                format,
-                password: request.password,
+        .block_on(client.process_with_limits(
+            ArchivePluginProcessRequest {
+                operation: ArchivePluginOperation::ExtractArchive {
+                    archive_path: archive_path.to_string_lossy().into_owned(),
+                    output_dir: output_dir.to_string_lossy().into_owned(),
+                    format,
+                    password: request.password,
+                },
             },
-        }))
+            scryer_plugin_sdk::ArchiveExtractionLimits {
+                max_input_bytes: MAX_ARCHIVE_ARTIFACT_BYTES as u64,
+                max_output_bytes: MAX_ARCHIVE_RESPONSE_BYTES as u64,
+                max_entries: MAX_ARCHIVE_RESPONSE_FILES as u64,
+                max_directories: MAX_ARCHIVE_RESPONSE_FILES as u64,
+                max_scratch_bytes: MAX_ARCHIVE_RESPONSE_BYTES as u64,
+            },
+        ))
         .map_err(ArchiveExtractFailure::from_app_error)?;
 
     match response.status {
@@ -1084,6 +1093,8 @@ mod tests {
             Ok(scryer_plugin_sdk::ArchivePluginProcessResponse {
                 status: self.status,
                 files: Vec::new(),
+                replaced_source_paths: Vec::new(),
+                processed_recovery_paths: Vec::new(),
                 expanded_bytes: None,
                 copied_bytes: None,
                 staged_bytes: None,

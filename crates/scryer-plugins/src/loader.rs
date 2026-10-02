@@ -4234,6 +4234,7 @@ mod tests {
                     default_base_url: None,
                     allowed_hosts: vec![],
                     capabilities: ArchiveExtractorCapabilities {
+                        enforced_limits: false,
                         formats: vec![
                             ArchivePluginFormat::Rar,
                             ArchivePluginFormat::SevenZip,

@@ -70,6 +70,7 @@ async fn import_series_download(
     source_root: &Path,
     video_files: &[ImportVideoFile],
     started_at: chrono::DateTime<Utc>,
+    subtitle_deliveries: &mut Vec<(PathBuf, PathBuf)>,
 ) -> AppResult<ImportResult> {
     let ImportPathSettings {
         media_root,
@@ -167,6 +168,10 @@ async fn import_series_download(
                 previous_path,
                 ..
             }) => {
+                subtitle_deliveries.push((
+                    source_video.path().to_path_buf(),
+                    stored_path_to_path_buf(&dest_path),
+                ));
                 imported_count += 1;
                 if let Some(size_bytes) = size_bytes {
                     imported_size_bytes =
@@ -191,8 +196,15 @@ async fn import_series_download(
                 message,
                 skip_reason,
                 episode_ids,
+                already_present_destination,
                 ..
             }) => {
+                if let Some((dest_path, _)) = already_present_destination {
+                    subtitle_deliveries.push((
+                        source_video.path().to_path_buf(),
+                        stored_path_to_path_buf(&dest_path),
+                    ));
+                }
                 skipped_count += 1;
                 append_unique_episode_ids(&mut attributed_episode_ids, &episode_ids);
                 last_skipped_message = Some(message);
@@ -351,6 +363,7 @@ enum EpisodeImportOutcome {
         reason_code: Option<String>,
         skip_reason: Option<ImportSkipReason>,
         episode_ids: Vec<String>,
+        already_present_destination: Option<(String, String)>,
     },
     Ignored {
         message: String,
@@ -1609,6 +1622,7 @@ async fn import_single_episode_file(
             reason_code: None,
             skip_reason: Some(ImportSkipReason::UnparseableEpisode),
             episode_ids: Vec::new(),
+            already_present_destination: None,
         });
     };
     let target_episode_ids: Vec<String> = target_episodes
@@ -1725,7 +1739,8 @@ async fn import_single_episode_file(
             &ep_meta.episode_numbers,
             resolved_episode.and_then(|episode| episode.episode_number.as_deref()),
         );
-        let absolute_number = import_absolute_episode_token(resolved_episode, ep_meta.absolute_episode);
+        let absolute_number =
+            import_absolute_episode_token(resolved_episode, ep_meta.absolute_episode);
         (season, episode_number, absolute_number)
     };
     let post_processing_episode = if uses_catalog_identity {
@@ -1862,6 +1877,7 @@ async fn import_single_episode_file(
         EpisodeImportOutcome::Skipped {
             reason_code,
             skip_reason,
+            already_present_destination,
             ..
         } => {
             let artifact_result = if episode_skip_is_already_present(skip_reason.as_ref()) {
@@ -1878,7 +1894,9 @@ async fn import_single_episode_file(
                 "episode",
                 artifact_result,
                 reason_code.as_deref(),
-                None,
+                already_present_destination
+                    .as_ref()
+                    .map(|(_, id)| id.as_str()),
                 &target_episodes,
             )
             .await?;

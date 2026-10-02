@@ -23,7 +23,7 @@ use scryer_application::{AppError, AppResult};
 use scryer_plugin_sdk::{ArchivePluginProcessResponse, PluginDescriptor};
 use tracing::Instrument;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
-use wasmtime::{Engine, Store};
+use wasmtime::{Engine, Store, UpdateDeadline};
 use wasmtime_wasi::p2::pipe::MemoryOutputPipe;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 
@@ -266,10 +266,30 @@ impl ArchiveComponentRuntime {
             },
         );
         store.limiter(|ctx: &mut ArchiveComponentCtx| &mut ctx.limits);
-        store.set_epoch_deadline(engine::deadline_ticks(timeout));
+        configure_epoch_deadline(&mut store, tokio::time::Instant::now() + timeout);
         let plugin = self.instance_pre.instantiate_async(&mut store).await?;
         Ok((store, plugin))
     }
+}
+
+/// CPU-bound guests must return control often enough for the enclosing job's
+/// timeout or cancellation to drop the invocation future. Keep the trap
+/// deadline fixed across these yields rather than renewing the runtime budget.
+fn configure_epoch_deadline<T: Send + 'static>(
+    store: &mut Store<T>,
+    deadline: tokio::time::Instant,
+) {
+    store.set_epoch_deadline(1);
+    store.epoch_deadline_callback(move |_| {
+        if tokio::time::Instant::now() >= deadline {
+            Ok(UpdateDeadline::Interrupt)
+        } else {
+            Ok(UpdateDeadline::YieldCustom(
+                1,
+                Box::pin(tokio::task::yield_now()),
+            ))
+        }
+    });
 }
 
 /// Extract a descriptor from an archive component through the world's
@@ -555,6 +575,60 @@ mod tests {
     use scryer_plugin_sdk::{
         ArchivePluginOperation, ArchivePluginProcessRequest, ArchivePluginStatus,
     };
+
+    async fn epoch_loop() -> (Store<()>, wasmtime::TypedFunc<(), ()>) {
+        let mut config = wasmtime::Config::new();
+        config.epoch_interruption(true);
+        let engine = Engine::new(&config).expect("test engine");
+        let wasm = wat::parse_str(
+            r#"(module
+                (import "" "tick" (func $tick))
+                (func (export "run")
+                    (loop $again (call $tick) (br $again))))"#,
+        )
+        .expect("epoch-loop fixture");
+        let module = wasmtime::Module::new(&engine, &wasm).expect("test module");
+        let mut store = Store::new(&engine, ());
+        let tick_engine = engine.clone();
+        // Guest execution advances epochs itself, avoiding a real clock or
+        // ticker thread and making the interruption boundary deterministic.
+        let tick = wasmtime::Func::wrap(&mut store, move || tick_engine.increment_epoch());
+        let instance = wasmtime::Instance::new_async(&mut store, &module, &[tick.into()])
+            .await
+            .expect("test instance");
+        let run = instance
+            .get_typed_func::<(), ()>(&mut store, "run")
+            .expect("test export");
+        (store, run)
+    }
+
+    #[tokio::test]
+    async fn epoch_yield_allows_outer_timeout_to_cancel_cpu_bound_guest() {
+        let (mut store, run) = epoch_loop().await;
+        configure_epoch_deadline(
+            &mut store,
+            tokio::time::Instant::now() + Duration::from_secs(3600),
+        );
+        // The guest is polled first, then the already-expired outer timer.
+        // A cooperative epoch yield lets that timer cancel the whole call
+        // despite the guest's much later independent trap deadline.
+        let result = tokio::time::timeout(Duration::ZERO, run.call_async(&mut store, ())).await;
+        assert!(result.is_err(), "outer timeout must regain control");
+    }
+
+    #[tokio::test]
+    async fn epoch_yield_preserves_absolute_trap_deadline() {
+        let (mut store, run) = epoch_loop().await;
+        configure_epoch_deadline(&mut store, tokio::time::Instant::now());
+        let failure = run
+            .call_async(&mut store, ())
+            .await
+            .expect_err("expired deadline must trap rather than yield indefinitely");
+        assert_eq!(
+            failure.downcast_ref::<wasmtime::Trap>(),
+            Some(&wasmtime::Trap::Interrupt)
+        );
+    }
 
     /// Guest memory layout for the hand-built fixture component below.
     const DESCRIPTOR_PTR: usize = 0;
