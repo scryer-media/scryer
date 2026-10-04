@@ -97,6 +97,11 @@ pub use ports::{
     AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord,
     IndexerSearchNumberingContext, TitleOptionsPatch,
 };
+pub use ports::{
+    DOWNLOAD_PASSWORD_AMBIGUOUS_REASON, DOWNLOAD_PASSWORD_REQUIRED_REASON,
+    DOWNLOAD_PASSWORD_RETRY_REASON, DownloadPasswordRetryClaim, DownloadPasswordRetryClaimOutcome,
+    DownloadPasswordRetryObservation,
+};
 pub use ports::{DownloadCleanupClaim, DownloadCleanupRecord, DownloadClientObservation};
 pub use ports::{DownloadTitleReassignment, DownloadTitleReferences};
 mod quality;
@@ -138,6 +143,7 @@ pub(crate) use events::activity;
 pub(crate) use events::domain_events;
 pub(crate) use events::event_views;
 pub(crate) use import::archive_extractor;
+pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
 pub(crate) use import::import as import_workflow;
@@ -161,6 +167,7 @@ pub(crate) use quality::scoring_weights;
 pub(crate) use rules::user_rule_input;
 
 pub use download_client_config::resolve_download_client_base_url_from_config_json;
+pub use import::archive_passwords::redact_archive_diagnostic;
 pub use import::completed_download as completed_download_handler;
 pub use ports::{
     CatalogDiscoveryCandidatesRecord, CatalogDiscoveryGroup, CatalogDiscoveryGroupKind,
@@ -214,6 +221,7 @@ pub use plugins::managed_rules;
 pub use plugins::plugins::RUNTIME_PLUGIN_LOAD_CONCURRENCY;
 pub use plugins::plugins::decode_persisted_plugin_wasm_payload;
 pub use plugins::plugins::load_runtime_plugin_from_persisted_installation_payload;
+pub use plugins::settings::PluginSettingsView;
 pub use quality::release_dedup;
 pub use quality::release_listing::{
     ReleaseListingView, release_listing_view, search_result_listing_json,
@@ -324,15 +332,15 @@ pub use contracts::{
     CanonicalDownloadIdentityDisposition, ClaimedMediaFile, ClientJobLocator, CollectionUpdate,
     DashboardActivityStats, DeleteExecutionConfirmation, DownloadClientAddRequest,
     DownloadClientBindingRecord, DownloadClientConfigUpdate, DownloadClientMarkImportedRequest,
-    DownloadClientStatus, DownloadOrigin, DownloadRecord, DownloadSubmission,
-    DownloadSubmissionActorSnapshot, DownloadSubmissionIdentity, DownloadSubmissionPurpose,
-    EpisodeLinkReplacement, EpisodeUpdate, ImportArtifact, IndexerArtifactLease,
-    IndexerArtifactResolutionRequest, IndexerConfigSyncResult, IndexerConfigUpdate,
-    IndexerDownloadClientMappingCatalog, IndexerDownloadClientMappingClient,
-    IndexerDownloadClientMappingIndexer, IndexerDownloadClientProviderCompatibility,
-    IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility, IndexerSyncPlan,
-    IndexerValidationResult, InsertMediaFileInput, ManagedIndexerChildPlan,
-    ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
+    DownloadClientRetryOutcome, DownloadClientStatus, DownloadOrigin, DownloadPasswordCandidates,
+    DownloadRecord, DownloadSubmission, DownloadSubmissionActorSnapshot,
+    DownloadSubmissionIdentity, DownloadSubmissionPurpose, EpisodeLinkReplacement, EpisodeUpdate,
+    ImportArtifact, IndexerArtifactLease, IndexerArtifactResolutionRequest,
+    IndexerConfigSyncResult, IndexerConfigUpdate, IndexerDownloadClientMappingCatalog,
+    IndexerDownloadClientMappingClient, IndexerDownloadClientMappingIndexer,
+    IndexerDownloadClientProviderCompatibility, IndexerRoutingEntry, IndexerRoutingPlan,
+    IndexerSearchEligibility, IndexerSyncPlan, IndexerValidationResult, InsertMediaFileInput,
+    ManagedIndexerChildPlan, ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
     MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewProxyConfig,
     NewSeedingProfile, NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob,
     PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
@@ -563,12 +571,13 @@ pub use escalation_backoff::DownloadClientStatus as DownloadClientBackoffStatus;
 pub use null_repositories::{NullMediaServerSignalRepository, NullMediaServerSignalSource};
 pub use ports::{
     AcquisitionScopeStateRepository, AcquisitionStateRepository, ArchiveExtractorClient,
-    ArchiveExtractorPluginProvider, BlocklistRepository, BuiltinDownloadClientConnectionTester,
-    DatastoreInfo, DiscoveryContextTitle, DomainEventRepository, DownloadClient,
-    DownloadClientConfigRepository, DownloadClientFeedbackScope, DownloadClientListing,
-    DownloadClientPluginProvider, DownloadClientSnapshotOutcome, DownloadClientStatusRepository,
-    DownloadQueueCommandRepository, DownloadRegistryRepository, DownloadSubmissionRepository,
-    EmbyApiKeyExchange, EmbyApiKeyExchangeCleanup, EmbyAvatar, EmbyConnectAddressStatus,
+    ArchiveExtractorPluginProvider, ArchiveExtractorSelection, BlocklistRepository,
+    BuiltinDownloadClientConnectionTester, DatastoreInfo, DiscoveryContextTitle,
+    DomainEventRepository, DownloadClient, DownloadClientConfigRepository,
+    DownloadClientFeedbackScope, DownloadClientListing, DownloadClientPluginProvider,
+    DownloadClientSnapshotOutcome, DownloadClientStatusRepository, DownloadQueueCommandRepository,
+    DownloadRegistryRepository, DownloadSubmissionRepository, EmbyApiKeyExchange,
+    EmbyApiKeyExchangeCleanup, EmbyAvatar, EmbyConnectAddressStatus,
     EmbyConnectIdentityVerification, EmbyConnectServer, EmbyConnectUserType, EmbyServerIdentity,
     EmbyServerUser, ExternalIdentityVerifier, ExternalImportMonitorSnapshotRepository,
     ExternalImportSetupInstanceApiKeyDraft, ExternalImportSetupSecretDraft,
@@ -897,6 +906,14 @@ pub enum AppError {
 
     #[error("{message}")]
     ArchiveExtractionTimedOut { message: String },
+
+    /// A decoder explicitly requested or rejected an archive password.
+    #[error("{message}")]
+    ArchivePasswordRequired { message: String },
+
+    /// The archive data or extraction policy requires operator intervention.
+    #[error("{message}")]
+    ArchiveExtractionFailed { message: String },
 
     #[error("{message}")]
     TemporaryUnavailable {

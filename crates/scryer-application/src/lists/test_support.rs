@@ -771,6 +771,7 @@ fn fixture_descriptor() -> PluginDescriptor {
         }],
     }];
     PluginDescriptor {
+        settings: Vec::new(),
         id: PROVIDER.to_string(),
         name: "Fixture Lists".to_string(),
         version: "1.0.0".to_string(),

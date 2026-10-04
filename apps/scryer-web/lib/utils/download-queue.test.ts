@@ -7,6 +7,7 @@ import { createServer, type ViteDevServer } from "vite";
 const WEB_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 
 type DownloadQueueModule = {
+  importRetrySucceeded: (result: { decision?: string; skipReason?: string | null } | null | undefined) => boolean;
   IMPORT_ATTENTION_STATUSES: string[];
   sameDownloadQueueItem: (
     current: DownloadQueueItem,
@@ -132,6 +133,30 @@ test("queue item equality ignores regenerated equivalent payload objects", () =>
     ),
     false,
   );
+});
+
+test("a returned import ID does not turn a failed password retry into success", () => {
+  const result = { importId: "attempt-1", decision: "FAILED", skipReason: "PASSWORD_REQUIRED" };
+  assert.equal(downloadQueue.importRetrySucceeded(result), false);
+  assert.equal(downloadQueue.importRetrySucceeded({ ...result, decision: "SKIPPED" }), false);
+  assert.equal(downloadQueue.importRetrySucceeded({ ...result, decision: "IMPORTED", skipReason: null }), true);
+  assert.equal(downloadQueue.importRetrySucceeded({ ...result, decision: "SKIPPED", skipReason: "ALREADY_IMPORTED" }), true);
+  assert.equal(downloadQueue.importRetrySucceeded(undefined), false);
+});
+
+test("queue reconciliation refreshes password failure and retry attempt changes", () => {
+  const current = queueItem({ passwordRetryImportId: "attempt-old" });
+  for (const patch of [
+    { passwordRetryImportId: "attempt-new" },
+    { passwordRetryImportId: null },
+    { passwordFailureCode: "archive_password_required" as const },
+  ]) {
+    const next = { ...current, ...patch };
+    assert.equal(downloadQueue.sameDownloadQueueItem(current, next), false);
+    const result = downloadQueue.reconcileDownloadQueueItems([current], [next]);
+    assert.deepEqual(result[0], next);
+    assert.notEqual(result[0], current);
+  }
 });
 
 test("queue reconciliation retains unchanged rows and list identity", () => {

@@ -367,7 +367,18 @@ pub struct PluginDescriptor {
     pub sdk_constraint: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub socket_permissions: Vec<SocketPermission>,
+    /// Installation-wide settings, independent of provider-instance fields.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<PluginSettingField>,
     pub provider: ProviderDescriptor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct PluginSettingField {
+    #[serde(flatten)]
+    pub field: ConfigFieldDef,
+    #[serde(default)]
+    pub sensitive: bool,
 }
 
 impl PluginDescriptor {
@@ -670,6 +681,9 @@ pub struct ArchiveExtractorDescriptor {
 pub struct ArchiveExtractorCapabilities {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub formats: Vec<ArchivePluginFormat>,
+    /// Enforces the caller's `limits` envelope while extracting and staging.
+    #[serde(default)]
+    pub enforced_limits: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -1169,6 +1183,30 @@ pub struct ArchivePluginProcessRequest {
     pub operation: ArchivePluginOperation,
 }
 
+/// Optional top-level `limits` envelope on an archive process request. Hosts
+/// require the matching capability before relying on these limits. Zero is a
+/// zero budget, never an alias for unlimited. Scratch and output are separate.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, JsonSchema)]
+pub struct ArchiveExtractionLimits {
+    pub max_input_bytes: u64,
+    pub max_output_bytes: u64,
+    pub max_entries: u64,
+    pub max_directories: u64,
+    pub max_scratch_bytes: u64,
+}
+
+impl Default for ArchiveExtractionLimits {
+    fn default() -> Self {
+        Self {
+            max_input_bytes: 2 * 1024 * 1024 * 1024 * 1024,
+            max_output_bytes: 2 * 1024 * 1024 * 1024 * 1024,
+            max_entries: 20_000,
+            max_directories: 20_000,
+            max_scratch_bytes: 2 * 1024 * 1024 * 1024 * 1024,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 // PAR2 recovery is deliberately absent here. Verifying and repairing a PAR2 set
@@ -1194,6 +1232,12 @@ pub enum ArchivePluginOperation {
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ArchivePluginProcessResponse {
     pub status: ArchivePluginStatus,
+    /// Actual source-relative files superseded by successfully placed plain media.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced_source_paths: Vec<String>,
+    /// Source-relative recovery metadata already handled by this invocation.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub processed_recovery_paths: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub files: Vec<ArchivePluginExtractedFile>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2031,7 +2075,7 @@ pub struct PluginDownloadScopedListResponse<T> {
     pub failures: Vec<PluginDownloadScopeFailure>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PluginDownloadSource {
     pub kind: DownloadInputKind,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -2056,6 +2100,19 @@ pub struct PluginDownloadSource {
     pub source_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_password: Option<String>,
+    /// Ordered release-specific candidates; never includes plugin-wide fallbacks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub password_candidates: Vec<String>,
+}
+
+impl std::fmt::Debug for PluginDownloadSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PluginDownloadSource")
+            .field("kind", &self.kind)
+            .field("has_password", &self.source_password.is_some())
+            .field("password_candidate_count", &self.password_candidates.len())
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
@@ -3176,6 +3233,7 @@ mod tests {
     #[test]
     fn tagged_descriptor_round_trips() {
         let descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "newznab".into(),
             name: "Newznab".into(),
             version: "1.0.0".into(),
@@ -3259,6 +3317,7 @@ mod tests {
     #[test]
     fn subtitle_sync_mode_and_capabilities_round_trip() {
         let descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "enhanced-subtitle-sync".into(),
             name: "Enhanced Subtitle Sync".into(),
             version: "1.0.0".into(),
@@ -3401,6 +3460,7 @@ mod tests {
     #[test]
     fn socket_permission_requires_ports_and_tls_modes() {
         let mut descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "email".into(),
             name: "Email".into(),
             version: "1.0.0".into(),
@@ -3551,6 +3611,7 @@ mod tests {
     #[test]
     fn indexer_supported_ids_serialize_in_stable_key_order() {
         let descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "newznab".into(),
             name: "Newznab".into(),
             version: "1.0.0".into(),
@@ -3649,6 +3710,7 @@ mod tests {
                 nzb_content_type: None,
                 source_title: None,
                 source_password: None,
+                password_candidates: Vec::new(),
             },
             release: PluginDownloadRelease {
                 info_hash_hint: Some("abcdef0123456789abcdef0123456789abcdef01".to_string()),
@@ -3717,6 +3779,7 @@ mod tests {
                 nzb_content_type: Some("application/x-nzb".to_string()),
                 source_title: None,
                 source_password: None,
+                password_candidates: Vec::new(),
             },
             release: PluginDownloadRelease::default(),
             title: PluginDownloadTitle {
@@ -3763,6 +3826,7 @@ mod tests {
                 nzb_content_type: Some("application/x-nzb".to_string()),
                 source_title: None,
                 source_password: None,
+                password_candidates: Vec::new(),
             },
             release: PluginDownloadRelease::default(),
             title: PluginDownloadTitle {
@@ -3804,6 +3868,7 @@ mod tests {
                 nzb_content_type: None,
                 source_title: None,
                 source_password: None,
+                password_candidates: Vec::new(),
             },
             release: PluginDownloadRelease::default(),
             title: PluginDownloadTitle {
@@ -4394,6 +4459,7 @@ mod tests {
         torrent: DownloadTorrentCapabilities,
     ) -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: provider_type.to_string(),
             name: provider_type.to_string(),
             version: "0.1.0".to_string(),
@@ -4512,6 +4578,7 @@ mod tests {
         capabilities: NotificationCapabilities,
     ) -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: provider_type.to_string(),
             name: provider_type.to_string(),
             version: "0.1.0".to_string(),

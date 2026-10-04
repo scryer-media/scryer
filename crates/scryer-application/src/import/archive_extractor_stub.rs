@@ -53,6 +53,24 @@ pub fn is_timeout_error(error: &AppError) -> bool {
 
 pub async fn cleanup_extracted_dir(_dir: &Path) {}
 
+pub fn replaced_archive_sources(
+    _workspace: &Path,
+) -> AppResult<std::collections::HashSet<PathBuf>> {
+    Ok(Default::default())
+}
+
 pub fn is_archive_workspace_output(_source: &Path, _dest: &Path) -> bool {
+    false
+}
+
+pub fn initialize_archive_workspace_ownership(_state_dir: &Path) -> AppResult<()> {
+    Ok(())
+}
+
+pub fn is_owned_archive_workspace(_root: &Path) -> bool {
+    false
+}
+
+pub(crate) fn is_owned_archive_workspace_handle(_root: &Path, _directory: &std::fs::File) -> bool {
     false
 }

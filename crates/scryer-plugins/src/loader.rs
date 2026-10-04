@@ -6,11 +6,12 @@ use std::sync::{Arc, LazyLock};
 use std::time::Instant;
 
 use scryer_application::{
-    AppError, AppResult, ArchiveExtractorClient, ArchiveExtractorPluginProvider, DownloadClient,
-    DownloadClientPluginProvider, ExternalPluginWasm, IndexerClient, IndexerErrorRecorder,
-    IndexerPluginProvider, IndexerStatsTracker, NotificationClient, NotificationPluginProvider,
-    NullIndexerErrorRecorder, NullIndexerStatsTracker, PluginDescriptorLoader, RuntimePluginLoad,
-    SubtitlePluginProvider, SubtitleProviderClient, SubtitleSyncClient,
+    AppError, AppResult, ArchiveExtractorClient, ArchiveExtractorPluginProvider,
+    ArchiveExtractorSelection, DownloadClient, DownloadClientPluginProvider, ExternalPluginWasm,
+    IndexerClient, IndexerErrorRecorder, IndexerPluginProvider, IndexerStatsTracker,
+    NotificationClient, NotificationPluginProvider, NullIndexerErrorRecorder,
+    NullIndexerStatsTracker, PluginDescriptorLoader, RuntimePluginLoad, SubtitlePluginProvider,
+    SubtitleProviderClient, SubtitleSyncClient,
 };
 use scryer_domain::{
     DownloadClientConfig, IndexerConfig, NotificationChannelConfig, PluginHostBindingId,
@@ -147,8 +148,7 @@ type NotificationClientCache =
 type SubtitleClientCacheKey = (String, String, String, String, String);
 type SubtitleClientCache =
     std::sync::Mutex<HashMap<SubtitleClientCacheKey, Arc<dyn SubtitleProviderClient>>>;
-type ArchiveExtractorClientCache =
-    std::sync::Mutex<HashMap<String, Arc<dyn ArchiveExtractorClient>>>;
+type ArchiveExtractorClientCache = std::sync::Mutex<HashMap<String, ArchiveExtractorSelection>>;
 
 fn log_stale_plugin_cache_eviction(
     plugin_family: &'static str,
@@ -293,8 +293,10 @@ enum LoadedPluginBacking {
 }
 
 pub(crate) struct LoadedPlugin {
+    installation_id: Option<String>,
     wasm: LoadedPluginBacking,
     pub(crate) descriptor: PluginDescriptor,
+    settings: std::collections::BTreeMap<String, String>,
     /// Trust provenance of this plugin. Drives host-capability gating (e.g. the
     /// host-process capability) via `can_use_first_party_host_bindings`.
     load_source: PluginLoadSource,
@@ -304,7 +306,9 @@ impl LoadedPlugin {
     pub(crate) fn from_owned(descriptor: PluginDescriptor, wasm_bytes: Vec<u8>) -> Self {
         Self {
             wasm: LoadedPluginBacking::Owned(wasm_bytes),
+            installation_id: None,
             descriptor,
+            settings: Default::default(),
             // Default to the least-privileged provenance; callers that know the
             // plugin is first-party override via `with_load_source`.
             load_source: PluginLoadSource::External { first_party: false },
@@ -317,14 +321,45 @@ impl LoadedPlugin {
     ) -> Self {
         Self {
             wasm: LoadedPluginBacking::Builtin(asset),
+            installation_id: None,
             descriptor,
+            settings: Default::default(),
             load_source: PluginLoadSource::Builtin,
         }
+        .with_settings(Default::default())
     }
 
     fn with_load_source(mut self, load_source: PluginLoadSource) -> Self {
         self.load_source = load_source;
         self
+    }
+
+    fn with_installation_id(mut self, installation_id: Option<String>) -> Self {
+        self.installation_id = installation_id;
+        self
+    }
+
+    pub(crate) fn with_settings(
+        mut self,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        self.settings = self
+            .descriptor
+            .settings
+            .iter()
+            .filter_map(|definition| {
+                let field = &definition.field;
+                settings
+                    .get(&field.key)
+                    .or(field.default_value.as_ref())
+                    .map(|value| (field.key.clone(), value.clone()))
+            })
+            .collect();
+        self
+    }
+
+    pub(crate) fn bind_settings(&self, config: &mut std::collections::BTreeMap<String, String>) {
+        bind_plugin_settings(config, &self.settings);
     }
 
     pub(crate) fn materialize_wasm(&self) -> Result<Vec<u8>, String> {
@@ -338,6 +373,46 @@ impl LoadedPlugin {
     fn stores_builtin_asset(&self) -> bool {
         matches!(self.wasm, LoadedPluginBacking::Builtin(_))
     }
+}
+
+fn apply_builtin_settings(
+    plugins: &mut HashMap<String, LoadedPlugin>,
+    settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+) -> Result<(), String> {
+    for (provider, values) in settings {
+        let loaded = plugins
+            .get_mut(provider)
+            .ok_or("builtin settings target is unavailable")?;
+        if !matches!(loaded.load_source, PluginLoadSource::Builtin) {
+            return Err("builtin settings target was replaced by an external plugin".into());
+        }
+        loaded.settings = loaded
+            .descriptor
+            .settings
+            .iter()
+            .filter_map(|definition| {
+                let field = &definition.field;
+                values
+                    .get(&field.key)
+                    .or(field.default_value.as_ref())
+                    .map(|value| (field.key.clone(), value.clone()))
+            })
+            .collect();
+    }
+    Ok(())
+}
+
+pub(crate) fn bind_plugin_settings(
+    config: &mut std::collections::BTreeMap<String, String>,
+    settings: &std::collections::BTreeMap<String, String>,
+) {
+    // Provider configuration cannot impersonate installation-wide settings.
+    config.retain(|key, _| !key.starts_with("plugin.settings."));
+    config.extend(
+        settings
+            .iter()
+            .map(|(key, value)| (format!("plugin.settings.{key}"), value.clone())),
+    );
 }
 
 pub(crate) struct LoadedPluginRecord {
@@ -583,10 +658,11 @@ impl WasmIndexerPluginProvider {
         ) {
             return Err("indexer descriptor rejected".to_string());
         }
-        Ok(LoadedPluginRecord::new(LoadedPlugin::from_owned(
-            descriptor,
-            plugin.wasm_bytes,
-        )))
+        Ok(LoadedPluginRecord::new(
+            LoadedPlugin::from_owned(descriptor, plugin.wasm_bytes)
+                .with_installation_id(plugin.installation_id)
+                .with_settings(plugin.settings),
+        ))
     }
 
     fn prepare_builtin_asset_record(
@@ -923,16 +999,15 @@ impl IndexerPluginProvider for WasmIndexerPluginProvider {
         };
 
         let built = match backing {
-            PluginRuntimeBacking::Indexer => {
-                WasmIndexerClient::new_component_with_indexer_error_recorder(
-                    wasm_bytes,
-                    loaded.descriptor.clone(),
-                    config.name.clone(),
-                    config.clone(),
-                    proxy_config.cloned(),
-                    Arc::clone(&self.indexer_error_recorder),
-                )
-            }
+            PluginRuntimeBacking::Indexer => WasmIndexerClient::new_component_with_plugin_settings(
+                wasm_bytes,
+                loaded.descriptor.clone(),
+                config.name.clone(),
+                config.clone(),
+                proxy_config.cloned(),
+                Arc::clone(&self.indexer_error_recorder),
+                &loaded.settings,
+            ),
             other => Err(AppError::Repository(format!(
                 "runtime {other:?} is not valid for an indexer descriptor"
             ))),
@@ -1031,6 +1106,43 @@ impl DynamicPluginProvider {
 }
 
 impl IndexerPluginProvider for DynamicPluginProvider {
+    fn builtin_descriptor_for_provider(&self, provider_type: &str) -> Option<PluginDescriptor> {
+        parse_builtin_descriptor(builtin_indexer_asset_for_provider(provider_type)?).ok()
+    }
+
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let asset = builtin_indexer_asset_for_provider(provider_type)
+            .ok_or("builtin settings target is unavailable")?;
+        let mut record = WasmIndexerPluginProvider::prepare_builtin_asset_record(asset)?;
+        record.loaded = record.loaded.with_settings(settings);
+        let mut guard = self
+            .inner
+            .write()
+            .expect("DynamicPluginProvider lock poisoned");
+        let guard = &mut *guard;
+        let affected =
+            insert_loaded_plugin(&mut guard.plugins, &mut guard.aliases, record, true, false);
+        self.invalidate_provider_keys(&affected);
+        Ok(())
+    }
+
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        let mut provider =
+            build_indexer_plugin_provider_from_runtime_plugins(runtime_plugins, disabled_builtins);
+        apply_builtin_settings(&mut provider.plugins, settings)?;
+        self.reload(provider);
+        Ok(())
+    }
+
     fn validate_config_for_provider(
         &self,
         provider_type: &str,
@@ -1347,10 +1459,11 @@ impl WasmDownloadClientPluginProvider {
         ) {
             return Err("download client descriptor rejected".to_string());
         }
-        Ok(LoadedPluginRecord::new(LoadedPlugin::from_owned(
-            plugin.descriptor,
-            plugin.wasm_bytes,
-        )))
+        Ok(LoadedPluginRecord::new(
+            LoadedPlugin::from_owned(plugin.descriptor, plugin.wasm_bytes)
+                .with_installation_id(plugin.installation_id)
+                .with_settings(plugin.settings),
+        ))
     }
 
     fn with_external_plugin(mut self, plugin: ExternalPluginWasm<'_>) -> Self {
@@ -1477,6 +1590,7 @@ impl WasmDownloadClientPluginProvider {
             computed_base_url.as_deref(),
             Some(&config.config_json),
         );
+        loaded.bind_settings(&mut command_config);
         let command_host = crate::wasmtime_host::command_host::CommandHost::for_download_client(
             loaded.descriptor.id.clone(),
             command_config,
@@ -2200,10 +2314,11 @@ impl WasmSubtitlePluginProvider {
         ) {
             return Err("subtitle provider descriptor rejected".to_string());
         }
-        Ok(LoadedPluginRecord::new(LoadedPlugin::from_owned(
-            plugin.descriptor,
-            plugin.wasm_bytes,
-        )))
+        Ok(LoadedPluginRecord::new(
+            LoadedPlugin::from_owned(plugin.descriptor, plugin.wasm_bytes)
+                .with_installation_id(plugin.installation_id)
+                .with_settings(plugin.settings),
+        ))
     }
 
     fn prepare_builtin_asset_record(
@@ -2365,7 +2480,9 @@ impl WasmSubtitlePluginProvider {
         // the component ABI" diagnostic at load rather than a missing-import
         // trap an hour into an align job.
         match WasmSubtitleSyncClient::new(wasm_bytes, &loaded.descriptor) {
-            Ok(client) => Some(Arc::new(client)),
+            Ok(client) => Some(Arc::new(
+                client.with_plugin_settings(loaded.settings.clone()),
+            )),
             Err(error) => {
                 warn!(
                     plugin_id = loaded.descriptor.id.as_str(),
@@ -2399,12 +2516,13 @@ impl SubtitlePluginProvider for WasmSubtitlePluginProvider {
                 return None;
             }
         };
-        match WasmSubtitleClient::new_with_archive_provider(
+        match WasmSubtitleClient::new_with_plugin_settings(
             wasm_bytes,
             loaded.descriptor.clone(),
             config.clone(),
             host_bindings.clone(),
             self.archive_provider.clone(),
+            loaded.settings.clone(),
         ) {
             Ok(client) => Some(Arc::new(client)),
             Err(error) => {
@@ -2526,6 +2644,43 @@ impl DynamicSubtitlePluginProvider {
 }
 
 impl SubtitlePluginProvider for DynamicSubtitlePluginProvider {
+    fn builtin_descriptor_for_provider(&self, provider_type: &str) -> Option<PluginDescriptor> {
+        parse_builtin_descriptor(builtin_subtitle_asset_for_provider(provider_type)?).ok()
+    }
+
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        let asset = builtin_subtitle_asset_for_provider(provider_type)
+            .ok_or("builtin settings target is unavailable")?;
+        let mut record = WasmSubtitlePluginProvider::prepare_builtin_asset_record(asset)?;
+        record.loaded = record.loaded.with_settings(settings);
+        let mut guard = self
+            .inner
+            .write()
+            .expect("DynamicSubtitlePluginProvider lock poisoned");
+        let guard = &mut *guard;
+        let affected =
+            insert_loaded_plugin(&mut guard.plugins, &mut guard.aliases, record, true, false);
+        self.invalidate_provider_keys(&affected);
+        Ok(())
+    }
+
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        let mut provider =
+            build_subtitle_plugin_provider_from_runtime_plugins(runtime_plugins, disabled_builtins);
+        apply_builtin_settings(&mut provider.plugins, settings)?;
+        self.reload(provider);
+        Ok(())
+    }
+
     fn client_for_config(
         &self,
         config: &SubtitleProviderConfig,
@@ -2744,14 +2899,12 @@ fn host_binding_cache_key(host_bindings: &HashMap<PluginHostBindingId, String>) 
 
 pub struct WasmArchiveExtractorPluginProvider {
     plugins: HashMap<String, LoadedPlugin>,
-    aliases: HashMap<String, String>,
 }
 
 impl WasmArchiveExtractorPluginProvider {
     pub fn empty() -> Self {
         Self {
             plugins: HashMap::new(),
-            aliases: HashMap::new(),
         }
     }
 
@@ -2785,10 +2938,14 @@ impl WasmArchiveExtractorPluginProvider {
         ) {
             return Err("archive extractor descriptor rejected".to_string());
         }
-        Ok(LoadedPluginRecord::new(LoadedPlugin::from_owned(
-            plugin.descriptor,
-            plugin.wasm_bytes,
-        )))
+        if plugin.installation_id.as_deref().is_none_or(str::is_empty) {
+            return Err("archive extractor installation identity is unavailable".into());
+        }
+        Ok(LoadedPluginRecord::new(
+            LoadedPlugin::from_owned(plugin.descriptor, plugin.wasm_bytes)
+                .with_installation_id(plugin.installation_id)
+                .with_settings(plugin.settings),
+        ))
     }
 
     fn with_external_plugin(mut self, plugin: ExternalPluginWasm<'_>) -> Self {
@@ -2800,8 +2957,7 @@ impl WasmArchiveExtractorPluginProvider {
                     provider_type = record.primary_key.as_str(),
                     "registered external archive extractor plugin"
                 );
-                let _ =
-                    insert_loaded_plugin(&mut self.plugins, &mut self.aliases, record, true, true);
+                self.insert_archive_plugin(record.loaded);
             }
             Err(error) => {
                 warn!(error = %error, "failed to load external archive extractor plugin");
@@ -2813,8 +2969,7 @@ impl WasmArchiveExtractorPluginProvider {
     fn with_runtime_plugin(mut self, plugin: RuntimePluginLoad) -> Self {
         match Self::prepare_runtime_plugin_record(plugin) {
             Ok(record) => {
-                let _ =
-                    insert_loaded_plugin(&mut self.plugins, &mut self.aliases, record, true, true);
+                self.insert_archive_plugin(record.loaded);
             }
             Err(error) => {
                 warn!(error = %error, "failed to load runtime archive extractor plugin");
@@ -2824,8 +2979,21 @@ impl WasmArchiveExtractorPluginProvider {
     }
 
     pub fn without_provider_type(mut self, provider_type: &str) -> Self {
-        let _ = remove_loaded_plugin(&mut self.plugins, &mut self.aliases, provider_type);
+        self.plugins.retain(|_, loaded| {
+            !loaded
+                .descriptor
+                .provider_type()
+                .eq_ignore_ascii_case(provider_type)
+        });
         self
+    }
+
+    fn insert_archive_plugin(&mut self, loaded: LoadedPlugin) {
+        let key = loaded
+            .installation_id
+            .clone()
+            .unwrap_or_else(|| format!("external:{}", loaded.descriptor.id));
+        self.plugins.insert(key, loaded);
     }
 
     fn provider_supports_format(loaded: &LoadedPlugin, format: ArchivePluginFormat) -> bool {
@@ -2836,10 +3004,38 @@ impl WasmArchiveExtractorPluginProvider {
             .unwrap_or(false)
     }
 
-    fn provider_for_format(&self, format: ArchivePluginFormat) -> Option<&LoadedPlugin> {
-        self.plugins
+    fn provider_for_format(&self, format: ArchivePluginFormat) -> AppResult<Option<&LoadedPlugin>> {
+        let mut eligible = self
+            .plugins
             .values()
-            .find(|loaded| Self::provider_supports_format(loaded, format))
+            .filter(|loaded| Self::provider_supports_format(loaded, format));
+        let selected = eligible.next();
+        if eligible.next().is_some() {
+            return Err(AppError::Validation(
+                "Multiple enabled archive extraction plugins support this format. Disable one in Settings → Plugins.".into()
+            ));
+        }
+        Ok(selected)
+    }
+
+    fn selection_for_loaded(loaded: &LoadedPlugin) -> AppResult<ArchiveExtractorSelection> {
+        let wasm_bytes = loaded.materialize_wasm().map_err(AppError::Repository)?;
+        let client = WasmArchiveExtractorClient::new(wasm_bytes, loaded.descriptor.clone())?;
+        let mut selection = ArchiveExtractorSelection {
+            installation_id: loaded.installation_id.clone(),
+            client: Arc::new(client),
+            passwords: Default::default(),
+        };
+        if loaded.installation_id.is_some() {
+            selection.passwords.extend_settings(
+                loaded
+                    .settings
+                    .get("additional_passwords")
+                    .map(String::as_str)
+                    .unwrap_or_default(),
+            );
+        }
+        Ok(selection)
     }
 }
 
@@ -2848,34 +3044,29 @@ impl ArchiveExtractorPluginProvider for WasmArchiveExtractorPluginProvider {
         &self,
         format: ArchivePluginFormat,
     ) -> Option<Arc<dyn ArchiveExtractorClient>> {
-        let loaded = self.provider_for_format(format)?;
-        let wasm_bytes = match loaded.materialize_wasm() {
-            Ok(wasm_bytes) => wasm_bytes,
-            Err(error) => {
-                warn!(
-                    format = ?format,
-                    error = %error,
-                    "failed to materialize WASM archive extractor bytes"
-                );
-                return None;
-            }
-        };
-        match WasmArchiveExtractorClient::new(wasm_bytes, loaded.descriptor.clone()) {
-            Ok(client) => Some(Arc::new(client)),
-            Err(error) => {
-                warn!(
-                    format = ?format,
-                    error = %error,
-                    "failed to instantiate WASM archive extractor plugin"
-                );
-                None
-            }
-        }
+        self.select_for_format(format)
+            .ok()
+            .flatten()
+            .map(|selection| selection.client)
+    }
+
+    fn select_for_format(
+        &self,
+        format: ArchivePluginFormat,
+    ) -> AppResult<Option<ArchiveExtractorSelection>> {
+        self.provider_for_format(format)?
+            .map(Self::selection_for_loaded)
+            .transpose()
     }
 
     fn available_provider_types(&self) -> Vec<String> {
-        let mut keys = self.plugins.keys().cloned().collect::<Vec<_>>();
+        let mut keys = self
+            .plugins
+            .values()
+            .map(|loaded| loaded.descriptor.provider_type().to_string())
+            .collect::<Vec<_>>();
         keys.sort();
+        keys.dedup();
         keys
     }
 
@@ -2918,25 +3109,39 @@ impl ArchiveExtractorPluginProvider for DynamicArchiveExtractorPluginProvider {
         &self,
         format: ArchivePluginFormat,
     ) -> Option<Arc<dyn ArchiveExtractorClient>> {
-        let cache_key = format!("extract:{format:?}");
-        if let Ok(cache) = self.client_cache.lock()
-            && let Some(client) = cache.get(&cache_key)
-        {
-            return Some(Arc::clone(client));
-        }
+        self.select_for_format(format)
+            .ok()
+            .flatten()
+            .map(|selection| selection.client)
+    }
 
-        let client = {
-            let guard = self
-                .inner
-                .read()
-                .unwrap_or_else(|poisoned| poisoned.into_inner());
-            guard.client_for_format(format)?
+    fn select_for_format(
+        &self,
+        format: ArchivePluginFormat,
+    ) -> AppResult<Option<ArchiveExtractorSelection>> {
+        // Keep the registry read lock through cache access so reload cannot
+        // repopulate the cache with an older installation's client/settings.
+        let guard = self
+            .inner
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(loaded) = guard.provider_for_format(format)? else {
+            return Ok(None);
         };
-
-        if let Ok(mut cache) = self.client_cache.lock() {
-            cache.insert(cache_key, Arc::clone(&client));
+        let cache_key = loaded
+            .installation_id
+            .clone()
+            .unwrap_or_else(|| format!("external:{}", loaded.descriptor.id));
+        if let Ok(cache) = self.client_cache.lock()
+            && let Some(selection) = cache.get(&cache_key)
+        {
+            return Ok(Some(selection.clone()));
         }
-        Some(client)
+        let selection = WasmArchiveExtractorPluginProvider::selection_for_loaded(loaded)?;
+        if let Ok(mut cache) = self.client_cache.lock() {
+            cache.insert(cache_key, selection.clone());
+        }
+        Ok(Some(selection))
     }
 
     fn available_provider_types(&self) -> Vec<String> {
@@ -2952,21 +3157,20 @@ impl ArchiveExtractorPluginProvider for DynamicArchiveExtractorPluginProvider {
             .inner
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let current = std::mem::replace(&mut *guard, WasmArchiveExtractorPluginProvider::empty());
-        *guard = current.with_runtime_plugin(plugin);
+        let record = WasmArchiveExtractorPluginProvider::prepare_runtime_plugin_record(plugin)?;
+        guard.insert_archive_plugin(record.loaded);
         if let Ok(mut cache) = self.client_cache.lock() {
             cache.clear();
         }
         Ok(())
     }
 
-    fn remove_runtime_plugin(&self, provider_type: &str) -> Result<(), String> {
+    fn remove_runtime_plugin(&self, installation_id: &str) -> Result<(), String> {
         let mut guard = self
             .inner
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let current = std::mem::replace(&mut *guard, WasmArchiveExtractorPluginProvider::empty());
-        *guard = current.without_provider_type(provider_type);
+        guard.plugins.remove(installation_id);
         if let Ok(mut cache) = self.client_cache.lock() {
             cache.clear();
         }
@@ -3055,16 +3259,12 @@ pub fn build_archive_extractor_plugin_provider(
 
 pub fn build_archive_extractor_plugin_provider_from_runtime_plugins(
     runtime_plugins: &[RuntimePluginLoad],
-    disabled_builtins: &[String],
+    _disabled_builtins: &[String],
 ) -> WasmArchiveExtractorPluginProvider {
     let mut provider = WasmArchiveExtractorPluginProvider::empty();
 
     for plugin in runtime_plugins.iter().cloned() {
         provider = provider.with_runtime_plugin(plugin);
-    }
-
-    for provider_type in disabled_builtins {
-        provider = provider.without_provider_type(provider_type);
     }
 
     provider
@@ -3527,7 +3727,9 @@ impl WasmNotificationPluginProvider {
         }
         Ok(LoadedPluginRecord::new(
             LoadedPlugin::from_owned(plugin.descriptor, plugin.wasm_bytes)
-                .with_load_source(load_source),
+                .with_load_source(load_source)
+                .with_installation_id(plugin.installation_id)
+                .with_settings(plugin.settings),
         ))
     }
 
@@ -3657,6 +3859,7 @@ impl WasmNotificationPluginProvider {
             }
         }
 
+        loaded.bind_settings(&mut channel_config);
         let command_host = crate::wasmtime_host::command_host::CommandHost::for_notification(
             loaded.descriptor.id.clone(),
             channel_config,
@@ -4234,6 +4437,7 @@ mod tests {
                     default_base_url: None,
                     allowed_hosts: vec![],
                     capabilities: ArchiveExtractorCapabilities {
+                        enforced_limits: false,
                         formats: vec![
                             ArchivePluginFormat::Rar,
                             ArchivePluginFormat::SevenZip,
@@ -4246,6 +4450,7 @@ mod tests {
         };
 
         PluginDescriptor {
+            settings: Vec::new(),
             id: "test".to_string(),
             name: "Test".to_string(),
             version: "0.1.0".to_string(),
@@ -4386,10 +4591,100 @@ mod tests {
         );
 
         RuntimePluginLoad {
+            installation_id: Some(provider_type.to_string()),
             descriptor,
             wasm_bytes: provider_type.as_bytes().to_vec(),
             first_party: true,
+            settings: Default::default(),
         }
+    }
+
+    #[test]
+    fn builtin_settings_bind_before_publication_and_preserve_provenance() {
+        let mut descriptor = parse_builtin_descriptor(NEWZNAB).unwrap();
+        descriptor.settings = serde_json::from_value(serde_json::json!([
+            {"key":"passwords", "label":"Passwords", "field_type":"multiline", "sensitive":true, "default_value":"synthetic-default"}
+        ])).unwrap();
+        let loaded = LoadedPlugin::from_builtin(descriptor, NEWZNAB);
+        assert_eq!(loaded.settings["passwords"], "synthetic-default");
+        let mut plugins = HashMap::from([("newznab".into(), loaded)]);
+        apply_builtin_settings(
+            &mut plugins,
+            &std::collections::BTreeMap::from([(
+                "newznab".into(),
+                std::collections::BTreeMap::from([
+                    ("passwords".into(), "synthetic-saved".into()),
+                    ("undeclared".into(), "ignored".into()),
+                ]),
+            )]),
+        )
+        .unwrap();
+        let loaded = &plugins["newznab"];
+        assert!(loaded.stores_builtin_asset());
+        assert!(matches!(loaded.load_source, PluginLoadSource::Builtin));
+        assert_eq!(loaded.settings.len(), 1);
+        assert_eq!(loaded.settings["passwords"], "synthetic-saved");
+        let snapshot = loaded.settings.clone();
+        apply_builtin_settings(
+            &mut plugins,
+            &std::collections::BTreeMap::from([("newznab".into(), Default::default())]),
+        )
+        .unwrap();
+        assert_eq!(
+            plugins["newznab"].settings["passwords"],
+            "synthetic-default"
+        );
+        assert_eq!(snapshot["passwords"], "synthetic-saved");
+    }
+
+    #[test]
+    fn builtin_settings_restore_replaces_external_override_and_aliases() {
+        let provider = DynamicPluginProvider::new(WasmIndexerPluginProvider::empty());
+        provider
+            .upsert_runtime_plugin(runtime_plugin_load("indexer", "newznab", &["old-alias"]))
+            .unwrap();
+        provider
+            .restore_builtin_plugin_with_settings("newznab", Default::default())
+            .unwrap();
+        let guard = provider.inner.read().unwrap();
+        let loaded = guard.get_loaded("newznab").unwrap();
+        assert!(matches!(loaded.load_source, PluginLoadSource::Builtin));
+        assert!(loaded.stores_builtin_asset());
+        assert!(guard.get_loaded("old-alias").is_none());
+        assert_eq!(
+            loaded.descriptor.id,
+            parse_builtin_descriptor(NEWZNAB).unwrap().id
+        );
+    }
+
+    #[test]
+    fn plugin_settings_binding_preserves_provider_authority_and_snapshot() {
+        let settings =
+            std::collections::BTreeMap::from([("passwords".into(), "synthetic secret".into())]);
+        let mut config = std::collections::BTreeMap::from([
+            ("base_url".into(), "https://provider.invalid".into()),
+            ("api_key".into(), "synthetic provider key".into()),
+            ("plugin.settings.passwords".into(), "forged".into()),
+            ("plugin.settings.undeclared".into(), "forged".into()),
+        ]);
+        bind_plugin_settings(&mut config, &settings);
+        assert_eq!(
+            config.get("base_url").map(String::as_str),
+            Some("https://provider.invalid")
+        );
+        assert_eq!(
+            config.get("api_key").map(String::as_str),
+            Some("synthetic provider key")
+        );
+        assert_eq!(
+            config.get("plugin.settings.passwords").map(String::as_str),
+            Some("synthetic secret")
+        );
+        assert!(!config.contains_key("plugin.settings.undeclared"));
+        let snapshot = config.clone();
+        bind_plugin_settings(&mut config, &Default::default());
+        assert!(!config.contains_key("plugin.settings.passwords"));
+        assert!(snapshot.contains_key("plugin.settings.passwords"));
     }
 
     #[test]
@@ -4936,16 +5231,19 @@ mod tests {
         assert!(
             provider
                 .provider_for_format(ArchivePluginFormat::Rar)
+                .unwrap()
                 .is_some()
         );
         assert!(
             provider
                 .provider_for_format(ArchivePluginFormat::Zip)
+                .unwrap()
                 .is_some()
         );
         assert!(
             provider
                 .provider_for_format(ArchivePluginFormat::SevenZip)
+                .unwrap()
                 .is_some()
         );
     }
@@ -4982,6 +5280,192 @@ mod tests {
             provider.available_provider_types(),
             vec!["archive-tools-two"]
         );
+    }
+
+    fn installed_archive_fixture(
+        id: &str,
+        plugin_id: &str,
+        format: ArchivePluginFormat,
+        password: &str,
+    ) -> RuntimePluginLoad {
+        let mut plugin = runtime_plugin_load("archive_extractor", "shared-archive-type", &[]);
+        plugin.installation_id = Some(id.into());
+        plugin.descriptor.id = plugin_id.into();
+        plugin.descriptor.settings = serde_json::from_value(serde_json::json!([
+            {"key":"additional_passwords", "label":"Additional passwords", "field_type":"string", "sensitive":true}
+        ])).unwrap();
+        if let ProviderDescriptor::ArchiveExtractor(ref mut descriptor) = plugin.descriptor.provider
+        {
+            descriptor.capabilities.formats = vec![format];
+        }
+        plugin
+            .settings
+            .insert("additional_passwords".into(), password.into());
+        plugin.wasm_bytes = wat::parse_str("(component)").unwrap();
+        plugin
+    }
+
+    #[test]
+    fn archive_installation_identity_isolates_settings_and_pins_attempt_snapshots() {
+        let mut first = installed_archive_fixture(
+            "install-a",
+            "archive-a",
+            ArchivePluginFormat::Rar,
+            "synthetic-a",
+        );
+        let second = installed_archive_fixture(
+            "install-b",
+            "archive-b",
+            ArchivePluginFormat::Zip,
+            "synthetic-b",
+        );
+        let provider = DynamicArchiveExtractorPluginProvider::new(
+            build_archive_extractor_plugin_provider_from_runtime_plugins(
+                &[first.clone(), second.clone()],
+                &[],
+            ),
+        );
+        let before = provider
+            .select_for_format(ArchivePluginFormat::Rar)
+            .unwrap()
+            .unwrap();
+        assert_eq!(before.installation_id.as_deref(), Some("install-a"));
+        assert_eq!(
+            before
+                .passwords
+                .iter()
+                .map(|candidate| candidate.value())
+                .collect::<Vec<_>>(),
+            ["synthetic-a"]
+        );
+        let zip = provider
+            .select_for_format(ArchivePluginFormat::Zip)
+            .unwrap()
+            .unwrap();
+        assert_eq!(zip.installation_id.as_deref(), Some("install-b"));
+        assert_eq!(
+            zip.passwords
+                .iter()
+                .map(|candidate| candidate.value())
+                .collect::<Vec<_>>(),
+            ["synthetic-b"]
+        );
+        assert_eq!(provider.inner.read().unwrap().plugins.len(), 2);
+        first
+            .settings
+            .insert("additional_passwords".into(), "synthetic-updated".into());
+        provider.upsert_runtime_plugin(first.clone()).unwrap();
+        let after = provider
+            .select_for_format(ArchivePluginFormat::Rar)
+            .unwrap()
+            .unwrap();
+        assert!(!Arc::ptr_eq(&before.client, &after.client));
+        assert_eq!(
+            after
+                .passwords
+                .iter()
+                .map(|candidate| candidate.value())
+                .collect::<Vec<_>>(),
+            ["synthetic-updated"]
+        );
+        assert_eq!(
+            before
+                .passwords
+                .iter()
+                .map(|candidate| candidate.value())
+                .collect::<Vec<_>>(),
+            ["synthetic-a"]
+        );
+        provider
+            .reload_runtime_plugins(
+                &[first.clone(), second.clone()],
+                &["shared-archive-type".into()],
+            )
+            .unwrap();
+        assert_eq!(
+            provider
+                .select_for_format(ArchivePluginFormat::Zip)
+                .unwrap()
+                .unwrap()
+                .installation_id
+                .as_deref(),
+            Some("install-b")
+        );
+        provider.remove_runtime_plugin("install-a").unwrap();
+        assert!(
+            provider
+                .select_for_format(ArchivePluginFormat::Rar)
+                .unwrap()
+                .is_none()
+        );
+        first.installation_id = Some("reinstalled-a".into());
+        first.settings.clear();
+        provider.upsert_runtime_plugin(first).unwrap();
+        let reinstalled = provider
+            .select_for_format(ArchivePluginFormat::Rar)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            reinstalled.installation_id.as_deref(),
+            Some("reinstalled-a")
+        );
+        assert!(reinstalled.passwords.is_empty());
+        assert_eq!(
+            provider
+                .select_for_format(ArchivePluginFormat::Zip)
+                .unwrap()
+                .unwrap()
+                .passwords
+                .iter()
+                .next()
+                .unwrap()
+                .value(),
+            "synthetic-b"
+        );
+    }
+
+    #[test]
+    fn archive_format_overlap_fails_before_cached_selection_and_disable_resolves_it() {
+        for same_type in [true, false] {
+            let first = installed_archive_fixture(
+                "install-a",
+                "archive-a",
+                ArchivePluginFormat::Rar,
+                "synthetic-a",
+            );
+            let mut second = installed_archive_fixture(
+                "install-b",
+                "archive-b",
+                ArchivePluginFormat::Rar,
+                "synthetic-b",
+            );
+            if !same_type {
+                set_provider_type(&mut second.descriptor, "other-archive-type");
+            }
+            let provider = DynamicArchiveExtractorPluginProvider::new(
+                build_archive_extractor_plugin_provider_from_runtime_plugins(&[first.clone()], &[]),
+            );
+            provider
+                .select_for_format(ArchivePluginFormat::Rar)
+                .unwrap()
+                .unwrap();
+            provider.upsert_runtime_plugin(second).unwrap();
+            let error = provider
+                .select_for_format(ArchivePluginFormat::Rar)
+                .err()
+                .expect("overlap must not reuse cached selection");
+            assert!(error.to_string().contains("Disable one in Settings"));
+            provider.remove_runtime_plugin("install-a").unwrap();
+            let remaining = provider
+                .select_for_format(ArchivePluginFormat::Rar)
+                .unwrap()
+                .unwrap();
+            assert_eq!(remaining.installation_id.as_deref(), Some("install-b"));
+            assert_eq!(
+                remaining.passwords.iter().next().unwrap().value(),
+                "synthetic-b"
+            );
+        }
     }
 
     #[test]

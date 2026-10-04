@@ -498,6 +498,7 @@ mod tests {
 
     fn download_failed(client_type: Option<&str>) -> DownloadFailedEventData {
         DownloadFailedEventData {
+            canonical_download_id: None,
             title: Some(title_snapshot(MediaFacet::Movie)),
             source_title: None,
             source_hint: None,

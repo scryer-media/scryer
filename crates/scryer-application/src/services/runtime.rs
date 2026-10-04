@@ -2289,6 +2289,7 @@ pub struct AppRuntimeHealthState {
 
 #[derive(Clone)]
 pub struct AppRuntimePluginState {
+    pub(crate) settings_write_lock: Arc<tokio::sync::Mutex<()>>,
     pub plugin_operation_guards: PluginOperationGuardTable,
     pub plugin_install_orchestrator: PluginInstallOrchestrator,
     pub(crate) compatibility_blockers: Arc<tokio::sync::RwLock<HashMap<String, String>>>,
@@ -2629,6 +2630,7 @@ impl AppRuntimeState {
                 results: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             },
             plugins: AppRuntimePluginState {
+                settings_write_lock: Arc::new(tokio::sync::Mutex::new(())),
                 plugin_operation_guards: PluginOperationGuardTable::default(),
                 plugin_install_orchestrator: PluginInstallOrchestrator::default(),
                 compatibility_blockers: Arc::new(tokio::sync::RwLock::new(HashMap::new())),

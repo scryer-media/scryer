@@ -491,6 +491,9 @@ impl SettingsStore {
 
 #[async_trait]
 impl SettingsRepository for SettingsStore {
+    fn invalidate_cache(&self) {
+        SettingsStore::invalidate_cache(self);
+    }
     async fn get_setting_json(
         &self,
         scope: &str,
@@ -1103,6 +1106,28 @@ async fn upsert_setting_value_tx(
     }
 
     let stored_value = stored_setting_value(value_json, is_sensitive, encryption_key)?;
+    if key_name == "plugins.config" {
+        if !is_sensitive || encryption_key.is_none() {
+            return Err(AppError::Repository(
+                "plugin settings require an encryption key".into(),
+            ));
+        }
+        let installation_id = scope_id.as_ref().ok_or_else(|| {
+            AppError::Validation("plugin settings require an installed plugin".into())
+        })?;
+        // Lock the installation in this transaction, serializing settings writes
+        // against uninstall. A new installation gets a different scope identity.
+        if SqlRuntime::execute(
+            SqlExec::Tx(tx),
+            "UPDATE plugin_installations SET updated_at = updated_at WHERE id = {}",
+            &[SqlArg::Text(installation_id.clone())],
+        )
+        .await?
+            == 0
+        {
+            return Err(AppError::NotFound("plugin is no longer installed".into()));
+        }
+    }
     let now = Utc::now();
     let normalized_scope_id = normalize_scope_id(scope_id);
     let existing_id = SqlRuntime::fetch_optional(

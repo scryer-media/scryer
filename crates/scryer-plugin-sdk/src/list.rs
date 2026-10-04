@@ -425,6 +425,7 @@ mod tests {
     #[test]
     fn list_provider_descriptor_round_trips_through_the_plugin_descriptor() {
         let descriptor = crate::PluginDescriptor {
+            settings: Vec::new(),
             id: "fixture-lists".to_string(),
             name: "Fixture Lists".to_string(),
             version: "1.0.0".to_string(),

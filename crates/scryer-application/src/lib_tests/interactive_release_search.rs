@@ -1521,6 +1521,7 @@ async fn an_unlinked_grab_resolves_the_indexer_artifact_before_client_routing() 
                 active: self.active.clone(),
                 staged: crate::StagedNzbRef {
                     id: "unlinked-lease".into(),
+                    password_candidates: Default::default(),
                     compressed_path: "fixture.nzb.gz".into(),
                     raw_size_bytes: 10,
                 },
@@ -2097,6 +2098,7 @@ impl DownloadClient for ArtifactDownloadClient {
 fn nzb_artifact(marker: &str) -> ResolvedDownloadArtifact {
     ResolvedDownloadArtifact::Nzb {
         bytes: format!("<nzb>{marker}</nzb>").into_bytes(),
+        password_candidates: Default::default(),
         file_name: None,
         content_type: None,
     }
@@ -2295,6 +2297,7 @@ async fn browser_download_rejects_an_oversized_aggregate_without_grab_history() 
                 url.clone(),
                 ResolvedDownloadArtifact::Nzb {
                     bytes: vec![b'x'; 24 * 1024 * 1024],
+                    password_candidates: Default::default(),
                     file_name: None,
                     content_type: None,
                 },

@@ -356,11 +356,12 @@ impl AppUseCase {
                     let mut previous_runtime_installation = updated.clone();
                     previous_runtime_installation.plugin_type = previous_plugin_type.clone();
                     previous_runtime_installation.provider_type = previous_provider_type.clone();
-                    self.apply_runtime_plugin_replace(
-                        &previous_runtime_installation,
+                    self.publish_runtime_plugin(
+                        Some(&previous_runtime_installation),
                         &updated,
                         runtime_plugin,
-                    )?;
+                    )
+                    .await?;
                 }
                 self.finalize_runtime_plugin_mutation_for_types(
                     [previous_plugin_type.as_str(), updated.plugin_type.as_str()],
@@ -408,7 +409,8 @@ impl AppUseCase {
                         Some(compressed_wasm_bytes.as_slice()),
                     )
                     .await?;
-                self.apply_runtime_plugin_upsert(&created, runtime_plugin)?;
+                self.publish_runtime_plugin(None, &created, runtime_plugin)
+                    .await?;
                 self.finalize_runtime_plugin_mutation(&created.plugin_type, true)
                     .await?;
                 created

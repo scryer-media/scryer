@@ -140,35 +140,9 @@ pub fn normalize_release_name(raw: Option<&str>) -> Option<String> {
         .map(|value| value.to_ascii_lowercase())
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ReleasePasswordClassification {
-    Real(String),
-    ProtectedFlag,
-    UnprotectedFlag,
-    Empty,
-}
-
-pub(crate) fn classify_release_password(raw: Option<&str>) -> ReleasePasswordClassification {
-    let Some(value) = raw.map(str::trim).filter(|value| !value.is_empty()) else {
-        return ReleasePasswordClassification::Empty;
-    };
-
-    match value.to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "passworded" | "protected" => {
-            ReleasePasswordClassification::ProtectedFlag
-        }
-        "0" | "false" | "no" => ReleasePasswordClassification::UnprotectedFlag,
-        _ => ReleasePasswordClassification::Real(value.to_string()),
-    }
-}
-
 pub fn normalize_release_password(raw: Option<&str>) -> Option<String> {
-    match classify_release_password(raw) {
-        ReleasePasswordClassification::Real(value) => Some(value),
-        ReleasePasswordClassification::ProtectedFlag
-        | ReleasePasswordClassification::UnprotectedFlag
-        | ReleasePasswordClassification::Empty => None,
-    }
+    raw.filter(|value| !value.trim().is_empty())
+        .map(str::to_string)
 }
 
 pub(crate) fn is_obfuscated_release_name(parsed: &ParsedReleaseMetadata) -> bool {

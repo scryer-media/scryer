@@ -2705,6 +2705,54 @@ impl DownloadSeedingSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadPasswordFailure {
+    Required,
+    PasswordOrCorruption,
+}
+
+impl DownloadPasswordFailure {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Required => "archive_password_required",
+            Self::PasswordOrCorruption => "archive_password_or_corruption",
+        }
+    }
+
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Required => "ARCHIVE_PASSWORD_REQUIRED: a new archive password is required",
+            Self::PasswordOrCorruption => {
+                "ARCHIVE_PASSWORD_OR_CORRUPTION: the password may be incorrect or the archive may be damaged"
+            }
+        }
+    }
+}
+
+impl DownloadQueueItem {
+    pub fn password_failure(&self) -> Option<DownloadPasswordFailure> {
+        if self.state != DownloadQueueState::Failed {
+            return None;
+        }
+        match self.attention_reason.as_deref() {
+            Some(reason)
+                if reason == "archive_password_required"
+                    || reason.starts_with("ARCHIVE_PASSWORD_REQUIRED:") =>
+            {
+                Some(DownloadPasswordFailure::Required)
+            }
+            Some(reason)
+                if reason == "archive_password_or_corruption"
+                    || reason.starts_with("ARCHIVE_PASSWORD_OR_CORRUPTION:") =>
+            {
+                Some(DownloadPasswordFailure::PasswordOrCorruption)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DownloadQueueItem {
     pub id: String,
@@ -4246,6 +4294,9 @@ pub struct GrabbedReleaseFacts {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DownloadFailedEventData {
+    /// Stable identity for an operator retry; download_id below is the native client ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_download_id: Option<String>,
     #[serde(default)]
     pub title: Option<TitleContextSnapshot>,
     #[serde(default)]

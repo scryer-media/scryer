@@ -132,6 +132,8 @@ export type DownloadQueueItem = {
   lastUpdatedAt: string | null;
   attentionRequired: boolean;
   attentionReason: string | null;
+  passwordFailureCode?: "archive_password_required" | "archive_password_or_corruption" | null;
+  passwordRetryImportId?: string | null;
   downloadClientItemId: string;
   downloadId: string | null;
   importStatus: ImportStatus | null;

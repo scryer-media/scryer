@@ -1202,6 +1202,165 @@ async fn list_download_queue_page_clamps_filters_and_uses_stable_identity_orderi
 }
 
 #[tokio::test]
+async fn local_password_retry_action_requires_current_identity_failure_and_library_permission() {
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let imports = Arc::new(TrackingImportRepo::default());
+    let (app, admin) = bootstrap_with_cleanup_tracking(
+        Arc::new(StubDownloadClient::default()),
+        submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+    );
+    let app = app.with_test_overrides(|builder| builder.with_imports(imports.clone()));
+    let title = app
+        .add_title(
+            &admin,
+            NewTitle {
+                name: "Password Retry Fixture".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    let source = ClientJobLocator::new(Some("primary"), "nzbget", "password-job");
+    submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".into(),
+            download_client_id: source.client_id.clone(),
+            download_client_type: source.client_type.clone(),
+            download_client_item_id: source.item_id.clone(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: None,
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+            release_listing_json: None,
+        })
+        .await
+        .unwrap();
+    let now = Utc::now();
+    let result = scryer_domain::ImportResult {
+        import_id: "password-attempt".into(),
+        decision: scryer_domain::ImportDecision::Failed,
+        skip_reason: Some(scryer_domain::ImportSkipReason::PasswordRequired),
+        title_id: Some(title.id.clone()),
+        source_system: None,
+        source_ref: None,
+        source_title: None,
+        source_path: "/synthetic/archive.rar".into(),
+        dest_path: None,
+        quality: None,
+        episode_ids: vec![],
+        file_size_bytes: None,
+        link_type: None,
+        error_message: None,
+        release_burned: false,
+        started_at: now,
+        completed_at: now,
+        upgrade: false,
+        upgrade_previous_path: None,
+    };
+    let record = ImportRecord {
+        id: result.import_id.clone(),
+        source_client_id: source.client_id.clone(),
+        source_system: source.client_type.clone(),
+        source_ref: source.item_id.clone(),
+        import_type: ImportType::MovieDownload,
+        status: ImportStatus::Failed,
+        payload_json: "{}".into(),
+        result_json: Some(serde_json::to_string(&result).unwrap()),
+        download_id: None,
+        import_transfer_phase: None,
+        import_transfer_bytes: None,
+        import_transfer_total_bytes: None,
+        import_transfer_started_at: None,
+        import_transfer_updated_at: None,
+        started_at: None,
+        finished_at: None,
+        created_at: now.to_rfc3339(),
+        updated_at: now.to_rfc3339(),
+    };
+    imports.records.lock().await.push(record.clone());
+    imports
+        .canonical_ids
+        .lock()
+        .await
+        .insert(record.id.clone(), download_id);
+    assert_eq!(
+        app.password_retry_import_id_for_download(&admin, &download_id.to_wire(), &source)
+            .await
+            .unwrap(),
+        Some(record.id.clone())
+    );
+    let actor = library_permission_user(
+        "other-library-resolver",
+        &scryer_domain::default_library_id_for_facet(&MediaFacet::Series),
+        &[scryer_domain::LibraryPermission::ResolveImports],
+    );
+    assert!(
+        app.has_any_library_permission(&actor, scryer_domain::LibraryPermission::ResolveImports)
+            .await
+            .expect("fixture actor permissions resolve")
+    );
+    assert!(
+        app.password_retry_import_id_for_download(&actor, &download_id.to_wire(), &source)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    imports.canonical_ids.lock().await.insert(
+        record.id.clone(),
+        scryer_domain::download_identity::DownloadId::new(),
+    );
+    assert!(
+        app.password_retry_import_id_for_download(&admin, &download_id.to_wire(), &source)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    imports
+        .canonical_ids
+        .lock()
+        .await
+        .insert(record.id.clone(), download_id);
+    for status in [ImportStatus::Processing, ImportStatus::Completed] {
+        imports.records.lock().await[0].status = status;
+        assert!(
+            app.password_retry_import_id_for_download(&admin, &download_id.to_wire(), &source)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+    imports.records.lock().await[0] = record.clone();
+    let mut newer = record;
+    newer.id = "latest-unrelated-failure".into();
+    newer.updated_at = (now + chrono::Duration::seconds(1)).to_rfc3339();
+    newer.result_json = Some("{}".into());
+    imports
+        .canonical_ids
+        .lock()
+        .await
+        .insert(newer.id.clone(), download_id);
+    imports.records.lock().await.push(newer);
+    assert!(
+        app.password_retry_import_id_for_download(&admin, &download_id.to_wire(), &source)
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn list_download_import_page_returns_only_import_rows_for_selected_filter() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());

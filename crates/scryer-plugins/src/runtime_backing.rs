@@ -165,6 +165,7 @@ mod tests {
 
     fn descriptor_with(provider: ProviderDescriptor) -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: "fixture".to_string(),
             name: "Fixture".to_string(),
             version: "1.0.0".to_string(),

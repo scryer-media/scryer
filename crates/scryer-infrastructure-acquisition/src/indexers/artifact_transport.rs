@@ -1137,6 +1137,15 @@ fn artifact_fetch_cancelled() -> AppError {
 
 fn selected_headers(response: &reqwest::Response) -> Option<serde_json::Value> {
     let mut map = serde_json::Map::new();
+    let passwords: Vec<_> = response
+        .headers()
+        .get_all("x-dnzb-password")
+        .iter()
+        .filter_map(|value| std::str::from_utf8(value.as_bytes()).ok())
+        .collect();
+    if !passwords.is_empty() {
+        map.insert("x-dnzb-password".into(), serde_json::json!(passwords));
+    }
     for name in ["content-type", "content-disposition"] {
         if let Some(value) = response.headers().get(name).and_then(|v| v.to_str().ok()) {
             map.insert(name.to_string(), value.into());
@@ -1270,6 +1279,7 @@ pub(crate) fn classify(
             )));
         }
         return Ok(ResolvedDownloadArtifact::Nzb {
+            password_candidates: nzb_header_passwords(headers),
             bytes,
             file_name,
             content_type,
@@ -1297,6 +1307,25 @@ pub(crate) fn classify(
     Err(AppError::Validation(format!(
         "{name} resolved the download URL, but the result was not an NZB, magnet URI, or torrent file."
     )))
+}
+
+pub(crate) fn nzb_header_passwords(
+    headers: Option<&serde_json::Value>,
+) -> scryer_application::DownloadPasswordCandidates {
+    let mut passwords = scryer_application::DownloadPasswordCandidates::default();
+    if let Some(headers) = headers.and_then(serde_json::Value::as_object) {
+        for (name, value) in headers {
+            if name.eq_ignore_ascii_case("x-dnzb-password") {
+                if let Some(value) = value.as_str() {
+                    passwords.push(value);
+                }
+                if let Some(values) = value.as_array() {
+                    passwords.extend(values.iter().filter_map(serde_json::Value::as_str));
+                }
+            }
+        }
+    }
+    passwords
 }
 fn looks_nzb(bytes: &[u8]) -> bool {
     std::str::from_utf8(&bytes[..bytes.len().min(4096)])
@@ -1446,6 +1475,85 @@ mod tests {
     use std::sync::atomic::{AtomicU32, Ordering};
     use wiremock::matchers::{header, method, path};
     use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    #[tokio::test]
+    async fn final_nzb_headers_preserve_repeated_literal_passwords_and_body() {
+        let server = MockServer::start().await;
+        let body = b"<?xml version=\"1.0\"?>\r\n<nzb><head><meta type=\"password\">body-only</meta></head></nzb>\r\n";
+        Mock::given(method("GET"))
+            .and(path("/grab"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/final", server.uri()))
+                    .insert_header("X-DNZB-Password", "redirect-only"),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/final"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .append_header("X-DNZB-Password", "1")
+                    .append_header("x-dnzb-password", "true")
+                    .append_header("X-Dnzb-Password", "synthetic-雪,!".as_bytes())
+                    .append_header("x-dnzb-password", "1")
+                    .set_body_bytes(body),
+            )
+            .mount(&server)
+            .await;
+        let stats = Arc::new(CountingStats::default());
+        let transport = transport(Arc::clone(&stats));
+        let tally = IndexerRequestTally::new(
+            "id".into(),
+            "fixture".into(),
+            IndexerErrorOperation::IndexerAction,
+            stats,
+        );
+        let fetched = transport
+            .fetch_response_direct(
+                "fixture",
+                &format!("{}/grab", server.uri()),
+                Duration::from_secs(30),
+                &PluginEgressPolicy::for_operator_configured_url(&server.uri()),
+                Some(&server.uri()),
+                None,
+                tally,
+                ArtifactEgress::Direct,
+            )
+            .await
+            .unwrap();
+        let ArtifactFetchResponse::Http(fetched) = fetched else {
+            panic!("expected NZB response")
+        };
+        let bytes = fetched.response.bytes().await.unwrap().to_vec();
+        assert_eq!(bytes, body);
+        let artifact = classify(
+            "fixture",
+            fetched.final_url.as_deref(),
+            fetched.headers.as_ref(),
+            bytes,
+            None,
+        )
+        .unwrap();
+        let ResolvedDownloadArtifact::Nzb {
+            bytes,
+            password_candidates,
+            ..
+        } = &artifact
+        else {
+            panic!("expected NZB")
+        };
+        assert_eq!(bytes, body);
+        assert_eq!(
+            password_candidates
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["1", "true", "synthetic-雪,!"]
+        );
+        assert!(!format!("{artifact:?}").contains("synthetic-雪"));
+        assert!(!format!("{artifact:?}").contains("body-only"));
+    }
 
     struct ChallengeThenArtifact(AtomicU32);
 

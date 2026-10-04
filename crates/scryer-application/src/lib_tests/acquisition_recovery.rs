@@ -2225,6 +2225,111 @@ async fn tracked_download_failure_prefers_tracked_source_title_for_blocklist_ide
 }
 
 #[tokio::test]
+async fn password_failed_download_emits_retryable_history_without_blocklisting() {
+    let submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
+    let (app, user) = bootstrap_with_acquisition_tracking(
+        Arc::new(StubDownloadClient::default()),
+        submissions.clone(),
+        Arc::new(TrackingPendingReleaseRepo::default()),
+        Arc::new(TrackingAcquisitionScopeStateRepo::default()),
+    );
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Synthetic Password Release".into(),
+                facet: MediaFacet::Movie,
+                monitored: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let download_id = scryer_domain::download_identity::DownloadId::new();
+    submissions
+        .record_submission(DownloadSubmission {
+            download_id,
+            title_id: title.id.clone(),
+            purpose: crate::DownloadSubmissionPurpose::Standard,
+            facet: "movie".into(),
+            download_client_id: Some("primary".into()),
+            download_client_type: "weaver".into(),
+            download_client_item_id: "synthetic-job".into(),
+            source_hint: None,
+            source_provider_id: None,
+            source_provider_name: None,
+            source_kind: None,
+            source_title: Some("Synthetic.Release{{synthetic-secret}}".into()),
+            info_hash: None,
+            release_size_bytes: None,
+            request_signature: None,
+            scope: SubmissionScope::Title,
+            release_listing_json: None,
+        })
+        .await
+        .unwrap();
+    let mut item = failed_history_item("synthetic-job", "Synthetic.Release{{synthetic-secret}}");
+    item.client_type = "weaver".into();
+    item.attention_reason = Some(
+        scryer_domain::DownloadPasswordFailure::Required
+            .message()
+            .into(),
+    );
+    let mut tracked = crate::tracked_downloads::TrackedDownloadService::build_new_tracked_download(
+        &app,
+        download_id,
+        "weaver:synthetic-job".into(),
+        item,
+    )
+    .await;
+    tracked.state = scryer_domain::TrackedDownloadState::FailedPending;
+    crate::failed_download_handler::process_failed(&app, &mut tracked).await;
+    assert_eq!(tracked.state, scryer_domain::TrackedDownloadState::Failed);
+    assert!(tracked.skip_reacquire_on_failure);
+    assert!(
+        app.services
+            .workflow
+            .blocklist_repo
+            .list_for_title(&title.id, 10)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let events = app
+        .services
+        .events
+        .domain_events
+        .list(&DomainEventFilter {
+            title_id: Some(title.id.clone()),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let failures = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            DomainEventPayload::DownloadFailed(data) => Some(data),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1);
+    assert_eq!(
+        failures[0].canonical_download_id.as_deref(),
+        Some(download_id.to_string().as_str())
+    );
+    assert_eq!(failures[0].download_id.as_deref(), Some("synthetic-job"));
+    assert_eq!(
+        failures[0].source_title.as_deref(),
+        Some("Synthetic.Release")
+    );
+    assert!(
+        !serde_json::to_string(failures[0])
+            .unwrap()
+            .contains("synthetic-secret")
+    );
+}
+
+#[tokio::test]
 async fn parse_matched_observed_failed_download_does_not_blocklist_or_requeue() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());

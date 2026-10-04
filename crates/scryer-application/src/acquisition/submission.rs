@@ -61,7 +61,7 @@ fn submission_for_grab(
         source_provider_id: request.indexer_id.clone(),
         source_provider_name: intent.source_provider_name.clone(),
         source_kind: intent.request.source_kind,
-        source_title: request.source_title.clone(),
+        source_title: request.source_title_without_password(),
         info_hash: request.info_hash_hint.clone(),
         release_size_bytes: intent.release_size_bytes,
         release_listing_json: intent.release_listing_json.clone(),
@@ -645,7 +645,7 @@ impl AppUseCase {
                 source_provider_id: request.indexer_id.clone(),
                 source_provider_name: intent.source_provider_name.clone(),
                 source_kind,
-                source_title: request.source_title.clone(),
+                source_title: request.source_title_without_password(),
                 info_hash: request.info_hash_hint.clone(),
                 release_size_bytes: intent.release_size_bytes,
                 release_listing_json: intent.release_listing_json.clone(),
@@ -655,6 +655,11 @@ impl AppUseCase {
             })
             .await?;
         // The intent's unbound binding retires memoized resolutions of its id.
+        self.services
+            .workflow
+            .download_submissions
+            .set_password_candidates(&download_id, &request.password_candidates())
+            .await?;
         self.runtime
             .acquisition
             .invalidate_download_registry_observations();
@@ -701,7 +706,7 @@ impl AppUseCase {
                             source_provider_id: request.indexer_id.clone(),
                             source_provider_name: intent.source_provider_name.clone(),
                             source_kind,
-                            source_title: request.source_title.clone(),
+                            source_title: request.source_title_without_password(),
                             info_hash: request.info_hash_hint.clone(),
                             release_size_bytes: intent.release_size_bytes,
                             release_listing_json: intent.release_listing_json.clone(),
@@ -760,7 +765,7 @@ impl AppUseCase {
                 source_provider_id: request.indexer_id.clone(),
                 source_provider_name: intent.source_provider_name.clone(),
                 source_kind,
-                source_title: request.source_title.clone(),
+                source_title: request.source_title_without_password(),
                 info_hash: request.info_hash_hint.clone(),
                 release_size_bytes: intent.release_size_bytes,
                 release_listing_json: intent.release_listing_json.clone(),

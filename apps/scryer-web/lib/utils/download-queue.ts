@@ -5,6 +5,13 @@ import type {
   DownloadQueueItem,
 } from "@/lib/types";
 
+export function importRetrySucceeded(
+  result: { decision?: string; skipReason?: string | null } | null | undefined,
+): boolean {
+  return result?.decision === "IMPORTED" ||
+    (result?.decision === "SKIPPED" && result.skipReason === "ALREADY_IMPORTED");
+}
+
 export type DownloadQueueDisplayStateInput = Pick<
   DownloadQueueItem,
   | "state"
@@ -49,6 +56,8 @@ const QUEUE_ITEM_VALUE_KEYS: readonly QueueItemValueKey[] = [
   "attentionReason",
   "downloadClientItemId",
   "downloadId",
+  "passwordFailureCode",
+  "passwordRetryImportId",
   "importStatus",
   "importErrorCode",
   "importErrorMessage",

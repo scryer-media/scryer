@@ -5234,6 +5234,17 @@ type DownloadImportPagePayload {
 	totalCount: Int!
 }
 
+type DownloadPasswordRetryPayload {
+	status: DownloadPasswordRetryStatus!
+	downloadClientItemId: String
+}
+
+enum DownloadPasswordRetryStatus {
+	ACCEPTED
+	REFUSED
+	AWAITING_RECONCILIATION
+}
+
 """
 Action represented by a download queue mutation response.
 """
@@ -5433,6 +5444,10 @@ type DownloadQueueItemPayload {
 	"""
 	attentionReason: String
 	"""
+	Stable password-related download failure classification; never contains credentials.
+	"""
+	passwordFailureCode: String
+	"""
 	Client-local item identifier; together with `client_id` it identifies the remote item.
 	"""
 	downloadClientItemId: String!
@@ -5508,6 +5523,10 @@ type DownloadQueueItemPayload {
 	Import actions this download currently offers; every client surface renders from this.
 	"""
 	importActions: DownloadImportActionsPayload!
+	"""
+	Failed local extraction attempt that can accept a replacement password.
+	"""
+	passwordRetryImportId: ID
 	"""
 	Acquisition scope for this queue item, or its episode scope when no more specific scope is available.
 	"""
@@ -17513,6 +17532,7 @@ type MutationRoot {
 		"""
 		input: UpdateSeriesMovieTagsInput!
 	): [SeriesMovieLinkPayload!]!
+	retryDownloadPassword(input: RetryDownloadPasswordInput!): DownloadPasswordRetryPayload!
 	"""
 	Evaluate an external announcement using normal automatic acquisition rules.
 	"""
@@ -19349,6 +19369,10 @@ type MutationRoot {
 		"""
 		input: ReleaseTitleClaimInput!
 	): TitleClaim!
+	"""
+	Replace or clear explicitly supplied installation-wide settings.
+	"""
+	updateInstalledPluginSettings(pluginId: ID!, changes: JSON!): JSON!
 	"""
 	Refresh the configured plugin registry catalogs and return the available plugins.
 	"""
@@ -23509,6 +23533,10 @@ type QueryRoot {
 		limit: Int
 	): [PostProcessingScriptRunPayload!]!
 	"""
+	Read the installed plugin's settings declaration and redacted values.
+	"""
+	installedPluginSettings(pluginId: ID!): JSON!
+	"""
 	List available registry plugins visible to the caller.
 	"""
 	plugins: [RegistryPluginPayload!]!
@@ -25267,6 +25295,14 @@ type ResumeWantedItemPayload {
 	State-row ID or convergence scope key that was resumed.
 	"""
 	id: ID!
+}
+
+input RetryDownloadPasswordInput {
+	downloadId: ID!
+	clientId: ID!
+	clientType: String!
+	downloadClientItemId: String!
+	password: String!
 }
 
 """

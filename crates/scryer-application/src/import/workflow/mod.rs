@@ -1,3 +1,5 @@
+mod sidecars;
+
 use crate::helpers::parse_usable_release_title;
 use crate::import::srrdb::{crc32_iso_hdlc_of_file, srrdb_lookup_applies};
 #[cfg(test)]
