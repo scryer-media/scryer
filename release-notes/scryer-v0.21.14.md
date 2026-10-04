@@ -1,4 +1,4 @@
-# Scryer 0.21.13 release notes
+# Scryer 0.21.14 release notes
 
 These notes cover what's changed since **0.21.12**.
 
