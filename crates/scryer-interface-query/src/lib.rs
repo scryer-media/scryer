@@ -4100,6 +4100,22 @@ impl AcquisitionQueries {
 
     // ── Plugins ──────────────────────────────────────────────────────────
 
+    /// Read the installed plugin's settings declaration and redacted values.
+    async fn installed_plugin_settings(
+        &self,
+        ctx: &Context<'_>,
+        plugin_id: ID,
+    ) -> GqlResult<async_graphql::Json<async_graphql::Value>> {
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let settings = app_from_ctx(ctx)?
+            .installed_plugin_settings(&actor, plugin_id.as_str())
+            .await
+            .map_err(to_gql_error)?;
+        async_graphql::Value::from_json(settings)
+            .map(async_graphql::Json)
+            .map_err(|_| async_graphql::Error::new("unable to serialize plugin settings"))
+    }
+
     /// List available registry plugins visible to the caller.
     async fn plugins(&self, ctx: &Context<'_>) -> GqlResult<Vec<RegistryPluginPayload>> {
         let app = app_from_ctx(ctx)?;

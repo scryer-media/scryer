@@ -1,3 +1,4 @@
+import { canRetryDownloadPassword } from "@/lib/hooks/use-download-password-retry";
 import {
   ArrowDownToLine,
   CircleAlert,
@@ -275,11 +276,11 @@ export const QueueTableRow = memo(function QueueTableRow({
                 <Pause className="h-6 w-6" />
               </QueueIconAction>
             )}
-            {row.canResume && (
+            {(row.canResume || canRetryDownloadPassword(queueItem)) && (
               <QueueIconAction
                 className={`h-10 w-10 border border-border/50 bg-muted/70 text-foreground hover:bg-accent/90 ${rowActionVisualClass}`}
                 disabled={isRowFullyBusy}
-                label={t("queue.resume")}
+                label={t(canRetryDownloadPassword(queueItem) ? "importHistory.retryWithPassword" : "queue.resume")}
                 onClick={() => {
                   if (
                     isActionLoading || isRowBlocked

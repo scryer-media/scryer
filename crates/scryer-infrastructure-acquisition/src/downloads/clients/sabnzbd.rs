@@ -1130,8 +1130,8 @@ impl DownloadClient for SabnzbdDownloadClient {
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
         let title = &request.title;
-        let nzb_name = request
-            .source_title
+        let source_title = request.source_title_without_password();
+        let nzb_name = source_title
             .as_deref()
             .map(str::trim)
             .filter(|v| !v.is_empty())
@@ -1152,12 +1152,7 @@ impl DownloadClient for SabnzbdDownloadClient {
                 .map(str::trim)
                 .filter(|value| !value.is_empty())
                 .map(str::to_string);
-            let password = request
-                .source_password
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty() && *value != "0")
-                .map(str::to_string);
+            let password = request.password_candidates().first().map(str::to_string);
             let nzb_name_owned = nzb_name.to_string();
             let queue_priority =
                 sabnzbd_queue_priority(request.queue_priority.as_deref()).to_string();
@@ -1449,6 +1444,70 @@ impl DownloadClient for SabnzbdDownloadClient {
         )
         .await?;
         Ok(())
+    }
+
+    async fn retry_failed_job(
+        &self,
+        id: &str,
+        password: &str,
+    ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
+        use scryer_application::DownloadClientRetryOutcome as Outcome;
+        if password.is_empty() || id.is_empty() {
+            return Err(AppError::Validation(
+                "job ID and replacement password are required".into(),
+            ));
+        }
+        let url = self.resolve_addfile_url().await?;
+        let mut fields = vec![
+            ("output", "json".to_string()),
+            ("mode", "retry".to_string()),
+            ("value", id.to_string()),
+            ("password", password.to_string()),
+        ];
+        match self.api_auth()? {
+            SabApiAuth::ApiKey(key) => fields.push(("apikey", key)),
+            SabApiAuth::Credentials { username, password } => {
+                fields.push(("ma_username", username));
+                fields.push(("ma_password", password));
+            }
+        }
+        // Secrets stay in the POST body. Dispatch once to one resolved endpoint.
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(fields.iter().map(|(name, value)| (*name, value.as_str())))
+            .finish();
+        let response = match self
+            .outbound_http
+            .send(self.mutation_policy("sabnzbd_retry"), || {
+                self.outbound_http
+                    .client()
+                    .post(&url)
+                    .header("Content-Type", "application/x-www-form-urlencoded")
+                    .body(body.clone())
+                    .timeout(SABNZBD_HTTP_REQUEST_TIMEOUT)
+            })
+            .await
+        {
+            Ok(response) => response,
+            Err(_) => return Ok(Outcome::Uncertain),
+        };
+        if !response.status().is_success() {
+            return Ok(Outcome::Uncertain);
+        }
+        let Ok(response) = response.json::<Value>().await else {
+            return Ok(Outcome::Uncertain);
+        };
+        match response.get("status").and_then(Value::as_bool) {
+            Some(false) => Ok(Outcome::Refused),
+            Some(true) => Ok(response
+                .get("nzo_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(|id| Outcome::Accepted {
+                    item_id: id.to_string(),
+                })
+                .unwrap_or(Outcome::Uncertain)),
+            None => Ok(Outcome::Uncertain),
+        }
     }
 
     /// A history delete includes `del_files=1` only when `remove_data` is
@@ -2356,6 +2415,16 @@ fn sabnzbd_history_state(
             .map(str::trim)
             .filter(|value| !value.is_empty())
     {
+        if fail_message.eq_ignore_ascii_case("Unpacking failed, archive requires a password") {
+            return Some((
+                DownloadQueueState::Failed,
+                Some(
+                    scryer_domain::DownloadPasswordFailure::Required
+                        .message()
+                        .into(),
+                ),
+            ));
+        }
         if fail_message.eq_ignore_ascii_case(UNPACK_WRITE_FAILURE) {
             return Some((DownloadQueueState::Warning, Some(fail_message.to_string())));
         }
@@ -2645,6 +2714,64 @@ mod tests {
 
     use crate::downloads::staged_nzb_store::FileSystemStagedNzbStore;
 
+    #[tokio::test]
+    async fn password_retry_posts_secret_once_and_preserves_ambiguous_outcome() {
+        use scryer_application::DownloadClientRetryOutcome as Outcome;
+        for valid_reply in [true, false] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/api"))
+                .and(query_param("mode", "queue"))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(json!({"queue": {"slots": []}})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/api"))
+                .respond_with(if valid_reply {
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"status": true, "nzo_id": "new-job"}))
+                } else {
+                    ResponseTemplate::new(502).set_body_string("synthetic secret response")
+                })
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client =
+                super::SabnzbdDownloadClient::new(server.uri(), "synthetic-api-key".into());
+            let result = client
+                .retry_failed_job("old-job", " synthetic &=密碼 ")
+                .await
+                .unwrap();
+            assert_eq!(
+                result,
+                if valid_reply {
+                    Outcome::Accepted {
+                        item_id: "new-job".into(),
+                    }
+                } else {
+                    Outcome::Uncertain
+                }
+            );
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 2);
+            let request = &requests[1];
+            assert!(request.url.query().is_none());
+            let fields: std::collections::HashMap<_, _> =
+                url::form_urlencoded::parse(&request.body)
+                    .into_owned()
+                    .collect();
+            assert_eq!(
+                fields.get("password").map(String::as_str),
+                Some(" synthetic &=密碼 ")
+            );
+            assert_eq!(fields.get("mode").map(String::as_str), Some("retry"));
+            assert_eq!(fields.get("value").map(String::as_str), Some("old-job"));
+        }
+    }
+
     fn test_add_request(download_id: &str) -> DownloadClientAddRequest {
         let facet = MediaFacet::Movie;
         DownloadClientAddRequest {
@@ -2695,6 +2822,7 @@ mod tests {
             source_hint: Some("https://example.invalid/release.nzb".to_string()),
             staged_nzb: None,
             resolved_download_artifact: Some(ResolvedDownloadArtifact::Nzb {
+                password_candidates: Default::default(),
                 bytes: b"<nzb></nzb>".to_vec(),
                 file_name: Some("Test Release.nzb".to_string()),
                 content_type: Some("application/x-nzb".to_string()),

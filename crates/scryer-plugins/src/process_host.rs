@@ -486,6 +486,7 @@ mod tests {
 
     fn notification_descriptor(requires_host_process: bool) -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: "custom-script".to_string(),
             name: "Custom Script".to_string(),
             version: "0.1.0".to_string(),

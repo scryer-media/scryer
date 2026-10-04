@@ -89,7 +89,9 @@ impl AcquisitionIndexerArtifactResolver {
         )
         .await?
         {
-            BufferedOrStagedNzb::Staged(lease) => {
+            BufferedOrStagedNzb::Staged(mut lease) => {
+                lease.staged_nzb.password_candidates =
+                    super::artifact_transport::nzb_header_passwords(headers.as_ref());
                 Ok(PreparedIndexerArtifact::StagedNzb(Box::new(lease)))
             }
             BufferedOrStagedNzb::Buffered(bytes) => {
@@ -178,8 +180,12 @@ impl AcquisitionIndexerArtifactResolver {
             }
         };
         match artifact {
-            ResolvedDownloadArtifact::Nzb { bytes, .. } => {
-                let lease = stage_nzb_from_bytes(
+            ResolvedDownloadArtifact::Nzb {
+                bytes,
+                password_candidates,
+                ..
+            } => {
+                let mut lease = stage_nzb_from_bytes(
                     &self.staged_nzb_store,
                     &self.staged_nzb_pipeline_limit,
                     "indexer_artifact",
@@ -189,6 +195,7 @@ impl AcquisitionIndexerArtifactResolver {
                     bytes,
                 )
                 .await?;
+                lease.staged_nzb.password_candidates = password_candidates;
                 Ok(PreparedIndexerArtifact::StagedNzb(Box::new(lease)))
             }
             ResolvedDownloadArtifact::TorrentFile {

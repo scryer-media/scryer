@@ -4762,6 +4762,8 @@ pub trait SubtitleProviderConfigRepository: Send + Sync {
 
 #[async_trait]
 pub trait SettingsRepository: Send + Sync {
+    /// Invalidate cached values after an atomic mutation owned by another repository.
+    fn invalidate_cache(&self) {}
     async fn get_setting_json(
         &self,
         scope: &str,
@@ -5344,8 +5346,94 @@ pub struct IdentityTrackedStateTarget<'a> {
     pub source_identity: Option<&'a ClientJobLocator>,
 }
 
+pub const DOWNLOAD_PASSWORD_RETRY_REASON: &str = "download_password_retry";
+pub const DOWNLOAD_PASSWORD_REQUIRED_REASON: &str = "archive_password_required";
+pub const DOWNLOAD_PASSWORD_AMBIGUOUS_REASON: &str = "archive_password_or_corruption";
+
+/// Durable dispatch ownership contains no password values.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DownloadPasswordRetryClaim {
+    pub download_id: DownloadId,
+    pub authorized_title_id: String,
+    #[serde(with = "import_retry_locator")]
+    pub source: ClientJobLocator,
+    pub attempt_id: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadPasswordRetryClaimOutcome {
+    Claimed,
+    Busy,
+}
+
+/// Recovery evidence is scoped to one attempt and its currently bound client job.
+#[derive(Clone, Debug)]
+pub struct DownloadPasswordRetryObservation {
+    pub claim: DownloadPasswordRetryClaim,
+    pub source: ClientJobLocator,
+    pub confirmed: bool,
+}
+
 #[async_trait]
 pub trait DownloadSubmissionRepository: Send + Sync {
+    async fn claim_password_retry(
+        &self,
+        _claim: &DownloadPasswordRetryClaim,
+        _password: &str,
+    ) -> AppResult<DownloadPasswordRetryClaimOutcome> {
+        Err(AppError::Repository(
+            "durable download password retry is unavailable".into(),
+        ))
+    }
+
+    /// Uncertain dispatch remains fenced; it must never be replayed automatically.
+    async fn finish_password_retry(
+        &self,
+        _claim: &DownloadPasswordRetryClaim,
+        _outcome: &crate::DownloadClientRetryOutcome,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "durable download password retry is unavailable".into(),
+        ))
+    }
+
+    async fn password_retry_observation(
+        &self,
+        _id: &DownloadId,
+    ) -> AppResult<Option<DownloadPasswordRetryObservation>> {
+        Ok(None)
+    }
+
+    /// Accept only evidence fetched after reading the attempt, never a queued snapshot.
+    async fn confirm_password_retry_observation(
+        &self,
+        _observation: &DownloadPasswordRetryObservation,
+        _state: scryer_domain::DownloadQueueState,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn set_password_candidates(
+        &self,
+        _id: &DownloadId,
+        candidates: &crate::DownloadPasswordCandidates,
+    ) -> AppResult<()> {
+        if candidates.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::Repository(
+                "download password persistence is unavailable".into(),
+            ))
+        }
+    }
+
+    async fn password_candidates(
+        &self,
+        _id: &DownloadId,
+    ) -> AppResult<crate::DownloadPasswordCandidates> {
+        Ok(Default::default())
+    }
+
     fn supports_durable_download_cleanup(&self) -> bool {
         false
     }
@@ -9274,6 +9362,33 @@ pub trait IndexerPluginProvider: Send + Sync {
     fn builtin_provider_types(&self) -> Vec<String> {
         vec![]
     }
+    fn builtin_descriptor_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> Option<scryer_plugin_sdk::PluginDescriptor> {
+        None
+    }
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        if !settings.is_empty() {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.restore_builtin_plugin(provider_type)
+    }
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        if settings.values().any(|values| !values.is_empty()) {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.reload_runtime_plugins(runtime_plugins, disabled_builtins)
+    }
     fn plugin_version_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
     }
@@ -9395,11 +9510,25 @@ pub struct ExternalPluginWasm<'a> {
     pub first_party: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RuntimePluginLoad {
+    /// Database installation identity; absent only during pre-install validation.
+    pub installation_id: Option<String>,
     pub descriptor: scryer_plugin_sdk::PluginDescriptor,
     pub wasm_bytes: Vec<u8>,
     pub first_party: bool,
+    /// Installation-scoped values; never serialized with the public descriptor.
+    pub settings: std::collections::BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for RuntimePluginLoad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimePluginLoad")
+            .field("plugin_id", &self.descriptor.id)
+            .field("first_party", &self.first_party)
+            .field("setting_count", &self.settings.len())
+            .finish_non_exhaustive()
+    }
 }
 
 pub trait DownloadClientPluginProvider: Send + Sync {
@@ -9850,6 +9979,33 @@ pub trait SubtitlePluginProvider: Send + Sync {
     fn builtin_provider_types(&self) -> Vec<String> {
         vec![]
     }
+    fn builtin_descriptor_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> Option<scryer_plugin_sdk::PluginDescriptor> {
+        None
+    }
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        if !settings.is_empty() {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.restore_builtin_plugin(provider_type)
+    }
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        if settings.values().any(|values| !values.is_empty()) {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.reload_runtime_plugins(runtime_plugins, disabled_builtins)
+    }
     fn plugin_version_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
     }
@@ -9917,11 +10073,32 @@ pub trait ArchiveExtractorClient: Send + Sync {
     }
 }
 
+#[derive(Clone)]
+pub struct ArchiveExtractorSelection {
+    pub installation_id: Option<String>,
+    pub client: Arc<dyn ArchiveExtractorClient>,
+    pub passwords: crate::import::archive_passwords::ArchivePasswordCandidates,
+}
+
 pub trait ArchiveExtractorPluginProvider: Send + Sync {
     fn client_for_format(
         &self,
         format: ArchivePluginFormat,
     ) -> Option<Arc<dyn ArchiveExtractorClient>>;
+
+    /// A pinned client and its own installation-scoped password snapshot.
+    fn select_for_format(
+        &self,
+        format: ArchivePluginFormat,
+    ) -> AppResult<Option<ArchiveExtractorSelection>> {
+        Ok(self
+            .client_for_format(format)
+            .map(|client| ArchiveExtractorSelection {
+                installation_id: None,
+                client,
+                passwords: Default::default(),
+            }))
+    }
 
     fn available_provider_types(&self) -> Vec<String>;
 
@@ -9930,8 +10107,8 @@ pub trait ArchiveExtractorPluginProvider: Send + Sync {
         Err("this provider does not support runtime-load upsert".to_string())
     }
 
-    fn remove_runtime_plugin(&self, provider_type: &str) -> Result<(), String> {
-        let _ = provider_type;
+    fn remove_runtime_plugin(&self, installation_id: &str) -> Result<(), String> {
+        let _ = installation_id;
         Err("this provider does not support runtime-load removal".to_string())
     }
 
@@ -10677,6 +10854,27 @@ pub trait DownloadClient: Send + Sync {
 
     async fn resume_queue_item_for_client(&self, _client_id: &str, id: &str) -> AppResult<()> {
         self.resume_queue_item(id).await
+    }
+
+    /// Retry an existing failed job once. An uncertain result must be reconciled,
+    /// never replayed automatically or replaced with a fresh submission.
+    async fn retry_failed_job(
+        &self,
+        _id: &str,
+        _password: &str,
+    ) -> AppResult<crate::DownloadClientRetryOutcome> {
+        Err(AppError::Validation(
+            "password-aware retry is not supported by this download client".into(),
+        ))
+    }
+
+    async fn retry_failed_job_for_client(
+        &self,
+        _client_id: &str,
+        id: &str,
+        password: &str,
+    ) -> AppResult<crate::DownloadClientRetryOutcome> {
+        self.retry_failed_job(id, password).await
     }
 
     /// Remove one item from the client.

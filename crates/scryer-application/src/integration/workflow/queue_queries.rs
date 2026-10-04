@@ -1554,6 +1554,85 @@ impl AppUseCase {
         ))
     }
 
+    /// Resolve a local password retry only when the latest attempt still belongs
+    /// to the same canonical download. The retry mutation rechecks eligibility.
+    pub async fn password_retry_import_id_for_download(
+        &self,
+        actor: &User,
+        download_id: &str,
+        source: &ClientJobLocator,
+    ) -> AppResult<Option<String>> {
+        match self
+            .require_any_library_permission(actor, scryer_domain::LibraryPermission::ResolveImports)
+            .await
+        {
+            Ok(()) => {}
+            Err(AppError::Unauthorized(_)) => return Ok(None),
+            Err(error) => return Err(error),
+        }
+        let Some(download_id) =
+            scryer_domain::download_identity::DownloadId::from_wire(download_id)
+        else {
+            return Ok(None);
+        };
+        let Some(submission) = self
+            .services
+            .workflow
+            .download_submissions
+            .find_by_canonical_download_id(&download_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+        if !submission.title_id.is_empty() {
+            match self
+                .require_title_library_permission(
+                    actor,
+                    &submission.title_id,
+                    scryer_domain::LibraryPermission::ResolveImports,
+                )
+                .await
+            {
+                Ok(_) => {}
+                Err(AppError::Unauthorized(_) | AppError::NotFound(_)) => return Ok(None),
+                Err(error) => return Err(error),
+            }
+        }
+        let records = self
+            .services
+            .workflow
+            .imports
+            .list_imports_for_identities(std::slice::from_ref(source))
+            .await?;
+        let Some(record) = records
+            .into_iter()
+            .max_by(|left, right| left.updated_at.cmp(&right.updated_at))
+        else {
+            return Ok(None);
+        };
+        if !matches!(
+            record.status,
+            scryer_domain::ImportStatus::Failed | scryer_domain::ImportStatus::Skipped
+        ) || self
+            .services
+            .workflow
+            .imports
+            .canonical_download_id_for_import(&record.id)
+            .await?
+            != Some(download_id)
+        {
+            return Ok(None);
+        }
+        let password_failed = record
+            .result_json
+            .as_deref()
+            .and_then(|json| serde_json::from_str::<scryer_domain::ImportResult>(json).ok())
+            .is_some_and(|result| {
+                result.skip_reason == Some(scryer_domain::ImportSkipReason::PasswordRequired)
+            });
+        Ok(password_failed.then_some(record.id))
+    }
+
     pub async fn list_download_import_page(
         &self,
         actor: &User,

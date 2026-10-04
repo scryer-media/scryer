@@ -535,7 +535,11 @@ pub(crate) fn title_history_record_from_domain_event(
             data.client_name.clone(),
             None,
             None,
-            false,
+            data.canonical_download_id.is_some()
+                && data.reason.as_deref().is_some_and(|reason| {
+                    reason.starts_with("ARCHIVE_PASSWORD_REQUIRED:")
+                        || reason.starts_with("ARCHIVE_PASSWORD_OR_CORRUPTION:")
+                }),
             data.reason.clone(),
             None,
             None,
@@ -1526,6 +1530,7 @@ mod tests {
             ),
             (
                 DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                    canonical_download_id: None,
                     title: Some(title.clone()),
                     source_title: Some("Broken.Release".to_string()),
                     source_hint: Some("client".to_string()),
@@ -1753,6 +1758,7 @@ mod tests {
             1,
             Utc::now(),
             DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                canonical_download_id: None,
                 title: Some(title_snapshot("Planetes", MediaFacet::Anime)),
                 source_title: None,
                 source_hint: Some(source_hint),

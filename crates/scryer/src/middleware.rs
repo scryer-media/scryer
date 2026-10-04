@@ -3064,7 +3064,8 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         AppError::ArchiveExtractionPluginRequired { message, .. } => {
             (StatusCode::CONFLICT, Json(ErrorResponse::new(message))).into_response()
         }
-        AppError::ArchiveExtractionFailed { message } => {
+        AppError::ArchiveExtractionFailed { message }
+        | AppError::ArchivePasswordRequired { message } => {
             (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message))).into_response()
         }
         AppError::ArchiveExtractionTimedOut { message } => (

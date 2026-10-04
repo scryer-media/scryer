@@ -465,6 +465,26 @@ async fn archive_password_candidates(
 ) -> crate::import::archive_passwords::ArchivePasswordCandidates {
     let mut candidates = crate::import::archive_passwords::ArchivePasswordCandidates::default();
     candidates.push_operator(operator_password);
+    if let Some(id) = completed
+        .download_id
+        .as_deref()
+        .and_then(scryer_domain::download_identity::DownloadId::parse)
+    {
+        match app
+            .services
+            .workflow
+            .download_submissions
+            .password_candidates(&id)
+            .await
+        {
+            Ok(values) => {
+                for value in values.iter() {
+                    candidates.push_response_header(value);
+                }
+            }
+            Err(_) => tracing::warn!("stored download password candidates could not be loaded"),
+        }
+    }
     if let (Some(title_id), Some(source_title)) = (
         release_evidence.title_id(),
         release_evidence.submission_source_title(),
@@ -486,21 +506,6 @@ async fn archive_password_candidates(
     }
     candidates.push_release_name(completed.release_name.as_deref());
     candidates.push_release_name(Some(&completed.name));
-    if let Some(path) = std::env::var_os("SCRYER_ARCHIVE_PASSWORD_FILE") {
-        let file_candidates = tokio::task::spawn_blocking(move || {
-            let mut values = crate::import::archive_passwords::ArchivePasswordCandidates::default();
-            values
-                .extend_from_file(std::path::Path::new(&path))
-                .map(|()| values)
-        })
-        .await;
-        match file_candidates {
-            Ok(Ok(values)) => candidates.extend(values),
-            _ => tracing::warn!(
-                "archive password file could not be loaded; continuing with release-specific candidates"
-            ),
-        }
-    }
     candidates
 }
 

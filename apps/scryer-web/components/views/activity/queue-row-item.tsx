@@ -1,3 +1,4 @@
+import { canRetryDownloadPassword } from "@/lib/hooks/use-download-password-retry";
 import {
   ArrowDownToLine,
   CircleAlert,
@@ -188,7 +189,7 @@ export const QueueRowItem = memo(function QueueRowItem({
             <span>{t("queue.pause")}</span>
           </Button>
         )}
-        {row.canResume && (
+        {(row.canResume || canRetryDownloadPassword(queueItem)) && (
           <Button
             type="button"
             size="sm"
@@ -205,7 +206,7 @@ export const QueueRowItem = memo(function QueueRowItem({
             }}
           >
             <Play className="h-4 w-4" />
-            <span>{t("queue.resume")}</span>
+            <span>{t(canRetryDownloadPassword(queueItem) ? "importHistory.retryWithPassword" : "queue.resume")}</span>
           </Button>
         )}
         {(row.canInteractiveManualImport || row.canDirectManualImport) && (

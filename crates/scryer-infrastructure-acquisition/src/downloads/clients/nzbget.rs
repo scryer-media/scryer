@@ -1252,7 +1252,7 @@ impl DownloadClient for NzbgetDownloadClient {
             .unwrap_or_default()
             .to_string();
 
-        let normalized_source_title = request.source_title.clone().and_then(|value| {
+        let normalized_source_title = request.source_title_without_password().and_then(|value| {
             let trimmed = value.trim().to_string();
             (!trimmed.is_empty()).then_some(trimmed)
         });
@@ -1276,12 +1276,7 @@ impl DownloadClient for NzbgetDownloadClient {
             request,
         )
         .await?;
-        let source_password = request
-            .source_password
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("0"))
-            .map(str::to_string);
+        let source_password = request.password_candidates().first().map(str::to_string);
 
         let facet_str =
             serde_json::to_string(&title.facet).unwrap_or_else(|_| "\"other\"".to_string());
@@ -1441,6 +1436,55 @@ impl DownloadClient for NzbgetDownloadClient {
             .parse()
             .map_err(|_| AppError::Validation(format!("invalid nzbget queue id: {id}")))?;
         self.edit_queue("GroupResume", vec![nzb_id]).await
+    }
+
+    async fn retry_failed_job(
+        &self,
+        id: &str,
+        password: &str,
+    ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
+        use scryer_application::DownloadClientRetryOutcome as Outcome;
+        let nzb_id: i64 = id
+            .parse()
+            .ok()
+            .filter(|id| *id > 0)
+            .ok_or_else(|| AppError::Validation("invalid nzbget job ID".into()))?;
+        if password.is_empty() {
+            return Err(AppError::Validation(
+                "replacement password is required".into(),
+            ));
+        }
+        let update = self
+            .rpc_call_with_policy(
+                "editqueue",
+                vec![
+                    json!("HistorySetParameter"),
+                    json!(format!("*Unpack:Password={password}")),
+                    json!([nzb_id]),
+                ],
+                self.mutation_policy("nzbget_retry_password"),
+            )
+            .await;
+        match update {
+            Ok(Value::Bool(true)) => {}
+            Ok(Value::Bool(false)) => return Ok(Outcome::Refused),
+            _ => return Ok(Outcome::Uncertain),
+        }
+        // A refused or ambiguous password update never schedules reprocessing.
+        match self
+            .rpc_call_with_policy(
+                "editqueue",
+                vec![json!("HistoryProcess"), json!(""), json!([nzb_id])],
+                self.mutation_policy("nzbget_retry_process"),
+            )
+            .await
+        {
+            Ok(Value::Bool(true)) => Ok(Outcome::Accepted {
+                item_id: id.to_string(),
+            }),
+            Ok(Value::Bool(false)) => Ok(Outcome::Refused),
+            _ => Ok(Outcome::Uncertain),
+        }
     }
 
     /// NZBGet has no per-call file-deletion option for history entries.
@@ -2011,6 +2055,21 @@ fn map_history_state(
     status_upper: &str,
     entry: &serde_json::Map<String, Value>,
 ) -> (DownloadQueueState, Option<String>) {
+    if entry
+        .get("UnpackStatus")
+        .or_else(|| entry.get("unpackStatus"))
+        .and_then(Value::as_str)
+        .is_some_and(|status| status.eq_ignore_ascii_case("PASSWORD"))
+    {
+        return (
+            DownloadQueueState::Failed,
+            Some(
+                scryer_domain::DownloadPasswordFailure::Required
+                    .message()
+                    .into(),
+            ),
+        );
+    }
     if status_upper.starts_with("SUCCESS") {
         // Even with SUCCESS status, check individual stage fields for failures
         if let Some(reason) = check_history_stage_failure(entry) {
@@ -2327,6 +2386,49 @@ mod tests {
     use super::*;
     use wiremock::matchers::{body_partial_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn password_retry_updates_before_processing_and_stops_on_update_failure() {
+        use scryer_application::DownloadClientRetryOutcome as Outcome;
+        for applied in [true, false] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST")).and(path("/jsonrpc"))
+                .and(body_partial_json(json!({"method": "editqueue", "params": ["HistorySetParameter", "*Unpack:Password= synthetic &=密碼 ", [42]]})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": applied})))
+                .expect(1).mount(&server).await;
+            mount_editqueue(&server, "HistoryProcess", 42, true, u64::from(applied)).await;
+            let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".into());
+            assert_eq!(
+                client
+                    .retry_failed_job("42", " synthetic &=密碼 ")
+                    .await
+                    .unwrap(),
+                if applied {
+                    Outcome::Accepted {
+                        item_id: "42".into(),
+                    }
+                } else {
+                    Outcome::Refused
+                }
+            );
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), if applied { 2 } else { 1 });
+            let first: Value = serde_json::from_slice(&requests[0].body).unwrap();
+            assert_eq!(first["params"][0], "HistorySetParameter");
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/jsonrpc"))
+            .respond_with(ResponseTemplate::new(502).set_body_string("synthetic secret response"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".into());
+        assert_eq!(
+            client.retry_failed_job("42", "synthetic").await.unwrap(),
+            Outcome::Uncertain
+        );
+    }
 
     async fn mount_editqueue(
         server: &MockServer,

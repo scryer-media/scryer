@@ -71,6 +71,7 @@ fn plugin(provider_type: &str, personal: bool, member_only: bool) -> PluginDescr
         rate_limit_seconds: None,
     };
     PluginDescriptor {
+        settings: Vec::new(),
         id: format!("{provider_type}-plugin"),
         name: "Fixture Lists".to_string(),
         version: "1.0.0".to_string(),

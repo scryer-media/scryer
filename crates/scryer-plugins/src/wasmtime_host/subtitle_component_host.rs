@@ -984,6 +984,7 @@ pub(crate) mod tests {
 
     fn subtitle_descriptor_json() -> String {
         let descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "fixture-subtitle".to_string(),
             name: "Fixture Subtitle".to_string(),
             version: "1.0.0".to_string(),

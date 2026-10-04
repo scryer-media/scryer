@@ -80,6 +80,26 @@ impl WasmIndexerClient {
         proxy_config: Option<ProxyConfig>,
         indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
     ) -> Result<Self, AppError> {
+        Self::new_component_with_plugin_settings(
+            wasm_bytes,
+            descriptor,
+            indexer_name,
+            config,
+            proxy_config,
+            indexer_error_recorder,
+            &BTreeMap::new(),
+        )
+    }
+
+    pub(crate) fn new_component_with_plugin_settings(
+        wasm_bytes: Vec<u8>,
+        descriptor: PluginDescriptor,
+        indexer_name: String,
+        config: IndexerConfig,
+        proxy_config: Option<ProxyConfig>,
+        indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
+        settings: &BTreeMap<String, String>,
+    ) -> Result<Self, AppError> {
         let inputs = build_runtime_inputs(&descriptor, &indexer_name, &config, proxy_config);
         let indexer_base_url = resolve_connection_url(&descriptor, Some(&inputs.config_entries))
             .unwrap_or_else(|| config.base_url.clone());
@@ -109,11 +129,13 @@ impl WasmIndexerClient {
         } else {
             None
         };
+        let mut host_config = inputs
+            .config_entries
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        crate::loader::bind_plugin_settings(&mut host_config, settings);
         let host = ComponentHost::for_indexer_with_provider_profile(
-            inputs
-                .config_entries
-                .into_iter()
-                .collect::<BTreeMap<_, _>>(),
+            host_config,
             inputs.allowed_hosts,
             inputs.egress_policy,
             inputs.proxy_policy,
@@ -571,6 +593,12 @@ struct IndexerGrabPayload {
     content_type: Option<String>,
     #[serde(default)]
     info_hash_hint: Option<String>,
+    #[serde(default)]
+    source_kind: Option<String>,
+    #[serde(default)]
+    response_headers: std::collections::BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    password_candidates: Vec<String>,
 }
 
 /// Turn one `grab` action result into a router artifact.
@@ -605,10 +633,8 @@ fn decode_grab_result(
     {
         return Ok(None);
     }
-    let payload: IndexerGrabPayload = serde_json::from_value(payload).map_err(|error| {
-        AppError::Repository(format!(
-            "indexer download resolution returned an invalid grab payload: {error}"
-        ))
+    let payload: IndexerGrabPayload = serde_json::from_value(payload).map_err(|_| {
+        AppError::Repository("indexer download resolution returned an invalid grab payload".into())
     })?;
     let url = payload.url.trim().to_string();
     if is_valid_magnet_uri(&url) {
@@ -623,6 +649,43 @@ fn decode_grab_result(
         return Err(AppError::Repository(
             "indexer download resolution returned an empty grab payload".to_string(),
         ));
+    }
+
+    let is_nzb = payload
+        .source_kind
+        .as_deref()
+        .is_some_and(|kind| kind.eq_ignore_ascii_case("nzb"))
+        || payload.content_type.as_deref().is_some_and(|kind| {
+            kind.split(';')
+                .next()
+                .is_some_and(|kind| matches!(kind.trim(), "application/x-nzb" | "application/nzb"))
+        })
+        || payload
+            .file_name
+            .as_deref()
+            .is_some_and(|name| name.to_ascii_lowercase().ends_with(".nzb"));
+    if is_nzb {
+        let mut password_candidates = scryer_application::DownloadPasswordCandidates::default();
+        for (name, value) in &payload.response_headers {
+            if name.eq_ignore_ascii_case("x-dnzb-password") {
+                match value {
+                    serde_json::Value::String(value) => password_candidates.push(value),
+                    serde_json::Value::Array(values) => {
+                        for value in values.iter().filter_map(serde_json::Value::as_str) {
+                            password_candidates.push(value);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        password_candidates.extend(payload.password_candidates.iter().map(String::as_str));
+        return Ok(Some(ResolvedDownloadArtifact::Nzb {
+            bytes: payload.body,
+            file_name: payload.file_name,
+            content_type: payload.content_type,
+            password_candidates,
+        }));
     }
 
     Ok(Some(ResolvedDownloadArtifact::TorrentFile {
@@ -1455,6 +1518,14 @@ fn plugin_password_hint(
             extra
                 .get("password")
                 .and_then(|value| value.as_str())
+                // This legacy provider-extra field mixes protection markers
+                // with actual passwords. The typed password_hint is literal.
+                .filter(|value| {
+                    !matches!(
+                        value.trim().to_ascii_lowercase().as_str(),
+                        "1" | "true" | "yes" | "protected" | "passworded" | "0" | "false" | "no"
+                    )
+                })
                 .and_then(|value| normalize_release_password(Some(value)))
         })
 }
@@ -1953,6 +2024,39 @@ mod tests {
         assert_eq!(request.rss_catch_up, None);
         let wire = serde_json::to_value(&request).expect("request should serialize");
         assert!(wire.get("rss_catch_up").is_none());
+    }
+
+    #[test]
+    fn grab_nzb_payload_preserves_headers_and_opaque_bytes() {
+        let bytes = b"<nzb><head><meta type=\"password\">untouched</meta></head></nzb>";
+        let artifact = decode_grab_result(PluginResult::Ok(PluginActionResponse {
+            payload: serde_json::json!({
+                "url": "https://indexer.example/download/1",
+                "body": bytes.to_vec(),
+                "source_kind": "nzb",
+                "response_headers": {"X-DNZB-Password": ["1", " synthetic ", "1"]},
+                "password_candidates": ["true", " synthetic "]
+            }),
+        }))
+        .unwrap()
+        .unwrap();
+        let ResolvedDownloadArtifact::Nzb {
+            bytes: actual,
+            password_candidates,
+            ..
+        } = artifact
+        else {
+            panic!("expected NZB artifact");
+        };
+        assert_eq!(actual, bytes);
+        assert_eq!(
+            password_candidates
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["1", " synthetic ", "true"]
+        );
+        assert!(!format!("{password_candidates:?}").contains("synthetic"));
     }
 
     #[test]
@@ -2494,7 +2598,7 @@ mod tests {
         let extra = merge_result_extra(&result);
         assert_eq!(
             plugin_password_hint(&result, &extra).as_deref(),
-            Some("archive-password")
+            Some(" archive-password ")
         );
 
         let result = scryer_plugin_sdk::PluginSearchResult {
@@ -2504,7 +2608,7 @@ mod tests {
         let extra = merge_result_extra(&result);
         assert_eq!(
             plugin_password_hint(&result, &extra).as_deref(),
-            Some("direct-password")
+            Some(" direct-password ")
         );
     }
 
@@ -2598,6 +2702,7 @@ mod tests {
 
     fn descriptor_with_base_url_role(provider_type: &str) -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: format!("{provider_type}_test"),
             name: "Test".to_string(),
             version: "0.0.0".to_string(),

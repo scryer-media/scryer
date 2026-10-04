@@ -1621,6 +1621,33 @@ impl ReleaseDecisionPayload {
 
 #[ComplexObject]
 impl DownloadQueueItemPayload {
+    /// Failed local extraction attempt that can accept a replacement password.
+    async fn password_retry_import_id(&self, ctx: &Context<'_>) -> GqlResult<Option<ID>> {
+        if !matches!(
+            self.import_status,
+            Some(ImportStatusValue::Failed | ImportStatusValue::Skipped)
+        ) {
+            return Ok(None);
+        }
+        let Some(download_id) = self.download_id.as_deref() else {
+            return Ok(None);
+        };
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.password_retry_import_id_for_download(
+            &actor,
+            download_id,
+            &scryer_application::ClientJobLocator::new(
+                Some(self.client_id.as_str()),
+                &self.client_type,
+                &self.download_client_item_id,
+            ),
+        )
+        .await
+        .map(|id| id.map(Into::into))
+        .map_err(to_gql_error)
+    }
+
     /// Acquisition scope for this queue item, or its episode scope when no more specific scope is available.
     async fn queue_scope(&self, ctx: &Context<'_>) -> GqlResult<Option<QueueDownloadScopePayload>> {
         Box::pin(async move {

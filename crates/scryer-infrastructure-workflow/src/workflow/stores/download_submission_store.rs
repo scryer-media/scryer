@@ -15,15 +15,28 @@ use super::unique_violation::run_in_transaction_retrying_unique_violation;
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
 
 include!("download_cleanup.rs");
+include!("download_password_retry.rs");
 
 #[derive(Clone)]
 pub struct DownloadSubmissionStore {
     datastore: StoreDatastore,
+    encryption_key: std::sync::Arc<std::sync::RwLock<Option<crate::encryption::EncryptionKey>>>,
 }
 
 impl DownloadSubmissionStore {
     pub fn new(datastore: StoreDatastore) -> Self {
-        Self { datastore }
+        Self {
+            datastore,
+            encryption_key: Default::default(),
+        }
+    }
+
+    pub fn with_encryption_key(
+        mut self,
+        key: std::sync::Arc<std::sync::RwLock<Option<crate::encryption::EncryptionKey>>>,
+    ) -> Self {
+        self.encryption_key = key;
+        self
     }
 
     async fn find_by_canonical_download_id(
@@ -749,8 +762,171 @@ fn lenient_timestamp(
     }))
 }
 
+async fn retain_adopted_passwords_tx(
+    tx: &mut SqlTx<'_>,
+    key: Option<&crate::encryption::EncryptionKey>,
+    requested: &DownloadId,
+    adopted: &DownloadId,
+    title_id: &str,
+) -> AppResult<()> {
+    let source = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT password_candidates FROM download_submissions WHERE id = {} AND title_id = {}",
+        &[
+            SqlArg::Text(requested.to_string()),
+            SqlArg::Text(title_id.to_string()),
+        ],
+    )
+    .await?;
+    let Some(encrypted) = source
+        .map(|row| row.opt_text("password_candidates"))
+        .transpose()?
+        .flatten()
+    else {
+        return Ok(());
+    };
+    let destination = SqlRuntime::fetch_optional(
+        SqlExec::Tx(tx),
+        "SELECT password_candidates FROM download_submissions WHERE id = {} AND title_id = {}",
+        &[
+            SqlArg::Text(adopted.to_string()),
+            SqlArg::Text(title_id.to_string()),
+        ],
+    )
+    .await?;
+    let Some(destination) = destination else {
+        return Err(AppError::Repository(
+            "cannot retain passwords for an unverified adopted download".into(),
+        ));
+    };
+    let decode =
+        |value: Option<String>| -> AppResult<scryer_application::DownloadPasswordCandidates> {
+            crate::config_store::decrypt_optional_value(key, value, "download passwords", true)?
+                .map(|value| {
+                    serde_json::from_str(&value).map_err(|_| {
+                        AppError::Repository("could not decode download passwords".into())
+                    })
+                })
+                .transpose()
+                .map(Option::unwrap_or_default)
+        };
+    let mut values = decode(destination.opt_text("password_candidates")?)?;
+    values.extend(decode(Some(encrypted))?.iter().map(String::as_str));
+    let json = serde_json::to_string(&values)
+        .map_err(|_| AppError::Repository("could not encode download passwords".into()))?;
+    let encrypted =
+        crate::config_store::encrypt_optional_value(key, Some(&json), "download passwords", true)?;
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "UPDATE download_submissions SET password_candidates = {} WHERE id = {}",
+        &[
+            SqlArg::OptText(encrypted),
+            SqlArg::Text(adopted.to_string()),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
 #[async_trait]
 impl DownloadSubmissionRepository for DownloadSubmissionStore {
+    async fn claim_password_retry(
+        &self,
+        claim: &DownloadPasswordRetryClaim,
+        password: &str,
+    ) -> AppResult<DownloadPasswordRetryClaimOutcome> {
+        self.claim_remote_password_retry(claim, password).await
+    }
+
+    async fn finish_password_retry(
+        &self,
+        claim: &DownloadPasswordRetryClaim,
+        outcome: &DownloadClientRetryOutcome,
+    ) -> AppResult<()> {
+        self.finish_remote_password_retry(claim, outcome).await
+    }
+
+    async fn password_retry_observation(
+        &self,
+        id: &DownloadId,
+    ) -> AppResult<Option<DownloadPasswordRetryObservation>> {
+        self.read_password_retry_observation(id).await
+    }
+
+    async fn confirm_password_retry_observation(
+        &self,
+        observation: &DownloadPasswordRetryObservation,
+        state: scryer_domain::DownloadQueueState,
+    ) -> AppResult<bool> {
+        self.apply_password_retry_observation(observation, state)
+            .await
+    }
+
+    async fn set_password_candidates(
+        &self,
+        id: &DownloadId,
+        candidates: &scryer_application::DownloadPasswordCandidates,
+    ) -> AppResult<()> {
+        if candidates.is_empty() {
+            return Ok(());
+        }
+        let key = crate::config_store::current_encryption_key(&self.encryption_key)?;
+        let json = serde_json::to_string(candidates)
+            .map_err(|_| AppError::Repository("could not encode download passwords".into()))?;
+        let encrypted = crate::config_store::encrypt_optional_value(
+            key.as_ref(),
+            Some(&json),
+            "download passwords",
+            true,
+        )?;
+        let args = vec![SqlArg::OptText(encrypted), SqlArg::Text(id.to_string())];
+        SqlRuntime::run_in_transaction(&self.datastore, "set_download_passwords", move |tx| {
+            let args = args.clone();
+            Box::pin(async move {
+                if SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE download_submissions SET password_candidates = {} WHERE id = {}",
+                    &args,
+                )
+                .await?
+                    == 0
+                {
+                    return Err(AppError::NotFound("download submission not found".into()));
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn password_candidates(
+        &self,
+        id: &DownloadId,
+    ) -> AppResult<scryer_application::DownloadPasswordCandidates> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT password_candidates FROM download_submissions WHERE id = {}",
+            &[SqlArg::Text(id.to_string())],
+        )
+        .await?;
+        let Some(row) = row else {
+            return Ok(Default::default());
+        };
+        let key = crate::config_store::current_encryption_key(&self.encryption_key)?;
+        let json = crate::config_store::decrypt_optional_value(
+            key.as_ref(),
+            row.opt_text("password_candidates")?,
+            "download passwords",
+            true,
+        )?;
+        json.map(|json| {
+            serde_json::from_str(&json)
+                .map_err(|_| AppError::Repository("could not decode download passwords".into()))
+        })
+        .transpose()
+        .map(Option::unwrap_or_default)
+    }
+
     fn supports_durable_download_cleanup(&self) -> bool {
         true
     }
@@ -943,6 +1119,7 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
     ) -> AppResult<CanonicalDownloadIdentityDisposition> {
         let requested_download_id = submission.download_id;
         let locator = ClientJobLocator::from_submission(&submission);
+        let encryption_key = crate::config_store::current_encryption_key(&self.encryption_key)?;
         run_in_transaction_retrying_unique_violation(
             &self.datastore,
             "record_download_submission_with_identity_disposition",
@@ -951,12 +1128,21 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                 let submission_identity = submission_identity.clone();
                 let seed_goals = seed_goals.clone();
                 let locator = locator.clone();
+                let encryption_key = encryption_key.clone();
                 Box::pin(async move {
                     if let Some(download_id) =
                         active_binding_download_id(SqlExec::Tx(tx), &locator).await?
                         && download_id != requested_download_id
                         && !bound_download_is_terminal_tx(tx, &download_id).await?
                     {
+                        retain_adopted_passwords_tx(
+                            tx,
+                            encryption_key.as_ref(),
+                            &requested_download_id,
+                            &download_id,
+                            &submission.title_id,
+                        )
+                        .await?;
                         // The grab resolved to another download, so the intent
                         // it recorded under its own id describes nothing.
                         withdraw_pending_download_submission_tx(tx, &requested_download_id).await?;
@@ -1009,6 +1195,14 @@ impl DownloadSubmissionRepository for DownloadSubmissionStore {
                     Ok(if effective_download_id == requested_download_id {
                         CanonicalDownloadIdentityDisposition::Requested
                     } else {
+                        retain_adopted_passwords_tx(
+                            tx,
+                            encryption_key.as_ref(),
+                            &requested_download_id,
+                            &effective_download_id,
+                            &submission.title_id,
+                        )
+                        .await?;
                         withdraw_pending_download_submission_tx(tx, &requested_download_id).await?;
                         CanonicalDownloadIdentityDisposition::AdoptedExisting {
                             download_id: effective_download_id,
@@ -2346,6 +2540,8 @@ mod seed_goal_tests {
                  info_hash TEXT,
                  release_size_bytes INTEGER,
                  release_listing_json TEXT,
+                 password_candidates TEXT,
+                 password_retry_state TEXT,
                  submitted_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ', 'now')),
                  collection_id TEXT,
                  tracked_state TEXT,
@@ -2425,7 +2621,8 @@ mod seed_goal_tests {
              );
              CREATE TABLE imports (
                  id TEXT PRIMARY KEY,
-                 canonical_download_id TEXT
+                 canonical_download_id TEXT,
+                 status TEXT NOT NULL DEFAULT 'completed'
              )",
         )
         .execute(&pool)
@@ -2521,6 +2718,612 @@ mod seed_goal_tests {
             resolution_source: SeedGoalResolutionSource::Indexer,
             info_hash: info_hash.map(str::to_string),
         }
+    }
+
+    #[tokio::test]
+    async fn password_candidates_survive_canonical_adoption_encrypted_and_restart() {
+        let store = store().await;
+        *store.encryption_key.write().unwrap() =
+            Some(crate::encryption::EncryptionKey::from_bytes([19; 32]));
+        let existing = DownloadId::new();
+        let requested = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(existing, "same-job", "title-1"),
+                submission_identity(existing),
+                None,
+            )
+            .await
+            .unwrap();
+        let mut old = scryer_application::DownloadPasswordCandidates::default();
+        old.push("synthetic existing");
+        store
+            .set_password_candidates(&existing, &old)
+            .await
+            .unwrap();
+        let accepted = submission(requested, "same-job", "title-1");
+        store
+            .record_pending_submission(accepted.clone())
+            .await
+            .unwrap();
+        let mut next = scryer_application::DownloadPasswordCandidates::default();
+        next.push("synthetic existing");
+        next.push(" synthetic header 密碼 ");
+        store
+            .set_password_candidates(&requested, &next)
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .record_submission_with_identity(accepted, submission_identity(requested), None)
+                .await
+                .unwrap(),
+            CanonicalDownloadIdentityDisposition::AdoptedExisting {
+                download_id: existing
+            }
+        );
+        let row = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT password_candidates FROM download_submissions WHERE id = {}",
+            &[SqlArg::Text(existing.to_string())],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let raw = row.text("password_candidates").unwrap();
+        assert!(!raw.contains("synthetic"));
+        let recovered = DownloadSubmissionStore::new(store.datastore.clone())
+            .with_encryption_key(store.encryption_key.clone());
+        assert_eq!(
+            recovered.password_candidates(&existing).await.unwrap(),
+            next
+        );
+        assert!(
+            recovered
+                .password_candidates(&requested)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    async fn password_retry_fixture(
+        reason: Option<&str>,
+    ) -> (DownloadSubmissionStore, DownloadPasswordRetryClaim) {
+        let store = store().await;
+        *store.encryption_key.write().unwrap() =
+            Some(crate::encryption::EncryptionKey::from_bytes([23; 32]));
+        let download_id = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(download_id, "job-1", "title-1"),
+                submission_identity(download_id),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&download_id),
+                &submission_identity(download_id),
+                Some(&identity()),
+                "failed",
+                reason,
+                None,
+            )
+            .await
+            .unwrap();
+        (
+            store,
+            DownloadPasswordRetryClaim {
+                download_id,
+                authorized_title_id: "title-1".into(),
+                source: identity(),
+                attempt_id: "synthetic-attempt".into(),
+            },
+        )
+    }
+
+    #[tokio::test]
+    async fn password_retry_retains_payload_and_fences_uncertain_dispatch_across_restart() {
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        assert!(matches!(
+            store.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+        assert!(store.due_cleanup(1).await.unwrap().is_empty());
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, " synthetic retry 密碼 ")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        assert!(matches!(
+            store.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+        store
+            .finish_password_retry(&claim, &DownloadClientRetryOutcome::Uncertain)
+            .await
+            .unwrap();
+        let recovered = DownloadSubmissionStore::new(store.datastore.clone())
+            .with_encryption_key(store.encryption_key.clone());
+        assert_eq!(
+            recovered
+                .claim_password_retry(&claim, "must-not-replace")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Busy
+        );
+        assert_eq!(
+            recovered
+                .password_candidates(&claim.download_id)
+                .await
+                .unwrap()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            [" synthetic retry 密碼 "]
+        );
+        assert!(matches!(
+            recovered.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+        assert!(
+            recovered
+                .record_identity_tracked_state_for_download(
+                    Some(&claim.download_id),
+                    &submission_identity(claim.download_id),
+                    Some(&claim.source),
+                    "failed",
+                    None,
+                    None
+                )
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn password_retry_refuses_after_cleanup_claim_without_changing_passwords() {
+        let (store, claim) = password_retry_fixture(None).await;
+        assert!(!matches!(
+            store.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+        // Cleanup may already have removed payload before reporting failure.
+        // Releasing its lease must not make that download safe to retry.
+        store
+            .finish_download_cleanup(
+                &claim.download_id,
+                "failed",
+                false,
+                0,
+                0,
+                Some("synthetic cleanup failure"),
+            )
+            .await
+            .unwrap();
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&claim.download_id),
+                &submission_identity(claim.download_id),
+                Some(&claim.source),
+                "failed",
+                Some(DOWNLOAD_PASSWORD_REQUIRED_REASON),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "synthetic-retry")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Busy
+        );
+        assert!(
+            store
+                .password_candidates(&claim.download_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn password_retry_rejects_stale_title_authorization() {
+        let (store, mut claim) =
+            password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        claim.authorized_title_id = "unrelated-title".into();
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "synthetic-retry")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Busy
+        );
+        assert!(
+            store
+                .password_candidates(&claim.download_id)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn password_retry_acceptance_rebinds_only_its_canonical_download() {
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "synthetic-retry")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        store
+            .finish_password_retry(
+                &claim,
+                &DownloadClientRetryOutcome::Accepted {
+                    item_id: "replacement-job".into(),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .active_binding_download_id(&ClientJobLocator::new(
+                    Some("primary"),
+                    "qbittorrent",
+                    "replacement-job"
+                ))
+                .await
+                .unwrap(),
+            Some(claim.download_id)
+        );
+        assert_eq!(
+            store
+                .active_binding_download_id(&claim.source)
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(matches!(
+            store.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "must-not-run-twice")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Busy
+        );
+    }
+
+    #[tokio::test]
+    async fn password_retry_never_adopts_another_download_from_a_retry_response() {
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        let other = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(other, "other-job", "title-2"),
+                submission_identity(other),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "synthetic-retry")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        assert!(
+            store
+                .finish_password_retry(
+                    &claim,
+                    &DownloadClientRetryOutcome::Accepted {
+                        item_id: "other-job".into()
+                    }
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            store
+                .active_binding_download_id(&claim.source)
+                .await
+                .unwrap(),
+            Some(claim.download_id)
+        );
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "must-not-run-twice")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Busy
+        );
+        assert!(matches!(
+            store.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+    }
+
+    #[tokio::test]
+    async fn password_retry_requires_fresh_progress_and_keeps_active_observation_fence() {
+        use scryer_domain::DownloadQueueState;
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        store
+            .claim_password_retry(&claim, "synthetic-retry")
+            .await
+            .unwrap();
+        store
+            .finish_password_retry(
+                &claim,
+                &DownloadClientRetryOutcome::Accepted {
+                    item_id: claim.source.item_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let recovered = DownloadSubmissionStore::new(store.datastore.clone())
+            .with_encryption_key(store.encryption_key.clone());
+        let pending = recovered
+            .password_retry_observation(&claim.download_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.source, claim.source);
+        assert!(!pending.confirmed);
+        assert!(
+            !recovered
+                .confirm_password_retry_observation(&pending, DownloadQueueState::Failed)
+                .await
+                .unwrap()
+        );
+        assert!(
+            recovered
+                .record_identity_tracked_state_for_download(
+                    Some(&claim.download_id),
+                    &submission_identity(claim.download_id),
+                    Some(&pending.source),
+                    "failed",
+                    Some(DOWNLOAD_PASSWORD_REQUIRED_REASON),
+                    None
+                )
+                .await
+                .is_err()
+        );
+        let mut unrelated = pending.clone();
+        unrelated.source.item_id = "unrelated-job".into();
+        assert!(
+            !recovered
+                .confirm_password_retry_observation(&unrelated, DownloadQueueState::Downloading)
+                .await
+                .unwrap()
+        );
+        assert!(
+            recovered
+                .confirm_password_retry_observation(&pending, DownloadQueueState::Extracting)
+                .await
+                .unwrap()
+        );
+        let confirmed = recovered
+            .password_retry_observation(&claim.download_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(confirmed.confirmed);
+        assert!(matches!(
+            recovered.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+        assert!(
+            !recovered
+                .confirm_password_retry_observation(&pending, DownloadQueueState::Completed)
+                .await
+                .unwrap()
+        );
+        assert!(
+            recovered
+                .confirm_password_retry_observation(&confirmed, DownloadQueueState::Downloading)
+                .await
+                .unwrap()
+        );
+        assert!(
+            recovered
+                .password_retry_observation(&claim.download_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            recovered
+                .confirm_password_retry_observation(&confirmed, DownloadQueueState::Completed)
+                .await
+                .unwrap()
+        );
+        recovered
+            .record_identity_tracked_state_for_download(
+                Some(&claim.download_id),
+                &submission_identity(claim.download_id),
+                Some(&confirmed.source),
+                "import_blocked",
+                Some("after_import"),
+                Some("synthetic import hold"),
+            )
+            .await
+            .unwrap();
+        assert!(
+            recovered
+                .confirm_password_retry_observation(&confirmed, DownloadQueueState::Completed)
+                .await
+                .unwrap()
+        );
+        let state = SqlRuntime::fetch_optional(
+            recovered.datastore.read_exec(),
+            "SELECT tracked_state, reason FROM download_identity_states WHERE identity_key = {}",
+            &[SqlArg::Text(format!("download:{}", claim.download_id))],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(state.text("tracked_state").unwrap(), "import_blocked");
+        assert_eq!(state.text("reason").unwrap(), "after_import");
+        assert!(
+            recovered
+                .password_retry_observation(&claim.download_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            recovered
+                .confirm_password_retry_observation(&confirmed, DownloadQueueState::Failed)
+                .await
+                .unwrap()
+        );
+        assert!(
+            recovered
+                .password_retry_observation(&claim.download_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn password_retry_acknowledged_new_id_can_fail_before_first_progress_observation() {
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        store
+            .claim_password_retry(&claim, "synthetic-retry")
+            .await
+            .unwrap();
+        store
+            .finish_password_retry(
+                &claim,
+                &DownloadClientRetryOutcome::Accepted {
+                    item_id: "replacement-job".into(),
+                },
+            )
+            .await
+            .unwrap();
+        let observation = store
+            .password_retry_observation(&claim.download_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!observation.confirmed);
+        assert_eq!(observation.source.item_id, "replacement-job");
+        assert!(
+            store
+                .confirm_password_retry_observation(
+                    &observation,
+                    scryer_domain::DownloadQueueState::Failed
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .password_retry_observation(&claim.download_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn password_retry_late_acknowledgement_preserves_confirmed_import_state() {
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        store
+            .claim_password_retry(&claim, "synthetic-retry")
+            .await
+            .unwrap();
+        let pending = store
+            .password_retry_observation(&claim.download_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            store
+                .confirm_password_retry_observation(
+                    &pending,
+                    scryer_domain::DownloadQueueState::Extracting
+                )
+                .await
+                .unwrap()
+        );
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&claim.download_id),
+                &submission_identity(claim.download_id),
+                Some(&claim.source),
+                "importing",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .finish_password_retry(
+                &claim,
+                &DownloadClientRetryOutcome::Accepted {
+                    item_id: claim.source.item_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        store
+            .finish_password_retry(&claim, &DownloadClientRetryOutcome::Refused)
+            .await
+            .unwrap();
+        let state = SqlRuntime::fetch_optional(
+            store.datastore.read_exec(),
+            "SELECT tracked_state FROM download_identity_states WHERE identity_key = {}",
+            &[SqlArg::Text(format!("download:{}", claim.download_id))],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(state.text("tracked_state").unwrap(), "importing");
+        let confirmed = store
+            .password_retry_observation(&claim.download_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(confirmed.confirmed);
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&claim.download_id),
+                &submission_identity(claim.download_id),
+                Some(&claim.source),
+                "imported",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            store
+                .password_retry_observation(&claim.download_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            !store
+                .confirm_password_retry_observation(
+                    &confirmed,
+                    scryer_domain::DownloadQueueState::Failed
+                )
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]

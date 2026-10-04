@@ -344,7 +344,48 @@ impl AppUseCase {
         }
     }
 
-    fn apply_runtime_builtin_restore(&self, installation: &PluginInstallation) -> AppResult<()> {
+    fn bundled_plugin_descriptor(
+        &self,
+        installation: &PluginInstallation,
+    ) -> Option<PluginDescriptor> {
+        if installation.source_kind != PluginSourceKind::Bundled {
+            return None;
+        }
+        if is_indexer_plugin_type(&installation.plugin_type) {
+            self.services
+                .integrations
+                .plugin_provider
+                .available()?
+                .builtin_descriptor_for_provider(&installation.provider_type)
+        } else if installation.plugin_type == "subtitle_provider" {
+            self.services
+                .integrations
+                .subtitle_plugin_provider
+                .available()?
+                .builtin_descriptor_for_provider(&installation.provider_type)
+        } else {
+            None
+        }
+    }
+
+    async fn bundled_plugin_settings(
+        &self,
+        installation: &PluginInstallation,
+    ) -> AppResult<std::collections::BTreeMap<String, String>> {
+        match self.bundled_plugin_descriptor(installation) {
+            Some(descriptor) => {
+                self.runtime_plugin_settings(installation, &descriptor)
+                    .await
+            }
+            None => Ok(Default::default()),
+        }
+    }
+
+    async fn apply_runtime_builtin_restore(
+        &self,
+        installation: &PluginInstallation,
+    ) -> AppResult<()> {
+        let settings = self.bundled_plugin_settings(installation).await?;
         let provider_type = installation.provider_type.as_str();
         if is_indexer_plugin_type(&installation.plugin_type) {
             let provider = self
@@ -356,7 +397,7 @@ impl AppUseCase {
                     AppError::Repository("indexer plugin provider unavailable".to_string())
                 })?;
             provider
-                .restore_builtin_plugin(provider_type)
+                .restore_builtin_plugin_with_settings(provider_type, settings)
                 .map_err(|e| {
                     AppError::Repository(format!("failed to restore built-in indexer plugin: {e}"))
                 })?;
@@ -374,7 +415,7 @@ impl AppUseCase {
                         AppError::Repository("subtitle plugin provider unavailable".to_string())
                     })?;
                 provider
-                    .restore_builtin_plugin(provider_type)
+                    .restore_builtin_plugin_with_settings(provider_type, settings)
                     .map_err(|e| {
                         AppError::Repository(format!(
                             "failed to restore built-in subtitle plugin: {e}"
@@ -416,6 +457,16 @@ impl AppUseCase {
                 &builtin.provider_type,
             )
             .await?;
+            if let Some(mut installation) =
+                repo.get_plugin_installation(&builtin.provider_type).await?
+                && let Some(descriptor) = self.bundled_plugin_descriptor(&installation)
+            {
+                let descriptor_json = Some(persisted_plugin_descriptor_json(&descriptor)?);
+                if installation.descriptor_json != descriptor_json {
+                    installation.descriptor_json = descriptor_json;
+                    repo.update_plugin_installation(&installation, None).await?;
+                }
+            }
         }
 
         let stale_builtin_plugin_ids = repo

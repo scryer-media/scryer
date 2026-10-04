@@ -11,7 +11,7 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
-use crate::import::archive_passwords::ArchivePasswordCandidates;
+use crate::import::archive_passwords::{ArchivePasswordCandidates, redact_archive_diagnostic};
 use crate::{AppError, AppResult, ArchiveExtractorPluginProvider};
 use scryer_plugin_sdk::{
     ArchivePluginFormat, ArchivePluginOperation, ArchivePluginProcessRequest,
@@ -372,7 +372,7 @@ impl Drop for ArchiveWorkspaceLease {
             && archive_workspace_owner(&self.root).is_some()
             && let Err(error) = release_archive_workspace(&self.root)
         {
-            tracing::warn!(error = %error, "unpublished archive workspace could not be released");
+            tracing::warn!(error = %redact_archive_diagnostic(&error.to_string()), "unpublished archive workspace could not be released");
         }
     }
 }
@@ -418,7 +418,7 @@ struct ArchivePluginExtraction {
     archive_type: ArchiveType,
     format: ArchivePluginFormat,
     password: Option<String>,
-    provider: Arc<dyn ArchiveExtractorPluginProvider>,
+    client: Arc<dyn crate::ArchiveExtractorClient>,
     output_dir: PathBuf,
 }
 
@@ -479,16 +479,16 @@ pub async fn extract_archives_if_needed(
     let Some(destination) = destination else {
         return Err(AppError::Validation(format!(
             "archive extraction requires a resolved import destination before staging output for {}",
-            dir.display()
+            redact_archive_diagnostic(&dir.to_string_lossy())
         )));
     };
     let mut workspace = ArchiveExtractionWorkspace::create(&destination).await?;
 
     info!(
-        archive = %sets[0].0.display(),
+        archive = %redact_archive_diagnostic(&sets[0].0.to_string_lossy()),
         archive_type = sets[0].1.as_str(),
         archive_sets = sets.len(),
-        workspace = %workspace.root.display(),
+        workspace = %redact_archive_diagnostic(&workspace.root.to_string_lossy()),
         "extracting archive before import"
     );
 
@@ -496,7 +496,7 @@ pub async fn extract_archives_if_needed(
     let Some(provider) = archive_provider else {
         cleanup_extracted_dir(&workspace_root).await;
         return Err(AppError::archive_extraction_plugin_required(Some(
-            dir.to_string_lossy().into_owned(),
+            redact_archive_diagnostic(&dir.to_string_lossy()),
         )));
     };
 
@@ -533,7 +533,12 @@ fn classify_archive_failure(error: AppError) -> AppError {
         return error;
     }
     match error {
-        AppError::Validation(message) => AppError::ArchiveExtractionFailed { message },
+        AppError::Validation(message) | AppError::ArchiveExtractionFailed { message } => {
+            AppError::ArchiveExtractionFailed {
+                message: redact_archive_diagnostic(&message),
+            }
+        }
+        AppError::Repository(message) => AppError::Repository(redact_archive_diagnostic(&message)),
         error => error,
     }
 }
@@ -693,8 +698,8 @@ impl ArchiveSetExtraction<'_> {
             Err(error) => {
                 discard_workspace_output_dir(&self.workspace.root, self.output_dir).await;
                 tracing::warn!(
-                    archive = %self.archive_path.display(),
-                    error = %error,
+                    archive = %redact_archive_diagnostic(&self.archive_path.to_string_lossy()),
+                    error = %redact_archive_diagnostic(&error.to_string()),
                     "skipping an archive set that failed to extract"
                 );
                 first_failure.get_or_insert(error);
@@ -707,17 +712,26 @@ impl ArchiveSetExtraction<'_> {
         &self,
         totals: &mut PluginOutputTotals,
     ) -> AppResult<Vec<PathBuf>> {
-        let mut rejection = match self.attempt(None, totals).await? {
+        let selection = self
+            .provider
+            .select_for_format(archive_plugin_format_for_type(self.archive_type))?
+            .ok_or_else(|| AppError::archive_extraction_plugin_required(None))?;
+        let mut passwords = self.passwords.clone();
+        passwords.extend(selection.passwords);
+        let mut rejection = match self.attempt(None, totals, &selection.client).await? {
             ArchiveAttempt::Extracted(paths) => return Ok(paths),
             ArchiveAttempt::PasswordRejected(error) => error,
         };
-        for (index, candidate) in self.passwords.iter().enumerate() {
-            match self.attempt(Some(candidate.value()), totals).await? {
+        for (index, candidate) in passwords.iter().enumerate() {
+            match self
+                .attempt(Some(candidate.value()), totals, &selection.client)
+                .await?
+            {
                 ArchiveAttempt::Extracted(paths) => {
                     info!(
                         password_source = candidate.source().as_str(),
                         candidate = index + 1,
-                        candidates = self.passwords.len(),
+                        candidates = passwords.len(),
                         "archive password candidate accepted"
                     );
                     return Ok(paths);
@@ -725,9 +739,9 @@ impl ArchiveSetExtraction<'_> {
                 ArchiveAttempt::PasswordRejected(error) => rejection = error,
             }
         }
-        if !self.passwords.is_empty() {
+        if !passwords.is_empty() {
             info!(
-                candidates = self.passwords.len(),
+                candidates = passwords.len(),
                 "no archive password candidate was accepted"
             );
         }
@@ -741,6 +755,7 @@ impl ArchiveSetExtraction<'_> {
         &self,
         password: Option<&str>,
         totals: &mut PluginOutputTotals,
+        client: &Arc<dyn crate::ArchiveExtractorClient>,
     ) -> AppResult<ArchiveAttempt> {
         prepare_workspace_output_dir(&self.workspace.root, self.output_dir).await?;
 
@@ -762,7 +777,7 @@ impl ArchiveSetExtraction<'_> {
                 archive_type: self.archive_type,
                 format: archive_plugin_format_for_type(self.archive_type),
                 password: password.map(str::to_string),
-                provider: Arc::clone(self.provider),
+                client: Arc::clone(client),
                 output_dir: self.output_dir.to_path_buf(),
             },
             totals,
@@ -789,7 +804,7 @@ async fn prepare_workspace_output_dir(workspace_root: &Path, output_dir: &Path) 
     if output_dir.parent() != Some(workspace_root) {
         return Err(AppError::Validation(format!(
             "archive output directory {} is not inside the staging workspace",
-            output_dir.display()
+            redact_archive_diagnostic(&output_dir.to_string_lossy())
         )));
     }
     match tokio::fs::create_dir(output_dir).await {
@@ -798,20 +813,20 @@ async fn prepare_workspace_output_dir(workspace_root: &Path, output_dir: &Path) 
             let mut entries = tokio::fs::read_dir(output_dir).await.map_err(|error| {
                 AppError::Repository(format!(
                     "failed to read archive staging output directory {}: {error}",
-                    output_dir.display()
+                    redact_archive_diagnostic(&output_dir.to_string_lossy())
                 ))
             })?;
             match entries.next_entry().await {
                 Ok(None) => Ok(()),
                 _ => Err(AppError::Validation(format!(
                     "archive staging output directory {} is not empty",
-                    output_dir.display()
+                    redact_archive_diagnostic(&output_dir.to_string_lossy())
                 ))),
             }
         }
         Err(error) => Err(AppError::Repository(format!(
             "failed to create archive staging output directory {}: {error}",
-            output_dir.display()
+            redact_archive_diagnostic(&output_dir.to_string_lossy())
         ))),
     }
 }
@@ -850,14 +865,14 @@ fn ensure_source_outside_output(source_dir: &Path, output_dir: &Path) -> AppResu
         path.canonicalize().map_err(|error| {
             AppError::Repository(format!(
                 "failed to canonicalize archive path {}: {error}",
-                path.display()
+                redact_archive_diagnostic(&path.to_string_lossy())
             ))
         })
     };
     if canonical(source_dir)?.starts_with(canonical(output_dir)?) {
         return Err(AppError::Validation(format!(
             "archive source {} lies inside its own extraction output",
-            source_dir.display()
+            redact_archive_diagnostic(&source_dir.to_string_lossy())
         )));
     }
     Ok(())
@@ -872,8 +887,7 @@ pub fn archive_extraction_would_be_needed(
 
 /// Check if an extraction error indicates a password-protected archive.
 pub fn is_password_required_error(error: &AppError) -> bool {
-    let msg = error.to_string().to_ascii_lowercase();
-    msg.contains("password") || msg.contains("encrypted") || msg.contains("wrong password")
+    matches!(error, AppError::ArchivePasswordRequired { .. })
 }
 
 pub fn is_timeout_error(error: &AppError) -> bool {
@@ -930,23 +944,15 @@ async fn extract_with_archive_plugin(
         archive_type,
         format,
         password,
-        provider,
+        client,
         output_dir,
     } = request;
 
-    let (client, operation) = {
-        let Some(client) = provider.client_for_format(format) else {
-            return Err(AppError::archive_extraction_plugin_required(Some(
-                source_dir.to_string_lossy().into_owned(),
-            )));
-        };
-        let operation = ArchivePluginOperation::ExtractArchive {
-            archive_path: archive_path.to_string_lossy().into_owned(),
-            output_dir: output_dir.to_string_lossy().into_owned(),
-            format,
-            password,
-        };
-        (client, operation)
+    let operation = ArchivePluginOperation::ExtractArchive {
+        archive_path: archive_path.to_string_lossy().into_owned(),
+        output_dir: output_dir.to_string_lossy().into_owned(),
+        format,
+        password,
     };
     let request = ArchivePluginProcessRequest { operation };
     let mut limits = scryer_plugin_sdk::ArchiveExtractionLimits {
@@ -1090,7 +1096,7 @@ impl ArchiveExtractionWorkspace {
             .map_err(|error| {
                 AppError::Repository(format!(
                     "failed to create archive staging parent {}: {error}",
-                    destination.staging_parent.display()
+                    redact_archive_diagnostic(&destination.staging_parent.to_string_lossy())
                 ))
             })?;
         cleanup_stale_archive_artifacts(&destination.staging_parent).await;
@@ -1166,7 +1172,7 @@ impl ArchiveExtractionWorkspace {
                     std::fs::create_dir(&output_dir).map_err(|error| {
                         AppError::Repository(format!(
                             "failed to create archive staging output directory {}: {error}",
-                            output_dir.display()
+                            redact_archive_diagnostic(&output_dir.to_string_lossy())
                         ))
                     })?;
                     return Ok(Self {
@@ -1179,7 +1185,7 @@ impl ArchiveExtractionWorkspace {
                 Err(error) => {
                     return Err(AppError::Repository(format!(
                         "failed to create archive staging directory {}: {error}",
-                        root.display()
+                        redact_archive_diagnostic(&root.to_string_lossy())
                     )));
                 }
             }
@@ -1187,7 +1193,7 @@ impl ArchiveExtractionWorkspace {
 
         Err(AppError::Repository(format!(
             "failed to allocate a unique archive staging directory under {}",
-            destination.staging_parent.display()
+            redact_archive_diagnostic(&destination.staging_parent.to_string_lossy())
         )))
     }
 }
@@ -1257,7 +1263,7 @@ fn handle_archive_plugin_response(
                     *totals = updated;
                     info!(
                         archive_type = archive_type.as_str(),
-                        output = %output_dir.display(),
+                        output = %redact_archive_diagnostic(&output_dir.to_string_lossy()),
                         "archive set extracted"
                     );
                     Ok(())
@@ -1272,14 +1278,12 @@ fn handle_archive_plugin_response(
             "archive plugin does not support {} extraction",
             archive_type.as_str()
         ))),
-        ArchivePluginStatus::PasswordRequired => Err(AppError::Validation(format!(
-            "{} archive requires a password",
-            archive_type.as_str()
-        ))),
-        ArchivePluginStatus::PasswordInvalid => Err(AppError::Validation(format!(
-            "{} archive password is invalid",
-            archive_type.as_str()
-        ))),
+        ArchivePluginStatus::PasswordRequired => Err(AppError::ArchivePasswordRequired {
+            message: format!("{} archive requires a password", archive_type.as_str()),
+        }),
+        ArchivePluginStatus::PasswordInvalid => Err(AppError::ArchivePasswordRequired {
+            message: format!("{} archive password is invalid", archive_type.as_str()),
+        }),
         ArchivePluginStatus::Failed => {
             let _ = std::fs::remove_dir_all(&output_dir);
             Err(archive_plugin_failure_error(
@@ -1300,12 +1304,20 @@ fn handle_archive_plugin_response(
 /// reconstruct the payload is a permanent condition in the downloaded data, not
 /// a transient host fault.
 fn archive_plugin_failure_error(error_code: Option<&str>, message: Option<&str>) -> AppError {
+    if error_code == Some("password_or_corruption") {
+        // Failed responses remain terminal for this attempt. This classification
+        // enables an operator password prompt without advancing the candidate loop.
+        return AppError::ArchivePasswordRequired {
+            message: "password_or_corruption: the password may be incorrect or the encrypted archive may be damaged; automatic password attempts stopped".into(),
+        };
+    }
     let text = match (error_code, message) {
         (Some(code), Some(message)) => format!("{code}: {message}"),
         (Some(code), None) => code.to_string(),
         (None, Some(message)) => message.to_string(),
         (None, None) => "archive plugin extraction failed".to_string(),
     };
+    let text = redact_archive_diagnostic(&text);
 
     if error_code.is_some_and(|code| {
         matches!(
@@ -1350,7 +1362,7 @@ fn validate_archive_plugin_output(
     let output_root = output_dir.canonicalize().map_err(|error| {
         AppError::Repository(format!(
             "failed to canonicalize archive plugin output directory {}: {error}",
-            output_dir.display()
+            redact_archive_diagnostic(&output_dir.to_string_lossy())
         ))
     })?;
 
@@ -1359,13 +1371,13 @@ fn validate_archive_plugin_output(
         let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
             AppError::Repository(format!(
                 "archive plugin manifest output '{}' is missing or unreadable: {error}",
-                path.display()
+                redact_archive_diagnostic(&path.to_string_lossy())
             ))
         })?;
         if !metadata.file_type().is_file() {
             return Err(AppError::Validation(format!(
                 "archive plugin manifest output is not a regular file: {}",
-                path.display()
+                redact_archive_diagnostic(&path.to_string_lossy())
             )));
         }
         ensure_path_under_output_with_root(&path, &output_root)?;
@@ -1374,7 +1386,7 @@ fn validate_archive_plugin_output(
         {
             return Err(AppError::Validation(format!(
                 "archive plugin manifest size mismatch for {}",
-                path.display()
+                redact_archive_diagnostic(&path.to_string_lossy())
             )));
         }
     }
@@ -1396,13 +1408,13 @@ fn validate_archive_plugin_output(
         let metadata = std::fs::symlink_metadata(&path).map_err(|error| {
             AppError::Repository(format!(
                 "failed to inspect archive plugin output {}: {error}",
-                path.display()
+                redact_archive_diagnostic(&path.to_string_lossy())
             ))
         })?;
         if metadata.file_type().is_symlink() {
             return Err(AppError::Validation(format!(
                 "archive plugin output contains a symlink: {}",
-                path.display()
+                redact_archive_diagnostic(&path.to_string_lossy())
             )));
         }
         ensure_path_under_output_with_root(&path, &output_root)?;
@@ -1416,7 +1428,7 @@ fn validate_archive_plugin_output(
             for entry in std::fs::read_dir(&path).map_err(|error| {
                 AppError::Repository(format!(
                     "failed to read archive plugin output directory {}: {error}",
-                    path.display()
+                    redact_archive_diagnostic(&path.to_string_lossy())
                 ))
             })? {
                 let entry = entry.map_err(|error| {
@@ -1436,7 +1448,7 @@ fn validate_archive_plugin_output(
         if !metadata.is_file() {
             return Err(AppError::Validation(format!(
                 "archive plugin output is not a regular file: {}",
-                path.display()
+                redact_archive_diagnostic(&path.to_string_lossy())
             )));
         }
 
@@ -1498,13 +1510,13 @@ fn ensure_path_under_output_with_root(path: &Path, output_root: &Path) -> AppRes
     let canonical = path.canonicalize().map_err(|e| {
         AppError::Repository(format!(
             "failed to canonicalize extraction path {}: {e}",
-            path.display()
+            redact_archive_diagnostic(&path.to_string_lossy())
         ))
     })?;
     if !canonical.starts_with(output_root) {
         return Err(AppError::Validation(format!(
             "archive entry escapes extraction directory: {}",
-            path.display()
+            redact_archive_diagnostic(&path.to_string_lossy())
         )));
     }
     Ok(())
@@ -1778,14 +1790,14 @@ pub async fn cleanup_extracted_dir(dir: &Path) {
     // Callers release only after their workflow/selection no longer needs the
     // output. If removal fails, the release record permits a later retry.
     if let Err(error) = release_archive_workspace(dir) {
-        tracing::warn!(error = %error, "archive workspace release could not be authenticated");
+        tracing::warn!(error = %redact_archive_diagnostic(&error.to_string()), "archive workspace release could not be authenticated");
         return;
     }
     if archive_workspace_release(dir).is_none() {
         return;
     }
     if let Err(error) = tokio::fs::remove_dir_all(dir).await {
-        tracing::warn!(error = %error, "released archive workspace could not be removed");
+        tracing::warn!(error = %redact_archive_diagnostic(&error.to_string()), "released archive workspace could not be removed");
     }
 }
 
@@ -1845,6 +1857,236 @@ mod tests {
     use scryer_plugin_sdk::ArchivePluginExtractedFile;
     use std::fs;
     use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct CapturedArchiveLogs(Arc<Mutex<String>>);
+
+    impl tracing::Subscriber for CapturedArchiveLogs {
+        fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+            true
+        }
+        fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+            tracing::span::Id::from_u64(1)
+        }
+        fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+        fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+        fn event(&self, event: &tracing::Event<'_>) {
+            struct Fields<'a>(&'a mut String);
+            impl tracing::field::Visit for Fields<'_> {
+                fn record_debug(&mut self, _: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                    use std::fmt::Write;
+                    write!(self.0, "{value:?}\n").unwrap();
+                }
+            }
+            event.record(&mut Fields(&mut self.0.lock().unwrap()));
+        }
+        fn enter(&self, _: &tracing::span::Id) {}
+        fn exit(&self, _: &tracing::span::Id) {}
+    }
+
+    #[tokio::test]
+    async fn archive_password_annotations_are_absent_from_logs_and_failure_diagnostics() {
+        let capture = CapturedArchiveLogs::default();
+        let _subscriber = tracing::subscriber::set_default(capture.clone());
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(
+            source.path().join("release{{synthetic-secret}}.rar"),
+            b"archive",
+        )
+        .unwrap();
+        let provider = Arc::new(RecordingArchiveProvider {
+            client: Arc::new(ScriptedArchiveClient {
+                emitted: Vec::new(),
+                status: ArchivePluginStatus::Failed,
+                error_code: Some("corrupt_archive"),
+                message: Some("could not read member{{synthetic-secret}}.mkv"),
+                copied_bytes: None,
+                replaced_sources: Vec::new(),
+            }),
+            formats: vec![ArchivePluginFormat::Rar],
+        });
+        let error = extract_archives_if_needed(
+            source.path(),
+            is_sample_named_file,
+            Some(ArchiveExtractionDestination::new(
+                destination.path(),
+                "diagnostic-test",
+            )),
+            &Default::default(),
+            Some(provider),
+        )
+        .await
+        .unwrap_err();
+        assert!(!error.to_string().contains("synthetic-secret"));
+        assert!(error.to_string().contains("member[redacted].mkv"));
+        let logs = capture.0.lock().unwrap();
+        assert!(!logs.contains("synthetic-secret"), "{logs}");
+        assert!(logs.contains("release[redacted].rar"), "{logs}");
+    }
+
+    struct NestedPasswordClient {
+        format: ArchivePluginFormat,
+        password: &'static str,
+        calls: Arc<Mutex<Vec<Option<String>>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ArchiveExtractorClient for NestedPasswordClient {
+        async fn process(
+            &self,
+            request: ArchivePluginProcessRequest,
+        ) -> AppResult<ArchivePluginProcessResponse> {
+            let ArchivePluginOperation::ExtractArchive {
+                output_dir,
+                password,
+                ..
+            } = request.operation
+            else {
+                panic!("extract expected");
+            };
+            self.calls.lock().unwrap().push(password.clone());
+            let mut response = ArchivePluginProcessResponse {
+                status: ArchivePluginStatus::Failed,
+                files: Vec::new(),
+                replaced_source_paths: Vec::new(),
+                processed_recovery_paths: Vec::new(),
+                expanded_bytes: None,
+                copied_bytes: None,
+                staged_bytes: None,
+                error_code: None,
+                message: None,
+            };
+            if password.as_deref() != Some(self.password) {
+                response.status = if password.is_none() {
+                    ArchivePluginStatus::PasswordRequired
+                } else {
+                    ArchivePluginStatus::PasswordInvalid
+                };
+                return Ok(response);
+            }
+            let name = if self.format == ArchivePluginFormat::Rar {
+                "nested.zip"
+            } else {
+                "movie.mkv"
+            };
+            fs::write(Path::new(&output_dir).join(name), b"fixture").unwrap();
+            response.status = ArchivePluginStatus::Ok;
+            response.files.push(ArchivePluginExtractedFile {
+                relative_path: name.into(),
+                size: Some(7),
+                checksum: None,
+            });
+            Ok(response)
+        }
+    }
+
+    struct NestedPasswordProvider {
+        clients: Vec<(
+            ArchivePluginFormat,
+            Arc<dyn ArchiveExtractorClient>,
+            &'static str,
+        )>,
+        selections: Mutex<Vec<ArchivePluginFormat>>,
+    }
+
+    impl ArchiveExtractorPluginProvider for NestedPasswordProvider {
+        fn client_for_format(
+            &self,
+            _: ArchivePluginFormat,
+        ) -> Option<Arc<dyn ArchiveExtractorClient>> {
+            panic!("selection must be pinned");
+        }
+        fn available_provider_types(&self) -> Vec<String> {
+            vec!["shared-archive-type".into()]
+        }
+        fn select_for_format(
+            &self,
+            format: ArchivePluginFormat,
+        ) -> AppResult<Option<crate::ArchiveExtractorSelection>> {
+            self.selections.lock().unwrap().push(format);
+            Ok(self
+                .clients
+                .iter()
+                .find(|(candidate, _, _)| *candidate == format)
+                .map(|(_, client, password)| {
+                    let mut passwords = ArchivePasswordCandidates::default();
+                    passwords.extend_settings(password);
+                    crate::ArchiveExtractorSelection {
+                        installation_id: Some(format!("installation-{format:?}")),
+                        client: client.clone(),
+                        passwords,
+                    }
+                }))
+        }
+    }
+
+    #[tokio::test]
+    async fn archive_nested_sets_use_only_their_selected_installation_passwords() {
+        let source = tempfile::tempdir().unwrap();
+        let destination = tempfile::tempdir().unwrap();
+        fs::write(source.path().join("release.rar"), b"archive").unwrap();
+        let rar_calls = Arc::new(Mutex::new(Vec::new()));
+        let zip_calls = Arc::new(Mutex::new(Vec::new()));
+        let provider = Arc::new(NestedPasswordProvider {
+            clients: vec![
+                (
+                    ArchivePluginFormat::Rar,
+                    Arc::new(NestedPasswordClient {
+                        format: ArchivePluginFormat::Rar,
+                        password: "synthetic-rar",
+                        calls: rar_calls.clone(),
+                    }),
+                    "synthetic-rar",
+                ),
+                (
+                    ArchivePluginFormat::Zip,
+                    Arc::new(NestedPasswordClient {
+                        format: ArchivePluginFormat::Zip,
+                        password: "synthetic-zip",
+                        calls: zip_calls.clone(),
+                    }),
+                    "synthetic-zip",
+                ),
+            ],
+            selections: Mutex::new(Vec::new()),
+        });
+        let mut passwords = ArchivePasswordCandidates::default();
+        passwords.push_operator(Some("synthetic-explicit"));
+        extract_archives_if_needed(
+            source.path(),
+            is_sample_named_file,
+            Some(ArchiveExtractionDestination::new(
+                destination.path(),
+                "nested-installations",
+            )),
+            &passwords,
+            Some(provider.clone()),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            *rar_calls.lock().unwrap(),
+            vec![
+                None,
+                Some("synthetic-explicit".into()),
+                Some("synthetic-rar".into())
+            ]
+        );
+        assert_eq!(
+            *zip_calls.lock().unwrap(),
+            vec![
+                None,
+                Some("synthetic-explicit".into()),
+                Some("synthetic-zip".into())
+            ]
+        );
+        assert_eq!(
+            *provider.selections.lock().unwrap(),
+            vec![ArchivePluginFormat::Rar, ArchivePluginFormat::Zip]
+        );
+    }
 
     struct RecordingArchiveClient {
         operation: Arc<Mutex<Option<ArchivePluginOperation>>>,

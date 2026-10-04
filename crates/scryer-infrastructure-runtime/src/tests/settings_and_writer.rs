@@ -1,6 +1,198 @@
 use super::*;
 
 #[tokio::test]
+async fn plugin_settings_encrypt_reject_stale_saves_and_reinstall_empty() {
+    let (services, _db) = temp_services("plugin_settings_lifecycle").await;
+    let settings = SettingsStore::new(services.datastore(), services.encryption_key_state());
+    let plugins = PluginStore::new(services.datastore());
+    settings
+        .batch_ensure_setting_definitions(vec![crate::types::SettingDefinitionSeed {
+            category: "plugins".into(),
+            scope: "system".into(),
+            key_name: "plugins.config".into(),
+            data_type: "json".into(),
+            default_value_json: "{}".into(),
+            is_sensitive: true,
+            validation_json: None,
+        }])
+        .await
+        .unwrap();
+    plugins
+        .seed_builtin(
+            "fixture-settings",
+            "Fixture",
+            "Synthetic settings",
+            "1.0.0",
+            "3.0.0",
+            ">=3.0.0",
+            "archive_extractor",
+            "fixture-settings",
+        )
+        .await
+        .unwrap();
+    let mut installation = plugins
+        .get_plugin_installation("fixture-settings")
+        .await
+        .unwrap()
+        .unwrap();
+    installation.is_builtin = false;
+    plugins
+        .update_plugin_installation(&installation, None)
+        .await
+        .unwrap();
+    let value = r#"{"additional_passwords":"synthetic-inline-password"}"#;
+    assert!(
+        settings
+            .upsert_setting_value(
+                "system",
+                "plugins.config",
+                Some(installation.id.clone()),
+                value,
+                "user",
+                None
+            )
+            .await
+            .is_err(),
+        "missing encryption key must reject the write"
+    );
+    services
+        .set_encryption_key(crate::encryption::EncryptionKey::from_bytes([19; 32]))
+        .await
+        .unwrap();
+    settings
+        .upsert_setting_value(
+            "system",
+            "plugins.config",
+            Some(installation.id.clone()),
+            value,
+            "user",
+            None,
+        )
+        .await
+        .unwrap();
+    let stored: String =
+        sqlx::query_scalar("SELECT value_json FROM settings_values WHERE scope_id = ?")
+            .bind(&installation.id)
+            .fetch_one(services.pool())
+            .await
+            .unwrap();
+    let stored: String = serde_json::from_str(&stored).unwrap();
+    assert!(crate::encryption::is_encrypted(&stored));
+    assert!(!stored.contains("synthetic-inline-password"));
+    assert_eq!(
+        settings
+            .get_setting_with_defaults("system", "plugins.config", Some(installation.id.clone()))
+            .await
+            .unwrap()
+            .unwrap()
+            .effective_value_json,
+        value
+    );
+    let mut other = installation.clone();
+    other.id = scryer_domain::Id::new().0;
+    other.plugin_id = "fixture-settings-other".into();
+    plugins
+        .create_plugin_installation(&other, None)
+        .await
+        .unwrap();
+    let other_value = r#"{"additional_passwords":"synthetic-other-password"}"#;
+    settings
+        .upsert_setting_value(
+            "system",
+            "plugins.config",
+            Some(other.id.clone()),
+            other_value,
+            "user",
+            None,
+        )
+        .await
+        .unwrap();
+    installation.version = "1.0.1".into();
+    installation.is_enabled = false;
+    plugins
+        .update_plugin_installation(&installation, None)
+        .await
+        .unwrap();
+    installation.is_enabled = true;
+    plugins
+        .update_plugin_installation(&installation, None)
+        .await
+        .unwrap();
+    // A new store simulates runtime reload without inheriting the old cache.
+    let restarted_settings =
+        SettingsStore::new(services.datastore(), services.encryption_key_state());
+    for (id, expected) in [(&installation.id, value), (&other.id, other_value)] {
+        assert_eq!(
+            restarted_settings
+                .get_setting_with_defaults("system", "plugins.config", Some(id.clone()),)
+                .await
+                .unwrap()
+                .unwrap()
+                .effective_value_json,
+            expected
+        );
+    }
+    // Exercise the two serialized race orders: a save committed before uninstall
+    // is removed; one that reaches the database afterward must be refused.
+    plugins
+        .delete_plugin_installation("fixture-settings")
+        .await
+        .unwrap();
+    settings.invalidate_cache();
+    assert!(
+        settings
+            .upsert_setting_value(
+                "system",
+                "plugins.config",
+                Some(installation.id.clone()),
+                value,
+                "user",
+                None
+            )
+            .await
+            .is_err()
+    );
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM settings_values WHERE scope_id = ?")
+        .bind(&installation.id)
+        .fetch_one(services.pool())
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+    assert_eq!(
+        settings
+            .get_setting_with_defaults("system", "plugins.config", Some(installation.id.clone()))
+            .await
+            .unwrap()
+            .unwrap()
+            .effective_value_json,
+        "{}"
+    );
+    installation.id = scryer_domain::Id::new().0;
+    plugins
+        .create_plugin_installation(&installation, None)
+        .await
+        .unwrap();
+    assert_eq!(
+        settings
+            .get_setting_with_defaults("system", "plugins.config", Some(other.id.clone()),)
+            .await
+            .unwrap()
+            .unwrap()
+            .effective_value_json,
+        other_value
+    );
+    assert_eq!(
+        settings
+            .get_setting_with_defaults("system", "plugins.config", Some(installation.id.clone()))
+            .await
+            .unwrap()
+            .unwrap()
+            .effective_value_json,
+        "{}"
+    );
+}
+
+#[tokio::test]
 async fn serialized_writer_handles_settings_batch_and_encrypted_upserts() {
     let (services, db) = temp_services("scryer_settings_writer").await;
     services

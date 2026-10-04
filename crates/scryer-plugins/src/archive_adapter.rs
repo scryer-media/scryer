@@ -224,14 +224,14 @@ fn map_child_path(root: &Path, path: &Path) -> AppResult<String> {
     let relative = path.strip_prefix(root).map_err(|_| {
         AppError::Validation(format!(
             "archive plugin path '{}' is outside allowed root '{}'",
-            path.display(),
-            root.display()
+            scryer_application::redact_archive_diagnostic(&path.to_string_lossy()),
+            scryer_application::redact_archive_diagnostic(&root.to_string_lossy())
         ))
     })?;
     if !is_safe_relative_plugin_path(relative) {
         return Err(AppError::Validation(format!(
             "archive plugin path '{}' is not a safe relative path",
-            path.display()
+            scryer_application::redact_archive_diagnostic(&path.to_string_lossy())
         )));
     }
     let guest_path = Path::new(GUEST_SOURCE_ROOT).join(relative);
@@ -245,4 +245,27 @@ fn is_safe_relative_plugin_path(path: &Path) -> bool {
             std::path::Component::Normal(_) | std::path::Component::CurDir
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn archive_adapter_path_failures_redact_names_but_guest_paths_remain_literal() {
+        let root = Path::new("/synthetic/allowed{{synthetic-root-secret}}");
+        for path in [
+            Path::new("/other/release{{synthetic-secret}}.rar"),
+            Path::new("../release{{synthetic-secret}}.rar"),
+        ] {
+            let error = map_child_path(root, path).unwrap_err().to_string();
+            assert!(!error.contains("synthetic-secret"));
+            assert!(!error.contains("synthetic-root-secret"));
+            assert!(error.contains("[redacted]"));
+        }
+        assert_eq!(
+            map_child_path(root, Path::new("release{{synthetic-secret}}.rar")).unwrap(),
+            "/scryer/source/release{{synthetic-secret}}.rar"
+        );
+    }
 }

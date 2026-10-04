@@ -500,6 +500,8 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
     lastUpdatedAt
     attentionRequired
     attentionReason
+    passwordFailureCode
+    passwordRetryImportId
     downloadClientItemId
     downloadId
     importStatus

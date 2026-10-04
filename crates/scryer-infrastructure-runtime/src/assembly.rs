@@ -893,7 +893,10 @@ impl DatastoreAssembly {
         let domain_event_store = Arc::new(DomainEventStore::new(datastore.clone()));
         let acquisition_store = Arc::new(AcquisitionStore::new(datastore.clone()));
         let download_registry_store = Arc::new(DownloadRegistryStore::new(datastore.clone()));
-        let download_submission_store = Arc::new(DownloadSubmissionStore::new(datastore.clone()));
+        let download_submission_store = Arc::new(
+            DownloadSubmissionStore::new(datastore.clone())
+                .with_encryption_key(db.encryption_key_state()),
+        );
         let import_store = Arc::new(ImportStore::new(datastore.clone()));
         let external_import_monitor_store =
             Arc::new(ExternalImportMonitorStore::new(datastore.clone()));
@@ -1050,7 +1053,10 @@ impl DatastoreAssembly {
         let domain_event_store = Arc::new(DomainEventStore::new(datastore.clone()));
         let acquisition_store = Arc::new(AcquisitionStore::new(datastore.clone()));
         let download_registry_store = Arc::new(DownloadRegistryStore::new(datastore.clone()));
-        let download_submission_store = Arc::new(DownloadSubmissionStore::new(datastore.clone()));
+        let download_submission_store = Arc::new(
+            DownloadSubmissionStore::new(datastore.clone())
+                .with_encryption_key(db.encryption_key_state()),
+        );
         let import_store = Arc::new(ImportStore::new(datastore.clone()));
         let external_import_monitor_store =
             Arc::new(ExternalImportMonitorStore::new(datastore.clone()));

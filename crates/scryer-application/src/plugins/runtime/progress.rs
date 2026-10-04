@@ -312,7 +312,8 @@ impl AppUseCase {
             .create_plugin_installation(&installation, Some(persisted_wasm_bytes.as_slice()))
             .await?;
 
-        self.apply_runtime_plugin_upsert(&result, runtime_plugin)?;
+        self.publish_runtime_plugin(None, &result, runtime_plugin)
+            .await?;
         self.finalize_runtime_plugin_mutation(&result.plugin_type, true)
             .await?;
         Ok(result)
@@ -379,11 +380,12 @@ impl AppUseCase {
             let mut previous_runtime_installation = result.clone();
             previous_runtime_installation.plugin_type = previous_plugin_type.clone();
             previous_runtime_installation.provider_type = previous_provider_type.clone();
-            self.apply_runtime_plugin_replace(
-                &previous_runtime_installation,
+            self.publish_runtime_plugin(
+                Some(&previous_runtime_installation),
                 &result,
                 runtime_plugin,
-            )?;
+            )
+            .await?;
         }
         self.finalize_runtime_plugin_mutation_for_types(
             [previous_plugin_type.as_str(), result.plugin_type.as_str()],
@@ -448,11 +450,12 @@ impl AppUseCase {
             let mut previous_runtime_installation = result.clone();
             previous_runtime_installation.plugin_type = previous_plugin_type.clone();
             previous_runtime_installation.provider_type = previous_provider_type.clone();
-            self.apply_runtime_plugin_replace(
-                &previous_runtime_installation,
+            self.publish_runtime_plugin(
+                Some(&previous_runtime_installation),
                 &result,
                 runtime_plugin,
-            )?;
+            )
+            .await?;
         }
         self.finalize_runtime_plugin_mutation_for_types(
             [previous_plugin_type.as_str(), result.plugin_type.as_str()],

@@ -11,6 +11,8 @@ const LEGACY_MODULE: &[u8] = b"\0asm\x01\0\0\0";
 fn builtin_load() -> RuntimePluginLoad {
     let asset = scryer_plugins::builtins::INDEXER_BUILTINS[0];
     RuntimePluginLoad {
+        installation_id: None,
+        settings: Default::default(),
         descriptor: serde_json::from_str(asset.descriptor_json).unwrap(),
         wasm_bytes: Vec::new(),
         first_party: true,

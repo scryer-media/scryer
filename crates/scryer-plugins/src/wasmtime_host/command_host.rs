@@ -41,6 +41,7 @@ const STAGED_ARCHIVE_OUTPUT_DIR: &str = "output";
 #[derive(Clone)]
 pub(crate) struct CommandHost {
     services: Option<Arc<CommandHostServices>>,
+    read_only_config: Option<Arc<BTreeMap<String, String>>>,
     request_deadline: Option<Instant>,
 }
 
@@ -77,8 +78,14 @@ impl CommandHost {
     pub(crate) fn disabled() -> Self {
         Self {
             services: None,
+            read_only_config: None,
             request_deadline: None,
         }
+    }
+
+    pub(crate) fn with_read_only_config(mut self, config: BTreeMap<String, String>) -> Self {
+        self.read_only_config = Some(Arc::new(config));
+        self
     }
 
     /// Build the host services for a command plugin whose egress needs no
@@ -101,6 +108,7 @@ impl CommandHost {
         archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
     ) -> Self {
         Self {
+            read_only_config: None,
             services: Some(Arc::new(CommandHostServices {
                 plugin_id,
                 config,
@@ -150,6 +158,7 @@ impl CommandHost {
         proxy_policy: Option<crate::plugin_http_host::ProxyPolicy>,
     ) -> Self {
         Self {
+            read_only_config: None,
             services: Some(Arc::new(CommandHostServices {
                 plugin_id,
                 config,
@@ -202,6 +211,7 @@ impl CommandHost {
         process_host: ProcessHost,
     ) -> Self {
         Self {
+            read_only_config: None,
             services: Some(Arc::new(CommandHostServices {
                 plugin_id,
                 config,
@@ -229,6 +239,7 @@ impl CommandHost {
         let now = Instant::now();
         Self {
             services: self.services.clone(),
+            read_only_config: self.read_only_config.clone(),
             request_deadline: Some(now.checked_add(timeout).unwrap_or(now)),
         }
     }
@@ -278,6 +289,13 @@ impl CommandHost {
     /// Fail-closed still holds for the services themselves: an arm whose
     /// service is absent answers `Unsupported` in-band.
     fn service_request(&self, request: PluginHostRequest) -> PluginHostResponse {
+        if let PluginHostRequest::ConfigGet(request) = &request
+            && let Some(config) = &self.read_only_config
+        {
+            return PluginHostResponse::ConfigGet(PluginResult::Ok(PluginConfigGetResponse {
+                value: config.get(&request.key).cloned(),
+            }));
+        }
         let Some(services) = &self.services else {
             return unsupported_response(request);
         };
@@ -446,6 +464,9 @@ impl CommandHost {
     /// `scryer:runtime/host@1.0.0` binding. Same map as the encoded
     /// `ConfigGet` arm.
     pub(crate) fn config_get(&self, key: &str) -> Option<String> {
+        if let Some(config) = &self.read_only_config {
+            return config.get(key).cloned();
+        }
         self.services.as_ref()?.config.get(key).cloned()
     }
 }
@@ -576,10 +597,11 @@ impl ArchiveExtractFailure {
     }
 
     fn into_plugin_result<T>(self) -> PluginResult<T> {
+        let message = scryer_application::redact_archive_diagnostic(&self.message);
         PluginResult::Err(PluginError {
             code: self.code,
-            public_message: self.message.clone(),
-            debug_message: Some(self.message),
+            public_message: message.clone(),
+            debug_message: Some(message),
             retry_after_seconds: Some(0),
             details: None,
         })
@@ -635,16 +657,20 @@ fn extract_archive(
         )));
     }
     let format = parse_archive_format(&request.format)?;
-    let client = services
+    let selection = services
         .archive_provider
         .as_ref()
-        .and_then(|provider| provider.client_for_format(format))
+        .map(|provider| provider.select_for_format(format))
+        .transpose()
+        .map_err(ArchiveExtractFailure::from_app_error)?
+        .flatten()
         .ok_or_else(|| {
             ArchiveExtractFailure::unsupported(format!(
                 "no installed archive extractor plugin handles '{}'",
                 request.format
             ))
         })?;
+    let client = selection.client;
     // A captured handle is the normal case; falling back to the ambient one
     // keeps the service working on hosts that build their CommandHost outside a
     // runtime context.
@@ -878,6 +904,61 @@ fn unsupported_response(request: PluginHostRequest) -> PluginHostResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archive_host_errors_redact_password_bearing_names() {
+        for name in [
+            "member{{synthetic-secret}}.srt",
+            "release password=synthetic-secret",
+            "release / synthetic-secret",
+        ] {
+            let PluginResult::Err(error) =
+                ArchiveExtractFailure::temporary(format!("could not decode {name}"))
+                    .into_plugin_result::<()>()
+            else {
+                panic!("expected failure")
+            };
+            assert!(!error.public_message.contains("synthetic-secret"));
+            assert!(!error.debug_message.unwrap().contains("synthetic-secret"));
+        }
+    }
+
+    #[test]
+    fn read_only_plugin_settings_do_not_grant_host_services() {
+        use scryer_plugin_sdk::host::{PluginConfigGetRequest, PluginStateSetRequest};
+        let host = CommandHost::disabled()
+            .with_read_only_config(BTreeMap::from([(
+                "plugin.settings.synthetic".into(),
+                "fixture-value".into(),
+            )]))
+            .for_invocation(Duration::from_secs(30));
+        assert_eq!(
+            host.config_get("plugin.settings.synthetic").as_deref(),
+            Some("fixture-value")
+        );
+        assert_eq!(host.config_get("unrelated.secret"), None);
+        let request = PluginHostRequest::ConfigGet(PluginConfigGetRequest {
+            key: "plugin.settings.synthetic".into(),
+        });
+        let response: PluginHostResponse = postcard::from_bytes(
+            &host
+                .call_bytes(&postcard::to_allocvec(&request).unwrap())
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            matches!(response, PluginHostResponse::ConfigGet(PluginResult::Ok(value)) if value.value.as_deref() == Some("fixture-value"))
+        );
+        let response = host.service_request(PluginHostRequest::StateSet(PluginStateSetRequest {
+            key: "synthetic".into(),
+            value: b"fixture".to_vec(),
+        }));
+        assert!(
+            matches!(response, PluginHostResponse::StateSet(PluginResult::Err(error)) if error.code == PluginErrorCode::Unsupported)
+        );
+        assert!(!host.state_cas("synthetic".into(), None, Some(b"fixture".to_vec())));
+        assert_eq!(host.state_get("synthetic"), None);
+    }
 
     /// A symlink planted by the archive must not be followed out of the
     /// extraction workspace, neither as a file to read nor as a directory to
@@ -1308,6 +1389,7 @@ mod tests {
         requires_host_process: bool,
     ) -> PluginDescriptor {
         PluginDescriptor {
+            settings: Vec::new(),
             id: "socket-host-test".to_string(),
             name: "Socket Host Test".to_string(),
             version: "1.0.0".to_string(),

@@ -26,9 +26,10 @@ pub(super) async fn guard_import_retry_tx(tx: &mut SqlTx<'_>, id: &str) -> AppRe
     )
     .await?;
     if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
-        "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason = {} LIMIT 1",
-        &[SqlArg::Text(id.into()), SqlArg::Text(IMPORT_RETRY_TRACKED_STATE_REASON.into())]).await?.is_some() {
-        return Err(AppError::Validation("download is awaiting import retry reconciliation".into()));
+        "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason IN ({}, {}) LIMIT 1",
+        &[SqlArg::Text(id.into()), SqlArg::Text(IMPORT_RETRY_TRACKED_STATE_REASON.into()),
+          SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?.is_some() {
+        return Err(AppError::Validation("download is awaiting retry reconciliation".into()));
     }
     Ok(())
 }
@@ -97,8 +98,9 @@ impl ImportStore {
                     return Ok(scryer_application::ImportRetryClaimOutcome::Busy);
                 }
                 if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
-                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason = {} LIMIT 1",
-                    &[SqlArg::Text(id.clone()), SqlArg::Text(IMPORT_RETRY_TRACKED_STATE_REASON.into())]).await?.is_some() {
+                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason IN ({}, {}) LIMIT 1",
+                    &[SqlArg::Text(id.clone()), SqlArg::Text(IMPORT_RETRY_TRACKED_STATE_REASON.into()),
+                      SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?.is_some() {
                     return Ok(scryer_application::ImportRetryClaimOutcome::Busy);
                 }
                 if SqlRuntime::fetch_optional(SqlExec::Tx(tx),

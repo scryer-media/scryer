@@ -13,6 +13,21 @@ pub struct PluginMutations;
 
 #[Object]
 impl PluginMutations {
+    /// Replace or clear explicitly supplied installation-wide settings.
+    async fn update_installed_plugin_settings(
+        &self,
+        ctx: &Context<'_>,
+        plugin_id: ID,
+        changes: async_graphql::Json<std::collections::BTreeMap<String, Option<String>>>,
+    ) -> GqlResult<async_graphql::Json<scryer_application::PluginSettingsView>> {
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        app_from_ctx(ctx)?
+            .update_installed_plugin_settings(&actor, plugin_id.as_str(), changes.0)
+            .await
+            .map(async_graphql::Json)
+            .map_err(to_gql_error)
+    }
+
     /// Refresh the configured plugin registry catalogs and return the available plugins.
     async fn refresh_plugin_catalog(
         &self,

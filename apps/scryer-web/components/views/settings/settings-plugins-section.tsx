@@ -2,6 +2,7 @@ import { useState, useMemo, useRef } from "react";
 import { createPortal } from "react-dom";
 import { ArrowUpCircle, Download, ExternalLink, Power, PowerOff, RefreshCw, Trash2, Upload } from "lucide-react";
 import { PluginLogo } from "@/components/common/plugin-visual";
+import { PluginSettingsPanel } from "./plugin-settings-panel";
 import { RenderBooleanIcon } from "@/components/common/boolean-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -442,6 +443,7 @@ function PluginTable({
                     <div className={`whitespace-normal break-words text-xs ${PLUGIN_MUTED_TEXT_CLASS}`}>
                       {plugin.description}
                     </div>
+                    {plugin.isInstalled && <PluginSettingsPanel key={plugin.installedVersion} pluginId={plugin.id} />}
                     {plugin.blockedReason && (
                       <div
                         data-ui="settings-plugin-blocked-reason"

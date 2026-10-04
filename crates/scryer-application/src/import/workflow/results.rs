@@ -121,6 +121,28 @@ pub async fn retry_failed_import(
         ));
     }
 
+    let previous_password_failure = current
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<ImportResult>(json).ok())
+        .is_some_and(|result| result.skip_reason == Some(ImportSkipReason::PasswordRequired));
+    if password.is_some_and(str::is_empty) || (previous_password_failure && password.is_none()) {
+        return Err(AppError::ArchivePasswordRequired {
+            message: "Enter a new archive password before retrying this import".into(),
+        });
+    }
+    if let Some(password) = password {
+        let repository = &app.services.workflow.download_submissions;
+        let previous = repository.password_candidates(&download_id).await?;
+        let mut candidates = crate::DownloadPasswordCandidates::default();
+        candidates.push(password);
+        candidates.extend(previous.iter().map(String::as_str));
+        // Commit the replacement before scheduling work, without adding it to plugin settings.
+        repository
+            .set_password_candidates(&download_id, &candidates)
+            .await?;
+    }
+
     // Finish reconciliation even if the requesting browser disconnects.
     let app = app.clone();
     let actor = actor.clone();

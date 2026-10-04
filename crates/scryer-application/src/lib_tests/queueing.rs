@@ -235,6 +235,7 @@ async fn canonical_submission_holds_artifact_lease_until_client_accepts() {
                 active: self.active.clone(),
                 staged: crate::StagedNzbRef {
                     id: "lease-test".into(),
+                    password_candidates: Default::default(),
                     compressed_path: "fixture.nzb.gz".into(),
                     raw_size_bytes: 10,
                 },

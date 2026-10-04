@@ -27,6 +27,7 @@ fn list_descriptor_json(id: &str) -> String {
         serde_json::from_value(serde_json::json!({ "provider_type": "fixture-lists" }))
             .expect("minimal list descriptor");
     serde_json::to_string(&PluginDescriptor {
+        settings: Vec::new(),
         id: id.to_string(),
         name: "Fixture Lists".to_string(),
         version: "1.0.0".to_string(),

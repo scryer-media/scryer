@@ -151,6 +151,7 @@ impl AppUseCase {
 impl AppUseCase {
     /// Reload runtime plugin providers from database state + builtins.
     pub async fn reload_plugin_providers(&self) -> AppResult<()> {
+        let _settings_guard = self.runtime.plugins.settings_write_lock.lock().await;
         let enabled = self
             .services
             .customization
@@ -158,14 +159,22 @@ impl AppUseCase {
             .get_enabled_plugin_wasm_bytes()
             .await?;
 
+        let installations: std::collections::HashMap<_, _> = enabled
+            .iter()
+            .map(|(installation, _)| (installation.plugin_id.clone(), installation.clone()))
+            .collect();
         let mut runtime_plugins = Vec::new();
-        let compatibility_blockers = self
+        const SETTINGS_BLOCKER: &str = "plugin settings require configuration";
+        let mut settings_blockers = std::collections::HashMap::new();
+        let mut compatibility_blockers = self
             .runtime
             .plugins
             .compatibility_blockers
             .read()
             .await
             .clone();
+        // Re-evaluate configuration blockers after a settings edit or plugin upgrade.
+        compatibility_blockers.retain(|_, reason| reason != SETTINGS_BLOCKER);
         let mut pending_plugins = enabled.into_iter().filter_map(|(installation, payload)| {
             if compatibility_blockers.contains_key(&installation.plugin_id) {
                 return None;
@@ -208,7 +217,31 @@ impl AppUseCase {
                 AppError::Repository(format!("runtime plugin load task panicked: {error}"))
             })?;
             match loaded {
-                Ok(runtime_plugin) => runtime_plugins.push(runtime_plugin),
+                Ok(mut runtime_plugin) => {
+                    let settings = match installations.get(&plugin_id) {
+                        Some(installation) => {
+                            self.runtime_plugin_settings(installation, &runtime_plugin.descriptor)
+                                .await
+                        }
+                        None => Err(AppError::Repository(
+                            "plugin installation disappeared during reload".into(),
+                        )),
+                    };
+                    match settings {
+                        Ok(settings) => {
+                            runtime_plugin.settings = settings;
+                            runtime_plugins.push(runtime_plugin);
+                        }
+                        Err(_) => {
+                            warn!(
+                                plugin_id = plugin_id.as_str(),
+                                "skipping plugin whose settings require configuration"
+                            );
+                            settings_blockers
+                                .insert(plugin_id.clone(), SETTINGS_BLOCKER.to_string());
+                        }
+                    }
+                }
                 Err(error) => {
                     warn!(
                         plugin_id = plugin_id.as_str(),
@@ -271,20 +304,57 @@ impl AppUseCase {
             .plugin_installations
             .list_plugin_installations()
             .await?;
-        let disabled_builtins: Vec<String> = all_installations
+        let mut disabled_builtins: Vec<String> = all_installations
             .iter()
             .filter(|inst| {
                 (inst.is_builtin
                     && !inst.is_enabled
                     && !is_reserved_first_party_provider(&inst.provider_type))
                     || compatibility_blockers.contains_key(&inst.plugin_id)
+                    || settings_blockers.contains_key(&inst.plugin_id)
             })
             .map(|inst| inst.provider_type.clone())
             .collect();
 
+        let mut indexer_builtin_settings = std::collections::BTreeMap::new();
+        let mut subtitle_builtin_settings = std::collections::BTreeMap::new();
+        for installation in &all_installations {
+            if installation.source_kind != PluginSourceKind::Bundled
+                || disabled_builtins.contains(&installation.provider_type)
+            {
+                continue;
+            }
+            let settings = match self.bundled_plugin_settings(installation).await {
+                Ok(settings) => settings,
+                Err(_) => {
+                    warn!(
+                        plugin_id = installation.plugin_id.as_str(),
+                        "skipping builtin whose settings require configuration"
+                    );
+                    settings_blockers
+                        .insert(installation.plugin_id.clone(), SETTINGS_BLOCKER.to_string());
+                    disabled_builtins.push(installation.provider_type.clone());
+                    continue;
+                }
+            };
+            if is_indexer_plugin_type(&installation.plugin_type) {
+                indexer_builtin_settings.insert(installation.provider_type.clone(), settings);
+            } else if installation.plugin_type == "subtitle_provider" {
+                subtitle_builtin_settings.insert(installation.provider_type.clone(), settings);
+            }
+        }
+        {
+            let mut blockers = self.runtime.plugins.compatibility_blockers.write().await;
+            blockers.retain(|_, reason| reason != SETTINGS_BLOCKER);
+            blockers.extend(settings_blockers);
+        }
         if let Some(provider) = self.services.integrations.plugin_provider.available() {
             provider
-                .reload_runtime_plugins(&indexer_plugins, &disabled_builtins)
+                .reload_runtime_plugins_with_builtin_settings(
+                    &indexer_plugins,
+                    &disabled_builtins,
+                    &indexer_builtin_settings,
+                )
                 .map_err(|e| {
                     AppError::Repository(format!("failed to reload plugin provider: {e}"))
                 })?;
@@ -312,7 +382,11 @@ impl AppUseCase {
             .available()
         {
             provider
-                .reload_runtime_plugins(&subtitle_plugins, &disabled_builtins)
+                .reload_runtime_plugins_with_builtin_settings(
+                    &subtitle_plugins,
+                    &disabled_builtins,
+                    &subtitle_builtin_settings,
+                )
                 .map_err(|e| {
                     AppError::Repository(format!("failed to reload subtitle plugin provider: {e}"))
                 })?;

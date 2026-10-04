@@ -191,6 +191,58 @@ fn order_standby_releases(
         )
     });
 }
+/// Password failures retain the release and emit history without blocklisting it.
+pub(crate) async fn record_password_retry_failure(
+    app: &AppUseCase,
+    td: &crate::tracked_downloads::TrackedDownload,
+    failure: scryer_domain::DownloadPasswordFailure,
+) -> AppResult<()> {
+    let submission = app
+        .services
+        .workflow
+        .download_submissions
+        .find_by_canonical_download_id(&td.download_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound("download submission not found".into()))?;
+    let attribution = resolve_failed_release_attribution(
+        app,
+        Some(&submission.title_id),
+        Some(&submission),
+        None,
+        None,
+    )
+    .await;
+    let title = attribution.title.as_ref();
+    let payload = DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+        canonical_download_id: Some(td.download_id.to_string()),
+        title: title.map(title_context_snapshot),
+        source_title: Some(
+            crate::import::archive_passwords::release_name_without_password(
+                td.source_title
+                    .as_deref()
+                    .unwrap_or(&td.client_item.title_name),
+            )
+            .to_string(),
+        ),
+        source_hint: None,
+        download_id: Some(td.client_item.download_client_item_id.clone()),
+        client_id: Some(td.client_id.clone()),
+        client_name: Some(td.client_item.client_name.clone()),
+        client_type: Some(td.client_type.clone()),
+        quality: None,
+        reason: Some(failure.message().to_string()),
+        episode_ids: attribution.episode_ids,
+        collection_id: attribution.collection_id,
+    });
+    app.append_domain_event(title_scoped_domain_event(
+        Some(&submission.title_id),
+        title,
+        payload,
+    ))
+    .await?;
+    Ok(())
+}
+
 // Canonical owner for all title-affecting failed release / blocklist side effects.
 #[expect(
     clippy::too_many_arguments,
@@ -276,6 +328,7 @@ async fn record_failed_release_outcome(
     let title = attribution.title.as_ref();
     let title_snapshot = title.map(title_context_snapshot);
     let payload = DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+        canonical_download_id: None,
         title: title_snapshot.clone(),
         source_title: normalized_source_title.clone(),
         source_hint: normalized_source_hint.clone(),
@@ -1846,13 +1899,7 @@ pub(crate) async fn try_saved_candidates(
                     },
                 )) = &judgement
                 {
-                    log_saved_result_queue_covered(
-                        item,
-                        &standby,
-                        queued_release,
-                        reason,
-                        message,
-                    );
+                    log_saved_result_queue_covered(item, &standby, queued_release, reason, message);
                     covered_scopes.push(standby_scope);
                     continue;
                 }
@@ -2053,13 +2100,7 @@ pub(crate) async fn try_saved_candidates(
                 // queue, rather than costing a claim, a submissions read and an
                 // admission pass each cycle. Rows reaching beyond the scope are
                 // still judged.
-                log_saved_result_queue_covered(
-                    item,
-                    &standby,
-                    &queued_release,
-                    &reason,
-                    &message,
-                );
+                log_saved_result_queue_covered(item, &standby, &queued_release, &reason, &message);
                 let _ = app
                     .services
                     .workflow

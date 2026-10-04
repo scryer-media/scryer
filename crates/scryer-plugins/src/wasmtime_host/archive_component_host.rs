@@ -435,7 +435,7 @@ async fn instrumented_archive_component(
         tracing::debug!(
             target: "scryer_plugins::archive",
             plugin_id = invocation.plugin_id,
-            stderr = stderr_tail.as_str(),
+            stderr = %scryer_application::redact_archive_diagnostic(&stderr_tail),
             "archive plugin stderr",
         );
     }
@@ -542,7 +542,7 @@ fn finish_error(
         disposition = ?failure.kind,
         "archive plugin invocation failed",
     );
-    error::to_app_error(
+    let diagnostic = error::to_app_error(
         failure,
         &error::InvocationContext {
             plugin_id: invocation.plugin_id,
@@ -551,7 +551,13 @@ fn finish_error(
             budget,
             stderr_tail,
         },
-    )
+    );
+    match diagnostic {
+        AppError::Repository(message) => {
+            AppError::Repository(scryer_application::redact_archive_diagnostic(&message))
+        }
+        other => other,
+    }
 }
 
 fn stderr_suffix(stderr_tail: &str) -> String {
@@ -565,8 +571,16 @@ fn stderr_suffix(stderr_tail: &str) -> String {
 /// Size-capped, lossy tail of a captured output pipe.
 fn tail_of(pipe: &MemoryOutputPipe) -> String {
     let bytes = pipe.contents();
-    let start = bytes.len().saturating_sub(STDERR_TAIL_BYTES);
-    String::from_utf8_lossy(&bytes[start..]).into_owned()
+    diagnostic_tail(&bytes)
+}
+
+fn diagnostic_tail(bytes: &[u8]) -> String {
+    let safe = scryer_application::redact_archive_diagnostic(&String::from_utf8_lossy(bytes));
+    let mut start = safe.len().saturating_sub(STDERR_TAIL_BYTES);
+    while !safe.is_char_boundary(start) {
+        start += 1;
+    }
+    safe[start..].to_owned()
 }
 
 #[cfg(test)]
@@ -575,6 +589,23 @@ mod tests {
     use scryer_plugin_sdk::{
         ArchivePluginOperation, ArchivePluginProcessRequest, ArchivePluginStatus,
     };
+
+    #[test]
+    fn diagnostic_tail_redacts_before_truncating_password_annotations() {
+        for annotation in [
+            "{{synthetic-secret}}",
+            " password=synthetic-secret",
+            " / synthetic-secret",
+        ] {
+            let diagnostic = format!("prefix{annotation}{}", "界".repeat(STDERR_TAIL_BYTES / 3));
+            let tail = diagnostic_tail(diagnostic.as_bytes());
+            assert!(!tail.contains("synthetic-secret"));
+            assert!(tail.len() <= STDERR_TAIL_BYTES);
+        }
+        let tail = diagnostic_tail("界".repeat(STDERR_TAIL_BYTES).as_bytes());
+        assert!(!tail.contains(char::REPLACEMENT_CHARACTER));
+        assert!(tail.len() <= STDERR_TAIL_BYTES);
+    }
 
     async fn epoch_loop() -> (Store<()>, wasmtime::TypedFunc<(), ()>) {
         let mut config = wasmtime::Config::new();
@@ -701,6 +732,7 @@ mod tests {
 
     fn archive_descriptor_json() -> String {
         let descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "fixture-archive".to_string(),
             name: "Fixture Archive".to_string(),
             version: "1.0.0".to_string(),
