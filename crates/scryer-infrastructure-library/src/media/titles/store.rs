@@ -1820,9 +1820,22 @@ impl TitleRepository for TitleStore {
     async fn find_by_external_id_in_facet(
         &self,
         facet: MediaFacet,
-        source: &str,
-        value: &str,
+        id: &ExternalId,
     ) -> AppResult<Option<Title>> {
+        let mut args = vec![
+            SqlArg::Text(facet.as_str().to_string()),
+            SqlArg::Text(id.source.clone()),
+            SqlArg::Text(id.value.clone()),
+        ];
+        // A kinded id matches rows of that kind and rows that carry no kind;
+        // a kindless id matches any kind.
+        let kind_clause = match id.normalized_kind() {
+            Some(kind) => {
+                args.push(SqlArg::Text(kind));
+                "AND (external_kind = '' OR external_kind = {})"
+            }
+            None => "",
+        };
         let sql = format!(
             "SELECT {TITLE_COLUMNS}
                FROM titles
@@ -1832,20 +1845,12 @@ impl TitleRepository for TitleStore {
                      WHERE facet = {{}}
                        AND LOWER(source) = LOWER({{}})
                        AND external_id = {{}}
+                       {kind_clause}
                 )
               ORDER BY id
               LIMIT 1"
         );
-        let row = SqlRuntime::fetch_optional(
-            self.datastore.read_exec(),
-            &sql,
-            &[
-                SqlArg::Text(facet.as_str().to_string()),
-                SqlArg::Text(source.to_string()),
-                SqlArg::Text(value.to_string()),
-            ],
-        )
-        .await?;
+        let row = SqlRuntime::fetch_optional(self.datastore.read_exec(), &sql, &args).await?;
         let mut titles = decode_optional_runtime_title_row(
             row.as_ref(),
             PersistedTitleReadMode::Presentation,
@@ -5800,6 +5805,108 @@ mod tests {
     use super::*;
 
     use sqlx::sqlite::SqlitePoolOptions;
+
+    #[tokio::test]
+    async fn external_id_lookup_in_facet_respects_the_id_kind() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        scryer_infrastructure_datastore::migrations::replay_source_catalog_for_fresh_install(
+            &pool, None, true,
+        )
+        .await
+        .expect("fresh migrations should apply");
+        let datastore = StoreDatastore::sqlite(pool, Arc::new(tokio::sync::Mutex::new(())));
+        let run = |sql: &'static str, args: Vec<SqlArg>| {
+            let datastore = datastore.clone();
+            async move {
+                SqlRuntime::execute_write(&datastore, "kind_lookup_fixture", sql, args)
+                    .await
+                    .unwrap_or_else(|error| panic!("fixture statement failed: {error}\n{sql}"));
+            }
+        };
+        run(
+            "INSERT INTO libraries (id, facet, name, slug, is_default, created_at, updated_at)
+             VALUES ('library-kind', 'anime', 'Kind', 'kind', 0, '2026-01-01T00:00:00Z',
+                     '2026-01-01T00:00:00Z')",
+            vec![],
+        )
+        .await;
+        for (title_id, kind) in [
+            ("a-fixture-feature", "movie"),
+            ("b-fixture-show", "tv"),
+            ("c-fixture-legacy", ""),
+        ] {
+            run(
+                "INSERT INTO titles (id, name, name_normalized, facet, monitored, status, tags,
+                                     external_ids, created_at, library_id, root_folder_id)
+                 VALUES ({}, {}, {}, 'anime', 1, 'active', '[]', '[]', '2026-01-01T00:00:00Z',
+                         'library-kind', 'root-kind')",
+                vec![
+                    SqlArg::Text(title_id.to_string()),
+                    SqlArg::Text(title_id.to_string()),
+                    SqlArg::Text(title_id.to_string()),
+                ],
+            )
+            .await;
+            let value = if kind.is_empty() { "9090" } else { "7070" };
+            run(
+                "INSERT INTO title_external_ids
+                    (id, title_id, source, external_id, created_at, facet, library_id,
+                     external_kind)
+                 VALUES ({}, {}, 'tmdb', {}, '2026-01-01T00:00:00Z', 'anime', 'library-kind', {})",
+                vec![
+                    SqlArg::Text(format!("ext-{title_id}")),
+                    SqlArg::Text(title_id.to_string()),
+                    SqlArg::Text(value.to_string()),
+                    SqlArg::Text(kind.to_string()),
+                ],
+            )
+            .await;
+        }
+        let store = TitleStore::new(datastore);
+        let found = |id: ExternalId| {
+            let store = &store;
+            async move {
+                store
+                    .find_by_external_id_in_facet(MediaFacet::Anime, &id)
+                    .await
+                    .unwrap()
+                    .map(|title| title.id)
+            }
+        };
+
+        assert_eq!(
+            found(ExternalId::with_kind("tmdb", "tv", "7070"))
+                .await
+                .as_deref(),
+            Some("b-fixture-show")
+        );
+        assert_eq!(
+            found(ExternalId::with_kind("tmdb", "movie", "7070"))
+                .await
+                .as_deref(),
+            Some("a-fixture-feature")
+        );
+        assert_eq!(
+            found(ExternalId::with_kind("tmdb", "collection", "7070")).await,
+            None
+        );
+        // An id without a kind matches whatever kind is stored.
+        assert_eq!(
+            found(ExternalId::new("tmdb", "7070")).await.as_deref(),
+            Some("a-fixture-feature")
+        );
+        // A stored id without a kind matches a kinded lookup.
+        assert_eq!(
+            found(ExternalId::with_kind("tmdb", "tv", "9090"))
+                .await
+                .as_deref(),
+            Some("c-fixture-legacy")
+        );
+    }
 
     #[tokio::test]
     async fn discovery_context_projection_reads_only_identity_and_genres() {

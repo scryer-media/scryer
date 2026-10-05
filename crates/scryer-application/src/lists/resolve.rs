@@ -67,6 +67,10 @@ impl ResolvedItem {
 /// The item's kind: its own hint when it gives one, otherwise the
 /// subscription's only kind. A multi-kind list whose item carries no hint
 /// cannot be routed and stays unresolved.
+///
+/// Anime is a kind of series, and a source that has no anime kind of its own
+/// (the gateway's charts among them) hints every anime show as a series. On a
+/// list that follows anime but not series, such an item is the list's anime.
 pub fn item_kind(item: &ListPluginItem, subscription: &ListSubscription) -> Option<MediaFacet> {
     let hinted = item.kind_hint.map(|kind| match kind {
         ListMediaKind::Movie => MediaFacet::Movie,
@@ -76,6 +80,9 @@ pub fn item_kind(item: &ListPluginItem, subscription: &ListSubscription) -> Opti
     match hinted {
         Some(kind) if subscription.kinds.is_empty() || subscription.kinds.contains(&kind) => {
             Some(kind)
+        }
+        Some(MediaFacet::Series) if subscription.kinds.contains(&MediaFacet::Anime) => {
+            Some(MediaFacet::Anime)
         }
         Some(_) => None,
         None => match subscription.kinds.as_slice() {

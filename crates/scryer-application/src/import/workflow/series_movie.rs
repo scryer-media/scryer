@@ -41,7 +41,24 @@ async fn run_import(
         CompletedImportTargetResolution::Finished(result) => return Ok(*result),
     };
 
+    let subtitle_roots = std::iter::once(PathBuf::from(&completed.dest_dir))
+        .chain(target.extracted_dir.iter().cloned())
+        .collect::<Vec<_>>();
+    let subtitle_videos = target
+        .video_files
+        .iter()
+        .map(|video| (video.path().to_path_buf(), video.parse_path().into_owned()))
+        .collect::<Vec<_>>();
+    let subtitle_plan = sidecars::SceneSubtitlePlan::discover_for_import(
+        app,
+        &target.title,
+        import_id,
+        &subtitle_videos,
+        &subtitle_roots,
+    )
+    .await?;
     drop(preparation_permit.take());
+    let mut subtitle_deliveries = Vec::new();
     let result = dispatch_completed_import_target(
         app,
         actor,
@@ -50,11 +67,30 @@ async fn run_import(
         release_evidence,
         started_at,
         &target,
+        &mut subtitle_deliveries,
     )
     .await;
 
+    // Delivery uses the original names captured before a move import. A
+    // failure retains extracted subtitles for inspection and a safe retry.
+    for (source, destination) in &subtitle_deliveries {
+        subtitle_plan
+            .deliver(app, &target.title.id, source, destination)
+            .await?;
+    }
+    let subtitles_pending = subtitle_plan.has_pending_sources(
+        subtitle_deliveries
+            .iter()
+            .map(|(source, _)| source.as_path()),
+    );
+
     // Clean up extracted archive directory if we created one
-    if let Some(ref dir) = target.extracted_dir {
+    if result
+        .as_ref()
+        .is_ok_and(|result| result.decision == ImportDecision::Imported)
+        && !subtitles_pending
+        && let Some(ref dir) = target.extracted_dir
+    {
         crate::archive_extractor::cleanup_extracted_dir(dir).await;
     }
 
@@ -264,7 +300,7 @@ enum TitlelessArchiveRelocation {
 }
 
 async fn relocate_titleless_archive_workspace_for_title(
-    title: &scryer_domain::Title,
+    title_name: &str,
     destination: crate::archive_extractor::ArchiveExtractionDestination,
     extracted_dir: PathBuf,
 ) -> AppResult<TitlelessArchiveRelocation> {
@@ -282,28 +318,29 @@ async fn relocate_titleless_archive_workspace_for_title(
             ))
         })?;
 
-    let mut target = target_parent.join(
+    let target = target_parent.join(
         extracted_dir
             .file_name()
             .unwrap_or_else(|| std::ffi::OsStr::new(".scryer-ax-relocated")),
     );
-    if target.exists() {
-        target = target_parent.join(format!(
-            ".scryer-ax-{:016x}",
-            uuid::Uuid::new_v4().as_u128() as u64
-        ));
-    }
-
-    match tokio::fs::rename(&extracted_dir, &target).await {
+    // Keep the name recorded by the ownership marker and never replace an
+    // existing directory. Unsupported filesystems can extract under the title.
+    let Some(result) = crate::fs_safety::exclusive_rename(&extracted_dir, &target).await else {
+        crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+        return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
+    };
+    match result {
         Ok(()) => Ok(TitlelessArchiveRelocation::Ready(target)),
         Err(error) => {
             crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
-            if crate::fs_safety::is_cross_device_error(&error) {
+            if crate::fs_safety::is_cross_device_error(&error)
+                || error.kind() == std::io::ErrorKind::AlreadyExists
+            {
                 return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
             }
             Err(AppError::Validation(format!(
                 "archive matched title '{}' but extracted workspace {} could not be moved to {} without copying: {error}",
-                title.name,
+                title_name,
                 extracted_dir.display(),
                 target.display()
             )))
@@ -364,8 +401,32 @@ fn media_facet_from_archive_hint(value: &str) -> Option<MediaFacet> {
     }
 }
 
-fn archive_extraction_would_be_needed_best_effort(dir: &Path) -> bool {
-    match crate::archive_extractor::archive_extraction_would_be_needed(dir) {
+/// The sample rule the automatic import scan applies to a facet's download,
+/// which archive planning must share: series and anime drop sample-named and
+/// sample-sized videos, while the movie scan has no size heuristic, so only a
+/// sample-named video leaves a movie download still needing its archives.
+fn automatic_scan_sample_rule(facet: &MediaFacet) -> fn(&Path) -> bool {
+    if matches!(facet, MediaFacet::Series | MediaFacet::Anime) {
+        is_sample_file
+    } else {
+        is_sample_named_file
+    }
+}
+
+/// The sample rule for a download whose title is not known yet: the facet
+/// hint the titleless archive probe itself uses, else the name-only rule every
+/// facet agrees on.
+fn titleless_sample_rule(completed: &CompletedDownload) -> fn(&Path) -> bool {
+    archive_probe_facet_from_completed(completed)
+        .map(|facet| automatic_scan_sample_rule(&facet))
+        .unwrap_or(is_sample_named_file)
+}
+
+fn archive_extraction_would_be_needed_best_effort(
+    dir: &Path,
+    is_sample: fn(&Path) -> bool,
+) -> bool {
+    match crate::archive_extractor::archive_extraction_would_be_needed(dir, is_sample) {
         Ok(needed) => needed,
         Err(error) => {
             tracing::warn!(
@@ -388,15 +449,77 @@ async fn mark_import_extracting(app: &AppUseCase, import_id: &str) -> AppResult<
     .await
 }
 
+/// Password candidates for this download's archives, in the order they are
+/// tried after a password-free attempt is refused: the operator's retry
+/// password, the password the indexer announced for this grab, then one
+/// carried in the client-reported release or job name.
+///
+/// The stored password is looked up only for a Scryer grab, by its title and
+/// persisted release title, so it can only be the one announced for this
+/// release. A failed lookup costs that candidate, never the import.
+async fn archive_password_candidates(
+    app: &AppUseCase,
+    completed: &CompletedDownload,
+    release_evidence: &ReleaseEvidence,
+    operator_password: Option<&str>,
+) -> crate::import::archive_passwords::ArchivePasswordCandidates {
+    let mut candidates = crate::import::archive_passwords::ArchivePasswordCandidates::default();
+    candidates.push_operator(operator_password);
+    if let Some(id) = completed
+        .download_id
+        .as_deref()
+        .and_then(scryer_domain::download_identity::DownloadId::parse)
+    {
+        match app
+            .services
+            .workflow
+            .download_submissions
+            .password_candidates(&id)
+            .await
+        {
+            Ok(values) => {
+                for value in values.iter() {
+                    candidates.push_response_header(value);
+                }
+            }
+            Err(_) => tracing::warn!("stored download password candidates could not be loaded"),
+        }
+    }
+    if let (Some(title_id), Some(source_title)) = (
+        release_evidence.title_id(),
+        release_evidence.submission_source_title(),
+    ) {
+        match app
+            .services
+            .workflow
+            .release_attempts
+            .get_latest_source_password(Some(title_id), None, Some(source_title))
+            .await
+        {
+            Ok(password) => candidates.push_indexer(password.as_deref()),
+            Err(error) => tracing::warn!(
+                error = %error,
+                title_id,
+                "failed to read the stored indexer archive password; continuing without it"
+            ),
+        }
+    }
+    candidates.push_release_name(completed.release_name.as_deref());
+    candidates.push_release_name(Some(&completed.name));
+    candidates
+}
+
 async fn try_match_titleless_archive_from_inner_video(
     app: &AppUseCase,
     import_id: &str,
     completed: &CompletedDownload,
     dest_dir: &Path,
+    release_evidence: &ReleaseEvidence,
     archive_password: Option<&str>,
     resolved_title_authorization: Option<&User>,
 ) -> AppResult<Option<TitlelessArchiveMatch>> {
-    if !archive_extraction_would_be_needed_best_effort(dest_dir) {
+    let is_sample = titleless_sample_rule(completed);
+    if !archive_extraction_would_be_needed_best_effort(dest_dir, is_sample) {
         return Ok(None);
     }
     let Some((destination, facet)) =
@@ -405,6 +528,8 @@ async fn try_match_titleless_archive_from_inner_video(
         return Ok(None);
     };
 
+    let passwords =
+        archive_password_candidates(app, completed, release_evidence, archive_password).await;
     let archive_provider = app
         .services
         .integrations
@@ -422,8 +547,9 @@ async fn try_match_titleless_archive_from_inner_video(
             .await;
         crate::archive_extractor::extract_archives_if_needed(
             dest_dir,
+            is_sample,
             Some(destination),
-            archive_password,
+            &passwords,
             archive_provider.clone(),
         )
         .await?
@@ -432,7 +558,19 @@ async fn try_match_titleless_archive_from_inner_video(
     };
 
     let is_series = matches!(facet, MediaFacet::Series | MediaFacet::Anime);
-    let video_files = match find_video_files(&extracted_dir, is_series) {
+    let video_files = match (|| {
+        let mut files = find_video_files(&extracted_dir, is_series)?;
+        let replaced = crate::archive_extractor::replaced_archive_sources(&extracted_dir)?;
+        files.extend(
+            find_video_files(dest_dir, is_series)?
+                .into_iter()
+                .filter(|path| {
+                    path.canonicalize()
+                        .is_ok_and(|path| !replaced.contains(&path))
+                }),
+        );
+        Ok::<_, AppError>(files)
+    })() {
         Ok(video_files) => video_files,
         Err(error) => {
             crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
@@ -472,9 +610,12 @@ async fn try_match_titleless_archive_from_inner_video(
                         return Err(error);
                     }
                 };
-            let relocation =
-                relocate_titleless_archive_workspace_for_title(&title, destination, extracted_dir)
-                    .await?;
+            let relocation = relocate_titleless_archive_workspace_for_title(
+                &title.name,
+                destination,
+                extracted_dir,
+            )
+            .await?;
             let extracted_dir = match relocation {
                 TitlelessArchiveRelocation::Ready(extracted_dir) => extracted_dir,
                 TitlelessArchiveRelocation::ReextractUnderMatchedTitle => {
@@ -490,8 +631,9 @@ async fn try_match_titleless_archive_from_inner_video(
                             .await;
                         crate::archive_extractor::extract_archives_if_needed(
                             dest_dir,
+                            is_sample,
                             Some(destination),
-                            archive_password,
+                            &passwords,
                             archive_provider.clone(),
                         )
                         .await?
@@ -586,6 +728,7 @@ async fn resolve_completed_import_target(
             import_id,
             completed,
             dest_dir,
+            release_evidence,
             archive_password,
             resolved_title_authorization,
         )
@@ -650,7 +793,10 @@ async fn resolve_completed_import_target(
     let title = match title {
         Some(t) => t,
         None => {
-            let archive_message = if archive_extraction_would_be_needed_best_effort(dest_dir) {
+            let archive_message = if archive_extraction_would_be_needed_best_effort(
+                dest_dir,
+                titleless_sample_rule(completed),
+            ) {
                 "; archived downloads require a facet/category hint and configured library root before Scryer can stage extraction under the import destination"
             } else {
                 ""
@@ -703,10 +849,18 @@ async fn resolve_completed_import_target(
     // 3. FIND VIDEO FILES (extract archives first if needed)
     let is_series = matches!(title.facet, MediaFacet::Series | MediaFacet::Anime);
     if extracted_dir.is_none() {
-        let extraction_destination = if archive_extraction_would_be_needed_best_effort(dest_dir) {
+        let extraction_destination = if archive_extraction_would_be_needed_best_effort(
+            dest_dir,
+            automatic_scan_sample_rule(&title.facet),
+        ) {
             Some(archive_extraction_destination_for_title(app, import_id, &title).await?)
         } else {
             None
+        };
+        let passwords = if extraction_destination.is_some() {
+            archive_password_candidates(app, completed, release_evidence, archive_password).await
+        } else {
+            Default::default()
         };
         if extraction_destination.is_some() {
             mark_import_extracting(app, import_id).await?;
@@ -729,20 +883,27 @@ async fn resolve_completed_import_target(
             None
         };
         drop(preparation_permit.take());
-        let extraction = {
-            let _archive_extraction_permit = app
-                .runtime
-                .imports
-                .execution_coordinator
-                .acquire_archive_extraction()
-                .await;
+        let extraction = async {
+            let acquire = app.runtime.imports.execution_coordinator.acquire_archive_extraction();
+            let cancellation = extraction_stream.as_ref().map(|stream| stream.cancellation_token());
+            let _archive_extraction_permit = if let Some(token) = &cancellation {
+                tokio::select! {
+                    biased;
+                    _ = token.cancelled() => return Err(AppError::Canceled("queued archive extraction was cancelled".into())),
+                    permit = acquire => permit,
+                }
+            } else { acquire.await };
             if let Some(stream) = &extraction_stream {
                 stream.mark_extracting().await;
             }
+            if cancellation.as_ref().is_some_and(|token| token.is_cancelled()) {
+                return Err(AppError::Canceled("queued archive extraction was cancelled".into()));
+            }
             crate::archive_extractor::extract_archives_if_needed(
                 dest_dir,
+                automatic_scan_sample_rule(&title.facet),
                 extraction_destination,
-                archive_password,
+                &passwords,
                 app.services
                     .integrations
                     .archive_extractor_plugin_provider
@@ -750,7 +911,7 @@ async fn resolve_completed_import_target(
                     .cloned(),
             )
             .await
-        };
+        }.await;
         if let Some(stream) = extraction_stream {
             stream.finish().await;
         }
@@ -764,11 +925,21 @@ async fn resolve_completed_import_target(
         extracted_dir = extraction?;
     }
     let effective_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
-    let video_files = match if is_series {
-        find_video_files(effective_dir, true)
-    } else {
-        find_video_files(effective_dir, false)
-    } {
+    let video_files = match (|| {
+        let mut files = find_video_files(effective_dir, is_series)?;
+        if extracted_dir.is_some() {
+            let replaced = crate::archive_extractor::replaced_archive_sources(effective_dir)?;
+            files.extend(
+                find_video_files(dest_dir, is_series)?
+                    .into_iter()
+                    .filter(|path| {
+                        path.canonicalize()
+                            .is_ok_and(|path| !replaced.contains(&path))
+                    }),
+            );
+        }
+        Ok::<_, AppError>(files)
+    })() {
         Ok(video_files) => video_files,
         Err(error) => {
             if let Some(ref dir) = extracted_dir {
@@ -851,6 +1022,10 @@ async fn resolve_completed_import_target(
     )))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "dispatch returns exact current source and destination mappings for sidecar delivery"
+)]
 async fn dispatch_completed_import_target(
     app: &AppUseCase,
     actor: &User,
@@ -859,6 +1034,7 @@ async fn dispatch_completed_import_target(
     release_evidence: &ReleaseEvidence,
     started_at: chrono::DateTime<Utc>,
     target: &CompletedImportTarget,
+    subtitle_deliveries: &mut Vec<(PathBuf, PathBuf)>,
 ) -> AppResult<ImportResult> {
     // The target title is settled and nothing has been written yet: the last
     // point an import can be refused cleanly while an operation owns the title
@@ -879,7 +1055,7 @@ async fn dispatch_completed_import_target(
     } else {
         crate::post_download_gate::RuntimeSampleValidationMode::EnforceAutomatic
     };
-    if let Some(ref series_movie_link_id) = target.series_movie_link_id {
+    let result = if let Some(ref series_movie_link_id) = target.series_movie_link_id {
         Box::pin(import_series_movie_download(
             app,
             actor,
@@ -908,6 +1084,7 @@ async fn dispatch_completed_import_target(
             source_root,
             &target.video_files,
             started_at,
+            subtitle_deliveries,
         ))
         .await
     } else {
@@ -923,7 +1100,18 @@ async fn dispatch_completed_import_target(
             runtime_sample_mode,
         ))
         .await
+    };
+    if (target.series_movie_link_id.is_some() || !target.is_series)
+        && let Ok(result) = &result
+        && result.decision == ImportDecision::Imported
+        && let Some(destination) = result.dest_path.as_deref()
+    {
+        subtitle_deliveries.push((
+            stored_path_to_path_buf(&result.source_path),
+            stored_path_to_path_buf(destination),
+        ));
     }
+    result
 }
 
 /// Did an operator choose this file, rather than the acquisition loop?
@@ -1831,7 +2019,7 @@ async fn import_movie_download(
                     "movie",
                     "imported",
                     Some("upgrade"),
-                    None,
+                    Some(&outcome.new_file_id),
                     &[],
                 )
                 .await?;
@@ -2641,7 +2829,7 @@ async fn import_series_movie_download(
                         "movie",
                         "imported",
                         Some("upgrade"),
-                        None,
+                        Some(&outcome.new_file_id),
                         &[],
                     )
                     .await?;
@@ -3220,6 +3408,57 @@ async fn mark_wanted_completed_for_series_movie_link(
 
 #[cfg(test)]
 mod archive_relocation_tests {
+    #[cfg(all(
+        feature = "runtime-archives",
+        any(target_os = "linux", target_os = "macos")
+    ))]
+    #[tokio::test]
+    async fn relocation_preserves_ownership_and_never_replaces_existing_directory() {
+        use super::*;
+        let root = tempfile::tempdir().unwrap();
+        let source =
+            crate::archive_extractor::create_test_archive_workspace(&root.path().join("source"));
+        let destination = root.path().join("title");
+        std::fs::write(source.join("out/episode.mkv"), b"video").unwrap();
+        let outcome = relocate_titleless_archive_workspace_for_title(
+            "Fixture",
+            crate::archive_extractor::ArchiveExtractionDestination::new(
+                &destination,
+                "fixture-import",
+            ),
+            source.clone(),
+        )
+        .await
+        .unwrap();
+        let TitlelessArchiveRelocation::Ready(moved) = outcome else {
+            panic!("exclusive move should succeed")
+        };
+        assert!(!source.exists());
+        assert!(crate::archive_extractor::is_archive_workspace_output(
+            &moved.join("out/episode.mkv"),
+            &destination.join("episode.mkv")
+        ));
+
+        // Even an empty destination directory belongs to someone else.
+        std::fs::create_dir_all(&source).unwrap();
+        let outcome = relocate_titleless_archive_workspace_for_title(
+            "Fixture",
+            crate::archive_extractor::ArchiveExtractionDestination::new(
+                source.parent().unwrap(),
+                "fixture-import",
+            ),
+            moved.clone(),
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            outcome,
+            TitlelessArchiveRelocation::ReextractUnderMatchedTitle
+        ));
+        assert!(source.is_dir());
+        assert!(!moved.exists());
+    }
+
     #[cfg(unix)]
     #[test]
     fn cross_device_rename_error_is_detected() {

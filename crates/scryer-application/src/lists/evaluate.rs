@@ -13,7 +13,9 @@
 //! 4. an earlier sync already settled it (added, requested, held, rejected,
 //!    recorded for Discover) → keep that state. An add or request that was
 //!    refused is kept only until the item's ids or the list's settings
-//!    change, and then it is a candidate again;
+//!    change, and then it is a candidate again. A title the list added and
+//!    that was later deleted from the library is not settled: the sync leaves
+//!    that row out, so the item is weighed again as if new;
 //! 5. the gateway could not resolve it → `Unresolved`, retried next sync;
 //! 6. otherwise it is a candidate.
 //!

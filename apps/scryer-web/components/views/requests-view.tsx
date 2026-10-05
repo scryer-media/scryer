@@ -831,7 +831,8 @@ export function RequestsView({
     /// how the API reads that.
     setApprovalLeaseChoice("requested");
     setApprovalCustomLeaseDays(approvalRequest.requestedLeaseDays ?? 30);
-    /// Prefilled from what the policy emitted, and editable: the approver is
+    /// Prefilled from what the policy emitted and the labels a list request's
+    /// list applies, and editable: the approver is
     /// the one who decides what the created title actually carries.
     setApprovalTags([...(approvalRequest.policyTags ?? [])]);
   }, [approvalRequest, libraries, qualityProfileOptions]);

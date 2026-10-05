@@ -2,7 +2,9 @@
 //!
 //! Ids live in a child table so a match is an indexed lookup on (source,
 //! value) rather than a scan of JSON, and so one exclusion can carry every id
-//! the request pipeline knows for the title.
+//! the request pipeline knows for the title. Each id keeps the entity kind it
+//! names (`''` when unknown); a kinded id matches only ids of the same kind or
+//! with no kind.
 
 use async_trait::async_trait;
 use scryer_application::lists::ListExclusionRepository;
@@ -31,11 +33,12 @@ impl ListExclusionRepository for ListStore {
         ];
         let id_rows: Vec<Vec<SqlArg>> = dedupe_ids(&exclusion.external_ids)
             .into_iter()
-            .map(|(source, value)| {
+            .map(|(source, kind, value)| {
                 vec![
                     SqlArg::Text(exclusion.id.clone()),
                     SqlArg::Text(source),
                     SqlArg::Text(value),
+                    SqlArg::Text(kind),
                 ]
             })
             .collect();
@@ -56,8 +59,8 @@ impl ListExclusionRepository for ListStore {
                 if !id_rows.is_empty() {
                     SqlRuntime::execute_batch_insert(
                         tx,
-                        "INSERT INTO list_exclusion_external_ids (exclusion_id, source, value)",
-                        3,
+                        "INSERT INTO list_exclusion_external_ids (exclusion_id, source, value, external_kind)",
+                        4,
                         id_rows,
                         "",
                     )
@@ -105,10 +108,16 @@ impl ListExclusionRepository for ListStore {
         let mut args = vec![SqlArg::Text(kind.as_str().to_string())];
         let id_predicates: Vec<&str> = ids
             .iter()
-            .map(|(source, value)| {
+            .map(|(source, kind, value)| {
                 args.push(SqlArg::Text(source.clone()));
                 args.push(SqlArg::Text(value.clone()));
-                "(LOWER(x.source) = {} AND LOWER(x.value) = {})"
+                if kind.is_empty() {
+                    "(LOWER(x.source) = {} AND LOWER(x.value) = {})"
+                } else {
+                    args.push(SqlArg::Text(kind.clone()));
+                    "(LOWER(x.source) = {} AND LOWER(x.value) = {}
+                      AND (x.external_kind = '' OR x.external_kind = {}))"
+                }
             })
             .collect();
         let scope_clause = match subscription_id {
@@ -168,7 +177,7 @@ impl ListStore {
         let id_rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
             &format!(
-                "SELECT exclusion_id, source, value FROM list_exclusion_external_ids
+                "SELECT exclusion_id, source, value, external_kind FROM list_exclusion_external_ids
                   WHERE exclusion_id IN ({})
                   ORDER BY exclusion_id, source, value",
                 placeholders(ids.len())
@@ -181,7 +190,11 @@ impl ListStore {
             by_exclusion
                 .entry(row.text("exclusion_id")?)
                 .or_default()
-                .push(ExternalId::new(row.text("source")?, row.text("value")?));
+                .push(ExternalId::with_kind(
+                    row.text("source")?,
+                    row.text("external_kind")?,
+                    row.text("value")?,
+                ));
         }
         for exclusion in &mut exclusions {
             exclusion.external_ids = by_exclusion.remove(&exclusion.id).unwrap_or_default();
@@ -190,21 +203,32 @@ impl ListStore {
     }
 }
 
-/// Lower-cased, de-duplicated (source, value) pairs; blank ids are dropped.
-fn dedupe_ids(external_ids: &[ExternalId]) -> Vec<(String, String)> {
-    let mut seen = std::collections::BTreeSet::new();
-    external_ids
-        .iter()
-        .filter_map(|id| {
-            let source = id.source.trim().to_ascii_lowercase();
-            let value = id.value.trim().to_ascii_lowercase();
-            if source.is_empty() || value.is_empty() {
-                return None;
+/// Lower-cased (source, kind, value) triples, one per (source, value); blank
+/// ids are dropped. `kind` is `""` when unknown. When the same (source, value)
+/// arrives with and without a kind, the first kinded one is kept, since it is
+/// the more specific identity.
+fn dedupe_ids(external_ids: &[ExternalId]) -> Vec<(String, String, String)> {
+    let mut out: Vec<(String, String, String)> = Vec::new();
+    for id in external_ids {
+        let source = id.source.trim().to_ascii_lowercase();
+        let value = id.value.trim().to_ascii_lowercase();
+        if source.is_empty() || value.is_empty() {
+            continue;
+        }
+        let kind = id.normalized_kind().unwrap_or_default();
+        match out
+            .iter_mut()
+            .find(|(seen_source, _, seen_value)| *seen_source == source && *seen_value == value)
+        {
+            Some(existing) => {
+                if existing.1.is_empty() {
+                    existing.1 = kind;
+                }
             }
-            seen.insert((source.clone(), value.clone()))
-                .then_some((source, value))
-        })
-        .collect()
+            None => out.push((source, kind, value)),
+        }
+    }
+    out
 }
 
 fn row_to_exclusion(row: &SqlRow) -> AppResult<ListExclusion> {

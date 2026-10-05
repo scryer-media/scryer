@@ -18,6 +18,25 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        self.trigger_title_wanted_search_unchecked(title_id, conflict_policy)
+            .await
+    }
+
+    /// Queues the title's wanted search without an actor permission check.
+    /// Only for callers whose own policy already authorized the add, such as
+    /// a media request approved by request policy.
+    pub(crate) async fn trigger_title_wanted_search_unchecked(
+        &self,
+        title_id: &str,
+        conflict_policy: SubmissionConflictPolicy,
+    ) -> AppResult<WantedSearchOutcome> {
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("title not found".to_string()))?;
 
         let now = Utc::now();
         let outcome = if let Some(handler) = self.facet_registry.get(&title.facet) {

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use super::extraction::{
     SubtitleExtractionContext, is_supported_subtitle_format,
-    normalize_downloaded_subtitle_with_archive_provider,
+    normalize_downloaded_subtitle_with_passwords,
 };
 use super::language::normalize_subtitle_language_code;
 use super::provider::{SubtitleFile, SubtitleProvider};
@@ -119,7 +119,7 @@ pub async fn download_and_save_with_selection(
     selection: SubtitleDownloadSelection,
 ) -> AppResult<(PathBuf, SubtitleFile)> {
     let language = normalize_language(language)?;
-    let file = normalize_downloaded_subtitle_with_archive_provider(
+    let file = normalize_downloaded_subtitle_with_passwords(
         provider.download(provider_file_id).await?,
         SubtitleExtractionContext {
             language: Some(language.clone()),
@@ -128,6 +128,7 @@ pub async fn download_and_save_with_selection(
             community_episode: selection.community_episode,
         },
         selection.archive_provider,
+        "",
     )
     .await?;
     validate_format(&file.format)?;

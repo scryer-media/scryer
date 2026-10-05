@@ -1,3 +1,5 @@
+mod sidecars;
+
 use crate::helpers::parse_usable_release_title;
 use crate::import::srrdb::{crc32_iso_hdlc_of_file, srrdb_lookup_applies};
 #[cfg(test)]
@@ -240,7 +242,10 @@ pub(crate) async fn import_file_with_record_progress(
         completed.map_or("", |item| item.client_id.as_str()),
         completed.map_or("", |item| item.client_type.as_str()),
     )
-    .with_active_import_stream(active_stream.clone());
+    .with_active_import_stream(active_stream.clone())
+    .with_archive_workspace_source(crate::archive_extractor::is_archive_workspace_output(
+        source, dest,
+    ));
     // FR-045: the depth is resolved *at import time*, not at process start, so
     // a preference change takes effect on the next import rather than the next
     // restart.

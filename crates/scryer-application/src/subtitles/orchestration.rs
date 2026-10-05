@@ -292,6 +292,8 @@ async fn record_subtitle_scheduler_feedback(
             rss_last_seen_release_published_at: None,
             rss_feed_result_count: None,
             rss_seen_release_identities: Vec::new(),
+            rss_oldest_release_published_at: None,
+            rss_stopped_at_page_ceiling: false,
             observed_at: Utc::now(),
         })
         .await

@@ -2580,6 +2580,12 @@ pub enum IndexerSearchOutcome {
     /// caps, or plugin changes, so convergence records it under a fingerprint
     /// that includes the provider's declared capabilities.
     Unsupported,
+    /// The indexer was left out because it is in an operational backoff after
+    /// recent failures. Nothing was sent. Only a raw text search reports it,
+    /// so the operator can see why an indexer stayed silent.
+    BackedOff {
+        until: Option<chrono::DateTime<chrono::Utc>>,
+    },
     Errored,
 }
 
@@ -2614,6 +2620,19 @@ pub struct IndexerSearchResponse {
     pub indexer_outcomes: Vec<IndexerQueryOutcome>,
 }
 
+/// An operator's raw text search (Prowlarr's manual search): the query as
+/// typed with no facet, ids or structured coordinates, the operator's own
+/// categories (empty sends none) and results left unfiltered by title.
+#[derive(Clone, Debug, Default)]
+pub struct RawTextSearchRequest {
+    pub query: String,
+    pub categories: Vec<String>,
+    /// Only these enabled indexers; `None` asks every enabled one.
+    pub indexer_ids: Option<std::collections::HashSet<String>>,
+    /// Page size each indexer is asked for.
+    pub limit: Option<u32>,
+}
+
 /// One complete effective search strategy submitted to a plan-capable indexer.
 #[derive(Clone, Debug)]
 pub struct IndexerSearchStrategyRequest {
@@ -2632,6 +2651,17 @@ pub struct IndexerSearchStrategyRequest {
     /// year the host can vouch for.
     pub year: Option<i32>,
     pub tagged_aliases: Vec<TaggedAlias>,
+    /// Where the previous successful RSS poll of this indexer stopped. Set only
+    /// on an RSS strategy the scheduler holds a marker for.
+    pub rss_catch_up: Option<IndexerRssCatchUp>,
+}
+
+/// The newest release the scheduler recorded on an indexer's previous
+/// successful RSS poll: a paging indexer reads back until it reaches it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexerRssCatchUp {
+    pub last_seen_published_at: chrono::DateTime<chrono::Utc>,
+    pub last_seen_identity: Option<String>,
 }
 
 /// A tier of strategies that one indexer component may execute concurrently.

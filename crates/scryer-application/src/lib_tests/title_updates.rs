@@ -911,7 +911,7 @@ async fn set_episode_monitored_emits_one_title_updated_with_actor() {
 }
 
 #[tokio::test]
-async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library() {
+async fn external_import_monitor_snapshots_are_scoped_and_consumed_per_library() {
     let (app, user) = bootstrap();
     let snapshots = Arc::new(MockExternalImportMonitorSnapshotRepo::default());
     let app = app.with_test_overrides(|services| {
@@ -995,6 +995,7 @@ async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library(
         )
         .await
         .expect("default-library snapshot should apply")
+        .claimed
     );
     let first_after = app
         .services
@@ -1021,6 +1022,7 @@ async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library(
         )
         .await
         .expect("consumed default-library snapshot should be absent")
+        .claimed
     );
 
     assert!(
@@ -1030,6 +1032,7 @@ async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library(
         )
         .await
         .expect("second-library snapshot should apply")
+        .claimed
     );
     let second_after = app
         .services
@@ -1053,14 +1056,15 @@ async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library(
         }],
     )
     .await;
-    assert!(
+    assert_eq!(
         app.apply_pending_external_import_monitor_snapshot_for_library(
             &MediaFacet::Movie,
-            &second_library.id,
+            &second_library.id
         )
         .await
-        .is_err(),
-        "an unresolved snapshot should remain retryable"
+        .unwrap()
+        .failed_entries,
+        1
     );
     let retry_title = app
         .create_title_without_hydration_in_library(
@@ -1078,12 +1082,13 @@ async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library(
         .expect("retry title should be created")
         .title;
     assert!(
-        app.apply_pending_external_import_monitor_snapshot_for_library(
+        !app.apply_pending_external_import_monitor_snapshot_for_library(
             &MediaFacet::Movie,
             &second_library.id,
         )
         .await
-        .expect("retained snapshot should apply on retry")
+        .expect("consumed snapshot must not apply again")
+        .claimed
     );
     let retry_after = app
         .services
@@ -1093,7 +1098,729 @@ async fn external_import_monitor_snapshots_are_scoped_and_retryable_per_library(
         .await
         .expect("retry title should load")
         .expect("retry title should exist");
-    assert!(!retry_after.monitored);
+    assert!(retry_after.monitored);
+    assert!(snapshots.chunks.lock().await.is_empty());
+}
+
+#[derive(Clone, Default)]
+struct SnapshotLogCapture(Arc<std::sync::Mutex<Vec<HashMap<String, String>>>>);
+
+impl tracing::Subscriber for SnapshotLogCapture {
+    fn enabled(&self, _: &tracing::Metadata<'_>) -> bool {
+        true
+    }
+    fn new_span(&self, _: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, _: &tracing::span::Record<'_>) {}
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        struct Fields(HashMap<String, String>);
+        impl tracing::field::Visit for Fields {
+            fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+                self.0.insert(field.name().into(), format!("{value:?}"));
+            }
+        }
+        let mut fields = Fields(HashMap::new());
+        event.record(&mut fields);
+        if fields.0.get("message").is_some_and(|message| {
+            message.contains("migration monitoring") || message.contains("monitor apply")
+        }) {
+            self.0.lock().unwrap().push(fields.0);
+        }
+    }
+}
+
+#[tokio::test]
+async fn external_import_monitor_snapshot_logs_only_failures_once() {
+    use tracing::instrument::WithSubscriber;
+    let (app, user, _, snapshots) = snapshot_test_app();
+    let facet = MediaFacet::Movie;
+    let library = scryer_domain::default_library_id_for_facet(&facet);
+    snapshot_test_title(&app, &user, facet.clone(), "601").await;
+    snapshot_test_chunk(&snapshots, &facet, 0, snapshot_test_line(&facet, "601")).await;
+    let logs = SnapshotLogCapture::default();
+    let report = app
+        .apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+        .with_subscriber(logs.clone())
+        .await
+        .unwrap();
+    assert!(!report.has_failures());
+    assert!(logs.0.lock().unwrap().is_empty());
+    snapshot_test_chunk(
+        &snapshots,
+        &facet,
+        0,
+        [
+            r#"{"monitored":"private-payload"}"#.into(),
+            snapshot_test_line(&facet, "missing"),
+        ]
+        .join("\n"),
+    )
+    .await;
+    let report = app
+        .apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+        .with_subscriber(logs.clone())
+        .await
+        .unwrap();
+    assert_eq!(report.failed_entries, 2);
+    let events = logs.0.lock().unwrap();
+    assert_eq!(events.len(), 2);
+    for (index, event) in events.iter().enumerate() {
+        assert_eq!(event["line"], (index + 1).to_string());
+        for field in [
+            "library_id",
+            "facet",
+            "attempt",
+            "chunk",
+            "operation",
+            "error",
+        ] {
+            assert!(event.contains_key(field), "missing {field}");
+        }
+        assert!(!format!("{event:?}").contains("private-payload"));
+    }
+}
+
+fn snapshot_test_app() -> (
+    AppUseCase,
+    User,
+    Arc<MockTitleRepo>,
+    Arc<MockExternalImportMonitorSnapshotRepo>,
+) {
+    let (mut app, user) = bootstrap();
+    let titles = Arc::new(MockTitleRepo::default());
+    let snapshots = Arc::new(MockExternalImportMonitorSnapshotRepo::default());
+    app.services.catalog.titles = titles.clone();
+    app.services.catalog.shows = Arc::new(MockShowRepo {
+        titles: Some(titles.clone()),
+        ..Default::default()
+    });
+    app.services.workflow.external_import_monitor_snapshots = snapshots.clone();
+    (app, user, titles, snapshots)
+}
+
+async fn snapshot_test_title(app: &AppUseCase, user: &User, facet: MediaFacet, id: &str) -> Title {
+    app.create_title_without_hydration_in_library(
+        user,
+        NewTitle {
+            name: format!("Snapshot fixture {id}"),
+            facet: facet.clone(),
+            monitored: false,
+            external_ids: vec![ExternalId::new(
+                if facet == MediaFacet::Movie {
+                    "tmdb"
+                } else {
+                    "tvdb"
+                },
+                id,
+            )],
+            ..Default::default()
+        },
+        scryer_domain::default_library_id_for_facet(&facet),
+    )
+    .await
+    .unwrap()
+    .title
+}
+
+fn snapshot_test_line(facet: &MediaFacet, id: &str) -> String {
+    if *facet == MediaFacet::Movie {
+        serde_json::to_string(&ExternalImportMonitorMovieEntry {
+            tmdb_id: Some(id.into()),
+            imdb_id: None,
+            path: None,
+            monitored: true,
+        })
+        .unwrap()
+    } else {
+        serde_json::to_string(&ExternalImportMonitorSeriesEntry {
+            tvdb_id: Some(id.into()),
+            path: None,
+            monitored: true,
+            seasons: vec![],
+            episodes: vec![],
+        })
+        .unwrap()
+    }
+}
+
+async fn snapshot_test_chunk(
+    repo: &MockExternalImportMonitorSnapshotRepo,
+    facet: &MediaFacet,
+    index: i32,
+    payload: String,
+) {
+    repo.append_external_import_monitor_snapshot_chunk(&ExternalImportMonitorSnapshotChunk {
+        session_id: crate::external_import_monitor_apply_session_id_for_library(
+            &scryer_domain::default_library_id_for_facet(facet),
+        ),
+        facet: facet.clone(),
+        entry_kind: if *facet == MediaFacet::Movie {
+            ExternalImportMonitorSnapshotEntryKind::Movie
+        } else {
+            ExternalImportMonitorSnapshotEntryKind::Series
+        },
+        chunk_index: index,
+        payload_ndjson: payload,
+        created_at: Utc::now().to_rfc3339(),
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn external_import_monitor_snapshot_failures_continue_and_never_replay() {
+    for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
+        let (app, user, titles, snapshots) = snapshot_test_app();
+        let first = snapshot_test_title(&app, &user, facet.clone(), "101").await;
+        let failed = snapshot_test_title(&app, &user, facet.clone(), "102").await;
+        let last = snapshot_test_title(&app, &user, facet.clone(), "103").await;
+        let ambiguous = snapshot_test_title(&app, &user, facet.clone(), "104").await;
+        if facet != MediaFacet::Movie {
+            for title in [&failed, &last] {
+                let collection = app
+                    .create_collection(
+                        &user,
+                        title.id.clone(),
+                        "season".into(),
+                        "1".into(),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                app.services
+                    .catalog
+                    .shows
+                    .set_collections_monitored(std::slice::from_ref(&collection.id), false)
+                    .await
+                    .unwrap();
+                let episode = app
+                    .create_episode(
+                        &user,
+                        title.id.clone(),
+                        Some(collection.id),
+                        "standard".into(),
+                        Some("1".into()),
+                        Some("1".into()),
+                        None,
+                        None,
+                        None,
+                        None,
+                        false,
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                app.services
+                    .catalog
+                    .shows
+                    .set_episodes_monitored(&[episode.id], false)
+                    .await
+                    .unwrap();
+            }
+        }
+        let mut duplicate = ambiguous.clone();
+        duplicate.id = uuid::Uuid::new_v4().to_string();
+        titles.store.lock().await.push(duplicate);
+        titles
+            .fail_monitoring_for
+            .lock()
+            .await
+            .insert(failed.id.clone());
+        snapshot_test_chunk(
+            &snapshots,
+            &facet,
+            0,
+            [
+                "malformed private payload".into(),
+                snapshot_test_line(&facet, "101"),
+                snapshot_test_line(&facet, "missing"),
+                snapshot_test_line(&facet, "102"),
+                snapshot_test_line(&facet, "104"),
+            ]
+            .join("\n"),
+        )
+        .await;
+        // More than one fetch batch, with failures preceding a later valid chunk.
+        for index in 1..5 {
+            snapshot_test_chunk(&snapshots, &facet, index, String::new()).await;
+        }
+        snapshot_test_chunk(&snapshots, &facet, 5, snapshot_test_line(&facet, "103")).await;
+        let failed_events_before = title_updated_events(&app, &failed.id).await.len();
+        let library = scryer_domain::default_library_id_for_facet(&facet);
+        let report = app
+            .apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+            .await
+            .unwrap();
+        assert_eq!(report.failed_entries, 4);
+        assert_eq!(report.unprocessed_chunks, 0);
+        assert!(!report.cleanup_failed);
+        if facet != MediaFacet::Movie {
+            assert_eq!(
+                title_updated_events(&app, &failed.id).await.len(),
+                failed_events_before + 1
+            );
+            for title in [&failed, &last] {
+                // Successful child writes survive a subsequent title-write failure.
+                let episodes = app
+                    .services
+                    .catalog
+                    .shows
+                    .list_episodes_for_title(&title.id)
+                    .await
+                    .unwrap();
+                assert_eq!(episodes.len(), 1);
+                assert!(episodes[0].monitored);
+            }
+        }
+        assert!(
+            titles
+                .get_by_id(&first.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+        assert!(titles.get_by_id(&last.id).await.unwrap().unwrap().monitored);
+        assert!(
+            !titles
+                .get_by_id(&failed.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+        assert!(
+            !titles
+                .get_by_id(&ambiguous.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+        assert!(snapshots.chunks.lock().await.is_empty());
+        app.set_title_monitored(&user, &first.id, false)
+            .await
+            .unwrap();
+        assert!(
+            !app.apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+                .await
+                .unwrap()
+                .claimed
+        );
+        assert!(
+            !titles
+                .get_by_id(&first.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+        // Only a newly supplied migration is eligible to change it again.
+        snapshot_test_chunk(&snapshots, &facet, 0, snapshot_test_line(&facet, "101")).await;
+        assert!(
+            app.apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+                .await
+                .unwrap()
+                .claimed
+        );
+        assert!(
+            titles
+                .get_by_id(&first.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+    }
+}
+
+#[tokio::test]
+async fn external_import_monitor_snapshot_partial_child_failure_emits_activity_and_continues() {
+    use futures_util::FutureExt;
+    for facet in [MediaFacet::Series, MediaFacet::Anime] {
+        let (mut app, user, titles, snapshots) = snapshot_test_app();
+        let shows = Arc::new(MockShowRepo {
+            titles: Some(titles),
+            ..Default::default()
+        });
+        app.services.catalog.shows = shows.clone();
+        let failed = snapshot_test_title(&app, &user, facet.clone(), "701").await;
+        let last = snapshot_test_title(&app, &user, facet.clone(), "702").await;
+        let collection = app
+            .create_collection(
+                &user,
+                failed.id.clone(),
+                "season".into(),
+                "1".into(),
+                None,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        shows
+            .set_collections_monitored(std::slice::from_ref(&collection.id), false)
+            .await
+            .unwrap();
+        let episode = app
+            .create_episode(
+                &user,
+                failed.id.clone(),
+                Some(collection.id.clone()),
+                "standard".into(),
+                Some("1".into()),
+                Some("1".into()),
+                None,
+                None,
+                None,
+                None,
+                false,
+                false,
+            )
+            .await
+            .unwrap();
+        shows
+            .set_episodes_monitored(std::slice::from_ref(&episode.id), false)
+            .await
+            .unwrap();
+        shows
+            .fail_episode_monitoring_for
+            .lock()
+            .await
+            .insert(episode.id.clone());
+        let before = title_updated_events(&app, &failed.id).await.len();
+        let _ = app
+            .runtime
+            .acquisition
+            .acquisition_wake
+            .notified()
+            .now_or_never();
+        snapshot_test_chunk(&snapshots, &facet, 0, snapshot_test_line(&facet, "701")).await;
+        let report = app
+            .apply_pending_external_import_monitor_snapshot_for_library(
+                &facet,
+                &scryer_domain::default_library_id_for_facet(&facet),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.failed_entries, 1);
+        assert!(
+            shows
+                .get_collection_by_id(&collection.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+        assert!(
+            !shows
+                .get_episode_by_id(&episode.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+        let events = title_updated_events(&app, &failed.id).await;
+        assert_eq!(events.len(), before + 1);
+        assert!(events.last().unwrap().actor_user_id.is_none());
+        assert!(
+            app.runtime
+                .acquisition
+                .acquisition_wake
+                .notified()
+                .now_or_never()
+                .is_some()
+        );
+        // The only entry in that attempt failed after committing its collection.
+        // A fresh snapshot also proves the child failure does not stop a later entry.
+        assert!(snapshots.chunks.lock().await.is_empty());
+        snapshot_test_chunk(
+            &snapshots,
+            &facet,
+            0,
+            [
+                snapshot_test_line(&facet, "701"),
+                snapshot_test_line(&facet, "702"),
+            ]
+            .join("\n"),
+        )
+        .await;
+        let report = app
+            .apply_pending_external_import_monitor_snapshot_for_library(
+                &facet,
+                &scryer_domain::default_library_id_for_facet(&facet),
+            )
+            .await
+            .unwrap();
+        assert_eq!(report.failed_entries, 1);
+        assert!(
+            app.services
+                .catalog
+                .titles
+                .get_by_id(&last.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+        assert!(snapshots.chunks.lock().await.is_empty());
+    }
+}
+
+#[tokio::test]
+async fn external_import_monitor_snapshot_notifies_after_anime_reconciliation() {
+    use futures_util::FutureExt;
+    let (mut app, user, titles, snapshots) = snapshot_test_app();
+    let shows = Arc::new(MockShowRepo {
+        titles: Some(titles),
+        ..Default::default()
+    });
+    app.services.catalog.shows = shows.clone();
+    let facet = MediaFacet::Anime;
+    let title = snapshot_test_title(&app, &user, facet.clone(), "801").await;
+    let before = title_updated_events(&app, &title.id).await.len();
+    let _ = app
+        .runtime
+        .acquisition
+        .acquisition_wake
+        .notified()
+        .now_or_never();
+    snapshot_test_chunk(&snapshots, &facet, 0, snapshot_test_line(&facet, "801")).await;
+    let entered = Arc::new(tokio::sync::Barrier::new(2));
+    let release = Arc::new(tokio::sync::Barrier::new(2));
+    *shows.series_movie_read_gate.lock().await = Some((entered.clone(), release.clone()));
+    let applying = app.clone();
+    let task = tokio::spawn(async move {
+        applying
+            .apply_pending_external_import_monitor_snapshot_for_library(
+                &facet,
+                &scryer_domain::default_library_id_for_facet(&facet),
+            )
+            .await
+            .unwrap()
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(30), entered.wait())
+        .await
+        .unwrap();
+    // The title row is committed, but derived link reconciliation is still blocked.
+    assert_eq!(title_updated_events(&app, &title.id).await.len(), before);
+    assert!(
+        app.runtime
+            .acquisition
+            .acquisition_wake
+            .notified()
+            .now_or_never()
+            .is_none()
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(30), release.wait())
+        .await
+        .unwrap();
+    let report = tokio::time::timeout(std::time::Duration::from_secs(30), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!report.has_failures());
+    assert_eq!(
+        title_updated_events(&app, &title.id).await.len(),
+        before + 1
+    );
+    assert!(
+        app.runtime
+            .acquisition
+            .acquisition_wake
+            .notified()
+            .now_or_never()
+            .is_some()
+    );
+}
+
+#[tokio::test]
+async fn external_import_monitor_snapshot_cleanup_failure_leaves_inert_rows() {
+    let (app, user, titles, snapshots) = snapshot_test_app();
+    let facet = MediaFacet::Movie;
+    let library = scryer_domain::default_library_id_for_facet(&facet);
+    let title = snapshot_test_title(&app, &user, facet.clone(), "201").await;
+    snapshot_test_chunk(&snapshots, &facet, 0, snapshot_test_line(&facet, "201")).await;
+    snapshots.fail_cleanup.store(true, Ordering::SeqCst);
+    let report = app
+        .apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+        .await
+        .unwrap();
+    assert!(report.claimed && report.cleanup_failed);
+    assert_eq!(snapshots.chunks.lock().await.len(), 1);
+    app.set_title_monitored(&user, &title.id, false)
+        .await
+        .unwrap();
+    assert!(
+        !app.apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+            .await
+            .unwrap()
+            .claimed
+    );
+    assert!(
+        !titles
+            .get_by_id(&title.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .monitored
+    );
+    let mut other_library = snapshots.chunks.lock().await[0].clone();
+    other_library.session_id = "external-import-monitor-apply-consumed:6f74686572:attempt".into();
+    let mut other_facet = snapshots.chunks.lock().await[0].clone();
+    other_facet.facet = MediaFacet::Anime;
+    snapshots
+        .chunks
+        .lock()
+        .await
+        .extend([other_library.clone(), other_facet.clone()]);
+    snapshots.fail_cleanup.store(false, Ordering::SeqCst);
+    assert!(
+        !app.apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+            .await
+            .unwrap()
+            .has_failures()
+    );
+    assert_eq!(
+        *snapshots.chunks.lock().await,
+        vec![other_library, other_facet]
+    );
+}
+
+#[tokio::test]
+async fn external_import_monitor_snapshot_claim_failure_writes_nothing() {
+    let (app, user, titles, snapshots) = snapshot_test_app();
+    let facet = MediaFacet::Movie;
+    let library = scryer_domain::default_library_id_for_facet(&facet);
+    let title = snapshot_test_title(&app, &user, facet.clone(), "301").await;
+    snapshot_test_chunk(&snapshots, &facet, 0, snapshot_test_line(&facet, "301")).await;
+    snapshots.fail_claim.store(true, Ordering::SeqCst);
+    assert!(
+        app.apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+            .await
+            .is_err()
+    );
+    assert!(
+        !titles
+            .get_by_id(&title.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .monitored
+    );
+    assert_eq!(
+        snapshots.chunks.lock().await[0].session_id,
+        crate::external_import_monitor_apply_session_id_for_library(&library)
+    );
+}
+
+#[tokio::test]
+async fn external_import_monitor_snapshot_read_failure_discards_unread_remainder() {
+    let (app, user, titles, snapshots) = snapshot_test_app();
+    let facet = MediaFacet::Movie;
+    let library = scryer_domain::default_library_id_for_facet(&facet);
+    let first = snapshot_test_title(&app, &user, facet.clone(), "401").await;
+    let last = snapshot_test_title(&app, &user, facet.clone(), "402").await;
+    for index in 0..5 {
+        snapshot_test_chunk(
+            &snapshots,
+            &facet,
+            index,
+            snapshot_test_line(&facet, if index == 4 { "402" } else { "401" }),
+        )
+        .await;
+    }
+    *snapshots.fail_reads_after.lock().await = Some(3);
+    let report = app
+        .apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+        .await
+        .unwrap();
+    assert_eq!(report.unprocessed_chunks, 1);
+    assert_eq!(report.failed_entries, 0);
+    assert!(
+        titles
+            .get_by_id(&first.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .monitored
+    );
+    assert!(!titles.get_by_id(&last.id).await.unwrap().unwrap().monitored);
+    assert!(snapshots.chunks.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn external_import_monitor_snapshot_crash_after_claim_never_resumes() {
+    for partial_write in [false, true] {
+        let (app, user, titles, snapshots) = snapshot_test_app();
+        let facet = MediaFacet::Movie;
+        let library = scryer_domain::default_library_id_for_facet(&facet);
+        let first = snapshot_test_title(&app, &user, facet.clone(), "501").await;
+        let last = snapshot_test_title(&app, &user, facet.clone(), "502").await;
+        snapshot_test_chunk(
+            &snapshots,
+            &facet,
+            0,
+            [
+                snapshot_test_line(&facet, "501"),
+                snapshot_test_line(&facet, "502"),
+            ]
+            .join("\n"),
+        )
+        .await;
+        let source = crate::external_import_monitor_apply_session_id_for_library(&library);
+        let key: String = library
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let consumed = format!("external-import-monitor-apply-consumed:{key}:interrupted");
+        assert_eq!(
+            snapshots
+                .claim_external_import_monitor_snapshot(&source, &consumed, facet.clone())
+                .await
+                .unwrap(),
+            1
+        );
+        if partial_write {
+            titles.update_monitored(&first.id, true).await.unwrap();
+            app.set_title_monitored(&user, &first.id, false)
+                .await
+                .unwrap();
+        }
+        // A fresh runtime over the same repositories models restart after the durable claim.
+        let (mut restarted, _) = bootstrap();
+        restarted.services.catalog.titles = titles.clone();
+        restarted
+            .services
+            .workflow
+            .external_import_monitor_snapshots = snapshots.clone();
+        assert!(
+            !restarted
+                .apply_pending_external_import_monitor_snapshot_for_library(&facet, &library)
+                .await
+                .unwrap()
+                .claimed
+        );
+        assert!(
+            !titles
+                .get_by_id(&first.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .monitored
+        );
+        assert!(!titles.get_by_id(&last.id).await.unwrap().unwrap().monitored);
+        assert!(snapshots.chunks.lock().await.is_empty());
+    }
 }
 
 #[tokio::test]

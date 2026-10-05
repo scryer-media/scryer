@@ -19,11 +19,14 @@ import type {
   ListSubscriptionDraft,
   ListSyncRunOutcome,
   ListSyncState,
+  MemberListPolicy,
   TitleListMembership,
 } from "../types/lists.ts";
 import type { ExternalId, Facet } from "../types/titles.ts";
 import { allOf, forEventTypes, forTitle, type DomainEventPredicate } from "../reactive/domain-event-feed.ts";
 import { selectorToken } from "./dom-ids.ts";
+import { getPluginLogoSources } from "./plugin-logos.ts";
+import { ratingSourceInfo } from "./title-ratings.ts";
 
 export type ListTone = "neutral" | "positive" | "warning" | "negative" | "info" | "outline";
 
@@ -325,6 +328,16 @@ export function setListParam(params: readonly ListParam[], key: string, value: s
 export function providerTileStyle(tile: ListProviderTile | null): { background: string; color: string } | null {
   if (!tile) return null;
   return { background: tile.bg, color: tile.ink };
+}
+
+/**
+ * The shipped logo for a list provider, or null when none exists and the tile
+ * keeps its abbreviation. Metadata sites resolve through the rating-source
+ * logos; everything else (Plex, plugin providers) through the plugin logos.
+ */
+export function providerLogoSrc(providerType: string): string | null {
+  if (!providerType.trim()) return null;
+  return ratingSourceInfo(providerType).logoSrc ?? getPluginLogoSources({ providerType })?.src ?? null;
 }
 
 export function providerTileAbbreviation(manifest: Pick<ListProviderManifest, "name" | "tile">): string {
@@ -710,4 +723,19 @@ export function titleListProvenance(memberships: readonly TitleListMembership[])
     (membership.leftAt ?? "") > (best.leftAt ?? "") ? membership : best,
   );
   return { kind: "left", name: latest.name };
+}
+
+/**
+ * Undo one member's failed policy change without touching anyone else's row.
+ * The row is put back only while it still shows the value that failed, so a
+ * change that has since succeeded, for this member or another, is kept.
+ */
+export function rollBackMemberListPolicy(
+  current: readonly MemberListPolicy[],
+  previous: MemberListPolicy,
+  attempted: MemberListPolicy["policy"],
+): MemberListPolicy[] {
+  return current.map((entry) =>
+    entry.user.id === previous.user.id && entry.policy === attempted ? previous : entry,
+  );
 }

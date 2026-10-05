@@ -322,6 +322,12 @@ export function DashboardContainer() {
   // open the mapper dialog. Everything richer lives on the import page.
   const manualImport = useManualImportLauncher({
     onImportQueued: refreshAfterImportAction,
+    onImportRetried: () => {
+      dispatchNavigationBadgesRefresh();
+      void refreshOverview(true);
+      void refreshImportActivity(true);
+      void refreshQueue(true);
+    },
   });
 
   const markImportFailed = React.useCallback(

@@ -261,6 +261,17 @@ fn generate_compose(movies_path: &str, series_path: &str) -> String {
       # Beta default: authentication is disabled and all requests act
       # as the built-in admin user. Set this to "true" to require login.
       SCRYER_AUTH_ENABLED: "false"
+      # For authenticated first boot, remove the false setting above and set
+      # SCRYER_ADMIN_PASSWORD to your temporary admin password, or mount a
+      # Compose secret and set SCRYER_ADMIN_PASSWORD_FILE: /run/secrets/admin_password
+      # Add that secret to both this service and the top-level secrets section.
+      # Optionally set SCRYER_ADMIN_USERNAME: box-owner and
+      # SCRYER_DISABLE_DEFAULT_ADMIN: "true" to disable the built-in admin.
+      # Sign in as the selected user with the supplied temporary password,
+      # then choose a new password. The database retains the replacement.
+      # SCRYER_ADMIN_PASSWORD_RESET: "true" deliberately resets that password
+      # on EVERY startup. Remove the flag after use. It does not reset MFA;
+      # lost MFA requires the separate recovery-admin workflow.
     # ── Upgrade procedure ───────────────────────────────────────────
     # 1. docker compose pull
     # 2. docker compose up -d

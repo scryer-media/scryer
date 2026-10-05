@@ -62,14 +62,24 @@ pub struct AuthRuntimeStateSnapshot {
 pub struct AuthRuntimeStateHandle {
     snapshot: Arc<RwLock<AuthRuntimeStateSnapshot>>,
     epoch_tx: watch::Sender<u64>,
+    local_login_bypass_disabled: bool,
 }
 
 impl AuthRuntimeStateHandle {
     pub fn new(snapshot: AuthRuntimeStateSnapshot) -> Self {
+        Self::with_local_login_bypass_policy(snapshot, false)
+    }
+
+    pub fn with_local_login_bypass_policy(
+        mut snapshot: AuthRuntimeStateSnapshot,
+        local_login_bypass_disabled: bool,
+    ) -> Self {
+        snapshot.skip_login_for_local_ips &= !local_login_bypass_disabled;
         let (epoch_tx, _) = watch::channel(snapshot.epoch);
         Self {
             snapshot: Arc::new(RwLock::new(snapshot)),
             epoch_tx,
+            local_login_bypass_disabled,
         }
     }
 
@@ -96,7 +106,8 @@ impl AuthRuntimeStateHandle {
                 snapshot.passkey_enabled,
             );
             snapshot.form_login_enabled = form_login_enabled;
-            snapshot.skip_login_for_local_ips = skip_login_for_local_ips;
+            snapshot.skip_login_for_local_ips =
+                skip_login_for_local_ips && !self.local_login_bypass_disabled;
             if !snapshot.env_override_active {
                 snapshot.effective_form_login_enabled = form_login_enabled;
             }
@@ -578,6 +589,12 @@ pub fn to_gql_error(err: AppError) -> Error {
         AppError::ArchiveExtractionTimedOut { message } => {
             coded_gql_error(message, "ARCHIVE_EXTRACTION_TIMED_OUT")
         }
+        AppError::ArchiveExtractionFailed { message } => {
+            coded_gql_error(message, "ARCHIVE_EXTRACTION_FAILED")
+        }
+        AppError::ArchivePasswordRequired { message } => {
+            coded_gql_error(message, "ARCHIVE_PASSWORD_REQUIRED")
+        }
         AppError::NewznabQuotaExceeded { code, message } => {
             Error::new(message).extend_with(|_, extensions| {
                 extensions.set("code", "TEMPORARY_UNAVAILABLE");
@@ -710,6 +727,8 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::DownloadSubmitFailoverExhausted(_) => "DownloadSubmitFailoverExhausted",
         AppError::ArchiveExtractionPluginRequired { .. } => "ArchiveExtractionPluginRequired",
         AppError::ArchiveExtractionTimedOut { .. } => "ArchiveExtractionTimedOut",
+        AppError::ArchiveExtractionFailed { .. } => "ArchiveExtractionFailed",
+        AppError::ArchivePasswordRequired { .. } => "ArchivePasswordRequired",
         AppError::TemporaryUnavailable { .. } => "TemporaryUnavailable",
         AppError::NewznabQuotaExceeded { .. } => "NewznabQuotaExceeded",
         AppError::MfaStepUpRequired(_) => "MfaStepUpRequired",
@@ -995,6 +1014,27 @@ pub fn mfa_verification_from_ctx(ctx: &Context<'_>) -> MfaVerification {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bootstrap_login_bypass_policy_survives_settings_refresh() {
+        let runtime = AuthRuntimeStateHandle::with_local_login_bypass_policy(
+            AuthRuntimeStateSnapshot {
+                form_login_enabled: true,
+                skip_login_for_local_ips: true,
+                effective_form_login_enabled: true,
+                webauthn_configured: false,
+                passkey_enabled: false,
+                env_override_active: true,
+                env_override_description: None,
+                epoch: 0,
+            },
+            true,
+        );
+        assert!(!runtime.snapshot().skip_login_for_local_ips);
+        let refreshed = runtime.apply_saved_security_settings(false, true);
+        assert!(refreshed.effective_form_login_enabled);
+        assert!(!refreshed.skip_login_for_local_ips);
+    }
 
     fn graphql_error_extension_string<'a>(error: &'a Error, key: &str) -> Option<&'a str> {
         error

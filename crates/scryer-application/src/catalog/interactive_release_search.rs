@@ -23,7 +23,7 @@ use scryer_logging::{ActorContext, LogContext, ResourceContext, WorkflowContext,
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{Instrument, info, warn};
+use tracing::{Instrument, info};
 
 /// Overall deadline for a job; stragglers past this are marked failed.
 const INTERACTIVE_RELEASE_SEARCH_DEADLINE: std::time::Duration =
@@ -37,6 +37,12 @@ const MAX_RUNNING_JOBS_PER_ACTOR: usize = 8;
 /// Releases one browser download may bundle. Each one is a separate
 /// upstream fetch, so the cap bounds how long a single request can hold.
 const MAX_INTERACTIVE_SEARCH_ARTIFACT_DOWNLOADS: usize = 50;
+/// Page size each indexer is asked for by a raw text search, and its ceiling.
+const RAW_QUERY_DEFAULT_PAGE_SIZE: i32 = 100;
+const RAW_QUERY_MAX_PAGE_SIZE: i32 = 500;
+/// Results a title search lists when the request names no limit, and the cap.
+const TITLE_DEFAULT_RESULT_LIMIT: i32 = 50;
+const TITLE_MAX_RESULT_LIMIT: i32 = 200;
 /// Total retained payload before archive construction (individual fetches are also capped).
 const MAX_INTERACTIVE_SEARCH_ARTIFACT_BYTES: usize = 64 * 1024 * 1024;
 /// Room for the extension and a dedupe suffix inside every filesystem's limit.
@@ -95,7 +101,9 @@ pub struct InteractiveReleaseSearchIndexerView {
     /// Routing priority for this indexer, `0` when routing states none.
     pub priority: i64,
     pub status: InteractiveReleaseSearchIndexerStatus,
-    /// The indexer's own batch size (before cross-indexer dedup).
+    /// The indexer's result count. A title search counts its own batch, before
+    /// cross-indexer dedup; a query search counts what it contributed to the
+    /// listing, after exact duplicates are removed.
     pub result_count: usize,
     /// Wall time of this indexer's own call, once it has answered.
     pub elapsed_ms: Option<i64>,
@@ -104,37 +112,123 @@ pub struct InteractiveReleaseSearchIndexerView {
     /// cooldown that lifts on its own, so the UI reads it as "cooling down"
     /// instead of an error.
     pub rate_limited: bool,
+    /// Why a `Skipped` indexer was not asked. `failure_reason` carries the
+    /// same reason as plain text.
+    pub skip_reason: Option<InteractiveIndexerSkipReason>,
+    /// When a skip that lifts on its own ends, if known.
+    pub skipped_until: Option<DateTime<Utc>>,
 }
 
-/// What a title-less query subject searches as. The kind picks the search
-/// facet, the id-search facet and the default newznab categories; `Raw` picks
-/// none of them and sends the query as plain text.
+/// Why an interactive search did not ask an indexer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum InteractiveSearchKind {
-    Movie,
-    Series,
-    Anime,
-    Raw,
+pub enum InteractiveIndexerSkipReason {
+    /// The indexer is switched off.
+    IndexerDisabled,
+    /// The indexer's own configuration disables it for a while.
+    TemporarilyDisabled,
+    /// The indexer is in a backoff after recent failures.
+    BackedOff,
+    /// The indexer takes no text query.
+    NoTextSearch,
 }
 
-impl InteractiveSearchKind {
-    /// The media facet this kind searches as, or `None` for a raw text search.
-    pub fn facet(self) -> Option<MediaFacet> {
+impl InteractiveIndexerSkipReason {
+    /// Plain-text form of the reason, for logs and API clients that do not
+    /// read the structured reason.
+    fn describe(self, until: Option<DateTime<Utc>>) -> String {
         match self {
-            Self::Movie => Some(MediaFacet::Movie),
-            Self::Series => Some(MediaFacet::Series),
-            Self::Anime => Some(MediaFacet::Anime),
-            Self::Raw => None,
+            Self::IndexerDisabled => "indexer is disabled".to_string(),
+            Self::TemporarilyDisabled => "temporarily disabled".to_string(),
+            Self::BackedOff => match until {
+                Some(until) => format!("in backoff until {}", until.to_rfc3339()),
+                None => "in backoff after recent failures".to_string(),
+            },
+            Self::NoTextSearch => "does not support text search".to_string(),
         }
     }
 
-    fn as_str(self) -> &'static str {
-        self.facet().as_ref().map_or("raw", MediaFacet::as_str)
+    /// The skip a raw search outcome reports, if the indexer was never asked.
+    fn from_outcome(outcome: crate::IndexerSearchOutcome) -> Option<IndexerSkip> {
+        match outcome {
+            crate::IndexerSearchOutcome::Unsupported => Some((Self::NoTextSearch, None)),
+            crate::IndexerSearchOutcome::BackedOff { until } => Some((Self::BackedOff, until)),
+            _ => None,
+        }
     }
 }
 
+/// A skip reported for one indexer: the reason and when it lifts, if known.
+type IndexerSkip = (InteractiveIndexerSkipReason, Option<DateTime<Utc>>);
+
+/// Drops exact duplicates: a release whose download URL was already listed,
+/// or whose GUID the same indexer already listed. The first copy stays.
+/// GUIDs are only compared within an indexer, since two indexers may number
+/// their releases alike.
+fn dedupe_exact_duplicate_releases(results: Vec<IndexerSearchResult>) -> Vec<IndexerSearchResult> {
+    let mut seen_urls = HashSet::new();
+    let mut seen_guids = HashSet::new();
+    results
+        .into_iter()
+        .filter(|result| {
+            let url = result
+                .download_url
+                .as_deref()
+                .map(str::trim)
+                .filter(|url| !url.is_empty());
+            let guid = result
+                .guid
+                .as_deref()
+                .map(str::trim)
+                .filter(|guid| !guid.is_empty())
+                .map(|guid| {
+                    (
+                        result.indexer_id.clone().unwrap_or_default(),
+                        guid.to_string(),
+                    )
+                });
+            let url_duplicate = url.is_some_and(|url| seen_urls.contains(url));
+            let guid_duplicate = guid.as_ref().is_some_and(|key| seen_guids.contains(key));
+            if url_duplicate || guid_duplicate {
+                return false;
+            }
+            if let Some(url) = url {
+                seen_urls.insert(url.to_string());
+            }
+            if let Some(key) = guid {
+                seen_guids.insert(key);
+            }
+            true
+        })
+        .collect()
+}
+
+/// A listing's publish time, if it parses.
+fn published_instant(result: &IndexerSearchResult) -> Option<DateTime<Utc>> {
+    let value = result.published_at.as_deref()?.trim();
+    DateTime::parse_from_rfc3339(value)
+        .or_else(|_| DateTime::parse_from_rfc2822(value))
+        .ok()
+        .map(|instant| instant.with_timezone(&Utc))
+}
+
+/// Newest listing first; undated listings last. Ties go by indexer name,
+/// then title, so the order does not depend on which indexer answered first.
+fn compare_newest_first(
+    left: &IndexerSearchResult,
+    right: &IndexerSearchResult,
+) -> std::cmp::Ordering {
+    let left_at = published_instant(left);
+    let right_at = published_instant(right);
+    right_at
+        .is_some()
+        .cmp(&left_at.is_some())
+        .then_with(|| right_at.cmp(&left_at))
+        .then_with(|| left.source.cmp(&right.source))
+        .then_with(|| left.title.cmp(&right.title))
+}
+
 /// Point-in-time snapshot of an interactive release-search job. `results` is
-/// the scored, cross-indexer-deduped merge of every completed indexer batch.
+/// the merge of every completed indexer batch.
 #[derive(Clone, Debug)]
 pub struct InteractiveReleaseSearchSnapshot {
     pub id: String,
@@ -143,8 +237,8 @@ pub struct InteractiveReleaseSearchSnapshot {
     pub indexers: Vec<InteractiveReleaseSearchIndexerView>,
     pub started_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
-    /// Requested result limit (SearchReleasesInput.limit); applied when the
-    /// GraphQL payload is built, mirroring the one-shot resolver.
+    /// How many results the payload lists: a title search's capped limit, or
+    /// `None` for a raw query, whose limit is the per-indexer page size.
     pub limit: Option<i32>,
 }
 
@@ -157,14 +251,13 @@ pub struct InteractiveReleaseSearchRequest {
     pub series_movie_link_id: Option<String>,
     pub season: Option<String>,
     pub episode: Option<String>,
+    /// A title search's result limit, or a raw query's per-indexer page size.
     pub limit: Option<i32>,
     /// Raw operator query; required (and only meaningful) without a title.
     pub query: Option<String>,
-    /// Required with `query`; picks the facet and the default categories.
-    pub kind: Option<InteractiveSearchKind>,
     /// Restricts the fan-out to these indexer config ids (both subjects).
     pub indexer_ids: Option<Vec<String>>,
-    /// Newznab categories for a query subject; defaults from the kind's facet.
+    /// Newznab categories a query subject sends; none when omitted.
     pub categories: Option<Vec<String>>,
 }
 
@@ -184,9 +277,6 @@ pub(crate) struct InteractiveReleaseSearchJobEntry {
     pub(crate) snapshot: InteractiveReleaseSearchSnapshot,
     pub(crate) actor_id: String,
     pub(crate) scope_key: String,
-    /// The query subject's kind, kept because a grab out of this search has no
-    /// title of its own to read a facet from. `None` for a title subject.
-    pub(crate) kind: Option<InteractiveSearchKind>,
     pub(crate) cancel: CancellationToken,
 }
 
@@ -212,19 +302,14 @@ fn evict_stale_entries(
 }
 
 /// Replace key: starting a search cancels the actor's running job for the same
-/// subject. A query subject is the same subject when the kind, the text and the
-/// restricted indexer set all match.
+/// subject. A query subject is the same subject when the text and the
+/// restricted indexer set both match.
 fn interactive_release_search_scope_key(request: &InteractiveReleaseSearchRequest) -> String {
     let mut indexer_ids = request.indexer_ids.clone().unwrap_or_default();
     indexer_ids.sort();
     indexer_ids.dedup();
     match request.query.as_deref() {
-        Some(query) => format!(
-            "q|{}|{}|{}",
-            request.kind.map_or("raw", InteractiveSearchKind::as_str),
-            query.trim(),
-            indexer_ids.join(","),
-        ),
+        Some(query) => format!("q|{}|{}", query.trim(), indexer_ids.join(",")),
         None => format!(
             "{}|{}|{}|{}",
             request.title_id.as_deref().unwrap_or("-"),
@@ -248,15 +333,12 @@ enum InteractiveReleaseSearchSubject {
         subject: Box<ResolvedReleaseSearchSubject>,
         preserve_subject_scope: bool,
     },
-    /// An operator's raw query, with no title to score or judge against.
+    /// An operator's raw query (Prowlarr's manual search): sent verbatim with
+    /// the operator's categories, never judged against a title or profile.
     Query {
         query: String,
-        /// Search facet and id-search facet; `None` for a raw text query.
-        facet: Option<String>,
-        newznab_categories: Option<Vec<String>>,
-        /// Facet default profile and the facet name. `None` for
-        /// the raw kind, and when the profile could not be resolved.
-        judge: Option<Box<(QualityProfile, String)>>,
+        categories: Vec<String>,
+        page_size: u32,
     },
 }
 
@@ -265,10 +347,6 @@ struct InteractiveReleaseSearchJobContext {
     job_id: String,
     actor: User,
     subject: InteractiveReleaseSearchSubject,
-    /// Routing entries for every enabled indexer. The query subject restricts a
-    /// copy of this to one indexer per task; the title subject's restriction is
-    /// applied inside the search pipeline, so it leaves this empty.
-    routing_base: HashMap<String, IndexerRoutingEntry>,
     /// Indexer config ids to fan out to (skipped ones excluded).
     dispatch: Vec<String>,
     indexer_priority_by_name: HashMap<String, i64>,
@@ -349,47 +427,24 @@ impl AppUseCase {
                     scryer_domain::AppPermission::ManageSystemSettings,
                 )
                 .await?;
-                let Some(kind) = request.kind else {
-                    return Err(AppError::Validation(
-                        "a search kind is required with a query".to_string(),
-                    ));
-                };
-                let facet = kind.facet();
-                let facet_name = facet.as_ref().map(|facet| facet.as_str().to_string());
-                let indexer_routing = self
-                    .resolve_indexer_routing(None, facet_name.as_deref())
-                    .await;
-                let newznab_categories = request
+                let categories = request
                     .categories
-                    .clone()
-                    .map(|values| {
-                        values
-                            .into_iter()
-                            .map(|value| value.trim().to_string())
-                            .filter(|value| !value.is_empty())
-                            .collect::<Vec<_>>()
-                    })
-                    .filter(|values| !values.is_empty())
-                    .or_else(|| {
-                        facet.as_ref().map(|facet| {
-                            crate::settings::keys::default_indexer_routing_categories_for_scope(
-                                facet.as_str(),
-                            )
-                        })
-                    })
-                    .filter(|values| !values.is_empty());
-                let judge = match facet {
-                    Some(facet) => self.resolve_query_subject_judge(facet).await,
-                    None => None,
-                };
+                    .iter()
+                    .flatten()
+                    .map(|value| value.trim().to_string())
+                    .filter(|value| !value.is_empty())
+                    .collect();
+                let page_size = request
+                    .limit
+                    .unwrap_or(RAW_QUERY_DEFAULT_PAGE_SIZE)
+                    .clamp(1, RAW_QUERY_MAX_PAGE_SIZE) as u32;
                 (
                     InteractiveReleaseSearchSubject::Query {
                         query: query.to_string(),
-                        facet: facet_name,
-                        newznab_categories,
-                        judge: judge.map(Box::new),
+                        categories,
+                        page_size,
                     },
-                    indexer_routing,
+                    None,
                 )
             }
             (None, Some(_)) => {
@@ -423,12 +478,12 @@ impl AppUseCase {
             }
         }
 
-        // Dispatch enabled interactive configs within the requested set.
-        // Explicitly selected disabled configs and config cooldowns remain
-        // visible as Skipped; routing-disabled indexers are omitted. Backoff
-        // state stays with the search client (a backed-off indexer's restricted
-        // call just returns empty).
-        let wants_routing_base = matches!(subject, InteractiveReleaseSearchSubject::Query { .. });
+        // Dispatch enabled configs within the requested set; a title search
+        // also needs the interactive-search flag. Explicitly selected
+        // disabled configs and config cooldowns remain visible as Skipped;
+        // routing-disabled indexers are omitted. Backoff is reported by the
+        // search client.
+        let is_query = matches!(subject, InteractiveReleaseSearchSubject::Query { .. });
         let now = self.runtime.environment.now();
         let mut indexer_views = Vec::new();
         let mut dispatch = Vec::new();
@@ -437,86 +492,61 @@ impl AppUseCase {
             .as_ref()
             .filter(|ids| !ids.is_empty())
             .map(|ids| ids.iter().cloned().collect::<HashSet<String>>());
-        let mut routing_base = HashMap::new();
         for config in configs {
-            if !config.is_enabled {
-                if requested_indexers
-                    .as_ref()
-                    .is_some_and(|ids| ids.contains(&config.id))
-                {
-                    indexer_views.push(InteractiveReleaseSearchIndexerView {
-                        priority: indexer_priority_by_name
-                            .get(config.name.as_str())
-                            .copied()
-                            .unwrap_or(0),
-                        indexer_id: config.id,
-                        name: config.name,
-                        status: InteractiveReleaseSearchIndexerStatus::Skipped,
-                        result_count: 0,
-                        elapsed_ms: None,
-                        failure_reason: Some("indexer is disabled".to_string()),
-                        rate_limited: false,
-                    });
-                }
+            let skip = if !config.is_enabled {
+                Some((InteractiveIndexerSkipReason::IndexerDisabled, None))
+            } else if !is_query && !config.enable_interactive_search {
                 continue;
-            }
-            let routing_entry = indexer_routing
-                .as_ref()
-                .and_then(|plan| plan.entries.get(&config.id));
-            if wants_routing_base {
-                // Indexers missing from a plan are searched by default, so the
-                // base must cover every enabled one for the per-task
-                // restriction to hold.
-                routing_base.insert(
-                    config.id.clone(),
-                    routing_entry.cloned().unwrap_or(IndexerRoutingEntry {
-                        enabled: true,
-                        categories: Vec::new(),
-                        priority: 0,
-                    }),
-                );
-            }
-            if !config.enable_interactive_search {
-                continue;
-            }
+            } else {
+                config
+                    .disabled_until
+                    .filter(|until| *until > now)
+                    .map(|until| {
+                        (
+                            InteractiveIndexerSkipReason::TemporarilyDisabled,
+                            Some(until),
+                        )
+                    })
+            };
             // A routing-disabled indexer and one the request did not name are
             // both ineligible; the shared contract decides, so this stays in
-            // step with the search client's own dispatch rule.
-            if crate::contracts::indexer_search_eligibility(
-                indexer_routing.as_ref(),
-                requested_indexers.as_ref(),
-                &config.id,
-            ) != crate::contracts::IndexerSearchEligibility::Eligible
-            {
+            // step with the search client's own dispatch rule. A disabled
+            // indexer shows only when the operator named it.
+            let eligible = if config.is_enabled {
+                crate::contracts::indexer_search_eligibility(
+                    indexer_routing.as_ref(),
+                    requested_indexers.as_ref(),
+                    &config.id,
+                ) == crate::contracts::IndexerSearchEligibility::Eligible
+            } else {
+                requested_indexers
+                    .as_ref()
+                    .is_some_and(|ids| ids.contains(&config.id))
+            };
+            if !eligible {
                 continue;
             }
-            let priority = indexer_priority_by_name
-                .get(config.name.as_str())
-                .copied()
-                .unwrap_or(0);
-            if config.disabled_until.is_some_and(|until| until > now) {
-                indexer_views.push(InteractiveReleaseSearchIndexerView {
-                    indexer_id: config.id,
-                    name: config.name,
-                    priority,
-                    status: InteractiveReleaseSearchIndexerStatus::Skipped,
-                    result_count: 0,
-                    elapsed_ms: None,
-                    failure_reason: Some("temporarily disabled".to_string()),
-                    rate_limited: false,
-                });
-                continue;
+            if skip.is_none() {
+                dispatch.push(config.id.clone());
             }
-            dispatch.push(config.id.clone());
             indexer_views.push(InteractiveReleaseSearchIndexerView {
+                priority: indexer_priority_by_name
+                    .get(config.name.as_str())
+                    .copied()
+                    .unwrap_or(0),
                 indexer_id: config.id,
                 name: config.name,
-                priority,
-                status: InteractiveReleaseSearchIndexerStatus::Pending,
+                status: if skip.is_some() {
+                    InteractiveReleaseSearchIndexerStatus::Skipped
+                } else {
+                    InteractiveReleaseSearchIndexerStatus::Pending
+                },
                 result_count: 0,
                 elapsed_ms: None,
-                failure_reason: None,
+                failure_reason: skip.map(|(reason, _)| reason.describe(None)),
                 rate_limited: false,
+                skip_reason: skip.map(|(reason, _)| reason),
+                skipped_until: skip.and_then(|(_, until)| until),
             });
         }
 
@@ -530,7 +560,12 @@ impl AppUseCase {
             indexers: indexer_views,
             started_at: now,
             completed_at: None,
-            limit: request.limit,
+            limit: (!is_query).then(|| {
+                request
+                    .limit
+                    .unwrap_or(TITLE_DEFAULT_RESULT_LIMIT)
+                    .clamp(1, TITLE_MAX_RESULT_LIMIT)
+            }),
         };
 
         {
@@ -571,7 +606,6 @@ impl AppUseCase {
                     snapshot: snapshot.clone(),
                     actor_id: actor.id.clone(),
                     scope_key,
-                    kind: request.kind,
                     cancel: cancel.clone(),
                 },
             );
@@ -581,7 +615,6 @@ impl AppUseCase {
             job_id,
             actor: actor.clone(),
             subject,
-            routing_base,
             dispatch,
             indexer_priority_by_name,
             preferred_source_kind,
@@ -598,9 +631,7 @@ impl AppUseCase {
                 subject.queries.first().map(String::as_str).unwrap_or(""),
                 subject.category.as_str(),
             ),
-            InteractiveReleaseSearchSubject::Query { query, facet, .. } => {
-                (None, query.as_str(), facet.as_deref().unwrap_or("raw"))
-            }
+            InteractiveReleaseSearchSubject::Query { query, .. } => (None, query.as_str(), "raw"),
         };
         let log_span = context_span(
             LogContext::workflow(WorkflowContext {
@@ -705,23 +736,21 @@ impl AppUseCase {
             job_id,
             actor,
             subject,
-            routing_base,
             dispatch,
             indexer_priority_by_name,
             preferred_source_kind,
             cancel,
         } = context;
+        let query_listing = matches!(subject, InteractiveReleaseSearchSubject::Query { .. });
         // Shared rather than cloned per task: the title subject carries a whole
         // Title and its resolved search subject.
         let subject = Arc::new(subject);
-        let routing_base = Arc::new(routing_base);
 
         let mut set = JoinSet::new();
         for indexer_id in dispatch {
             let app = self.clone();
             let actor = actor.clone();
             let subject = Arc::clone(&subject);
-            let routing_base = Arc::clone(&routing_base);
             let job_id = job_id.clone();
             let child_token = cancel.child_token();
             set.spawn(async move {
@@ -765,23 +794,20 @@ impl AppUseCase {
                                     *preserve_subject_scope,
                                 )
                                 .await;
-                                Ok((search_outcome.results, failure_reason))
+                                Ok((search_outcome.results, failure_reason, None))
                             }
                             Err(error) => Err(error),
                         }
                     }
                     InteractiveReleaseSearchSubject::Query {
                         query,
-                        facet,
-                        newznab_categories,
-                        judge,
+                        categories,
+                        page_size,
                     } => {
                         app.search_query_subject_on_indexer(
                             query,
-                            facet,
-                            newznab_categories,
-                            judge.as_deref(),
-                            &routing_base,
+                            categories,
+                            *page_size,
                             &indexer_id,
                             child_token,
                         )
@@ -807,10 +833,21 @@ impl AppUseCase {
                     }
                 };
                 match outcome {
-                    Ok((batch, failure_reason)) => {
+                    Ok((_, _, Some((reason, until)))) => {
+                        self.set_interactive_indexer_skipped(
+                            &job_id,
+                            &indexer_id,
+                            reason,
+                            until,
+                            elapsed_ms,
+                        )
+                        .await;
+                    }
+                    Ok((batch, failure_reason, None)) => {
                         self.merge_interactive_indexer_batch(
                             &job_id,
                             &indexer_id,
+                            query_listing,
                             batch,
                             &indexer_priority_by_name,
                             &preferred_source_kind,
@@ -920,14 +957,55 @@ impl AppUseCase {
         }
     }
 
-    /// Merge one indexer's evaluated batch into the job snapshot and re-run
-    /// cross-indexer dedup over the merged set (per-indexer restricted calls
-    /// only dedup within themselves). Late batches for a non-running job are
-    /// dropped.
+    /// Mark an indexer the search never asked as skipped, with the reason.
+    async fn set_interactive_indexer_skipped(
+        &self,
+        job_id: &str,
+        indexer_id: &str,
+        reason: InteractiveIndexerSkipReason,
+        until: Option<DateTime<Utc>>,
+        elapsed_ms: i64,
+    ) {
+        let mut registry = self
+            .runtime
+            .acquisition
+            .interactive_release_searches
+            .lock()
+            .await;
+        let Some(entry) = registry.get_mut(job_id) else {
+            return;
+        };
+        if entry.snapshot.state != InteractiveReleaseSearchState::Running {
+            return;
+        }
+        if let Some(indexer) = entry
+            .snapshot
+            .indexers
+            .iter_mut()
+            .find(|indexer| indexer.indexer_id == indexer_id)
+        {
+            indexer.status = InteractiveReleaseSearchIndexerStatus::Skipped;
+            indexer.result_count = 0;
+            indexer.elapsed_ms = Some(elapsed_ms);
+            indexer.failure_reason = Some(reason.describe(until));
+            indexer.rate_limited = false;
+            indexer.skip_reason = Some(reason);
+            indexer.skipped_until = until;
+        }
+    }
+
+    /// Merge one indexer's batch into the job snapshot and re-run dedup over
+    /// the merged set (per-indexer restricted calls only dedup within
+    /// themselves). Late batches for a non-running job are dropped.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the merge needs the job, the batch and every ordering input"
+    )]
     async fn merge_interactive_indexer_batch(
         &self,
         job_id: &str,
         indexer_id: &str,
+        query_listing: bool,
         batch: Vec<IndexerSearchResult>,
         indexer_priority_by_name: &HashMap<String, i64>,
         preferred_source_kind: &str,
@@ -948,17 +1026,25 @@ impl AppUseCase {
         let batch_len = batch.len();
         let mut merged = std::mem::take(&mut entry.snapshot.results);
         merged.extend(batch);
-        let mut merged = dedupe_cross_indexer_release_results(
-            merged,
-            indexer_priority_by_name,
-            preferred_source_kind,
-        );
-        // Re-sort the merged set with the one-shot path's comparator: the
-        // GraphQL payload truncates to the requested limit, and without a
-        // global re-sort a later indexer's top-scored releases would be cut
-        // in arrival order.
-        merged.sort_by(compare_release_search_results);
-        entry.snapshot.results = merged;
+        entry.snapshot.results = if query_listing {
+            // Distinct releases that parse alike are separate listings to an
+            // operator browsing a catalogue: only exact duplicates go.
+            let mut merged = dedupe_exact_duplicate_releases(merged);
+            merged.sort_by(compare_newest_first);
+            merged
+        } else {
+            let mut merged = dedupe_cross_indexer_release_results(
+                merged,
+                indexer_priority_by_name,
+                preferred_source_kind,
+            );
+            // Re-sort the merged set with the one-shot path's comparator: the
+            // GraphQL payload truncates to the requested limit, and without a
+            // global re-sort a later indexer's top-scored releases would be
+            // cut in arrival order.
+            merged.sort_by(compare_release_search_results);
+            merged
+        };
         if let Some(indexer) = entry
             .snapshot
             .indexers
@@ -971,186 +1057,87 @@ impl AppUseCase {
             indexer.failure_reason = None;
             indexer.rate_limited = false;
         }
+        if query_listing {
+            // A query search counts what each indexer contributed to the
+            // listing the operator sees, after duplicates are removed.
+            let mut counts = HashMap::<&str, usize>::new();
+            for result in &entry.snapshot.results {
+                if let Some(id) = result.indexer_id.as_deref() {
+                    *counts.entry(id).or_default() += 1;
+                }
+            }
+            for indexer in entry.snapshot.indexers.iter_mut().filter(|indexer| {
+                matches!(
+                    indexer.status,
+                    InteractiveReleaseSearchIndexerStatus::Completed
+                        | InteractiveReleaseSearchIndexerStatus::Failed
+                )
+            }) {
+                indexer.result_count = counts
+                    .get(indexer.indexer_id.as_str())
+                    .copied()
+                    .unwrap_or(0);
+            }
+        }
     }
 
-    /// One indexer's answer to a query subject: its own catalogue, parsed and —
-    /// for a faceted kind — judged against the facet's default profile.
-    /// No candidate tokens: those are minted at grab time, once a title is
-    /// chosen.
-    #[expect(
-        clippy::too_many_arguments,
-        reason = "the call carries the whole query envelope plus the indexer it is restricted to"
-    )]
+    /// One indexer's raw answer to a query subject, with each release's name
+    /// parsed for display. No candidate tokens: those are minted at grab time,
+    /// once a title is chosen.
     async fn search_query_subject_on_indexer(
         &self,
         query: &str,
-        facet: &Option<String>,
-        newznab_categories: &Option<Vec<String>>,
-        judge: Option<&(QualityProfile, String)>,
-        routing_base: &HashMap<String, IndexerRoutingEntry>,
+        categories: &[String],
+        page_size: u32,
         indexer_id: &str,
         cancel_token: CancellationToken,
-    ) -> AppResult<(Vec<IndexerSearchResult>, Option<String>)> {
-        // The only routing surface the multi-indexer client reads: restrict to
-        // one indexer by disabling every other entry, as `catalog::discovery`
-        // does for the convergence subset.
-        let plan = IndexerRoutingPlan {
-            entries: routing_base
-                .iter()
-                .map(|(id, entry)| {
-                    (
-                        id.clone(),
-                        IndexerRoutingEntry {
-                            enabled: id == indexer_id,
-                            ..entry.clone()
-                        },
-                    )
-                })
-                .collect(),
-        };
+    ) -> AppResult<(
+        Vec<IndexerSearchResult>,
+        Option<String>,
+        Option<IndexerSkip>,
+    )> {
         let response = self
             .services
             .integrations
             .indexer_client
-            .search(
-                query.to_string(),
-                HashMap::new(),
-                None,
-                // The id-search facet mirrors the search facet: this subject
-                // never carries external ids.
-                facet.clone(),
-                facet.clone(),
-                newznab_categories.clone(),
-                Some(plan),
-                SearchMode::Interactive,
-                IndexerErrorOperation::InteractiveSearch,
-                None,
-                None,
-                None,
-                None,
-                Vec::new(),
-                None,
-                cancel_token.clone(),
+            .search_raw_text(
+                crate::RawTextSearchRequest {
+                    query: query.to_string(),
+                    categories: categories.to_vec(),
+                    indexer_ids: Some(HashSet::from([indexer_id.to_string()])),
+                    limit: Some(page_size),
+                },
+                cancel_token,
             )
             .await?;
-        let failure_reason = response
+        let own_outcome = response
             .indexer_outcomes
             .iter()
             .find(|outcome| outcome.indexer_id == indexer_id)
-            .and_then(|outcome| incomplete_indexer_reason(outcome.outcome));
-        let rules = self.user_rules_engine_snapshot();
-        let judge = judge.cloned();
-        let indexer_id = indexer_id.to_string();
-        // Not grabbed: listing age is measured at this search's own instant.
-        let now = self.runtime.environment.now();
-        let results = tokio::task::spawn_blocking(move || {
-            // Reuse one evaluator for this response and keep synchronous rule
-            // evaluation off the async worker handling requests/cancellation.
-            let context = judge.as_ref().map(|(profile, category)| {
-                crate::canonical_scoring::ScoringContext {
-                    profile,
-                    required_audio_languages: &profile.criteria.required_audio_languages,
-                    category,
-                    size_basis: Default::default(),
-                    rules: Some(&rules),
-                    title_id: None,
-                    library_name: None,
-                    original_language: None,
-                    original_country: None,
-                    title_tags: &[],
-                    is_filler: false,
+            .map(|outcome| outcome.outcome);
+        if let Some(skip) = own_outcome.and_then(InteractiveIndexerSkipReason::from_outcome) {
+            return Ok((Vec::new(), None, Some(skip)));
+        }
+        let failure_reason = own_outcome.and_then(incomplete_indexer_reason);
+        let results = response
+            .results
+            .into_iter()
+            .map(|mut result| {
+                if result
+                    .indexer_id
+                    .as_deref()
+                    .is_none_or(|value| value.trim().is_empty())
+                {
+                    result.indexer_id = Some(indexer_id.to_string());
                 }
-            });
-            let mut evaluator = context
-                .as_ref()
-                .map(crate::canonical_scoring::RuleEvaluationBatch::from_context);
-            let context = context.map(crate::canonical_scoring::ScoringContext::without_rules);
-            response
-                .results
-                .into_iter()
-                .take_while(|_| !cancel_token.is_cancelled())
-                .map(|mut result| {
-                    if result
-                        .indexer_id
-                        .as_deref()
-                        .is_none_or(|value| value.trim().is_empty())
-                    {
-                        result.indexer_id = Some(indexer_id.to_string());
-                    }
-                    let parsed = result
-                        .parsed_release_metadata
-                        .take()
-                        .unwrap_or_else(|| crate::parse_release_metadata(&result.title));
-                    if let (Some(context), Some(evaluator)) = (context.as_ref(), evaluator.as_mut())
-                    {
-                        // No title or incumbent context exists yet. Still collect
-                        // every applicable contribution before judging eligibility.
-                        let listing =
-                            crate::quality::release_listing::ReleaseListingSnapshot::for_scoring(
-                                &result, now,
-                            );
-                        let listing_json = listing.to_json_string();
-                        result.quality_profile_decision = Some(
-                            crate::canonical_scoring::score_release_in_batch(
-                                &crate::canonical_scoring::ReleaseEvidence::announced(
-                                    parsed.clone(),
-                                    result.size_bytes,
-                                )
-                                .with_listing(Some(
-                                    crate::canonical_scoring::ListingFacts::candidate(listing, now),
-                                )),
-                                context,
-                                evaluator,
-                            )
-                            .announced_decision,
-                        );
-                        result.release_listing_json = Some(listing_json);
-                    }
-                    result.parsed_release_metadata = Some(parsed);
-                    result
-                })
-                .collect()
-        })
-        .await
-        .map_err(|error| AppError::Repository(format!("query scoring worker failed: {error}")))?;
-        Ok((results, failure_reason))
-    }
-
-    /// The facet's default quality profile — everything a
-    /// context-free rejection can be based on. Best effort: an
-    /// unresolvable profile means the pane shows releases without profile
-    /// rejections, never a failed search.
-    async fn resolve_query_subject_judge(
-        &self,
-        facet: MediaFacet,
-    ) -> Option<(QualityProfile, String)> {
-        let category = facet.as_str().to_string();
-        let mut profile = match self
-            .resolve_quality_profile(QualityProfileLookup {
-                title_tags: &[],
-                library_id: None,
-                imdb_id: None,
-                tvdb_id: None,
-                category_hint: Some(category.as_str()),
+                if result.parsed_release_metadata.is_none() {
+                    result.parsed_release_metadata =
+                        Some(crate::parse_release_metadata(&result.title));
+                }
+                result
             })
-            .await
-        {
-            Ok(profile) => profile,
-            Err(error) => {
-                warn!(
-                    error = %error,
-                    facet = category.as_str(),
-                    "interactive query search: default quality profile unresolved; no rejections"
-                );
-                return None;
-            }
-        };
-        profile.criteria.scoring_persona = self
-            .resolve_scoring_persona(None, Some(category.as_str()))
-            .await
-            .unwrap_or_default();
-        profile.criteria.facet_persona_overrides.clear();
-        Some((profile, category))
+            .collect();
+        Ok((results, failure_reason, None))
     }
 
     /// Mint a candidate token for one release of an existing search.
@@ -1169,7 +1156,7 @@ impl AppUseCase {
         episode: Option<String>,
     ) -> AppResult<IndexerSearchResult> {
         validate_interactive_search_subject_shape(None, season.as_deref(), episode.as_deref())?;
-        let (mut result, _) = self
+        let mut result = self
             .find_interactive_search_result(actor, search_id, download_url)
             .await?;
 
@@ -1226,7 +1213,7 @@ impl AppUseCase {
             self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
                 .await?;
         }
-        let (result, kind) = self
+        let result = self
             .find_interactive_search_result(actor, search_id, download_url)
             .await?;
         let (_, source_kind) = result
@@ -1248,19 +1235,7 @@ impl AppUseCase {
             .await?;
             title
         } else {
-            let facet = kind
-                .and_then(InteractiveSearchKind::facet)
-                .unwrap_or_else(|| {
-                    if result
-                        .parsed_release_metadata
-                        .as_ref()
-                        .is_some_and(|parsed| parsed.episode.is_some())
-                    {
-                        MediaFacet::Series
-                    } else {
-                        MediaFacet::Movie
-                    }
-                });
+            let facet = unlinked_grab_facet(&result);
             unlinked_grab_title(&result.title, facet, self.runtime.environment.now())
         };
         let mut clients = self
@@ -1339,7 +1314,7 @@ impl AppUseCase {
             category: category.clone(),
         }
         .validate()?;
-        let (result, kind) = self
+        let result = self
             .find_interactive_search_result(actor, search_id, download_url)
             .await?;
         let client = self
@@ -1415,22 +1390,9 @@ impl AppUseCase {
             });
         }
 
-        // With no title there is no owner facet. The operator's search kind is
-        // the stated intent; a raw search falls back to what the release parses
-        // as, the same read the tracked-download reconciler makes.
-        let facet = kind
-            .and_then(InteractiveSearchKind::facet)
-            .unwrap_or_else(|| {
-                if result
-                    .parsed_release_metadata
-                    .as_ref()
-                    .is_some_and(|parsed| parsed.episode.is_some())
-                {
-                    MediaFacet::Series
-                } else {
-                    MediaFacet::Movie
-                }
-            });
+        // With no title there is no owner facet; the release's parsed shape
+        // stands in, the same read the tracked-download reconciler makes.
+        let facet = unlinked_grab_facet(&result);
         let now = self.runtime.environment.now();
         let stand_in_title = unlinked_grab_title(&result.title, facet.clone(), now);
         let download_id = scryer_domain::download_identity::DownloadId::new();
@@ -1647,7 +1609,7 @@ impl AppUseCase {
         let mut artifacts: Vec<FetchedSearchArtifact> = Vec::with_capacity(targets.len());
         let mut total_bytes = 0usize;
         for target in targets {
-            let (result, kind) = self
+            let result = self
                 .find_interactive_search_result(actor, &target.search_id, &target.download_url)
                 .await?;
             let Some((source_hint, source_kind)) = result.canonical_download_source() else {
@@ -1656,21 +1618,9 @@ impl AppUseCase {
                     result.title
                 )));
             };
-            // With no title there is no owner facet, so the search kind stands
-            // in for one exactly as the unlinked grab reads it.
-            let facet = kind
-                .and_then(InteractiveSearchKind::facet)
-                .unwrap_or_else(|| {
-                    if result
-                        .parsed_release_metadata
-                        .as_ref()
-                        .is_some_and(|parsed| parsed.episode.is_some())
-                    {
-                        MediaFacet::Series
-                    } else {
-                        MediaFacet::Movie
-                    }
-                });
+            // With no title there is no owner facet; read one exactly as the
+            // unlinked grab does.
+            let facet = unlinked_grab_facet(&result);
             let stand_in_title = unlinked_grab_title(&result.title, facet, now);
             let info_hash_hint = result
                 .extra
@@ -1844,7 +1794,7 @@ impl AppUseCase {
     }
 
     /// Locate one release of the actor's own live search by the download URL
-    /// the search payload already handed the browser, with the search's kind.
+    /// the search payload already handed the browser.
     ///
     /// Shared by candidate-token issuance and the unlinked grab so
     /// neither can act on a release the operator never saw.
@@ -1853,7 +1803,7 @@ impl AppUseCase {
         actor: &User,
         search_id: &str,
         download_url: &str,
-    ) -> AppResult<(IndexerSearchResult, Option<InteractiveSearchKind>)> {
+    ) -> AppResult<IndexerSearchResult> {
         let mut registry = self
             .runtime
             .acquisition
@@ -1878,7 +1828,7 @@ impl AppUseCase {
             })
             .cloned()
             .ok_or_else(|| AppError::NotFound("release is no longer in this search".to_string()))?;
-        Ok((result, entry.kind))
+        Ok(result)
     }
 
     /// Resolve the title-subject search target for `(series_movie_link_id,
@@ -1925,9 +1875,12 @@ impl AppUseCase {
                     .await?;
                 Ok((title.clone(), subject, false))
             }
-            // A whole season searches as a season pack. Each release still
-            // binds to what it parses as covering, so an episode release that
-            // answers the season query stays an episode grab.
+            // A whole season searches as a season pack, and its list keeps
+            // only releases of several episodes that include the season:
+            // season, partial-season and multi-season packs, complete-series
+            // packs and batches. Single episodes that answer the season query
+            // are dropped. Each kept release still binds to what it parses as
+            // covering, so a partial pack stays a grab of its own episodes.
             (None, Some(season), None) => {
                 let subject = self
                     .resolve_release_search_subject_for_season(title, season)
@@ -2050,6 +2003,20 @@ fn build_release_artifact_archive(
         .map_err(|error| AppError::Repository(format!("failed to finish archive: {error}")))?
         .finish()
         .map_err(|error| AppError::Repository(format!("failed to compress archive: {error}")))
+}
+
+/// The facet a title-less release stands in as: a series when its name parses
+/// an episode, otherwise a movie.
+fn unlinked_grab_facet(result: &IndexerSearchResult) -> MediaFacet {
+    if result
+        .parsed_release_metadata
+        .as_ref()
+        .is_some_and(|parsed| parsed.episode.is_some())
+    {
+        MediaFacet::Series
+    } else {
+        MediaFacet::Movie
+    }
 }
 
 /// The title-less stand-in an unlinked grab submits under.

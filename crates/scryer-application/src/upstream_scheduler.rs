@@ -277,6 +277,10 @@ pub struct SchedulerFeedback {
     pub rss_last_seen_release_published_at: Option<DateTime<Utc>>,
     pub rss_feed_result_count: Option<u32>,
     pub rss_seen_release_identities: Vec<String>,
+    /// Publish time of the oldest release the poll returned, across every page.
+    pub rss_oldest_release_published_at: Option<DateTime<Utc>>,
+    /// The indexer stopped paging at its page ceiling before it finished.
+    pub rss_stopped_at_page_ceiling: bool,
     pub observed_at: DateTime<Utc>,
 }
 
@@ -424,6 +428,44 @@ pub fn rss_poll_is_due(
         || freshness_risk.is_some_and(|risk| risk >= RSS_FRESHNESS_ESCALATION_THRESHOLD)
 }
 
+/// Whether an RSS poll read back far enough to reach the previous poll's
+/// newest release, either by returning that release again or by returning a
+/// release published no later than it.
+///
+/// A poll with no previous marker, or one that returned nothing, has no window
+/// to judge and counts as covered. Shared by the scheduler, which records the
+/// uncovered window, and the search client, which logs it.
+///
+/// A poll the indexer cut off at its page ceiling counts as covered only when
+/// it returned the marker release itself. Usenet publish times are post times
+/// while feeds are ordered by listing time, so one late-listed old post would
+/// otherwise make an unfinished read look complete.
+pub fn rss_poll_reached_marker(
+    previous_identity: Option<&str>,
+    previous_published_at: Option<DateTime<Utc>>,
+    seen_identities: &[String],
+    oldest_published_at: Option<DateTime<Utc>>,
+    stopped_at_page_ceiling: bool,
+) -> bool {
+    let Some(previous_identity) = previous_identity else {
+        return true;
+    };
+    if seen_identities.is_empty()
+        || seen_identities
+            .iter()
+            .any(|identity| identity == previous_identity)
+    {
+        return true;
+    }
+    if stopped_at_page_ceiling {
+        return false;
+    }
+    matches!(
+        (oldest_published_at, previous_published_at),
+        (Some(oldest), Some(previous)) if oldest <= previous
+    )
+}
+
 /// Which RSS-capable indexers are due for a poll right now.
 ///
 /// Both lists empty means "not known" — an implementation that cannot answer
@@ -470,8 +512,81 @@ pub trait UpstreamScheduler: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::SchedulerSnapshotFilter;
-    use super::{RSS_FRESHNESS_ESCALATION_THRESHOLD, RssDueIndexers, rss_poll_is_due};
+    use super::{
+        RSS_FRESHNESS_ESCALATION_THRESHOLD, RssDueIndexers, rss_poll_is_due,
+        rss_poll_reached_marker,
+    };
     use chrono::{Duration, Utc};
+
+    #[test]
+    fn an_rss_poll_reaches_its_marker_by_identity_or_by_date() {
+        let marker_at = Utc::now() - Duration::hours(2);
+        let marker = Some("marker-guid");
+        let seen = vec!["newer-guid".to_string(), "marker-guid".to_string()];
+        let unseen = vec!["newer-guid".to_string(), "other-guid".to_string()];
+
+        assert!(rss_poll_reached_marker(None, None, &unseen, None, false));
+        assert!(rss_poll_reached_marker(
+            marker,
+            Some(marker_at),
+            &[],
+            None,
+            false
+        ));
+        assert!(rss_poll_reached_marker(
+            marker,
+            Some(marker_at),
+            &seen,
+            Some(marker_at + Duration::hours(1)),
+            false,
+        ));
+        assert!(rss_poll_reached_marker(
+            marker,
+            Some(marker_at),
+            &unseen,
+            Some(marker_at),
+            false,
+        ));
+        assert!(!rss_poll_reached_marker(
+            marker,
+            Some(marker_at),
+            &unseen,
+            Some(marker_at + Duration::seconds(1)),
+            false,
+        ));
+        assert!(!rss_poll_reached_marker(
+            marker,
+            None,
+            &unseen,
+            Some(marker_at),
+            false
+        ));
+    }
+
+    #[test]
+    fn a_poll_cut_off_at_its_page_ceiling_reaches_the_marker_only_by_identity() {
+        let marker_at = Utc::now() - Duration::hours(2);
+        let marker = Some("marker-guid");
+        let seen = vec!["newer-guid".to_string(), "marker-guid".to_string()];
+        let unseen = vec!["newer-guid".to_string(), "late-listed-guid".to_string()];
+
+        // A late-listed old post predates the marker, but the read stopped
+        // at the ceiling, so its date proves nothing.
+        assert!(!rss_poll_reached_marker(
+            marker,
+            Some(marker_at),
+            &unseen,
+            Some(marker_at - Duration::days(30)),
+            true,
+        ));
+        assert!(rss_poll_reached_marker(
+            marker,
+            Some(marker_at),
+            &seen,
+            Some(marker_at + Duration::hours(1)),
+            true,
+        ));
+    }
 
     #[test]
     fn a_destination_with_no_freshness_has_never_been_polled_and_is_due() {

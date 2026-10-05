@@ -658,6 +658,7 @@ mod tests {
     #[test]
     fn descriptor_socket_permissions_resolve_notification_config_host() {
         let descriptor = PluginDescriptor {
+            settings: Vec::new(),
             id: "email".to_string(),
             name: "Email".to_string(),
             version: "1.0.0".to_string(),

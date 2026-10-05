@@ -269,6 +269,14 @@ impl AppUseCase {
     }
 
     async fn ensure_default_admin_actor(&self) -> AppResult<User> {
+        if self
+            .runtime
+            .security
+            .default_admin_disabled
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Validation("admin is disabled by SCRYER_DISABLE_DEFAULT_ADMIN; remove that setting and restart before using the default administrator".into()));
+        }
         let username = DEFAULT_ADMIN_USERNAME;
         if let Some(found) = self
             .services
@@ -306,6 +314,245 @@ impl AppUseCase {
 
     pub async fn find_or_create_default_user(&self) -> AppResult<User> {
         self.ensure_default_admin_actor().await
+    }
+
+    pub async fn bootstrap_admin_password(&self, password: &str) -> AppResult<()> {
+        self.configure_bootstrap_admin(None, Some(password), false, false)
+            .await
+    }
+
+    async fn bootstrap_admin_eligible(
+        &self,
+        user: &User,
+        require_password: bool,
+    ) -> AppResult<bool> {
+        if !user.account_kind.allows_local_credentials()
+            || !user.login_status().is_enabled()
+            || Self::is_reserved_local_username(&user.username)
+        {
+            return Ok(false);
+        }
+        if require_password
+            && !user
+                .password_hash
+                .as_deref()
+                .is_some_and(|hash| self.validate_password_hash(hash).is_ok())
+        {
+            return Ok(false);
+        }
+        let user = self.attach_user_authorization(user.clone()).await?;
+        Ok(user
+            .authorization
+            .app
+            .contains(Self::required_startup_admin_app_permissions()))
+    }
+
+    pub async fn configure_bootstrap_admin(
+        &self,
+        username: Option<&str>,
+        password: Option<&str>,
+        reset: bool,
+        disable_default: bool,
+    ) -> AppResult<()> {
+        let select_account = username.is_some() || password.is_some() || reset;
+        let username = Self::normalize_local_username(username.unwrap_or(DEFAULT_ADMIN_USERNAME));
+        if username.is_empty() || Self::is_reserved_local_username(username) {
+            return Err(AppError::Validation(
+                "SCRYER_ADMIN_USERNAME must name a non-reserved local administrator".into(),
+            ));
+        }
+        if reset && password.is_none() {
+            return Err(AppError::Validation("SCRYER_ADMIN_PASSWORD_RESET requires SCRYER_ADMIN_PASSWORD or SCRYER_ADMIN_PASSWORD_FILE".into()));
+        }
+        if select_account && disable_default && Self::is_default_admin_username(username) {
+            return Err(AppError::Validation(
+                "cannot provision or select admin while SCRYER_DISABLE_DEFAULT_ADMIN is true"
+                    .into(),
+            ));
+        }
+        let users = self.services.identity.users.list_all().await?;
+        let matches: Vec<_> = users
+            .iter()
+            .filter(|user| {
+                Self::normalize_local_username(&user.username).eq_ignore_ascii_case(username)
+            })
+            .collect();
+        if select_account
+            && (matches.len() > 1
+                || matches
+                    .first()
+                    .is_some_and(|user| user.username != username))
+        {
+            return Err(AppError::Validation("SCRYER_ADMIN_USERNAME conflicts with an existing username; use its exact stored spelling".into()));
+        }
+        let existing = matches.first().copied();
+        let initialize_seed = if select_account && password.is_some() {
+            if let Some(user) = existing {
+                self.services
+                    .identity
+                    .users
+                    .bootstrap_seed_is_uninitialized(&user.id)
+                    .await?
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if select_account {
+            if let Some(user) = existing {
+                if !initialize_seed
+                    && !self
+                        .bootstrap_admin_eligible(user, password.is_none())
+                        .await?
+                {
+                    return Err(AppError::Validation("selected bootstrap account must already be an enabled local full administrator; use recovery for lockouts".into()));
+                }
+            } else if password.is_none() {
+                return Err(AppError::Validation("new bootstrap administrator requires SCRYER_ADMIN_PASSWORD or SCRYER_ADMIN_PASSWORD_FILE".into()));
+            }
+            if reset || existing.is_none_or(|user| user.password_hash.is_none()) {
+                self.validate_new_local_password(password.unwrap_or_default())
+                    .await?;
+            }
+        }
+        // Validate disable-only requests before persisting anything, even if admin is already disabled.
+        let mut alternate = None;
+        if disable_default {
+            for user in &users {
+                if !Self::is_default_admin_username(&user.username)
+                    && self.bootstrap_admin_eligible(user, true).await?
+                {
+                    alternate = Some(user.clone());
+                    break;
+                }
+            }
+            if alternate.is_none() && !select_account {
+                return Err(AppError::Validation("SCRYER_DISABLE_DEFAULT_ADMIN requires another enabled local full administrator with a usable password".into()));
+            }
+        }
+        let changes_credentials =
+            select_account && (reset || existing.is_none_or(|user| user.password_hash.is_none()));
+        let disables_enabled_admin = disable_default
+            && users.iter().any(|user| {
+                Self::is_default_admin_username(&user.username) && user.login_status().is_enabled()
+            });
+        // Persist the closed state before mutations, but preserve saved preferences on no-op boots.
+        if changes_credentials || disables_enabled_admin {
+            for (key, value) in [
+                (crate::FORM_LOGIN_ENABLED_KEY, true),
+                (crate::SKIP_LOGIN_FOR_LOCAL_IPS_KEY, false),
+            ] {
+                self.services
+                    .config
+                    .settings
+                    .upsert_setting_json(
+                        SETTINGS_SCOPE_SYSTEM,
+                        key,
+                        None,
+                        value.to_string(),
+                        "startup_bootstrap",
+                        None,
+                    )
+                    .await?;
+            }
+        }
+        if select_account {
+            let user = if let Some(existing) = existing.filter(|_| !initialize_seed) {
+                if reset || existing.password_hash.is_none() {
+                    let updated = self
+                        .services
+                        .identity
+                        .users
+                        .update_own_password_and_invalidate_sessions(
+                            &existing.id,
+                            self.hash_password(password.unwrap_or_default())?,
+                            true,
+                            &Id::new().0,
+                            existing.password_hash.as_deref(),
+                        )
+                        .await?;
+                    self.refresh_cached_jwt_signing_key(&updated).await?;
+                    self.revoke_oauth_refresh_grants_for_user(&updated.id, "password_changed")
+                        .await?;
+                    self.emit_configuration_changed_event(
+                        None,
+                        "temporary_password",
+                        Some(updated.id.clone()),
+                        ConfigurationChangeAction::Updated,
+                    )
+                    .await;
+                    updated
+                } else {
+                    existing.clone()
+                }
+            } else {
+                let user = User {
+                    id: existing
+                        .map(|user| user.id.clone())
+                        .unwrap_or_else(|| Id::new().0),
+                    username: username.to_string(),
+                    password_hash: Some(self.hash_password(password.unwrap_or_default())?),
+                    password_change_required: true,
+                    account_kind: scryer_domain::UserAccountKind::Local,
+                    authorization: scryer_domain::UserAuthorization::full_admin(),
+                };
+                let grants = self
+                    .services
+                    .catalog
+                    .libraries
+                    .list(None)
+                    .await?
+                    .into_iter()
+                    .map(|library| scryer_domain::LibraryGrant {
+                        user_id: user.id.clone(),
+                        library_id: library.id,
+                        permissions: user.authorization.default_library,
+                    })
+                    .collect();
+                let user = self
+                    .services
+                    .identity
+                    .users
+                    .create_bootstrap_admin(user, grants, initialize_seed)
+                    .await?;
+                self.cache_jwt_signing_key(&user).await?;
+                self.emit_configuration_changed_event(
+                    None,
+                    "user",
+                    Some(user.id.clone()),
+                    ConfigurationChangeAction::Saved,
+                )
+                .await;
+                user
+            };
+            if !self.bootstrap_admin_eligible(&user, true).await? {
+                return Err(AppError::Validation(
+                    "bootstrap administrator has no usable credentials".into(),
+                ));
+            }
+            if !Self::is_default_admin_username(&user.username) {
+                alternate = Some(user);
+            }
+        }
+        if disable_default {
+            alternate.ok_or_else(|| {
+                AppError::Validation(
+                    "cannot disable admin without another usable administrator".into(),
+                )
+            })?;
+            if let Some(admin) = self.find_default_user().await? {
+                self.set_user_login_enabled_internal(None, &admin.id, false, true)
+                    .await?;
+                self.revoke_oauth_refresh_grants_for_user(&admin.id, "user_login_disabled")
+                    .await?;
+            }
+            self.runtime
+                .security
+                .default_admin_disabled
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(())
     }
 
     pub async fn find_default_user(&self) -> AppResult<Option<User>> {
@@ -505,6 +752,17 @@ impl AppUseCase {
         }
 
         let username = Self::normalize_local_username(&username).to_string();
+        if Self::is_default_admin_username(&username)
+            && self
+                .runtime
+                .security
+                .default_admin_disabled
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Validation(
+                "cannot create admin while SCRYER_DISABLE_DEFAULT_ADMIN is true".into(),
+            ));
+        }
         if username.is_empty() {
             return Err(AppError::Validation("username is required".to_string()));
         }
@@ -997,6 +1255,22 @@ impl AppUseCase {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageUsers)
             .await?;
 
+        self.set_user_login_enabled_internal(
+            Some(actor),
+            user_id,
+            enabled,
+            effective_form_login_enabled,
+        )
+        .await
+    }
+
+    async fn set_user_login_enabled_internal(
+        &self,
+        actor: Option<&User>,
+        user_id: &str,
+        enabled: bool,
+        effective_form_login_enabled: bool,
+    ) -> AppResult<User> {
         let user = self
             .services
             .identity
@@ -1004,7 +1278,17 @@ impl AppUseCase {
             .get_by_id(user_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("user {user_id}")))?;
-        if user.id == actor.id {
+        if enabled
+            && Self::is_default_admin_username(&user.username)
+            && self
+                .runtime
+                .security
+                .default_admin_disabled
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Validation("admin is disabled by SCRYER_DISABLE_DEFAULT_ADMIN; remove that setting and restart before enabling it".into()));
+        }
+        if actor.is_some_and(|actor| user.id == actor.id) {
             return Err(AppError::Validation(
                 "cannot change login status for the current user".into(),
             ));
@@ -1072,7 +1356,10 @@ impl AppUseCase {
             tracing::warn!(user_id, %error, "failed to revoke OAuth refresh grants after disabling user login");
         }
         self.emit_configuration_changed_event(
-            actor,
+            actor.map_or_else(
+                crate::DomainEventActor::system,
+                crate::DomainEventActor::user,
+            ),
             "user_login_status",
             Some(updated.id.clone()),
             ConfigurationChangeAction::Updated,

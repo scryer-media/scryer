@@ -1,6 +1,23 @@
 use super::*;
 
 #[tokio::test]
+async fn migration_catalog_installs_download_password_storage() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(
+        directory
+            .path()
+            .join("password-schema.db")
+            .to_string_lossy(),
+    )
+    .await
+    .expect("registered migrations should initialize");
+    let columns: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM pragma_table_info('download_submissions') WHERE name IN ('password_candidates', 'password_retry_state') ORDER BY name",
+    ).fetch_all(&services.pool).await.expect("password schema should be installed");
+    assert_eq!(columns, ["password_candidates", "password_retry_state"]);
+}
+
+#[tokio::test]
 async fn migration_validate_mode_rejects_pending_schema() {
     let db = std::env::temp_dir().join(format!(
         "scryer_validate_mode_{}.db",

@@ -210,14 +210,25 @@ impl AppUseCase {
         .map_err(|_| {
             AppError::Validation("manual import files are no longer available".to_string())
         })?;
+        let download_root = std::fs::canonicalize(&completed.dest_dir).ok();
         for candidate in selection.candidates.iter().filter(|candidate| {
             mappings
                 .iter()
                 .any(|mapping| mapping.candidate_id == candidate.id)
         }) {
+            let source = crate::stored_paths::stored_path_to_path_buf(&candidate.canonical_path);
+            let candidate_root = download_root
+                .as_deref()
+                .filter(|root| {
+                    crate::import_workflow::validate_manual_import_source_under_trusted_root(
+                        &source, root,
+                    )
+                    .is_ok()
+                })
+                .unwrap_or(&trusted_root);
             let qualified = crate::import_workflow::qualify_manual_import_video_candidate(
-                &crate::stored_paths::stored_path_to_path_buf(&candidate.canonical_path),
-                &trusted_root,
+                &source,
+                candidate_root,
             )
             .await
             .map_err(|_| {

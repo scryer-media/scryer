@@ -1,3 +1,23 @@
+async fn reused_episode_destination(
+    app: &AppUseCase,
+    title_id: &str,
+    code: crate::import_checks::ImportCheckCode,
+    destination: &Path,
+) -> AppResult<Option<(String, String)>> {
+    if !code.is_duplicate_file() {
+        return Ok(None);
+    }
+    let destination = path_to_stored_string(destination);
+    Ok(app
+        .services
+        .library
+        .media_files
+        .get_media_file_by_path(&destination)
+        .await?
+        .filter(|file| file.title_id == title_id)
+        .map(|file| (destination, file.id)))
+}
+
 fn expected_runtime_seconds_for_episode_import(
     title: &scryer_domain::Title,
     target_episodes: &[scryer_domain::Episode],
@@ -197,6 +217,10 @@ async fn execute_resolved_episode_import(
                     skip_reason_for_import_check_rejection(app, code, &dest_path).await?,
                 ),
                 episode_ids: target_episode_ids.clone(),
+                already_present_destination: reused_episode_destination(
+                    app, &title.id, code, &dest_path,
+                )
+                .await?,
             });
         }
 
@@ -359,6 +383,13 @@ async fn execute_resolved_episode_import(
                 skip_reason_for_import_check_rejection(app, code, &precheck_dest_path).await?,
             ),
             episode_ids: target_episode_ids.clone(),
+            already_present_destination: reused_episode_destination(
+                app,
+                &title.id,
+                code,
+                &precheck_dest_path,
+            )
+            .await?,
         });
     }
 
@@ -389,6 +420,7 @@ async fn execute_resolved_episode_import(
                     reason_code: Some(rejection.recycle_reason.to_string()),
                     skip_reason: Some(rejection.review_hold_skip_reason()),
                     episode_ids: target_episode_ids.clone(),
+                    already_present_destination: None,
                 });
             }
             // The probe refused the bytes outright. A corrupt container or a
@@ -471,6 +503,7 @@ async fn execute_resolved_episode_import(
             ),
             skip_reason: Some(ImportSkipReason::PolicyMismatch),
             episode_ids: target_episode_ids.clone(),
+            already_present_destination: None,
         });
     }
 
@@ -658,7 +691,7 @@ async fn execute_resolved_episode_import(
                 return Ok(EpisodeImportOutcome::Imported {
                     dest_path: path_to_stored_string(&dest_path),
                     episode_ids: target_episode_ids,
-                    imported_media_file_id: None,
+                    imported_media_file_id: Some(outcome.new_file_id.clone()),
                     reason_code: Some("upgrade".to_string()),
                     link_type: (import_mode == scryer_domain::ImportMode::Move)
                         .then_some(scryer_domain::ImportStrategy::Move),

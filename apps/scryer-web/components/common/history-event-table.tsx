@@ -11,7 +11,7 @@ import {
   CalendarEventHoverCard,
   type CalendarEpisodeItem,
 } from "@/components/views/calendar-view";
-import { Input } from "@/components/ui/input";
+import { PasswordRetryDialog } from "@/components/dialogs/password-retry-dialog";
 import {
   Table,
   TableActionsHead,
@@ -26,6 +26,7 @@ import type { TitleHistoryEvent } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
+import { useDownloadPasswordRetry, type DownloadPasswordRetryTarget } from "@/lib/hooks/use-download-password-retry";
 import { formatUiDate, formatUiTime } from "@/lib/utils/date-format";
 import {
   compareHistoryEpisodes,
@@ -368,7 +369,23 @@ function HistoryEpisodes({
   );
 }
 
+function passwordRetryTarget(event: TitleHistoryEvent): DownloadPasswordRetryTarget | null {
+  if (event.eventType !== "download_failed") return null;
+  const payload = historyHoverData(event.dataJson);
+  const data = historyHoverData(payload?.data) ?? payload;
+  const reason = historyHoverString(data, "reason");
+  const downloadId = historyHoverString(data, "canonical_download_id");
+  const clientId = historyHoverString(data, "client_id");
+  const clientType = historyHoverString(data, "client_type");
+  const downloadClientItemId = historyHoverString(data, "download_id");
+  if (!downloadId || !clientId || !clientType || !downloadClientItemId ||
+      !["sabnzbd", "nzbget", "weaver"].includes(clientType) ||
+      !(reason?.startsWith("ARCHIVE_PASSWORD_REQUIRED:") || reason?.startsWith("ARCHIVE_PASSWORD_OR_CORRUPTION:"))) return null;
+  return { downloadId, clientId, clientType, downloadClientItemId, titleName: primarySourceLabel(event) };
+}
+
 function canRetryEvent(event: TitleHistoryEvent, onRetry?: (importId: string, password?: string) => Promise<void>): boolean {
+  if (passwordRetryTarget(event)) return true;
   return Boolean(
     onRetry &&
       event.importId &&
@@ -394,9 +411,10 @@ export function HistoryEventTable({
   const t = useTranslate();
   const dateTimeFormat = useUiDateTimeFormat();
   const [expandedRows, setExpandedRows] = React.useState<Record<string, boolean>>({});
-  const [passwordDrafts, setPasswordDrafts] = React.useState<Record<string, string>>({});
+  const [passwordRetry, setPasswordRetry] = React.useState<TitleHistoryEvent | null>(null);
   const [retryingId, setRetryingId] = React.useState<string | null>(null);
-  const showActions = Boolean(onRetry);
+  const { request: requestDownloadPassword, dialog: downloadPasswordDialog } = useDownloadPasswordRetry();
+  const showActions = Boolean(onRetry) || events.some((event) => passwordRetryTarget(event) !== null);
   const columnCount =
     1 + // expander
     1 + // event
@@ -415,21 +433,21 @@ export function HistoryEventTable({
     }));
   }, []);
 
-  const setPasswordDraft = React.useCallback((eventId: string, value: string) => {
-    setPasswordDrafts((current) => ({
-      ...current,
-      [eventId]: value,
-    }));
-  }, []);
-
   const handleRetry = React.useCallback(
-    async (event: TitleHistoryEvent) => {
+    async (event: TitleHistoryEvent, password?: string) => {
+      const target = passwordRetryTarget(event);
+      if (target) {
+        setRetryingId(event.id);
+        try { await requestDownloadPassword(target); }
+        finally { setRetryingId(null); }
+        return;
+      }
       if (!onRetry || !event.importId) {
         return;
       }
 
-      const password = passwordDrafts[event.id]?.trim();
       if (event.retryRequiresPassword && !password) {
+        setPasswordRetry(event);
         return;
       }
 
@@ -440,7 +458,7 @@ export function HistoryEventTable({
         setRetryingId(null);
       }
     },
-    [onRetry, passwordDrafts],
+    [onRetry, requestDownloadPassword],
   );
 
   if (events.length === 0) {
@@ -607,7 +625,7 @@ export function HistoryEventTable({
                   </TableCell>
                   {showActions ? (
                     <TableCell className="align-middle text-center">
-                      {retryable && !event.retryRequiresPassword && !isExpanded ? (
+                      {retryable && !isExpanded ? (
                         <div className="flex justify-center">
                           <Button
                             type="button"
@@ -667,23 +685,11 @@ export function HistoryEventTable({
                                   {t("importHistory.passwordRequired")}
                                 </p>
                                 <div className="flex flex-col gap-2 sm:flex-row">
-                                  <Input
-                                    type="password"
-                                    value={passwordDrafts[event.id] ?? ""}
-                                    onChange={(inputEvent) =>
-                                      setPasswordDraft(event.id, inputEvent.target.value)
-                                    }
-                                    placeholder={t("importHistory.passwordPlaceholder")}
-                                    className="sm:max-w-xs"
-                                  />
                                   <Button
                                     type="button"
                                     variant="outline"
                                     size="sm"
-                                    disabled={
-                                      retryingId === event.id ||
-                                      !(passwordDrafts[event.id] ?? "").trim()
-                                    }
+                                    disabled={retryingId === event.id}
                                     onClick={() => void handleRetry(event)}
                                   >
                                     {retryingId === event.id ? (
@@ -722,6 +728,18 @@ export function HistoryEventTable({
           })}
         </TableBody>
       </Table>
+      <PasswordRetryDialog
+        key={passwordRetry?.id ?? "closed"}
+        open={passwordRetry !== null}
+        jobLabel={passwordRetry ? primarySourceLabel(passwordRetry) : ""}
+        onCancel={() => setPasswordRetry(null)}
+        onConfirm={async (password) => {
+          const event = passwordRetry;
+          setPasswordRetry(null);
+          if (event) await handleRetry(event, password);
+        }}
+      />
+      {downloadPasswordDialog}
     </div>
   );
 }

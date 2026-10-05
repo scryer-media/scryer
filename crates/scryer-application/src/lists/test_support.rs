@@ -157,6 +157,9 @@ pub(crate) struct MemoryListStore {
     /// Sync outcomes for these subscription ids cannot be saved, so they stay
     /// due.
     pub fail_record_sync_for: Mutex<HashSet<String>>,
+    /// When set, this many subscription reads by id succeed and every later
+    /// one fails, as a store that breaks partway through a sync would.
+    pub subscription_reads_left: Mutex<Option<usize>>,
 }
 
 impl MemoryListStore {
@@ -219,6 +222,12 @@ impl ListSubscriptionRepository for MemoryListStore {
     }
 
     async fn get_by_id(&self, id: &str) -> AppResult<Option<ListSubscription>> {
+        if let Some(left) = self.subscription_reads_left.lock().unwrap().as_mut() {
+            if *left == 0 {
+                return Err(AppError::Repository("fixture store failure".into()));
+            }
+            *left -= 1;
+        }
         Ok(self
             .subscriptions
             .lock()
@@ -258,6 +267,29 @@ impl ListSubscriptionRepository for MemoryListStore {
         let mut rows = self.subscriptions.lock().unwrap();
         if let Some(row) = rows.iter_mut().find(|row| row.id == id) {
             row.sync = sync.clone();
+            row.counts = *counts;
+        }
+        Ok(())
+    }
+
+    async fn record_sync_outcome(
+        &self,
+        id: &str,
+        read: &ListSyncStatus,
+        sync: &ListSyncStatus,
+        counts: &ListCounts,
+    ) -> AppResult<()> {
+        if self.fail_record_sync_for.lock().unwrap().contains(id) {
+            return Err(AppError::Repository("fixture store failure".into()));
+        }
+        let mut rows = self.subscriptions.lock().unwrap();
+        if let Some(row) = rows.iter_mut().find(|row| row.id == id) {
+            let mut sync = sync.clone();
+            if row.sync.next_at != read.next_at {
+                sync.next_at = row.sync.next_at;
+                sync.fetch_fingerprint = row.sync.fetch_fingerprint.clone();
+            }
+            row.sync = sync;
             row.counts = *counts;
         }
         Ok(())
@@ -726,11 +758,37 @@ impl ListItemResolver for FixtureResolver {
 
 // ── Plugin ─────────────────────────────────────────────────────────────────
 
+/// A provider with one public `user_list` source named by `list_id`, the
+/// source [`subscription`] follows.
 fn fixture_descriptor() -> PluginDescriptor {
-    let provider: ListProviderDescriptor =
+    use scryer_plugin_sdk::{
+        ListAuthBadge, ListProviderGroup, ListProviderItem, ListSourceParam, ListSourceParamType,
+    };
+    let mut provider: ListProviderDescriptor =
         serde_json::from_value(serde_json::json!({ "provider_type": PROVIDER }))
             .expect("minimal list descriptor");
+    provider.groups = vec![ListProviderGroup {
+        label: "Lists".to_string(),
+        auth_badge: ListAuthBadge::NoAccountNeedsValue,
+        items: vec![ListProviderItem {
+            id: format!("{PROVIDER}:user_list"),
+            name: "Fixture public list".to_string(),
+            description: None,
+            kinds: vec![ListMediaKind::Movie],
+            source_type: "user_list".to_string(),
+            params: vec![ListSourceParam {
+                key: "list_id".to_string(),
+                label: "List ID".to_string(),
+                param_type: ListSourceParamType::Text,
+                options: Vec::new(),
+                required: true,
+            }],
+            personal: false,
+            default_interval_seconds: 6 * 3600,
+        }],
+    }];
     PluginDescriptor {
+        settings: Vec::new(),
         id: PROVIDER.to_string(),
         name: "Fixture Lists".to_string(),
         version: "1.0.0".to_string(),
@@ -862,12 +920,11 @@ pub(crate) fn keys_of(rows: &[ListMembership]) -> HashSet<String> {
 
 // ── Gateway charts ─────────────────────────────────────────────────────────
 
-/// Serves scripted chart and IMDb list entries; anything not scripted is
+/// Serves scripted chart entries; anything not scripted is
 /// unavailable, as a gateway outage would be.
 #[derive(Default)]
 pub(crate) struct ScriptedCharts {
     pub charts: Mutex<HashMap<String, Vec<super::gateway::ListChartItem>>>,
-    pub imdb_lists: Mutex<HashMap<String, Vec<super::gateway::ListChartItem>>>,
 }
 
 #[async_trait]
@@ -888,20 +945,6 @@ impl super::fetch::ListChartSource for ScriptedCharts {
                     super::fetch::ListFailureClass::Unavailable,
                     "The metadata service",
                 )
-            })
-    }
-
-    async fn imdb_user_list(
-        &self,
-        list_id: &str,
-    ) -> Result<Vec<super::gateway::ListChartItem>, super::fetch::ListFailure> {
-        self.imdb_lists
-            .lock()
-            .unwrap()
-            .get(list_id)
-            .cloned()
-            .ok_or_else(|| {
-                super::fetch::ListFailure::new(super::fetch::ListFailureClass::NotFound, "IMDb")
             })
     }
 }

@@ -14,8 +14,8 @@ use scryer_domain::{
 use snapshot::{MediaRequestMetadataSnapshot, MediaRequestMetadataSnapshotExt};
 use std::collections::BTreeSet;
 
-const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
-const TITLE_MONITOR_TYPE_TAG_PREFIX: &str = "scryer:monitor-type:";
+pub(crate) const TITLE_QUALITY_PROFILE_TAG_PREFIX: &str = "scryer:quality-profile:";
+pub(crate) const TITLE_MONITOR_TYPE_TAG_PREFIX: &str = "scryer:monitor-type:";
 
 impl AppUseCase {
     async fn prepare_request_approval_title(
@@ -194,12 +194,34 @@ fn apply_admission_floor(
     }
 }
 
+/// A submission whose request row was committed, and what acting on the
+/// verdict came to. The request exists even when that action failed.
+pub(crate) struct CommittedMediaRequest {
+    pub request_id: String,
+    pub decision: AppResult<()>,
+}
+
 impl AppUseCase {
     pub async fn submit_media_request(
         &self,
         actor: &User,
         input: SubmitMediaRequestInput,
     ) -> AppResult<SubmitMediaRequestOutcome> {
+        let committed = self.submit_media_request_committed(actor, input).await?;
+        committed.decision?;
+        Ok(SubmitMediaRequestOutcome {
+            request_id: committed.request_id,
+        })
+    }
+
+    /// Submit a request and report its id once the row is committed, even
+    /// when approving or denying it afterwards fails. A caller that records
+    /// the id can then find the request again instead of filing another.
+    pub(crate) async fn submit_media_request_committed(
+        &self,
+        actor: &User,
+        input: SubmitMediaRequestInput,
+    ) -> AppResult<CommittedMediaRequest> {
         let title = input.title.trim().to_string();
         if title.is_empty() {
             return Err(AppError::Validation("request title is required".into()));
@@ -341,6 +363,13 @@ impl AppUseCase {
             )
             .await?;
         apply_admission_floor(&mut evaluation, input.admission);
+        self.add_list_request_tags(
+            &request.origin,
+            &request.facet,
+            &request.library_id,
+            &mut evaluation.tags,
+        )
+        .await;
 
         let submission = self
             .services
@@ -352,10 +381,14 @@ impl AppUseCase {
         self.publish_stored_domain_event(&submission.event).await;
         let submitted_request = submission.request;
         self.stamp_request_decision(&request_id, &evaluation).await;
-        self.act_on_request_decision(actor, submitted_request, &evaluation)
-            .await?;
+        let decision = self
+            .act_on_request_decision(actor, submitted_request, &evaluation)
+            .await;
 
-        Ok(SubmitMediaRequestOutcome { request_id })
+        Ok(CommittedMediaRequest {
+            request_id,
+            decision,
+        })
     }
 
     /// The grant a submission needs. Every request needs Request, except a
@@ -585,17 +618,16 @@ impl AppUseCase {
             approved_monitor_type.as_deref(),
             monitor_selection.or_else(|| request.requested_monitor_selection.clone()),
         )?;
+        let mut new_title = media_request_to_new_title(
+            &request,
+            Some(&approved_quality_profile_id),
+            approved_monitor_type.as_deref(),
+            &approved_tags,
+        );
+        self.apply_list_route_to_request_title(&request, &mut new_title)
+            .await;
         let (title, _title_guard) = self
-            .prepare_request_approval_title(
-                actor,
-                media_request_to_new_title(
-                    &request,
-                    Some(&approved_quality_profile_id),
-                    approved_monitor_type.as_deref(),
-                    &approved_tags,
-                ),
-                request.library_id.clone(),
-            )
+            .prepare_request_approval_title(actor, new_title, request.library_id.clone())
             .await?;
         let provenance = RequestDecisionProvenance {
             decision_id: request.decision_id.clone(),
@@ -814,7 +846,7 @@ impl AppUseCase {
         // submission was.
         let updated_request = update.request.clone();
         let snapshot = updated_request.metadata_snapshot();
-        let evaluation = self
+        let mut evaluation = self
             .evaluate_request_draft(
                 actor,
                 &library,
@@ -825,6 +857,15 @@ impl AppUseCase {
                 },
             )
             .await?;
+        // The stamp below replaces the row's tags, so the list's own labels
+        // are added again or an edit would drop them.
+        self.add_list_request_tags(
+            &updated_request.origin,
+            &updated_request.facet,
+            &updated_request.library_id,
+            &mut evaluation.tags,
+        )
+        .await;
         self.stamp_request_decision(&updated_request.id, &evaluation)
             .await;
         self.act_on_request_decision(actor, updated_request, &evaluation)
@@ -922,17 +963,16 @@ impl AppUseCase {
             .quality_profile_reference_lock
             .lock()
             .await;
+        let mut new_title = media_request_to_new_title(
+            &request,
+            Some(&approved_quality_profile_id),
+            approved_monitor_type.as_deref(),
+            &provenance.policy_tags,
+        );
+        self.apply_list_route_to_request_title(&request, &mut new_title)
+            .await;
         let (title, _title_guard) = self
-            .prepare_request_approval_title(
-                actor,
-                media_request_to_new_title(
-                    &request,
-                    Some(&approved_quality_profile_id),
-                    approved_monitor_type.as_deref(),
-                    &provenance.policy_tags,
-                ),
-                request.library_id.clone(),
-            )
+            .prepare_request_approval_title(actor, new_title, request.library_id.clone())
             .await?;
         let mut event_data = media_request_resolved_event_data(
             &request,
@@ -1000,9 +1040,10 @@ impl AppUseCase {
         )
         .await;
 
+        // Request policy already authorized this add; the requester usually
+        // lacks ManageTitles, so the post-add search runs with system authority.
         if let Err(error) = self
-            .trigger_title_wanted_search(
-                actor,
+            .trigger_title_wanted_search_unchecked(
                 &outcome.title.id,
                 SubmissionConflictPolicy::from_replace_flag(false),
             )
@@ -2247,15 +2288,14 @@ fn media_request_to_new_title(
     }
 }
 
-fn normalize_requested_monitor_type(
+pub(crate) fn normalize_requested_monitor_type(
     facet: &MediaFacet,
     value: Option<String>,
 ) -> AppResult<Option<String>> {
+    // No requested monitor type means the title gets the default monitoring,
+    // not a narrower pick the requester never made.
     let Some(value) = normalized_optional_string(value) else {
-        return Ok(match facet {
-            MediaFacet::Movie => None,
-            MediaFacet::Series | MediaFacet::Anime => Some("futureepisodes".to_string()),
-        });
+        return Ok(None);
     };
     let normalized = value
         .chars()
@@ -2299,7 +2339,7 @@ pub(crate) fn normalize_requested_monitor_selection(
     Ok(Some(selection))
 }
 
-fn monitor_type_to_monitored(value: &str) -> bool {
+pub(crate) fn monitor_type_to_monitored(value: &str) -> bool {
     !matches!(value, "none" | "unmonitored")
 }
 

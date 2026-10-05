@@ -621,6 +621,25 @@ impl DownloadClient for FeedbackTimeoutDownloadClient {
         self.inner.resume_queue_item_for_client(client_id, id).await
     }
 
+    async fn retry_failed_job(
+        &self,
+        id: &str,
+        password: &str,
+    ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
+        self.inner.retry_failed_job(id, password).await
+    }
+
+    async fn retry_failed_job_for_client(
+        &self,
+        client_id: &str,
+        id: &str,
+        password: &str,
+    ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
+        self.inner
+            .retry_failed_job_for_client(client_id, id, password)
+            .await
+    }
+
     async fn delete_queue_item(
         &self,
         id: &str,
@@ -2241,6 +2260,7 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 self.delete_staged_nzb(Some(&staged_nzb), "browser_download_served")
                     .await;
                 Ok(ResolvedDownloadArtifact::Nzb {
+                    password_candidates: Default::default(),
                     bytes: bytes?,
                     file_name: None,
                     content_type: None,
@@ -2719,6 +2739,11 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
             // Fail-closed: a selected client whose proxy will not resolve is a
             // routing failure, not a client to use unproxied.
             let proxy_config = self.proxy_for_download_client(&config).await?;
+            debug!(
+                client_id = config.id.as_str(),
+                stage = "proxy_resolved",
+                "download client submit stage"
+            );
             let client = match Self::client_from_config(
                 &config,
                 self.staged_nzb_store.clone(),
@@ -2801,7 +2826,20 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
                 }
             };
 
-            match client.submit_download(&effective_request).await {
+            debug!(
+                client_id = config.id.as_str(),
+                staged_nzb = effective_request.staged_nzb.is_some(),
+                stage = "routing_applied",
+                "download client submit stage"
+            );
+            let submit_result = client.submit_download(&effective_request).await;
+            debug!(
+                client_id = config.id.as_str(),
+                accepted = submit_result.is_ok(),
+                stage = "client_returned",
+                "download client submit stage"
+            );
+            match submit_result {
                 Ok(result) => {
                     self.delete_staged_nzb(
                         staged_nzb.as_ref().map(|lease| &lease.staged_nzb),
@@ -3710,6 +3748,19 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         )))
     }
 
+    async fn retry_failed_job_for_client(
+        &self,
+        client_id: &str,
+        id: &str,
+        password: &str,
+    ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
+        let client = self
+            .resolve_client_for_id(client_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("download client".into()))?;
+        client.retry_failed_job(id, password).await
+    }
+
     async fn delete_queue_item(
         &self,
         id: &str,
@@ -3995,6 +4046,7 @@ mod tests {
 
     fn resolved_nzb_fixture() -> ResolvedDownloadArtifact {
         ResolvedDownloadArtifact::Nzb {
+            password_candidates: Default::default(),
             bytes: b"<nzb></nzb>".to_vec(),
             file_name: Some("fixture.nzb".to_string()),
             content_type: Some("application/x-nzb".to_string()),
@@ -5848,6 +5900,7 @@ mod tests {
         );
         request.indexer_id = Some("indexer-1".to_string());
         request.staged_nzb = Some(StagedNzbRef {
+            password_candidates: Default::default(),
             id: "staged-missing-client".to_string(),
             compressed_path: std::path::PathBuf::from("/tmp/staged-missing-client.nzb.zst"),
             raw_size_bytes: 128,
@@ -5915,6 +5968,7 @@ mod tests {
         );
         request.indexer_id = Some("indexer-1".to_string());
         request.staged_nzb = Some(StagedNzbRef {
+            password_candidates: Default::default(),
             id: "staged-incompatible".to_string(),
             compressed_path: std::path::PathBuf::from("/tmp/staged-incompatible.nzb.zst"),
             raw_size_bytes: 128,
@@ -5981,6 +6035,7 @@ mod tests {
         );
         request.indexer_id = Some("indexer-1".to_string());
         request.staged_nzb = Some(StagedNzbRef {
+            password_candidates: Default::default(),
             id: "staged-scope-disabled".to_string(),
             compressed_path: std::path::PathBuf::from("/tmp/staged-scope-disabled.nzb.zst"),
             raw_size_bytes: 128,
@@ -6048,6 +6103,7 @@ mod tests {
         );
         request.indexer_id = Some("indexer-1".to_string());
         request.staged_nzb = Some(StagedNzbRef {
+            password_candidates: Default::default(),
             id: "staged-1".to_string(),
             compressed_path: std::path::PathBuf::from("/tmp/staged-1.nzb.zst"),
             raw_size_bytes: 128,
@@ -6354,6 +6410,7 @@ mod tests {
             source_hint: Some("https://example.invalid/release.nzb".to_string()),
             staged_nzb: None,
             resolved_download_artifact: Some(ResolvedDownloadArtifact::Nzb {
+                password_candidates: Default::default(),
                 bytes: ANIME_CATEGORY_NZB.to_vec(),
                 file_name: Some("release.nzb".to_string()),
                 content_type: Some("application/x-nzb".to_string()),

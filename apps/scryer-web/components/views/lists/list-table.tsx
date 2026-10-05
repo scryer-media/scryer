@@ -69,6 +69,7 @@ export function ListTable({
             <TableRow
               key={subscription.id}
               id={`list-row-${subscription.id}`}
+              data-ui="list-subscription-row"
               className="cursor-pointer hover:bg-[var(--scry-hover)]"
               onClick={() => onOpen(subscription)}
             >

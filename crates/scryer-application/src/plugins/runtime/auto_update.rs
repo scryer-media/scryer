@@ -345,7 +345,8 @@ impl AppUseCase {
 
         if restored.is_enabled {
             let runtime_plugin = self.load_runtime_plugin_for_installation(&restored).await?;
-            self.apply_runtime_plugin_replace(current, &restored, runtime_plugin)?;
+            self.publish_runtime_plugin(Some(current), &restored, runtime_plugin)
+                .await?;
         }
 
         self.finalize_runtime_plugin_mutation_for_types(
@@ -373,7 +374,7 @@ impl AppUseCase {
             {
                 self.apply_runtime_plugin_removal(current)?;
             }
-            self.apply_runtime_builtin_restore(&restored)?;
+            self.apply_runtime_builtin_restore(&restored).await?;
         }
 
         self.finalize_runtime_plugin_mutation_for_types(

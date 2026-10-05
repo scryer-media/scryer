@@ -904,10 +904,28 @@ impl AppUseCase {
                 "at least one indexer field must be provided".into(),
             ));
         }
-        let mut changes_other_than_enabled = update.clone();
-        changes_other_than_enabled.is_enabled = None;
-        let managed_enabled_only =
-            update.is_enabled.is_some() && !changes_other_than_enabled.has_changes();
+        // A managed child owns its enabled flag, its search flags and its rate
+        // limits locally; every other field comes from the parent sync.
+        let mut changes_beyond_local = update.clone();
+        changes_beyond_local.is_enabled = None;
+        changes_beyond_local.enable_interactive_search = None;
+        changes_beyond_local.enable_auto_search = None;
+        changes_beyond_local.rate_limit_seconds = None;
+        changes_beyond_local.rate_limit_burst = None;
+        changes_beyond_local.max_queries_per_minute = None;
+        let managed_local_only = !changes_beyond_local.has_changes();
+        let managed_local_update = IndexerConfigUpdate {
+            id: update.id.clone(),
+            enable_interactive_search: update.enable_interactive_search,
+            enable_auto_search: update.enable_auto_search,
+            rate_limit_seconds: update.rate_limit_seconds,
+            rate_limit_burst: update.rate_limit_burst,
+            max_queries_per_minute: update
+                .max_queries_per_minute
+                .map(|budget| validate_max_queries_per_minute(budget, false))
+                .transpose()?,
+            ..Default::default()
+        };
 
         let normalized_name = update.name.map(|value| value.trim().to_string());
         if normalized_name.as_ref().is_some_and(String::is_empty) {
@@ -928,19 +946,29 @@ impl AppUseCase {
             .get_by_id(config_id)
             .await?
             .ok_or_else(|| AppError::NotFound(format!("indexer config '{config_id}' not found")))?;
-        if existing.managed_parent_config_id.is_some()
-            && managed_enabled_only
-            && let Some(requested_enabled) = update.is_enabled
-        {
-            return self
-                .set_managed_child_indexer_enabled(actor, &existing, requested_enabled)
-                .await;
-        }
         if existing.managed_parent_config_id.is_some() {
-            return Err(AppError::Validation(
-                "managed child indexers are controlled by their parent sync and cannot be edited directly"
-                    .into(),
-            ));
+            if !managed_local_only {
+                return Err(AppError::Validation(
+                    "managed child indexers are controlled by their parent sync and cannot be edited directly"
+                        .into(),
+                ));
+            }
+            let mut updated = existing.clone();
+            if managed_local_update.has_changes() {
+                updated = self
+                    .services
+                    .integrations
+                    .indexer_configs
+                    .update(managed_local_update)
+                    .await?;
+            }
+            if let Some(requested_enabled) = update.is_enabled {
+                return self
+                    .set_managed_child_indexer_enabled(actor, &updated, requested_enabled)
+                    .await;
+            }
+            self.publish_indexers_changed();
+            return Ok(updated);
         }
         let effective_provider = normalized_provider
             .as_deref()
@@ -1563,8 +1591,12 @@ impl AppUseCase {
                             rate_limit_burst: None,
                             max_queries_per_minute: None,
                             is_enabled: Some(desired.is_enabled && !locally_disabled),
-                            enable_interactive_search: Some(desired.enable_interactive_search),
-                            enable_auto_search: Some(desired.enable_auto_search),
+                            // The parent's sync profile seeds a child's search
+                            // flags at creation; afterwards the operator owns
+                            // them here, like the rate limit, and a sync must
+                            // not undo that choice.
+                            enable_interactive_search: None,
+                            enable_auto_search: None,
                             proxy_config_id: Some(parent.proxy_config_id.clone()),
                             download_client_id: None,
                             seeding_profile_id: None,

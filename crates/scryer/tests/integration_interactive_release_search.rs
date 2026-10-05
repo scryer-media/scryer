@@ -20,9 +20,9 @@ use common::{
 use scryer_application::{
     AppServices, AppUseCase, FacetRegistry, INDEXER_ROUTING_SETTINGS_KEY, IndexerPluginProvider,
     InteractiveReleaseSearchIndexerStatus, InteractiveReleaseSearchRequest,
-    InteractiveReleaseSearchSnapshot, InteractiveReleaseSearchState, InteractiveSearchKind,
-    JwtAuthConfig, LibraryRootDraft, MovieFacetHandler, QUALITY_PROFILE_CATALOG_KEY,
-    QUALITY_PROFILE_ID_KEY, SETTINGS_SCOPE_SYSTEM, SaveQualityProfileSettings, SeriesFacetHandler,
+    InteractiveReleaseSearchSnapshot, InteractiveReleaseSearchState, JwtAuthConfig,
+    LibraryRootDraft, MovieFacetHandler, QUALITY_PROFILE_CATALOG_KEY, QUALITY_PROFILE_ID_KEY,
+    SETTINGS_SCOPE_SYSTEM, SaveQualityProfileSettings, SeriesFacetHandler,
 };
 use scryer_domain::{ExternalId, IndexerConfig, MediaFacet, NewTitle, User};
 use scryer_infrastructure_acquisition::{
@@ -491,7 +491,6 @@ fn title_request(title_id: &str) -> InteractiveReleaseSearchRequest {
 fn raw_query_request(query: &str) -> InteractiveReleaseSearchRequest {
     InteractiveReleaseSearchRequest {
         query: Some(query.to_string()),
-        kind: Some(InteractiveSearchKind::Raw),
         ..InteractiveReleaseSearchRequest::default()
     }
 }
@@ -626,16 +625,13 @@ async fn dolby_vision_profile_edits_reach_fresh_interactive_searches() {
                 category_persona_selections: vec![],
             }).await.expect("save profile");
             assert_eq!(settings.profiles[0].criteria.dolby_vision_allowed, allowed);
-            for request in [InteractiveReleaseSearchRequest {
-                query: Some("Star Trek Discovery S05E06".into()),
-                kind: Some(InteractiveSearchKind::Series),
-                ..Default::default()
-            }, InteractiveReleaseSearchRequest {
-                title_id: Some(title.id.clone()),
-                season: Some("5".into()),
-                episode: Some("6".into()),
-                ..Default::default()
-            }] {
+            {
+                let request = InteractiveReleaseSearchRequest {
+                    title_id: Some(title.id.clone()),
+                    season: Some("5".into()),
+                    episode: Some("6".into()),
+                    ..Default::default()
+                };
                 let start = app
                     .start_interactive_release_search(&user, request)
                     .await
@@ -1094,7 +1090,7 @@ async fn raw_query_subject_issues_a_text_search_and_completes_with_the_release()
         search_requests
             .iter()
             .any(|url| url.contains("t=search") && !url.contains("t=movie")),
-        "raw kind must issue a facet-less text search, saw: {search_requests:?}"
+        "a raw query must issue a facet-less text search, saw: {search_requests:?}"
     );
 }
 

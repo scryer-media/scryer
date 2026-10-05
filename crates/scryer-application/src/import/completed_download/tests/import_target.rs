@@ -332,6 +332,75 @@ async fn retry_skipped_import_reevaluates_instead_of_replaying_rejection() {
 }
 
 #[tokio::test]
+async fn password_retry_requires_and_persists_replacement_before_execution() {
+    let (_dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
+    let mut record = test_import_record(
+        "import-password",
+        &source_identity(),
+        ImportStatus::Failed,
+        completed_request_payload(
+            &completed,
+            observation_evidence_json(PAPER_LANTERN_RELEASE),
+            Some("title-a"),
+        ),
+    );
+    record.result_json = Some(serde_json::json!({
+        "import_id": "import-password", "decision": "failed", "skip_reason": "password_required",
+        "source_path": completed.dest_dir, "episode_ids": [],
+        "started_at": Utc::now(), "completed_at": Utc::now()
+    }).to_string());
+    let original = record.result_json.clone();
+    let imports = Arc::new(TestImportRepo::with_records(vec![record]));
+    let submissions = Arc::new(TestDownloadSubmissionRepo::default());
+    let app = app_for_import(submissions.clone(), imports.clone());
+    for password in [None, Some("")] {
+        let error = crate::import_workflow::retry_failed_import(
+            &app,
+            &import_actor(),
+            "import-password",
+            password,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(error, AppError::ArchivePasswordRequired { .. }));
+        assert!(imports.retry_claims.lock().await.is_empty());
+        assert!(imports.status_updates.lock().await.is_empty());
+        assert_eq!(imports.records.lock().await[0].result_json, original);
+    }
+    submissions
+        .fail_password_save
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let error = crate::import_workflow::retry_failed_import(
+        &app,
+        &import_actor(),
+        "import-password",
+        Some(" new synthetic 密碼 "),
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(error, AppError::Repository(_)));
+    assert!(imports.retry_claims.lock().await.is_empty());
+    assert!(imports.status_updates.lock().await.is_empty());
+    submissions
+        .fail_password_save
+        .store(false, std::sync::atomic::Ordering::SeqCst);
+    crate::import_workflow::retry_failed_import(
+        &app,
+        &import_actor(),
+        "import-password",
+        Some(" new synthetic 密碼 "),
+    )
+    .await
+    .unwrap();
+    let saved = submissions.passwords.lock().await;
+    assert_eq!(saved.len(), 1);
+    assert_eq!(
+        saved.values().next().unwrap().first(),
+        Some(" new synthetic 密碼 ")
+    );
+}
+
+#[tokio::test]
 async fn retry_reconciliation_replaces_durable_burned_failure_and_survives_restart() {
     let (_dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
     let repo = Arc::new(TestImportRepo::with_records(vec![test_import_record(

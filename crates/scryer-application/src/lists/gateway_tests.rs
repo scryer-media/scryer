@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
-use scryer_domain::{ExternalId, LIST_SOURCE_IMDB_LIST_ID_PARAM, ListSourceOrigin, MediaFacet};
+use scryer_domain::{ExternalId, ListSourceOrigin, MediaFacet};
 use scryer_plugin_sdk::ListMediaKind;
 
 use super::*;
@@ -43,13 +43,10 @@ fn chart_item(rank: i64, title_id: Option<i64>, imdb: Option<&str>) -> ListChart
 
 #[test]
 fn chart_entries_are_keyed_by_gateway_title_and_carry_that_id() {
-    let items = chart_items_to_plugin_items(
-        vec![
-            chart_item(1, Some(41), Some("tt0000041")),
-            chart_item(2, None, Some("tt0000042")),
-        ],
-        ChartItemKey::GatewayTitle,
-    );
+    let items = chart_items_to_plugin_items(vec![
+        chart_item(1, Some(41), Some("tt0000041")),
+        chart_item(2, None, Some("tt0000042")),
+    ]);
 
     assert_eq!(items.len(), 1, "an entry with no gateway title has no key");
     let (item, poster) = &items[0];
@@ -66,65 +63,10 @@ fn chart_entries_are_keyed_by_gateway_title_and_carry_that_id() {
 }
 
 #[test]
-fn imdb_entries_keep_their_imdb_key_whether_or_not_they_resolved() {
-    let items = chart_items_to_plugin_items(
-        vec![
-            chart_item(1, Some(41), Some("tt0000041")),
-            chart_item(2, None, Some("tt0000042")),
-            chart_item(3, None, None),
-        ],
-        ChartItemKey::Imdb,
-    );
-
-    let keys = items
-        .iter()
-        .map(|(item, _)| item.item_key.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(keys, vec!["imdb:tt0000041", "imdb:tt0000042"]);
-    assert_eq!(items[1].0.kind_hint, None, "an unknown kind stays unknown");
-}
-
-#[test]
 fn a_gateway_title_id_becomes_the_ref_id() {
     let reference = title_ref(&[id("smg", "77"), id("trakt", "9001")]);
     assert_eq!(reference.smg_id, Some(77));
     assert_eq!(reference.external_ids, vec![id("trakt", "9001")]);
-}
-
-#[tokio::test]
-async fn an_imdb_list_reads_through_the_gateway_by_its_list_id() {
-    let charts = ScriptedCharts::default();
-    charts.imdb_lists.lock().unwrap().insert(
-        "ls000000001".to_string(),
-        vec![
-            chart_item(1, Some(41), Some("tt0000041")),
-            chart_item(2, None, Some("tt0000042")),
-        ],
-    );
-    let plugins = ScriptedProvider(ScriptedLists::new());
-    let mut list = subscription("list-imdb");
-    list.source.provider = "imdb".to_string();
-    list.source.origin = ListSourceOrigin::SmgImdbList;
-    list.source.params.insert(
-        LIST_SOURCE_IMDB_LIST_ID_PARAM.to_string(),
-        "ls000000001".to_string(),
-    );
-
-    let fetched = fetch_list(&list, &plugins, &charts, None, &Default::default())
-        .await
-        .expect("imdb list");
-
-    assert_eq!(fetched.items.len(), 2);
-    assert_eq!(
-        fetched.posters.get("imdb:tt0000042").map(String::as_str),
-        Some("https://images.invalid/2.jpg")
-    );
-
-    list.source.params.clear();
-    let failure = fetch_list(&list, &plugins, &charts, None, &Default::default())
-        .await
-        .expect_err("no list id");
-    assert_eq!(failure.class, ListFailureClass::NotFound);
 }
 
 #[tokio::test]
@@ -327,4 +269,81 @@ async fn a_gateway_error_fails_the_whole_resolve() {
         error,
         AppError::Repository(_) | AppError::Validation(_)
     ));
+}
+
+fn gateway_chart_item(rank: i64, title_id: i64, kind: &str) -> ListChartItem {
+    ListChartItem {
+        rank,
+        title_id: Some(title_id),
+        resolved: true,
+        kind: kind.to_string(),
+        external_ids: vec![id("tvdb", &format!("tvdb-{title_id}"))],
+        display_title: format!("Fixture Title {rank}"),
+        year: Some(2030),
+        poster_url: None,
+    }
+}
+
+fn chart_subscription(kinds: Vec<MediaFacet>) -> scryer_domain::ListSubscription {
+    let mut subscription = subscription("anime-chart");
+    subscription.source.origin = ListSourceOrigin::SmgChart {
+        chart_key: "fixture.trending".to_string(),
+        scope: "trending".to_string(),
+    };
+    subscription.kinds = kinds;
+    subscription
+}
+
+#[tokio::test]
+async fn a_gateway_series_on_an_anime_list_resolves_as_anime() {
+    // The gateway has no anime kind: its anime charts list every show as a
+    // series, and an anime movie as a movie.
+    let items = chart_items_to_plugin_items(vec![
+        gateway_chart_item(1, 41, "series"),
+        gateway_chart_item(2, 42, "movie"),
+    ])
+    .into_iter()
+    .map(|(item, _)| item)
+    .collect::<Vec<_>>();
+    let gateway = Arc::new(RecordingResolveGateway::default());
+    let resolver = GatewayListItemResolver::new(gateway.clone(), FixtureLibrary(HashMap::new()));
+
+    let resolved = crate::lists::resolve::resolve_items(
+        &chart_subscription(vec![MediaFacet::Anime]),
+        items,
+        &resolver,
+    )
+    .await
+    .expect("resolve");
+
+    let calls = gateway.calls.lock().unwrap().clone();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "anime");
+    assert_eq!(calls[0].1[0].smg_id, Some(41));
+    assert_eq!(resolved[0].kind, Some(MediaFacet::Anime));
+    assert!(resolved[0].resolved);
+    assert_eq!(resolved[0].smg_title_id, Some(41));
+    assert_eq!(resolved[1].kind, None, "an anime list has no movie route");
+    assert!(!resolved[1].resolved);
+}
+
+#[tokio::test]
+async fn a_gateway_series_on_a_list_that_follows_series_stays_a_series() {
+    let items = chart_items_to_plugin_items(vec![gateway_chart_item(1, 41, "series")])
+        .into_iter()
+        .map(|(item, _)| item)
+        .collect::<Vec<_>>();
+    let gateway = Arc::new(RecordingResolveGateway::default());
+    let resolver = GatewayListItemResolver::new(gateway.clone(), FixtureLibrary(HashMap::new()));
+
+    let resolved = crate::lists::resolve::resolve_items(
+        &chart_subscription(vec![MediaFacet::Series, MediaFacet::Anime]),
+        items,
+        &resolver,
+    )
+    .await
+    .expect("resolve");
+
+    assert_eq!(gateway.calls.lock().unwrap()[0].0, "series");
+    assert_eq!(resolved[0].kind, Some(MediaFacet::Series));
 }

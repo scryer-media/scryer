@@ -2884,6 +2884,616 @@ async fn tampered_token_is_rejected_by_authenticate_token() {
     );
 }
 
+#[tokio::test]
+async fn bootstrap_admin_noop_preserves_saved_sign_in_settings() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    ctx.app
+        .bootstrap_admin_password("temporary-admin-secret")
+        .await
+        .unwrap();
+    for (key, value) in [
+        ("auth.form_login_enabled", "false"),
+        ("auth.skip_login_for_local_ips", "true"),
+    ] {
+        ctx.settings_store
+            .upsert_setting_value("system", key, None, value, "test", None)
+            .await
+            .unwrap();
+    }
+    let before = ctx.app.security_settings().await.unwrap();
+    assert!(!before.form_login_enabled);
+    assert!(before.skip_login_for_local_ips);
+    ctx.app
+        .bootstrap_admin_password("temporary-admin-secret")
+        .await
+        .unwrap();
+    assert_eq!(ctx.app.security_settings().await.unwrap(), before);
+}
+
+#[tokio::test]
+async fn bootstrap_admin_custom_account_disables_default_and_blocks_reenable() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    ctx.app
+        .configure_bootstrap_admin(
+            Some("box-owner"),
+            Some("temporary-owner-secret"),
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+    let owner = ctx
+        .users
+        .get_by_username("box-owner")
+        .await
+        .unwrap()
+        .unwrap();
+    let admin = ctx.app.find_default_user().await.unwrap().unwrap();
+    assert!(!admin.login_status().is_enabled());
+    assert!(owner.password_change_required);
+    assert!(ctx.app.usable_admin_login_exists().await.unwrap());
+    assert!(
+        ctx.app
+            .set_user_login_enabled(&owner, &admin.id, true, true)
+            .await
+            .is_err()
+    );
+    ctx.app
+        .configure_bootstrap_admin(Some("box-owner"), Some("ignored"), false, true)
+        .await
+        .unwrap();
+    assert_eq!(
+        ctx.users
+            .get_by_id(&owner.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash,
+        owner.password_hash
+    );
+    ctx.app
+        .configure_bootstrap_admin(None, None, false, true)
+        .await
+        .unwrap();
+    assert!(
+        ctx.app
+            .authenticate_credentials("admin", "temporary-owner-secret")
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.app
+            .authenticate_credentials("box-owner", "temporary-owner-secret")
+            .await
+            .is_ok()
+    );
+    assert!(ctx.app.find_or_create_default_user().await.is_err());
+    // Simulate a database where the default account is absent; startup policy still forbids recreation.
+    sqlx::query("DELETE FROM users WHERE id = ?")
+        .bind(&admin.id)
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    assert!(ctx.app.find_or_create_default_user().await.is_err());
+    assert!(ctx.app.find_default_user().await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn bootstrap_admin_disable_requires_usable_alternate_even_when_default_disabled() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    ctx.app
+        .bootstrap_admin_password("fixture-password")
+        .await
+        .unwrap();
+    assert!(
+        ctx.app
+            .configure_bootstrap_admin(None, None, false, true)
+            .await
+            .is_err()
+    );
+    let admin = ctx.app.find_default_user().await.unwrap().unwrap();
+    ctx.users
+        .update_login_status_and_rotate_session(
+            &admin.id,
+            scryer_domain::UserLoginStatus::Disabled,
+            "disabled",
+        )
+        .await
+        .unwrap();
+    assert!(
+        ctx.app
+            .configure_bootstrap_admin(None, None, false, true)
+            .await
+            .is_err()
+    );
+    for (name, kind, disabled, password, full) in [
+        (
+            "restricted",
+            scryer_domain::UserAccountKind::Local,
+            false,
+            true,
+            false,
+        ),
+        (
+            "passwordless",
+            scryer_domain::UserAccountKind::Local,
+            false,
+            false,
+            true,
+        ),
+        (
+            "external",
+            scryer_domain::UserAccountKind::ExternalAutoProvisioned,
+            false,
+            true,
+            true,
+        ),
+        (
+            "disabled",
+            scryer_domain::UserAccountKind::Local,
+            true,
+            true,
+            true,
+        ),
+        (
+            "recovery-admin",
+            scryer_domain::UserAccountKind::Local,
+            false,
+            true,
+            true,
+        ),
+    ] {
+        let mut user = User::new_admin(name);
+        user.account_kind = kind;
+        user.password_hash = if password {
+            admin.password_hash.clone()
+        } else {
+            None
+        };
+        let user = ctx.users.create(user).await.unwrap();
+        if full {
+            ctx.libraries
+                .set_app_permission_mask_for_user(
+                    &user.id,
+                    scryer_domain::UserAuthorization::full_admin().app,
+                )
+                .await
+                .unwrap();
+        }
+        if disabled {
+            ctx.users
+                .update_login_status_and_rotate_session(
+                    &user.id,
+                    scryer_domain::UserLoginStatus::Disabled,
+                    "disabled",
+                )
+                .await
+                .unwrap();
+        }
+        assert!(
+            ctx.app
+                .configure_bootstrap_admin(None, None, false, true)
+                .await
+                .is_err(),
+            "{name} must not satisfy alternate admin requirement"
+        );
+        if name != "passwordless" {
+            assert!(
+                ctx.app
+                    .configure_bootstrap_admin(Some(name), Some("reset-secret"), true, false)
+                    .await
+                    .is_err()
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn bootstrap_admin_invalid_requests_do_not_change_credentials() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    for name in ["", "  ", "anonymous", "recovery-admin", "ADMIN"] {
+        assert!(
+            ctx.app
+                .configure_bootstrap_admin(Some(name), Some("temporary-secret"), false, false)
+                .await
+                .is_err()
+        );
+    }
+    assert!(
+        ctx.app
+            .configure_bootstrap_admin(None, Some("temporary-secret"), false, true)
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.app
+            .configure_bootstrap_admin(Some("missing"), None, false, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.app
+            .configure_bootstrap_admin(None, None, true, false)
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.app
+            .find_default_user()
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash
+            .is_none()
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_admin_reset_preserves_mfa_and_invalidates_sessions() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    ctx.app
+        .configure_bootstrap_admin(
+            Some("box-owner"),
+            Some("initial-owner-password"),
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+    let owner = ctx
+        .users
+        .get_by_username("box-owner")
+        .await
+        .unwrap()
+        .unwrap();
+    let epoch = ctx.users.auth_session_version(&owner.id).await.unwrap();
+    ctx.app
+        .complete_required_password_change(&owner, "permanent-owner-password".into(), &epoch)
+        .await
+        .unwrap();
+    enroll_totp_for_test(&ctx, &owner).await;
+    seed_test_passkey(&ctx, &owner.id, "bootstrap-test-passkey").await;
+    ctx.settings_store
+        .upsert_setting_value(
+            "system",
+            "auth.mfa.require_password_login",
+            None,
+            "true",
+            "test",
+            None,
+        )
+        .await
+        .unwrap();
+    let totp = TotpStore::new(ctx.db.datastore(), ctx.db.encryption_key_state());
+    let before_totp = totp.get_credential_for_user(&owner.id).await.unwrap();
+    let before_codes = totp.list_recovery_codes_for_user(&owner.id).await.unwrap();
+    let webauthn = WebauthnStore::new(ctx.db.datastore());
+    let before_passkeys = webauthn.list_credentials_for_user(&owner.id).await.unwrap();
+    let policy = ctx.app.security_settings().await.unwrap();
+    for _ in 0..2 {
+        let previous = ctx.users.auth_session_version(&owner.id).await.unwrap();
+        ctx.app
+            .configure_bootstrap_admin(Some("box-owner"), Some("reset-owner-password"), true, false)
+            .await
+            .unwrap();
+        assert_ne!(
+            ctx.users.auth_session_version(&owner.id).await.unwrap(),
+            previous
+        );
+        assert!(
+            ctx.users
+                .get_by_id(&owner.id)
+                .await
+                .unwrap()
+                .unwrap()
+                .password_change_required
+        );
+        assert_eq!(
+            totp.get_credential_for_user(&owner.id).await.unwrap(),
+            before_totp
+        );
+        assert_eq!(
+            totp.list_recovery_codes_for_user(&owner.id).await.unwrap(),
+            before_codes
+        );
+        assert_eq!(
+            webauthn.list_credentials_for_user(&owner.id).await.unwrap(),
+            before_passkeys
+        );
+        assert_eq!(ctx.app.security_settings().await.unwrap(), policy);
+    }
+    let login = schema_exec(&ctx, r#"mutation { login(input: { username: "box-owner", password: "reset-owner-password" }) { token } }"#, None).await;
+    assert!(
+        login["errors"].is_array(),
+        "MFA must not be bypassed: {login}"
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_admin_creation_is_atomic_and_disable_failure_can_resume() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    sqlx::query("CREATE TRIGGER reject_admin_grant BEFORE INSERT ON user_app_permission_masks BEGIN SELECT RAISE(ABORT, 'fixture grant failure'); END").execute(ctx.db.pool()).await.unwrap();
+    assert!(
+        ctx.app
+            .configure_bootstrap_admin(
+                Some("box-owner"),
+                Some("temporary-owner-password"),
+                false,
+                true
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.users
+            .get_by_username("box-owner")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ctx.app
+            .security_settings()
+            .await
+            .unwrap()
+            .form_login_enabled
+    );
+    sqlx::query("DROP TRIGGER reject_admin_grant")
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    sqlx::query("CREATE TRIGGER reject_admin_disable BEFORE UPDATE OF status ON users WHEN OLD.username = 'admin' BEGIN SELECT RAISE(ABORT, 'fixture disable failure'); END").execute(ctx.db.pool()).await.unwrap();
+    assert!(
+        ctx.app
+            .configure_bootstrap_admin(
+                Some("box-owner"),
+                Some("temporary-owner-password"),
+                false,
+                true
+            )
+            .await
+            .is_err()
+    );
+    let before = ctx
+        .users
+        .get_by_username("box-owner")
+        .await
+        .unwrap()
+        .unwrap();
+    sqlx::query("DROP TRIGGER reject_admin_disable")
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    ctx.app
+        .configure_bootstrap_admin(
+            Some("box-owner"),
+            Some("temporary-owner-password"),
+            false,
+            true,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        ctx.users
+            .get_by_id(&before.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash,
+        before.password_hash
+    );
+    assert!(
+        !ctx.app
+            .find_default_user()
+            .await
+            .unwrap()
+            .unwrap()
+            .login_status()
+            .is_enabled()
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_admin_password_preserves_disabled_and_external_accounts() {
+    for external in [false, true] {
+        let ctx = TestContext::new().await;
+        seed_typed_settings_definitions(&ctx).await;
+        sqlx::query("UPDATE users SET username = 'fixture-owner' WHERE username = 'admin'")
+            .execute(ctx.db.pool())
+            .await
+            .unwrap();
+        let mut admin = User::new_admin("admin");
+        if external {
+            admin.account_kind = scryer_domain::UserAccountKind::ExternalAutoProvisioned;
+        }
+        let admin = ctx.users.create(admin).await.unwrap();
+        if !external {
+            ctx.users
+                .update_login_status_and_rotate_session(
+                    &admin.id,
+                    scryer_domain::UserLoginStatus::Disabled,
+                    "disabled-session",
+                )
+                .await
+                .unwrap();
+        }
+        assert!(
+            ctx.app
+                .bootstrap_admin_password("temporary-admin-secret")
+                .await
+                .is_err()
+        );
+        let unchanged = ctx.app.find_default_user().await.unwrap().unwrap();
+        assert!(unchanged.password_hash.is_none());
+        assert_eq!(unchanged.account_kind, admin.account_kind);
+        assert_eq!(unchanged.login_status().is_enabled(), external);
+    }
+}
+
+#[tokio::test]
+async fn bootstrap_admin_password_failure_remains_closed_and_can_resume() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    sqlx::query("CREATE TRIGGER reject_bootstrap_password BEFORE UPDATE OF password_hash ON users BEGIN SELECT RAISE(ABORT, 'fixture credential failure'); END")
+        .execute(ctx.db.pool()).await.unwrap();
+    assert!(
+        ctx.app
+            .bootstrap_admin_password("temporary-admin-secret")
+            .await
+            .is_err()
+    );
+    assert!(
+        ctx.app
+            .security_settings()
+            .await
+            .unwrap()
+            .form_login_enabled
+    );
+    assert!(
+        ctx.app
+            .find_default_user()
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash
+            .is_none()
+    );
+    assert!(!ctx.app.usable_admin_login_exists().await.unwrap());
+    sqlx::query("DROP TRIGGER reject_bootstrap_password")
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    ctx.app
+        .bootstrap_admin_password("temporary-admin-secret")
+        .await
+        .unwrap();
+    assert!(ctx.app.usable_admin_login_exists().await.unwrap());
+    assert!(
+        ctx.app
+            .find_default_user()
+            .await
+            .unwrap()
+            .unwrap()
+            .password_change_required
+    );
+}
+
+#[tokio::test]
+async fn bootstrap_admin_password_initializes_passwordless_but_rejects_invalid_secret() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    assert!(ctx.app.bootstrap_admin_password("").await.is_err());
+    assert!(
+        ctx.app
+            .find_default_user()
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash
+            .is_none()
+    );
+    let admin = ctx.app.find_or_create_default_user().await.unwrap();
+    ctx.app
+        .bootstrap_admin_password("temporary-admin-secret")
+        .await
+        .unwrap();
+    let initialized = ctx.app.find_default_user().await.unwrap().unwrap();
+    assert_eq!(initialized.id, admin.id);
+    assert!(initialized.password_change_required);
+    assert!(ctx.app.usable_admin_login_exists().await.unwrap());
+}
+
+#[tokio::test]
+async fn bootstrap_admin_password_requires_replacement_and_never_reapplies() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    sqlx::query("UPDATE users SET username = 'fixture-owner' WHERE username = 'admin'")
+        .execute(ctx.db.pool())
+        .await
+        .unwrap();
+    ctx.app
+        .bootstrap_admin_password("temporary-admin-secret")
+        .await
+        .unwrap();
+    ctx.auth_runtime.apply_saved_security_settings(true, false);
+    let anonymous = schema_exec(&ctx, "{ users { id } }", None).await;
+    assert!(anonymous["errors"].is_array());
+    let original = ctx.app.find_default_user().await.unwrap().unwrap();
+    assert!(original.password_change_required);
+    assert!(
+        ctx.app
+            .security_settings()
+            .await
+            .unwrap()
+            .form_login_enabled
+    );
+    assert!(
+        !ctx.app
+            .security_settings()
+            .await
+            .unwrap()
+            .skip_login_for_local_ips
+    );
+    ctx.app.bootstrap_admin_password("old").await.unwrap();
+    assert_eq!(
+        ctx.app
+            .find_default_user()
+            .await
+            .unwrap()
+            .unwrap()
+            .password_hash,
+        original.password_hash
+    );
+
+    let login = schema_exec(&ctx,
+        r#"mutation { login(input: { username: "admin", password: "temporary-admin-secret" }) { token passwordChangeRequired } }"#, None).await;
+    assert_no_errors(&login);
+    assert_eq!(login["data"]["login"]["passwordChangeRequired"], true);
+    let token = login["data"]["login"]["token"].as_str().unwrap();
+    let blocked = gql_with_token(&ctx, "{ me { id } }", json!({}), token).await;
+    assert_eq!(
+        blocked["errors"][0]["extensions"]["code"],
+        "PASSWORD_CHANGE_REQUIRED"
+    );
+    let reused = gql_with_token(&ctx,
+        r#"mutation { completeRequiredPasswordChange(input: { password: "temporary-admin-secret" }) { token } }"#, json!({}), token).await;
+    assert!(reused["errors"].is_array());
+    assert!(
+        ctx.app
+            .find_default_user()
+            .await
+            .unwrap()
+            .unwrap()
+            .password_change_required
+    );
+    let replacement = gql_with_token(&ctx,
+        r#"mutation { completeRequiredPasswordChange(input: { password: "permanent-admin-secret" }) { token passwordChangeRequired } }"#, json!({}), token).await;
+    assert_no_errors(&replacement);
+    assert_eq!(
+        replacement["data"]["completeRequiredPasswordChange"]["passwordChangeRequired"],
+        false
+    );
+    assert!(ctx.app.authenticate_token(token).await.is_err());
+    let changed = ctx.app.find_default_user().await.unwrap().unwrap();
+    ctx.app
+        .bootstrap_admin_password("temporary-admin-secret")
+        .await
+        .unwrap();
+    let restarted = ctx.app.find_default_user().await.unwrap().unwrap();
+    assert_eq!(changed.password_hash, restarted.password_hash);
+    assert!(!restarted.password_change_required);
+    let login = schema_exec(&ctx,
+        r#"mutation { login(input: { username: "admin", password: "permanent-admin-secret" }) { passwordChangeRequired } }"#, None).await;
+    assert_no_errors(&login);
+    assert_eq!(login["data"]["login"]["passwordChangeRequired"], false);
+}
+
 /// An administrator-created password is valid only for the short-lived
 /// replacement flow, which must issue the full session after completion.
 #[tokio::test]

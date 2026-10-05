@@ -4,7 +4,9 @@ import { KeyRound } from "lucide-react";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { FilterableSelect } from "@/components/ui/filterable-select";
 import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -90,6 +92,28 @@ export function ProviderSettingsCard({ providerType, fields, onSave }: ProviderS
                 id={id}
                 checked={value === "true"}
                 onCheckedChange={(checked) => edit(field.key, { value: checked ? "true" : "false", clear: false })}
+              />
+            ) : field.type === "SELECT" && !field.secret && field.options.length > 0 ? (
+              <Select value={value} onValueChange={(next) => edit(field.key, { value: next, clear: false })}>
+                <SelectTrigger id={id} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {field.options.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : field.type === "FILTERED_SELECT" && !field.secret && field.options.length > 0 ? (
+              <FilterableSelect
+                id={id}
+                value={value}
+                onValueChange={(next) => edit(field.key, { value: next, clear: false })}
+                ariaLabel={field.label}
+                optionIdPrefix={`${id}-option`}
+                options={field.options.map((option) => ({ value: option.value, label: option.label }))}
               />
             ) : field.type === "MULTILINE" && !field.secret ? (
               <Textarea

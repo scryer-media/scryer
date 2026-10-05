@@ -670,6 +670,7 @@ fn fixture_descriptor(
     capabilities: IndexerCapabilities,
 ) -> PluginDescriptor {
     PluginDescriptor {
+        settings: Vec::new(),
         id: format!("{provider_type}_fixture"),
         name: format!("{provider_type} fixture"),
         version: "0.0.0".to_string(),

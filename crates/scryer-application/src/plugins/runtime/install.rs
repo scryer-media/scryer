@@ -38,7 +38,12 @@ impl AppUseCase {
                     installation.plugin_id
                 ))
             })?;
-        load_runtime_plugin_from_persisted_installation_payload(installation, &payload).await
+        let mut plugin =
+            load_runtime_plugin_from_persisted_installation_payload(installation, &payload).await?;
+        plugin.settings = self
+            .runtime_plugin_settings(installation, &plugin.descriptor)
+            .await?;
+        Ok(plugin)
     }
 }
 impl AppUseCase {
@@ -165,10 +170,44 @@ impl AppUseCase {
             self.apply_runtime_plugin_removal_for_values(
                 previous_installation.plugin_type.as_str(),
                 previous_installation.provider_type.as_str(),
+                previous_installation.id.as_str(),
             )?;
         }
 
         self.apply_runtime_plugin_upsert(next_installation, runtime_plugin)
+    }
+
+    async fn publish_runtime_plugin(
+        &self,
+        previous: Option<&PluginInstallation>,
+        installation: &PluginInstallation,
+        mut plugin: RuntimePluginLoad,
+    ) -> AppResult<()> {
+        let _settings_guard = self.runtime.plugins.settings_write_lock.lock().await;
+        let current = self
+            .services
+            .customization
+            .plugin_installations
+            .get_plugin_installation(&installation.plugin_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("plugin is no longer installed".into()))?;
+        if current.id != installation.id
+            || current.version != installation.version
+            || !current.is_enabled
+        {
+            return Err(AppError::Validation(
+                "plugin changed while its runtime was being prepared".into(),
+            ));
+        }
+        plugin.installation_id = Some(current.id.clone());
+        plugin.settings = self
+            .runtime_plugin_settings(&current, &plugin.descriptor)
+            .await?;
+        if let Some(previous) = previous {
+            self.apply_runtime_plugin_replace(previous, &current, plugin)
+        } else {
+            self.apply_runtime_plugin_upsert(&current, plugin)
+        }
     }
 }
 impl AppUseCase {
@@ -176,6 +215,7 @@ impl AppUseCase {
         self.apply_runtime_plugin_removal_for_values(
             installation.plugin_type.as_str(),
             installation.provider_type.as_str(),
+            installation.id.as_str(),
         )
     }
 }
@@ -189,6 +229,7 @@ impl AppUseCase {
     pub async fn uninstall_plugin(&self, actor: &User, plugin_id: &str) -> AppResult<()> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
             .await?;
+        let _settings_guard = self.runtime.plugins.settings_write_lock.lock().await;
 
         let installation = self
             .services
@@ -233,6 +274,9 @@ impl AppUseCase {
             reverted.wasm_digest = None;
             reverted.artifact_digest = None;
             reverted.updated_at = Utc::now();
+            if let Some(descriptor) = self.bundled_plugin_descriptor(&reverted) {
+                reverted.descriptor_json = Some(persisted_plugin_descriptor_json(&descriptor)?);
+            }
 
             self.services
                 .customization
@@ -242,7 +286,7 @@ impl AppUseCase {
 
             let runtime_touched = reverted.is_enabled;
             if runtime_touched {
-                self.apply_runtime_builtin_restore(&reverted)?;
+                self.apply_runtime_builtin_restore(&reverted).await?;
             } else {
                 self.apply_runtime_plugin_removal(&reverted)?;
             }
@@ -284,6 +328,8 @@ impl AppUseCase {
             .plugin_installations
             .delete_plugin_installation(plugin_id)
             .await?;
+
+        self.services.config.settings.invalidate_cache();
 
         self.apply_runtime_plugin_removal(&installation)?;
         self.finalize_runtime_plugin_mutation(&installation.plugin_type, installation.is_enabled)
@@ -385,6 +431,7 @@ impl AppUseCase {
         installation.is_enabled = enabled;
         installation.updated_at = Utc::now();
 
+        let settings_guard = self.runtime.plugins.settings_write_lock.lock().await;
         let result = self
             .services
             .customization
@@ -394,14 +441,16 @@ impl AppUseCase {
 
         if enabled {
             if result.is_builtin && result.source_kind == PluginSourceKind::Bundled {
-                self.apply_runtime_builtin_restore(&result)?;
+                self.apply_runtime_builtin_restore(&result).await?;
             } else {
                 let runtime_plugin = prepared_runtime_plugin.ok_or_else(|| {
                     AppError::Repository(
                         "enabled external plugin was not prepared before activation".to_string(),
                     )
                 })?;
-                self.apply_runtime_plugin_upsert(&result, runtime_plugin)?;
+                drop(settings_guard);
+                self.publish_runtime_plugin(None, &result, runtime_plugin)
+                    .await?;
             }
         } else {
             self.apply_runtime_plugin_removal(&result)?;

@@ -755,21 +755,6 @@ pub struct SubtitleProviderConfigPayload {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Enum, Copy, Clone, Eq, PartialEq)]
-#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
-/// What a title-less interactive search looks for; picks the search facet and
-/// the default newznab categories.
-pub enum InteractiveSearchKindValue {
-    /// Movie facet search.
-    Movie,
-    /// Series facet search.
-    Series,
-    /// Anime facet search.
-    Anime,
-    /// Plain text search with no facet.
-    Raw,
-}
-
 #[derive(InputObject)]
 /// Filters for an interactive release search. Exactly one of `titleId` and
 /// `query` names the subject.
@@ -784,15 +769,15 @@ pub struct SearchReleasesInput {
     pub season: Option<String>,
     /// Optional episode label or number to search; requires `season`.
     pub episode: Option<String>,
-    /// Optional result limit; the resolver applies its own default and cap.
+    /// Optional limit. A title search lists at most this many results
+    /// (default 50, max 200); a `query` search asks each indexer for this many
+    /// (default 100, 1 to 500) and lists everything returned.
     pub limit: Option<i32>,
-    /// Raw operator query searched without a catalog title.
+    /// Raw operator query sent as typed to each indexer, without a catalog title.
     pub query: Option<String>,
-    /// Search kind; required with `query`.
-    pub kind: Option<InteractiveSearchKindValue>,
     /// Optional indexer configuration identities to restrict the search to.
     pub indexer_ids: Option<Vec<ID>>,
-    /// Optional newznab categories; the kind's defaults apply when omitted.
+    /// Optional newznab categories a `query` search sends as given; none when omitted.
     pub categories: Option<Vec<String>>,
 }
 
@@ -1708,6 +1693,20 @@ pub enum InteractiveReleaseSearchIndexerStatusValue {
     Skipped,
 }
 
+/// Why an interactive release search did not ask an indexer.
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+pub enum InteractiveReleaseSearchSkipReasonValue {
+    /// The indexer is switched off.
+    IndexerDisabled,
+    /// The indexer's configuration disables it for a while.
+    TemporarilyDisabled,
+    /// The indexer is in a backoff after recent failures.
+    BackedOff,
+    /// The indexer takes no text query.
+    NoTextSearch,
+}
+
 #[derive(SimpleObject, Clone)]
 /// Per-indexer progress and result count for an interactive release search.
 pub struct InteractiveReleaseSearchIndexerPayload {
@@ -1719,7 +1718,9 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     pub priority: i32,
     /// Current indexer lifecycle state.
     pub status: InteractiveReleaseSearchIndexerStatusValue,
-    /// The indexer's own result count (before cross-indexer dedup).
+    /// The indexer's result count. A title search counts its own batch, before
+    /// cross-indexer dedup; a query search counts what it contributed to the
+    /// listing, after exact duplicates are removed.
     pub result_count: i32,
     /// Wall time of this indexer's own call in milliseconds, or null before it answered.
     pub elapsed_ms: Option<i32>,
@@ -1728,6 +1729,10 @@ pub struct InteractiveReleaseSearchIndexerPayload {
     /// True when the indexer asked Scryer to slow down rather than failing.
     /// Searching resumes on its own, so this reads as a cooldown, not an error.
     pub rate_limited: bool,
+    /// Why a skipped indexer was not asked, or null when it was not skipped.
+    pub skip_reason: Option<InteractiveReleaseSearchSkipReasonValue>,
+    /// UTC time a skip that lifts on its own ends, when known.
+    pub skipped_until: Option<DateTime<Utc>>,
 }
 
 #[derive(SimpleObject, Clone)]

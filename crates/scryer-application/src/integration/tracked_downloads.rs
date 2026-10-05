@@ -437,7 +437,6 @@ impl TrackedDownloadService {
         )
         .await
         .resolution;
-        let id = tracked_download_id_for_item(&client_item);
         let download_id = match resolved_download_id {
             crate::download_identity::ObservedClientJobResolution::Resolved(download_id) => {
                 download_id
@@ -484,6 +483,49 @@ impl TrackedDownloadService {
             },
         };
 
+        // Retry acknowledgements and queued snapshots can arrive in either
+        // order. Only a fresh read of the exact bound job can advance a retry.
+        let client_item = match app
+            .services
+            .workflow
+            .download_submissions
+            .password_retry_observation(&download_id)
+            .await
+        {
+            Ok(Some(observation)) => {
+                let Ok(crate::DownloadClientObservation::Present(fresh)) = app
+                    .services
+                    .integrations
+                    .download_client
+                    .observe_download(&observation.source, 0)
+                    .await
+                else {
+                    return None;
+                };
+                if crate::download_identity::observed_queue_item_job(&fresh).locator
+                    != observation.source
+                {
+                    return None;
+                }
+                if !app
+                    .services
+                    .workflow
+                    .download_submissions
+                    .confirm_password_retry_observation(&observation, fresh.state)
+                    .await
+                    .unwrap_or(false)
+                {
+                    return None;
+                }
+                if !observation.confirmed {
+                    self.stop_tracking_download(download_id);
+                }
+                *fresh
+            }
+            Ok(None) => client_item,
+            Err(_) => return None,
+        };
+        let id = tracked_download_id_for_item(&client_item);
         self.current_download_for_id.insert(id.clone(), download_id);
         let now = Utc::now();
         self.last_seen_at.insert(download_id, now);
@@ -1187,25 +1229,29 @@ impl TrackedDownloadService {
         td: &TrackedDownload,
         state: TrackedDownloadState,
     ) -> bool {
-        let (reason, detail) = if state == TrackedDownloadState::Failed && td.burned_by_import_gate
-        {
-            let warning_timeout = td
-                .status_messages
-                .iter()
-                .find(|message| message.starts_with(WARNING_TIMEOUT_STATUS_MESSAGE_PREFIX));
-            (
-                Some(if warning_timeout.is_some() {
-                    WARNING_TIMEOUT_TRACKED_STATE_REASON
-                } else {
-                    IMPORT_GATE_REJECTED_TRACKED_STATE_REASON
-                }),
-                warning_timeout
-                    .map(String::as_str)
-                    .or_else(|| td.status_messages.first().map(String::as_str)),
-            )
-        } else {
-            (None, None)
-        };
+        let password_failure = td.client_item.password_failure();
+        let (reason, detail) =
+            if state == TrackedDownloadState::Failed && password_failure.is_some() {
+                let failure = password_failure.expect("checked password failure");
+                (Some(failure.code()), Some(failure.message()))
+            } else if state == TrackedDownloadState::Failed && td.burned_by_import_gate {
+                let warning_timeout = td
+                    .status_messages
+                    .iter()
+                    .find(|message| message.starts_with(WARNING_TIMEOUT_STATUS_MESSAGE_PREFIX));
+                (
+                    Some(if warning_timeout.is_some() {
+                        WARNING_TIMEOUT_TRACKED_STATE_REASON
+                    } else {
+                        IMPORT_GATE_REJECTED_TRACKED_STATE_REASON
+                    }),
+                    warning_timeout
+                        .map(String::as_str)
+                        .or_else(|| td.status_messages.first().map(String::as_str)),
+                )
+            } else {
+                (None, None)
+            };
         persist_tracked_download_state_marker(app, td, state, reason, detail).await
     }
 
@@ -3606,8 +3652,7 @@ mod tests {
         async fn find_by_external_id_in_facet(
             &self,
             _: MediaFacet,
-            _: &str,
-            _: &str,
+            _: &scryer_domain::ExternalId,
         ) -> AppResult<Option<Title>> {
             Ok(None)
         }
@@ -3783,8 +3828,7 @@ mod tests {
         async fn find_by_external_id_in_facet(
             &self,
             _: MediaFacet,
-            _: &str,
-            _: &str,
+            _: &scryer_domain::ExternalId,
         ) -> AppResult<Option<Title>> {
             Ok(None)
         }

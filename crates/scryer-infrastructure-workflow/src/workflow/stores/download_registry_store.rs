@@ -797,6 +797,25 @@ async fn touch_observation_timestamps_tx(
     download_id: DownloadId,
     observed_at: DateTime<Utc>,
 ) -> AppResult<()> {
+    // Binding row first, then `downloads`: the one order every writer of a
+    // canonical download takes its rows in. A grab claim locks the binding
+    // before it writes `downloads`, so touching `downloads` first here could
+    // deadlock against it on postgres.
+    SqlRuntime::execute(
+        SqlExec::Tx(tx),
+        "UPDATE download_client_bindings
+         SET last_seen_at = CASE
+                 WHEN last_seen_at IS NULL OR last_seen_at < {} THEN {}
+                 ELSE last_seen_at
+             END
+         WHERE download_id = {}",
+        &[
+            SqlArg::Timestamp(observed_at),
+            SqlArg::Timestamp(observed_at),
+            SqlArg::Text(download_id.to_string()),
+        ],
+    )
+    .await?;
     SqlRuntime::execute(
         SqlExec::Tx(tx),
         "UPDATE downloads
@@ -808,21 +827,6 @@ async fn touch_observation_timestamps_tx(
          WHERE id = {}",
         &[
             SqlArg::Timestamp(observed_at),
-            SqlArg::Timestamp(observed_at),
-            SqlArg::Timestamp(observed_at),
-            SqlArg::Text(download_id.to_string()),
-        ],
-    )
-    .await?;
-    SqlRuntime::execute(
-        SqlExec::Tx(tx),
-        "UPDATE download_client_bindings
-         SET last_seen_at = CASE
-                 WHEN last_seen_at IS NULL OR last_seen_at < {} THEN {}
-                 ELSE last_seen_at
-             END
-         WHERE download_id = {}",
-        &[
             SqlArg::Timestamp(observed_at),
             SqlArg::Timestamp(observed_at),
             SqlArg::Text(download_id.to_string()),

@@ -273,6 +273,14 @@ impl AppUseCase {
         }
 
         if current.form_login_enabled && !input.form_login_enabled {
+            if self
+                .runtime
+                .security
+                .default_admin_disabled
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(AppError::Validation("form login cannot be turned off while SCRYER_DISABLE_DEFAULT_ADMIN is true, because running without login uses the default admin account; remove that setting and restart first".into()));
+            }
             self.find_or_create_default_user().await?;
         }
 

@@ -657,6 +657,8 @@ pub struct DownloadQueueItemPayload {
     pub attention_required: bool,
     /// Reason for the attention flag, or null when no attention is required.
     pub attention_reason: Option<String>,
+    /// Stable password-related download failure classification; never contains credentials.
+    pub password_failure_code: Option<String>,
     /// Client-local item identifier; together with `client_id` it identifies the remote item.
     pub download_client_item_id: String,
     /// Application download identifier, or null when the item is not linked to one.

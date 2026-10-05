@@ -89,6 +89,7 @@ pub struct WasmSubtitleSyncClient {
     wasm_bytes: Arc<Vec<u8>>,
     plugin_id: String,
     plugin_version: String,
+    settings: std::collections::BTreeMap<String, String>,
 }
 
 impl WasmSubtitleSyncClient {
@@ -108,7 +109,16 @@ impl WasmSubtitleSyncClient {
             wasm_bytes: Arc::new(wasm_bytes),
             plugin_id: descriptor.id.clone(),
             plugin_version: descriptor.version.clone(),
+            settings: Default::default(),
         })
+    }
+
+    pub(crate) fn with_plugin_settings(
+        mut self,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Self {
+        crate::loader::bind_plugin_settings(&mut self.settings, &settings);
+        self
     }
 }
 
@@ -116,7 +126,12 @@ impl WasmSubtitleSyncClient {
 impl SubtitleSyncClient for WasmSubtitleSyncClient {
     async fn align_subtitle(&self, job: SubtitleSyncJob) -> AppResult<SubtitleSyncAlignResponse> {
         let prepared = PreparedSubtitleSyncCommand::new(job)?;
-        let spec = prepared.instance_spec(Arc::clone(&self.wasm_bytes));
+        let mut spec = prepared.instance_spec(Arc::clone(&self.wasm_bytes));
+        if !self.settings.is_empty() {
+            spec.command_host = spec
+                .command_host
+                .with_read_only_config(self.settings.clone());
+        }
 
         let response = process_subtitle_component(
             &spec,

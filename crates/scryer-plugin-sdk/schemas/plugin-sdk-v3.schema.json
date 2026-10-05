@@ -212,6 +212,13 @@
             "$ref": "#/$defs/SocketPermission"
           }
         },
+        "settings": {
+          "description": "Installation-wide settings, independent of provider-instance fields.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PluginSettingField"
+          }
+        },
         "provider": {
           "$ref": "#/$defs/ProviderDescriptor"
         }
@@ -258,6 +265,208 @@
         "plain",
         "starttls",
         "tls"
+      ]
+    },
+    "PluginSettingField": {
+      "type": "object",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "field_type": {
+          "$ref": "#/$defs/ConfigFieldType"
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "default_value": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "value_source": {
+          "$ref": "#/$defs/ConfigFieldValueSource",
+          "default": "user"
+        },
+        "role": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ConfigFieldRole"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_binding": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginHostBindingId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "options": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ConfigFieldOption"
+          }
+        },
+        "help_text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "visible_when": {
+          "description": "Shown only while this holds. `None` means always shown.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "required_when": {
+          "description": "Required while this holds, in addition to `required`. A field hidden by\n`visible_when` is never required, whatever this says.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/FieldCondition"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "advanced": {
+          "description": "Placed behind the form's advanced disclosure rather than shown up front.",
+          "type": "boolean",
+          "default": false
+        },
+        "sensitive": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "key",
+        "label",
+        "field_type"
+      ]
+    },
+    "ConfigFieldType": {
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "string",
+            "password",
+            "multiline",
+            "bool",
+            "select",
+            "number",
+            "path",
+            "tag"
+          ]
+        },
+        {
+          "description": "Enumerated selection rendered with a filter box. Same `options` payload\nas `Select`; declare it when the list is long enough that scanning it\nunaided is the wrong ask.",
+          "type": "string",
+          "const": "filtered_select"
+        }
+      ]
+    },
+    "ConfigFieldValueSource": {
+      "type": "string",
+      "enum": [
+        "user",
+        "host_binding"
+      ]
+    },
+    "ConfigFieldRole": {
+      "type": "string",
+      "enum": [
+        "connection_url"
+      ]
+    },
+    "PluginHostBindingId": {
+      "type": "string",
+      "enum": [
+        "smg.opensubtitles_api_key"
+      ]
+    },
+    "ConfigFieldOption": {
+      "type": "object",
+      "properties": {
+        "value": {
+          "type": "string"
+        },
+        "label": {
+          "type": "string"
+        },
+        "config_overrides": {
+          "description": "Config values supplied by this option when the corresponding stored\nvalues are absent. Explicit configuration remains authoritative.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "value",
+        "label"
+      ]
+    },
+    "FieldCondition": {
+      "description": "A predicate over another configuration field's current value.\n\nThe host evaluates these, so the operator set is closed rather than an\nexpression language: a plugin declares what it depends on, it does not run\nlogic in the form.",
+      "type": "object",
+      "properties": {
+        "key": {
+          "description": "Key of the field whose value is tested.",
+          "type": "string"
+        },
+        "op": {
+          "$ref": "#/$defs/ConditionOp"
+        },
+        "values": {
+          "description": "Values compared against. `eq`/`ne` use the first, `in`/`not_in` the\nwhole set, and `non_empty` ignores it.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "key",
+        "op"
+      ]
+    },
+    "ConditionOp": {
+      "description": "How a [`FieldCondition`] compares another field's value.",
+      "oneOf": [
+        {
+          "type": "string",
+          "enum": [
+            "eq",
+            "ne",
+            "in",
+            "not_in"
+          ]
+        },
+        {
+          "description": "Holds when the referenced field has a non-blank value. Ignores `values`.",
+          "type": "string",
+          "const": "non_empty"
+        }
       ]
     },
     "ProviderDescriptor": {
@@ -1077,112 +1286,6 @@
         "field_type"
       ]
     },
-    "ConfigFieldType": {
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "string",
-            "password",
-            "multiline",
-            "bool",
-            "select",
-            "number",
-            "path",
-            "tag"
-          ]
-        },
-        {
-          "description": "Enumerated selection rendered with a filter box. Same `options` payload\nas `Select`; declare it when the list is long enough that scanning it\nunaided is the wrong ask.",
-          "type": "string",
-          "const": "filtered_select"
-        }
-      ]
-    },
-    "ConfigFieldValueSource": {
-      "type": "string",
-      "enum": [
-        "user",
-        "host_binding"
-      ]
-    },
-    "ConfigFieldRole": {
-      "type": "string",
-      "enum": [
-        "connection_url"
-      ]
-    },
-    "PluginHostBindingId": {
-      "type": "string",
-      "enum": [
-        "smg.opensubtitles_api_key"
-      ]
-    },
-    "ConfigFieldOption": {
-      "type": "object",
-      "properties": {
-        "value": {
-          "type": "string"
-        },
-        "label": {
-          "type": "string"
-        },
-        "config_overrides": {
-          "description": "Config values supplied by this option when the corresponding stored\nvalues are absent. Explicit configuration remains authoritative.",
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "value",
-        "label"
-      ]
-    },
-    "FieldCondition": {
-      "description": "A predicate over another configuration field's current value.\n\nThe host evaluates these, so the operator set is closed rather than an\nexpression language: a plugin declares what it depends on, it does not run\nlogic in the form.",
-      "type": "object",
-      "properties": {
-        "key": {
-          "description": "Key of the field whose value is tested.",
-          "type": "string"
-        },
-        "op": {
-          "$ref": "#/$defs/ConditionOp"
-        },
-        "values": {
-          "description": "Values compared against. `eq`/`ne` use the first, `in`/`not_in` the\nwhole set, and `non_empty` ignores it.",
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        }
-      },
-      "required": [
-        "key",
-        "op"
-      ]
-    },
-    "ConditionOp": {
-      "description": "How a [`FieldCondition`] compares another field's value.",
-      "oneOf": [
-        {
-          "type": "string",
-          "enum": [
-            "eq",
-            "ne",
-            "in",
-            "not_in"
-          ]
-        },
-        {
-          "description": "Holds when the referenced field has a non-blank value. Ignores `values`.",
-          "type": "string",
-          "const": "non_empty"
-        }
-      ]
-    },
     "IndexerDescriptor": {
       "type": "object",
       "properties": {
@@ -1944,6 +2047,11 @@
           "items": {
             "$ref": "#/$defs/ArchivePluginFormat"
           }
+        },
+        "enforced_limits": {
+          "description": "Enforces the caller's `limits` envelope while extracting and staging.",
+          "type": "boolean",
+          "default": false
         }
       }
     },
@@ -1988,7 +2096,9 @@
         },
         "capabilities": {
           "$ref": "#/$defs/ArchiveExtractorCapabilities",
-          "default": {}
+          "default": {
+            "enforced_limits": false
+          }
         }
       },
       "required": [
@@ -2666,6 +2776,17 @@
               "type": "null"
             }
           ]
+        },
+        "rss_catch_up": {
+          "description": "Where the previous successful RSS poll of this indexer stopped. Present\nonly on an RSS (recent-releases) request the host has a marker for; a\nplugin that pages its feed reads older pages until it reaches the\nmarker, and a plugin that does not page ignores it. Absent means \"read\nthe newest page only\", which is also what every host before SDK 3.13\nasked for.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PluginRssCatchUp"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -2792,6 +2913,26 @@
         "id",
         "aggregate_id",
         "fallback"
+      ]
+    },
+    "PluginRssCatchUp": {
+      "description": "The newest release the host saw on the previous successful RSS poll of one\nindexer.\n\nA plugin has caught up once a page contains `last_seen_identity`, or once\nthe oldest release on a page was published before `last_seen_published_at`.\nWhen it stops paging for its own page ceiling first, it reports the run as\nincomplete with the releases it did read, so the host records the period\nit could not cover.",
+      "type": "object",
+      "properties": {
+        "last_seen_published_at": {
+          "description": "RFC 3339 publish time of the newest release the host saw on the previous successful RSS poll.",
+          "type": "string"
+        },
+        "last_seen_identity": {
+          "description": "The same release's identity, as the host derives it from a\n[`PluginSearchResult`] the plugin returned: its `guid` verbatim when\npresent, otherwise its `link`, otherwise its `download_url`, otherwise\nits `title`. A plugin matches it against the same fields in the same\norder. Absent when the host holds only a publish time.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "last_seen_published_at"
       ]
     },
     "PluginActionRequest": {
@@ -3137,6 +3278,13 @@
             "string",
             "null"
           ]
+        },
+        "password_candidates": {
+          "description": "Ordered release-specific candidates; never includes plugin-wide fallbacks.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         }
       },
       "required": [
@@ -10279,6 +10427,20 @@
       "properties": {
         "status": {
           "$ref": "#/$defs/ArchivePluginStatus"
+        },
+        "replaced_source_paths": {
+          "description": "Actual source-relative files superseded by successfully placed plain media.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "processed_recovery_paths": {
+          "description": "Source-relative recovery metadata already handled by this invocation.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "files": {
           "type": "array",

@@ -1848,14 +1848,20 @@ pub async fn begin_manual_import_selection(
         manual_import_preview_targets(app, title_id).await?;
 
     let mut preview_root = download_root.clone();
-    let mut trusted_root = download_root;
+    let mut trusted_root = download_root.clone();
     let mut archive_workspace_root = None;
+    // Manual import ignores samples by name and retains loose media alongside
+    // every archive set in a mixed release.
     let mut archive_extraction_needed =
-        crate::archive_extractor::archive_extraction_would_be_needed(&preview_root)?;
+        crate::archive_extractor::archive_extraction_would_be_needed(
+            &preview_root,
+            is_sample_named_file,
+        )?;
 
     if archive_extraction_needed && extract_archives {
         let destination =
             archive_extraction_destination_for_title(app, &selection_id, &authorized.title).await?;
+        let passwords = archive_password_candidates(app, &completed, &release_evidence, None).await;
         let extracted_root = {
             let _archive_extraction_permit = app
                 .runtime
@@ -1865,8 +1871,9 @@ pub async fn begin_manual_import_selection(
                 .await;
             crate::archive_extractor::extract_archives_if_needed(
                 &preview_root,
+                is_sample_named_file,
                 Some(destination),
-                None,
+                &passwords,
                 app.services
                     .integrations
                     .archive_extractor_plugin_provider
@@ -1874,18 +1881,17 @@ pub async fn begin_manual_import_selection(
                     .cloned(),
             )
             .await?
+        };
+        if let Some(extracted_root) = extracted_root {
+            trusted_root = std::fs::canonicalize(&extracted_root).map_err(|error| {
+                AppError::Validation(format!(
+                    "extracted archive workspace is not accessible: {} ({error})",
+                    extracted_root.display()
+                ))
+            })?;
+            preview_root = trusted_root.clone();
+            archive_workspace_root = Some(path_to_stored_string(&trusted_root));
         }
-        .ok_or_else(|| {
-            AppError::Validation("archive extraction did not produce importable files".to_string())
-        })?;
-        trusted_root = std::fs::canonicalize(&extracted_root).map_err(|error| {
-            AppError::Validation(format!(
-                "extracted archive workspace is not accessible: {} ({error})",
-                extracted_root.display()
-            ))
-        })?;
-        preview_root = trusted_root.clone();
-        archive_workspace_root = Some(path_to_stored_string(&trusted_root));
         archive_extraction_needed = false;
     } else if archive_extraction_needed
         && let Some((existing_root, workspace)) = prior_selection
@@ -1928,7 +1934,7 @@ pub async fn begin_manual_import_selection(
 
     let mut candidates = Vec::new();
     let mut files = Vec::new();
-    let preview = preview_manual_import(
+    let mut preview = preview_manual_import(
         app,
         &preview_root,
         &authorized.title,
@@ -1936,6 +1942,22 @@ pub async fn begin_manual_import_selection(
         &all_episodes,
     )
     .await?;
+    if archive_workspace_root.is_some() && preview_root != download_root {
+        let replaced = crate::archive_extractor::replaced_archive_sources(&preview_root)?;
+        preview.files.extend(
+            preview_manual_import(
+                app,
+                &download_root,
+                &authorized.title,
+                &release_evidence,
+                &all_episodes,
+            )
+            .await?
+            .files
+            .into_iter()
+            .filter(|file| !replaced.contains(&stored_path_to_path_buf(&file.file_path))),
+        );
+    }
     for file in preview.files {
         let canonical_path = file.file_path.clone();
         let candidate_id = prior_candidate_ids
@@ -3070,6 +3092,49 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             trusted_source_root.display()
         ))
     })?;
+    let download_root =
+        completed.and_then(|download| std::fs::canonicalize(&download.dest_dir).ok());
+
+    let subtitle_roots = std::iter::once(trusted_source_root.clone())
+        .chain(
+            download_root
+                .iter()
+                .filter(|root| **root != trusted_source_root)
+                .cloned(),
+        )
+        .collect::<Vec<_>>();
+    let mut subtitle_plan =
+        if crate::archive_extractor::is_owned_archive_workspace(&trusted_source_root) {
+            let mut subtitle_videos = Vec::new();
+            let replaced_sources =
+                crate::archive_extractor::replaced_archive_sources(&trusted_source_root)?;
+            for root in &subtitle_roots {
+                subtitle_videos.extend(
+                    find_video_files(root, title.facet != MediaFacet::Movie)?
+                        .into_iter()
+                        .filter(|video| !replaced_sources.contains(video))
+                        .map(|video| (video.clone(), video)),
+                );
+            }
+            subtitle_videos.sort();
+            subtitle_videos.dedup();
+            sidecars::SceneSubtitlePlan::discover_for_import(
+                app,
+                &title,
+                import_id,
+                &subtitle_videos,
+                &subtitle_roots,
+            )
+            .await?
+        } else {
+            sidecars::SceneSubtitlePlan::default()
+        };
+    subtitle_plan.retain_sources(
+        &files
+            .iter()
+            .map(|mapping| stored_path_to_path_buf(&mapping.file_path))
+            .collect::<Vec<_>>(),
+    );
 
     let ImportPathSettings {
         media_root,
@@ -3083,7 +3148,19 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
     ensure_import_title_folder_available(app, &title, &full_folder_path).await?;
     let quality_profile = resolve_import_quality_profile(app, &title).await?;
     let movie_primary_index = (title.facet == MediaFacet::Movie)
-        .then(|| select_manual_movie_primary_index(&files, &title.facet, &trusted_source_root))
+        .then(|| {
+            std::iter::once(&trusted_source_root)
+                .chain(download_root.iter())
+                .filter_map(|root| select_manual_movie_primary_index(&files, &title.facet, root))
+                .max_by_key(|index| {
+                    (
+                        std::fs::metadata(stored_path_to_path_buf(&files[*index].file_path))
+                            .map(|m| m.len())
+                            .unwrap_or(0),
+                        std::cmp::Reverse(*index),
+                    )
+                })
+        })
         .flatten();
 
     let mut results = Vec::new();
@@ -3101,34 +3178,37 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
 
     for (mapping_index, mapping) in files.iter().enumerate() {
         let source = stored_path_to_path_buf(&mapping.file_path);
-        let qualified =
-            match qualify_manual_import_video_candidate(&source, &trusted_source_root).await {
-                Ok(Some(qualified)) => qualified,
-                Ok(None) => {
-                    results.push(manual_import_file_result(
-                        mapping,
-                        false,
-                        None,
-                        Some(ImportErrorCode::PolicyMismatch),
-                        Some("manual import candidate is no longer a valid video".to_string()),
-                    ));
-                    continue;
-                }
-                Err(err) => {
-                    results.push(manual_import_file_result(
-                        mapping,
-                        false,
-                        None,
-                        Some(if !source.exists() {
-                            ImportErrorCode::FileNotFound
-                        } else {
-                            classify_manual_import_error_message(&err.to_string())
-                        }),
-                        Some(err.to_string()),
-                    ));
-                    continue;
-                }
-            };
+        let candidate_root = download_root
+            .as_deref()
+            .filter(|root| validate_manual_import_source_under_trusted_root(&source, root).is_ok())
+            .unwrap_or(&trusted_source_root);
+        let qualified = match qualify_manual_import_video_candidate(&source, candidate_root).await {
+            Ok(Some(qualified)) => qualified,
+            Ok(None) => {
+                results.push(manual_import_file_result(
+                    mapping,
+                    false,
+                    None,
+                    Some(ImportErrorCode::PolicyMismatch),
+                    Some("manual import candidate is no longer a valid video".to_string()),
+                ));
+                continue;
+            }
+            Err(err) => {
+                results.push(manual_import_file_result(
+                    mapping,
+                    false,
+                    None,
+                    Some(if !source.exists() {
+                        ImportErrorCode::FileNotFound
+                    } else {
+                        classify_manual_import_error_message(&err.to_string())
+                    }),
+                    Some(err.to_string()),
+                ));
+                continue;
+            }
+        };
         // Only a source this re-qualification content-probed as video carries
         // that proof into the import checks and destination naming.
         let content_qualified = qualified
@@ -3498,6 +3578,7 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                 message,
                 reason_code,
                 skip_reason,
+                already_present_destination,
                 ..
             }) => {
                 if episode_skip_is_already_present(skip_reason.as_ref()) {
@@ -3517,12 +3598,20 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                             "episode",
                             "already_present",
                             reason_code.as_deref(),
-                            None,
+                            already_present_destination
+                                .as_ref()
+                                .map(|(_, id)| id.as_str()),
                             &target_episodes,
                         )
                         .await?;
                     }
-                    results.push(manual_import_file_result(mapping, true, None, None, None));
+                    results.push(manual_import_file_result(
+                        mapping,
+                        true,
+                        already_present_destination.map(|(destination, _)| destination),
+                        None,
+                        None,
+                    ));
                     continue;
                 }
                 results.push(manual_import_file_result(
@@ -3569,6 +3658,33 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                 ));
             }
         }
+    }
+
+    for result in &results {
+        if result.success
+            && let Some(destination) = result.dest_path.as_deref()
+        {
+            subtitle_plan
+                .deliver(
+                    app,
+                    &title.id,
+                    &stored_path_to_path_buf(&result.file_path),
+                    &stored_path_to_path_buf(destination),
+                )
+                .await?;
+        }
+    }
+
+    let delivered_sources = results
+        .iter()
+        .filter(|result| result.success && result.dest_path.is_some())
+        .map(|result| stored_path_to_path_buf(&result.file_path))
+        .collect::<Vec<_>>();
+    if subtitle_plan.has_pending_sources(delivered_sources.iter().map(PathBuf::as_path)) {
+        return Err(AppError::ManualReconciliationRequired(
+            "scene subtitles require an exact completed import destination; workspace preserved"
+                .into(),
+        ));
     }
 
     // Successful files the manual-level Import Complete still has to report.
@@ -3932,7 +4048,11 @@ async fn execute_queued_manual_import_with_outcome(
     payload: &ManualImportRequestPayload,
 ) -> AppResult<QueuedManualImportOutcome> {
     let outcome = execute_queued_manual_import_with_outcome_inner(app, import_id, payload).await;
-    if let Some(workspace_root) = payload.archive_workspace_root.as_deref() {
+    if outcome
+        .as_ref()
+        .is_ok_and(|outcome| outcome.status == ImportStatus::Completed)
+        && let Some(workspace_root) = payload.archive_workspace_root.as_deref()
+    {
         crate::archive_extractor::cleanup_extracted_dir(&stored_path_to_path_buf(workspace_root))
             .await;
     }

@@ -71,6 +71,7 @@ fn plugin(provider_type: &str, personal: bool, member_only: bool) -> PluginDescr
         rate_limit_seconds: None,
     };
     PluginDescriptor {
+        settings: Vec::new(),
         id: format!("{provider_type}-plugin"),
         name: "Fixture Lists".to_string(),
         version: "1.0.0".to_string(),
@@ -81,8 +82,24 @@ fn plugin(provider_type: &str, personal: bool, member_only: bool) -> PluginDescr
     }
 }
 
+fn imdb_charts() -> Vec<ListChartCatalogEntry> {
+    vec![
+        chart("imdb", "imdb.top250.movies", "global"),
+        chart("imdb", "imdb.moviemeter.movies", "global"),
+        chart("IMDb", "imdb.toptv.series", "global"),
+        chart("imdb", "imdb.tvmeter.series", "global"),
+    ]
+}
+
+fn provider_types(manifests: &[ListProviderManifest]) -> Vec<&str> {
+    manifests
+        .iter()
+        .map(|manifest| manifest.provider_type.as_str())
+        .collect()
+}
+
 #[test]
-fn charts_join_their_provider_and_imdb_lists_are_always_offered() {
+fn charts_join_their_provider() {
     let manifests = merge_provider_catalog(
         &[plugin("fixturelists", false, false)],
         &[
@@ -90,11 +107,7 @@ fn charts_join_their_provider_and_imdb_lists_are_always_offered() {
             chart("tmdb", "popular", "movie"),
         ],
     );
-    let names = manifests
-        .iter()
-        .map(|manifest| manifest.provider_type.as_str())
-        .collect::<Vec<_>>();
-    assert_eq!(names, vec!["fixturelists", "imdb", "tmdb"]);
+    assert_eq!(provider_types(&manifests), vec!["fixturelists", "tmdb"]);
 
     let fixture = &manifests[0];
     assert_eq!(fixture.name, "Fixture Lists");
@@ -106,12 +119,52 @@ fn charts_join_their_provider_and_imdb_lists_are_always_offered() {
     assert!(fixture.coverage.contains(&MediaFacet::Movie));
     assert!(fixture.coverage.contains(&MediaFacet::Series));
 
-    let tmdb = &manifests[2];
+    let tmdb = &manifests[1];
     assert_eq!(tmdb.name, "TMDb");
     assert!(find_item(tmdb, "smg_chart:popular:movie").is_some());
+}
 
+#[test]
+fn imdb_is_offered_only_as_the_gateway_charts() {
+    let manifests = merge_provider_catalog(
+        &[plugin("fixturelists", false, false)],
+        &[chart("tmdb", "popular", "movie")],
+    );
+    assert_eq!(
+        provider_types(&manifests),
+        vec!["fixturelists", "tmdb"],
+        "IMDb has no tile until the gateway serves its charts"
+    );
+
+    let mut charts = imdb_charts();
+    charts.push(chart("tmdb", "popular", "movie"));
+    let manifests = merge_provider_catalog(&[plugin("fixturelists", false, false)], &charts);
+    assert_eq!(
+        provider_types(&manifests),
+        vec!["fixturelists", "imdb", "tmdb"]
+    );
     let imdb = &manifests[1];
-    assert!(find_item(imdb, LIST_SOURCE_TYPE_IMDB_USER_LIST).is_some());
+    assert_eq!(imdb.name, "IMDb");
+    let items = imdb
+        .groups
+        .iter()
+        .flat_map(|group| &group.items)
+        .map(|item| item.source_type.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        items,
+        vec![
+            "smg_chart:imdb.top250.movies:global",
+            "smg_chart:imdb.moviemeter.movies:global",
+            "smg_chart:imdb.toptv.series:global",
+            "smg_chart:imdb.tvmeter.series:global",
+        ],
+        "every chart, and nothing but charts"
+    );
+    assert!(
+        imdb.url_patterns.is_empty(),
+        "no imdb.com link is recognised"
+    );
 }
 
 #[test]
@@ -136,13 +189,11 @@ fn urls_are_recognised_by_manifest_patterns() {
         Some("fixture-one")
     );
 
-    let imdb = recognize_url(&manifests, "https://www.imdb.com/list/ls000000123/").unwrap();
-    assert_eq!(imdb.provider, "imdb");
-    assert_eq!(
-        imdb.params
-            .get(LIST_SOURCE_IMDB_LIST_ID_PARAM)
-            .map(String::as_str),
-        Some("ls000000123")
+    let with_imdb_charts =
+        merge_provider_catalog(&[plugin("fixturelists", false, false)], &imdb_charts());
+    assert!(
+        recognize_url(&with_imdb_charts, "https://www.imdb.com/list/ls000000123/").is_none(),
+        "an IMDb list link is not something Scryer follows"
     );
 
     assert!(recognize_url(&manifests, "https://unknown.example.test/x").is_none());
@@ -172,17 +223,6 @@ fn public_sources_are_classified_by_origin() {
         }
     );
     assert_eq!(chart.kinds, vec![MediaFacet::Movie]);
-
-    let imdb = classify_public_source(
-        &manifests,
-        &charts,
-        &member_only,
-        "imdb",
-        "user_list",
-        &BTreeMap::from([("list_id".to_string(), "ls000000123".to_string())]),
-    )
-    .unwrap();
-    assert_eq!(imdb.source.origin, ListSourceOrigin::SmgImdbList);
 
     let fetched = classify_public_source(
         &manifests,
@@ -258,4 +298,45 @@ fn public_sources_reject_what_they_cannot_follow() {
         &BTreeMap::from([("slug".to_string(), "fixture-one".to_string())]),
     );
     assert!(member_only_item.is_err());
+}
+
+#[test]
+fn imdb_charts_can_be_followed_but_imdb_lists_cannot() {
+    let plugins = [plugin("fixturelists", false, false)];
+    let charts = imdb_charts();
+    let manifests = merge_provider_catalog(&plugins, &charts);
+    let member_only = member_only_providers(&plugins);
+
+    for provider in ["imdb", "IMDb"] {
+        let classified = classify_public_source(
+            &manifests,
+            &charts,
+            &member_only,
+            provider,
+            &smg_chart_source_type("imdb.top250.movies", "global"),
+            &BTreeMap::new(),
+        )
+        .expect("an IMDb chart is followable");
+        assert_eq!(classified.source.provider, "imdb");
+        assert_eq!(
+            classified.source.origin,
+            ListSourceOrigin::SmgChart {
+                chart_key: "imdb.top250.movies".to_string(),
+                scope: "global".to_string(),
+            }
+        );
+    }
+
+    let list = classify_public_source(
+        &manifests,
+        &charts,
+        &member_only,
+        "imdb",
+        "user_list",
+        &BTreeMap::from([("list_id".to_string(), "ls000000123".to_string())]),
+    );
+    assert!(
+        matches!(&list, Err(AppError::Validation(message)) if message == "that provider has no such list"),
+        "an IMDb list is refused: {list:?}"
+    );
 }

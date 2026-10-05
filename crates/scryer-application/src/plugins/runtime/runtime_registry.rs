@@ -4,6 +4,7 @@ impl AppUseCase {
         &self,
         plugin_type: &str,
         provider_type: &str,
+        installation_id: &str,
     ) -> AppResult<()> {
         if is_indexer_plugin_type(plugin_type) {
             let provider = self
@@ -72,9 +73,13 @@ impl AppUseCase {
                             "archive extractor plugin provider unavailable".to_string(),
                         )
                     })?;
-                provider.remove_runtime_plugin(provider_type).map_err(|e| {
-                    AppError::Repository(format!("failed to remove archive extractor plugin: {e}"))
-                })?;
+                provider
+                    .remove_runtime_plugin(installation_id)
+                    .map_err(|e| {
+                        AppError::Repository(format!(
+                            "failed to remove archive extractor plugin: {e}"
+                        ))
+                    })?;
             }
             "list_provider" => {
                 self.services
@@ -139,6 +144,9 @@ impl AppUseCase {
                         || !installation_sdk_contract_is_host_compatible(installation) =>
                 {
                     false
+                }
+                Some(ref installation) if installation.source_kind == PluginSourceKind::Bundled => {
+                    self.bundled_plugin_settings(installation).await.is_ok()
                 }
                 Some(ref installation) => {
                     match self

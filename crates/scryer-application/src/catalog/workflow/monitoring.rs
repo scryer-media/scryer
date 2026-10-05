@@ -1,7 +1,19 @@
 const EXTERNAL_IMPORT_MONITOR_SNAPSHOT_APPLY_CHUNK_BATCH_SIZE: i32 = 4;
-/// Titles whose monitored flag is flipped in one write transaction. A 100k-title
-/// import must not take 100k trips through the sqlite writer gate.
-const MONITOR_APPLY_TITLE_WRITE_BATCH_SIZE: usize = 500;
+
+#[derive(Debug, Default)]
+pub(crate) struct MonitorSnapshotApplyReport {
+    pub(crate) claimed: bool,
+    pub(crate) failed_entries: usize,
+    /// Chunks not enumerated; entry counts are unknowable when reading fails.
+    pub(crate) unprocessed_chunks: u64,
+    pub(crate) cleanup_failed: bool,
+}
+
+impl MonitorSnapshotApplyReport {
+    pub(crate) fn has_failures(&self) -> bool {
+        self.failed_entries > 0 || self.unprocessed_chunks > 0 || self.cleanup_failed
+    }
+}
 /// Per-title `TitleUpdated` activity events one monitor apply may emit. Beyond
 /// this the apply is a bulk operation, not a feed of individual edits: the
 /// activity feed and the web title-list reactive refresh both react per title,
@@ -12,7 +24,9 @@ fn parse_external_import_monitor_snapshot_line<T: serde::de::DeserializeOwned>(
 ) -> AppResult<T> {
     serde_json::from_str(line).map_err(|err| {
         AppError::Validation(format!(
-            "failed to parse external import monitor snapshot line: {err}"
+            "invalid snapshot JSON ({:?}, column {})",
+            err.classify(),
+            err.column()
         ))
     })
 }
@@ -25,6 +39,7 @@ impl AppUseCase {
         let library_id = scryer_domain::default_library_id_for_facet(facet);
         self.apply_pending_external_import_monitor_snapshot_for_library(facet, &library_id)
             .await
+            .map(|report| report.claimed)
     }
 }
 impl AppUseCase {
@@ -301,227 +316,191 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
-    /// Applies the title-level outcome of a monitor snapshot apply.
-    ///
-    /// `changes` are titles whose monitored flag flips; they are written in
-    /// batched transactions grouped by target value rather than one transaction
-    /// per title. `related_only` are titles whose seasons or episodes changed
-    /// without the title itself flipping; they get the same follow-ups minus the
-    /// write.
-    async fn flush_monitor_apply_title_changes(
+    /// Applies one entry's title change and derived-state follow-ups.
+    async fn apply_monitor_snapshot_title(
         &self,
-        changes: HashMap<String, (Title, bool)>,
-        related_only: HashMap<String, Title>,
+        title: &mut Title,
+        monitored: bool,
+        persisted_change: &mut bool,
     ) -> AppResult<()> {
-        let mut changes = changes.into_values().collect::<Vec<_>>();
-        changes.sort_by(|(left, _), (right, _)| left.id.cmp(&right.id));
-        let mut related_only = related_only.into_values().collect::<Vec<_>>();
-        related_only.sort_by(|left, right| left.id.cmp(&right.id));
-
-        let mut emitted_activities = 0usize;
-        let mut suppressed_activities = 0usize;
-        for batch in changes.chunks(MONITOR_APPLY_TITLE_WRITE_BATCH_SIZE) {
-            let mut enable = Vec::new();
-            let mut disable = Vec::new();
-            for (title, monitored) in batch {
-                if *monitored {
-                    enable.push(title.id.clone());
-                } else {
-                    disable.push(title.id.clone());
-                }
-            }
-            if !enable.is_empty() {
+        let changed = title.monitored != monitored;
+        if changed {
+            self.services
+                .catalog
+                .titles
+                .set_titles_monitored(std::slice::from_ref(&title.id), monitored)
+                .await?;
+            title.monitored = monitored;
+            *persisted_change = true;
+            self.invalidate_monitored_title_matcher().await;
+        }
+        if changed {
+            self.reconcile_series_movie_link_monitoring_for_title(title)
+                .await?;
+            if !monitored {
                 self.services
-                    .catalog
-                    .titles
-                    .set_titles_monitored(&enable, true)
+                    .workflow
+                    .acquisition_scope_states
+                    .delete_acquisition_scope_states_for_title(&title.id)
                     .await?;
             }
-            if !disable.is_empty() {
-                self.services
-                    .catalog
-                    .titles
-                    .set_titles_monitored(&disable, false)
-                    .await?;
-            }
-            if !enable.is_empty() || !disable.is_empty() {
-                // Same reason as `persist_title_monitoring`, once per batch.
-                self.invalidate_monitored_title_matcher().await;
-            }
-
-            for (title, monitored) in batch {
-                let mut updated = title.clone();
-                updated.monitored = *monitored;
-                self.reconcile_series_movie_link_monitoring_for_title(&updated)
-                    .await?;
-                if !*monitored
-                    && let Err(err) = self
-                        .services
-                        .workflow
-                        .acquisition_scope_states
-                        .delete_acquisition_scope_states_for_title(&updated.id)
-                        .await
-                {
-                    warn!(
-                        title_id = updated.id.as_str(),
-                        error = %err,
-                        "failed to delete wanted items after disabling monitoring"
-                    );
-                }
-                self.emit_monitor_apply_title_activity(
-                    &updated,
-                    &mut emitted_activities,
-                    &mut suppressed_activities,
-                )
-                .await;
-            }
-            if !enable.is_empty() {
-                // The derived target set already reflects the new monitored
-                // state; the woken cycle picks the titles up immediately.
-                self.runtime.acquisition.acquisition_wake.notify_one();
-            }
-        }
-
-        for title in &related_only {
-            self.emit_monitor_apply_title_activity(
-                title,
-                &mut emitted_activities,
-                &mut suppressed_activities,
-            )
-            .await;
-        }
-        if !related_only.is_empty() {
-            self.runtime.acquisition.acquisition_wake.notify_one();
-        }
-
-        if suppressed_activities > 0 {
-            tracing::info!(
-                emitted_activities,
-                suppressed_activities,
-                "external import monitor apply suppressed per-title activity beyond its cap"
-            );
         }
         Ok(())
     }
-
-    async fn emit_monitor_apply_title_activity(
-        &self,
-        title: &Title,
-        emitted: &mut usize,
-        suppressed: &mut usize,
-    ) {
-        if *emitted >= MONITOR_APPLY_TITLE_ACTIVITY_LIMIT {
-            *suppressed += 1;
-            return;
-        }
-        *emitted += 1;
-        self.emit_title_updated_activity(None, title).await;
-    }
 }
 impl AppUseCase {
-    async fn apply_movie_monitor_snapshot_chunks(
+    async fn apply_monitor_snapshot_chunks(
         &self,
+        facet: &MediaFacet,
         session_id: &str,
         library_id: &str,
-        _now: &DateTime<Utc>,
+        report: &mut MonitorSnapshotApplyReport,
     ) -> AppResult<()> {
         let titles = self
             .services
             .catalog
             .titles
-            .list_for_libraries(Some(MediaFacet::Movie), &[library_id.to_string()], None)
+            .list_for_libraries(Some(facet.clone()), &[library_id.to_string()], None)
             .await?;
-        let mut titles_by_tmdb = HashMap::<String, Vec<Title>>::new();
-        let mut titles_by_imdb = HashMap::<String, Vec<Title>>::new();
-
+        let mut primary = HashMap::<String, Vec<Title>>::new();
+        let mut imdb = HashMap::<String, Vec<Title>>::new();
+        let movie = *facet == MediaFacet::Movie;
         for title in &titles {
             push_title_external_id_index(
-                &mut titles_by_tmdb,
-                title_external_id_value(title, "tmdb"),
+                &mut primary,
+                title_external_id_value(title, if movie { "tmdb" } else { "tvdb" }),
                 title,
             );
-            push_title_external_id_index(
-                &mut titles_by_imdb,
-                title_external_id_value(title, "imdb"),
-                title,
-            );
+            if movie {
+                push_title_external_id_index(
+                    &mut imdb,
+                    title_external_id_value(title, "imdb"),
+                    title,
+                );
+            }
         }
-
-        let mut pending_changes = HashMap::<String, (Title, bool)>::new();
-        let mut unresolved_entries = 0usize;
-        let mut processed_chunk_count = 0i32;
+        let kind = if movie {
+            ExternalImportMonitorSnapshotEntryKind::Movie
+        } else {
+            ExternalImportMonitorSnapshotEntryKind::Series
+        };
         let mut after_chunk_index = None;
-        loop {
+        let mut emitted = 0;
+        while report.unprocessed_chunks > 0 {
             let chunks = self
                 .services
                 .workflow
                 .external_import_monitor_snapshots
                 .list_external_import_monitor_snapshot_chunk_batch(
                     session_id,
-                    MediaFacet::Movie,
-                    ExternalImportMonitorSnapshotEntryKind::Movie,
+                    facet.clone(),
+                    kind.clone(),
                     after_chunk_index,
                     EXTERNAL_IMPORT_MONITOR_SNAPSHOT_APPLY_CHUNK_BATCH_SIZE,
                 )
                 .await?;
             if chunks.is_empty() {
-                break;
+                return Err(AppError::Repository(
+                    "consumed snapshot chunks are missing".into(),
+                ));
             }
-
             for chunk in chunks {
                 after_chunk_index = Some(chunk.chunk_index);
-                processed_chunk_count += 1;
-                for line in chunk
-                    .payload_ndjson
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                {
-                    let entry: ExternalImportMonitorMovieEntry =
-                        parse_external_import_monitor_snapshot_line(line)?;
-                    let matched_title =
-                        unique_title_match(&titles_by_tmdb, entry.tmdb_id.as_deref()).or_else(
-                            || unique_title_match(&titles_by_imdb, entry.imdb_id.as_deref()),
-                        );
-                    let Some(title) = matched_title else {
-                        unresolved_entries += 1;
-                        continue;
-                    };
-
-                    if title.monitored == entry.monitored {
-                        // The in-memory library listing is the same row the
-                        // singular path would re-read, so an unchanged entry
-                        // costs no round trip at all.
+                for (line_index, line) in chunk.payload_ndjson.lines().enumerate() {
+                    let line = line.trim();
+                    if line.is_empty() {
                         continue;
                     }
-                    pending_changes.insert(title.id.clone(), (title, entry.monitored));
+                    let mut external_id = None;
+                    let mut fallback_id = None;
+                    let mut operation = "parse";
+                    let mut applied_title = None;
+                    let mut persisted_change = false;
+                    let result: AppResult<()> = async {
+                        let (matched, monitored, series_entry) = if movie {
+                            let entry: ExternalImportMonitorMovieEntry =
+                                parse_external_import_monitor_snapshot_line(line)?;
+                            external_id = entry.tmdb_id.clone();
+                            fallback_id = entry.imdb_id.clone();
+                            (
+                                unique_title_match(&primary, entry.tmdb_id.as_deref()).or_else(
+                                    || unique_title_match(&imdb, entry.imdb_id.as_deref()),
+                                ),
+                                entry.monitored,
+                                None,
+                            )
+                        } else {
+                            let entry: ExternalImportMonitorSeriesEntry =
+                                parse_external_import_monitor_snapshot_line(line)?;
+                            external_id = entry.tvdb_id.clone();
+                            (
+                                unique_title_match(&primary, entry.tvdb_id.as_deref()),
+                                entry.monitored,
+                                Some(entry),
+                            )
+                        };
+                        operation = "match_title";
+                        let matched = matched.ok_or_else(|| {
+                            AppError::Validation("snapshot title is missing or ambiguous".into())
+                        })?;
+                        // Re-read monitoring so repeated entries see earlier successful writes.
+                        operation = "read_title";
+                        let title = self
+                            .services
+                            .catalog
+                            .titles
+                            .get_by_id(&matched.id)
+                            .await?
+                            .ok_or_else(|| {
+                                AppError::Validation("snapshot title no longer exists".into())
+                            })?;
+                        let title = applied_title.insert(title);
+                        operation = "apply_children";
+                        if let Some(entry) = series_entry {
+                            self.apply_series_monitor_snapshot_entry(
+                                title,
+                                &entry,
+                                &mut persisted_change,
+                            )
+                            .await?;
+                        }
+                        operation = "apply_title";
+                        self.apply_monitor_snapshot_title(title, monitored, &mut persisted_change)
+                            .await
+                    }
+                    .await;
+                    // Publish after all follow-ups, including successful writes in a
+                    // partially failed entry. Consumed snapshots cannot repair these later.
+                    if persisted_change && let Some(title) = applied_title {
+                        if emitted < MONITOR_APPLY_TITLE_ACTIVITY_LIMIT {
+                            emitted += 1;
+                            self.emit_title_updated_activity(None, &title).await;
+                        }
+                        self.runtime.acquisition.acquisition_wake.notify_one();
+                    }
+                    if let Err(error) = result {
+                        report.failed_entries += 1;
+                        warn!(library_id, facet = facet.as_str(), attempt = session_id,
+                            chunk = chunk.chunk_index, line = line_index + 1,
+                            external_id = external_id.as_deref(), imdb_id = fallback_id.as_deref(),
+                            operation, error = %error, "failed to apply migration monitoring entry");
+                    }
                 }
+                report.unprocessed_chunks = report.unprocessed_chunks.saturating_sub(1);
             }
         }
-        if processed_chunk_count == 0 {
-            return Ok(());
-        }
-
-        self.flush_monitor_apply_title_changes(pending_changes, HashMap::new())
-            .await?;
-
-        if unresolved_entries > 0 {
-            return Err(AppError::Repository(format!(
-                "{unresolved_entries} imported movie monitoring entries did not match titles in library {library_id}"
-            )));
-        }
-
         Ok(())
     }
 }
 impl AppUseCase {
     /// Applies the season/episode/collection side of one series entry and
-    /// reports whether anything below the title changed.
+    /// tracks committed changes even when a later write fails.
     async fn apply_series_monitor_snapshot_entry(
         &self,
         title: &Title,
         entry: &ExternalImportMonitorSeriesEntry,
-    ) -> AppResult<bool> {
+        persisted_change: &mut bool,
+    ) -> AppResult<()> {
         let collections = self
             .services
             .catalog
@@ -618,6 +597,7 @@ impl AppUseCase {
                 .shows
                 .set_collections_monitored(&collections_to_disable, false)
                 .await?;
+            *persisted_change = true;
         }
         if !collections_to_enable.is_empty() {
             self.services
@@ -625,6 +605,7 @@ impl AppUseCase {
                 .shows
                 .set_collections_monitored(&collections_to_enable, true)
                 .await?;
+            *persisted_change = true;
         }
         if !episodes_to_disable.is_empty() {
             self.services
@@ -632,6 +613,7 @@ impl AppUseCase {
                 .shows
                 .set_episodes_monitored(&episodes_to_disable, false)
                 .await?;
+            *persisted_change = true;
         }
         if !episodes_to_enable.is_empty() {
             self.services
@@ -639,103 +621,7 @@ impl AppUseCase {
                 .shows
                 .set_episodes_monitored(&episodes_to_enable, true)
                 .await?;
-        }
-
-        // The title's own monitored flip is left to the caller so a bulk apply
-        // can batch every flip into a handful of write transactions.
-        Ok(!collections_to_enable.is_empty()
-            || !collections_to_disable.is_empty()
-            || !episodes_to_enable.is_empty()
-            || !episodes_to_disable.is_empty())
-    }
-}
-impl AppUseCase {
-    async fn apply_series_monitor_snapshot_chunks(
-        &self,
-        facet: &MediaFacet,
-        session_id: &str,
-        library_id: &str,
-        _now: &DateTime<Utc>,
-    ) -> AppResult<()> {
-        let titles = self
-            .services
-            .catalog
-            .titles
-            .list_for_libraries(Some(facet.clone()), &[library_id.to_string()], None)
-            .await?;
-        let mut titles_by_tvdb = HashMap::<String, Vec<Title>>::new();
-
-        for title in &titles {
-            push_title_external_id_index(
-                &mut titles_by_tvdb,
-                title_external_id_value(title, "tvdb"),
-                title,
-            );
-        }
-
-        let mut pending_changes = HashMap::<String, (Title, bool)>::new();
-        let mut related_only_changes = HashMap::<String, Title>::new();
-        let mut unresolved_entries = 0usize;
-        let mut processed_chunk_count = 0i32;
-        let mut after_chunk_index = None;
-        loop {
-            let chunks = self
-                .services
-                .workflow
-                .external_import_monitor_snapshots
-                .list_external_import_monitor_snapshot_chunk_batch(
-                    session_id,
-                    facet.clone(),
-                    ExternalImportMonitorSnapshotEntryKind::Series,
-                    after_chunk_index,
-                    EXTERNAL_IMPORT_MONITOR_SNAPSHOT_APPLY_CHUNK_BATCH_SIZE,
-                )
-                .await?;
-            if chunks.is_empty() {
-                break;
-            }
-
-            for chunk in chunks {
-                after_chunk_index = Some(chunk.chunk_index);
-                processed_chunk_count += 1;
-                for line in chunk
-                    .payload_ndjson
-                    .lines()
-                    .map(str::trim)
-                    .filter(|line| !line.is_empty())
-                {
-                    let entry: ExternalImportMonitorSeriesEntry =
-                        parse_external_import_monitor_snapshot_line(line)?;
-                    let Some(title) = unique_title_match(&titles_by_tvdb, entry.tvdb_id.as_deref())
-                    else {
-                        unresolved_entries += 1;
-                        continue;
-                    };
-
-                    let related_changed = self
-                        .apply_series_monitor_snapshot_entry(&title, &entry)
-                        .await?;
-                    if title.monitored != entry.monitored {
-                        related_only_changes.remove(&title.id);
-                        pending_changes.insert(title.id.clone(), (title, entry.monitored));
-                    } else if related_changed && !pending_changes.contains_key(&title.id) {
-                        related_only_changes.insert(title.id.clone(), title);
-                    }
-                }
-            }
-        }
-        if processed_chunk_count == 0 {
-            return Ok(());
-        }
-
-        self.flush_monitor_apply_title_changes(pending_changes, related_only_changes)
-            .await?;
-
-        if unresolved_entries > 0 {
-            return Err(AppError::Repository(format!(
-                "{unresolved_entries} imported {} monitoring entries did not match titles in library {library_id}",
-                facet.as_str()
-            )));
+            *persisted_change = true;
         }
 
         Ok(())
@@ -746,57 +632,70 @@ impl AppUseCase {
         &self,
         facet: &MediaFacet,
         library_id: &str,
-    ) -> AppResult<bool> {
+    ) -> AppResult<MonitorSnapshotApplyReport> {
         let _apply_guard = self.acquire_external_import_apply_guard().await;
+        let repo = &self.services.workflow.external_import_monitor_snapshots;
         let apply_session_id =
             crate::external_import_monitor_apply_session_id_for_library(library_id);
-        let now = Utc::now();
-        let chunk_entry_kind = match facet {
-            MediaFacet::Movie => ExternalImportMonitorSnapshotEntryKind::Movie,
-            MediaFacet::Series | MediaFacet::Anime => {
-                ExternalImportMonitorSnapshotEntryKind::Series
+        // Hex encoding keeps library IDs literal in the repository's LIKE-prefix cleanup.
+        let library_key: String = library_id
+            .trim()
+            .as_bytes()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        let consumed_prefix = format!("external-import-monitor-apply-consumed:{library_key}:");
+        let mut report = MonitorSnapshotApplyReport::default();
+        if let Err(error) = repo
+            .delete_external_import_monitor_snapshot_chunks_for_session_prefix(
+                &consumed_prefix,
+                facet.clone(),
+            )
+            .await
+        {
+            report.cleanup_failed = true;
+            warn!(library_id, facet = facet.as_str(), operation = "cleanup_consumed",
+                error = %error, "failed to clean consumed migration monitoring snapshots");
+        }
+        let consumed_session_id = format!("{consumed_prefix}{}", uuid::Uuid::new_v4());
+        let claimed = match repo
+            .claim_external_import_monitor_snapshot(
+                &apply_session_id,
+                &consumed_session_id,
+                facet.clone(),
+            )
+            .await
+        {
+            Ok(count) => count,
+            Err(error) => {
+                warn!(library_id, facet = facet.as_str(), attempt = %consumed_session_id,
+                    operation = "claim", error = %error, "failed to consume migration monitoring snapshot");
+                return Err(error);
             }
         };
-        let chunk_batch = self
-            .services
-            .workflow
-            .external_import_monitor_snapshots
-            .list_external_import_monitor_snapshot_chunk_batch(
-                &apply_session_id,
-                facet.clone(),
-                chunk_entry_kind,
-                None,
-                1,
-            )
-            .await?;
-
-        if chunk_batch.is_empty() {
-            return Ok(false);
+        if claimed == 0 {
+            return Ok(report);
         }
-
-        match facet {
-            MediaFacet::Movie => {
-                self.apply_movie_monitor_snapshot_chunks(&apply_session_id, library_id, &now)
-                    .await?;
-            }
-            MediaFacet::Series | MediaFacet::Anime => {
-                self.apply_series_monitor_snapshot_chunks(
-                    facet,
-                    &apply_session_id,
-                    library_id,
-                    &now,
-                )
-                .await?;
-            }
+        report.claimed = true;
+        report.unprocessed_chunks = claimed;
+        if let Err(error) = self
+            .apply_monitor_snapshot_chunks(facet, &consumed_session_id, library_id, &mut report)
+            .await
+        {
+            warn!(library_id, facet = facet.as_str(), attempt = %consumed_session_id,
+                operation = "enumerate", unprocessed_chunks = report.unprocessed_chunks,
+                error = %error, "could not finish reading consumed migration monitoring snapshot");
         }
-
-        self.services
-            .workflow
-            .external_import_monitor_snapshots
-            .delete_external_import_monitor_snapshot_chunks(&apply_session_id, facet.clone())
-            .await?;
-
-        Ok(true)
+        // Once claimed, every error path comes here. Cancellation/crashes leave inert rows.
+        if let Err(error) = repo
+            .delete_external_import_monitor_snapshot_chunks(&consumed_session_id, facet.clone())
+            .await
+        {
+            report.cleanup_failed = true;
+            warn!(library_id, facet = facet.as_str(), attempt = %consumed_session_id,
+                operation = "cleanup", error = %error, "failed to delete consumed migration monitoring snapshot");
+        }
+        Ok(report)
     }
 }
 impl AppUseCase {

@@ -91,9 +91,11 @@ fn runtime_plugin_load_from_validated(
     first_party: bool,
 ) -> RuntimePluginLoad {
     RuntimePluginLoad {
+        installation_id: None,
         descriptor,
         wasm_bytes,
         first_party,
+        settings: Default::default(),
     }
 }
 fn persisted_plugin_descriptor_json(descriptor: &PluginDescriptor) -> AppResult<String> {
@@ -197,11 +199,13 @@ pub async fn load_runtime_plugin_from_persisted_installation_payload(
         installation.support_tier,
         false,
     )?;
-    Ok(runtime_plugin_load_from_validated(
+    let mut plugin = runtime_plugin_load_from_validated(
         validated.descriptor,
         wasm_bytes,
         installation_is_first_party(installation),
-    ))
+    );
+    plugin.installation_id = Some(installation.id.clone());
+    Ok(plugin)
 }
 fn installation_sdk_contract_is_host_compatible(installation: &PluginInstallation) -> bool {
     match validate_sdk_contract(

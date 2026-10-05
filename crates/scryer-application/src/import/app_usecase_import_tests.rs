@@ -2513,8 +2513,7 @@ impl TitleRepository for ManualImportCleanupTitleRepo {
     async fn find_by_external_id_in_facet(
         &self,
         _: MediaFacet,
-        _: &str,
-        _: &str,
+        _: &ExternalId,
     ) -> AppResult<Option<Title>> {
         Ok(None)
     }

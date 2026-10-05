@@ -567,7 +567,7 @@ impl AppUseCase {
         }
 
         let availability = self.scheduler_availability().await;
-        let host_keys = self.indexer_scheduler_host_keys().await;
+        let destination_keys = self.indexer_scheduler_destination_keys().await;
 
         for (title_id, scope_key) in scopes {
             let Some(Some(context)) = title_context.get(title_id) else {
@@ -606,7 +606,8 @@ impl AppUseCase {
             let state = if uncovered.is_empty() {
                 WantedConvergenceState::Converged
             } else if uncovered.iter().all(|id| {
-                !availability.indexer_available(host_keys.get(id.as_str()).map(String::as_str), id)
+                !availability
+                    .indexer_available(destination_keys.get(id.as_str()).map(String::as_str), id)
             }) {
                 WantedConvergenceState::Deferred
             } else if covered_count == 0 {

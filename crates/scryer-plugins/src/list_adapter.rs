@@ -364,10 +364,10 @@ impl WasmListPluginProvider {
         ) {
             return Err("list provider descriptor rejected".to_string());
         }
-        Ok(LoadedPluginRecord::new(LoadedPlugin::from_owned(
-            plugin.descriptor,
-            plugin.wasm_bytes,
-        )))
+        Ok(LoadedPluginRecord::new(
+            LoadedPlugin::from_owned(plugin.descriptor, plugin.wasm_bytes)
+                .with_settings(plugin.settings),
+        ))
     }
 
     fn prepare_builtin_asset_record(
@@ -484,7 +484,7 @@ impl WasmListPluginProvider {
             .iter()
             .map(|field| field.key.as_str())
             .collect::<std::collections::HashSet<_>>();
-        let plugin_config = config
+        let mut plugin_config = config
             .iter()
             .filter(|(key, _)| declared.contains(key.as_str()))
             .map(|(key, value)| (key.clone(), value.clone()))
@@ -498,6 +498,7 @@ impl WasmListPluginProvider {
             allowed_hosts_for_descriptor(&loaded.descriptor, base_url, Some(&config_json));
         let egress_policy = operator_egress_policy_for_descriptor(None, Some(&config_json));
 
+        loaded.bind_settings(&mut plugin_config);
         let command_host = CommandHost::with_archive_provider(
             loaded.descriptor.id.clone(),
             plugin_config.clone(),

@@ -7046,13 +7046,6 @@ impl MetadataGateway for MetadataGatewayClient {
             .await
     }
 
-    async fn list_imdb_user_list(
-        &self,
-        list_id: &str,
-    ) -> AppResult<Vec<scryer_application::lists::gateway::ListChartItem>> {
-        self.fetch_list_imdb_user_list(list_id).await
-    }
-
     async fn search_titles_multi(
         &self,
         query: &str,

@@ -1,9 +1,11 @@
+use crate::location::model::VerificationDepth;
+use crate::location::verify::{
+    CopyProgress, DestinationClaim, VerifiedCopier, VerifiedCopyRequest, hash_existing_file,
+};
 use crate::{AppError, AppResult};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use tokio::io::AsyncWriteExt;
 use tracing::{info, warn};
 
 pub const RECYCLE_MANIFEST_SCHEMA: &str = "scryer.recycle-entry.v1";
@@ -581,7 +583,7 @@ async fn recycle_source_to_destination(
                 source = %source_path.display(),
                 recycled = %recycled_path.display(),
                 error = %error,
-                "recycle rename crossed devices; falling back to copy with sampled verification"
+                "recycle rename crossed devices; falling back to a verified copy"
             );
         }
         Err(error) => {
@@ -594,65 +596,28 @@ async fn recycle_source_to_destination(
         }
     }
 
-    let mut source_file = tokio::fs::File::open(&source_path).await.map_err(|error| {
-        AppError::Repository(format!(
-            "failed to open source file {} for recycle: {}",
-            source_path.display(),
-            error
-        ))
-    })?;
-    let mut recycled_file = tokio::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&recycled_path)
-        .await
-        .map_err(|error| {
-            AppError::Repository(format!(
-                "failed to claim recycle destination {}: {}",
-                recycled_path.display(),
-                error
-            ))
-        })?;
+    recycle_by_verified_copy(&source_path, &recycled_path, CopyProgress::none()).await
+}
 
-    if let Err(error) = tokio::io::copy(&mut source_file, &mut recycled_file).await {
-        let _ = crate::fs_safety::remove_file_safely_if_exists(&recycled_path).await;
-        return Err(AppError::Repository(format!(
-            "failed to copy {} to recycle bin {}: {}",
-            source_path.display(),
-            recycled_path.display(),
-            error
-        )));
-    }
-    if let Err(error) = recycled_file.flush().await {
-        let _ = crate::fs_safety::remove_file_safely_if_exists(&recycled_path).await;
-        return Err(AppError::Repository(format!(
-            "failed to flush recycled file {}: {}",
-            recycled_path.display(),
-            error
-        )));
-    }
-    if let Err(error) = recycled_file.sync_all().await {
-        let _ = crate::fs_safety::remove_file_safely_if_exists(&recycled_path).await;
-        return Err(AppError::Repository(format!(
-            "failed to sync recycled file {}: {}",
-            recycled_path.display(),
-            error
-        )));
-    }
-    drop(recycled_file);
+/// Copy `source_path` into the recycle bin, prove the copy, and only then
+/// remove the source. `recycled_path` must not exist yet.
+async fn recycle_by_verified_copy(
+    source_path: &Path,
+    recycled_path: &Path,
+    progress: CopyProgress,
+) -> AppResult<()> {
+    quick_verified_copy(
+        source_path,
+        recycled_path,
+        DestinationClaim::ClaimHere,
+        progress,
+    )
+    .await?;
 
-    if let Err(verify_error) =
-        crate::fs_integrity::verify_same_file_async(&source_path, &recycled_path).await
-    {
-        let _ = crate::fs_safety::remove_file_safely_if_exists(&recycled_path).await;
-        return Err(verify_error);
-    }
-    drop(source_file);
-
-    match crate::fs_safety::remove_file_safely_if_exists(&source_path).await {
+    match crate::fs_safety::remove_file_safely_if_exists(source_path).await {
         Ok(()) => Ok(()),
         Err(error) => {
-            let _ = crate::fs_safety::remove_file_safely_if_exists(&recycled_path).await;
+            let _ = crate::fs_safety::remove_file_safely_if_exists(recycled_path).await;
             Err(AppError::Repository(format!(
                 "failed to remove source file {} after copy to recycle bin: {}",
                 source_path.display(),
@@ -660,6 +625,51 @@ async fn recycle_source_to_destination(
             )))
         }
     }
+}
+
+/// Copy one file through the verified copier and prove it with the quick
+/// check. Anything short of a verified copy removes the copy and fails, so
+/// the caller never removes a source on an unproven destination.
+async fn quick_verified_copy(
+    source: &Path,
+    destination: &Path,
+    claim: DestinationClaim,
+    progress: CopyProgress,
+) -> AppResult<()> {
+    let copied = VerifiedCopier::new()
+        .copy_and_verify(VerifiedCopyRequest {
+            source: source.to_path_buf(),
+            destination: destination.to_path_buf(),
+            depth: VerificationDepth::Quick,
+            claim,
+            progress,
+        })
+        .await;
+    let verified = match copied {
+        Ok(verified) => verified,
+        Err(error) => {
+            // A copy that claims its own name never leaves anything under it
+            // on failure, and whatever holds that name is not this copy's. A
+            // name the caller claimed is this operation's to clean up.
+            if claim == DestinationClaim::AlreadyHeld {
+                let _ = crate::fs_safety::remove_file_safely_if_exists(destination).await;
+            }
+            return Err(error);
+        }
+    };
+    if verified.permits_source_removal() {
+        return Ok(());
+    }
+    let _ = crate::fs_safety::remove_file_safely_if_exists(destination).await;
+    let detail = verified
+        .detail
+        .map(|detail| format!(": {detail}"))
+        .unwrap_or_default();
+    Err(AppError::Repository(format!(
+        "copy verification failed for {} -> {}{detail}",
+        source.display(),
+        destination.display()
+    )))
 }
 
 #[cfg(not(windows))]
@@ -793,77 +803,20 @@ fn restore_candidate_path(original_path: &Path, attempt: u32) -> PathBuf {
     parent.join(file_name)
 }
 
+/// Copy a recycled file onto a destination name the caller already claimed.
+/// The recycled source is never touched here.
 async fn copy_recycled_to_claimed_destination(
     recycled_path: &Path,
     destination: &Path,
-    destination_file: tokio::fs::File,
+    progress: CopyProgress,
 ) -> AppResult<()> {
-    copy_recycled_to_claimed_destination_with_verifier(
+    quick_verified_copy(
         recycled_path,
         destination,
-        destination_file,
-        |source, dest| async move { crate::fs_integrity::verify_same_file_async(&source, &dest).await },
+        DestinationClaim::AlreadyHeld,
+        progress,
     )
     .await
-}
-
-async fn copy_recycled_to_claimed_destination_with_verifier<F, Fut>(
-    recycled_path: &Path,
-    destination: &Path,
-    mut destination_file: tokio::fs::File,
-    verify: F,
-) -> AppResult<()>
-where
-    F: FnOnce(PathBuf, PathBuf) -> Fut,
-    Fut: std::future::Future<Output = AppResult<()>>,
-{
-    let mut source_file = tokio::fs::File::open(recycled_path)
-        .await
-        .map_err(|error| {
-            AppError::Repository(format!(
-                "failed to open recycled file {} for restore: {}",
-                recycled_path.display(),
-                error
-            ))
-        })?;
-    if let Err(error) = tokio::io::copy(&mut source_file, &mut destination_file).await {
-        drop(destination_file);
-        let _ = crate::fs_safety::remove_file_safely_if_exists(destination).await;
-        return Err(AppError::Repository(format!(
-            "failed to restore {} to {}: {}",
-            recycled_path.display(),
-            destination.display(),
-            error
-        )));
-    }
-    if let Err(error) = destination_file.flush().await {
-        drop(destination_file);
-        let _ = crate::fs_safety::remove_file_safely_if_exists(destination).await;
-        return Err(AppError::Repository(format!(
-            "failed to flush restored file {}: {}",
-            destination.display(),
-            error
-        )));
-    }
-    if let Err(error) = destination_file.sync_all().await {
-        drop(destination_file);
-        let _ = crate::fs_safety::remove_file_safely_if_exists(destination).await;
-        return Err(AppError::Repository(format!(
-            "failed to sync restored file {}: {}",
-            destination.display(),
-            error
-        )));
-    }
-    drop(destination_file);
-
-    let recycled_for_verify = recycled_path.to_path_buf();
-    let destination_for_verify = destination.to_path_buf();
-    if let Err(verify_error) = verify(recycled_for_verify, destination_for_verify).await {
-        let _ = crate::fs_safety::remove_file_safely_if_exists(destination).await;
-        return Err(verify_error);
-    }
-
-    Ok(())
 }
 
 async fn restore_without_overwrite(
@@ -883,13 +836,13 @@ async fn restore_without_overwrite(
                 // Hard links are preferred but impossible across devices and on
                 // filesystems without link support; claim the destination and
                 // copy with verification instead.
-                let destination_file = match tokio::fs::OpenOptions::new()
+                match tokio::fs::OpenOptions::new()
                     .write(true)
                     .create_new(true)
                     .open(&destination)
                     .await
                 {
-                    Ok(file) => file,
+                    Ok(claimed) => drop(claimed),
                     Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
                     Err(error) => {
                         return Err(AppError::Repository(format!(
@@ -900,8 +853,12 @@ async fn restore_without_overwrite(
                         )));
                     }
                 };
-                copy_recycled_to_claimed_destination(recycled_path, &destination, destination_file)
-                    .await?;
+                copy_recycled_to_claimed_destination(
+                    recycled_path,
+                    &destination,
+                    CopyProgress::none(),
+                )
+                .await?;
             }
         }
 
@@ -1013,7 +970,7 @@ pub(crate) async fn link_recycled_file_to_exact_destination(
             // Same fallback as restore_without_overwrite; either way the
             // recycled source is retained, so callers keep their rollback
             // point until they explicitly remove it.
-            let destination_file = tokio::fs::OpenOptions::new()
+            let claimed = tokio::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
                 .open(destination)
@@ -1026,9 +983,36 @@ pub(crate) async fn link_recycled_file_to_exact_destination(
                         error
                     ))
                 })?;
-            copy_recycled_to_claimed_destination(recycled_path, destination, destination_file).await
+            drop(claimed);
+            copy_recycled_to_claimed_destination(recycled_path, destination, CopyProgress::none())
+                .await
         }
     }
+}
+
+/// Restore across filesystems onto `original_path`, replacing whatever file
+/// holds that name. The restored copy is proven before the recycled source is
+/// removed; an unproven restore is removed and the recycled copy is kept, so
+/// the file is never lost.
+async fn restore_over_by_verified_copy(
+    recycled_path: &Path,
+    original_path: &Path,
+    progress: CopyProgress,
+) -> AppResult<()> {
+    let claim = match tokio::fs::symlink_metadata(original_path).await {
+        Ok(_) => DestinationClaim::AlreadyHeld,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => DestinationClaim::ClaimHere,
+        Err(error) => {
+            return Err(AppError::Repository(format!(
+                "failed to inspect restore destination {}: {}",
+                original_path.display(),
+                error
+            )));
+        }
+    };
+    quick_verified_copy(recycled_path, original_path, claim, progress).await?;
+    let _ = crate::fs_safety::remove_file_safely_if_exists(recycled_path).await;
+    Ok(())
 }
 
 async fn restore_from_recycle_inner(
@@ -1067,27 +1051,8 @@ async fn restore_from_recycle_inner(
     match tokio::fs::rename(recycled_path, original_path).await {
         Ok(()) => {}
         Err(error) if crate::fs_safety::is_cross_device_error(&error) => {
-            // Cross-device restore cannot rename. Prove the restored copy is
-            // identical before removing the recycled source; on mismatch,
-            // remove the bad restore and keep the recycled copy so the file
-            // is never lost.
-            tokio::fs::copy(recycled_path, original_path)
-                .await
-                .map_err(|copy_error| {
-                    AppError::Repository(format!(
-                        "failed to restore {} to {}: {}",
-                        recycled_path.display(),
-                        original_path.display(),
-                        copy_error
-                    ))
-                })?;
-            if let Err(verify_error) =
-                crate::fs_integrity::verify_same_file_async(recycled_path, original_path).await
-            {
-                let _ = crate::fs_safety::remove_file_safely_if_exists(original_path).await;
-                return Err(verify_error);
-            }
-            let _ = crate::fs_safety::remove_file_safely_if_exists(recycled_path).await;
+            restore_over_by_verified_copy(recycled_path, original_path, CopyProgress::none())
+                .await?;
         }
         Err(error) => {
             return Err(AppError::Repository(format!(
@@ -1645,88 +1610,23 @@ pub(crate) struct RecycleRelocationPlan {
     pub targets: Vec<RecycleRelocationTarget>,
 }
 
-/// Size and full-content BLAKE3 digest of one file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RelocationFileDigest {
-    size: u64,
-    blake3: blake3::Hash,
-}
-
-/// The file operations a relocation uses, replaceable so tests can force the
-/// copy path and inject copy or verification failures.
-#[derive(Clone, Copy)]
+/// How a relocation moves an entry, replaceable so tests can force the copy
+/// path and inject verification failures.
+#[derive(Clone)]
 struct RelocationOps {
     /// Try an atomic no-replace rename before copying.
     allow_rename: bool,
-    /// Copy `source` onto a `dest` that does not exist yet, returning the
-    /// digest of the bytes read from `source`.
-    copy_file: fn(&Path, &Path) -> std::io::Result<RelocationFileDigest>,
-    /// Digest of a file as it is on disk.
-    digest_file: fn(&Path) -> std::io::Result<RelocationFileDigest>,
+    /// Copies and proves each file of an entry that cannot be renamed.
+    copier: VerifiedCopier,
 }
 
 impl Default for RelocationOps {
     fn default() -> Self {
         Self {
             allow_rename: true,
-            copy_file: copy_file_with_digest,
-            digest_file,
+            copier: VerifiedCopier::new(),
         }
     }
-}
-
-const RELOCATION_COPY_BUFFER_BYTES: usize = 1024 * 1024;
-
-fn copy_file_with_digest(source: &Path, dest: &Path) -> std::io::Result<RelocationFileDigest> {
-    use std::io::{Read, Write};
-
-    let mut source_file = std::fs::File::open(source)?;
-    let mut dest_file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(dest)?;
-    let mut hasher = blake3::Hasher::new();
-    let mut buffer = vec![0u8; RELOCATION_COPY_BUFFER_BYTES];
-    let mut size = 0u64;
-    loop {
-        let read = source_file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        dest_file.write_all(&buffer[..read])?;
-        size += read as u64;
-    }
-    dest_file.flush()?;
-    dest_file.sync_all()?;
-    if let Ok(metadata) = source_file.metadata() {
-        let _ = dest_file.set_permissions(metadata.permissions());
-    }
-    Ok(RelocationFileDigest {
-        size,
-        blake3: hasher.finalize(),
-    })
-}
-
-fn digest_file(path: &Path) -> std::io::Result<RelocationFileDigest> {
-    use std::io::Read;
-
-    let mut file = std::fs::File::open(path)?;
-    let mut hasher = blake3::Hasher::new();
-    let mut buffer = vec![0u8; RELOCATION_COPY_BUFFER_BYTES];
-    let mut size = 0u64;
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..read]);
-        size += read as u64;
-    }
-    Ok(RelocationFileDigest {
-        size,
-        blake3: hasher.finalize(),
-    })
 }
 
 /// Move every committed entry of each plan's previous bin to its new bin.
@@ -1845,7 +1745,7 @@ async fn relocate_plan(
             continue;
         }
 
-        match relocate_entry(&entry_dir, &target.join(&entry_id), &manifest, ops).await {
+        match relocate_entry(&entry_dir, &target.join(&entry_id), &manifest, &ops).await {
             Ok(RelocatedEntry::Moved) => report.moved_count += 1,
             Ok(RelocatedEntry::MovedWithLeftovers(reason)) => {
                 report.moved_count += 1;
@@ -1948,7 +1848,7 @@ async fn relocate_entry(
     entry_dir: &Path,
     dest: &Path,
     manifest: &RecycleManifest,
-    ops: RelocationOps,
+    ops: &RelocationOps,
 ) -> Result<RelocatedEntry, String> {
     match tokio::fs::symlink_metadata(dest).await {
         Ok(_) => return Err(relocation_collision(dest)),
@@ -1985,14 +1885,7 @@ async fn relocate_entry(
         }
     }
 
-    let source = entry_dir.to_path_buf();
-    let destination = dest.to_path_buf();
-    let expected_manifest = manifest.clone();
-    tokio::task::spawn_blocking(move || {
-        copy_and_verify_entry(&source, &destination, &expected_manifest, ops)
-    })
-    .await
-    .map_err(|error| format!("the copy task failed: {error}"))??;
+    copy_and_verify_entry(entry_dir, dest, manifest, ops).await?;
 
     // The new copy is proven complete; only now does the previous one go.
     match crate::fs_safety::remove_dir_all_safely(entry_dir).await {
@@ -2014,17 +1907,17 @@ fn relocation_collision(dest: &Path) -> String {
 /// Copy `entry_dir` to a new `dest` and prove every file arrived intact. On
 /// failure the partial copy this call created is removed; the source is never
 /// touched.
-fn copy_and_verify_entry(
+async fn copy_and_verify_entry(
     entry_dir: &Path,
     dest: &Path,
     manifest: &RecycleManifest,
-    ops: RelocationOps,
+    ops: &RelocationOps,
 ) -> Result<(), String> {
-    let (dirs, files) = collect_entry_tree(entry_dir)?;
+    let (dirs, files) = collect_entry_tree_off_runtime(entry_dir).await?;
 
     // Creating the directory itself is the claim: it fails when anything
     // already holds the name, so the copy never lands in someone else's entry.
-    match std::fs::create_dir(dest) {
+    match tokio::fs::create_dir(dest).await {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(relocation_collision(dest));
@@ -2037,10 +1930,12 @@ fn copy_and_verify_entry(
         }
     }
 
-    let outcome = copy_entry_tree(entry_dir, dest, &dirs, &files, ops)
-        .and_then(|copied| verify_entry_copy(entry_dir, dest, &copied, manifest, ops));
+    let outcome = match copy_entry_tree(entry_dir, dest, &dirs, &files, ops).await {
+        Ok(()) => verify_entry_copy(dest, &files, manifest).await,
+        Err(reason) => Err(reason),
+    };
     if let Err(reason) = outcome {
-        return Err(match std::fs::remove_dir_all(dest) {
+        return Err(match tokio::fs::remove_dir_all(dest).await {
             Ok(()) => reason,
             Err(error) => format!(
                 "{reason}; the partial copy at {} could not be removed: {error}",
@@ -2049,6 +1944,15 @@ fn copy_and_verify_entry(
         });
     }
     Ok(())
+}
+
+async fn collect_entry_tree_off_runtime(
+    entry_dir: &Path,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
+    let entry_dir = entry_dir.to_path_buf();
+    tokio::task::spawn_blocking(move || collect_entry_tree(&entry_dir))
+        .await
+        .map_err(|error| format!("the copy task failed: {error}"))?
 }
 
 /// Relative directories and files of an entry. Anything other than plain
@@ -2091,72 +1995,80 @@ fn collect_entry_tree(entry_dir: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), 
     Ok((dirs, files))
 }
 
-fn copy_entry_tree(
+/// Copy every file through the verified copier. A file counts only when its
+/// copy was read back in full and matched, and the source still holds the
+/// bytes that were copied.
+async fn copy_entry_tree(
     entry_dir: &Path,
     dest: &Path,
     dirs: &[PathBuf],
     files: &[PathBuf],
-    ops: RelocationOps,
-) -> Result<BTreeMap<PathBuf, RelocationFileDigest>, String> {
+    ops: &RelocationOps,
+) -> Result<(), String> {
     for dir in dirs {
         let target = dest.join(dir);
-        std::fs::create_dir(&target)
+        tokio::fs::create_dir(&target)
+            .await
             .map_err(|error| format!("could not create {}: {error}", target.display()))?;
     }
-    let mut copied = BTreeMap::new();
     for file in files {
         let source = entry_dir.join(file);
         let target = dest.join(file);
-        let digest = (ops.copy_file)(&source, &target).map_err(|error| {
-            format!(
-                "could not copy {} to {}: {error}",
-                source.display(),
+        let verified = ops
+            .copier
+            .copy_and_verify(VerifiedCopyRequest {
+                source: source.clone(),
+                destination: target.clone(),
+                depth: VerificationDepth::Full,
+                claim: DestinationClaim::ClaimHere,
+                progress: CopyProgress::none(),
+            })
+            .await
+            .map_err(|error| {
+                format!(
+                    "could not copy {} to {}: {error}",
+                    source.display(),
+                    target.display()
+                )
+            })?;
+        if !verified.permits_source_removal() || verified.depth.fell_back {
+            let detail = verified
+                .detail
+                .map(|detail| format!(": {detail}"))
+                .unwrap_or_default();
+            return Err(format!(
+                "verification failed: {} was not proven to match the entry's copy{detail}",
                 target.display()
-            )
-        })?;
-        copied.insert(file.clone(), digest);
+            ));
+        }
+        let source_now = hash_existing_file(&source)
+            .await
+            .map_err(|error| format!("could not re-check {}: {error}", source.display()))?;
+        if verified.hashes.as_ref() != Some(&source_now) {
+            return Err(format!(
+                "{} changed while it was being copied",
+                source.display()
+            ));
+        }
     }
-    Ok(copied)
+    Ok(())
 }
 
-fn verify_entry_copy(
-    entry_dir: &Path,
+async fn verify_entry_copy(
     dest: &Path,
-    copied: &BTreeMap<PathBuf, RelocationFileDigest>,
+    files: &[PathBuf],
     manifest: &RecycleManifest,
-    ops: RelocationOps,
 ) -> Result<(), String> {
-    let (_, dest_files) = collect_entry_tree(dest)?;
-    if dest_files.iter().collect::<Vec<_>>() != copied.keys().collect::<Vec<_>>() {
+    let (_, dest_files) = collect_entry_tree_off_runtime(dest).await?;
+    if dest_files != files {
         return Err(format!(
             "the copy at {} does not hold the same files as the entry",
             dest.display()
         ));
     }
-    for (file, source_digest) in copied {
-        // The source must still be the file that was copied, and the copy
-        // must match it byte for byte.
-        let source_size = std::fs::metadata(entry_dir.join(file))
-            .map_err(|error| format!("could not re-check {}: {error}", file.display()))?
-            .len();
-        if source_size != source_digest.size {
-            return Err(format!(
-                "{} changed while it was being copied",
-                entry_dir.join(file).display()
-            ));
-        }
-        let target = dest.join(file);
-        let dest_digest = (ops.digest_file)(&target)
-            .map_err(|error| format!("could not verify {}: {error}", target.display()))?;
-        if dest_digest != *source_digest {
-            return Err(format!(
-                "verification failed: {} does not match the entry's copy",
-                target.display()
-            ));
-        }
-    }
 
-    let manifest_bytes = std::fs::read(manifest_path(dest))
+    let manifest_bytes = tokio::fs::read(manifest_path(dest))
+        .await
         .map_err(|error| format!("could not read the copied manifest: {error}"))?;
     let copied_manifest: RecycleManifest = serde_json::from_slice(&manifest_bytes)
         .map_err(|error| format!("the copied manifest could not be parsed: {error}"))?;
@@ -2172,6 +2084,7 @@ fn verify_entry_copy(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::location::verify::{ReadBackHandle, open_cache_bypassed};
     use tempfile::TempDir;
 
     fn test_config(dir: &Path) -> RecycleBinConfig {
@@ -3101,6 +3014,86 @@ mod tests {
         );
     }
 
+    /// Overwrites `path` at the moment the copier starts proving it, which
+    /// is after the copy finished and before anything is compared.
+    fn damage_when_verification_starts(path: &Path, bytes: &'static [u8]) -> CopyProgress {
+        let path = path.to_path_buf();
+        CopyProgress::none().with_transfer_sink(move |phase, verified_bytes| {
+            if phase == scryer_domain::ImportTransferPhase::Verifying && verified_bytes == 0 {
+                std::fs::write(&path, bytes).unwrap();
+            }
+        })
+    }
+
+    #[tokio::test]
+    async fn recycle_by_copy_removes_the_source_once_the_copy_is_proven() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("library").join("sample-feature.mkv");
+        let recycled = tmp.path().join("bin").join("sample-feature.mkv");
+        let bystander = tmp.path().join("library").join("other-feature.mkv");
+        tokio::fs::create_dir_all(source.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(recycled.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&source, b"library bytes").await.unwrap();
+        tokio::fs::write(&bystander, b"unrelated").await.unwrap();
+
+        recycle_by_verified_copy(&source, &recycled, CopyProgress::none())
+            .await
+            .unwrap();
+
+        assert!(!source.exists(), "the proven copy replaces the source");
+        assert_eq!(std::fs::read(&recycled).unwrap(), b"library bytes");
+        assert_eq!(std::fs::read(&bystander).unwrap(), b"unrelated");
+    }
+
+    #[tokio::test]
+    async fn recycle_by_copy_keeps_the_source_when_the_copy_does_not_match() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("sample-feature.mkv");
+        let recycled = tmp.path().join("bin").join("sample-feature.mkv");
+        tokio::fs::create_dir_all(recycled.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&source, b"library bytes").await.unwrap();
+
+        let error = recycle_by_verified_copy(
+            &source,
+            &recycled,
+            damage_when_verification_starts(&recycled, b"damaged"),
+        )
+        .await
+        .expect_err("an unproven copy must fail the recycle");
+
+        assert!(
+            error.to_string().contains("copy verification failed"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&source).unwrap(), b"library bytes");
+        assert!(!recycled.exists(), "the unproven copy is removed");
+    }
+
+    #[tokio::test]
+    async fn recycle_by_copy_never_replaces_an_occupied_destination() {
+        let tmp = TempDir::new().unwrap();
+        let source = tmp.path().join("sample-feature.mkv");
+        let recycled = tmp.path().join("bin").join("sample-feature.mkv");
+        tokio::fs::create_dir_all(recycled.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&source, b"library bytes").await.unwrap();
+        tokio::fs::write(&recycled, b"already here").await.unwrap();
+
+        recycle_by_verified_copy(&source, &recycled, CopyProgress::none())
+            .await
+            .expect_err("an occupied destination must fail the recycle");
+
+        assert_eq!(std::fs::read(&source).unwrap(), b"library bytes");
+        assert_eq!(std::fs::read(&recycled).unwrap(), b"already here");
+    }
+
     #[tokio::test]
     async fn test_restore_sampled_proof_mismatch_removes_partial_and_keeps_recycled_source() {
         let tmp = TempDir::new().unwrap();
@@ -3109,23 +3102,17 @@ mod tests {
         tokio::fs::write(&recycled_path, b"recycled source bytes")
             .await
             .unwrap();
-        let destination_file = tokio::fs::OpenOptions::new()
+        tokio::fs::OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&destination)
             .await
             .unwrap();
 
-        let error = copy_recycled_to_claimed_destination_with_verifier(
+        let error = copy_recycled_to_claimed_destination(
             &recycled_path,
             &destination,
-            destination_file,
-            |source, dest| async move {
-                tokio::fs::write(&dest, b"mismatched restored bytes")
-                    .await
-                    .unwrap();
-                crate::fs_integrity::verify_same_file_async(&source, &dest).await
-            },
+            damage_when_verification_starts(&destination, b"mismatched restored bytes"),
         )
         .await
         .expect_err("sampled proof mismatch should fail restore");
@@ -3246,6 +3233,77 @@ mod tests {
             !result.recycled_path.exists(),
             "recycled source should be removed after verified restore"
         );
+    }
+
+    #[tokio::test]
+    async fn restore_over_by_copy_replaces_the_occupant_and_removes_the_recycled_copy() {
+        let tmp = TempDir::new().unwrap();
+        let recycled = tmp.path().join("bin").join("sample-feature.mkv");
+        let original = tmp.path().join("library").join("sample-feature.mkv");
+        let bystander = tmp.path().join("library").join("other-feature.mkv");
+        tokio::fs::create_dir_all(recycled.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::create_dir_all(original.parent().unwrap())
+            .await
+            .unwrap();
+        tokio::fs::write(&recycled, b"recycled bytes")
+            .await
+            .unwrap();
+        tokio::fs::write(&original, b"the occupant, which is longer")
+            .await
+            .unwrap();
+        tokio::fs::write(&bystander, b"unrelated").await.unwrap();
+
+        restore_over_by_verified_copy(&recycled, &original, CopyProgress::none())
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&original).unwrap(), b"recycled bytes");
+        assert!(!recycled.exists(), "the proven restore replaces the copy");
+        assert_eq!(std::fs::read(&bystander).unwrap(), b"unrelated");
+    }
+
+    #[tokio::test]
+    async fn restore_over_by_copy_fills_an_absent_destination() {
+        let tmp = TempDir::new().unwrap();
+        let recycled = tmp.path().join("sample-feature.recycled");
+        let original = tmp.path().join("sample-feature.mkv");
+        tokio::fs::write(&recycled, b"recycled bytes")
+            .await
+            .unwrap();
+
+        restore_over_by_verified_copy(&recycled, &original, CopyProgress::none())
+            .await
+            .unwrap();
+
+        assert_eq!(std::fs::read(&original).unwrap(), b"recycled bytes");
+        assert!(!recycled.exists());
+    }
+
+    #[tokio::test]
+    async fn restore_over_by_copy_keeps_the_recycled_copy_when_the_restore_does_not_match() {
+        let tmp = TempDir::new().unwrap();
+        let recycled = tmp.path().join("sample-feature.recycled");
+        let original = tmp.path().join("sample-feature.mkv");
+        tokio::fs::write(&recycled, b"recycled bytes")
+            .await
+            .unwrap();
+
+        let error = restore_over_by_verified_copy(
+            &recycled,
+            &original,
+            damage_when_verification_starts(&original, b"damaged"),
+        )
+        .await
+        .expect_err("an unproven restore must fail");
+
+        assert!(
+            error.to_string().contains("copy verification failed"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(std::fs::read(&recycled).unwrap(), b"recycled bytes");
+        assert!(!original.exists(), "the unproven restore is removed");
     }
 
     #[tokio::test]
@@ -3592,19 +3650,23 @@ mod tests {
         }
     }
 
-    fn payload_copy_fails(source: &Path, dest: &Path) -> std::io::Result<RelocationFileDigest> {
-        if dest.file_name().is_some_and(|name| name == "media.mkv") {
-            return Err(std::io::Error::other("injected copy failure"));
+    /// Copy-only relocation whose read-back of the payload is decided by
+    /// `payload`; every other file is read back normally.
+    fn ops_with_payload_read_back(
+        payload: impl Fn(&Path) -> ReadBackHandle + Send + Sync + 'static,
+    ) -> RelocationOps {
+        RelocationOps {
+            allow_rename: false,
+            copier: VerifiedCopier::with_read_back_opener(std::sync::Arc::new(
+                move |path: &Path| {
+                    if path.file_name().is_some_and(|name| name == "media.mkv") {
+                        payload(path)
+                    } else {
+                        open_cache_bypassed(path)
+                    }
+                },
+            )),
         }
-        copy_file_with_digest(source, dest)
-    }
-
-    fn payload_digest_mismatches(path: &Path) -> std::io::Result<RelocationFileDigest> {
-        let mut digest = digest_file(path)?;
-        if path.file_name().is_some_and(|name| name == "media.mkv") {
-            digest.blake3 = blake3::hash(b"not the recycled payload");
-        }
-        Ok(digest)
     }
 
     fn single_target_plan(from: &Path, to: &Path) -> RecycleRelocationPlan {
@@ -3718,6 +3780,9 @@ mod tests {
         );
     }
 
+    // The copy writes under a longer staging name first, so a file whose name
+    // is already near the limit cannot be copied.
+    #[cfg(unix)]
     #[tokio::test]
     async fn relocation_copy_failure_keeps_entry_and_removes_partial_copy() {
         let tmp = TempDir::new().unwrap();
@@ -3725,13 +3790,12 @@ mod tests {
         let new_bin = tmp.path().join("new-bin");
         let entry_id = "20310102_030405000_cfl111";
         let old_entry = seed_relocation_bin(&old_bin, entry_id).await;
+        tokio::fs::write(old_entry.join("z".repeat(250)), b"sidecar")
+            .await
+            .unwrap();
         let before = tree_snapshot(&old_bin);
 
-        let ops = RelocationOps {
-            copy_file: payload_copy_fails,
-            ..copy_only_ops()
-        };
-        let report = relocate_plan(&single_target_plan(&old_bin, &new_bin), ops).await;
+        let report = relocate_plan(&single_target_plan(&old_bin, &new_bin), copy_only_ops()).await;
 
         assert_eq!(report.moved_count, 0);
         assert_eq!(report.failures.len(), 1);
@@ -3741,7 +3805,7 @@ mod tests {
             old_entry.to_string_lossy().into_owned()
         );
         assert!(
-            report.failures[0].reason.contains("injected copy failure"),
+            report.failures[0].reason.contains("could not copy"),
             "{}",
             report.failures[0].reason
         );
@@ -3761,10 +3825,10 @@ mod tests {
         seed_relocation_bin(&old_bin, entry_id).await;
         let before = tree_snapshot(&old_bin);
 
-        let ops = RelocationOps {
-            digest_file: payload_digest_mismatches,
-            ..copy_only_ops()
-        };
+        // The read-back sees different bytes than the copy wrote.
+        let ops = ops_with_payload_read_back(|path| {
+            open_cache_bypassed(&manifest_path(path.parent().unwrap()))
+        });
         let report = relocate_plan(&single_target_plan(&old_bin, &new_bin), ops).await;
 
         assert_eq!(report.moved_count, 0);
@@ -3778,6 +3842,68 @@ mod tests {
         assert!(
             !new_bin.join(entry_id).exists(),
             "the unverified copy is removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn relocation_refuses_a_copy_it_could_only_sample() {
+        let tmp = TempDir::new().unwrap();
+        let old_bin = tmp.path().join("old-bin");
+        let new_bin = tmp.path().join("new-bin");
+        let entry_id = "20310102_030405000_smp111";
+        seed_relocation_bin(&old_bin, entry_id).await;
+        let before = tree_snapshot(&old_bin);
+
+        let ops = ops_with_payload_read_back(|_| {
+            ReadBackHandle::Unsupported("the read-back cannot run here".to_string())
+        });
+        let report = relocate_plan(&single_target_plan(&old_bin, &new_bin), ops).await;
+
+        assert_eq!(report.moved_count, 0);
+        assert_eq!(report.failures.len(), 1);
+        assert!(
+            report.failures[0].reason.contains("verification failed"),
+            "{}",
+            report.failures[0].reason
+        );
+        assert_eq!(tree_snapshot(&old_bin), before, "the entry is left intact");
+        assert!(
+            !new_bin.join(entry_id).exists(),
+            "the unproven copy is removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn relocation_keeps_an_entry_that_changed_while_it_was_copied() {
+        let tmp = TempDir::new().unwrap();
+        let old_bin = tmp.path().join("old-bin");
+        let new_bin = tmp.path().join("new-bin");
+        let entry_id = "20310102_030405000_chg111";
+        let old_entry = seed_relocation_bin(&old_bin, entry_id).await;
+        let payload = old_entry.join("media.mkv");
+
+        // Same size, different bytes, written after the copy read the file.
+        let changed_payload = payload.clone();
+        let ops = ops_with_payload_read_back(move |path| {
+            std::fs::write(&changed_payload, b"MEDIA").unwrap();
+            open_cache_bypassed(path)
+        });
+        let report = relocate_plan(&single_target_plan(&old_bin, &new_bin), ops).await;
+
+        assert_eq!(report.moved_count, 0);
+        assert_eq!(report.failures.len(), 1);
+        assert!(
+            report.failures[0]
+                .reason
+                .contains("changed while it was being copied"),
+            "{}",
+            report.failures[0].reason
+        );
+        assert_eq!(std::fs::read(&payload).unwrap(), b"MEDIA");
+        assert!(manifest_path(&old_entry).is_file(), "the entry is kept");
+        assert!(
+            !new_bin.join(entry_id).exists(),
+            "the copy of the earlier bytes is removed"
         );
     }
 

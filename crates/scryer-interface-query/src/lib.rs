@@ -558,10 +558,24 @@ pub fn from_interactive_release_search_snapshot(
                 .map(|elapsed| i32::try_from(elapsed).unwrap_or(i32::MAX)),
             failure_reason: indexer.failure_reason,
             rate_limited: indexer.rate_limited,
+            skip_reason: indexer.skip_reason.map(|reason| {
+                use scryer_application::InteractiveIndexerSkipReason as Reason;
+                match reason {
+                    Reason::IndexerDisabled => {
+                        InteractiveReleaseSearchSkipReasonValue::IndexerDisabled
+                    }
+                    Reason::TemporarilyDisabled => {
+                        InteractiveReleaseSearchSkipReasonValue::TemporarilyDisabled
+                    }
+                    Reason::BackedOff => InteractiveReleaseSearchSkipReasonValue::BackedOff,
+                    Reason::NoTextSearch => InteractiveReleaseSearchSkipReasonValue::NoTextSearch,
+                }
+            }),
+            skipped_until: indexer.skipped_until,
         })
         .collect();
-    // Parity with the one-shot `searchReleases` resolver's limit handling.
-    let safe_limit = snapshot.limit.unwrap_or(50).clamp(1, 200) as usize;
+    // A title search's limit is already capped; a raw query lists everything.
+    let safe_limit = snapshot.limit.map_or(usize::MAX, |limit| limit as usize);
     InteractiveReleaseSearchPayload {
         id: snapshot.id.into(),
         state,
@@ -4085,6 +4099,22 @@ impl AcquisitionQueries {
     }
 
     // ── Plugins ──────────────────────────────────────────────────────────
+
+    /// Read the installed plugin's settings declaration and redacted values.
+    async fn installed_plugin_settings(
+        &self,
+        ctx: &Context<'_>,
+        plugin_id: ID,
+    ) -> GqlResult<async_graphql::Json<async_graphql::Value>> {
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+        let settings = app_from_ctx(ctx)?
+            .installed_plugin_settings(&actor, plugin_id.as_str())
+            .await
+            .map_err(to_gql_error)?;
+        async_graphql::Value::from_json(settings)
+            .map(async_graphql::Json)
+            .map_err(|_| async_graphql::Error::new("unable to serialize plugin settings"))
+    }
 
     /// List available registry plugins visible to the caller.
     async fn plugins(&self, ctx: &Context<'_>) -> GqlResult<Vec<RegistryPluginPayload>> {

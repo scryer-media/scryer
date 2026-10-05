@@ -10,12 +10,7 @@ import { indexerSearchResultRowId } from "./dom-ids.ts";
 export const SLOW_INDEXER_MS = 1_000;
 
 export type IndexerSearchSortKey =
-  | "newest"
-  | "size"
-  | "age"
-  | "seeders"
-  | "priority"
-  | `${"release" | "indexer" | "size" | "age" | "peers"}-${"asc" | "desc"}`;
+  `${"release" | "indexer" | "size" | "age" | "peers"}-${"asc" | "desc"}`;
 
 export type IndexerSearchFacetGroupKey =
   | "protocol"
@@ -92,14 +87,6 @@ export function isDownloadableRelease(release: Release): boolean {
 /** The subset of `releases` a browser download can actually produce a file for. */
 export function downloadableReleases(releases: Release[]): Release[] {
   return releases.filter((release) => isDownloadableRelease(release));
-}
-
-export function isReleaseRejected(release: Release): boolean {
-  return (release.qualityProfileDecision?.blockCodes?.length ?? 0) > 0;
-}
-
-export function releaseBlockCode(release: Release): string | null {
-  return release.qualityProfileDecision?.blockCodes?.[0] ?? null;
 }
 
 /**
@@ -358,19 +345,14 @@ export function filterIndexerSearchReleases(
 export function sortIndexerSearchReleases(
   releases: Release[],
   sortKey: IndexerSearchSortKey,
-  priorityByIndexer: ReadonlyMap<string, number>,
 ): Release[] {
-  const aliases: Record<string, string> = {
-    newest: "age-asc", age: "age-desc", size: "size-desc", seeders: "peers-desc",
-  };
-  const [column, direction] = (aliases[sortKey] ?? sortKey).split("-");
+  const [column, direction] = sortKey.split("-");
   const value = (release: Release): string | number | null => {
     switch (column) {
       case "release": return release.title?.trim() || null;
       case "indexer": return release.source?.trim() || null;
       case "size": return release.sizeBytes ?? null;
       case "peers": return release.seeders ?? release.grabs ?? null;
-      case "priority": return priorityByIndexer.get(release.source ?? "") ?? null;
       default: {
         const date = release.publishedAt ? Date.parse(release.publishedAt) : NaN;
         return Number.isFinite(date) ? -date : null;
@@ -498,10 +480,15 @@ export function summarizeIndexerHealth(
   };
 }
 
-export function indexerPriorityByName(
-  indexers: InteractiveSearchIndexerProgress[],
-): Map<string, number> {
-  return new Map(indexers.map((entry) => [entry.name, entry.priority]));
+/** A raw query's limit is a page size per indexer, not a cap on the merged list. */
+export const RAW_SEARCH_DEFAULT_PAGE_SIZE = 100;
+export const RAW_SEARCH_MAX_PAGE_SIZE = 500;
+
+/** The typed per-indexer page size, clamped to 1..=500; undefined leaves the server default. */
+export function rawSearchPageSize(raw: string): number | undefined {
+  const value = Math.trunc(Number(raw.trim()));
+  if (!raw.trim() || !Number.isFinite(value)) return undefined;
+  return Math.min(RAW_SEARCH_MAX_PAGE_SIZE, Math.max(1, value));
 }
 
 /** Newznab categories are typed as a comma- or space-separated numeric list. */
@@ -518,7 +505,6 @@ export function parseCategoryList(raw: string): string[] {
 
 export type SavedIndexerSearch = {
   query: string;
-  kind: string;
   indexerIds: string[];
   categories: string[];
 };
@@ -548,13 +534,11 @@ export function parseSavedIndexerSearches(
     }
     const record = candidate as Record<string, unknown>;
     const query = typeof record.query === "string" ? record.query.trim() : "";
-    const kind = "RAW";
     if (!query) {
       continue;
     }
     entries.push({
       query,
-      kind,
       indexerIds: Array.isArray(record.indexerIds)
         ? record.indexerIds.filter(
             (value): value is string => typeof value === "string",
@@ -573,7 +557,7 @@ export function parseSavedIndexerSearches(
   return entries;
 }
 
-/** Newest first, one raw entry per query, capped at 20. */
+/** Newest first, one entry per query, capped at 20. */
 export function addSavedIndexerSearch(
   saved: SavedIndexerSearch[],
   entry: SavedIndexerSearch,
@@ -582,10 +566,8 @@ export function addSavedIndexerSearch(
   if (!query) {
     return saved;
   }
-  const next = saved.filter(
-    (candidate) => candidate.query !== query,
-  );
-  return [{ ...entry, kind: "RAW", query }, ...next].slice(0, MAX_SAVED_INDEXER_SEARCHES);
+  const next = saved.filter((candidate) => candidate.query !== query);
+  return [{ ...entry, query }, ...next].slice(0, MAX_SAVED_INDEXER_SEARCHES);
 }
 
 export function readSavedIndexerSearches(): SavedIndexerSearch[] {

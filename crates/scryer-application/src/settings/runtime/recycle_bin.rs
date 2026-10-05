@@ -122,7 +122,120 @@ impl AppUseCase {
             }
         }
 
+        // The same check again with every link resolved, so a bin or root
+        // that reaches the other through a symlink is caught. A path that
+        // cannot be resolved refuses the bin rather than skipping the check.
+        if custom_path && !configured_roots.is_empty() {
+            let resolved_base = match Self::resolve_recycle_config_links(base_path) {
+                Ok(resolved) => resolved,
+                Err(reason) => {
+                    return Some(format!(
+                        "custom recycle bin path {} could not be resolved: {reason}",
+                        base_path.display()
+                    ));
+                }
+            };
+            for root in configured_roots.iter().filter(|root| root.is_absolute()) {
+                let resolved_root = match Self::resolve_recycle_config_links(root) {
+                    Ok(resolved) => resolved,
+                    Err(reason) => {
+                        return Some(format!(
+                            "custom recycle bin path {} could not be checked against configured media root {}: {reason}",
+                            normalized_base.display(),
+                            root.display()
+                        ));
+                    }
+                };
+                if resolved_base == resolved_root
+                    || resolved_base.starts_with(&resolved_root)
+                    || resolved_root.starts_with(&resolved_base)
+                {
+                    return Some(format!(
+                        "custom recycle bin path {} must be outside configured media root {} (they meet at {} once links are resolved)",
+                        normalized_base.display(),
+                        root.display(),
+                        resolved_base.display()
+                    ));
+                }
+            }
+        }
+
         None
+    }
+
+    /// `path` with every link in the part that exists resolved. The part that
+    /// does not exist yet is appended as written, since nothing there can
+    /// redirect it. Fails when the path is not absolute, when a component
+    /// cannot be inspected, when a component is a link that leads nowhere
+    /// (creating the bin would follow it later), or when `..` follows a
+    /// missing component, since where it lands depends on what gets created.
+    fn resolve_recycle_config_links(path: &Path) -> Result<PathBuf, String> {
+        use std::path::Component;
+
+        if !path.is_absolute() {
+            return Err("the path is not absolute".to_string());
+        }
+        let mut resolved = PathBuf::new();
+        let mut exists = true;
+        for component in path.components() {
+            match component {
+                Component::Prefix(_) | Component::RootDir => {
+                    resolved.push(component.as_os_str());
+                    if matches!(component, Component::RootDir) {
+                        resolved = Self::resolve_existing_component(&resolved)?
+                            .unwrap_or(resolved);
+                    }
+                }
+                Component::CurDir => {}
+                Component::ParentDir if exists => {
+                    let candidate = resolved.join("..");
+                    match Self::resolve_existing_component(&candidate)? {
+                        Some(real) => resolved = real,
+                        None => {
+                            return Err(format!("{} could not be followed", candidate.display()));
+                        }
+                    }
+                }
+                Component::ParentDir => {
+                    return Err(format!(
+                        "`..` follows {}, which does not exist yet",
+                        resolved.display()
+                    ));
+                }
+                Component::Normal(segment) => {
+                    let candidate = resolved.join(segment);
+                    if exists {
+                        match Self::resolve_existing_component(&candidate)? {
+                            Some(real) => resolved = real,
+                            None => {
+                                exists = false;
+                                resolved = candidate;
+                            }
+                        }
+                    } else {
+                        resolved = candidate;
+                    }
+                }
+            }
+        }
+        Ok(resolved)
+    }
+
+    /// The real path of `candidate`, `None` when nothing is there, or why it
+    /// cannot be told apart from either.
+    fn resolve_existing_component(candidate: &Path) -> Result<Option<PathBuf>, String> {
+        match std::fs::symlink_metadata(candidate) {
+            Ok(metadata) => match std::fs::canonicalize(candidate) {
+                Ok(real) => Ok(Some(real)),
+                Err(error) if metadata.file_type().is_symlink() => Err(format!(
+                    "{} is a link that cannot be followed: {error}",
+                    candidate.display()
+                )),
+                Err(error) => Err(format!("{} cannot be resolved: {error}", candidate.display())),
+            },
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(format!("{} cannot be inspected: {error}", candidate.display())),
+        }
     }
 }
 impl AppUseCase {
@@ -132,8 +245,8 @@ impl AppUseCase {
     /// Only roots being added or changed are checked, so a root in
     /// `existing_roots` that already conflicts never blocks an edit. Without a
     /// custom bin, or with the recycle bin turned off, there is nothing to
-    /// check; a bin that is refused whatever the roots are is not a conflict
-    /// of any root either.
+    /// check; a bin that is refused whatever the roots are, including one
+    /// whose links cannot be resolved, is not a conflict of any root either.
     pub(crate) async fn recycle_bin_conflict_for_library_roots<'a>(
         &self,
         existing_roots: impl IntoIterator<Item = &'a str>,
@@ -144,7 +257,9 @@ impl AppUseCase {
             return None;
         }
         let bin = PathBuf::from(custom_path?);
-        if Self::recycle_bin_validation_error(&bin, true, &[]).is_some() {
+        if Self::recycle_bin_validation_error(&bin, true, &[]).is_some()
+            || Self::resolve_recycle_config_links(&bin).is_err()
+        {
             return None;
         }
         let normalize = |root: &str| Self::normalize_recycle_config_path(Path::new(root.trim()));

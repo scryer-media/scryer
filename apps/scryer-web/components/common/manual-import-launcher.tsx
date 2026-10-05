@@ -7,6 +7,7 @@ import { ManualImportDialog } from "@/components/dialogs/manual-import-dialog";
 import { Button } from "@/components/ui/button";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useDownloadPasswordRetry } from "@/lib/hooks/use-download-password-retry";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import {
   beginManualImportSelectionMutation,
@@ -52,21 +53,32 @@ export type ManualImportLauncher = {
 export function useManualImportLauncher({
   title,
   onImportQueued,
+  onImportRetried,
 }: {
   /** The title being viewed, when the download belongs to it. */
   title?: { id: string; name: string; facet: string } | null;
   /** Refreshes the page once an import is queued. */
   onImportQueued: (item: DownloadQueueItem) => Promise<void> | void;
+  /** Refreshes a finished local retry without marking it pending. */
+  onImportRetried?: (item: DownloadQueueItem) => Promise<void> | void;
 }): ManualImportLauncher {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
+  const { request: requestPasswordRetry, dialog: passwordRetryDialog } = useDownloadPasswordRetry();
   const [busyItemId, setBusyItemId] = React.useState<string | null>(null);
   const [dialogTarget, setDialogTarget] = React.useState<DialogTarget | null>(null);
   const onImportQueuedRef = React.useRef(onImportQueued);
+  const onImportRetriedRef = React.useRef(onImportRetried ?? onImportQueued);
   React.useEffect(() => {
     onImportQueuedRef.current = onImportQueued;
+    onImportRetriedRef.current = onImportRetried ?? onImportQueued;
   });
+  const notifyImportRetried = React.useCallback((item: DownloadQueueItem) => {
+    void Promise.resolve().then(() => onImportRetriedRef.current(item)).catch((error: unknown) => {
+      console.error("[manual-import] refresh after retry failed:", error);
+    });
+  }, []);
   const notifyImportQueued = React.useCallback((item: DownloadQueueItem) => {
     // The import is queued either way; a failed reload only leaves the page
     // stale until its next refresh.
@@ -107,6 +119,11 @@ export function useManualImportLauncher({
 
   const launch = React.useCallback(
     async (item: DownloadQueueItem) => {
+      if (item.passwordRetryImportId) {
+        const outcome = await requestPasswordRetry(item);
+        if (outcome !== "cancelled") notifyImportRetried(item);
+        return;
+      }
       const titleId = title?.id ?? item.titleId;
       if (!titleId) {
         setGlobalStatus(t("queue.assignTitleBeforeImport"));
@@ -164,6 +181,8 @@ export function useManualImportLauncher({
       beginSelection,
       client,
       notifyImportQueued,
+      notifyImportRetried,
+      requestPasswordRetry,
       setGlobalStatus,
       t,
       title?.facet,
@@ -190,7 +209,7 @@ export function useManualImportLauncher({
     />
   ) : null;
 
-  return { launch, busyItemId, dialog };
+  return { launch, busyItemId, dialog: <>{dialog}{passwordRetryDialog}</> };
 }
 
 /**

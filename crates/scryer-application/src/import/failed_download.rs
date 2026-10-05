@@ -54,6 +54,23 @@ pub async fn process_failed(app: &AppUseCase, td: &mut TrackedDownload) {
         return;
     }
 
+    if let Some(failure) = td.client_item.password_failure() {
+        if crate::acquisition_workflow::record_password_retry_failure(app, td, failure)
+            .await
+            .is_err()
+        {
+            td.status_messages = vec!["Could not record password failure; awaiting retry".into()];
+            return;
+        }
+        // Retain the existing release for an operator password retry. A
+        // credential failure is not evidence to blocklist or replace it.
+        td.state = TrackedDownloadState::Failed;
+        td.status = TrackedDownloadStatus::Error;
+        td.status_messages = vec![failure.message().into()];
+        td.skip_reacquire_on_failure = true;
+        return;
+    }
+
     let failure_reason = td
         .client_item
         .attention_reason

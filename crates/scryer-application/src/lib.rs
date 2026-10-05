@@ -97,6 +97,11 @@ pub use ports::{
     AnimeSearchNumberingContext, CatalogOwnedExternalIdRecord, CatalogOwnedTitleRecord,
     IndexerSearchNumberingContext, TitleOptionsPatch,
 };
+pub use ports::{
+    DOWNLOAD_PASSWORD_AMBIGUOUS_REASON, DOWNLOAD_PASSWORD_REQUIRED_REASON,
+    DOWNLOAD_PASSWORD_RETRY_REASON, DownloadPasswordRetryClaim, DownloadPasswordRetryClaimOutcome,
+    DownloadPasswordRetryObservation,
+};
 pub use ports::{DownloadCleanupClaim, DownloadCleanupRecord, DownloadClientObservation};
 pub use ports::{DownloadTitleReassignment, DownloadTitleReferences};
 mod quality;
@@ -138,6 +143,7 @@ pub(crate) use events::activity;
 pub(crate) use events::domain_events;
 pub(crate) use events::event_views;
 pub(crate) use import::archive_extractor;
+pub use import::archive_extractor::initialize_archive_workspace_ownership;
 pub(crate) use import::checks as import_checks;
 pub(crate) use import::decide as import_decide;
 pub(crate) use import::import as import_workflow;
@@ -161,6 +167,7 @@ pub(crate) use quality::scoring_weights;
 pub(crate) use rules::user_rule_input;
 
 pub use download_client_config::resolve_download_client_base_url_from_config_json;
+pub use import::archive_passwords::redact_archive_diagnostic;
 pub use import::completed_download as completed_download_handler;
 pub use ports::{
     CatalogDiscoveryCandidatesRecord, CatalogDiscoveryGroup, CatalogDiscoveryGroupKind,
@@ -214,6 +221,7 @@ pub use plugins::managed_rules;
 pub use plugins::plugins::RUNTIME_PLUGIN_LOAD_CONCURRENCY;
 pub use plugins::plugins::decode_persisted_plugin_wasm_payload;
 pub use plugins::plugins::load_runtime_plugin_from_persisted_installation_payload;
+pub use plugins::settings::PluginSettingsView;
 pub use quality::release_dedup;
 pub use quality::release_listing::{
     ReleaseListingView, release_listing_view, search_result_listing_json,
@@ -235,7 +243,7 @@ pub use upstream_scheduler::{
     SchedulerBatchRequest, SchedulerCandidate, SchedulerCandidateId, SchedulerFeedback,
     SchedulerFeedbackOutcome, SchedulerIntent, SchedulerLease, SchedulerOperation,
     SchedulerPluginKind, SchedulerSnapshot, SchedulerSnapshotEntry, SchedulerSnapshotFilter,
-    SearchLearningContext, SkipReason, UpstreamScheduler, rss_poll_is_due,
+    SearchLearningContext, SkipReason, UpstreamScheduler, rss_poll_is_due, rss_poll_reached_marker,
 };
 pub const SCRYER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const LIBRARY_SCAN_MAX_RECURSIVE_DEPTH: usize =
@@ -307,10 +315,10 @@ pub use catalog::facets::movie::MovieFacetHandler;
 pub use catalog::facets::registry::FacetRegistry;
 pub use catalog::facets::series::SeriesFacetHandler;
 pub use catalog::interactive_release_search::{
-    InteractiveReleaseSearchIndexerStatus, InteractiveReleaseSearchIndexerView,
-    InteractiveReleaseSearchRequest, InteractiveReleaseSearchSnapshot,
-    InteractiveReleaseSearchState, InteractiveSearchArtifactBundle,
-    InteractiveSearchArtifactTarget, InteractiveSearchKind, QueueUnlinkedReleaseOutcome,
+    InteractiveIndexerSkipReason, InteractiveReleaseSearchIndexerStatus,
+    InteractiveReleaseSearchIndexerView, InteractiveReleaseSearchRequest,
+    InteractiveReleaseSearchSnapshot, InteractiveReleaseSearchState,
+    InteractiveSearchArtifactBundle, InteractiveSearchArtifactTarget, QueueUnlinkedReleaseOutcome,
 };
 pub use catalog::release_search::release_candidate_fingerprint;
 pub use catalog::title_hydration::start_background_title_hydration_loop;
@@ -324,15 +332,15 @@ pub use contracts::{
     CanonicalDownloadIdentityDisposition, ClaimedMediaFile, ClientJobLocator, CollectionUpdate,
     DashboardActivityStats, DeleteExecutionConfirmation, DownloadClientAddRequest,
     DownloadClientBindingRecord, DownloadClientConfigUpdate, DownloadClientMarkImportedRequest,
-    DownloadClientStatus, DownloadOrigin, DownloadRecord, DownloadSubmission,
-    DownloadSubmissionActorSnapshot, DownloadSubmissionIdentity, DownloadSubmissionPurpose,
-    EpisodeLinkReplacement, EpisodeUpdate, ImportArtifact, IndexerArtifactLease,
-    IndexerArtifactResolutionRequest, IndexerConfigSyncResult, IndexerConfigUpdate,
-    IndexerDownloadClientMappingCatalog, IndexerDownloadClientMappingClient,
-    IndexerDownloadClientMappingIndexer, IndexerDownloadClientProviderCompatibility,
-    IndexerRoutingEntry, IndexerRoutingPlan, IndexerSearchEligibility, IndexerSyncPlan,
-    IndexerValidationResult, InsertMediaFileInput, ManagedIndexerChildPlan,
-    ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
+    DownloadClientRetryOutcome, DownloadClientStatus, DownloadOrigin, DownloadPasswordCandidates,
+    DownloadRecord, DownloadSubmission, DownloadSubmissionActorSnapshot,
+    DownloadSubmissionIdentity, DownloadSubmissionPurpose, EpisodeLinkReplacement, EpisodeUpdate,
+    ImportArtifact, IndexerArtifactLease, IndexerArtifactResolutionRequest,
+    IndexerConfigSyncResult, IndexerConfigUpdate, IndexerDownloadClientMappingCatalog,
+    IndexerDownloadClientMappingClient, IndexerDownloadClientMappingIndexer,
+    IndexerDownloadClientProviderCompatibility, IndexerRoutingEntry, IndexerRoutingPlan,
+    IndexerSearchEligibility, IndexerSyncPlan, IndexerValidationResult, InsertMediaFileInput,
+    ManagedIndexerChildPlan, ManagedIndexerRoutingScope, MediaAnalysisOutcome, MediaFileAnalysis,
     MediaFileCatalogDisposition, MediaFileRole, NewBlocklistEntry, NewProxyConfig,
     NewSeedingProfile, NotificationScopeIdUpdate, ObservationResolution, ObservedClientJob,
     PendingReleasePageSort, PendingReleasesPageQuery, PendingStagedNzb, PersistedSeedGoals,
@@ -563,12 +571,13 @@ pub use escalation_backoff::DownloadClientStatus as DownloadClientBackoffStatus;
 pub use null_repositories::{NullMediaServerSignalRepository, NullMediaServerSignalSource};
 pub use ports::{
     AcquisitionScopeStateRepository, AcquisitionStateRepository, ArchiveExtractorClient,
-    ArchiveExtractorPluginProvider, BlocklistRepository, BuiltinDownloadClientConnectionTester,
-    DatastoreInfo, DiscoveryContextTitle, DomainEventRepository, DownloadClient,
-    DownloadClientConfigRepository, DownloadClientFeedbackScope, DownloadClientListing,
-    DownloadClientPluginProvider, DownloadClientSnapshotOutcome, DownloadClientStatusRepository,
-    DownloadQueueCommandRepository, DownloadRegistryRepository, DownloadSubmissionRepository,
-    EmbyApiKeyExchange, EmbyApiKeyExchangeCleanup, EmbyAvatar, EmbyConnectAddressStatus,
+    ArchiveExtractorPluginProvider, ArchiveExtractorSelection, BlocklistRepository,
+    BuiltinDownloadClientConnectionTester, DatastoreInfo, DiscoveryContextTitle,
+    DomainEventRepository, DownloadClient, DownloadClientConfigRepository,
+    DownloadClientFeedbackScope, DownloadClientListing, DownloadClientPluginProvider,
+    DownloadClientSnapshotOutcome, DownloadClientStatusRepository, DownloadQueueCommandRepository,
+    DownloadRegistryRepository, DownloadSubmissionRepository, EmbyApiKeyExchange,
+    EmbyApiKeyExchangeCleanup, EmbyAvatar, EmbyConnectAddressStatus,
     EmbyConnectIdentityVerification, EmbyConnectServer, EmbyConnectUserType, EmbyServerIdentity,
     EmbyServerUser, ExternalIdentityVerifier, ExternalImportMonitorSnapshotRepository,
     ExternalImportSetupInstanceApiKeyDraft, ExternalImportSetupSecretDraft,
@@ -645,6 +654,7 @@ pub use quality_profile::{
     QualityProfileDecision, REQUEST_QUALITY_PROFILE_IDS_KEY, ScoringConfig, ScoringEntry,
     ScoringEntryKind, ScoringSource, builtin_4k_profile, builtin_8k_profile, builtin_1080p_profile,
     builtin_anime_profile, builtin_default_quality_profile, parse_profile_catalog_from_json,
+    parse_published_at,
 };
 pub use rate_limit_signal::{RateLimitSignal, RateLimitSignalSource, destination_cooldown_until};
 pub use services::{
@@ -763,13 +773,14 @@ pub use types::{
 pub use types::{
     CapturedIndexerHttpHeader, CapturedIndexerHttpResponse, INDEXER_CAPS_REFRESH_ERROR_PREFIX,
     IndexerErrorClassification, IndexerErrorDetail, IndexerErrorOperation, IndexerErrorPage,
-    IndexerErrorSummary, IndexerQueryOutcome, IndexerResponseAttributes, IndexerSearchCompletion,
-    IndexerSearchIncompleteReason, IndexerSearchOutcome, IndexerSearchPage,
-    IndexerSearchPageReservation, IndexerSearchPageSink, IndexerSearchPlanCapability,
-    IndexerSearchPlanRequest, IndexerSearchPlanSummary, IndexerSearchResponse, IndexerSearchResult,
-    IndexerSearchStrategyEvent, IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest,
-    NewIndexerError, ReleaseCandidateProvenance, ReleaseSearchSubjectKind, ReleaseStrategyKind,
-    extract_magnet_info_hash, indexer_search_identity, is_valid_magnet_uri,
+    IndexerErrorSummary, IndexerQueryOutcome, IndexerResponseAttributes, IndexerRssCatchUp,
+    IndexerSearchCompletion, IndexerSearchIncompleteReason, IndexerSearchOutcome,
+    IndexerSearchPage, IndexerSearchPageReservation, IndexerSearchPageSink,
+    IndexerSearchPlanCapability, IndexerSearchPlanRequest, IndexerSearchPlanSummary,
+    IndexerSearchResponse, IndexerSearchResult, IndexerSearchStrategyEvent,
+    IndexerSearchStrategyEventSink, IndexerSearchStrategyRequest, NewIndexerError,
+    RawTextSearchRequest, ReleaseCandidateProvenance, ReleaseSearchSubjectKind,
+    ReleaseStrategyKind, extract_magnet_info_hash, indexer_search_identity, is_valid_magnet_uri,
     search_relevant_indexer_caps, search_relevant_managed_indexer_metadata,
 };
 pub use types::{
@@ -895,6 +906,14 @@ pub enum AppError {
 
     #[error("{message}")]
     ArchiveExtractionTimedOut { message: String },
+
+    /// A decoder explicitly requested or rejected an archive password.
+    #[error("{message}")]
+    ArchivePasswordRequired { message: String },
+
+    /// The archive data or extraction policy requires operator intervention.
+    #[error("{message}")]
+    ArchiveExtractionFailed { message: String },
 
     #[error("{message}")]
     TemporaryUnavailable {

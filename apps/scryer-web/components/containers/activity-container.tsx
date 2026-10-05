@@ -22,6 +22,7 @@ import {
 } from "@/lib/graphql/mutations";
 import { downloadClientsQuery } from "@/lib/graphql/queries";
 import { useDownloadImport } from "@/lib/hooks/use-download-import";
+import { canRetryDownloadPassword, useDownloadPasswordRetry } from "@/lib/hooks/use-download-password-retry";
 import { useActiveImportStreams } from "@/lib/hooks/use-active-import-streams";
 import { useDownloadQueuePage } from "@/lib/hooks/use-download-queue-page";
 import { useImportHistorySubscription } from "@/lib/hooks/use-import-history-subscription";
@@ -126,6 +127,7 @@ export const ActivityContainer = memo(function ActivityContainer({
   const [, executeResumeDownload] = useMutation(resumeDownloadMutation);
   const [, executeDeleteDownload] = useMutation(deleteDownloadMutation);
   const [, executeCancelActiveImport] = useMutation(cancelActiveImportMutation);
+  const { request: requestPasswordRetry, dialog: passwordRetryDialog } = useDownloadPasswordRetry();
 
   const activeTab = activitySection;
   const importTabActive = activeTab === "import";
@@ -348,6 +350,7 @@ export const ActivityContainer = memo(function ActivityContainer({
 
   // Series and anime open the mapper dialog; movies import straight away.
   const manualImport = useManualImportLauncher({
+    onImportRetried: () => { void refreshVisibleTab(); },
     onImportQueued: (item) => {
       setOptimisticQueueStates((current) => ({
         ...current,
@@ -494,6 +497,11 @@ export const ActivityContainer = memo(function ActivityContainer({
 
   const requestResume = useCallback(
     async (item: DownloadQueueItem) => {
+      if (canRetryDownloadPassword(item)) {
+        await requestPasswordRetry(item);
+        await refreshVisibleTab();
+        return;
+      }
       const itemKey = downloadQueueItemIdentityKey(item);
       setOptimisticQueueStates((current) => ({
         ...current,
@@ -517,7 +525,7 @@ export const ActivityContainer = memo(function ActivityContainer({
       setGlobalStatus(t("queue.resumeSuccess"));
       await refreshVisibleTab();
     },
-    [executeResumeDownload, refreshVisibleTab, setGlobalStatus, t],
+    [executeResumeDownload, requestPasswordRetry, refreshVisibleTab, setGlobalStatus, t],
   );
 
   const requestDelete = useCallback(
@@ -720,6 +728,7 @@ export const ActivityContainer = memo(function ActivityContainer({
         }}
       />
       {manualImport.dialog}
+      {passwordRetryDialog}
       <AssignTrackedDownloadTitleDialog
         open={assignTitleItem !== null}
         onOpenChange={(open) => {

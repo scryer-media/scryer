@@ -13,7 +13,7 @@ use scryer_domain::{
     DomainEventPayload, ExternalId, LibraryPermission, ListEventSubject, ListOnLeave,
     ListRequestSubmittedEventData, ListRoute, ListSubscription, ListSyncFailedEventData,
     ListTitleAddedEventData, ListTitleLeftEventData, MediaFacet, MediaRequest, MediaRequestOrigin,
-    NewDomainEvent, NewTitle, User,
+    NewDomainEvent, NewTitle, ReleaseNumbering, User,
 };
 
 use super::act::{AddedTitle, ListActions};
@@ -21,6 +21,7 @@ use super::fetch::ListFailure;
 use super::gateway::{GatewayListChartSource, GatewayListItemResolver, ListLibraryLookup};
 use super::rejection::remember_rejected_request;
 use super::resolve::ResolvedItem;
+use super::route_options::{route_monitor_type, route_option_tags};
 use super::sync::{ListSyncContext, ListSyncReport, sync_due_subscriptions};
 use crate::events::domain_events::{
     new_global_domain_event, new_title_domain_event, title_context_snapshot,
@@ -131,11 +132,18 @@ impl ListActions for AppListActions<'_> {
                 .await?;
         }
         let actor = User::system_execution_actor();
+        let monitor_type = route_monitor_type(route);
+        // A new title takes its options from its tags, as the add dialog's
+        // titles do; the patch below only reaches a title that already exists.
+        let mut tags = route_option_tags(route);
+        tags.extend(route.tags.iter().cloned());
         let request = NewTitle {
             name: item_name(item),
             facet: route.kind.clone(),
-            monitored: true,
-            tags: route.tags.clone(),
+            monitored: monitor_type
+                .as_deref()
+                .is_none_or(crate::media_requests::monitor_type_to_monitored),
+            tags,
             external_ids: item.external_ids.clone(),
             root_folder_id: route.root_folder_id.clone(),
             min_availability: route.min_availability.clone(),
@@ -144,9 +152,12 @@ impl ListActions for AppListActions<'_> {
         };
         let patch = TitleOptionsPatch {
             quality_profile_id: route.quality_profile_id.clone().map(Some),
-            monitor_type: non_empty(&route.monitor_type).map(Some),
+            monitor_type: monitor_type.map(Some),
             use_season_folders: route.use_season_folders.map(Some),
-            release_numbering: route.release_numbering.clone().map(Some),
+            release_numbering: route.release_numbering.as_deref().map(|value| {
+                let numbering = ReleaseNumbering::from_str_or_default(value);
+                (numbering != ReleaseNumbering::Auto).then(|| numbering.as_str().to_string())
+            }),
             ..TitleOptionsPatch::default()
         };
         let outcome = self
@@ -236,9 +247,9 @@ impl ListActions for AppListActions<'_> {
         if !owner.authorization.login_status.is_enabled() {
             return Err(AppError::Unauthorized("list owner is disabled".into()));
         }
-        let outcome = self
+        let committed = self
             .app
-            .submit_media_request(
+            .submit_media_request_committed(
                 &owner,
                 SubmitMediaRequestInput {
                     library_id: route.library_id.clone(),
@@ -268,6 +279,17 @@ impl ListActions for AppListActions<'_> {
                 },
             )
             .await?;
+        // Keep a committed request's id even when acting on its verdict fails.
+        if !subscription.is_personal()
+            && let Err(error) = &committed.decision
+        {
+            tracing::warn!(
+                subscription_id = %subscription.id,
+                request_id = %committed.request_id,
+                error = %error,
+                "a list request was filed but acting on its verdict failed"
+            );
+        }
         {
             self.app
                 .append_list_event(if subscription.is_personal() {
@@ -276,7 +298,7 @@ impl ListActions for AppListActions<'_> {
                         subscription.owner_user_id.clone(),
                         DomainEventPayload::ListRequestSubmitted(ListRequestSubmittedEventData {
                             list: ListEventSubject::of(subscription),
-                            request_id: outcome.request_id.clone(),
+                            request_id: committed.request_id.clone(),
                             library_id: route.library_id.clone(),
                             facet: route.kind.clone(),
                             title_name: item_name(item),
@@ -289,7 +311,7 @@ impl ListActions for AppListActions<'_> {
                         &User::system_execution_actor(),
                         DomainEventPayload::ListRequestSubmitted(ListRequestSubmittedEventData {
                             list: ListEventSubject::of(subscription),
-                            request_id: outcome.request_id.clone(),
+                            request_id: committed.request_id.clone(),
                             library_id: route.library_id.clone(),
                             facet: route.kind.clone(),
                             title_name: item_name(item),
@@ -300,7 +322,7 @@ impl ListActions for AppListActions<'_> {
                 })
                 .await;
         }
-        Ok(outcome.request_id)
+        Ok(committed.request_id)
     }
 
     async fn set_title_monitored(&self, title_id: &str, monitored: bool) -> AppResult<()> {
@@ -482,7 +504,7 @@ impl ListLibraryLookup for AppListLibraryLookup<'_> {
                 .services
                 .catalog
                 .titles
-                .find_by_external_id_in_facet(kind.clone(), &id.source, &id.value)
+                .find_by_external_id_in_facet(kind.clone(), id)
                 .await?
             {
                 return Ok(Some(title.id));

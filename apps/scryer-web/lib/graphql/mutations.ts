@@ -1871,6 +1871,8 @@ export const startInteractiveReleaseSearchMutation = `mutation StartInteractiveR
       resultCount
       elapsedMs
       failureReason
+      skipReason
+      skippedUntil
     }
     startedAt
     completedAt
@@ -3290,6 +3292,10 @@ export const updateListProviderSettingsMutation = `mutation UpdateListProviderSe
       secret
       isSet
       value
+      options {
+        value
+        label
+      }
     }
   }
 }`;

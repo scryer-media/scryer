@@ -14,6 +14,7 @@ use crate::wasmtime_host::subtitle_component_host::tests as fixtures;
 
 fn descriptor(provider: serde_json::Value) -> PluginDescriptor {
     PluginDescriptor {
+        settings: Vec::new(),
         id: "fixture-lists".to_string(),
         name: "Fixture Lists".to_string(),
         version: "1.0.0".to_string(),
@@ -35,6 +36,8 @@ fn runtime_plugin(descriptor: PluginDescriptor) -> RuntimePluginLoad {
     ))
     .expect("fixture list component WAT must assemble");
     RuntimePluginLoad {
+        installation_id: None,
+        settings: Default::default(),
         descriptor,
         wasm_bytes: wasm,
         first_party: false,
@@ -97,6 +100,8 @@ fn a_descriptor_of_another_family_is_refused() {
             .expect("subtitle descriptor"),
     );
     let provider = WasmListPluginProvider::empty().with_runtime_plugin(RuntimePluginLoad {
+        installation_id: None,
+        settings: Default::default(),
         descriptor: subtitle,
         wasm_bytes: Vec::new(),
         first_party: false,

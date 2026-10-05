@@ -547,7 +547,7 @@ function MainContent({
       return <ViewLoadingFallback />;
     }
     if (activitySection === "history") {
-      return <TitleHistoryContainer key="activity-history" showRetryActions={false} />;
+      return <TitleHistoryContainer key="activity-history" showRetryActions={canResolveImports} />;
     }
     return (
       <ActivityContainer key={`activity-${activitySection}`} activitySection={activitySection} />

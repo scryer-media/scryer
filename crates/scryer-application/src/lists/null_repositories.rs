@@ -51,6 +51,16 @@ impl ListSubscriptionRepository for NullListStore {
         Err(not_configured())
     }
 
+    async fn record_sync_outcome(
+        &self,
+        _: &str,
+        _: &ListSyncStatus,
+        _: &ListSyncStatus,
+        _: &ListCounts,
+    ) -> AppResult<()> {
+        Err(not_configured())
+    }
+
     async fn delete(&self, _: &str) -> AppResult<()> {
         Err(not_configured())
     }

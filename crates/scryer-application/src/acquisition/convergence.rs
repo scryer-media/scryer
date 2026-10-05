@@ -206,9 +206,12 @@ const QUOTA_EXHAUSTED_REMAINING_FRACTION: f64 = 0.01;
 /// every routed indexer is currently unreachable.
 #[derive(Default)]
 pub(crate) struct SchedulerAvailability {
-    cooled_hosts: std::collections::HashSet<String>,
+    /// Scheduler destinations under an active cooldown. The scheduler cools
+    /// down per destination, not per host, so indexers behind one proxy host
+    /// (Prowlarr, Hydra) are judged independently.
+    cooled_destinations: std::collections::HashSet<String>,
     exhausted_accounts: std::collections::HashSet<String>,
-    /// The soonest a cooling host comes back, when any is cooling. It is the
+    /// The soonest a cooling destination comes back, when any is cooling. It is the
     /// only *timed* half of this snapshot — an exhausted quota carries no
     /// recovery instant — so it is a lower bound on when deferred work becomes
     /// runnable, not a promise that it will.
@@ -220,12 +223,12 @@ pub(crate) struct SchedulerAvailability {
 }
 
 impl SchedulerAvailability {
-    /// An indexer can be searched when its host is not cooling down, its
-    /// account quota (keyed by indexer config id) is not exhausted, and it is
-    /// not sitting in a failure backoff.
-    pub fn indexer_available(&self, host_key: Option<&str>, indexer_id: &str) -> bool {
-        if let Some(host) = host_key
-            && self.cooled_hosts.contains(host)
+    /// An indexer can be searched when its scheduler destination is not
+    /// cooling down, its account quota (keyed by indexer config id) is not
+    /// exhausted, and it is not sitting in a failure backoff.
+    pub fn indexer_available(&self, destination_key: Option<&str>, indexer_id: &str) -> bool {
+        if let Some(destination) = destination_key
+            && self.cooled_destinations.contains(destination)
         {
             return false;
         }
@@ -234,30 +237,23 @@ impl SchedulerAvailability {
             && !self.backed_off_indexers.contains(&indexer_key)
     }
 
-    /// How long until the soonest cooling host is expected back, if one is.
+    /// How long until the soonest cooling destination is expected back, if one is.
     pub(crate) fn earliest_recovery_in(&self, now: &DateTime<Utc>) -> Option<std::time::Duration> {
         self.earliest_cooldown_until
             .map(|until| (until - *now).to_std().unwrap_or_default())
     }
 }
 
-/// The scheduler host key for an indexer base URL — the URL's host, matching
-/// the keys the plan-112 snapshot reports.
-pub(crate) fn indexer_scheduler_host_key(base_url: &str) -> Option<String> {
-    let trimmed = base_url.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-    url::Url::parse(trimmed)
-        .ok()
-        .and_then(|parsed| parsed.host_str().map(|host| host.to_ascii_lowercase()))
-        .or_else(|| Some(trimmed.to_ascii_lowercase()))
+/// The scheduler destination key for an indexer — the key the search client
+/// admits and cools the indexer under, normalized as the snapshot reports it.
+pub(crate) fn indexer_scheduler_destination_key(config: &IndexerConfig) -> String {
+    scryer_outbound_http::DestinationKey::from(config.rate_limit_domain_key()).to_string()
 }
 
 impl AppUseCase {
     pub(crate) async fn scheduler_availability(&self) -> SchedulerAvailability {
         let now = chrono::Utc::now();
-        let mut cooled_hosts = std::collections::HashSet::new();
+        let mut cooled_destinations = std::collections::HashSet::new();
         let mut exhausted_accounts = std::collections::HashSet::new();
         let mut earliest_cooldown_until: Option<DateTime<Utc>> = None;
         match self
@@ -269,7 +265,7 @@ impl AppUseCase {
             Ok(snapshot) => {
                 for entry in snapshot.entries {
                     if let Some(until) = entry.cooldown_until.filter(|until| *until > now) {
-                        cooled_hosts.insert(entry.host_key.as_str().to_string());
+                        cooled_destinations.insert(entry.destination_key.to_string());
                         earliest_cooldown_until = Some(
                             earliest_cooldown_until
                                 .map_or(until, |current: DateTime<Utc>| current.min(until)),
@@ -313,15 +309,15 @@ impl AppUseCase {
             }
         };
         SchedulerAvailability {
-            cooled_hosts,
+            cooled_destinations,
             exhausted_accounts,
             earliest_cooldown_until,
             backed_off_indexers,
         }
     }
 
-    /// Indexer config id → scheduler host key, for the cursor's pre-skip.
-    pub(crate) async fn indexer_scheduler_host_keys(
+    /// Indexer config id → scheduler destination key, for the cursor's pre-skip.
+    pub(crate) async fn indexer_scheduler_destination_keys(
         &self,
     ) -> std::collections::HashMap<String, String> {
         self.services
@@ -331,8 +327,9 @@ impl AppUseCase {
             .await
             .unwrap_or_default()
             .into_iter()
-            .filter_map(|config| {
-                indexer_scheduler_host_key(&config.base_url).map(|host| (config.id, host))
+            .map(|config| {
+                let destination = indexer_scheduler_destination_key(&config);
+                (config.id, destination)
             })
             .collect()
     }
@@ -524,6 +521,10 @@ fn provider_capabilities(
 /// re-maps the title to a different canonical subject, changing these ids, so folding
 /// them into the fingerprint re-opens convergence. Plain metadata edits
 /// that leave the match unchanged do not.
+///
+/// A pre-release search carries a phase suffix, so its empty answer is kept
+/// apart from released coverage and the scope is searched again once the
+/// release settles. Released identities carry no suffix.
 pub(crate) fn scope_match_identity(subject: &ResolvedReleaseSearchSubject) -> String {
     fn part(label: &str, value: &Option<String>) -> String {
         format!(
@@ -531,14 +532,19 @@ pub(crate) fn scope_match_identity(subject: &ResolvedReleaseSearchSubject) -> St
             value.as_deref().map(str::trim).unwrap_or_default()
         )
     }
-    [
+    let identity = [
         part("imdb", &subject.imdb_id),
         part("tmdb", &subject.tmdb_id),
         part("tvdb", &subject.tvdb_id),
         part("anidb", &subject.anidb_id),
         part("mal", &subject.mal_id),
     ]
-    .join(";")
+    .join(";");
+    if subject.pre_release {
+        format!("{identity};phase=pre")
+    } else {
+        identity
+    }
 }
 
 impl AppUseCase {
@@ -1153,6 +1159,11 @@ impl AppUseCase {
 
     /// The routed indexer ids for `(library_id, scope_id)`, and whether every
     /// read behind them succeeded.
+    ///
+    /// Only indexers the background search would actually query count: a
+    /// disabled indexer, or one with automatic search turned off, never fires
+    /// and so never earns a receipt, and routing a scope to it would keep that
+    /// scope in the walk forever.
     async fn routed_indexer_ids_for_routing_scope(
         &self,
         library_id: &str,
@@ -1161,26 +1172,41 @@ impl AppUseCase {
         let routing = self
             .resolve_indexer_routing_observed(Some(library_id), scope_id)
             .await;
-        match routing.plan {
-            Some(plan) => (
+        let searchable = self
+            .services
+            .integrations
+            .indexer_configs
+            .list(None)
+            .await
+            .ok()
+            .map(|configs| {
+                configs
+                    .into_iter()
+                    .filter(|config| config.is_enabled && config.enable_auto_search)
+                    .map(|config| config.id)
+                    .collect::<Vec<_>>()
+            });
+        match (routing.plan, searchable) {
+            (Some(plan), Some(searchable)) => (
+                plan.entries
+                    .into_iter()
+                    .filter(|(indexer_id, entry)| entry.enabled && searchable.contains(indexer_id))
+                    .map(|(indexer_id, _)| indexer_id)
+                    .collect(),
+                !routing.read_failed,
+            ),
+            // Without the configs the plan cannot be narrowed; keep it for
+            // this stage but do not report the answer as complete.
+            (Some(plan), None) => (
                 plan.entries
                     .into_iter()
                     .filter(|(_, entry)| entry.enabled)
                     .map(|(indexer_id, _)| indexer_id)
                     .collect(),
-                !routing.read_failed,
+                false,
             ),
-            None => match self.services.integrations.indexer_configs.list(None).await {
-                Ok(configs) => (
-                    configs
-                        .into_iter()
-                        .filter(|config| config.is_enabled)
-                        .map(|config| config.id)
-                        .collect(),
-                    !routing.read_failed,
-                ),
-                Err(_) => (Vec::new(), false),
-            },
+            (None, Some(searchable)) => (searchable, !routing.read_failed),
+            (None, None) => (Vec::new(), false),
         }
     }
 
@@ -1353,8 +1379,8 @@ impl AppUseCase {
 mod tests {
     use super::{
         SchedulerAvailability, canonical_json_string, compute_search_fingerprint,
-        convergence_scope_key, profile_criteria_version, series_pack_collection_scope_key,
-        series_pack_set_scope_key,
+        convergence_scope_key, indexer_scheduler_destination_key, profile_criteria_version,
+        series_pack_collection_scope_key, series_pack_set_scope_key,
     };
     use crate::contracts::SubmissionScope;
     use crate::quality_profile::{AcceptanceCriteria, QualityProfileCriteria};
@@ -1362,16 +1388,64 @@ mod tests {
     #[test]
     fn pre_skip_treats_backed_off_indexers_as_unavailable() {
         let availability = SchedulerAvailability {
-            cooled_hosts: ["cooled.example".to_string()].into_iter().collect(),
+            cooled_destinations: ["cooled-idx".to_string()].into_iter().collect(),
             exhausted_accounts: ["quota-idx".to_string()].into_iter().collect(),
             backed_off_indexers: ["backoff-idx".to_string()].into_iter().collect(),
             earliest_cooldown_until: None,
         };
-        assert!(availability.indexer_available(Some("open.example"), "healthy-idx"));
-        assert!(!availability.indexer_available(Some("cooled.example"), "healthy-idx"));
-        assert!(!availability.indexer_available(Some("open.example"), "quota-idx"));
-        assert!(!availability.indexer_available(Some("open.example"), "Backoff-Idx"));
+        assert!(availability.indexer_available(Some("open-idx"), "healthy-idx"));
+        assert!(!availability.indexer_available(Some("cooled-idx"), "healthy-idx"));
+        assert!(!availability.indexer_available(Some("open-idx"), "quota-idx"));
+        assert!(!availability.indexer_available(Some("open-idx"), "Backoff-Idx"));
         assert!(!availability.indexer_available(None, " backoff-idx "));
+    }
+
+    #[test]
+    fn pre_skip_cools_one_destination_behind_a_shared_host() {
+        // Two children of one proxy share its host but not its destination.
+        let indexer = |child: &str| scryer_domain::IndexerConfig {
+            id: format!("proxy-{child}"),
+            name: format!("Synthetic {child}"),
+            provider_type: "newznab".to_string(),
+            base_url: "http://proxy.example:9696".to_string(),
+            api_key_encrypted: None,
+            rate_limit_seconds: None,
+            rate_limit_burst: None,
+            max_queries_per_minute: None,
+            disabled_until: None,
+            is_enabled: true,
+            enable_interactive_search: true,
+            enable_auto_search: true,
+            proxy_config_id: None,
+            download_client_id: None,
+            seeding_profile_id: None,
+            managed_parent_config_id: Some("proxy-parent".to_string()),
+            managed_child_key: Some(child.to_string()),
+            managed_metadata_json: None,
+            caps_snapshot_json: None,
+            last_health_status: None,
+            last_error_message: None,
+            last_error_at: None,
+            config_json: None,
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+        };
+        let cooled = indexer("cooled");
+        let open = indexer("open");
+        let availability = SchedulerAvailability {
+            cooled_destinations: [indexer_scheduler_destination_key(&cooled)]
+                .into_iter()
+                .collect(),
+            ..SchedulerAvailability::default()
+        };
+        assert!(!availability.indexer_available(
+            Some(&indexer_scheduler_destination_key(&cooled)),
+            &cooled.id
+        ));
+        assert!(
+            availability
+                .indexer_available(Some(&indexer_scheduler_destination_key(&open)), &open.id)
+        );
     }
 
     #[test]
@@ -1423,6 +1497,43 @@ mod tests {
             a, b,
             "a rematch (changed SMG match id) must change the fingerprint"
         );
+    }
+
+    #[test]
+    fn an_episode_stays_pre_release_until_a_day_after_its_air_date() {
+        use crate::acquisition::release_search::episode_is_pre_release;
+        let now = chrono::DateTime::parse_from_rfc3339("2026-03-10T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert!(
+            episode_is_pre_release(Some("2026-03-11"), &now),
+            "airs tomorrow"
+        );
+        assert!(
+            episode_is_pre_release(Some("2026-03-10"), &now),
+            "twelve hours after a date-only air date the release has not settled"
+        );
+        assert!(
+            !episode_is_pre_release(Some("2026-03-08"), &now),
+            "aired two days ago"
+        );
+        assert!(!episode_is_pre_release(None, &now), "no air date");
+        assert!(
+            !episode_is_pre_release(Some("soon"), &now),
+            "unreadable air date"
+        );
+    }
+
+    #[test]
+    fn a_movie_without_release_dates_is_never_pre_release() {
+        use crate::acquisition::release_search::movie_is_pre_release;
+        let now = chrono::DateTime::parse_from_rfc3339("2026-03-10T12:00:00Z")
+            .unwrap()
+            .with_timezone(&chrono::Utc);
+        assert!(!movie_is_pre_release(None, None, &now));
+        assert!(!movie_is_pre_release(Some("tba"), None, &now));
+        assert!(movie_is_pre_release(None, Some("2026-03-10"), &now));
+        assert!(!movie_is_pre_release(None, Some("2026-03-08"), &now));
     }
 
     fn test_criteria() -> QualityProfileCriteria {

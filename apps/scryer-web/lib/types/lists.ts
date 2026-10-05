@@ -105,6 +105,8 @@ export type ListProviderSettingField = {
   secret: boolean;
   isSet: boolean;
   value: string | null;
+  /** The choices of a select field, in the provider's order. */
+  options: Array<{ value: string; label: string }>;
 };
 
 export type ListProviderSettings = {

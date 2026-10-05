@@ -1957,11 +1957,13 @@ pub trait TitleRepository: Send + Sync {
         }
     }
     async fn find_by_external_id(&self, source: &str, value: &str) -> AppResult<Option<Title>>;
+    /// A title of `facet` carrying `id`. A kinded `id` never matches a title
+    /// whose id of the same source and value names a different kind; an id
+    /// without a kind, on either side, matches any kind.
     async fn find_by_external_id_in_facet(
         &self,
         facet: MediaFacet,
-        source: &str,
-        value: &str,
+        id: &ExternalId,
     ) -> AppResult<Option<Title>>;
     async fn find_by_external_id_in_library_and_facet(
         &self,
@@ -3264,6 +3266,19 @@ pub trait UserRepository: Send + Sync {
         }))
     }
     async fn create(&self, user: User) -> AppResult<User>;
+    async fn bootstrap_seed_is_uninitialized(&self, _id: &str) -> AppResult<bool> {
+        Ok(false)
+    }
+    async fn create_bootstrap_admin(
+        &self,
+        _user: User,
+        _grants: Vec<LibraryGrant>,
+        _initialize_seed: bool,
+    ) -> AppResult<User> {
+        Err(AppError::Repository(
+            "atomic administrator bootstrap is not configured".into(),
+        ))
+    }
     async fn list_all(&self) -> AppResult<Vec<User>>;
     async fn get_by_id(&self, id: &str) -> AppResult<Option<User>>;
     async fn auth_session_version(&self, user_id: &str) -> AppResult<Option<String>>;
@@ -4747,6 +4762,8 @@ pub trait SubtitleProviderConfigRepository: Send + Sync {
 
 #[async_trait]
 pub trait SettingsRepository: Send + Sync {
+    /// Invalidate cached values after an atomic mutation owned by another repository.
+    fn invalidate_cache(&self) {}
     async fn get_setting_json(
         &self,
         scope: &str,
@@ -5329,8 +5346,94 @@ pub struct IdentityTrackedStateTarget<'a> {
     pub source_identity: Option<&'a ClientJobLocator>,
 }
 
+pub const DOWNLOAD_PASSWORD_RETRY_REASON: &str = "download_password_retry";
+pub const DOWNLOAD_PASSWORD_REQUIRED_REASON: &str = "archive_password_required";
+pub const DOWNLOAD_PASSWORD_AMBIGUOUS_REASON: &str = "archive_password_or_corruption";
+
+/// Durable dispatch ownership contains no password values.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct DownloadPasswordRetryClaim {
+    pub download_id: DownloadId,
+    pub authorized_title_id: String,
+    #[serde(with = "import_retry_locator")]
+    pub source: ClientJobLocator,
+    pub attempt_id: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DownloadPasswordRetryClaimOutcome {
+    Claimed,
+    Busy,
+}
+
+/// Recovery evidence is scoped to one attempt and its currently bound client job.
+#[derive(Clone, Debug)]
+pub struct DownloadPasswordRetryObservation {
+    pub claim: DownloadPasswordRetryClaim,
+    pub source: ClientJobLocator,
+    pub confirmed: bool,
+}
+
 #[async_trait]
 pub trait DownloadSubmissionRepository: Send + Sync {
+    async fn claim_password_retry(
+        &self,
+        _claim: &DownloadPasswordRetryClaim,
+        _password: &str,
+    ) -> AppResult<DownloadPasswordRetryClaimOutcome> {
+        Err(AppError::Repository(
+            "durable download password retry is unavailable".into(),
+        ))
+    }
+
+    /// Uncertain dispatch remains fenced; it must never be replayed automatically.
+    async fn finish_password_retry(
+        &self,
+        _claim: &DownloadPasswordRetryClaim,
+        _outcome: &crate::DownloadClientRetryOutcome,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "durable download password retry is unavailable".into(),
+        ))
+    }
+
+    async fn password_retry_observation(
+        &self,
+        _id: &DownloadId,
+    ) -> AppResult<Option<DownloadPasswordRetryObservation>> {
+        Ok(None)
+    }
+
+    /// Accept only evidence fetched after reading the attempt, never a queued snapshot.
+    async fn confirm_password_retry_observation(
+        &self,
+        _observation: &DownloadPasswordRetryObservation,
+        _state: scryer_domain::DownloadQueueState,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
+
+    async fn set_password_candidates(
+        &self,
+        _id: &DownloadId,
+        candidates: &crate::DownloadPasswordCandidates,
+    ) -> AppResult<()> {
+        if candidates.is_empty() {
+            Ok(())
+        } else {
+            Err(AppError::Repository(
+                "download password persistence is unavailable".into(),
+            ))
+        }
+    }
+
+    async fn password_candidates(
+        &self,
+        _id: &DownloadId,
+    ) -> AppResult<crate::DownloadPasswordCandidates> {
+        Ok(Default::default())
+    }
+
     fn supports_durable_download_cleanup(&self) -> bool {
         false
     }
@@ -6574,6 +6677,15 @@ pub trait ImportRepository: Send + Sync {
 
 #[async_trait]
 pub trait ExternalImportMonitorSnapshotRepository: Send + Sync {
+    /// Atomically consume an exact library/facet session, returning its chunk count.
+    /// The caller must supply a unique destination that is never eligible for apply.
+    async fn claim_external_import_monitor_snapshot(
+        &self,
+        session_id: &str,
+        consumed_session_id: &str,
+        facet: MediaFacet,
+    ) -> AppResult<u64>;
+
     async fn append_external_import_monitor_snapshot_chunk(
         &self,
         chunk: &crate::ExternalImportMonitorSnapshotChunk,
@@ -6807,6 +6919,7 @@ pub struct ImportFilePermissions {
 pub struct ImportFileExecutionContext {
     client_lane_key: String,
     active_import_stream: Option<crate::ActiveImportStreamHandle>,
+    archive_workspace_source: bool,
 }
 
 impl ImportFileExecutionContext {
@@ -6820,11 +6933,24 @@ impl ImportFileExecutionContext {
         Self {
             client_lane_key,
             active_import_stream: None,
+            archive_workspace_source: false,
         }
     }
 
     pub fn client_lane_key(&self) -> &str {
         &self.client_lane_key
+    }
+
+    /// Marks the source as output the archive extractor wrote into its own
+    /// workspace. That file is Scryer's scratch, so the importer may place it
+    /// by rename instead of linking or copying it.
+    pub fn with_archive_workspace_source(mut self, archive_workspace_source: bool) -> Self {
+        self.archive_workspace_source = archive_workspace_source;
+        self
+    }
+
+    pub fn archive_workspace_source(&self) -> bool {
+        self.archive_workspace_source
     }
 
     pub fn with_active_import_stream(
@@ -8896,6 +9022,39 @@ pub trait IndexerClient: Send + Sync {
         ))
     }
 
+    /// Run one prepared strategy against this single indexer.
+    ///
+    /// The default forwards to [`Self::search`] and drops
+    /// `request.rss_catch_up`; an adapter that can hand the RSS catch-up
+    /// marker to its provider overrides this.
+    async fn search_strategy(
+        &self,
+        request: crate::IndexerSearchStrategyRequest,
+        mode: SearchMode,
+        operation: IndexerErrorOperation,
+        cancel_token: tokio_util::sync::CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        self.search(
+            request.query,
+            request.ids,
+            request.category,
+            request.facet,
+            request.id_search_facet,
+            request.newznab_categories,
+            None,
+            mode,
+            operation,
+            request.season,
+            request.episode,
+            request.absolute_episode,
+            request.year,
+            request.tagged_aliases,
+            None,
+            cancel_token,
+        )
+        .await
+    }
+
     #[expect(
         clippy::too_many_arguments,
         reason = "indexer search forwards the full caller-controlled search envelope to plugins"
@@ -8964,6 +9123,36 @@ pub trait IndexerClient: Send + Sync {
         }
         response.results = results;
         Ok(response)
+    }
+
+    /// An operator's raw text search. The multi-indexer client dispatches it
+    /// to each eligible indexer; a single-indexer adapter answers it itself,
+    /// and this default asks [`Self::search`] for the bare query, which
+    /// cannot carry the page size.
+    async fn search_raw_text(
+        &self,
+        request: crate::RawTextSearchRequest,
+        cancel_token: tokio_util::sync::CancellationToken,
+    ) -> AppResult<IndexerSearchResponse> {
+        self.search(
+            request.query,
+            std::collections::HashMap::new(),
+            None,
+            None,
+            None,
+            Some(request.categories).filter(|categories| !categories.is_empty()),
+            None,
+            SearchMode::Interactive,
+            IndexerErrorOperation::InteractiveSearch,
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+            None,
+            cancel_token,
+        )
+        .await
     }
 
     #[expect(
@@ -9173,6 +9362,33 @@ pub trait IndexerPluginProvider: Send + Sync {
     fn builtin_provider_types(&self) -> Vec<String> {
         vec![]
     }
+    fn builtin_descriptor_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> Option<scryer_plugin_sdk::PluginDescriptor> {
+        None
+    }
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        if !settings.is_empty() {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.restore_builtin_plugin(provider_type)
+    }
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        if settings.values().any(|values| !values.is_empty()) {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.reload_runtime_plugins(runtime_plugins, disabled_builtins)
+    }
     fn plugin_version_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
     }
@@ -9294,11 +9510,25 @@ pub struct ExternalPluginWasm<'a> {
     pub first_party: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct RuntimePluginLoad {
+    /// Database installation identity; absent only during pre-install validation.
+    pub installation_id: Option<String>,
     pub descriptor: scryer_plugin_sdk::PluginDescriptor,
     pub wasm_bytes: Vec<u8>,
     pub first_party: bool,
+    /// Installation-scoped values; never serialized with the public descriptor.
+    pub settings: std::collections::BTreeMap<String, String>,
+}
+
+impl std::fmt::Debug for RuntimePluginLoad {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RuntimePluginLoad")
+            .field("plugin_id", &self.descriptor.id)
+            .field("first_party", &self.first_party)
+            .field("setting_count", &self.settings.len())
+            .finish_non_exhaustive()
+    }
 }
 
 pub trait DownloadClientPluginProvider: Send + Sync {
@@ -9749,6 +9979,33 @@ pub trait SubtitlePluginProvider: Send + Sync {
     fn builtin_provider_types(&self) -> Vec<String> {
         vec![]
     }
+    fn builtin_descriptor_for_provider(
+        &self,
+        _provider_type: &str,
+    ) -> Option<scryer_plugin_sdk::PluginDescriptor> {
+        None
+    }
+    fn restore_builtin_plugin_with_settings(
+        &self,
+        provider_type: &str,
+        settings: std::collections::BTreeMap<String, String>,
+    ) -> Result<(), String> {
+        if !settings.is_empty() {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.restore_builtin_plugin(provider_type)
+    }
+    fn reload_runtime_plugins_with_builtin_settings(
+        &self,
+        runtime_plugins: &[RuntimePluginLoad],
+        disabled_builtins: &[String],
+        settings: &std::collections::BTreeMap<String, std::collections::BTreeMap<String, String>>,
+    ) -> Result<(), String> {
+        if settings.values().any(|values| !values.is_empty()) {
+            return Err("builtin settings are unsupported".into());
+        }
+        self.reload_runtime_plugins(runtime_plugins, disabled_builtins)
+    }
     fn plugin_version_for_provider(&self, _provider_type: &str) -> Option<String> {
         None
     }
@@ -9806,6 +10063,21 @@ pub trait ArchiveExtractorClient: Send + Sync {
         &self,
         request: ArchivePluginProcessRequest,
     ) -> AppResult<ArchivePluginProcessResponse>;
+
+    async fn process_with_limits(
+        &self,
+        request: ArchivePluginProcessRequest,
+        _limits: scryer_plugin_sdk::ArchiveExtractionLimits,
+    ) -> AppResult<ArchivePluginProcessResponse> {
+        self.process(request).await
+    }
+}
+
+#[derive(Clone)]
+pub struct ArchiveExtractorSelection {
+    pub installation_id: Option<String>,
+    pub client: Arc<dyn ArchiveExtractorClient>,
+    pub passwords: crate::import::archive_passwords::ArchivePasswordCandidates,
 }
 
 pub trait ArchiveExtractorPluginProvider: Send + Sync {
@@ -9814,6 +10086,20 @@ pub trait ArchiveExtractorPluginProvider: Send + Sync {
         format: ArchivePluginFormat,
     ) -> Option<Arc<dyn ArchiveExtractorClient>>;
 
+    /// A pinned client and its own installation-scoped password snapshot.
+    fn select_for_format(
+        &self,
+        format: ArchivePluginFormat,
+    ) -> AppResult<Option<ArchiveExtractorSelection>> {
+        Ok(self
+            .client_for_format(format)
+            .map(|client| ArchiveExtractorSelection {
+                installation_id: None,
+                client,
+                passwords: Default::default(),
+            }))
+    }
+
     fn available_provider_types(&self) -> Vec<String>;
 
     fn upsert_runtime_plugin(&self, plugin: RuntimePluginLoad) -> Result<(), String> {
@@ -9821,8 +10107,8 @@ pub trait ArchiveExtractorPluginProvider: Send + Sync {
         Err("this provider does not support runtime-load upsert".to_string())
     }
 
-    fn remove_runtime_plugin(&self, provider_type: &str) -> Result<(), String> {
-        let _ = provider_type;
+    fn remove_runtime_plugin(&self, installation_id: &str) -> Result<(), String> {
+        let _ = installation_id;
         Err("this provider does not support runtime-load removal".to_string())
     }
 
@@ -10568,6 +10854,27 @@ pub trait DownloadClient: Send + Sync {
 
     async fn resume_queue_item_for_client(&self, _client_id: &str, id: &str) -> AppResult<()> {
         self.resume_queue_item(id).await
+    }
+
+    /// Retry an existing failed job once. An uncertain result must be reconciled,
+    /// never replayed automatically or replaced with a fresh submission.
+    async fn retry_failed_job(
+        &self,
+        _id: &str,
+        _password: &str,
+    ) -> AppResult<crate::DownloadClientRetryOutcome> {
+        Err(AppError::Validation(
+            "password-aware retry is not supported by this download client".into(),
+        ))
+    }
+
+    async fn retry_failed_job_for_client(
+        &self,
+        _client_id: &str,
+        id: &str,
+        password: &str,
+    ) -> AppResult<crate::DownloadClientRetryOutcome> {
+        self.retry_failed_job(id, password).await
     }
 
     /// Remove one item from the client.

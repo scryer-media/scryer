@@ -30,6 +30,26 @@ use tracing::{debug, warn};
 
 const RSS_SYNC_MAX_GUIDS: usize = 2000;
 
+/// Bounds the seen-GUID set. A caught-up poll can return more releases than
+/// the cap, so this cycle's GUIDs are never evicted: dropping one would let the
+/// next poll, which reads back to the same marker, treat it as new again.
+fn cap_rss_seen_guids(seen_guids: &mut HashSet<String>, current_guids: &HashSet<String>) {
+    let limit = RSS_SYNC_MAX_GUIDS.max(current_guids.len());
+    if seen_guids.len() <= limit {
+        return;
+    }
+    let excess = seen_guids.len() - limit;
+    let to_remove: Vec<String> = seen_guids
+        .iter()
+        .filter(|guid| !current_guids.contains(*guid))
+        .take(excess)
+        .cloned()
+        .collect();
+    for key in to_remove {
+        seen_guids.remove(&key);
+    }
+}
+
 /// The shipped healthy-quota RSS cadence.
 pub const DEFAULT_RSS_TARGET_INTERVAL: std::time::Duration =
     std::time::Duration::from_secs(15 * 60);
@@ -1242,6 +1262,7 @@ impl AppUseCase {
         let initial_seen_count = seen_guids.len();
 
         let mut new_results: Vec<IndexerSearchResult> = Vec::new();
+        let mut current_guids: HashSet<String> = HashSet::new();
         for result in fresh_results {
             let release_identity = rss_release_identity(&result);
             let guid = result
@@ -1254,6 +1275,7 @@ impl AppUseCase {
             // Record every fresh GUID, then give an active unknown-age row one
             // more look even if it was already seen this process lifetime.
             let is_new_guid = seen_guids.insert(guid.to_string());
+            current_guids.insert(guid.to_string());
             if unknown_age_identities.contains(&release_identity)
                 || unknown_age_listing_prefixes.contains(&rss_listing_identity_prefix(&result))
                 || is_new_guid
@@ -1262,14 +1284,7 @@ impl AppUseCase {
             }
         }
 
-        // Cap the seen set to prevent unbounded growth
-        if seen_guids.len() > RSS_SYNC_MAX_GUIDS {
-            let excess = seen_guids.len() - RSS_SYNC_MAX_GUIDS;
-            let to_remove: Vec<String> = seen_guids.iter().take(excess).cloned().collect();
-            for key in to_remove {
-                seen_guids.remove(&key);
-            }
-        }
+        cap_rss_seen_guids(&mut seen_guids, &current_guids);
 
         // Release the write lock before doing any I/O
         drop(seen_guids);
@@ -3388,6 +3403,38 @@ pub struct RssSyncReport {
 mod tests {
     use super::*;
     use scryer_domain::{MediaFacet, Title};
+
+    #[test]
+    fn capping_seen_guids_never_evicts_the_current_poll() {
+        let current: HashSet<String> = (0..RSS_SYNC_MAX_GUIDS + 500)
+            .map(|index| format!("current-guid-{index}"))
+            .collect();
+        let mut seen: HashSet<String> = (0..300)
+            .map(|index| format!("earlier-guid-{index}"))
+            .collect();
+        seen.extend(current.iter().cloned());
+
+        cap_rss_seen_guids(&mut seen, &current);
+
+        assert!(current.iter().all(|guid| seen.contains(guid)));
+        assert_eq!(seen.len(), current.len());
+    }
+
+    #[test]
+    fn capping_seen_guids_evicts_only_earlier_polls_down_to_the_cap() {
+        let current: HashSet<String> = (0..10)
+            .map(|index| format!("current-guid-{index}"))
+            .collect();
+        let mut seen: HashSet<String> = (0..RSS_SYNC_MAX_GUIDS + 50)
+            .map(|index| format!("earlier-guid-{index}"))
+            .collect();
+        seen.extend(current.iter().cloned());
+
+        cap_rss_seen_guids(&mut seen, &current);
+
+        assert_eq!(seen.len(), RSS_SYNC_MAX_GUIDS);
+        assert!(current.iter().all(|guid| seen.contains(guid)));
+    }
 
     #[test]
     fn the_sync_worker_keeps_its_shipped_tick_without_an_override() {

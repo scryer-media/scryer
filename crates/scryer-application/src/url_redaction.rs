@@ -3,7 +3,8 @@
 //! Torznab/Newznab download links carry the operator's indexer key in the
 //! query string (`...&apikey=...` or Jackett's `jackett_apikey`), and private
 //! trackers do the same with `passkey`, `rss_key`, `token`, `auth`, `authkey`
-//! or `torrent_pass`. The live URL is needed to fetch the
+//! or `torrent_pass`. Feed and download URLs may also embed HTTP userinfo
+//! (`https://user:pass@host/...`). The live URL is needed to fetch the
 //! release, but every copy that is persisted for display, sent in a
 //! notification, or written to a log must lose the credential first.
 
@@ -28,14 +29,29 @@ fn credential_query_param_regex() -> &'static Regex {
     })
 }
 
+fn url_userinfo_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        // The authority's userinfo runs from `scheme://` to the last `@` before
+        // the path, query or fragment. An already-redacted userinfo matches
+        // again and is rewritten to itself, so redaction stays idempotent.
+        Regex::new(r#"(?i)(?P<scheme>\b[a-z][a-z0-9+.-]*://)(?P<userinfo>[^/?#\s"'<>]+)@"#)
+            .expect("url userinfo regex should compile")
+    })
+}
+
 /// Replace the value of every credential-bearing query parameter in `raw` with
+/// [`REDACTED_SECRET`], and replace any URL userinfo (`user:pass@`) with
 /// [`REDACTED_SECRET`], leaving the rest of the text (scheme, host, path, other
 /// parameters, fragment) untouched. Text without such a parameter is returned
 /// unchanged, so this is safe to run over free-form strings and values that
 /// may already have been redacted.
 pub fn redact_url_credentials(raw: &str) -> String {
+    let without_userinfo = url_userinfo_regex().replace_all(raw, |captures: &Captures<'_>| {
+        format!("{}{REDACTED_SECRET}@", &captures["scheme"])
+    });
     credential_query_param_regex()
-        .replace_all(raw, |captures: &Captures<'_>| {
+        .replace_all(&without_userinfo, |captures: &Captures<'_>| {
             format!("{}{REDACTED_SECRET}", &captures["prefix"])
         })
         .into_owned()
@@ -142,6 +158,40 @@ mod tests {
         ] {
             assert_eq!(redact_url_credentials(raw), raw);
         }
+    }
+
+    #[test]
+    fn redacts_url_userinfo() {
+        assert_eq!(
+            redact_url_credentials("https://feeduser:s3cret@lists.invalid/feed.json?page=2"),
+            "https://[redacted]@lists.invalid/feed.json?page=2"
+        );
+        assert_eq!(
+            redact_url_credentials("see http://token-only@lists.invalid/rss and more"),
+            "see http://[redacted]@lists.invalid/rss and more"
+        );
+        assert_eq!(
+            redact_url_credentials("https://user:p@ss@lists.invalid/x?apikey=k"),
+            "https://[redacted]@lists.invalid/x?apikey=[redacted]"
+        );
+    }
+
+    #[test]
+    fn leaves_at_signs_outside_the_authority_untouched() {
+        for raw in [
+            "https://lists.invalid/users/@someone/feed",
+            "https://lists.invalid/feed?contact=a@b.invalid",
+            "mailto:someone@lists.invalid",
+            "someone@lists.invalid",
+        ] {
+            assert_eq!(redact_url_credentials(raw), raw);
+        }
+    }
+
+    #[test]
+    fn userinfo_redaction_is_idempotent() {
+        let once = redact_url_credentials("https://u:p@lists.invalid/a");
+        assert_eq!(redact_url_credentials(&once), once);
     }
 
     #[test]

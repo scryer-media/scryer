@@ -566,7 +566,10 @@ function SeriesOverviewViewImpl({
     [timelineItems, toggleKey],
   );
   const seasonActionsByKey = React.useCallback(
-    (run: ((collection: TitleCollection) => Promise<void> | void) | undefined) => {
+    (
+      run: ((collection: TitleCollection) => Promise<void> | void) | undefined,
+      options: { expandOnRun?: boolean } = {},
+    ) => {
       const actions = new Map<string, (() => void) | undefined>();
       for (const item of timelineItems) {
         if (item.kind === "seriesMovie") {
@@ -592,6 +595,18 @@ function SeriesOverviewViewImpl({
                   delete next[collection.id];
                   return next;
                 });
+                if (options.expandOnRun) {
+                  // The results list inside the season's section, so a
+                  // collapsed season would run the search and show nothing.
+                  setExpandedKeys((current) => {
+                    if (current.has(item.key)) {
+                      return current;
+                    }
+                    const next = new Set(current);
+                    next.add(item.key);
+                    return next;
+                  });
+                }
                 void run(collection);
               }
             : undefined,
@@ -606,7 +621,7 @@ function SeriesOverviewViewImpl({
     [onRunSeasonSearch, seasonActionsByKey],
   );
   const seasonInteractiveSearchActionByKey = React.useMemo(
-    () => seasonActionsByKey(onRunSeasonInteractiveSearch),
+    () => seasonActionsByKey(onRunSeasonInteractiveSearch, { expandOnRun: true }),
     [onRunSeasonInteractiveSearch, seasonActionsByKey],
   );
 

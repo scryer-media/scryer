@@ -28,14 +28,18 @@ impl ArchiveExtractionDestination {
 
 pub async fn extract_archives_if_needed(
     _dir: &Path,
+    _is_sample: fn(&Path) -> bool,
     _destination: Option<ArchiveExtractionDestination>,
-    _password: Option<&str>,
+    _passwords: &crate::import::archive_passwords::ArchivePasswordCandidates,
     _archive_provider: Option<Arc<dyn ArchiveExtractorPluginProvider>>,
 ) -> AppResult<Option<PathBuf>> {
     Ok(None)
 }
 
-pub fn archive_extraction_would_be_needed(_dir: &Path) -> AppResult<bool> {
+pub fn archive_extraction_would_be_needed(
+    _dir: &Path,
+    _is_sample: fn(&Path) -> bool,
+) -> AppResult<bool> {
     Ok(false)
 }
 
@@ -48,3 +52,25 @@ pub fn is_timeout_error(error: &AppError) -> bool {
 }
 
 pub async fn cleanup_extracted_dir(_dir: &Path) {}
+
+pub fn replaced_archive_sources(
+    _workspace: &Path,
+) -> AppResult<std::collections::HashSet<PathBuf>> {
+    Ok(Default::default())
+}
+
+pub fn is_archive_workspace_output(_source: &Path, _dest: &Path) -> bool {
+    false
+}
+
+pub fn initialize_archive_workspace_ownership(_state_dir: &Path) -> AppResult<()> {
+    Ok(())
+}
+
+pub fn is_owned_archive_workspace(_root: &Path) -> bool {
+    false
+}
+
+pub(crate) fn is_owned_archive_workspace_handle(_root: &Path, _directory: &std::fs::File) -> bool {
+    false
+}

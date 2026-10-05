@@ -418,8 +418,13 @@ async fn act_for_owner(
     let mut item = resolved_item("alpha");
     item.external_ids = vec![ExternalId::new("tvdb", tvdb_id.to_string())];
 
-    let outcome =
-        crate::lists::act::act_on_candidate(&AppListActions::new(&harness.app), &list, &item).await;
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &item,
+        false,
+    )
+    .await;
     (harness, outcome)
 }
 
@@ -467,6 +472,52 @@ async fn a_request_list_owner_who_may_only_request_files_a_request() {
     assert!(outcome.request_id.is_some());
     assert_eq!(outcome.title_id, None);
     assert_eq!(harness.media_requests.requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_list_request_keeps_its_id_when_approving_it_fails() {
+    let harness = bootstrap_media_request_app();
+    harness
+        .media_requests
+        .fail_approvals
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let owner = library_permission_user(
+        "list-owner",
+        &library_id,
+        &[
+            LibraryPermission::Request,
+            LibraryPermission::AutoApproveRequests,
+        ],
+    );
+    harness.users.store.lock().await.push(owner.clone());
+    let mut list = subscription("public-list-one");
+    list.owner_user_id = owner.id.clone();
+    list.mode = ListMode::Request;
+    list.routes = vec![crate::lists::test_support::route(
+        MediaFacet::Movie,
+        &library_id,
+    )];
+    let mut item = resolved_item("alpha");
+    item.external_ids = vec![ExternalId::new("tvdb", "9070".to_string())];
+
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &item,
+        false,
+    )
+    .await;
+
+    let requests = harness.media_requests.requests.lock().await;
+    assert_eq!(requests.len(), 1, "the request was filed once");
+    assert_eq!(requests[0].status, MediaRequestStatus::Pending);
+    assert_eq!(
+        outcome.request_id.as_ref(),
+        Some(&requests[0].id),
+        "the membership keeps the filed request"
+    );
+    assert_eq!(outcome.state, ListMembershipState::Requested);
 }
 
 #[tokio::test]
@@ -601,4 +652,206 @@ async fn a_title_manager_still_cannot_file_an_ordinary_request() {
 
     assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
     assert!(harness.media_requests.requests.lock().await.is_empty());
+}
+
+const LIST_LABEL: &str = "fixture-label";
+
+/// A public series list whose route asks for every per-title option, owned by
+/// a user holding `permissions` on the routed library and kept in the list
+/// store so its requests can be traced back to it.
+async fn series_list_with_options(
+    harness: &MediaRequestTestHarness,
+    mode: ListMode,
+    permissions: &[LibraryPermission],
+) -> (scryer_domain::ListSubscription, String) {
+    harness
+        .app
+        .ensure_title_tag_registered(LIST_LABEL, "Fixture label")
+        .await
+        .expect("label registered");
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    let root_id = harness
+        .libraries
+        .get_by_id(&library_id)
+        .await
+        .expect("library read")
+        .and_then(|library| library.roots.first().map(|root| root.id.clone()))
+        .expect("the series library has a root");
+    let owner = library_permission_user("list-owner", &library_id, permissions);
+    harness.users.store.lock().await.push(owner.clone());
+    let mut route = crate::lists::test_support::route(MediaFacet::Series, &library_id);
+    route.quality_profile_id = Some("1080p".to_string());
+    route.monitor_type = "FUTURE_EPISODES".to_string();
+    route.root_folder_id = Some(root_id);
+    route.use_season_folders = Some(false);
+    route.release_numbering = Some("ALTERNATE".to_string());
+    route.tags = vec![LIST_LABEL.to_string()];
+    let mut list = subscription("public-list-one");
+    list.owner_user_id = owner.id.clone();
+    list.mode = mode;
+    list.kinds = vec![MediaFacet::Series];
+    list.routes = vec![route];
+    *harness.lists.subscriptions.lock().unwrap() = vec![list.clone()];
+    (list, library_id)
+}
+
+fn series_item(tvdb_id: u32) -> crate::lists::resolve::ResolvedItem {
+    let mut item = resolved_item("alpha");
+    item.kind = Some(MediaFacet::Series);
+    item.external_ids = vec![ExternalId::new("tvdb", tvdb_id.to_string())];
+    item
+}
+
+fn assert_carries_route_layout(tags: &[String]) {
+    for expected in [
+        "scryer:season-folder:disabled",
+        "scryer:release-numbering:alternate",
+    ] {
+        assert!(
+            tags.iter().any(|tag| tag == expected),
+            "{expected} missing from {tags:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_list_add_creates_the_title_with_every_route_option() {
+    let harness = bootstrap_media_request_app();
+    let (list, _) =
+        series_list_with_options(&harness, ListMode::Add, &[LibraryPermission::View]).await;
+
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &series_item(9080),
+        false,
+    )
+    .await;
+
+    assert_eq!(
+        outcome.state,
+        ListMembershipState::Added,
+        "{:?}",
+        outcome.reason
+    );
+    let title_id = outcome.title_id.expect("the add names its title");
+    let titles = harness.titles.store.lock().await;
+    let title = titles
+        .iter()
+        .find(|title| title.id == title_id)
+        .expect("title");
+    for expected in [
+        "scryer:quality-profile:1080p",
+        "scryer:monitor-type:futureepisodes",
+        LIST_LABEL,
+    ] {
+        assert!(
+            title.tags.iter().any(|tag| tag == expected),
+            "{expected} missing from {:?}",
+            title.tags
+        );
+    }
+    assert_carries_route_layout(&title.tags);
+}
+
+#[tokio::test]
+async fn a_held_list_request_offers_the_list_labels_and_lands_the_route_options() {
+    // An approver who keeps the offered labels, and one who clears them.
+    for (approver_tags, tvdb_id) in [(None, 9081), (Some(Vec::new()), 9082)] {
+        let harness = bootstrap_media_request_app();
+        let (list, library_id) =
+            series_list_with_options(&harness, ListMode::Hold, &[LibraryPermission::Request]).await;
+        let outcome = crate::lists::act::act_on_candidate(
+            &AppListActions::new(&harness.app),
+            &list,
+            &series_item(tvdb_id),
+            false,
+        )
+        .await;
+        let request_id = outcome.request_id.expect("the hold files a request");
+        let pending = harness
+            .media_requests
+            .requests
+            .lock()
+            .await
+            .iter()
+            .find(|request| request.id == request_id)
+            .cloned()
+            .expect("request");
+        assert_eq!(
+            pending.policy_tags,
+            vec![LIST_LABEL.to_string()],
+            "the reviewer is offered the list's labels"
+        );
+
+        let clears = approver_tags.is_some();
+        let approved = harness
+            .app
+            .approve_media_request(
+                &harness.manager,
+                &request_id,
+                "1080p",
+                None,
+                None,
+                None,
+                approver_tags,
+            )
+            .await
+            .expect("approved");
+
+        let titles = harness.titles.store.lock().await;
+        let title = titles
+            .iter()
+            .find(|title| title.id == approved.title_id)
+            .expect("title");
+        assert_eq!(
+            title.tags.iter().any(|tag| tag == LIST_LABEL),
+            !clears,
+            "approver tags {clears}: {:?}",
+            title.tags
+        );
+        assert_carries_route_layout(&title.tags);
+        let route = &list.routes[0];
+        assert_eq!(Some(&title.root_folder_id), route.root_folder_id.as_ref());
+        assert_eq!(title.library_id, library_id);
+    }
+}
+
+#[tokio::test]
+async fn a_list_request_whose_route_root_is_gone_still_approves() {
+    let harness = bootstrap_media_request_app();
+    let (mut list, _) =
+        series_list_with_options(&harness, ListMode::Hold, &[LibraryPermission::Request]).await;
+    list.routes[0].root_folder_id = Some("root-removed".to_string());
+    *harness.lists.subscriptions.lock().unwrap() = vec![list.clone()];
+    let outcome = crate::lists::act::act_on_candidate(
+        &AppListActions::new(&harness.app),
+        &list,
+        &series_item(9083),
+        false,
+    )
+    .await;
+    let request_id = outcome.request_id.expect("the hold files a request");
+
+    let approved = harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &request_id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("a stale root falls back to the library default");
+
+    let titles = harness.titles.store.lock().await;
+    let title = titles
+        .iter()
+        .find(|title| title.id == approved.title_id)
+        .expect("title");
+    assert_ne!(title.root_folder_id, "root-removed");
+    assert_carries_route_layout(&title.tags);
 }

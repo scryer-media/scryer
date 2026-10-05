@@ -500,6 +500,8 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
     lastUpdatedAt
     attentionRequired
     attentionReason
+    passwordFailureCode
+    passwordRetryImportId
     downloadClientItemId
     downloadId
     importStatus
@@ -1330,6 +1332,8 @@ export const interactiveReleaseSearchQuery = `query InteractiveReleaseSearch($id
       elapsedMs
       failureReason
       rateLimited
+      skipReason
+      skippedUntil
     }
     startedAt
     completedAt
@@ -5457,6 +5461,10 @@ export const listProvidersQuery =`query ListProviders {
       secret
       isSet
       value
+      options {
+        value
+        label
+      }
     }
     urlPatterns {
       pattern
@@ -5480,6 +5488,10 @@ const LIST_PROVIDER_SETTINGS_FIELDS = `
       secret
       isSet
       value
+      options {
+        value
+        label
+      }
     }`;
 
 export const listProviderSettingsQuery = `query ListProviderSettings {

@@ -1,10 +1,9 @@
-//! The metadata gateway's side of Lists: public charts, proxied IMDb lists,
-//! and identity resolution for every kind.
+//! The metadata gateway's side of Lists: public charts and identity
+//! resolution for every kind.
 //!
 //! Charts the gateway already ingests are read from it rather than from the
 //! provider, so an instance never spends its own rate limit on a public chart.
-//! IMDb has no API; the gateway proxies public IMDb lists for enrolled
-//! instances. Every list item, whatever id scheme its provider speaks, is
+//! Every list item, whatever id scheme its provider speaks, is
 //! resolved through the gateway's `resolveTitles`, which maps alias sources
 //! (Plex GUIDs, Trakt, Simkl, Kitsu, MAL, AniList) itself.
 
@@ -42,13 +41,13 @@ pub struct ListChartCatalogEntry {
     pub item_count: i64,
 }
 
-/// One entry of a chart or a proxied IMDb list, in list order.
+/// One entry of a chart, in chart order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ListChartItem {
     pub rank: i64,
     pub title_id: Option<i64>,
     pub resolved: bool,
-    /// `movie`, `series`, `anime`, or `unknown` for an unresolved IMDb entry.
+    /// `movie`, `series` or `anime`.
     pub kind: String,
     pub external_ids: Vec<ExternalId>,
     pub display_title: String,
@@ -74,33 +73,16 @@ fn list_kind(kind: &str) -> Option<ListMediaKind> {
     }
 }
 
-/// How an item of a gateway-served list is keyed across syncs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChartItemKey {
-    /// By gateway title id: chart entries are always resolved.
-    GatewayTitle,
-    /// By IMDb id: a proxied IMDb entry keeps its key when it resolves later.
-    Imdb,
-}
-
-/// Turn gateway list entries into plugin-shaped items, keeping list order.
-/// Entries with no usable key are dropped rather than invented.
+/// Turn chart entries into plugin-shaped items, keeping chart order. Each is
+/// keyed by its gateway title id across syncs; an entry without one is
+/// dropped rather than given an invented key.
 pub fn chart_items_to_plugin_items(
     items: Vec<ListChartItem>,
-    key: ChartItemKey,
 ) -> Vec<(ListPluginItem, Option<String>)> {
     items
         .into_iter()
         .filter_map(|item| {
-            let imdb_id = item
-                .external_ids
-                .iter()
-                .find(|id| id.source.eq_ignore_ascii_case("imdb"))
-                .map(|id| id.value.clone());
-            let item_key = match key {
-                ChartItemKey::GatewayTitle => item.title_id.map(|id| format!("smg:{id}")),
-                ChartItemKey::Imdb => imdb_id.map(|id| format!("imdb:{id}")),
-            }?;
+            let item_key = item.title_id.map(|id| format!("smg:{id}"))?;
             let mut external_ids = item
                 .external_ids
                 .iter()
@@ -140,7 +122,7 @@ pub fn chart_items_to_plugin_items(
 /// own error text reaches the subscription.
 fn gateway_failure(provider: &str, error: &crate::AppError) -> ListFailure {
     let text = error.to_string().to_ascii_lowercase();
-    let class = if text.contains("not found") || text.contains("invalid imdb list") {
+    let class = if text.contains("not found") {
         ListFailureClass::NotFound
     } else if text.contains("unknown chart") {
         ListFailureClass::Failed
@@ -150,7 +132,7 @@ fn gateway_failure(provider: &str, error: &crate::AppError) -> ListFailure {
     ListFailure::new(class, provider)
 }
 
-/// Chart and IMDb list reads through the metadata gateway.
+/// Chart reads through the metadata gateway.
 pub struct GatewayListChartSource {
     gateway: Arc<dyn MetadataGateway>,
 }
@@ -179,13 +161,6 @@ impl ListChartSource for GatewayListChartSource {
             )
             .await
             .map_err(|error| gateway_failure(provider, &error))
-    }
-
-    async fn imdb_user_list(&self, list_id: &str) -> Result<Vec<ListChartItem>, ListFailure> {
-        self.gateway
-            .list_imdb_user_list(list_id)
-            .await
-            .map_err(|error| gateway_failure("IMDb", &error))
     }
 }
 

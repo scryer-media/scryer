@@ -1370,7 +1370,6 @@ export function ActivityView({
               {t(queueError ? "activity.staleData" : "activity.queueStale")}
             </p>
           ) : null}
-          {queueRefreshing && !queueLoading ? <div role="status" className="flex items-center gap-2 text-sm text-muted-foreground"><LoadingMark className="h-4 w-4" />{t("label.loading")}</div> : null}
           <div
             className={cn(
               "flex flex-col gap-3 sm:flex-row sm:items-center",

@@ -24,6 +24,7 @@ pub mod provider_settings;
 pub mod public;
 pub mod rejection;
 pub mod resolve;
+mod route_options;
 mod runtime;
 #[cfg(test)]
 pub(crate) use runtime::AppListActions;

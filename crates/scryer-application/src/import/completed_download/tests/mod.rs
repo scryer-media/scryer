@@ -154,18 +154,17 @@ impl TitleRepository for TestTitleRepo {
     async fn find_by_external_id_in_facet(
         &self,
         facet: MediaFacet,
-        source: &str,
-        value: &str,
+        id: &scryer_domain::ExternalId,
     ) -> AppResult<Option<Title>> {
         let titles = self.titles.lock().await;
         Ok(titles
             .iter()
             .find(|title| {
                 title.facet == facet
-                    && title.external_ids.iter().any(|external_id| {
-                        external_id.source.eq_ignore_ascii_case(source)
-                            && external_id.value == value
-                    })
+                    && title
+                        .external_ids
+                        .iter()
+                        .any(|external_id| external_id.same_entity_as(id))
             })
             .cloned())
     }
@@ -901,6 +900,8 @@ impl ImportArtifactRepository for UnavailableImportArtifactRepo {
 
 #[derive(Default)]
 struct TestDownloadSubmissionRepo {
+    passwords: Mutex<HashMap<String, crate::DownloadPasswordCandidates>>,
+    fail_password_save: std::sync::atomic::AtomicBool,
     rows: Arc<Mutex<Vec<(DownloadSubmission, DownloadSubmissionIdentity)>>>,
     tracked_states: Arc<Mutex<Vec<(ClientJobLocator, String)>>>,
     identity_tracked_states: Arc<Mutex<Vec<(String, String)>>>,
@@ -943,6 +944,39 @@ fn test_tracked_state_key(
 
 #[async_trait]
 impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
+    async fn set_password_candidates(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+        candidates: &crate::DownloadPasswordCandidates,
+    ) -> AppResult<()> {
+        if self
+            .fail_password_save
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository(
+                "synthetic password persistence failure".into(),
+            ));
+        }
+        self.passwords
+            .lock()
+            .await
+            .insert(id.to_string(), candidates.clone());
+        Ok(())
+    }
+
+    async fn password_candidates(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<crate::DownloadPasswordCandidates> {
+        Ok(self
+            .passwords
+            .lock()
+            .await
+            .get(&id.to_string())
+            .cloned()
+            .unwrap_or_default())
+    }
+
     async fn record_submission(&self, submission: DownloadSubmission) -> AppResult<()> {
         self.rows
             .lock()

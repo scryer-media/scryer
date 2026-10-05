@@ -1,10 +1,8 @@
-/** Search kinds a title-less query subject may take. */
-export type InteractiveSearchKind = "MOVIE" | "SERIES" | "ANIME" | "RAW";
-
 /**
  * The job accepts exactly one subject: a catalog title (`titleId`, optionally
  * narrowed to a season, or to a season and episode) or a raw operator query
- * (`query` + `kind`). `indexerIds` and `categories` restrict either subject.
+ * (`query`, sent as is with `categories`; `limit` is then a per-indexer page
+ * size). `indexerIds` restricts either subject.
  */
 export type InteractiveReleaseSearchInput = {
   titleId?: string;
@@ -12,7 +10,6 @@ export type InteractiveReleaseSearchInput = {
   season?: string;
   episode?: string;
   query?: string;
-  kind?: InteractiveSearchKind;
   indexerIds?: string[];
   categories?: string[];
   limit?: number;

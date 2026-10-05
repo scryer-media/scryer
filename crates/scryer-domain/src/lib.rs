@@ -391,8 +391,8 @@ pub struct MediaRequest {
     pub decision_id: Option<String>,
     /// Rule sets that voted for the effective outcome.
     pub decided_by_rule_set_ids: Vec<String>,
-    /// Tags the rules emitted, merged onto the created title at approval
-    /// (spec 0003 FR-050).
+    /// Tags the rules emitted, and the labels a list request's route applies,
+    /// merged onto the created title at approval (spec 0003 FR-050).
     pub policy_tags: Vec<String>,
     /// Versioned metadata snapshot captured at submit (spec 0003 FR-030).
     /// A raw JSON string here: the typed snapshot lives in the application
@@ -925,6 +925,23 @@ impl ExternalId {
     /// The kind, trimmed and lowercased, or `None` when absent or blank.
     pub fn normalized_kind(&self) -> Option<String> {
         self.kind.as_deref().and_then(normalize_external_id_kind)
+    }
+
+    /// Whether `self` and `other` can name the same entity: the same source
+    /// and value, and kinds that do not disagree. An id without a kind matches
+    /// any kind, as user, plugin and pre-kind ids always have; two kinded ids
+    /// match only when their kinds are equal (tvdb movie 7373 is not tvdb
+    /// series 7373).
+    pub fn same_entity_as(&self, other: &ExternalId) -> bool {
+        if !self.source.trim().eq_ignore_ascii_case(other.source.trim())
+            || !self.value.trim().eq_ignore_ascii_case(other.value.trim())
+        {
+            return false;
+        }
+        match (self.normalized_kind(), other.normalized_kind()) {
+            (Some(left), Some(right)) => left == right,
+            _ => true,
+        }
     }
 
     /// `source:kind:id`, with the kind segment omitted when it is unknown.
@@ -2688,6 +2705,54 @@ impl DownloadSeedingSnapshot {
     }
 }
 
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DownloadPasswordFailure {
+    Required,
+    PasswordOrCorruption,
+}
+
+impl DownloadPasswordFailure {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Required => "archive_password_required",
+            Self::PasswordOrCorruption => "archive_password_or_corruption",
+        }
+    }
+
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Required => "ARCHIVE_PASSWORD_REQUIRED: a new archive password is required",
+            Self::PasswordOrCorruption => {
+                "ARCHIVE_PASSWORD_OR_CORRUPTION: the password may be incorrect or the archive may be damaged"
+            }
+        }
+    }
+}
+
+impl DownloadQueueItem {
+    pub fn password_failure(&self) -> Option<DownloadPasswordFailure> {
+        if self.state != DownloadQueueState::Failed {
+            return None;
+        }
+        match self.attention_reason.as_deref() {
+            Some(reason)
+                if reason == "archive_password_required"
+                    || reason.starts_with("ARCHIVE_PASSWORD_REQUIRED:") =>
+            {
+                Some(DownloadPasswordFailure::Required)
+            }
+            Some(reason)
+                if reason == "archive_password_or_corruption"
+                    || reason.starts_with("ARCHIVE_PASSWORD_OR_CORRUPTION:") =>
+            {
+                Some(DownloadPasswordFailure::PasswordOrCorruption)
+            }
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DownloadQueueItem {
     pub id: String,
@@ -3243,6 +3308,19 @@ pub enum ImportDestinationDisposition {
     AlreadyPresent,
 }
 
+/// Where the import left its source.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportSourceDisposition {
+    /// The source is still at its path; a move import removes it later through
+    /// its cleanup guard.
+    #[default]
+    Retained,
+    /// The source was archive extraction output and was renamed into place, so
+    /// nothing is left at its path and there is nothing to clean up.
+    RenamedIntoPlace,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ImportFileResult {
     pub strategy: ImportStrategy,
@@ -3251,6 +3329,8 @@ pub struct ImportFileResult {
     pub size_bytes: u64,
     #[serde(default)]
     pub destination_disposition: ImportDestinationDisposition,
+    #[serde(default)]
+    pub source_disposition: ImportSourceDisposition,
     pub source_cleanup: Option<ImportSourceCleanupGuard>,
     /// What proving the destination concluded, for the placements that copied
     /// bytes (FR-045). `None` for a rename, hardlink, or symlink placement:
@@ -4214,6 +4294,9 @@ pub struct GrabbedReleaseFacts {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DownloadFailedEventData {
+    /// Stable identity for an operator retry; download_id below is the native client ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canonical_download_id: Option<String>,
     #[serde(default)]
     pub title: Option<TitleContextSnapshot>,
     #[serde(default)]

@@ -178,6 +178,46 @@ pub(crate) struct ResolvedReleaseSearchSubject {
     pub(crate) absolute_episode: Option<u32>,
     pub(crate) subject_kind: ReleaseSearchSubjectKind,
     pub(crate) submission_scope: SubmissionScope,
+    /// The subject is searched before its release window has settled — an
+    /// episode within a day of its air date, or a movie not yet a day past
+    /// availability. Coverage from such a search proves nothing about the
+    /// released catalog, so it is fingerprinted apart from released coverage.
+    pub(crate) pre_release: bool,
+}
+
+/// How long after an air or availability date a search still counts as
+/// pre-release: a date-only air date carries no broadcast time, and
+/// indexers need time to carry a new release.
+const PRE_RELEASE_SETTLE_HOURS: i64 = 24;
+
+/// Whether an episode search runs before its air date has settled. An
+/// episode without a readable air date is never pre-release.
+pub(crate) fn episode_is_pre_release(air_date: Option<&str>, now: &DateTime<Utc>) -> bool {
+    crate::acquisition::policy::parse_schedule_baseline_date(air_date)
+        .is_some_and(|air| *now < air + chrono::Duration::hours(PRE_RELEASE_SETTLE_HOURS))
+}
+
+/// Whether a movie search runs before the movie has been released for a
+/// settle window. A movie with no readable release date is never
+/// pre-release, or its searches would be kept apart from released coverage
+/// forever.
+pub(crate) fn movie_is_pre_release(
+    first_aired: Option<&str>,
+    digital_release_date: Option<&str>,
+    now: &DateTime<Utc>,
+) -> bool {
+    let readable = |date: &&str| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok();
+    let first_aired = first_aired.filter(readable);
+    let digital_release_date = digital_release_date.filter(readable);
+    if first_aired.is_none() && digital_release_date.is_none() {
+        return false;
+    }
+    !crate::acquisition::targets::movie_is_available_for_acquisition(
+        first_aired,
+        digital_release_date,
+        "released",
+        &(*now - chrono::Duration::hours(PRE_RELEASE_SETTLE_HOURS)),
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -2628,6 +2668,12 @@ impl AppUseCase {
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
+            pre_release: title.facet == MediaFacet::Movie
+                && movie_is_pre_release(
+                    title.first_aired.as_deref(),
+                    title.digital_release_date.as_deref(),
+                    &Utc::now(),
+                ),
         })
     }
 
@@ -2800,6 +2846,12 @@ impl AppUseCase {
                     episode_id: episode.id.clone(),
                 })
                 .unwrap_or(SubmissionScope::Title),
+            pre_release: episode_is_pre_release(
+                episode_record
+                    .as_ref()
+                    .and_then(|episode| episode.air_date.as_deref()),
+                &Utc::now(),
+            ),
         })
     }
 
@@ -2931,6 +2983,7 @@ impl AppUseCase {
                 absolute_episode: None,
                 subject_kind: ReleaseSearchSubjectKind::Season,
                 submission_scope,
+                pre_release: false,
             },
             // Results come back under any name the index holds for the title,
             // a cour name included, so the evidence is built from the index's
@@ -2999,6 +3052,7 @@ impl AppUseCase {
                 submission_scope: SubmissionScope::SeriesMovie {
                     series_movie_link_id: link.id.clone(),
                 },
+                pre_release: false,
             },
         ))
     }
@@ -3104,6 +3158,18 @@ impl AppUseCase {
                     _ => ReleaseSearchSubjectKind::Title,
                 },
                 submission_scope: direct_download_submission_scope_for_wanted_item(item, episode),
+                pre_release: match item.media_type.as_str() {
+                    "episode" => episode_is_pre_release(
+                        episode.and_then(|episode| episode.air_date.as_deref()),
+                        &Utc::now(),
+                    ),
+                    "movie" => movie_is_pre_release(
+                        search_title.first_aired.as_deref(),
+                        search_title.digital_release_date.as_deref(),
+                        &Utc::now(),
+                    ),
+                    _ => false,
+                },
             },
             evidence: PendingTitleEvidence::Ambiguity(search_title.clone()),
         })
@@ -4030,6 +4096,7 @@ mod tests {
             submission_scope: SubmissionScope::EpisodeSet {
                 episode_ids: episode_ids.iter().map(|id| (*id).to_string()).collect(),
             },
+            pre_release: false,
         }
     }
 
@@ -4193,6 +4260,7 @@ mod tests {
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
+            pre_release: false,
         };
         let profile = QualityProfile::default();
         let thresholds = AcquisitionThresholds::default();
@@ -4270,6 +4338,7 @@ mod tests {
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
+            pre_release: false,
         };
         let profile = QualityProfile::default();
         let thresholds = AcquisitionThresholds::default();
@@ -4365,6 +4434,7 @@ mod tests {
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Episode,
             submission_scope: SubmissionScope::Title,
+            pre_release: false,
         }
     }
 
@@ -5692,6 +5762,7 @@ mod tests {
             absolute_episode: None,
             subject_kind: ReleaseSearchSubjectKind::Title,
             submission_scope: SubmissionScope::Title,
+            pre_release: false,
         };
         let profile = QualityProfile::default();
         let thresholds = AcquisitionThresholds::default();
@@ -5783,6 +5854,7 @@ mod tests {
                 absolute_episode: None,
                 subject_kind: ReleaseSearchSubjectKind::Title,
                 submission_scope: SubmissionScope::Title,
+                pre_release: false,
             }
         }
 

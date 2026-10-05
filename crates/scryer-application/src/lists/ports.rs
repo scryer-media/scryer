@@ -43,6 +43,11 @@ impl ListSubscriptionQuery {
 
 #[async_trait]
 pub trait ListSubscriptionRepository: Send + Sync {
+    /// Stores a new subscription. A public subscription whose source
+    /// (provider, source type and params) another public subscription already
+    /// follows is refused with a validation error; the check and the insert
+    /// are one atomic step, so concurrent follows of one source cannot both
+    /// succeed.
     async fn create(&self, subscription: ListSubscription) -> AppResult<ListSubscription>;
 
     /// Rewrites the subscription's settings and routes. The sync bookkeeping
@@ -65,6 +70,20 @@ pub trait ListSubscriptionRepository: Send + Sync {
     async fn record_sync(
         &self,
         id: &str,
+        sync: &ListSyncStatus,
+        counts: &ListCounts,
+    ) -> AppResult<()>;
+
+    /// [`Self::record_sync`] for the outcome of a sync that read the list's
+    /// status as `read`. When the stored next sync time is no longer
+    /// `read.next_at`, a sync was asked for while this one ran ("sync now",
+    /// turning the list back on): the stored next sync time and fingerprint
+    /// are kept, so that request is not overwritten, and everything else is
+    /// written as given. The check and the write are one atomic step.
+    async fn record_sync_outcome(
+        &self,
+        id: &str,
+        read: &ListSyncStatus,
         sync: &ListSyncStatus,
         counts: &ListCounts,
     ) -> AppResult<()>;

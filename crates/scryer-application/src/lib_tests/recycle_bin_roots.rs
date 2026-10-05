@@ -882,3 +882,150 @@ async fn a_root_change_into_the_custom_bin_is_refused_before_anything_moves() {
         .await
         .expect("a new root clear of the bin plans as before");
 }
+
+#[cfg(unix)]
+fn link(target: &Path, link: &Path) {
+    std::os::unix::fs::symlink(target, link).expect("create fixture link");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_custom_bin_that_links_into_a_library_root_is_refused_and_keeps_the_file() {
+    let fixture = Fixture::new();
+    let root_a = fixture.root_a();
+    let inside = root_a.join("linked-bin");
+    std::fs::create_dir_all(&inside).expect("create folder inside the root");
+    let bin = fixture.temp.path().join("bin-link");
+    link(&inside, &bin);
+    let (app, user) = movie_app(&root_a).await;
+    let app =
+        app.with_test_overrides(|services| services.with_settings(settings_with_bin(Some(&bin))));
+    let (media, neighbour) = fixture.seed_media(&root_a, "Synthetic Feature");
+
+    let config = app
+        .recycle_bin_config_for_media_root(Some(root_a.to_string_lossy().as_ref()))
+        .await;
+    let error = config
+        .validation_error
+        .as_deref()
+        .expect("a bin reaching into a root through a link is refused");
+    assert!(
+        error.contains("once links are resolved"),
+        "unexpected refusal: {error}"
+    );
+    assert!(!config.cleanup_enabled);
+    crate::recycle_bin::recycle_file(&config, &media, removal_manifest(&media))
+        .await
+        .expect_err("the recycle is refused");
+    assert_untouched(&media, "Synthetic Feature media");
+    assert_untouched(&neighbour, "Synthetic Feature neighbour");
+    assert_eq!(
+        std::fs::read_dir(&inside)
+            .expect("read linked folder")
+            .count(),
+        0,
+        "nothing was written through the link"
+    );
+
+    // Saving such a location is refused too, and the stored one stays.
+    let app = app.with_test_overrides(|services| services.with_settings(settings_with_bin(None)));
+    let error = app
+        .update_recycle_bin_settings(
+            &user,
+            UpdateRecycleBinSettings {
+                enabled: None,
+                path: Some(Some(bin.to_string_lossy().to_string())),
+                retention_days: None,
+            },
+        )
+        .await
+        .expect_err("the linked location is refused");
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    let settings = app
+        .get_recycle_bin_settings(&user)
+        .await
+        .expect("read settings");
+    assert_eq!(settings.path, None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_custom_bin_under_a_link_that_leads_nowhere_is_refused_and_creates_nothing() {
+    let fixture = Fixture::new();
+    let root_a = fixture.root_a();
+    let missing = fixture.temp.path().join("missing-target");
+    let dangling = fixture.temp.path().join("dangling");
+    link(&missing, &dangling);
+    let bin = dangling.join("bin");
+    let (app, _) = movie_app(&root_a).await;
+    let app =
+        app.with_test_overrides(|services| services.with_settings(settings_with_bin(Some(&bin))));
+    let (media, neighbour) = fixture.seed_media(&root_a, "Synthetic Feature");
+
+    let config = app
+        .recycle_bin_config_for_media_root(Some(root_a.to_string_lossy().as_ref()))
+        .await;
+    let error = config
+        .validation_error
+        .as_deref()
+        .expect("a bin that cannot be resolved is refused");
+    assert!(
+        error.contains("could not be resolved"),
+        "unexpected refusal: {error}"
+    );
+    crate::recycle_bin::recycle_file(&config, &media, removal_manifest(&media))
+        .await
+        .expect_err("the recycle is refused");
+    assert_untouched(&media, "Synthetic Feature media");
+    assert_untouched(&neighbour, "Synthetic Feature neighbour");
+    assert!(!missing.exists(), "nothing was created behind the link");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_custom_bin_that_links_outside_every_root_still_recycles() {
+    let fixture = Fixture::new();
+    let root_a = fixture.root_a();
+    let outside = fixture.temp.path().join("outside-bin");
+    std::fs::create_dir_all(&outside).expect("create outside folder");
+    let bin = fixture.temp.path().join("bin-link");
+    link(&outside, &bin);
+    let (app, _) = movie_app(&root_a).await;
+    let app =
+        app.with_test_overrides(|services| services.with_settings(settings_with_bin(Some(&bin))));
+    let (media, neighbour) = fixture.seed_media(&root_a, "Synthetic Feature");
+
+    let config = app
+        .recycle_bin_config_for_media_root(Some(root_a.to_string_lossy().as_ref()))
+        .await;
+    assert_eq!(config.validation_error, None);
+    let result = crate::recycle_bin::recycle_file(&config, &media, removal_manifest(&media))
+        .await
+        .expect("the bin is usable")
+        .expect("file recycled");
+    assert_untouched(&result.recycled_path, "Synthetic Feature media");
+    assert_untouched(&neighbour, "Synthetic Feature neighbour");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_library_root_that_links_to_the_folder_holding_the_custom_bin_is_refused() {
+    let fixture = Fixture::new();
+    let (app, user, _) = app_with_custom_bin(&fixture).await;
+    let libraries_before = library_names(&app).await;
+    let root = fixture.temp.path().join("disk-link");
+    link(&fixture.temp.path().join("disk"), &root);
+
+    let error = app
+        .create_library(
+            &user,
+            MediaFacet::Movie,
+            "Synthetic Linked Library".to_string(),
+            vec![root_draft(&root)],
+            None,
+        )
+        .await
+        .expect_err("a root reaching the bin through a link is refused");
+    assert_bin_conflict(error, &root);
+    assert_eq!(library_names(&app).await, libraries_before);
+}

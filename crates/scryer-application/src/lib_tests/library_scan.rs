@@ -1254,6 +1254,99 @@ async fn movie_title_scan_removes_missing_tracked_movie_file() {
     );
 }
 
+/// The coverage receipts left for a movie whose tracked file vanished.
+async fn movie_lost_file_coverage_after_scan(monitored: bool) -> Vec<String> {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let movie_path = tempdir.path().join("Quiet Lantern (2026) - 1080p.mkv");
+    std::fs::write(&movie_path, b"movie").expect("write movie file");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "movies.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let (app, user) = bootstrap_with_scan_unmatched_tracking(
+        settings,
+        Arc::new(MutableLibraryScanner::default()),
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile movie root");
+
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Quiet Lantern".into(),
+                facet: MediaFacet::Movie,
+                monitored,
+                year: Some(2026),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create movie title");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&title.id, tempdir.path().to_string_lossy().as_ref())
+        .await
+        .expect("set movie folder path");
+    app.services
+        .library
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: movie_path.to_string_lossy().to_string(),
+            size_bytes: 5,
+            quality_label: Some("1080p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("seed movie media file");
+    let scope_key = format!("title:{}", title.id);
+    coverage
+        .record_coverage(&scope_key, "movie", "indexer-a", "fp")
+        .await
+        .expect("seed coverage");
+
+    std::fs::remove_file(&movie_path).expect("remove movie file externally");
+    app.scan_title_library(&user, &title.id)
+        .await
+        .expect("movie title scan should succeed");
+    assert!(
+        app.services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .expect("list media files")
+            .is_empty()
+    );
+
+    coverage.indexers_for_scope(&scope_key).await
+}
+
+#[tokio::test]
+async fn movie_title_scan_reopens_coverage_when_a_monitored_movie_loses_its_file() {
+    assert!(movie_lost_file_coverage_after_scan(true).await.is_empty());
+}
+
+#[tokio::test]
+async fn movie_title_scan_keeps_coverage_when_an_unmonitored_movie_loses_its_file() {
+    assert_eq!(
+        movie_lost_file_coverage_after_scan(false).await,
+        vec!["indexer-a".to_string()]
+    );
+}
+
 #[tokio::test]
 async fn movie_title_scan_multiple_files_picks_initial_primary_and_marks_rest_additional() {
     let tempdir = tempfile::tempdir().expect("tempdir");
@@ -1655,6 +1748,185 @@ async fn series_title_scan_imports_episode_file_as_primary() {
     assert_eq!(
         files[0].release_listing_json, None,
         "a scanned file has no grab behind it"
+    );
+}
+
+#[tokio::test]
+async fn series_title_scan_reopens_coverage_only_for_monitored_episodes_whose_files_were_lost() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let title_dir = tempdir.path().join("Lost Reel (2026)");
+    std::fs::create_dir(&title_dir).expect("create series folder");
+    let episode_paths = [
+        title_dir.join("Lost Reel - 1x01 - First WEBDL-1080p.mkv"),
+        title_dir.join("Lost Reel - 1x02 - Second WEBDL-1080p.mkv"),
+        title_dir.join("Lost Reel - 1x03 - Third WEBDL-1080p.mkv"),
+    ];
+    for path in &episode_paths {
+        std::fs::write(path, vec![0_u8; 128]).expect("write episode file");
+    }
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "series.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner
+        .set_library_files(build_test_library_files(
+            &episode_paths
+                .iter()
+                .map(PathBuf::as_path)
+                .collect::<Vec<_>>(),
+        ))
+        .await;
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        settings,
+        library_scanner.clone(),
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+        Arc::new(EmptySearchMetadataGateway),
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::new());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile series root");
+
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Lost Reel".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                year: Some(2026),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series title");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&title.id, title_dir.to_string_lossy().as_ref())
+        .await
+        .expect("set series folder path");
+    let season = app
+        .services
+        .catalog
+        .shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: Some("1".to_string()),
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("3".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("create season");
+    // Episode 1 is monitored and loses its file, episode 2 is unmonitored and
+    // loses its file, episode 3 is monitored and keeps its file.
+    let mut episode_ids = Vec::new();
+    for (number, monitored) in [(1, true), (2, false), (3, true)] {
+        let episode = app
+            .services
+            .catalog
+            .shows
+            .create_episode(Episode {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_id: Some(season.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some(number.to_string()),
+                season_number: Some("1".to_string()),
+                episode_label: Some(format!("S01E0{number}")),
+                title: None,
+                air_date: Some("2026-01-01".to_string()),
+                duration_seconds: Some(420),
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                contiguous_absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                tmdb_id: None,
+                image_url: None,
+                monitored,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create episode");
+        episode_ids.push(episode.id);
+    }
+
+    app.scan_title_library(&user, &title.id)
+        .await
+        .expect("initial series scan");
+    assert_eq!(
+        app.services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .expect("list media files")
+            .len(),
+        3
+    );
+    let scope_keys = episode_ids
+        .iter()
+        .map(|episode_id| format!("episode:{episode_id}"))
+        .collect::<Vec<_>>();
+    for scope_key in &scope_keys {
+        coverage
+            .record_coverage(scope_key, "series", "indexer-a", "fp")
+            .await
+            .expect("seed coverage");
+    }
+
+    std::fs::remove_file(&episode_paths[0]).expect("remove first episode externally");
+    std::fs::remove_file(&episode_paths[1]).expect("remove second episode externally");
+    library_scanner
+        .set_library_files(build_test_library_files(&[episode_paths[2].as_path()]))
+        .await;
+    app.scan_title_library(&user, &title.id)
+        .await
+        .expect("rescan series title");
+
+    assert_eq!(
+        app.services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await
+            .expect("list media files")
+            .len(),
+        1,
+        "the two lost files are retired"
+    );
+    assert!(
+        coverage.indexers_for_scope(&scope_keys[0]).await.is_empty(),
+        "a monitored episode that lost its file is searchable again"
+    );
+    assert_eq!(
+        coverage.indexers_for_scope(&scope_keys[1]).await,
+        vec!["indexer-a".to_string()],
+        "an unmonitored episode keeps its receipts"
+    );
+    assert_eq!(
+        coverage.indexers_for_scope(&scope_keys[2]).await,
+        vec!["indexer-a".to_string()],
+        "an episode whose file is still there keeps its receipts"
     );
 }
 

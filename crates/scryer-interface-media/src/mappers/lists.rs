@@ -190,6 +190,19 @@ fn from_list_provider_setting_field(
         secret: field.secret,
         is_set: field.is_set,
         value: if field.secret { None } else { field.value },
+        options: field
+            .options
+            .into_iter()
+            .map(|option| PluginConfigFieldOptionPayload {
+                value: option.value,
+                label: option.label,
+                config_overrides: option
+                    .config_overrides
+                    .into_iter()
+                    .map(|(key, value)| PluginConfigFieldOverridePayload { key, value })
+                    .collect(),
+            })
+            .collect(),
     }
 }
 

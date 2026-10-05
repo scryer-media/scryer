@@ -1,14 +1,11 @@
-use std::sync::Arc;
-
-use base64::Engine as _;
 use scryer_application::{AppError, MetadataGateway, TitleExternalRef};
 use scryer_domain::ExternalId;
 use serde_json::json;
-use wiremock::matchers::{body_string_contains, method, path, query_param};
+use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
-use super::super::{InstanceAuth, MetadataGatewayClient, MtlsState, SmgEnrollmentConfig};
-use super::{OP_LIST_CHART_CATALOG, OP_LIST_CHART_ITEMS, OP_LIST_IMDB_USER_LIST};
+use super::super::{MetadataGatewayClient, SmgEnrollmentConfig};
+use super::{OP_LIST_CHART_CATALOG, OP_LIST_CHART_ITEMS};
 
 fn unsigned_client(endpoint: String) -> MetadataGatewayClient {
     MetadataGatewayClient::new_without_enrollment_store(
@@ -17,25 +14,6 @@ fn unsigned_client(endpoint: String) -> MetadataGatewayClient {
             registration_secret: None,
         },
     )
-}
-
-async fn signed_client(endpoint: String) -> MetadataGatewayClient {
-    let client = MetadataGatewayClient::new_without_enrollment_store(
-        endpoint,
-        SmgEnrollmentConfig {
-            registration_secret: Some("fixture-secret".to_string()),
-        },
-    );
-    *client.mtls_state.write().await = MtlsState::Enrolled {
-        client: scryer_outbound_http::smg_reqwest_client(),
-        auth: InstanceAuth::Pq {
-            instance_id: Arc::new("fixture-instance".to_string()),
-            seed_b64: Arc::new(base64::engine::general_purpose::STANDARD.encode([7u8; 32])),
-            key_id: Arc::new("fixture-key".to_string()),
-            enrollment_generation: Some(1),
-        },
-    };
-    client
 }
 
 fn query_variables(request: &Request) -> serde_json::Value {
@@ -160,67 +138,6 @@ async fn an_unknown_chart_is_an_error_not_an_empty_list() {
         .await
         .expect_err("unknown chart");
     assert!(matches!(&error, AppError::Repository(message) if message == "unknown chart"));
-}
-
-#[tokio::test]
-async fn an_imdb_list_is_a_signed_post() {
-    let server = MockServer::start().await;
-    Mock::given(method("POST"))
-        .and(path("/graphql"))
-        .and(body_string_contains(format!(
-            "\"operationName\":\"{OP_LIST_IMDB_USER_LIST}\""
-        )))
-        .and(body_string_contains("\"listId\":\"ls000000001\""))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "data": {"listImdbUserList": [
-                chart_entry(1, Some(7001), "tt0000701"),
-                chart_entry(2, None, "tt0000799")
-            ]}
-        })))
-        .expect(1)
-        .mount(&server)
-        .await;
-    let client = signed_client(format!("{}/graphql", server.uri())).await;
-
-    let items = client
-        .list_imdb_user_list("ls000000001")
-        .await
-        .expect("imdb list");
-
-    assert_eq!(items.len(), 2);
-    assert!(!items[1].resolved);
-    assert_eq!(items[1].kind, "unknown");
-    let requests = server.received_requests().await.expect("captured");
-    let signed = requests
-        .iter()
-        .find(|request| request.method.as_str() == "POST")
-        .expect("post captured");
-    assert_eq!(
-        signed
-            .headers
-            .get("x-scryer-key-id")
-            .and_then(|value| value.to_str().ok()),
-        Some("fixture-key")
-    );
-    assert!(signed.headers.get("x-scryer-signature").is_some());
-}
-
-#[tokio::test]
-async fn an_imdb_list_needs_an_enrolled_instance() {
-    let server = MockServer::start().await;
-    let client = unsigned_client(format!("{}/graphql", server.uri()));
-
-    client
-        .list_imdb_user_list("ls000000001")
-        .await
-        .expect_err("no instance auth");
-    assert!(
-        server
-            .received_requests()
-            .await
-            .expect("captured")
-            .is_empty()
-    );
 }
 
 fn alias_ref(source: &str, value: &str) -> TitleExternalRef {

@@ -61,7 +61,7 @@ fn submission_for_grab(
         source_provider_id: request.indexer_id.clone(),
         source_provider_name: intent.source_provider_name.clone(),
         source_kind: intent.request.source_kind,
-        source_title: request.source_title.clone(),
+        source_title: request.source_title_without_password(),
         info_hash: request.info_hash_hint.clone(),
         release_size_bytes: intent.release_size_bytes,
         release_listing_json: intent.release_listing_json.clone(),
@@ -313,6 +313,12 @@ impl AppUseCase {
                 &title_id,
             )
             .await?;
+        tracing::debug!(
+            title_id = %title_id,
+            download_id = ?intent.request.download_id,
+            stage = "guards_acquired",
+            "grab submission stage"
+        );
 
         if let Some(claim) = self
             .runtime
@@ -614,6 +620,13 @@ impl AppUseCase {
         let _prepared_artifact = self
             .prepare_indexer_artifact_for_submission(&mut request, Some(title_id.clone()))
             .await?;
+        tracing::debug!(
+            title_id = %title_id,
+            download_id = %download_id,
+            staged_nzb = request.staged_nzb.is_some(),
+            stage = "artifact_prepared",
+            "grab submission stage"
+        );
         // Nothing reaches a client until the grab's intent is durable. A
         // client can finish a job before it answers the submit, and that job
         // must already resolve to this title, purpose and scope rather than
@@ -632,7 +645,7 @@ impl AppUseCase {
                 source_provider_id: request.indexer_id.clone(),
                 source_provider_name: intent.source_provider_name.clone(),
                 source_kind,
-                source_title: request.source_title.clone(),
+                source_title: request.source_title_without_password(),
                 info_hash: request.info_hash_hint.clone(),
                 release_size_bytes: intent.release_size_bytes,
                 release_listing_json: intent.release_listing_json.clone(),
@@ -642,15 +655,33 @@ impl AppUseCase {
             })
             .await?;
         // The intent's unbound binding retires memoized resolutions of its id.
+        self.services
+            .workflow
+            .download_submissions
+            .set_password_candidates(&download_id, &request.password_candidates())
+            .await?;
         self.runtime
             .acquisition
             .invalidate_download_registry_observations();
+        tracing::debug!(
+            title_id = %title_id,
+            download_id = %download_id,
+            stage = "intent_recorded",
+            "grab submission stage"
+        );
         let grab_result = self
             .services
             .integrations
             .download_client
             .submit_download(&request)
             .await;
+        tracing::debug!(
+            title_id = %title_id,
+            download_id = %download_id,
+            accepted = grab_result.is_ok(),
+            stage = "client_submit_returned",
+            "grab submission stage"
+        );
         // The clients now hold something they did not hold a moment ago — or,
         // on an ambiguous error, may hold it. Either way the cached client
         // snapshots have stopped describing them, and the next subject this
@@ -675,7 +706,7 @@ impl AppUseCase {
                             source_provider_id: request.indexer_id.clone(),
                             source_provider_name: intent.source_provider_name.clone(),
                             source_kind,
-                            source_title: request.source_title.clone(),
+                            source_title: request.source_title_without_password(),
                             info_hash: request.info_hash_hint.clone(),
                             release_size_bytes: intent.release_size_bytes,
                             release_listing_json: intent.release_listing_json.clone(),
@@ -734,7 +765,7 @@ impl AppUseCase {
                 source_provider_id: request.indexer_id.clone(),
                 source_provider_name: intent.source_provider_name.clone(),
                 source_kind,
-                source_title: request.source_title.clone(),
+                source_title: request.source_title_without_password(),
                 info_hash: request.info_hash_hint.clone(),
                 release_size_bytes: intent.release_size_bytes,
                 release_listing_json: intent.release_listing_json.clone(),
@@ -786,7 +817,15 @@ impl AppUseCase {
             )
             .await
         {
-            Ok(disposition) => disposition,
+            Ok(disposition) => {
+                tracing::debug!(
+                    title_id = %title_id,
+                    download_id = %download_id,
+                    stage = "acceptance_recorded",
+                    "grab submission stage"
+                );
+                disposition
+            }
             Err(error) => {
                 self.runtime
                     .acquisition

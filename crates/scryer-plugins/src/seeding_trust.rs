@@ -148,6 +148,7 @@ pub(crate) fn descriptor(id: &str, version: &str) -> PluginDescriptor {
     use crate::types::{DownloadClientCapabilities, DownloadClientDescriptor, ProviderDescriptor};
 
     PluginDescriptor {
+        settings: Vec::new(),
         id: id.to_string(),
         name: id.to_string(),
         version: version.to_string(),

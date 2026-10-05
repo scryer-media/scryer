@@ -5234,6 +5234,17 @@ type DownloadImportPagePayload {
 	totalCount: Int!
 }
 
+type DownloadPasswordRetryPayload {
+	status: DownloadPasswordRetryStatus!
+	downloadClientItemId: String
+}
+
+enum DownloadPasswordRetryStatus {
+	ACCEPTED
+	REFUSED
+	AWAITING_RECONCILIATION
+}
+
 """
 Action represented by a download queue mutation response.
 """
@@ -5433,6 +5444,10 @@ type DownloadQueueItemPayload {
 	"""
 	attentionReason: String
 	"""
+	Stable password-related download failure classification; never contains credentials.
+	"""
+	passwordFailureCode: String
+	"""
 	Client-local item identifier; together with `client_id` it identifies the remote item.
 	"""
 	downloadClientItemId: String!
@@ -5508,6 +5523,10 @@ type DownloadQueueItemPayload {
 	Import actions this download currently offers; every client surface renders from this.
 	"""
 	importActions: DownloadImportActionsPayload!
+	"""
+	Failed local extraction attempt that can accept a replacement password.
+	"""
+	passwordRetryImportId: ID
 	"""
 	Acquisition scope for this queue item, or its episode scope when no more specific scope is available.
 	"""
@@ -8605,7 +8624,9 @@ type InteractiveReleaseSearchIndexerPayload {
 	"""
 	status: InteractiveReleaseSearchIndexerStatusValue!
 	"""
-	The indexer's own result count (before cross-indexer dedup).
+	The indexer's result count. A title search counts its own batch, before
+	cross-indexer dedup; a query search counts what it contributed to the
+	listing, after exact duplicates are removed.
 	"""
 	resultCount: Int!
 	"""
@@ -8621,6 +8642,14 @@ type InteractiveReleaseSearchIndexerPayload {
 	Searching resumes on its own, so this reads as a cooldown, not an error.
 	"""
 	rateLimited: Boolean!
+	"""
+	Why a skipped indexer was not asked, or null when it was not skipped.
+	"""
+	skipReason: InteractiveReleaseSearchSkipReasonValue
+	"""
+	UTC time a skip that lifts on its own ends, when known.
+	"""
+	skippedUntil: DateTime
 }
 
 """
@@ -8680,6 +8709,28 @@ type InteractiveReleaseSearchPayload {
 }
 
 """
+Why an interactive release search did not ask an indexer.
+"""
+enum InteractiveReleaseSearchSkipReasonValue {
+	"""
+	The indexer is switched off.
+	"""
+	INDEXER_DISABLED
+	"""
+	The indexer's configuration disables it for a while.
+	"""
+	TEMPORARILY_DISABLED
+	"""
+	The indexer is in a backoff after recent failures.
+	"""
+	BACKED_OFF
+	"""
+	The indexer takes no text query.
+	"""
+	NO_TEXT_SEARCH
+}
+
+"""
 Lifecycle state of a background interactive release search.
 """
 enum InteractiveReleaseSearchStateValue {
@@ -8695,29 +8746,6 @@ enum InteractiveReleaseSearchStateValue {
 	Search was canceled before completion.
 	"""
 	CANCELLED
-}
-
-"""
-What a title-less interactive search looks for; picks the search facet and
-the default newznab categories.
-"""
-enum InteractiveSearchKindValue {
-	"""
-	Movie facet search.
-	"""
-	MOVIE
-	"""
-	Series facet search.
-	"""
-	SERIES
-	"""
-	Anime facet search.
-	"""
-	ANIME
-	"""
-	Plain text search with no facet.
-	"""
-	RAW
 }
 
 """
@@ -10743,6 +10771,11 @@ type ListProviderSettingFieldPayload {
 	The stored value of a setting that is not secret, or null.
 	"""
 	value: String
+	"""
+	The choices of a select setting, in the provider's order. Empty for
+	every other type.
+	"""
+	options: [PluginConfigFieldOptionPayload!]!
 }
 
 """
@@ -17675,6 +17708,7 @@ type MutationRoot {
 		"""
 		input: UpdateSeriesMovieTagsInput!
 	): [SeriesMovieLinkPayload!]!
+	retryDownloadPassword(input: RetryDownloadPasswordInput!): DownloadPasswordRetryPayload!
 	"""
 	Evaluate an external announcement using normal automatic acquisition rules.
 	"""
@@ -19512,6 +19546,10 @@ type MutationRoot {
 		input: ReleaseTitleClaimInput!
 	): TitleClaim!
 	"""
+	Replace or clear explicitly supplied installation-wide settings.
+	"""
+	updateInstalledPluginSettings(pluginId: ID!, changes: JSON!): JSON!
+	"""
 	Refresh the configured plugin registry catalogs and return the available plugins.
 	"""
 	refreshPluginCatalog: [RegistryPluginPayload!]!
@@ -19901,7 +19939,7 @@ type MutationRoot {
 	"""
 	startInteractiveReleaseSearch(
 		"""
-		Either a title (with an optional series-movie link, a season alone for the whole season, or a season and episode) or a raw query and kind, plus an optional indexer restriction, categories and result limit.
+		Either a title (with an optional series-movie link, a season alone for the whole season, or a season and episode) or a raw query, plus an optional indexer restriction, categories and limit.
 		"""
 		input: SearchReleasesInput!
 	): InteractiveReleaseSearchPayload!
@@ -23753,6 +23791,10 @@ type QueryRoot {
 		limit: Int
 	): [PostProcessingScriptRunPayload!]!
 	"""
+	Read the installed plugin's settings declaration and redacted values.
+	"""
+	installedPluginSettings(pluginId: ID!): JSON!
+	"""
 	List available registry plugins visible to the caller.
 	"""
 	plugins: [RegistryPluginPayload!]!
@@ -25535,6 +25577,14 @@ type ResumeWantedItemPayload {
 	id: ID!
 }
 
+input RetryDownloadPasswordInput {
+	downloadId: ID!
+	clientId: ID!
+	clientType: String!
+	downloadClientItemId: String!
+	password: String!
+}
+
 """
 Requests retrying one import record, optionally supplying an archive password.
 """
@@ -26296,23 +26346,21 @@ input SearchReleasesInput {
 	"""
 	episode: String
 	"""
-	Optional result limit; the resolver applies its own default and cap.
+	Optional limit. A title search lists at most this many results
+	(default 50, max 200); a `query` search asks each indexer for this many
+	(default 100, 1 to 500) and lists everything returned.
 	"""
 	limit: Int
 	"""
-	Raw operator query searched without a catalog title.
+	Raw operator query sent as typed to each indexer, without a catalog title.
 	"""
 	query: String
-	"""
-	Search kind; required with `query`.
-	"""
-	kind: InteractiveSearchKindValue
 	"""
 	Optional indexer configuration identities to restrict the search to.
 	"""
 	indexerIds: [ID!]
 	"""
-	Optional newznab categories; the kind's defaults apply when omitted.
+	Optional newznab categories a `query` search sends as given; none when omitted.
 	"""
 	categories: [String!]
 }

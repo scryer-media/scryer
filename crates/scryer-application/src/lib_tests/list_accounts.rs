@@ -756,11 +756,11 @@ async fn private_follow_lifecycle_waits_for_fetch_then_stale_sync_snapshot_is_sk
         .await
         .expect("sync and lifecycle complete");
         changed.unwrap();
-        let SubscriptionSyncOutcome::Synced { counts, .. } = report.unwrap() else {
+        let SubscriptionSyncOutcome::Synced { acted, .. } = report.unwrap() else {
             panic!("in-flight sync must finish before lifecycle succeeds");
         };
         assert_eq!(
-            counts.requested, 1,
+            acted.requested, 1,
             "the in-flight request must finish before lifecycle succeeds"
         );
         let before = harness.media_requests.requests.lock().await.len();

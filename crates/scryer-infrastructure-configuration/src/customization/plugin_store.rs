@@ -315,13 +315,20 @@ impl PluginInstallationRepository for PluginStore {
     }
 
     async fn delete_plugin_installation(&self, plugin_id: &str) -> AppResult<()> {
-        execute_write(
-            &self.datastore,
-            "delete_plugin_installation",
-            "DELETE FROM plugin_installations WHERE plugin_id = {}",
-            vec![SqlArg::Text(plugin_id.to_string())],
-        )
-        .await
+        let plugin_id = plugin_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "delete_plugin_installation", move |tx| {
+            let plugin_id = plugin_id.clone();
+            Box::pin(async move {
+                let args = [SqlArg::Text(plugin_id)];
+                SqlRuntime::execute(SqlExec::Tx(tx),
+                    "UPDATE plugin_installations SET updated_at = updated_at WHERE plugin_id = {}", &args).await?;
+                SqlRuntime::execute(SqlExec::Tx(tx),
+                    "DELETE FROM settings_values WHERE scope = 'system' AND setting_definition_id IN (SELECT id FROM settings_definitions WHERE key_name = 'plugins.config' AND scope = 'system') AND scope_id IN (SELECT id FROM plugin_installations WHERE plugin_id = {})", &args).await?;
+                SqlRuntime::execute(SqlExec::Tx(tx),
+                    "DELETE FROM plugin_installations WHERE plugin_id = {}", &args).await?;
+                Ok(())
+            })
+        }).await
     }
 
     async fn get_enabled_plugin_wasm_bytes(
@@ -542,7 +549,7 @@ const PLUGIN_INSTALLATION_UPDATE_SQL: &str = "UPDATE plugin_installations
        manifest_url = CASE WHEN {} = 'bundled' THEN NULL ELSE COALESCE({}, manifest_url) END,
        wasm_digest = CASE WHEN {} = 'bundled' THEN NULL ELSE COALESCE({}, wasm_digest) END,
        artifact_digest = CASE WHEN {} = 'bundled' THEN NULL ELSE COALESCE({}, artifact_digest) END,
-       descriptor_json = CASE WHEN {} = 'bundled' THEN NULL ELSE COALESCE({}, descriptor_json) END,
+       descriptor_json = CASE WHEN {} = 'bundled' THEN {} ELSE COALESCE({}, descriptor_json) END,
        updated_at = {}
  WHERE plugin_id = {}";
 
@@ -704,6 +711,7 @@ fn plugin_update_args(
         SqlArg::Text(source_kind.clone()),
         SqlArg::OptText(installation.artifact_digest.clone()),
         SqlArg::Text(source_kind),
+        SqlArg::OptText(installation.descriptor_json.clone()),
         SqlArg::OptText(installation.descriptor_json.clone()),
         SqlArg::Timestamp(installation.updated_at),
         SqlArg::Text(installation.plugin_id.clone()),

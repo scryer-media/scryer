@@ -10,6 +10,29 @@ use scryer_interface_media::{mappers, types::*};
 #[derive(Default)]
 pub struct DownloadMutations;
 
+#[derive(async_graphql::InputObject)]
+pub struct RetryDownloadPasswordInput {
+    pub download_id: async_graphql::ID,
+    pub client_id: async_graphql::ID,
+    pub client_type: String,
+    pub download_client_item_id: String,
+    #[graphql(secret)]
+    pub password: String,
+}
+
+#[derive(async_graphql::Enum, Copy, Clone, Eq, PartialEq)]
+pub enum DownloadPasswordRetryStatus {
+    Accepted,
+    Refused,
+    AwaitingReconciliation,
+}
+
+#[derive(async_graphql::SimpleObject)]
+pub struct DownloadPasswordRetryPayload {
+    pub status: DownloadPasswordRetryStatus,
+    pub download_client_item_id: Option<String>,
+}
+
 async fn queue_item_payload_for_action(
     app: &AppUseCase,
     actor: &User,
@@ -84,6 +107,49 @@ pub(crate) fn queue_download_conflict_payload(
 
 #[Object]
 impl DownloadMutations {
+    async fn retry_download_password(
+        &self,
+        ctx: &Context<'_>,
+        input: RetryDownloadPasswordInput,
+    ) -> GqlResult<DownloadPasswordRetryPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let download_id =
+            scryer_domain::download_identity::DownloadId::parse(input.download_id.as_str())
+                .ok_or_else(|| {
+                    to_gql_error(AppError::Validation("invalid canonical download id".into()))
+                })?;
+        let source = scryer_application::ClientJobLocator::new(
+            Some(input.client_id.as_str()),
+            &input.client_type,
+            &input.download_client_item_id,
+        );
+        let outcome = app
+            .retry_download_password(&actor, download_id, source, &input.password)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(match outcome {
+            scryer_application::DownloadClientRetryOutcome::Accepted { item_id } => {
+                DownloadPasswordRetryPayload {
+                    status: DownloadPasswordRetryStatus::Accepted,
+                    download_client_item_id: Some(item_id),
+                }
+            }
+            scryer_application::DownloadClientRetryOutcome::Refused => {
+                DownloadPasswordRetryPayload {
+                    status: DownloadPasswordRetryStatus::Refused,
+                    download_client_item_id: None,
+                }
+            }
+            scryer_application::DownloadClientRetryOutcome::Uncertain => {
+                DownloadPasswordRetryPayload {
+                    status: DownloadPasswordRetryStatus::AwaitingReconciliation,
+                    download_client_item_id: None,
+                }
+            }
+        })
+    }
+
     /// Evaluate an external announcement using normal automatic acquisition rules.
     async fn submit_external_release(
         &self,

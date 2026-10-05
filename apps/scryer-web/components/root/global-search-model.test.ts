@@ -741,3 +741,19 @@ test("a catalog row becomes the search item the add and request dialogs take", (
     null,
   );
 });
+
+test("a series row known only by its TMDB id can still be added or requested", () => {
+  const row: TitleRecord = libraryTitle("t-tmdb", "Sample Series", "SERIES", "series-main");
+  row.externalIds = [{ source: "tmdb", kind: "series", value: "4242" }];
+
+  const item = metadataSearchItemFromCatalogTitle(row);
+  assert.ok(item);
+  assert.equal(item.tvdbId, "");
+  assert.equal(item.smgId, null);
+  assert.equal(item.tmdbId, 4242);
+
+  // An anime row whose only TMDB id belongs to a mapped movie has no identity of its own.
+  const mappedOnly: TitleRecord = libraryTitle("t-mapped", "Sample Anime", "ANIME", "anime-main");
+  mappedOnly.externalIds = [{ source: "tmdb", kind: "movie", value: "5151" }];
+  assert.equal(metadataSearchItemFromCatalogTitle(mappedOnly), null);
+});

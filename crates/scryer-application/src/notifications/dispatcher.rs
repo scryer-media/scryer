@@ -2423,6 +2423,7 @@ mod tests {
                 schema_version: 1,
                 stream: scryer_domain::DomainEventStream::Global,
                 payload: DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                    canonical_download_id: None,
                     title: Some(title_context("Broken Download", MediaFacet::Movie)),
                     source_title: Some("Broken.Download.2024".to_string()),
                     source_hint: Some("manual".to_string()),
