@@ -379,6 +379,9 @@ pub fn from_notification_target(
 pub fn from_domain_event(event: DomainEvent) -> DomainEventEnvelopePayload {
     let (stream_kind, stream_id) = match event.stream {
         scryer_domain::DomainEventStream::Global => (StreamKindValue::Global, None),
+        scryer_domain::DomainEventStream::User { user_id } => {
+            (StreamKindValue::User, Some(user_id))
+        }
         scryer_domain::DomainEventStream::Title { title_id } => {
             (StreamKindValue::Title, Some(title_id))
         }

@@ -6,6 +6,7 @@ pub(super) struct MockDomainEventRepo {
     space_notification_receipts: Mutex<std::collections::BTreeSet<(String, String)>>,
     space_notification_attempts: Mutex<HashMap<String, i64>>,
     pub(super) fail_append_many: AtomicBool,
+    pub(super) fail_append: AtomicBool,
     pub(super) events: Arc<Mutex<Vec<DomainEvent>>>,
     pub(super) subscriber_offsets: Arc<Mutex<HashMap<String, i64>>>,
     pub(super) delete_operation_log: OptionalDeleteOperationLog,
@@ -200,6 +201,11 @@ impl DomainEventRepository for MockDomainEventRepo {
     }
 
     async fn append(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+        if self.fail_append.load(Ordering::SeqCst) {
+            return Err(AppError::Repository(
+                "synthetic event append failure".into(),
+            ));
+        }
         let mut events = self.events.lock().await;
         let sequence = events
             .last()

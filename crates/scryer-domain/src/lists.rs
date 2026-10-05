@@ -598,9 +598,24 @@ impl UserListAccountStatus {
 /// The token material a member's provider link holds. Stored encrypted with
 /// the datastore key; decrypted only in memory for a fetch or a renewal, and
 /// never projected to any API.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ListAccountCredential {
     pub access_token: String,
+    /// Opaque instance-bound gateway handle, never a provider refresh token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_handle: Option<String>,
+    /// Whether this credential was issued using the instance's provider app.
+    #[serde(default)]
+    pub direct: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_expires_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub client_id: Option<String>,
+    /// Encrypted registration snapshot used to renew a direct credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub app_config: Option<std::collections::BTreeMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub refresh_token: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -609,6 +624,15 @@ pub struct ListAccountCredential {
     pub token_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+}
+
+impl std::fmt::Debug for ListAccountCredential {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ListAccountCredential")
+            .field("tokens", &"<redacted>")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 /// A member's link to a list provider. Distinct from a login-provider account:

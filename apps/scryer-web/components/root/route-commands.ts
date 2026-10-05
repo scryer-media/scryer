@@ -287,7 +287,7 @@ export function buildRouteCommands({
           onSelect: buildNavigate(onNavigate, "calendar"),
         } satisfies RouteCommand]
       : []),
-    ...(canAccessListsPage(canViewCatalog, canManageLists, experimentalFeaturesEnabled)
+    ...(canAccessListsPage(canViewCatalog || hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) || hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.manageTitles), canManageLists || canManageSystemSettings, experimentalFeaturesEnabled)
       ? [{
           id: "lists",
           label: t("nav.lists"),

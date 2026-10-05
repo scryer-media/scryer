@@ -13,6 +13,7 @@ fn filter_input(kind: ListFilterKindValue) -> ListFilterInput {
 
 fn subscribe_input(scope: ListScopeValue) -> SubscribeListInput {
     SubscribeListInput {
+        credential_id: None,
         scope,
         provider: Some("fixture".to_string()),
         source_type: Some("chart".to_string()),

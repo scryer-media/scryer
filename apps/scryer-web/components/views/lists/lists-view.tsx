@@ -7,6 +7,7 @@ import type { ListsSection } from "@/components/root/types";
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
+  ListAccount,
   ListExclusion,
   ListMembershipPage,
   ListPreview,
@@ -28,6 +29,8 @@ import { FollowListDialog, type FollowListTarget } from "./follow-list-dialog";
 import { ListDetailPanel } from "./list-detail-panel";
 import { ListTable } from "./list-table";
 import { ProviderBrowser } from "./provider-browser";
+import { PersonalAccounts } from "./personal-accounts";
+import { ProviderAppsPanel } from "./provider-apps-panel";
 
 export type ListRouteOptions = {
   libraries: LibraryRecord[];
@@ -48,6 +51,17 @@ type ListsViewProps = {
   section: ListsSection;
   onSectionChange: (section: ListsSection) => void;
   canManageLists: boolean;
+  experimentalFeaturesEnabled: boolean;
+  canManageProviderApps: boolean;
+  accounts: ListAccount[];
+  managedAccount: ListAccount | null;
+  accountLoading: boolean;
+  linkingProvider: string | null;
+  accountLinkError: string | null;
+  onLinkAccount: (provider: string) => void;
+  onCancelLink: () => void;
+  onManageAccount: (account: ListAccount | null) => void;
+  onUnlinkAccount: (account: ListAccount) => Promise<boolean>;
   loading: boolean;
   loadError: string | null;
   onRetry: () => void;
@@ -94,6 +108,7 @@ export function ListsView(props: ListsViewProps) {
   } = props;
   const t = useTranslate();
   const [followTarget, setFollowTarget] = React.useState<FollowListTarget | null>(null);
+  const canManageSubscriptions = canManageLists || (section === "personal" && props.experimentalFeaturesEnabled);
   const providerByType = React.useMemo(
     () => new Map(providers.map((provider) => [provider.providerType, provider])),
     [providers],
@@ -148,7 +163,7 @@ export function ListsView(props: ListsViewProps) {
             </h1>
             <p className="mt-1 max-w-2xl text-[13.5px] text-[var(--scry-muted)]">{t("lists.heading.copy")}</p>
           </div>
-          {canManageLists && section === "public" && subscriptions.length > 0 ? (
+          {canManageSubscriptions && (section === "public" || section === "personal") && subscriptions.length > 0 ? (
             <Button id="lists-sync-all" type="button" variant="outline" size="sm" onClick={props.onSyncAll}>
               <RefreshCw className="h-4 w-4" />
               {t("lists.action.syncAll")}
@@ -164,9 +179,15 @@ export function ListsView(props: ListsViewProps) {
               aria-selected={section === "public"}
               selected={section === "public"}
               label={t("lists.tab.public")}
-              count={subscriptions.length}
+              count={section === "public" ? subscriptions.length : undefined}
               onClick={() => onSectionChange("public")}
             />
+            {props.experimentalFeaturesEnabled ? (
+              <UnderlineFilterButton id="lists-tab-personal" role="tab" aria-selected={section === "personal"} selected={section === "personal"} label={t("lists.tab.personal")} count={section === "personal" ? subscriptions.length : undefined} onClick={() => onSectionChange("personal")} />
+            ) : null}
+            {props.experimentalFeaturesEnabled && props.canManageProviderApps ? (
+              <UnderlineFilterButton id="lists-tab-provider-apps" role="tab" aria-selected={section === "providerApps"} selected={section === "providerApps"} label={t("lists.providerApps.heading")} onClick={() => onSectionChange("providerApps")} />
+            ) : null}
             {canManageLists ? (
               <UnderlineFilterButton
                 id="lists-tab-exclusions"
@@ -180,7 +201,11 @@ export function ListsView(props: ListsViewProps) {
           </div>
         </div>
 
-        {loading ? (
+        {section === "providerApps" && props.canManageProviderApps && props.experimentalFeaturesEnabled ? (
+          <ProviderAppsPanel />
+        ) : (section === "providerApps" || (section === "personal" && !props.experimentalFeaturesEnabled)) ? (
+          <p role="status" className="py-6 text-sm">{t("status.permissionDenied")}</p>
+        ) : loading ? (
           <div className="flex items-center gap-2 py-8 text-sm text-[var(--scry-muted)]">
             <LoadingMark className="h-4 w-4" />
             {t("label.loading")}
@@ -207,7 +232,9 @@ export function ListsView(props: ListsViewProps) {
           />
         ) : (
           <div className="space-y-8">
-            {canManageLists ? (
+            {section === "personal" ? (
+              <PersonalAccounts providers={providers} accounts={props.accounts} managedAccount={props.managedAccount} accountLoading={props.accountLoading} busyIds={busyIds} linkingProvider={props.linkingProvider} linkError={props.accountLinkError} onLink={props.onLinkAccount} onCancelLink={props.onCancelLink} onManage={props.onManageAccount} onUnlink={props.onUnlinkAccount} onFollow={(manifest, item, source, name) => setFollowTarget({ kind: "new", source, manifest, item, name, kinds: item.kinds, preview: null })} />
+            ) : canManageLists ? (
               <AddByUrlCard providers={providers} onPreviewUrl={props.onPreviewUrl} onRecognized={followFromUrl} />
             ) : null}
 
@@ -221,7 +248,7 @@ export function ListsView(props: ListsViewProps) {
                 <ListTable
                   subscriptions={subscriptions}
                   providers={providers}
-                  canManageLists={canManageLists}
+                  canManageLists={canManageSubscriptions}
                   busyIds={busyIds}
                   onOpen={(subscription) => props.onOpenDetail(subscription.id)}
                   onSetEnabled={props.onSetEnabled}
@@ -230,7 +257,7 @@ export function ListsView(props: ListsViewProps) {
               )}
             </section>
 
-            {canManageLists ? (
+            {canManageLists && section === "public" ? (
               <section className="space-y-3">
                 <h2 className={PANEL_HEADING}>{t("lists.catalog.heading")}</h2>
                 <ProviderBrowser
@@ -249,7 +276,7 @@ export function ListsView(props: ListsViewProps) {
         detail={detail}
         fallback={detailFallback}
         provider={detailSubscription ? (providerByType.get(detailSubscription.source.provider) ?? null) : null}
-        canManageLists={canManageLists}
+        canManageLists={canManageSubscriptions}
         busy={detail ? busyIds.has(detail.id) : false}
         membershipPageSize={props.membershipPageSize}
         onClose={() => props.onOpenDetail(null)}
@@ -267,7 +294,7 @@ export function ListsView(props: ListsViewProps) {
         onUnsubscribe={props.onUnsubscribe}
       />
 
-      {canManageLists ? (
+      {canManageSubscriptions ? (
         <FollowListDialog
           target={followTarget}
           routeOptions={routeOptions}

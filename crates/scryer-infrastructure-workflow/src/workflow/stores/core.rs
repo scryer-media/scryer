@@ -1611,6 +1611,10 @@ pub fn domain_event_from_row(row: &SqlRow) -> AppResult<DomainEvent> {
 pub fn stream_from_parts(kind: &str, identifier: Option<String>) -> AppResult<DomainEventStream> {
     match kind {
         "global" => Ok(DomainEventStream::Global),
+        "user" => identifier
+            .filter(|id| !id.is_empty())
+            .map(|user_id| DomainEventStream::User { user_id })
+            .ok_or_else(|| AppError::Repository("domain event missing user stream id".into())),
         "title" => identifier
             .map(|title_id| DomainEventStream::Title { title_id })
             .ok_or_else(|| AppError::Repository("domain event missing title stream id".into())),

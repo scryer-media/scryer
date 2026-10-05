@@ -36,6 +36,8 @@ mod media_rename;
 mod metadata_search;
 #[path = "integration_graphql/misc_smoke.rs"]
 mod misc_smoke;
+#[path = "integration_graphql/private_list_accounts.rs"]
+mod private_list_accounts;
 #[path = "integration_graphql/quality_routing_settings.rs"]
 mod quality_routing_settings;
 #[path = "integration_graphql/rule_tester.rs"]

@@ -451,6 +451,23 @@ impl ListExclusionRepository for MemoryListStore {
 
 #[async_trait]
 impl UserListAccountRepository for MemoryListStore {
+    async fn unlink(&self, id: &str, owner: &str) -> AppResult<()> {
+        let mut accounts = self.accounts.lock().unwrap();
+        if !accounts
+            .iter()
+            .any(|row| row.id == id && row.user_id == owner)
+        {
+            return Err(AppError::NotFound("list account".into()));
+        }
+        self.subscriptions.lock().unwrap().retain(|row| {
+            !(row.credential_id.as_deref() == Some(id)
+                && row.owner_user_id == owner
+                && row.is_personal())
+        });
+        accounts.retain(|row| row.id != id);
+        Ok(())
+    }
+
     async fn create(&self, account: UserListAccount) -> AppResult<UserListAccount> {
         self.accounts.lock().unwrap().push(account.clone());
         Ok(account)

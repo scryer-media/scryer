@@ -34,6 +34,7 @@ export const SETTINGS_SECTION_PATH: Record<SettingsSection, string> = {
   maintenanceRules: "maintenance-rules",
   requestRules: "request-rules",
   plugins: "plugins",
+  listProviderApps: "lists/provider-apps",
   notifications: "notifications",
   "post-processing": "post-processing",
   subtitles: "subtitles",
@@ -150,14 +151,19 @@ export function maintenanceRulesSectionFromPath(
 /// Panes of the Lists page. Public lists are the default and add no segment.
 export const LISTS_SECTION_PATH: Record<ListsSection, string> = {
   public: "",
+  personal: "personal",
+  providerApps: "provider-apps",
   exclusions: "exclusions",
 };
 
 const LISTS_SECTION_BY_SEGMENT: Record<string, ListsSection> = {
+  personal: "personal",
+  "provider-apps": "providerApps",
   exclusions: "exclusions",
 };
 
 export function buildListsPath(section: ListsSection): string {
+  if (section === "providerApps") return "/settings/lists/provider-apps";
   const segment = LISTS_SECTION_PATH[section];
   return segment ? `/lists/${segment}` : "/lists";
 }
@@ -680,6 +686,10 @@ export function resolveAppRoute(
       search,
       hash,
     );
+  }
+
+  if (root === "settings" && normalizedSegments[1] === "lists" && normalizedSegments[2] === "provider-apps" && rawSegments.length === 3) {
+    return canonicalOrRedirect(currentPath, parsedRoute(buildListsPath("providerApps"), "lists"), search, hash);
   }
 
   if (root === "lists") {

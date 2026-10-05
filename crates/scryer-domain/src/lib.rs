@@ -4877,16 +4877,29 @@ impl DomainEventPayload {
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum DomainEventStream {
     Global,
-    Title { title_id: String },
-    LibraryScan { session_id: String },
-    JobRun { run_id: String },
-    DownloadQueueItem { item_id: String },
+    /// Private product facts visible only to the owning member's sessions.
+    User {
+        user_id: String,
+    },
+    Title {
+        title_id: String,
+    },
+    LibraryScan {
+        session_id: String,
+    },
+    JobRun {
+        run_id: String,
+    },
+    DownloadQueueItem {
+        item_id: String,
+    },
 }
 
 impl DomainEventStream {
     pub fn kind(&self) -> &'static str {
         match self {
             Self::Global => "global",
+            Self::User { .. } => "user",
             Self::Title { .. } => "title",
             Self::LibraryScan { .. } => "library_scan",
             Self::JobRun { .. } => "job_run",
@@ -4897,6 +4910,7 @@ impl DomainEventStream {
     pub fn identifier(&self) -> Option<&str> {
         match self {
             Self::Global => None,
+            Self::User { user_id } => Some(user_id.as_str()),
             Self::Title { title_id } => Some(title_id.as_str()),
             Self::LibraryScan { session_id } => Some(session_id.as_str()),
             Self::JobRun { run_id } => Some(run_id.as_str()),

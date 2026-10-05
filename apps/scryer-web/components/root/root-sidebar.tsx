@@ -45,6 +45,7 @@ import {
   FolderCog,
   Heart,
   Inbox,
+  ListPlus,
   MessagesSquare,
   Monitor,
   Moon,
@@ -289,6 +290,7 @@ const DEFAULT_SETTINGS_SECTION_ORDER: SettingsSection[] = [
   "delayProfiles",
   "titleTags",
   "plugins",
+  "listProviderApps",
 ];
 const MEDIA_NAV_VIEW_IDS: ViewId[] = ["movies", "series", "anime"];
 
@@ -427,6 +429,12 @@ const settingsEntries: Array<{
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
+    id: "listProviderApps",
+    label: (t) => t("lists.providerApps.settingsLabel"),
+    icon: ListPlus,
+    requiredAnyAppPermission: [APP_PERMISSIONS.manageSystemSettings],
+  },
+  {
     id: "plugins",
     label: (t) => t("settings.plugins"),
     icon: Puzzle,
@@ -465,6 +473,7 @@ const SETTINGS_NAV_GROUPS: Array<{
       "delayProfiles",
       "titleTags",
       "plugins",
+      "listProviderApps",
     ],
   },
 ];
@@ -789,7 +798,7 @@ function RootSidebarContent({
           // Maintenance and request rules are still being finished, so their
           // shortcuts are offered only when the instance has opted in. The
           // permission each already required still applies on top.
-          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules") ||
+          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules" && entry.id !== "listProviderApps") ||
             experimentalFeaturesEnabled) &&
           (!entry.requiredAnyAppPermission ||
             hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
@@ -825,7 +834,7 @@ function RootSidebarContent({
           (!MEDIA_NAV_VIEW_IDS.includes(item.id) || canAccessMediaTopNav) &&
           (item.id !== "calendar" || canViewCatalog) &&
           (item.id !== "lists" ||
-            canAccessListsPage(canViewCatalog, canManageLists, experimentalFeaturesEnabled)) &&
+            canAccessListsPage(canViewCatalog || hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) || canManageTitle, canManageLists || canManageSystemSettings, experimentalFeaturesEnabled)) &&
           (item.id !== "wanted" || canViewCatalog) &&
           (item.id !== "dashboard" || canAccessDashboard(canManageSystemSettings)) &&
           (item.id !== "system" || canManageSystemSettings) &&
@@ -840,6 +849,7 @@ function RootSidebarContent({
       canResolveImports,
       canViewCatalog,
       topNav,
+      user,
     ],
   );
   const groupedTopNav = React.useMemo<TopNavGroup[]>(() => {

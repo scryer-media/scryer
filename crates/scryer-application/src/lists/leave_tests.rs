@@ -16,6 +16,28 @@ fn departed_added(subscription_id: &str, key: &str) -> scryer_domain::ListMember
 }
 
 #[tokio::test]
+async fn personal_departure_preserves_monitoring_and_tags_after_owner_grants_are_revoked() {
+    for on_leave in [ListOnLeave::Unmonitor, ListOnLeave::Tag] {
+        let mut list = subscription("private-follow");
+        list.scope = scryer_domain::ListScope::Personal;
+        list.on_leave = on_leave;
+        let store = MemoryListStore::with_subscriptions(vec![list.clone()]);
+        store.insert_rows(vec![departed_added(&list.id, "alpha")]);
+        let actions = RecordingActions {
+            owner_manages_titles: false,
+            ..Default::default()
+        };
+        let report = handle_departures(&list, &store, &store, &actions)
+            .await
+            .unwrap();
+        assert_eq!(report.acted, 0);
+        assert_eq!(report.failed, 1);
+        assert!(actions.calls().is_empty());
+        assert!(!store.row(&list.id, "alpha").left_handled);
+    }
+}
+
+#[tokio::test]
 async fn keep_records_the_departure_and_does_nothing_else() {
     let list = subscription("list-a");
     let store = MemoryListStore::with_subscriptions(vec![list.clone()]);

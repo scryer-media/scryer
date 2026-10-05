@@ -164,6 +164,18 @@ pub(crate) fn new_global_domain_event(
     }
 }
 
+pub(crate) fn new_user_domain_event(
+    actor: impl Into<DomainEventActor>,
+    user_id: impl Into<String>,
+    payload: DomainEventPayload,
+) -> NewDomainEvent {
+    let mut event = new_global_domain_event(actor, payload);
+    event.stream = DomainEventStream::User {
+        user_id: user_id.into(),
+    };
+    event
+}
+
 pub(crate) fn new_library_scan_domain_event(
     actor: impl Into<DomainEventActor>,
     session_id: impl Into<String>,

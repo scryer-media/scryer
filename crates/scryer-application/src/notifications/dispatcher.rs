@@ -543,6 +543,11 @@ struct BuiltNotification {
 }
 
 fn build_notification(event: &DomainEvent) -> Option<BuiltNotification> {
+    // Notification channels are instance-wide. Private member facts have no
+    // channel read path, including after durable replay or a restart.
+    if matches!(event.stream, scryer_domain::DomainEventStream::User { .. }) {
+        return None;
+    }
     notification_event_mappings!(notification_build_match, &event.payload)
 }
 
@@ -2872,6 +2877,27 @@ mod tests {
             stream: scryer_domain::DomainEventStream::Global,
             payload,
         }
+    }
+
+    #[test]
+    fn private_user_stream_has_no_notification_during_durable_replay() {
+        let mut private = list_sample_event(
+            1,
+            DomainEventPayload::ListSyncFailed(ListSyncFailedEventData {
+                list: scryer_domain::ListEventSubject {
+                    subscription_id: "private-subscription".into(),
+                    list_name: "Private fixture list".into(),
+                    provider: "trakt".into(),
+                },
+                reason: "provider unavailable".into(),
+                failure_class: "provider_unavailable".into(),
+            }),
+        );
+        assert!(build_notification(&private).is_some());
+        private.stream = scryer_domain::DomainEventStream::User {
+            user_id: "member-owner".into(),
+        };
+        assert!(build_notification(&private).is_none());
     }
 
     #[test]

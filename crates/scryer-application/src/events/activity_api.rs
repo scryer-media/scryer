@@ -100,6 +100,10 @@ where
 
         before_sequence = batch.last().map(|event| event.sequence);
         for event in &batch {
+            // Actorless global projections must never include private facts.
+            if matches!(event.stream, scryer_domain::DomainEventStream::User { .. }) {
+                continue;
+            }
             if let Some(item) = map(event) {
                 projected.push(item);
                 if projected.len() >= target_len {
@@ -234,6 +238,9 @@ async fn event_allowed(
     allowed_library_ids: &HashSet<String>,
     title_library_cache: &mut HashMap<String, Option<String>>,
 ) -> AppResult<bool> {
+    if let scryer_domain::DomainEventStream::User { user_id } = &event.stream {
+        return Ok(user_id == &actor.id);
+    }
     if event.title_id.is_some() {
         return event_title_allowed(
             app,
@@ -1252,7 +1259,35 @@ impl AppUseCase {
         } else {
             filter.limit.min(500)
         };
-        self.services.events.domain_events.list(&filter).await
+        // Audit permissions do not grant access to another member's facts.
+        let target_len = filter.limit;
+        let forward = filter.after_sequence.is_some() && filter.before_sequence.is_none();
+        let mut visible = Vec::new();
+        filter.limit = 500;
+        loop {
+            let events = self.services.events.domain_events.list(&filter).await?;
+            let next_sequence = events.last().map(|event| event.sequence);
+            let batch_len = events.len();
+            for event in events {
+                if matches!(&event.stream, scryer_domain::DomainEventStream::User { user_id } if user_id != &actor.id)
+                {
+                    continue;
+                }
+                visible.push(event);
+                if visible.len() == target_len {
+                    return Ok(visible);
+                }
+            }
+            if batch_len < 500 {
+                break;
+            }
+            if forward {
+                filter.after_sequence = next_sequence;
+            } else {
+                filter.before_sequence = next_sequence;
+            }
+        }
+        Ok(visible)
     }
 
     /// The current tail of the event log; subscriptions start from here so a

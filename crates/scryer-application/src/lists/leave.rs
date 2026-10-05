@@ -84,6 +84,22 @@ pub async fn handle_departures(
         }
 
         let on_leave = subscription.on_leave;
+        if subscription.is_personal()
+            && matches!(on_leave, ListOnLeave::Unmonitor | ListOnLeave::Tag)
+        {
+            let permitted = if let Some(route) = subscription.route_for(row.kind.clone()) {
+                actions
+                    .owner_manages_titles(subscription, route)
+                    .await
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if !permitted {
+                report.failed += 1;
+                continue;
+            }
+        }
         let result = match on_leave {
             ListOnLeave::Keep => Ok(()),
             ListOnLeave::Log => {
@@ -91,8 +107,16 @@ pub async fn handle_departures(
                     .record_departure(subscription, &title_id, on_leave)
                     .await
             }
-            ListOnLeave::Unmonitor => actions.set_title_monitored(&title_id, false).await,
-            ListOnLeave::Tag => actions.tag_title(&title_id, LEFT_LIST_TAG).await,
+            ListOnLeave::Unmonitor => {
+                actions
+                    .set_departed_title_monitored(subscription, &title_id, false)
+                    .await
+            }
+            ListOnLeave::Tag => {
+                actions
+                    .tag_departed_title(subscription, &title_id, LEFT_LIST_TAG)
+                    .await
+            }
         };
         if result.is_ok()
             && matches!(on_leave, ListOnLeave::Unmonitor | ListOnLeave::Tag)

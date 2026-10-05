@@ -88,8 +88,21 @@ pub(crate) fn mount_router(router: Router, base_path: &BasePath) -> Router {
     // of the base path, breaking all static asset loads.
     let bare = base_prefix.clone();
     let target = ui_root.clone();
+    let account_return = base_path.join("/lists/oauth/return");
 
     Router::new()
+        // The sole gateway's fallback uses the origin root. Transfer only
+        // the fragment into the configured UI prefix before loading assets.
+        .route("/lists/oauth/return", axum::routing::get(move || {
+            let account_return = account_return.clone();
+            async move {
+                let target = serde_json::to_string(&account_return).unwrap_or_else(|_| "\"/\"".into()).replace('<', "\\u003c");
+                (
+                    [(axum::http::header::CACHE_CONTROL, "no-store"), (axum::http::header::REFERRER_POLICY, "no-referrer")],
+                    axum::response::Html(format!("<!doctype html><meta name=\"referrer\" content=\"no-referrer\"><script>location.replace({target}+location.hash)</script>")),
+                )
+            }
+        }))
         .nest_service(&base_prefix, router)
         .layer(axum::middleware::from_fn(
             move |req: Request, next: Next| {
@@ -189,6 +202,29 @@ mod tests {
                 .unwrap(),
             "/scryer/"
         );
+    }
+
+    #[tokio::test]
+    async fn gateway_account_return_transfers_fragment_without_loading_assets() {
+        let app = mount_router(Router::new(), &BasePath::from_raw(Some("/media/")));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/lists/oauth/return")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["cache-control"], "no-store");
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        let body = axum::body::to_bytes(response.into_body(), 4096)
+            .await
+            .unwrap();
+        let html = std::str::from_utf8(&body).unwrap();
+        assert!(html.contains("location.replace(\"/media/lists/oauth/return\"+location.hash)"));
+        assert!(!html.contains("src="));
     }
 
     #[tokio::test]

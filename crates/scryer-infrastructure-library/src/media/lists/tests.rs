@@ -674,6 +674,7 @@ fn account(id: &str, user_id: &str) -> UserListAccount {
             expires_at: Some(now + Duration::days(7)),
             token_type: Some("bearer".into()),
             scope: Some("public".into()),
+            ..ListAccountCredential::default()
         },
         status: UserListAccountStatus::Active,
         error_message: None,
@@ -825,4 +826,64 @@ async fn deleting_a_member_removes_their_lists_accounts_and_policy() {
     );
     assert!(store.list_by_user_id(OWNER).await.unwrap().is_empty());
     assert!(store.get(OWNER).await.unwrap().is_none());
+}
+
+#[tokio::test]
+async fn account_unlink_removes_only_owned_dependent_rows_and_is_atomic() {
+    let store = test_store(Some(EncryptionKey::generate())).await;
+    let linked = account("linked-account", OWNER);
+    let other = account("other-account", OTHER_MEMBER);
+    UserListAccountRepository::create(&store, linked.clone())
+        .await
+        .unwrap();
+    UserListAccountRepository::create(&store, other.clone())
+        .await
+        .unwrap();
+    let mut personal = subscription("private-follow", ListScope::Personal, OWNER);
+    personal.credential_id = Some(linked.id.clone());
+    ListSubscriptionRepository::create(&store, personal)
+        .await
+        .unwrap();
+    let public = subscription("public-follow", ListScope::Public, OWNER);
+    ListSubscriptionRepository::create(&store, public)
+        .await
+        .unwrap();
+    assert!(store.unlink(&linked.id, OTHER_MEMBER).await.is_err());
+    assert!(
+        UserListAccountRepository::get_by_id(&store, &linked.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        ListSubscriptionRepository::get_by_id(&store, "private-follow")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    store.unlink(&linked.id, OWNER).await.unwrap();
+    assert!(
+        UserListAccountRepository::get_by_id(&store, &linked.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ListSubscriptionRepository::get_by_id(&store, "private-follow")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        ListSubscriptionRepository::get_by_id(&store, "public-follow")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        UserListAccountRepository::get_by_id(&store, &other.id)
+            .await
+            .unwrap()
+            .is_some()
+    );
 }

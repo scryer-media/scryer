@@ -464,6 +464,11 @@ fn serialize_title_history_data(payload: &DomainEventPayload) -> Option<String> 
 pub(crate) fn title_history_record_from_domain_event(
     event: &DomainEvent,
 ) -> Option<TitleHistoryRecord> {
+    // Title history is shared with library viewers; member facts belong only
+    // in the authorized member event feed and activity projection.
+    if matches!(event.stream, scryer_domain::DomainEventStream::User { .. }) {
+        return None;
+    }
     // Not a filter. An event without a `title_id` is not a malformed event —
     // it is an event with no catalog title behind it, and FR-026 says such a
     // grab is still "recorded as history against the release and indexer".

@@ -77,6 +77,42 @@ impl<'a> AppListActions<'a> {
 
 #[async_trait]
 impl ListActions for AppListActions<'_> {
+    async fn owner_is_enabled(&self, subscription: &ListSubscription) -> AppResult<bool> {
+        Ok(self
+            .app
+            .services
+            .identity
+            .users
+            .get_by_id(&subscription.owner_user_id)
+            .await?
+            .is_some_and(|owner| owner.authorization.login_status.is_enabled()))
+    }
+    async fn lock_account(
+        &self,
+        subscription: &ListSubscription,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        if subscription.is_personal() {
+            Some(
+                self.app
+                    .services
+                    .lists
+                    .account_runtime
+                    .lock_account(subscription.credential_id.as_deref().unwrap_or_default())
+                    .await,
+            )
+        } else {
+            None
+        }
+    }
+    async fn prepare_account(
+        &self,
+        account: scryer_domain::UserListAccount,
+    ) -> AppResult<scryer_domain::UserListAccount> {
+        let mut account = self.app.refresh_list_account_locked(account).await?;
+        account.last_used_at = Some(Utc::now());
+        account.updated_at = Utc::now();
+        self.app.services.lists.accounts.update(account).await
+    }
     async fn add_title(
         &self,
         subscription: &ListSubscription,
@@ -84,6 +120,16 @@ impl ListActions for AppListActions<'_> {
         item: &ResolvedItem,
         search: bool,
     ) -> AppResult<AddedTitle> {
+        if subscription.is_personal() {
+            let owner = self.list_owner(subscription).await?;
+            self.app
+                .require_library_permission(
+                    &owner,
+                    &route.library_id,
+                    LibraryPermission::ManageTitles,
+                )
+                .await?;
+        }
         let actor = User::system_execution_actor();
         let request = NewTitle {
             name: item_name(item),
@@ -132,18 +178,31 @@ impl ListActions for AppListActions<'_> {
                 );
             }
         }
-        if created && !subscription.is_personal() {
+        if created {
             self.app
-                .append_list_event(new_title_domain_event(
-                    &actor,
-                    &outcome.title,
-                    DomainEventPayload::ListTitleAdded(ListTitleAddedEventData {
-                        list: ListEventSubject::of(subscription),
-                        title: title_context_snapshot(&outcome.title),
-                        library_id: route.library_id.clone(),
-                        searched: search,
-                    }),
-                ))
+                .append_list_event(if subscription.is_personal() {
+                    crate::events::domain_events::new_user_domain_event(
+                        &actor,
+                        subscription.owner_user_id.clone(),
+                        DomainEventPayload::ListTitleAdded(ListTitleAddedEventData {
+                            list: ListEventSubject::of(subscription),
+                            title: title_context_snapshot(&outcome.title),
+                            library_id: route.library_id.clone(),
+                            searched: search,
+                        }),
+                    )
+                } else {
+                    new_title_domain_event(
+                        &actor,
+                        &outcome.title,
+                        DomainEventPayload::ListTitleAdded(ListTitleAddedEventData {
+                            list: ListEventSubject::of(subscription),
+                            title: title_context_snapshot(&outcome.title),
+                            library_id: route.library_id.clone(),
+                            searched: search,
+                        }),
+                    )
+                })
                 .await;
         }
         Ok(AddedTitle {
@@ -158,6 +217,9 @@ impl ListActions for AppListActions<'_> {
         route: &ListRoute,
     ) -> AppResult<bool> {
         let owner = self.list_owner(subscription).await?;
+        if !owner.authorization.login_status.is_enabled() {
+            return Ok(false);
+        }
         self.app
             .has_library_permission(&owner, &route.library_id, LibraryPermission::ManageTitles)
             .await
@@ -171,6 +233,9 @@ impl ListActions for AppListActions<'_> {
         hold: bool,
     ) -> AppResult<String> {
         let owner = self.list_owner(subscription).await?;
+        if !owner.authorization.login_status.is_enabled() {
+            return Err(AppError::Unauthorized("list owner is disabled".into()));
+        }
         let outcome = self
             .app
             .submit_media_request(
@@ -203,20 +268,36 @@ impl ListActions for AppListActions<'_> {
                 },
             )
             .await?;
-        if !subscription.is_personal() {
+        {
             self.app
-                .append_list_event(new_global_domain_event(
-                    &User::system_execution_actor(),
-                    DomainEventPayload::ListRequestSubmitted(ListRequestSubmittedEventData {
-                        list: ListEventSubject::of(subscription),
-                        request_id: outcome.request_id.clone(),
-                        library_id: route.library_id.clone(),
-                        facet: route.kind.clone(),
-                        title_name: item_name(item),
-                        year: item.item.year,
-                        held: hold,
-                    }),
-                ))
+                .append_list_event(if subscription.is_personal() {
+                    crate::events::domain_events::new_user_domain_event(
+                        &owner,
+                        subscription.owner_user_id.clone(),
+                        DomainEventPayload::ListRequestSubmitted(ListRequestSubmittedEventData {
+                            list: ListEventSubject::of(subscription),
+                            request_id: outcome.request_id.clone(),
+                            library_id: route.library_id.clone(),
+                            facet: route.kind.clone(),
+                            title_name: item_name(item),
+                            year: item.item.year,
+                            held: hold,
+                        }),
+                    )
+                } else {
+                    new_global_domain_event(
+                        &User::system_execution_actor(),
+                        DomainEventPayload::ListRequestSubmitted(ListRequestSubmittedEventData {
+                            list: ListEventSubject::of(subscription),
+                            request_id: outcome.request_id.clone(),
+                            library_id: route.library_id.clone(),
+                            facet: route.kind.clone(),
+                            title_name: item_name(item),
+                            year: item.item.year,
+                            held: hold,
+                        }),
+                    )
+                })
                 .await;
         }
         Ok(outcome.request_id)
@@ -244,6 +325,58 @@ impl ListActions for AppListActions<'_> {
             .map(|_| ())
     }
 
+    async fn set_departed_title_monitored(
+        &self,
+        subscription: &ListSubscription,
+        title_id: &str,
+        monitored: bool,
+    ) -> AppResult<()> {
+        if !subscription.is_personal() {
+            return self.set_title_monitored(title_id, monitored).await;
+        }
+        let owner = self.list_owner(subscription).await?;
+        if !owner.authorization.login_status.is_enabled() {
+            return Err(AppError::Unauthorized("list owner is disabled".into()));
+        }
+        self.app
+            .set_title_monitored(&owner, title_id, monitored)
+            .await
+            .map(|_| ())
+    }
+
+    async fn tag_departed_title(
+        &self,
+        subscription: &ListSubscription,
+        title_id: &str,
+        tag: &str,
+    ) -> AppResult<()> {
+        if !subscription.is_personal() {
+            return self.tag_title(title_id, tag).await;
+        }
+        let owner = self.list_owner(subscription).await?;
+        if !owner.authorization.login_status.is_enabled() {
+            return Err(AppError::Unauthorized("list owner is disabled".into()));
+        }
+        let title = self
+            .app
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("title".into()))?;
+        self.app
+            .require_library_permission(&owner, &title.library_id, LibraryPermission::ManageTitles)
+            .await?;
+        self.app
+            .ensure_title_tag_registered(tag, LEFT_LIST_TAG_DESCRIPTION)
+            .await?;
+        self.app
+            .update_title_tags(&owner, &[title_id.into()], &[tag.into()], &[])
+            .await
+            .map(|_| ())
+    }
+
     async fn title_exists(&self, title_id: &str) -> AppResult<bool> {
         Ok(self
             .app
@@ -262,16 +395,19 @@ impl ListActions for AppListActions<'_> {
         action: ListOnLeave,
     ) -> AppResult<()> {
         if subscription.is_personal() {
-            // A personal list's name and contents are private to its owner:
-            // no feed event, and the log line carries ids only.
-            tracing::debug!(
-                subscription_id = %subscription.id,
-                owner_user_id = %subscription.owner_user_id,
-                provider = %subscription.source.provider,
-                title_id = %title_id,
-                action = action.as_str(),
-                "a title a personal list added has left it"
-            );
+            if let Some(title) = self.app.services.catalog.titles.get_by_id(title_id).await? {
+                self.app
+                    .append_domain_event(crate::events::domain_events::new_user_domain_event(
+                        &User::system_execution_actor(),
+                        subscription.owner_user_id.clone(),
+                        DomainEventPayload::ListTitleLeft(ListTitleLeftEventData {
+                            list: ListEventSubject::of(subscription),
+                            title: title_context_snapshot(&title),
+                            action,
+                        }),
+                    ))
+                    .await?;
+            }
             return Ok(());
         }
         let Some(title) = self.app.services.catalog.titles.get_by_id(title_id).await? else {
@@ -298,7 +434,19 @@ impl ListActions for AppListActions<'_> {
         failure: &ListFailure,
     ) -> AppResult<()> {
         if subscription.is_personal() {
-            return Ok(());
+            return self
+                .app
+                .append_domain_event(crate::events::domain_events::new_user_domain_event(
+                    &User::system_execution_actor(),
+                    subscription.owner_user_id.clone(),
+                    DomainEventPayload::ListSyncFailed(ListSyncFailedEventData {
+                        list: ListEventSubject::of(subscription),
+                        reason: failure.message.clone(),
+                        failure_class: failure.class.as_str().into(),
+                    }),
+                ))
+                .await
+                .map(|_| ());
         }
         self.app
             .append_domain_event(new_global_domain_event(
@@ -362,6 +510,14 @@ impl AppUseCase {
         subscription: &ListSubscription,
     ) {
         if subscription.is_personal() {
+            self.append_list_event(crate::events::domain_events::new_user_domain_event(
+                actor,
+                subscription.owner_user_id.clone(),
+                DomainEventPayload::ListUnfollowed(scryer_domain::ListUnfollowedEventData {
+                    list: ListEventSubject::of(subscription),
+                }),
+            ))
+            .await;
             return;
         }
         self.append_list_event(new_global_domain_event(

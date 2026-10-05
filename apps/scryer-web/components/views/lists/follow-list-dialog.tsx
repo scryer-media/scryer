@@ -17,6 +17,8 @@ import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { SingleSelectField } from "@/components/ui/select";
 import { ActionTooltip } from "@/components/ui/tooltip";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useSessionUser, type AuthUser } from "@/lib/hooks/use-auth";
+import { hasLibraryPermission, LIBRARY_PERMISSIONS } from "@/lib/utils/permissions";
 import { defaultMonitorTypeForFacet } from "@/lib/facets/helpers";
 import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
 import type {
@@ -79,12 +81,19 @@ type FollowListDialogProps = {
 const SECTION_HEADING = "text-[13px] font-semibold uppercase tracking-[0.06em] text-[var(--scry-muted)]";
 const ID = "follow-list";
 
-function initialDraft(target: FollowListTarget, routeOptions: ListRouteOptions): ListSubscriptionDraft {
+function initialDraft(target: FollowListTarget, routeOptions: ListRouteOptions, user: AuthUser | null): ListSubscriptionDraft {
   if (target.kind === "edit") return subscriptionToDraft(target.subscription);
   const draft = emptyListDraft(target.name, target.kinds);
-  draft.routes = target.kinds.map((kind) =>
-    defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind)),
-  );
+  if (target.source.credentialId) draft.mode = "REQUEST";
+  draft.routes = target.kinds.map((kind) => {
+    const route = defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind));
+    const library = routeOptions.libraries.find((entry) => entry.id === route.libraryId);
+    if (target.source.credentialId && !hasLibraryPermission(user, route.libraryId, LIBRARY_PERMISSIONS.manageTitles)) {
+      route.qualityProfileId = library?.requestQualityProfileDefaultId ?? library?.requestQualityProfileIds?.[0] ?? null;
+      route.rootFolderId = null;
+    }
+    return route;
+  });
   return draft;
 }
 
@@ -112,8 +121,9 @@ function FollowListDialogBody({
   onUpdate,
 }: FollowListDialogProps & { target: FollowListTarget }) {
   const t = useTranslate();
+  const user = useSessionUser();
   const { definitions: tagDefinitions, loading: tagsLoading } = useTitleTagDefinitions();
-  const [draft, setDraft] = React.useState(() => initialDraft(target, routeOptions));
+  const [draft, setDraft] = React.useState(() => initialDraft(target, routeOptions, user));
   const [source, setSource] = React.useState<ListSourceDraft | null>(
     target.kind === "new" ? target.source : null,
   );
@@ -144,8 +154,11 @@ function FollowListDialogBody({
   const interval = intervalSeconds ? listIntervalParts(intervalSeconds) : null;
 
   const missingParams = source ? missingSourceParams(paramDefinitions, source.params) : [];
+  const personal = target.kind === "new" ? !!target.source.credentialId : target.subscription.scope === "PERSONAL";
+  const canDirectAdd = draft.kinds.length > 0 && draft.kinds.every((kind) => hasLibraryPermission(user, draft.routes.find((route) => route.kind === kind)?.libraryId, LIBRARY_PERMISSIONS.manageTitles));
+  const modes: readonly ListMode[] = personal ? canDirectAdd ? ["SEARCH", "ADD", "REQUEST"] : ["REQUEST"] : PUBLIC_LIST_MODES;
   const problems = listDraftProblems(draft);
-  const canSave = !saving && problems.length === 0 && missingParams.length === 0;
+  const canSave = !saving && problems.length === 0 && missingParams.length === 0 && modes.includes(draft.mode);
 
   const toggleKind = (kind: Facet, checked: boolean) => {
     setDraft((current) => {
@@ -207,6 +220,7 @@ function FollowListDialogBody({
       </DialogHeader>
 
       <div className="space-y-6 p-5 sm:p-6">
+        {personal ? <p className="rounded-lg border p-3 text-sm text-muted-foreground">{t("lists.accounts.personalRouting")}</p> : null}
         {source && paramDefinitions.length > 0 ? (
           <section className="space-y-3">
             <h3 className={SECTION_HEADING}>{t("lists.follow.sourceHeading")}</h3>
@@ -281,7 +295,7 @@ function FollowListDialogBody({
             onValueChange={(mode) => setDraft((current) => ({ ...current, mode: mode as ListMode }))}
             className="grid gap-2 sm:grid-cols-2"
           >
-            {PUBLIC_LIST_MODES.map((mode) => {
+            {modes.map((mode) => {
               const selectable = isListModeSelectable(mode);
               const option = (
                 <label
@@ -326,16 +340,25 @@ function FollowListDialogBody({
                   kind={kind}
                   route={route}
                   libraries={routeOptions.libraries}
-                  qualityProfiles={routeOptions.qualityProfiles}
+                  requestOnly={personal && !hasLibraryPermission(user, route.libraryId, LIBRARY_PERMISSIONS.manageTitles)}
+                  qualityProfiles={personal && !hasLibraryPermission(user, route.libraryId, LIBRARY_PERMISSIONS.manageTitles)
+                    ? routeOptions.qualityProfiles.filter((profile) => {
+                      const library = routeOptions.libraries.find((entry) => entry.id === route.libraryId);
+                      return (library?.requestQualityProfileIds?.length ? library.requestQualityProfileIds : [library?.requestQualityProfileDefaultId]).includes(profile.id);
+                    })
+                    : routeOptions.qualityProfiles}
                   tagDefinitions={tagDefinitions}
                   tagsLoading={tagsLoading}
                   idPrefix={ID}
-                  onChange={(next) =>
-                    setDraft((current) => ({
-                      ...current,
-                      routes: [...current.routes.filter((entry) => entry.kind !== kind), next],
-                    }))
-                  }
+                  onChange={(next) => setDraft((current) => {
+                    const selectedLibrary = routeOptions.libraries.find((library) => library.id === next.libraryId);
+                    const managesLibrary = hasLibraryPermission(user, next.libraryId, LIBRARY_PERMISSIONS.manageTitles);
+                    const allowedProfiles = selectedLibrary?.requestQualityProfileIds?.length ? selectedLibrary.requestQualityProfileIds : [selectedLibrary?.requestQualityProfileDefaultId];
+                    const normalized = personal && !managesLibrary ? { ...next, rootFolderId: null, qualityProfileId: next.qualityProfileId && allowedProfiles.includes(next.qualityProfileId) ? next.qualityProfileId : selectedLibrary?.requestQualityProfileDefaultId ?? selectedLibrary?.requestQualityProfileIds?.[0] ?? null } : next;
+                    const routes = [...current.routes.filter((entry) => entry.kind !== kind), normalized];
+                    const direct = current.kinds.every((selectedKind) => hasLibraryPermission(user, routes.find((route) => route.kind === selectedKind)?.libraryId, LIBRARY_PERMISSIONS.manageTitles));
+                    return { ...current, routes, mode: personal && !direct ? "REQUEST" : current.mode };
+                  })}
                 />
               );
             })}
@@ -373,7 +396,7 @@ function FollowListDialogBody({
               label={t("lists.follow.onLeave")}
               description={t("lists.follow.onLeaveHelp")}
               value={draft.onLeave}
-              options={LIST_ON_LEAVE_OPTIONS.map((value) => ({ value, label: t(listOnLeaveLabelKey(value)) }))}
+              options={LIST_ON_LEAVE_OPTIONS.filter((value) => !personal || canDirectAdd || value === "KEEP" || value === "LOG").map((value) => ({ value, label: t(listOnLeaveLabelKey(value)) }))}
               onValueChange={(value) =>
                 setDraft((current) => ({ ...current, onLeave: value as ListSubscriptionDraft["onLeave"] }))
               }

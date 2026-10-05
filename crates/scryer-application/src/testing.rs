@@ -148,3 +148,82 @@ impl AppUseCaseTestExt for AppUseCase {
         self.runtime.events.notification_event_broadcast.subscribe()
     }
 }
+
+/// Synthetic account metadata for integration tests that exercise owner checks.
+#[derive(Clone)]
+pub struct ListAccountFixtureProvider {
+    descriptor: scryer_plugin_sdk::PluginDescriptor,
+    account_calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Default for ListAccountFixtureProvider {
+    fn default() -> Self {
+        Self {
+            account_calls: Default::default(),
+            descriptor: serde_json::from_value(serde_json::json!({
+                "id":"trakt-list", "name":"Fixture lists", "version":"1.0.0", "sdk_version":scryer_plugin_sdk::SDK_VERSION, "sdk_constraint":scryer_plugin_sdk::current_sdk_constraint(),
+                "provider":{"kind":"list_provider","provider_type":"trakt","auth":{"type":"member_account","flow":{"type":"authorization_code","pkce":true},"exchange":"smg_relay"},"capabilities":{"account":true},
+                "groups":[{"label":"Personal","auth_badge":"member_account","items":[{"id":"watchlist","name":"Watchlist","kinds":["movie"],"source_type":"watchlist","personal":true,"default_interval_seconds":3600}]}]}
+            })).expect("synthetic list provider descriptor"),
+        }
+    }
+}
+impl ListAccountFixtureProvider {
+    pub fn account_calls(&self) -> usize {
+        self.account_calls.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
+#[async_trait::async_trait]
+impl crate::lists::ListProviderClient for ListAccountFixtureProvider {
+    fn descriptor(&self) -> &scryer_plugin_sdk::PluginDescriptor {
+        &self.descriptor
+    }
+    async fn fetch(
+        &self,
+        _: scryer_plugin_sdk::ListPluginFetchRequest,
+    ) -> crate::AppResult<scryer_plugin_sdk::PluginResult<scryer_plugin_sdk::ListPluginFetchResponse>>
+    {
+        Ok(scryer_plugin_sdk::PluginResult::Ok(Default::default()))
+    }
+    async fn account(
+        &self,
+        _: scryer_plugin_sdk::ListCredential,
+    ) -> crate::AppResult<
+        scryer_plugin_sdk::PluginResult<scryer_plugin_sdk::ListPluginAccountResponse>,
+    > {
+        self.account_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(scryer_plugin_sdk::PluginResult::Ok(
+            scryer_plugin_sdk::ListPluginAccountResponse {
+                external_user_id: "private-provider-identity".into(),
+                username: "private-provider-member".into(),
+                ..Default::default()
+            },
+        ))
+    }
+    async fn health(
+        &self,
+    ) -> crate::AppResult<
+        scryer_plugin_sdk::PluginResult<scryer_plugin_sdk::ListPluginHealthResponse>,
+    > {
+        Ok(scryer_plugin_sdk::PluginResult::Ok(Default::default()))
+    }
+}
+impl crate::lists::ListPluginProvider for ListAccountFixtureProvider {
+    fn client_for_provider(
+        &self,
+        provider: &str,
+        _: &std::collections::BTreeMap<String, String>,
+    ) -> Option<std::sync::Arc<dyn crate::lists::ListProviderClient>> {
+        (provider == "trakt").then(|| {
+            std::sync::Arc::new(self.clone())
+                as std::sync::Arc<dyn crate::lists::ListProviderClient>
+        })
+    }
+    fn descriptors(&self) -> Vec<scryer_plugin_sdk::PluginDescriptor> {
+        vec![self.descriptor.clone()]
+    }
+    fn available_provider_types(&self) -> Vec<String> {
+        vec!["trakt".into()]
+    }
+}

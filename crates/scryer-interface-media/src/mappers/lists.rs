@@ -510,6 +510,7 @@ pub fn from_member_list_policy(entry: MemberListPolicy) -> MemberListPolicyPaylo
 
 pub fn list_source_draft_from_input(input: ListSourceInput) -> ListSourceDraft {
     ListSourceDraft {
+        credential_id: input.credential_id.map(|id| id.to_string()),
         provider: input.provider,
         source_type: input.source_type,
         params: params_from_input(input.params),

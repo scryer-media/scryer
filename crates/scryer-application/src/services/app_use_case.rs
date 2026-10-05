@@ -198,7 +198,9 @@ impl AppUseCase {
             .events
             .domain_event_broadcast
             .send(stored.sequence);
-        if crate::notifications::dispatcher::notification_event_type(&stored.payload).is_some() {
+        if !matches!(stored.stream, scryer_domain::DomainEventStream::User { .. })
+            && crate::notifications::dispatcher::notification_event_type(&stored.payload).is_some()
+        {
             tracing::debug!(
                 sequence = stored.sequence,
                 event_type = stored.payload.event_type().as_str(),
@@ -257,7 +259,9 @@ impl AppUseCase {
         let notification_count = stored
             .iter()
             .filter(|event| {
-                crate::notifications::dispatcher::notification_event_type(&event.payload).is_some()
+                !matches!(event.stream, scryer_domain::DomainEventStream::User { .. })
+                    && crate::notifications::dispatcher::notification_event_type(&event.payload)
+                        .is_some()
             })
             .count();
         if notification_count > 0

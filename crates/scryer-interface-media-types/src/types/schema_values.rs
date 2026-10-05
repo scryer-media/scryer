@@ -1330,6 +1330,8 @@ impl CatalogRefreshStateValue {
 pub enum StreamKindValue {
     /// Events from the global stream.
     Global,
+    /// Private events for the authenticated member.
+    User,
     /// Events for one title.
     Title,
     /// Events for one library scan.

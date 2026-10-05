@@ -9856,6 +9856,152 @@ type LinkedAccountPayload {
 }
 
 """
+A short-lived account-link session bound to the current member.
+"""
+type ListAccountLinkPayload {
+	"""
+	Opaque local session identifier.
+	"""
+	sessionId: ID!
+	"""
+	State that must match the callback before completion.
+	"""
+	state: String!
+	"""
+	Provider authorization URL to open.
+	"""
+	authorizeUrl: String!
+	"""
+	Exact origin allowed to send the authorization result.
+	"""
+	authorizationOrigin: String!
+	"""
+	Session expiry time.
+	"""
+	expiresAt: DateTime!
+	"""
+	Whether this provider completes by polling.
+	"""
+	pollRequired: Boolean!
+}
+
+"""
+A linked account visible only to its owner, without credentials.
+"""
+type ListAccountPayload {
+	"""
+	Local account identifier.
+	"""
+	id: ID!
+	"""
+	Provider identifier.
+	"""
+	provider: String!
+	"""
+	Stable account identity returned by the provider.
+	"""
+	externalUserId: String!
+	"""
+	Provider username.
+	"""
+	username: String!
+	"""
+	Optional provider display name.
+	"""
+	displayName: String
+	"""
+	Account health, including whether reconnect is needed.
+	"""
+	status: String!
+	"""
+	Safe explanation of an account problem.
+	"""
+	errorMessage: String
+	"""
+	When this account was first linked.
+	"""
+	linkedAt: DateTime!
+	"""
+	When a list last used this account.
+	"""
+	lastUsedAt: DateTime
+	"""
+	Lists owned by this account, populated by the account detail query.
+	"""
+	ownedLists: [ListAccountSourcePayload!]!
+	"""
+	Personal status collections, populated by the account detail query.
+	"""
+	statuses: [ListAccountStatusPayload!]!
+}
+
+"""
+The result of polling a personal account-link session.
+"""
+type ListAccountPollPayload {
+	"""
+	Pending or linked state.
+	"""
+	status: String!
+	"""
+	The linked account when authorization completed.
+	"""
+	account: ListAccountPayload
+}
+
+"""
+One list owned by the linked provider account.
+"""
+type ListAccountSourcePayload {
+	"""
+	The provider's list identifier.
+	"""
+	id: String!
+	"""
+	Display name of the list.
+	"""
+	name: String!
+	"""
+	Media kinds the list contains.
+	"""
+	kinds: [MediaFacetValue!]!
+	"""
+	Source type to use when following this list.
+	"""
+	sourceType: String!
+	"""
+	Provider parameters to use when following this list.
+	"""
+	params: [ListParamPayload!]!
+}
+
+"""
+A personal status collection offered by a provider account.
+"""
+type ListAccountStatusPayload {
+	"""
+	The provider's status identifier.
+	"""
+	key: String!
+	"""
+	Display name of the status.
+	"""
+	label: String!
+	"""
+	Media kinds the status contains.
+	"""
+	kinds: [MediaFacetValue!]!
+	"""
+	Source type to use when following this status.
+	"""
+	sourceType: String!
+	"""
+	Provider parameters to use when following this status.
+	"""
+	params: [ListParamPayload!]!
+}
+
+"""
 The account a provider group's lists need.
 """
 enum ListAuthBadge {
@@ -10403,6 +10549,32 @@ type ListPreviewPayload {
 }
 
 """
+Write-only provider application settings, with secret presence only.
+"""
+type ListProviderAppPayload {
+	"""
+	Provider identifier.
+	"""
+	provider: String!
+	"""
+	Configured OAuth application client identifier.
+	"""
+	clientId: String
+	"""
+	Configured callback URL on this instance.
+	"""
+	redirectUri: String
+	"""
+	Whether a secret is configured; its value is never returned.
+	"""
+	clientSecretSet: Boolean!
+	"""
+	Whether the operator's application overrides the default linking flow.
+	"""
+	enabled: Boolean!
+}
+
+"""
 A group of a provider's lists that need the same account.
 """
 type ListProviderGroupPayload {
@@ -10473,7 +10645,7 @@ type ListProviderNotePayload {
 }
 
 """
-A provider public lists can be followed from.
+A provider public or personal lists can be followed from.
 """
 type ListProviderPayload {
 	"""
@@ -10709,6 +10881,10 @@ A list source to preview.
 """
 input ListSourceInput {
 	"""
+	Linked account owned by the caller, required for personal source previews.
+	"""
+	credentialId: ID
+	"""
 	Provider key; with `sourceType`, names the source directly.
 	"""
 	provider: String
@@ -10793,7 +10969,7 @@ type ListSourcePayload {
 }
 
 """
-A followed public list.
+A followed public list or a personal list owned by the current member.
 """
 type ListSubscriptionPayload {
 	"""
@@ -10801,7 +10977,7 @@ type ListSubscriptionPayload {
 	"""
 	id: ID!
 	"""
-	Always `PUBLIC` here.
+	`PUBLIC` for an instance list or `PERSONAL` for the current member's list.
 	"""
 	scope: ListScope!
 	"""
@@ -19758,21 +19934,102 @@ type MutationRoot {
 		input: QueueUnlinkedReleaseInput!
 	): QueueUnlinkedReleasePayload!
 	"""
-	Follow a public list. Its first sync is due at once.
+	Start linking a provider account to the current member from an approved instance origin.
+	"""
+	startListAccountLink(
+		"""
+		Provider whose account is being linked.
+		"""
+		provider: String!,
+		"""
+		Exact browser origin approved by the instance public URL or local listening address.
+		"""
+		origin: String!
+	): ListAccountLinkPayload!
+	"""
+	Poll an account authorization session owned by the current member.
+	"""
+	pollListAccountLink(
+		"""
+		Opaque session returned when linking started.
+		"""
+		sessionId: ID!
+	): ListAccountPollPayload!
+	"""
+	Consume an owned authorization session and link the verified provider identity.
+	"""
+	completeListAccountLink(
+		"""
+		Opaque session returned when linking started.
+		"""
+		sessionId: ID!,
+		"""
+		State returned by authorization.
+		"""
+		state: String!,
+		"""
+		Provider bound to this session.
+		"""
+		provider: String!,
+		"""
+		One-use authorization code or sealed exchange receipt.
+		"""
+		code: String!,
+		"""
+		Provider issuer, required for Simkl.
+		"""
+		issuer: String
+	): ListAccountPayload!
+	"""
+	Remove an owned account and its follows while preserving library media.
+	"""
+	unlinkListAccount(
+		"""
+		ID of an account owned by the current member.
+		"""
+		id: ID!
+	): ID!
+	"""
+	Save an optional OAuth application for Trakt, AniList or MyAnimeList.
+	"""
+	updateListProviderApp(
+		"""
+		Provider whose OAuth application is being configured.
+		"""
+		provider: String!,
+		"""
+		Application client identifier; omitted retains the current value.
+		"""
+		clientId: String,
+		"""
+		Write-only application secret; omitted retains the current value.
+		"""
+		clientSecret: String,
+		"""
+		Callback URL on this instance.
+		"""
+		redirectUri: String,
+		"""
+		Whether to use this application instead of the default flow.
+		"""
+		enabled: Boolean!
+	): ListProviderAppPayload!
+	"""
+	Follow a public list or a personal list from an owned account. Its first sync is due at once.
 	"""
 	subscribeList(
 		"""
-		The list to follow and how its titles are handled.
+		The public or personal list to follow and how its titles are handled.
 		"""
 		input: SubscribeListInput!
 	): ListSubscriptionPayload!
 	"""
-	Change a followed public list's settings. Omitted fields stay as they
+	Change a followed public list or an owned personal list. Omitted fields stay as they
 	are.
 	"""
 	updateListSubscription(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!,
 		"""
@@ -19781,12 +20038,12 @@ type MutationRoot {
 		input: UpdateListSubscriptionInput!
 	): ListSubscriptionPayload!
 	"""
-	Turn a followed public list off or back on. Turning it on makes it due
+	Turn a followed public list or an owned personal list off or back on. Turning it on makes it due
 	at once.
 	"""
 	setListSubscriptionEnabled(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!,
 		"""
@@ -19795,30 +20052,31 @@ type MutationRoot {
 		enabled: Boolean!
 	): ListSubscriptionPayload!
 	"""
-	Make one followed public list due now and start a sync.
+	Make one followed public list or an owned personal list due now and start a sync.
 	"""
 	syncListSubscription(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!
 	): ListSyncEnqueuedPayload!
 	"""
-	Make every enabled public list due now and start a sync.
+	Make every enabled list in the selected scope due now and start a sync.
+	Personal scope includes only lists owned by the current member.
 	"""
 	syncAllLists(
 		"""
-		Must be `PUBLIC` or omitted.
+		PUBLIC or omitted syncs instance public lists; PERSONAL syncs only the current member's personal lists.
 		"""
 		scope: ListScope
 	): ListSyncEnqueuedPayload!
 	"""
-	Stop following a public list. Every title and request it made stays.
+	Stop following a public list or an owned personal list. Every title and request it made stays.
 	Returns the ID of the list.
 	"""
 	unsubscribeList(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!
 	): ID!
@@ -23720,7 +23978,28 @@ type QueryRoot {
 		id: ID!
 	): IndexerErrorDetailPayload
 	"""
-	Every provider a public list can be followed from, with the lists each
+	Linked accounts owned by the current member. Credentials are never returned.
+	"""
+	myListAccounts: [ListAccountPayload!]!
+	"""
+	Refresh an owned account's provider identity and available personal lists.
+	"""
+	listAccount(
+		"""
+		ID of an account owned by the current member.
+		"""
+		id: ID!
+	): ListAccountPayload!
+	"""
+	Optional operator-owned OAuth applications. Secrets are write-only.
+	"""
+	listProviderApps: [ListProviderAppPayload!]!
+	"""
+	Personal lists followed by the current member.
+	"""
+	myListSubscriptions: [ListSubscriptionPayload!]!
+	"""
+	Every provider public or personal lists can be followed from, with the lists each
 	offers and the link shapes it is recognised by.
 	"""
 	listProviders: [ListProviderPayload!]!
@@ -23736,20 +24015,21 @@ type QueryRoot {
 	"""
 	listSubscriptions: [ListSubscriptionPayload!]!
 	"""
-	One followed public list, or null when there is none with that ID.
+	One followed public list or a personal list owned by the current member.
+	Returns null when no list has that ID.
 	"""
 	listSubscription(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!
 	): ListSubscriptionPayload
 	"""
-	A page of the titles currently on a followed public list, in list order.
+	A page of titles on a followed public list or an owned personal list, in list order.
 	"""
 	listSubscriptionMemberships(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!,
 		"""
@@ -23762,11 +24042,11 @@ type QueryRoot {
 		offset: Int
 	): ListMembershipPagePayload!
 	"""
-	A followed public list's recent syncs, newest first.
+	Recent syncs of a followed public list or an owned personal list, newest first.
 	"""
 	listSyncRuns(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		subscriptionId: ID!,
 		"""
@@ -23775,12 +24055,12 @@ type QueryRoot {
 		limit: Int
 	): [ListSyncRunPayload!]!
 	"""
-	What the next sync of a followed public list would do. Requires list
-	management permission.
+	What the next sync of a followed public list or an owned personal list would do.
+	Public-list previews require list management permission.
 	"""
 	listSubscriptionPreview(
 		"""
-		ID of the followed public list.
+		ID of a public list or a personal list owned by the current member.
 		"""
 		id: ID!
 	): ListPreviewPayload!
@@ -23795,12 +24075,12 @@ type QueryRoot {
 		url: String!
 	): ListPreviewPayload!
 	"""
-	What following a list source would do. Requires list management
-	permission.
+	What following a public source or a source from an owned account would do.
+	Public-source previews require list management permission.
 	"""
 	listSourcePreview(
 		"""
-		The provider, source type and parameters, or a link.
+		The provider, source type and parameters, or a link; personal sources also require an owned linked account.
 		"""
 		input: ListSourceInput!
 	): ListPreviewPayload!
@@ -27017,6 +27297,10 @@ enum StreamKindValue {
 	"""
 	GLOBAL
 	"""
+	Private events for the authenticated member.
+	"""
+	USER
+	"""
 	Events for one title.
 	"""
 	TITLE
@@ -27180,11 +27464,15 @@ type SubmitMediaRequestPayload {
 }
 
 """
-A public list to follow.
+A public or owner-linked personal list to follow.
 """
 input SubscribeListInput {
 	"""
-	Must be `PUBLIC`.
+	Linked account owned by the caller, required when scope is PERSONAL.
+	"""
+	credentialId: ID
+	"""
+	`PERSONAL` requires an account owned by the caller.
 	"""
 	scope: ListScope!
 	"""
@@ -30326,7 +30614,7 @@ input UpdateLibraryRootInput {
 }
 
 """
-Changes to a followed public list. Omitted fields stay as they are.
+Changes to a followed public list or an owned personal list. Omitted fields stay as they are.
 """
 input UpdateListSubscriptionInput {
 	"""

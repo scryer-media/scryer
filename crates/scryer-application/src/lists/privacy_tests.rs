@@ -115,14 +115,15 @@ fn a_credential_needs_the_owners_active_account_for_the_same_provider() {
 }
 
 #[test]
-fn a_personal_failure_label_names_only_owner_provider_and_class() {
+fn a_personal_failure_label_has_no_owner_provider_or_list_association() {
     let list = personal("owner-one");
     let label = job_failure_label(
         &list,
         &ListFailure::new(ListFailureClass::Unauthorized, PROVIDER),
     );
-    assert!(label.contains("owner-one"));
-    assert!(label.contains(PROVIDER));
+    assert_eq!(label, "personal list: unauthorized");
+    assert!(!label.contains("owner-one"));
+    assert!(!label.contains(PROVIDER));
     assert!(!label.contains(&list.name), "{label}");
     assert!(!label.contains(&list.id), "{label}");
 }

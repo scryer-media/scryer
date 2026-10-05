@@ -268,6 +268,23 @@ pub fn default_persist_session_from_ctx(ctx: &Context<'_>) -> bool {
 #[derive(Clone, Copy)]
 pub struct RequestClientIp(pub std::net::IpAddr);
 
+/// Server-approved callback origins for this HTTP request. Transport adapters
+/// derive these from operator configuration, never from client headers.
+#[derive(Clone, Default)]
+pub struct RequestListAccountLinkOrigins(pub std::sync::Arc<[String]>);
+
+pub fn list_account_link_origin_from_ctx(ctx: &Context<'_>, requested: &str) -> GqlResult<String> {
+    ctx.data_opt::<RequestListAccountLinkOrigins>()
+        .and_then(|policy| policy.0.iter().find(|origin| origin.as_str() == requested))
+        .cloned()
+        .ok_or_else(|| {
+            coded_gql_error(
+                "Account linking is unavailable from this address; configure SCRYER_PUBLIC_URL or use an approved local address",
+                "LIST_ACCOUNT_ORIGIN_NOT_ALLOWED",
+            )
+        })
+}
+
 pub fn request_client_ip_from_ctx(ctx: &Context<'_>) -> Option<std::net::IpAddr> {
     ctx.data_opt::<RequestClientIp>()
         .map(|client_ip| client_ip.0)
@@ -275,6 +292,75 @@ pub fn request_client_ip_from_ctx(ctx: &Context<'_>) -> Option<std::net::IpAddr>
 
 pub fn persist_session_or_default(requested: Option<bool>, default: bool) -> bool {
     requested.unwrap_or(default)
+}
+
+#[cfg(test)]
+mod request_list_account_origin_tests {
+    use super::{RequestListAccountLinkOrigins, list_account_link_origin_from_ctx};
+    use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Request, Schema};
+
+    struct Query;
+
+    #[Object]
+    impl Query {
+        async fn approved_origin(
+            &self,
+            ctx: &Context<'_>,
+            origin: String,
+        ) -> async_graphql::Result<String> {
+            list_account_link_origin_from_ctx(ctx, &origin)
+        }
+    }
+
+    #[tokio::test]
+    async fn account_link_origin_requires_transport_context_and_exact_approved_origin() {
+        let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
+        let policy = RequestListAccountLinkOrigins(vec!["https://media.home".into()].into());
+        for (requested, context, accepted) in [
+            ("https://media.home", None, false),
+            (
+                "https://media.home",
+                Some(RequestListAccountLinkOrigins::default()),
+                false,
+            ),
+            ("https://attacker.invalid", Some(policy.clone()), false),
+            (
+                "https://media.home.attacker.invalid",
+                Some(policy.clone()),
+                false,
+            ),
+            ("http://media.home", Some(policy.clone()), false),
+            ("https://media.home", Some(policy), true),
+        ] {
+            let mut request =
+                Request::new(format!("{{ approvedOrigin(origin: \"{requested}\") }}"));
+            if let Some(context) = context {
+                request = request.data(context);
+            }
+            let response =
+                tokio::time::timeout(std::time::Duration::from_secs(30), schema.execute(request))
+                    .await
+                    .expect("origin check completes");
+            if accepted {
+                assert!(response.errors.is_empty());
+                assert_eq!(
+                    response.data,
+                    async_graphql::value!({"approvedOrigin": requested})
+                );
+            } else {
+                assert_eq!(response.errors.len(), 1);
+                assert_eq!(
+                    response.errors[0]
+                        .extensions
+                        .as_ref()
+                        .and_then(|value| value.get("code")),
+                    Some(&async_graphql::Value::from(
+                        "LIST_ACCOUNT_ORIGIN_NOT_ALLOWED"
+                    ))
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

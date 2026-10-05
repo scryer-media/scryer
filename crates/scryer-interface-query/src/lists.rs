@@ -1,6 +1,4 @@
-//! Public-list reads: the provider catalog, followed lists, their titles and
-//! sync history, previews, exclusions, and members' list policies. Personal
-//! lists are never read here.
+//! List reads with owner-only access to personal accounts and subscriptions.
 
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use scryer_application::lists::public::{LIST_MEMBERSHIP_PAGE_MAX, LIST_SYNC_RUNS_MAX};
@@ -11,9 +9,9 @@ use scryer_interface_media::mappers::{
     from_member_list_policy, list_source_draft_from_input,
 };
 use scryer_interface_media::types::{
-    ListExclusionPayload, ListMembershipPagePayload, ListPreviewPayload, ListProviderPayload,
-    ListProviderSettingsPayload, ListSourceInput, ListSubscriptionPayload, ListSyncRunPayload,
-    MemberListPolicyPayload,
+    ListAccountPayload, ListExclusionPayload, ListMembershipPagePayload, ListPreviewPayload,
+    ListProviderAppPayload, ListProviderPayload, ListProviderSettingsPayload, ListSourceInput,
+    ListSubscriptionPayload, ListSyncRunPayload, MemberListPolicyPayload,
 };
 
 const DEFAULT_MEMBERSHIP_LIMIT: i32 = 100;
@@ -30,7 +28,63 @@ pub(crate) struct ListQueries;
 
 #[Object]
 impl ListQueries {
-    /// Every provider a public list can be followed from, with the lists each
+    /// Linked accounts owned by the current member. Credentials are never returned.
+    async fn my_list_accounts(&self, ctx: &Context<'_>) -> GqlResult<Vec<ListAccountPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        Ok(app
+            .my_list_accounts(&actor)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .map(ListAccountPayload::from_view)
+            .collect())
+    }
+    /// Refresh an owned account's provider identity and available personal lists.
+    async fn list_account(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "ID of an account owned by the current member.")] id: ID,
+    ) -> GqlResult<ListAccountPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        Ok(ListAccountPayload::from_view(
+            app.list_account(&actor, id.as_str())
+                .await
+                .map_err(to_gql_error)?,
+        ))
+    }
+    /// Optional operator-owned OAuth applications. Secrets are write-only.
+    async fn list_provider_apps(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<ListProviderAppPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        Ok(app
+            .list_provider_apps(&actor)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .map(Into::into)
+            .collect())
+    }
+    /// Personal lists followed by the current member.
+    async fn my_list_subscriptions(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Vec<ListSubscriptionPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        Ok(app
+            .my_list_subscriptions(&actor)
+            .await
+            .map_err(to_gql_error)?
+            .into_iter()
+            .map(from_list_subscription)
+            .collect())
+    }
+    /// Every provider public or personal lists can be followed from, with the lists each
     /// offers and the link shapes it is recognised by.
     async fn list_providers(&self, ctx: &Context<'_>) -> GqlResult<Vec<ListProviderPayload>> {
         let app = app_from_ctx(ctx)?;
@@ -79,26 +133,27 @@ impl ListQueries {
             .collect())
     }
 
-    /// One followed public list, or null when there is none with that ID.
+    /// One followed public list or a personal list owned by the current member.
+    /// Returns null when no list has that ID.
     async fn list_subscription(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "ID of the followed public list.")] id: ID,
+        #[graphql(desc = "ID of a public list or a personal list owned by the current member.")] id: ID,
     ) -> GqlResult<Option<ListSubscriptionPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let subscription = app
-            .public_list_subscription(&actor, id.as_str())
+            .visible_list_subscription(&actor, id.as_str())
             .await
             .map_err(to_gql_error)?;
         Ok(subscription.map(from_list_subscription))
     }
 
-    /// A page of the titles currently on a followed public list, in list order.
+    /// A page of titles on a followed public list or an owned personal list, in list order.
     async fn list_subscription_memberships(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "ID of the followed public list.")] id: ID,
+        #[graphql(desc = "ID of a public list or a personal list owned by the current member.")] id: ID,
         #[graphql(desc = "Page size from 1 through 500; defaults to 100.")] limit: Option<i32>,
         #[graphql(desc = "Titles to skip; defaults to 0.")] offset: Option<i32>,
     ) -> GqlResult<ListMembershipPagePayload> {
@@ -107,17 +162,18 @@ impl ListQueries {
         let limit = clamp(limit, DEFAULT_MEMBERSHIP_LIMIT, LIST_MEMBERSHIP_PAGE_MAX);
         let offset = usize::try_from(offset.unwrap_or(0).max(0)).unwrap_or(0);
         let page = app
-            .public_list_memberships(&actor, id.as_str(), limit, offset)
+            .visible_list_memberships(&actor, id.as_str(), limit, offset)
             .await
             .map_err(to_gql_error)?;
         Ok(from_list_membership_page(page))
     }
 
-    /// A followed public list's recent syncs, newest first.
+    /// Recent syncs of a followed public list or an owned personal list, newest first.
     async fn list_sync_runs(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "ID of the followed public list.")] subscription_id: ID,
+        #[graphql(desc = "ID of a public list or a personal list owned by the current member.")]
+        subscription_id: ID,
         #[graphql(desc = "Most syncs to return, from 1 through 100; defaults to 20.")]
         limit: Option<i32>,
     ) -> GqlResult<Vec<ListSyncRunPayload>> {
@@ -125,23 +181,23 @@ impl ListQueries {
         let actor = actor_from_ctx(ctx)?;
         let limit = clamp(limit, DEFAULT_SYNC_RUN_LIMIT, LIST_SYNC_RUNS_MAX);
         let runs = app
-            .public_list_sync_runs(&actor, subscription_id.as_str(), limit)
+            .visible_list_sync_runs(&actor, subscription_id.as_str(), limit)
             .await
             .map_err(to_gql_error)?;
         Ok(runs.into_iter().map(from_list_sync_run).collect())
     }
 
-    /// What the next sync of a followed public list would do. Requires list
-    /// management permission.
+    /// What the next sync of a followed public list or an owned personal list would do.
+    /// Public-list previews require list management permission.
     async fn list_subscription_preview(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "ID of the followed public list.")] id: ID,
+        #[graphql(desc = "ID of a public list or a personal list owned by the current member.")] id: ID,
     ) -> GqlResult<ListPreviewPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let preview = app
-            .preview_public_list(&actor, id.as_str())
+            .preview_visible_list(&actor, id.as_str())
             .await
             .map_err(to_gql_error)?;
         Ok(from_list_preview(preview))
@@ -163,20 +219,25 @@ impl ListQueries {
         Ok(from_list_preview(preview))
     }
 
-    /// What following a list source would do. Requires list management
-    /// permission.
+    /// What following a public source or a source from an owned account would do.
+    /// Public-source previews require list management permission.
     async fn list_source_preview(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "The provider, source type and parameters, or a link.")]
+        #[graphql(
+            desc = "The provider, source type and parameters, or a link; personal sources also require an owned linked account."
+        )]
         input: ListSourceInput,
     ) -> GqlResult<ListPreviewPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let preview = app
-            .preview_list_source(&actor, list_source_draft_from_input(input))
-            .await
-            .map_err(to_gql_error)?;
+        let draft = list_source_draft_from_input(input);
+        let preview = if draft.credential_id.is_some() {
+            app.preview_personal_source(&actor, draft).await
+        } else {
+            app.preview_list_source(&actor, draft).await
+        }
+        .map_err(to_gql_error)?;
         Ok(from_list_preview(preview))
     }
 

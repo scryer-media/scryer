@@ -348,6 +348,47 @@ async fn graphql_http_schema_is_fully_documented() {
 }
 
 #[tokio::test]
+async fn private_account_schema_has_owner_queries_and_never_exposes_credentials() {
+    let ctx = TestContext::new().await;
+    let sdl = schema_sdl(&ctx);
+    for field in [
+        "myListAccounts",
+        "myListSubscriptions",
+        "startListAccountLink",
+        "completeListAccountLink",
+        "unlinkListAccount",
+    ] {
+        assert!(sdl.contains(field));
+    }
+    let payload = sdl
+        .split("type ListAccountPayload {")
+        .nth(1)
+        .unwrap()
+        .split('}')
+        .next()
+        .unwrap();
+    for secret in [
+        "accessToken",
+        "refreshToken",
+        "refreshHandle",
+        "credential",
+        "clientSecret",
+        "appConfig",
+    ] {
+        assert!(!payload.contains(secret), "account schema exposes {secret}");
+    }
+    let body = gql(
+        &ctx,
+        "{ myListAccounts { id provider externalUserId } myListSubscriptions { id } }",
+        json!({}),
+    )
+    .await;
+    assert_no_errors(&body);
+    assert_eq!(body["data"]["myListAccounts"], json!([]));
+    assert_eq!(body["data"]["myListSubscriptions"], json!([]));
+}
+
+#[tokio::test]
 async fn graphql_introspection_schema_census_matches_contract_baseline() {
     let ctx = TestContext::new().await;
     let sdl = schema_sdl(&ctx);
@@ -714,7 +755,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // `latestJobRuns`, the newest run per job in one read: 185->186.
     assert!(query_field_names.contains(&"latestJobRuns"));
     assert_eq!(
-        query_field_count, 186,
+        query_field_count, 190,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -746,7 +787,7 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // policy. 250->259. Changing a list provider's server-wide settings adds
     // one more: 259->260.
     assert_eq!(
-        mutation_field_count, 260,
+        mutation_field_count, 265,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1012,8 +1053,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // its failures in two payloads: public types 917->919, OBJECT 497->499.
     assert!(public_type_names.contains(&"RecycleBinRelocationPayload"));
     assert!(public_type_names.contains(&"RecycleBinRelocationFailurePayload"));
-    assert_eq!(public_types.len(), 919);
-    assert_eq!(kind_count("OBJECT"), 499);
+    // Private account management adds six credential-free output objects.
+    assert_eq!(public_types.len(), 925);
+    assert_eq!(kind_count("OBJECT"), 505);
     assert_eq!(kind_count("INPUT_OBJECT"), 232);
     assert_eq!(kind_count("ENUM"), 176);
     assert_eq!(kind_count("SCALAR"), 10);

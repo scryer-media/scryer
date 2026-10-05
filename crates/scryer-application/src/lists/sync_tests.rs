@@ -205,7 +205,7 @@ async fn a_public_failure_is_announced_once_until_it_changes() {
 }
 
 #[tokio::test]
-async fn a_personal_failure_is_not_announced() {
+async fn a_personal_failure_reaches_the_owner_event_port() {
     let list = ListSubscription {
         scope: ListScope::Personal,
         credential_id: Some("missing-account".to_string()),
@@ -216,7 +216,13 @@ async fn a_personal_failure_is_not_announced() {
     let report = harness.sync_at(at(0)).await;
 
     assert_eq!(report.failed, 1);
-    assert!(sync_failures(&harness.actions).is_empty());
+    assert_eq!(
+        sync_failures(&harness.actions),
+        vec![RecordedAction::SyncFailure {
+            subscription_id: "list-a".into(),
+            class: "account_required".into()
+        }]
+    );
 }
 
 #[tokio::test]
@@ -367,7 +373,72 @@ async fn a_personal_list_without_an_account_fails_without_fetching() {
 
     assert_eq!(report.failed, 1);
     assert!(harness.lists.fetched.lock().unwrap().is_empty());
-    assert!(report.failures[0].contains("owner-one"));
+    assert_eq!(report.failures, vec!["personal list: account_required"]);
+}
+
+#[tokio::test]
+async fn global_job_report_redacts_private_associations_and_preserves_owner_status() {
+    let mut private = subscription("private-subscription-marker");
+    private.scope = ListScope::Personal;
+    private.owner_user_id = "private-owner-marker".into();
+    private.name = "Private subscription name marker".into();
+    private.source.provider = "private-provider-marker".into();
+    private.credential_id = Some("private-account-marker".into());
+    let public = subscription("public-subscription-marker");
+    let harness = Harness::new(vec![private.clone(), public.clone()]);
+    harness.lists.fail(
+        &public.id,
+        PluginError {
+            code: PluginErrorCode::Permanent,
+            public_message: "fixture provider failure".into(),
+            debug_message: None,
+            retry_after_seconds: None,
+            details: None,
+        },
+    );
+
+    let report = harness.sync_at(at(0)).await;
+
+    assert_eq!(report.failed, 2);
+    let serialized = serde_json::to_string(&report).unwrap();
+    for marker in [
+        &private.id,
+        &private.owner_user_id,
+        &private.name,
+        &private.source.provider,
+        private.credential_id.as_ref().unwrap(),
+    ] {
+        assert!(
+            !serialized.contains(marker),
+            "global report exposed a private association"
+        );
+    }
+    assert!(
+        report
+            .failures
+            .contains(&"personal list: account_required".into())
+    );
+    assert!(
+        report.failures.contains(&format!(
+            "public list {} ({}): failed",
+            public.id, public.source.provider
+        )),
+        "public reports retain their existing association"
+    );
+    let saved = harness.store.subscription(&private.id);
+    assert_eq!(saved.owner_user_id, private.owner_user_id);
+    assert_eq!(saved.sync.state, ListSyncState::Fail);
+    assert_eq!(
+        saved.sync.error_message.as_deref(),
+        Some("This list needs a linked private-provider-marker account.")
+    );
+    assert!(
+        sync_failures(&harness.actions).contains(&RecordedAction::SyncFailure {
+            subscription_id: private.id,
+            class: "account_required".into(),
+        }),
+        "the owner event port retains the private failure association"
+    );
 }
 
 #[tokio::test]
@@ -450,6 +521,38 @@ async fn a_personal_add_list_submits_requests_instead() {
             hold: false
         }]
     );
+}
+
+#[tokio::test]
+async fn personal_manager_add_preserves_search_intent_and_revoked_grants_request() {
+    for (mode, search) in [(ListMode::Add, false), (ListMode::Search, true)] {
+        let list = ListSubscription {
+            scope: ListScope::Personal,
+            mode,
+            ..subscription("manager-list")
+        };
+        let item = crate::lists::test_support::resolved_item("alpha");
+        let mut actions = RecordingActions {
+            owner_manages_titles: true,
+            ..Default::default()
+        };
+        let outcome = crate::lists::act::act_on_candidate(&actions, &list, &item).await;
+        assert_eq!(outcome.state, ListMembershipState::Added);
+        assert_eq!(
+            actions.calls(),
+            vec![RecordedAction::Add {
+                item_key: "alpha".into(),
+                search
+            }]
+        );
+        actions.owner_manages_titles = false;
+        let outcome = crate::lists::act::act_on_candidate(&actions, &list, &item).await;
+        assert_eq!(outcome.state, ListMembershipState::Requested);
+        assert!(matches!(
+            actions.calls().last(),
+            Some(RecordedAction::Request { hold: false, .. })
+        ));
+    }
 }
 
 #[tokio::test]

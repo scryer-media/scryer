@@ -26,6 +26,22 @@ pub struct AddedTitle {
 /// The effects the sync engine may cause.
 #[async_trait]
 pub trait ListActions: Send + Sync {
+    async fn owner_is_enabled(&self, _subscription: &ListSubscription) -> AppResult<bool> {
+        Ok(true)
+    }
+    async fn lock_account(
+        &self,
+        _subscription: &ListSubscription,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        None
+    }
+    /// Production refreshes and saves rotated token material before fetching.
+    async fn prepare_account(
+        &self,
+        account: scryer_domain::UserListAccount,
+    ) -> AppResult<scryer_domain::UserListAccount> {
+        Ok(account)
+    }
     /// Create the title monitored in the route's library and, when `search`
     /// is set, start the same wanted search an approved request starts.
     async fn add_title(
@@ -59,6 +75,24 @@ pub trait ListActions: Send + Sync {
     async fn set_title_monitored(&self, title_id: &str, monitored: bool) -> AppResult<()>;
 
     async fn tag_title(&self, title_id: &str, tag: &str) -> AppResult<()>;
+
+    async fn set_departed_title_monitored(
+        &self,
+        _subscription: &ListSubscription,
+        title_id: &str,
+        monitored: bool,
+    ) -> AppResult<()> {
+        self.set_title_monitored(title_id, monitored).await
+    }
+
+    async fn tag_departed_title(
+        &self,
+        _subscription: &ListSubscription,
+        title_id: &str,
+        tag: &str,
+    ) -> AppResult<()> {
+        self.tag_title(title_id, tag).await
+    }
 
     /// Whether the title is still in the library. Only read after an
     /// on-leave action failed, to tell a title that is gone from a failure
@@ -128,11 +162,21 @@ pub async fn act_on_candidate(
         };
     };
 
-    // A personal list never adds straight into a library on its mode alone:
-    // whatever mode it carries, it acts as a Request list, so its titles are
-    // added only for an owner who could add them by hand.
+    // Re-check the owner's current grants on every item. A revoked grant
+    // falls back to the normal request policy; Add keeps its no-search intent.
     let mode = match subscription.mode {
-        ListMode::Search | ListMode::Add if subscription.is_personal() => ListMode::Request,
+        ListMode::Search | ListMode::Add if subscription.is_personal() => {
+            match actions.owner_manages_titles(subscription, route).await {
+                Ok(true) => subscription.mode,
+                Ok(false) => ListMode::Request,
+                Err(error) => {
+                    return ActOutcome {
+                        reason: Some(action_failure_reason(&error)),
+                        ..ActOutcome::state(failed_action_state(&error))
+                    };
+                }
+            }
+        }
         mode => mode,
     };
     let result = match mode {

@@ -1120,6 +1120,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             is_sensitive: true,
         },
         ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.provider_apps",
+            data_type: "json",
+            default_value_json: "null",
+            is_sensitive: true,
+        },
+        ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SUBTITLES,
             scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "subtitles.enabled",

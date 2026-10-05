@@ -10,6 +10,11 @@ import {
 } from "@/components/views/lists/lists-view";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
+import { useSessionUser } from "@/lib/hooks/use-auth";
+import { useListAccountLink } from "@/lib/hooks/use-list-account-link";
+import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
+import { listAccountQuery, myListAccountsQuery, myListSubscriptionsQuery, personalListRouteOptionsQuery, unlinkListAccountMutation } from "@/lib/graphql/list-accounts";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import {
   addListExclusionMutation,
@@ -34,6 +39,7 @@ import {
   listUrlPreviewQuery,
 } from "@/lib/graphql/queries";
 import type {
+  ListAccount,
   ListExclusion,
   ListMembershipPage,
   ListPreview,
@@ -65,6 +71,12 @@ type ListsContainerProps = {
 };
 
 export function ListsContainer({ canManageLists }: ListsContainerProps) {
+  const user = useSessionUser();
+  const location = useLocation();
+  return <ListsContainerBody key={`${user?.id ?? "anonymous"}:${listsSectionFromPath(location.pathname)}`} canManageLists={canManageLists} />;
+}
+
+function ListsContainerBody({ canManageLists }: ListsContainerProps) {
   const client = useClient();
   const t = useTranslate();
   const setGlobalStatus = useGlobalStatus();
@@ -72,10 +84,20 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
   const navigate = useNavigate();
   const requestedSection = listsSectionFromPath(location.pathname);
   const section: ListsSection = requestedSection;
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const user = useSessionUser();
+  const canManageProviderApps = hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
+  const personal = section === "personal";
 
   const [providers, setProviders] = React.useState<ListProviderManifest[]>([]);
+  const [accounts, setAccounts] = React.useState<ListAccount[]>([]);
+  const [managedAccount, setManagedAccount] = React.useState<ListAccount | null>(null);
+  const [accountLoading, setAccountLoading] = React.useState(false);
   const [providerSettings, setProviderSettings] = React.useState<ListProviderSettings[] | null>(null);
-  const [subscriptions, setSubscriptions] = React.useState<ListSubscription[]>([]);
+  const [publicSubscriptions, setPublicSubscriptions] = React.useState<ListSubscription[]>([]);
+  const [personalSubscriptions, setPersonalSubscriptions] = React.useState<ListSubscription[]>([]);
+  const subscriptions = personal ? personalSubscriptions : publicSubscriptions;
+  const setSubscriptions = personal ? setPersonalSubscriptions : setPublicSubscriptions;
   const [exclusions, setExclusions] = React.useState<ListExclusion[]>([]);
   const [routeOptions, setRouteOptions] = React.useState<ListRouteOptions>({
     libraries: [],
@@ -98,15 +120,51 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
 
   const loadSubscriptions = React.useCallback(async (): Promise<ListSubscription[]> => {
     const result = await client
-      .query(listSubscriptionsQuery, {}, { requestPolicy: "network-only" })
+      .query(personal ? myListSubscriptionsQuery : listSubscriptionsQuery, {}, { requestPolicy: "network-only" })
       .toPromise();
     if (result.error) {
       throw result.error;
     }
-    const loaded = (result.data?.listSubscriptions ?? []) as ListSubscription[];
+    const loaded = (personal ? result.data?.myListSubscriptions : result.data?.listSubscriptions) ?? [];
     setSubscriptions(loaded);
     return loaded;
+  }, [client, personal, setSubscriptions]);
+
+  const loadAccounts = React.useCallback(async (isCurrent: () => boolean = () => true) => {
+    const result = await client.query(myListAccountsQuery, {}, { requestPolicy: "network-only" }).toPromise();
+    if (!isCurrent()) return;
+    if (result.error) throw result.error;
+    setAccounts((result.data?.myListAccounts ?? []) as ListAccount[]);
   }, [client]);
+  const accountLink = useListAccountLink(loadAccounts);
+
+  const manageAccount = async (account: ListAccount | null) => {
+    setManagedAccount(account);
+    if (!account) return;
+    setAccountLoading(true);
+    try {
+      const result = await client.query(listAccountQuery, { id: account.id }, { requestPolicy: "network-only" }).toPromise();
+      if (result.error) throw result.error;
+      setManagedAccount((current) => current?.id === account.id ? result.data?.listAccount ?? null : current);
+    } catch (error) {
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToLoad")));
+    } finally { setAccountLoading(false); }
+  };
+
+  const unlinkAccount = async (account: ListAccount) => {
+    markBusy(account.id, true);
+    try {
+      const result = await client.mutation(unlinkListAccountMutation, { id: account.id }).toPromise();
+      if (result.error) throw result.error;
+      setManagedAccount(null);
+      await Promise.all([loadAccounts(), loadSubscriptions()]);
+      setGlobalStatus(t("lists.accounts.unlinked"));
+      return true;
+    } catch (error) {
+      setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
+      return false;
+    } finally { markBusy(account.id, false); }
+  };
 
   const loadPage = React.useCallback(async () => {
     setLoading(true);
@@ -115,11 +173,12 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
       const [providersResult] = await Promise.all([
         client.query(listProvidersQuery, {}).toPromise(),
         loadSubscriptions(),
+        ...(personal && experimentalFeaturesEnabled ? [loadAccounts()] : []),
       ]);
       if (providersResult.error) throw providersResult.error;
       setProviders((providersResult.data?.listProviders ?? []) as ListProviderManifest[]);
-      if (canManageLists) {
-        const optionsResult = await client.query(listRouteOptionsQuery, {}).toPromise();
+      if (canManageLists || personal) {
+        const optionsResult = await client.query(personal ? personalListRouteOptionsQuery : listRouteOptionsQuery, {}).toPromise();
         // Libraries and profiles only feed the follow form's routing choices;
         // failing to read them must not take the lists themselves down.
         if (optionsResult.error) {
@@ -130,7 +189,9 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
           return;
         }
         setRouteOptions({
-          libraries: (optionsResult.data?.libraries ?? []) as LibraryRecord[],
+          libraries: personal
+            ? [...new Map([...(optionsResult.data?.requestableLibraries ?? []), ...(optionsResult.data?.manageableLibraries ?? [])].map((library: LibraryRecord) => [library.id, library])).values()]
+            : (optionsResult.data?.libraries ?? []) as LibraryRecord[],
           qualityProfiles: (optionsResult.data?.qualityProfileSettings?.profiles ?? []) as Array<{
             id: string;
             name: string;
@@ -142,7 +203,7 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
     } finally {
       setLoading(false);
     }
-  }, [canManageLists, client, loadSubscriptions, setGlobalStatus, t]);
+  }, [canManageLists, client, experimentalFeaturesEnabled, loadAccounts, loadSubscriptions, personal, setGlobalStatus, t]);
 
   const loadExclusions = React.useCallback(async () => {
     if (!canManageLists) return;
@@ -327,6 +388,7 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
             sourceType: source.sourceType,
             params: source.params.filter((param) => param.value.trim()).map(listParamInput),
             url: source.url,
+            credentialId: source.credentialId ?? null,
           },
         },
         "listSourcePreview",
@@ -398,7 +460,7 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
         if (detail?.id === subscription.id) void loadDetail(subscription.id, detail.membershipOffset);
       }
     },
-    [client, detail, loadDetail, markBusy, refreshAfterChange, setGlobalStatus, t],
+    [client, detail, loadDetail, markBusy, refreshAfterChange, setGlobalStatus, setSubscriptions, t],
   );
 
   // "Sync now" and "Sync all" only queue syncs, so the table and an open detail
@@ -528,7 +590,7 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
 
   const syncAll = React.useCallback(async () => {
     try {
-      const result = await client.mutation(syncAllListsMutation, { scope: "PUBLIC" }).toPromise();
+      const result = await client.mutation(syncAllListsMutation, { scope: personal ? "PERSONAL" : "PUBLIC" }).toPromise();
       if (result.error) throw result.error;
       setGlobalStatus(t("lists.status.syncAllQueued"));
       const queuedIds = new Set<string>(result.data?.syncAllLists?.subscriptionIds ?? []);
@@ -536,7 +598,7 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
     } catch (error) {
       setGlobalStatus(userFacingGraphQlErrorMessage(error, t("status.failedToUpdate")));
     }
-  }, [client, setGlobalStatus, subscriptions, t, watchSync]);
+  }, [client, personal, setGlobalStatus, subscriptions, t, watchSync]);
 
   const unsubscribe = React.useCallback(
     async (subscription: ListSubscription): Promise<boolean> => {
@@ -609,6 +671,17 @@ export function ListsContainer({ canManageLists }: ListsContainerProps) {
       section={section}
       onSectionChange={changeSection}
       canManageLists={canManageLists}
+      experimentalFeaturesEnabled={experimentalFeaturesEnabled}
+      canManageProviderApps={canManageProviderApps}
+      accounts={accounts}
+      managedAccount={managedAccount}
+      accountLoading={accountLoading}
+      linkingProvider={accountLink.provider}
+      accountLinkError={accountLink.error}
+      onLinkAccount={(provider) => void accountLink.start(provider)}
+      onCancelLink={accountLink.cancel}
+      onManageAccount={(account) => void manageAccount(account)}
+      onUnlinkAccount={unlinkAccount}
       loading={loading}
       loadError={loadError}
       onRetry={() => void loadPage()}

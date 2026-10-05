@@ -704,6 +704,8 @@ impl AppServicesBuilder {
             accounts: store.clone(),
             policies: store,
             plugins,
+            auth: self.services.lists.auth.clone(),
+            account_runtime: self.services.lists.account_runtime.clone(),
         };
         self
     }
@@ -714,6 +716,13 @@ impl AppServicesBuilder {
         value: Arc<dyn crate::lists::ListPluginProvider>,
     ) -> Self {
         self.services.lists.plugins = value;
+        self
+    }
+    pub fn with_list_account_auth_gateway(
+        mut self,
+        value: Arc<dyn crate::lists::account_transport::ListAccountAuthGateway>,
+    ) -> Self {
+        self.services.lists.auth = value;
         self
     }
     pub fn with_notification_provider(

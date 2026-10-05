@@ -365,10 +365,13 @@ test("rulesSectionsFor drops maintenance and request rules until experimental fe
 test("the Lists page resolves its panes and redirects the default pane's alias", () => {
   assert.equal(canonical("/lists").view, "lists");
   assert.equal(canonical("/lists/exclusions").view, "lists");
+  assert.equal(canonical("/lists/personal").view, "lists");
+  assert.equal(canonical("/settings/lists/provider-apps").view, "lists");
+  redirects("/lists/provider-apps", "/settings/lists/provider-apps");
   redirects("/lists/public", "/lists");
   assert.deepEqual(resolveAppRoute("/lists/unknown"), { kind: "not-found" });
   assert.deepEqual(resolveAppRoute("/lists/exclusions/extra"), { kind: "not-found" });
-  for (const section of ["public", "exclusions"] as const) {
+  for (const section of ["public", "personal", "exclusions", "providerApps"] as const) {
     assert.equal(listsSectionFromPath(buildListsPath(section)), section, section);
   }
   assert.equal(listsSectionFromPath("/lists/unknown"), "public");

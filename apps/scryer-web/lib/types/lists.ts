@@ -275,4 +275,36 @@ export type ListSourceDraft = {
   sourceType: string;
   params: ListParam[];
   url: string | null;
+  credentialId?: string;
+};
+
+export type ListAccount = {
+  id: string;
+  provider: string;
+  externalUserId: string;
+  username: string | null;
+  displayName: string | null;
+  status: string;
+  errorMessage: string | null;
+  linkedAt: string;
+  lastUsedAt: string | null;
+  ownedLists: Array<{ id: string; name: string; kinds: Facet[]; sourceType: string; params: ListParam[] }>;
+  statuses: Array<{ key: string; label: string; kinds: Facet[]; sourceType: string; params: ListParam[] }>;
+};
+
+export type ListAccountLinkSession = {
+  sessionId: string;
+  state: string;
+  authorizeUrl: string;
+  authorizationOrigin: string;
+  expiresAt: string;
+  pollRequired: boolean;
+};
+
+export type ListProviderApp = {
+  provider: string;
+  clientId: string | null;
+  redirectUri: string | null;
+  clientSecretSet: boolean;
+  enabled: boolean;
 };

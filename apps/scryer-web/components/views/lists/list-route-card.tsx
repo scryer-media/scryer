@@ -16,6 +16,7 @@ type ListRouteCardProps = {
   tagDefinitions: readonly TitleTagDefinition[];
   tagsLoading: boolean;
   disabled?: boolean;
+  requestOnly?: boolean;
   idPrefix: string;
   onChange: (route: ListRoute) => void;
 };
@@ -29,6 +30,7 @@ export function ListRouteCard({
   tagDefinitions,
   tagsLoading,
   disabled,
+  requestOnly = false,
   idPrefix,
   onChange,
 }: ListRouteCardProps) {
@@ -81,7 +83,7 @@ export function ListRouteCard({
           label={t("search.addConfigQualityProfile")}
           value={route.qualityProfileId ?? INHERIT_QUALITY_PROFILE}
           options={[
-            { value: INHERIT_QUALITY_PROFILE, label: t("search.addConfigInheritLibrary") },
+            ...(!requestOnly ? [{ value: INHERIT_QUALITY_PROFILE, label: t("search.addConfigInheritLibrary") }] : []),
             ...qualityProfiles.map((profile) => ({ value: profile.id, label: profile.name })),
           ]}
           onValueChange={(value) =>
@@ -89,7 +91,7 @@ export function ListRouteCard({
           }
           disabled={disabled}
         />
-        <SingleSelectField
+        {!requestOnly ? <SingleSelectField
           id={`${idPrefix}-route-${kind.toLowerCase()}-root`}
           label={t("search.addConfigRootFolder")}
           valueKind="path"
@@ -97,7 +99,7 @@ export function ListRouteCard({
           options={roots.map((root) => ({ value: root.id, label: root.path }))}
           onValueChange={(rootFolderId) => update({ rootFolderId })}
           disabled={disabled || roots.length === 0}
-        />
+        /> : null}
         <SingleSelectField
           id={`${idPrefix}-route-${kind.toLowerCase()}-monitor`}
           label={t("search.addConfigMonitorType")}
@@ -106,7 +108,7 @@ export function ListRouteCard({
           onValueChange={(monitorType) => update({ monitorType })}
           disabled={disabled}
         />
-        {kind === "MOVIE" ? (
+        {!requestOnly && (kind === "MOVIE" ? (
           <SingleSelectField
             id={`${idPrefix}-route-${kind.toLowerCase()}-availability`}
             label={t("settings.minAvailabilityLabel")}
@@ -130,8 +132,8 @@ export function ListRouteCard({
             onValueChange={(value) => update({ useSeasonFolders: value === "enabled" })}
             disabled={disabled}
           />
-        )}
-        {kind === "ANIME" ? (
+        ))}
+        {!requestOnly && kind === "ANIME" ? (
           <SingleSelectField
             id={`${idPrefix}-route-${kind.toLowerCase()}-numbering`}
             label={t("settings.releaseNumberingLabel")}
@@ -147,14 +149,14 @@ export function ListRouteCard({
           />
         ) : null}
       </div>
-      <TitleTagsPicker
+      {!requestOnly ? <TitleTagsPicker
         idPrefix={`${idPrefix}-route-${kind.toLowerCase()}-tags`}
         value={route.tags}
         onChange={(tags) => update({ tags })}
         definitions={tagDefinitions}
         loading={tagsLoading}
         disabled={disabled}
-      />
+      /> : null}
     </fieldset>
   );
 }

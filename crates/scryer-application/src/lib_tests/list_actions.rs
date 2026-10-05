@@ -114,7 +114,7 @@ async fn a_public_departure_is_recorded_on_the_title_with_its_action() {
 }
 
 #[tokio::test]
-async fn personal_lists_put_nothing_on_the_feed() {
+async fn personal_lists_publish_only_to_the_owner_feed() {
     let harness = bootstrap_media_request_app();
     harness
         .titles
@@ -128,6 +128,7 @@ async fn personal_lists_put_nothing_on_the_feed() {
         ));
     let mut list = subscription("personal-list-one");
     list.scope = ListScope::Personal;
+    list.owner_user_id = harness.user.id.clone();
     let actions = AppListActions::new(&harness.app);
 
     actions
@@ -142,7 +143,56 @@ async fn personal_lists_put_nothing_on_the_feed() {
         .await
         .expect("failure handled");
 
-    assert!(list_events(&harness).await.is_empty());
+    let events = list_events(&harness).await;
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| event.stream
+        == DomainEventStream::User {
+            user_id: harness.user.id.clone(),
+        }));
+    let filter = scryer_domain::DomainEventFilter {
+        limit: 10,
+        ..Default::default()
+    };
+    let mut owner = harness.user.clone();
+    owner.authorization.default_library = scryer_domain::LibraryPermissionMask::from_permissions([
+        LibraryPermission::View,
+        LibraryPermission::Request,
+    ]);
+    assert_eq!(
+        harness
+            .app
+            .list_domain_events(&owner, &filter)
+            .await
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        harness
+            .app
+            .list_domain_events(&harness.manager, &filter)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let mut another = owner.clone();
+    another.id = "another-member".into();
+    assert!(
+        harness
+            .app
+            .list_domain_events(&another, &filter)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        harness
+            .app
+            .recent_activity_page(10, 0)
+            .await
+            .unwrap()
+            .is_empty()
+    );
 }
 
 #[tokio::test]

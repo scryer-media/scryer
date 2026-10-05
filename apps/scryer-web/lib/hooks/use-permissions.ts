@@ -49,8 +49,8 @@ export function usePermissions(authenticatedUser: AuthUser) {
     experimentalFeaturesEnabled &&
     hasAppPermission(authenticatedUser, APP_PERMISSIONS.manageLists);
   const canAccessLists = canAccessListsPage(
-    canViewCatalog,
-    canManageLists,
+    canViewCatalog || canRequestMedia || canManageTitle,
+    canManageLists || canManageSystemSettings,
     experimentalFeaturesEnabled,
   );
   const canManageUsers = canManageUserAccounts || canManagePermissions;

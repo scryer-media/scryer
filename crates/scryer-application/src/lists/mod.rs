@@ -6,6 +6,8 @@
 //! act → leave, driven by `sync`. `runtime` binds the engine's action and
 //! resolver ports to the application's use cases.
 
+pub mod account_transport;
+pub mod accounts;
 pub mod act;
 pub mod catalog;
 pub mod evaluate;
@@ -13,9 +15,11 @@ pub mod fetch;
 pub mod gateway;
 pub mod leave;
 pub mod null_repositories;
+pub mod personal;
 pub mod plugin;
 pub mod ports;
 pub mod privacy;
+pub mod provider_apps;
 pub mod provider_settings;
 pub mod public;
 pub mod rejection;

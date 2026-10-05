@@ -153,6 +153,14 @@ pub trait UserListAccountRepository: Send + Sync {
 
     async fn list_by_user_id(&self, user_id: &str) -> AppResult<Vec<UserListAccount>>;
 
+    /// Atomically remove an owner's account and personal subscriptions that
+    /// use it. Library titles, requests and files remain untouched.
+    async fn unlink(&self, _id: &str, _user_id: &str) -> AppResult<()> {
+        Err(crate::AppError::Repository(
+            "atomic list account unlink is unavailable".into(),
+        ))
+    }
+
     async fn delete(&self, id: &str) -> AppResult<()>;
 }
 

@@ -51,7 +51,7 @@ pub(crate) async fn ui_fallback(method: Method, uri: Uri, headers: HeaderMap) ->
     let request_path = uri.path();
     let head_only = method == Method::HEAD;
     let preferred_encoding = preferred_content_encoding(&headers);
-    match ui_asset_mode() {
+    let mut response = match ui_asset_mode() {
         UiAssetMode::Filesystem(dist_dir) => {
             serve_ui_path(dist_dir, request_path, head_only, preferred_encoding).await
         }
@@ -59,7 +59,20 @@ pub(crate) async fn ui_fallback(method: Method, uri: Uri, headers: HeaderMap) ->
             serve_embedded_ui(request_path, head_only, preferred_encoding).await
         }
         UiAssetMode::Fallback => serve_fallback_ui(request_path).await,
+    };
+    if request_path.ends_with("/lists/oauth/callback")
+        || request_path.ends_with("/lists/oauth/return")
+    {
+        response.headers_mut().insert(
+            header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        );
+        response.headers_mut().insert(
+            header::REFERRER_POLICY,
+            axum::http::HeaderValue::from_static("no-referrer"),
+        );
     }
+    response
 }
 
 fn preferred_content_encoding(headers: &HeaderMap) -> UiContentEncoding {

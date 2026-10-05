@@ -84,6 +84,7 @@ pub struct ListSourceDraft {
     pub source_type: Option<String>,
     pub params: BTreeMap<String, String>,
     pub url: Option<String>,
+    pub credential_id: Option<String>,
 }
 
 /// One title the next sync would act on.
@@ -666,7 +667,7 @@ impl AppUseCase {
     }
 
     /// Fetch, resolve and evaluate `subscription` without writing anything.
-    async fn run_preview(
+    pub(crate) async fn run_preview(
         &self,
         subscription: &ListSubscription,
         existing: HashMap<String, ListMembership>,
@@ -679,18 +680,74 @@ impl AppUseCase {
         // leave it nothing to show.
         let mut subscription = subscription.clone();
         subscription.sync.fetch_fingerprint = None;
-        let config = self
+        let mut config = self
             .list_provider_config_for(&subscription.source.provider)
             .await;
-        let mut fetched: FetchedList = fetch_list(
+        let _account_guard = if subscription.is_personal() {
+            Some(
+                lists
+                    .account_runtime
+                    .lock_account(subscription.credential_id.as_deref().unwrap_or_default())
+                    .await,
+            )
+        } else {
+            None
+        };
+        let credential = if subscription.is_personal() {
+            let account = lists
+                .accounts
+                .get_by_id(subscription.credential_id.as_deref().unwrap_or_default())
+                .await?;
+            super::privacy::credential_for(&subscription, account.as_ref())
+                .map_err(|failure| AppError::Validation(failure.message))?;
+            let account = match account {
+                Some(account) => Some(self.refresh_list_account_locked(account).await?),
+                None => None,
+            };
+            if let Some(id) = account
+                .as_ref()
+                .and_then(|account| account.credential.client_id.as_ref())
+            {
+                config.insert("client_id".into(), id.clone());
+            }
+            Some(
+                super::privacy::credential_for(&subscription, account.as_ref())
+                    .map_err(|failure| AppError::Validation(failure.message))?,
+            )
+        } else {
+            None
+        };
+        let mut fetched: FetchedList = match fetch_list(
             &subscription,
             lists.plugins.as_ref(),
             &charts,
-            None,
+            credential,
             &config,
         )
         .await
-        .map_err(|failure| AppError::Validation(failure.message))?;
+        {
+            Ok(fetched) => fetched,
+            Err(failure) => {
+                if subscription.is_personal()
+                    && matches!(failure.class, super::fetch::ListFailureClass::Unauthorized)
+                {
+                    if let Some(id) = subscription.credential_id.as_deref() {
+                        if let Some(mut account) = lists.accounts.get_by_id(id).await? {
+                            if account.user_id == subscription.owner_user_id
+                                && account.provider == subscription.source.provider
+                            {
+                                account.status = scryer_domain::UserListAccountStatus::Expired;
+                                account.error_message =
+                                    Some("Reconnect this list account to resume syncing.".into());
+                                account.updated_at = Utc::now();
+                                lists.accounts.update(account).await?;
+                            }
+                        }
+                    }
+                }
+                return Err(AppError::Validation(failure.message));
+            }
+        };
         fetched.dedupe();
         let resolved = resolve_items(&subscription, fetched.items, &resolver).await?;
         let exclusions = lists.exclusions.list().await?;
@@ -942,7 +999,7 @@ impl AppUseCase {
         Ok(subscription.id)
     }
 
-    async fn queue_list_syncs(
+    pub(crate) async fn queue_list_syncs(
         &self,
         actor: &User,
         subscriptions: Vec<ListSubscription>,

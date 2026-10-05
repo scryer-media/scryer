@@ -32,7 +32,7 @@ export const PUBLIC_LIST_MODES: readonly ListMode[] = ["SEARCH", "ADD", "HOLD", 
 
 /** Discover-only membership has no destination yet, so it cannot be chosen. */
 export function isListModeSelectable(mode: ListMode): boolean {
-  return mode === "SEARCH" || mode === "ADD" || mode === "HOLD";
+  return mode === "SEARCH" || mode === "ADD" || mode === "HOLD" || mode === "REQUEST";
 }
 
 export const LIST_ON_LEAVE_OPTIONS: readonly ListOnLeave[] = ["KEEP", "LOG", "UNMONITOR", "TAG"];
@@ -458,7 +458,8 @@ export type UpdateListSubscriptionInput = {
 };
 
 export type SubscribeListInput = UpdateListSubscriptionInput & {
-  scope: "PUBLIC";
+  scope: "PUBLIC" | "PERSONAL";
+  credentialId?: string;
   provider: string;
   sourceType: string;
   params: ListParam[];
@@ -482,7 +483,8 @@ export function draftToUpdateInput(draft: ListSubscriptionDraft): UpdateListSubs
 
 export function draftToSubscribeInput(source: ListSourceDraft, draft: ListSubscriptionDraft): SubscribeListInput {
   return {
-    scope: "PUBLIC",
+    scope: source.credentialId ? "PERSONAL" : "PUBLIC",
+    ...(source.credentialId ? { credentialId: source.credentialId } : {}),
     provider: source.provider,
     sourceType: source.sourceType,
     params: source.params.filter((param) => param.value.trim()).map(listParamInput),

@@ -254,6 +254,8 @@ pub struct AppListServices {
     pub(crate) accounts: Arc<dyn crate::lists::UserListAccountRepository>,
     pub(crate) policies: Arc<dyn crate::lists::UserListPolicyRepository>,
     pub(crate) plugins: Arc<dyn crate::lists::ListPluginProvider>,
+    pub(crate) auth: Arc<dyn crate::lists::account_transport::ListAccountAuthGateway>,
+    pub(crate) account_runtime: Arc<crate::lists::accounts::ListAccountRuntime>,
 }
 
 impl AppListServices {
@@ -266,6 +268,8 @@ impl AppListServices {
             accounts: store.clone(),
             policies: store,
             plugins: Arc::new(crate::lists::NullListPluginProvider),
+            auth: Arc::new(crate::lists::account_transport::NullListAccountAuthGateway),
+            account_runtime: Arc::new(crate::lists::accounts::ListAccountRuntime::default()),
         }
     }
 }

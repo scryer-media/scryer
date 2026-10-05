@@ -78,6 +78,10 @@ use crate::{graphql::metadata_gateway as graphql_docs, smg_enrollment};
 #[path = "client_lists.rs"]
 mod lists;
 
+#[path = "client_list_accounts.rs"]
+mod list_accounts;
+pub use list_accounts::HttpListAccountAuthGateway;
+
 /// SHA-256 of a GraphQL query document, for Automatic Persisted Queries.
 ///
 /// **Compatibility only.** The APQ protocol fixes the algorithm: the gateway

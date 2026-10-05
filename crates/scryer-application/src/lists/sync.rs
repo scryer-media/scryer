@@ -83,8 +83,7 @@ pub enum SubscriptionSyncOutcome {
     Failed(ListFailure),
 }
 
-/// Aggregate outcome of one job run. Personal failures are named by owner,
-/// provider and error class only.
+/// Aggregate outcome of one job run. Personal failures expose error class only.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct ListSyncReport {
     pub considered: u64,
@@ -215,17 +214,38 @@ pub async fn sync_subscription(
     now: DateTime<Utc>,
     job_run_id: Option<String>,
 ) -> AppResult<SubscriptionSyncOutcome> {
+    let _account_guard = context.actions.lock_account(subscription).await;
+    // Due-job snapshots can wait behind owner edits or unlink. Read the
+    // authoritative row under the same account guard before any effects.
+    let current;
+    let subscription = if subscription.is_personal() {
+        current = context.subscriptions.get_by_id(&subscription.id).await?;
+        match current.as_ref() {
+            Some(row)
+                if row.is_personal()
+                    && row.enabled
+                    && row.owner_user_id == subscription.owner_user_id
+                    && row.credential_id == subscription.credential_id =>
+            {
+                row
+            }
+            _ => return Ok(SubscriptionSyncOutcome::Off),
+        }
+    } else {
+        subscription
+    };
     let mut run = ListSyncRun::started(subscription.id.clone(), job_run_id);
     run.started_at = now;
 
     if subscription.scope == ListScope::Personal
-        && context
-            .policies
-            .get(&subscription.owner_user_id)
-            .await?
-            .map(|policy| policy.policy)
-            .unwrap_or_default()
-            == ListPolicy::None
+        && (!context.actions.owner_is_enabled(subscription).await?
+            || context
+                .policies
+                .get(&subscription.owner_user_id)
+                .await?
+                .map(|policy| policy.policy)
+                .unwrap_or_default()
+                == ListPolicy::None)
     {
         let status = ListSyncStatus {
             state: ListSyncState::Off,
@@ -248,6 +268,30 @@ pub async fn sync_subscription(
                 Some(account_id) => context.accounts.get_by_id(account_id).await?,
                 None => None,
             };
+            let account = match account {
+                Some(account)
+                    if account.user_id == subscription.owner_user_id
+                        && account.provider == subscription.source.provider =>
+                {
+                    match context.actions.prepare_account(account).await {
+                        Ok(account) => Some(account),
+                        Err(_) => {
+                            return record_failure(
+                                context,
+                                subscription,
+                                run,
+                                now,
+                                ListFailure::new(
+                                    ListFailureClass::Unauthorized,
+                                    &subscription.source.provider,
+                                ),
+                            )
+                            .await;
+                        }
+                    }
+                }
+                other => other,
+            };
             match credential_for(subscription, account.as_ref()) {
                 Ok(credential) => Some(credential),
                 Err(failure) => {
@@ -258,9 +302,20 @@ pub async fn sync_subscription(
         ListScope::Public => None,
     };
 
-    let config = context
+    let mut config = context
         .provider_configs
         .for_provider(context.plugins, &subscription.source.provider);
+    if let Some(id) = subscription.credential_id.as_deref() {
+        if let Some(account) = context.accounts.get_by_id(id).await? {
+            if account.user_id == subscription.owner_user_id
+                && account.provider == subscription.source.provider
+            {
+                if let Some(id) = account.credential.client_id {
+                    config.insert("client_id".into(), id);
+                }
+            }
+        }
+    }
     let mut fetched = match fetch_list(
         subscription,
         context.plugins,
@@ -584,6 +639,21 @@ async fn record_failure(
     now: DateTime<Utc>,
     failure: ListFailure,
 ) -> AppResult<SubscriptionSyncOutcome> {
+    if subscription.is_personal() && matches!(failure.class, ListFailureClass::Unauthorized) {
+        if let Some(id) = subscription.credential_id.as_deref() {
+            if let Some(mut account) = context.accounts.get_by_id(id).await? {
+                if account.user_id == subscription.owner_user_id
+                    && account.provider == subscription.source.provider
+                {
+                    account.status = scryer_domain::UserListAccountStatus::Expired;
+                    account.error_message =
+                        Some("Reconnect this list account to resume syncing.".into());
+                    account.updated_at = now;
+                    context.accounts.update(account).await?;
+                }
+            }
+        }
+    }
     let next_at = next_sync_at(subscription, now);
     let paused_until = match failure.class {
         ListFailureClass::RateLimited {
@@ -616,12 +686,11 @@ async fn record_failure(
     run.error_message = Some(failure.message.clone());
     finish_run(context, run, now).await?;
 
-    // Tell the operator once per failure, not once per retry. Personal
-    // failures surface only in the member's own view.
+    // Record once per failure, not once per retry. Production routes
+    // personal failures onto the owner's User stream.
     let newly_failing = subscription.sync.state != ListSyncState::Fail
         || subscription.sync.error_message.as_deref() != Some(failure.message.as_str());
     if newly_failing
-        && !subscription.is_personal()
         && let Err(error) = context
             .actions
             .record_sync_failure(subscription, &failure)

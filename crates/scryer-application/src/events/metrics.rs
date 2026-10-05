@@ -131,6 +131,9 @@ pub fn describe_domain_event_metrics() {
 /// Pure, infallible and allocation-light: the only allocation is the lowercased
 /// download-client type used as a label value.
 pub(crate) fn record_domain_event_metrics(event: &DomainEvent) {
+    if matches!(event.stream, scryer_domain::DomainEventStream::User { .. }) {
+        return;
+    }
     let payload = &event.payload;
     counter!(DOMAIN_EVENTS_TOTAL, "event_type" => payload.event_type().as_str()).increment(1);
 
@@ -406,6 +409,21 @@ mod tests {
 
     fn event(payload: DomainEventPayload) -> DomainEvent {
         event_with_facet(payload, Some(MediaFacet::Series))
+    }
+
+    #[test]
+    fn private_user_stream_does_not_publish_global_metrics() {
+        let mut private = event(DomainEventPayload::ConfigurationChanged(
+            ConfigurationChangedEventData {
+                resource_type: "list_account".into(),
+                resource_id: Some("private-account".into()),
+                action: ConfigurationChangeAction::Saved,
+            },
+        ));
+        private.stream = DomainEventStream::User {
+            user_id: "member-owner".into(),
+        };
+        assert!(record(&[private]).is_empty());
     }
 
     /// Records the given events against a thread-local debugging recorder and

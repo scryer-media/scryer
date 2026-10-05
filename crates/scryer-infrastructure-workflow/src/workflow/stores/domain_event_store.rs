@@ -480,6 +480,34 @@ mod title_history_filter_tests {
         }
     }
 
+    #[tokio::test]
+    async fn private_user_stream_roundtrips_through_durable_storage() {
+        let store = store().await;
+        let mut event = download_ignored_event();
+        event.stream = DomainEventStream::User {
+            user_id: "member-owner".into(),
+        };
+        let appended = store.append(event).await.unwrap();
+        assert_eq!(appended.stream.kind(), "user");
+        assert_eq!(appended.stream.identifier(), Some("member-owner"));
+        let rows = store
+            .list(&DomainEventFilter {
+                stream_id: Some("member-owner".into()),
+                after_sequence: Some(appended.sequence - 1),
+                before_sequence: Some(appended.sequence + 1),
+                limit: 1,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].sequence, appended.sequence);
+        assert_eq!(rows[0].stream, appended.stream);
+        assert_eq!(rows[0].payload, appended.payload);
+        assert!(stream_from_parts("user", None).is_err());
+        assert!(stream_from_parts("user", Some(String::new())).is_err());
+    }
+
     fn event_with_payload(event_id: &str, payload: DomainEventPayload) -> NewDomainEvent {
         let mut event = download_ignored_event();
         event.event_id = event_id.to_string();

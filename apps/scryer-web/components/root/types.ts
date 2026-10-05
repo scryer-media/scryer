@@ -19,7 +19,7 @@ export type ActivitySection = "activity" | "import" | "history";
 export type WantedSection = "wanted" | "cutoff" | "pending";
 /// Panes of the Lists page. Public lists are the default and have no segment
 /// of their own, so `/lists` keeps meaning the list table.
-export type ListsSection = "public" | "exclusions";
+export type ListsSection = "public" | "personal" | "exclusions" | "providerApps";
 export type SettingsSection =
   | "profile"
   | "general"
@@ -38,6 +38,7 @@ export type SettingsSection =
   | "maintenanceRules"
   | "requestRules"
   | "plugins"
+  | "listProviderApps"
   | "notifications"
   | "post-processing"
   | "subtitles";

@@ -94,6 +94,7 @@ mod http_error;
 mod http_metrics;
 mod indexer_search_routes;
 mod init;
+mod list_account_origin;
 mod log_buffer;
 mod metadata_gateway_url;
 mod metrics_setup;
@@ -1606,6 +1607,9 @@ async fn bootstrap_application(
                 .filter(|value| !value.is_empty()),
         )
         .with_smg_gateway_url(Some(metadata_gateway_url.into_string()))
+        .with_list_account_auth_gateway(Arc::new(
+            scryer_infrastructure_metadata::metadata::gateway::client::HttpListAccountAuthGateway::new(metadata_gateway.clone()).map_err(|error| error.to_string())?
+        ))
         .with_metadata_gateway(metadata_gateway)
         .with_image_proxy_cache_control(image_proxy_runtime.clone())
         .with_library_scanner(library_scanner)
@@ -2128,6 +2132,7 @@ async fn bootstrap_application(
         auth_runtime: auth_runtime.clone(),
         rate_limiter: rate_limiter.clone(),
         ws_origin_policy: WebSocketOriginPolicy::from_env(&cors),
+        list_account_origin_policy: list_account_origin::ListAccountOriginPolicy::from_env(&bind),
         authless_web_client_proof: authless_web_client_proof.clone(),
     };
     let authless_access_guard_state = AuthlessAccessGuardState {
