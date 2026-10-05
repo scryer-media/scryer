@@ -114,7 +114,16 @@ pub(crate) fn normalize_release_attempt_hint(raw: Option<&str>) -> Option<String
         .filter(|(key, _)| {
             !matches!(
                 key.to_ascii_lowercase().replace(['_', '-'], "").as_str(),
-                "apikey" | "apiaccess" | "token" | "auth" | "password" | "passkey"
+                "apikey"
+                    | "apiaccess"
+                    | "token"
+                    | "auth"
+                    | "password"
+                    | "passkey"
+                    | "jackettapikey"
+                    | "rsskey"
+                    | "authkey"
+                    | "torrentpass"
             )
         })
         .map(|(key, value)| (key.into_owned(), value.into_owned()))
@@ -650,6 +659,44 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_attempt_hint_drops_indexer_and_tracker_credentials() {
+        for name in [
+            "apikey",
+            "ApiKey",
+            "api_key",
+            "passkey",
+            "token",
+            "auth",
+            "jackett_apikey",
+            "Jackett_ApiKey",
+            "rss_key",
+            "RSSKEY",
+            "authkey",
+            "AuthKey",
+            "torrent_pass",
+            "Torrent-Pass",
+        ] {
+            let raw = format!("https://tracker.invalid/dl?id=42&{name}=s3cret&file=lantern");
+            assert_eq!(
+                normalize_release_attempt_hint(Some(&raw)).as_deref(),
+                Some("https://tracker.invalid/dl?file=lantern&id=42"),
+                "parameter {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn release_attempt_hint_keeps_parameters_that_only_resemble_credentials() {
+        assert_eq!(
+            normalize_release_attempt_hint(Some(
+                "https://tracker.invalid/dl?torrent_passes=keep&x_authkey=keep&id=7"
+            ))
+            .as_deref(),
+            Some("https://tracker.invalid/dl?id=7&torrent_passes=keep&x_authkey=keep")
+        );
+    }
 
     #[test]
     fn user_title_tag_normalization_folds_case_and_whitespace() {
