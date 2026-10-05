@@ -927,6 +927,55 @@ async fn an_edited_list_is_processed_even_when_unchanged() {
 }
 
 #[tokio::test]
+async fn an_unrouted_personal_departure_waits_without_forcing_reads_and_runs_once_routed() {
+    let mut harness = personal_request_harness(None);
+    harness.actions.owner_manages_titles = true;
+    let set_routes = |routes: Vec<scryer_domain::ListRoute>, edited_at| {
+        let mut subscriptions = harness.store.subscriptions.lock().unwrap();
+        let edited = subscriptions
+            .iter_mut()
+            .find(|row| row.id == "list-a")
+            .unwrap();
+        edited.routes = routes;
+        edited.updated_at = edited_at;
+    };
+    {
+        let mut subscriptions = harness.store.subscriptions.lock().unwrap();
+        let list = subscriptions
+            .iter_mut()
+            .find(|row| row.id == "list-a")
+            .unwrap();
+        list.mode = ListMode::Add;
+        list.on_leave = ListOnLeave::Unmonitor;
+        list.interval_seconds = 60;
+    }
+    let routed = harness.store.subscription("list-a").routes;
+    harness.lists.serve("list-a", &["alpha", "beta"]);
+    harness.sync_at(at(0)).await;
+    assert!(harness.store.row("list-a", "beta").added_by_list);
+
+    // The kind loses its route, and the title leaves in the same read.
+    set_routes(Vec::new(), at(5));
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(10)).await;
+    assert!(harness.store.row("list-a", "beta").left_at.is_some());
+    assert!(!harness.store.row("list-a", "beta").left_handled);
+    assert_eq!(unmonitors_of(&harness.actions, "title-beta"), 0);
+
+    // Still owed, but it does not force the list to be read again.
+    let quiet = harness.sync_at(at(20)).await;
+    assert_eq!(quiet.unchanged, 1);
+    assert!(!harness.store.row("list-a", "beta").left_handled);
+
+    // Once the kind is routed again, the next sync runs the owed departure.
+    set_routes(routed, at(25));
+    let report = harness.sync_at(at(30)).await;
+    assert_eq!(report.departures_acted, 1);
+    assert!(harness.store.row("list-a", "beta").left_handled);
+    assert_eq!(unmonitors_of(&harness.actions, "title-beta"), 1);
+}
+
+#[tokio::test]
 async fn an_empty_fetch_marks_nobody_left_and_runs_no_leave_action() {
     let mut list = subscription("list-a");
     list.on_leave = ListOnLeave::Unmonitor;
