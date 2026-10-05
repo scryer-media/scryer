@@ -2800,6 +2800,23 @@ file = "postgres/migrations/0269_download_password_candidates.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 274
+description = "ui catalog view device classes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0274_ui_catalog_view_device_classes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0274_ui_catalog_view_device_classes.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

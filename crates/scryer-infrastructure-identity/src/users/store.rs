@@ -1,10 +1,10 @@
 use async_trait::async_trait;
 use chrono::Utc;
 use scryer_application::{
-    AppError, AppResult, UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiSettings,
-    UiSettingsFacet, UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode,
-    UiTheme, UserExternalAccountRepository, UserLoginSnapshot, UserRepository,
-    UserUiSettingsRepository,
+    AppError, AppResult, UiCatalogViewMode, UiCatalogViewSetting, UiCatalogViewUpdate,
+    UiDateTimeFormat, UiDefaultLandingView, UiDensity, UiDeviceClass, UiSettings, UiSettingsFacet,
+    UiSettingsUpdate, UiSidebarMode, UiTableColumnSetting, UiTableViewMode, UiTheme,
+    UserExternalAccountRepository, UserLoginSnapshot, UserRepository, UserUiSettingsRepository,
 };
 use scryer_domain::{
     AppPermissionMask, ExternalAccountProvider, ExternalAccountStatus, LibraryGrant, User,
@@ -432,7 +432,73 @@ impl UserUiSettingsRepository for UserStore {
             let settings = settings.clone();
             Box::pin(async move {
                 upsert_ui_settings_tx(tx, &user_id, &settings).await?;
-                replace_ui_table_columns_tx(tx, &user_id, &settings.table_columns).await?;
+                if let Some(language) = &settings.language {
+                    update_user_language_tx(tx, &user_id, language.as_deref()).await?;
+                }
+                if let Some(columns) = &settings.table_columns {
+                    replace_ui_table_columns_tx(tx, &user_id, None, columns).await?;
+                }
+                load_ui_settings_by_user_id_tx(tx, &user_id)
+                    .await?
+                    .ok_or_else(|| AppError::NotFound(format!("UI settings for user {user_id}")))
+            })
+        })
+        .await
+    }
+
+    async fn set_catalog_view(
+        &self,
+        user_id: &str,
+        update: UiCatalogViewUpdate,
+    ) -> AppResult<UiSettings> {
+        let user_id = user_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "set_user_ui_catalog_view", move |tx| {
+            let user_id = user_id.clone();
+            let update = update.clone();
+            Box::pin(async move {
+                let now = Utc::now();
+                // Settings are read through their row, so a first catalog save
+                // creates it with every other preference at its default.
+                tx.execute(
+                    "INSERT INTO user_ui_settings (user_id, created_at, updated_at)
+                     VALUES ({}, {}, {})
+                     ON CONFLICT(user_id) DO NOTHING",
+                    &[
+                        SqlArg::Text(user_id.clone()),
+                        SqlArg::Timestamp(now),
+                        SqlArg::Timestamp(now),
+                    ],
+                )
+                .await?;
+                if let Some(view_mode) = update.view_mode {
+                    tx.execute(
+                        "INSERT INTO user_ui_catalog_views (
+                             user_id, device_class, facet, view_mode, created_at, updated_at
+                         )
+                         VALUES ({}, {}, {}, {}, {}, {})
+                         ON CONFLICT(user_id, device_class, facet) DO UPDATE SET
+                             view_mode = excluded.view_mode,
+                             updated_at = excluded.updated_at",
+                        &[
+                            SqlArg::Text(user_id.clone()),
+                            SqlArg::Text(update.device_class.as_str().to_string()),
+                            SqlArg::Text(update.facet.as_str().to_string()),
+                            SqlArg::Text(view_mode.as_str().to_string()),
+                            SqlArg::Timestamp(now),
+                            SqlArg::Timestamp(now),
+                        ],
+                    )
+                    .await?;
+                }
+                if let Some(columns) = &update.columns {
+                    replace_ui_table_columns_tx(
+                        tx,
+                        &user_id,
+                        Some((update.device_class, update.facet)),
+                        columns,
+                    )
+                    .await?;
+                }
                 load_ui_settings_by_user_id_tx(tx, &user_id)
                     .await?
                     .ok_or_else(|| AppError::NotFound(format!("UI settings for user {user_id}")))
@@ -886,16 +952,23 @@ fn row_to_user(row: &SqlRow) -> AppResult<User> {
     })
 }
 
+// The language lives on the user's own row; the rest of the interface
+// preferences live in user_ui_settings.
+const UI_SETTINGS_SELECT: &str =
+    "SELECT user_id, theme, date_time_format, highlight_color, secondary_color, high_contrast_mode,
+            reduce_motion, hide_sponsor_button, density, sidebar_mode, default_landing_view,
+            (SELECT locale FROM users WHERE users.id = user_ui_settings.user_id) AS language,
+            created_at, updated_at
+       FROM user_ui_settings
+      WHERE user_id = {}";
+
 async fn load_ui_settings_by_user_id(
     datastore: &StoreDatastore,
     user_id: &str,
 ) -> AppResult<Option<UiSettings>> {
     let row = SqlRuntime::fetch_optional(
         datastore.read_exec(),
-        "SELECT user_id, theme, date_time_format, highlight_color, secondary_color, high_contrast_mode,
-                reduce_motion, hide_sponsor_button, density, sidebar_mode, default_landing_view, created_at, updated_at
-           FROM user_ui_settings
-          WHERE user_id = {}",
+        UI_SETTINGS_SELECT,
         &[SqlArg::Text(user_id.to_string())],
     )
     .await?;
@@ -903,7 +976,8 @@ async fn load_ui_settings_by_user_id(
         return Ok(None);
     };
     let mut settings = row_to_ui_settings(&row)?;
-    settings.table_columns = load_ui_table_columns(datastore, user_id).await?;
+    settings.table_columns = load_ui_table_columns(datastore.read_exec(), user_id).await?;
+    settings.catalog_views = load_ui_catalog_views(datastore.read_exec(), user_id).await?;
     Ok(Some(settings))
 }
 
@@ -913,10 +987,7 @@ async fn load_ui_settings_by_user_id_tx(
 ) -> AppResult<Option<UiSettings>> {
     let row = SqlRuntime::fetch_optional(
         SqlExec::Tx(tx),
-        "SELECT user_id, theme, date_time_format, highlight_color, secondary_color, high_contrast_mode,
-                reduce_motion, hide_sponsor_button, density, sidebar_mode, default_landing_view, created_at, updated_at
-           FROM user_ui_settings
-          WHERE user_id = {}",
+        UI_SETTINGS_SELECT,
         &[SqlArg::Text(user_id.to_string())],
     )
     .await?;
@@ -924,7 +995,8 @@ async fn load_ui_settings_by_user_id_tx(
         return Ok(None);
     };
     let mut settings = row_to_ui_settings(&row)?;
-    settings.table_columns = load_ui_table_columns_tx(tx, user_id).await?;
+    settings.table_columns = load_ui_table_columns(SqlExec::Tx(tx), user_id).await?;
+    settings.catalog_views = load_ui_catalog_views(SqlExec::Tx(tx), user_id).await?;
     Ok(Some(settings))
 }
 
@@ -972,27 +1044,63 @@ async fn upsert_ui_settings_tx(
     Ok(())
 }
 
+async fn update_user_language_tx(
+    tx: &mut SqlTx<'_>,
+    user_id: &str,
+    language: Option<&str>,
+) -> AppResult<()> {
+    tx.execute(
+        "UPDATE users SET locale = {} WHERE id = {}",
+        &[
+            SqlArg::OptText(language.map(str::to_string)),
+            SqlArg::Text(user_id.to_string()),
+        ],
+    )
+    .await?;
+    Ok(())
+}
+
+/// Replaces the user's column rows: every row when `scope` is `None`, otherwise
+/// only the rows of that device class and facet.
 async fn replace_ui_table_columns_tx(
     tx: &mut SqlTx<'_>,
     user_id: &str,
+    scope: Option<(UiDeviceClass, UiSettingsFacet)>,
     columns: &[UiTableColumnSetting],
 ) -> AppResult<()> {
-    tx.execute(
-        "DELETE FROM user_ui_table_columns WHERE user_id = {}",
-        &[SqlArg::Text(user_id.to_string())],
-    )
-    .await?;
+    match scope {
+        None => {
+            tx.execute(
+                "DELETE FROM user_ui_table_columns WHERE user_id = {}",
+                &[SqlArg::Text(user_id.to_string())],
+            )
+            .await?;
+        }
+        Some((device_class, facet)) => {
+            tx.execute(
+                "DELETE FROM user_ui_table_columns
+                  WHERE user_id = {} AND device_class = {} AND facet = {}",
+                &[
+                    SqlArg::Text(user_id.to_string()),
+                    SqlArg::Text(device_class.as_str().to_string()),
+                    SqlArg::Text(facet.as_str().to_string()),
+                ],
+            )
+            .await?;
+        }
+    }
 
     let now = Utc::now();
     for column in columns {
         tx.execute(
             "INSERT INTO user_ui_table_columns (
-                 user_id, facet, table_view_mode, column_id, column_order, visible,
+                 user_id, device_class, facet, table_view_mode, column_id, column_order, visible,
                  created_at, updated_at
              )
-             VALUES ({}, {}, {}, {}, {}, {}, {}, {})",
+             VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {})",
             &[
                 SqlArg::Text(user_id.to_string()),
+                SqlArg::Text(column.device_class.as_str().to_string()),
                 SqlArg::Text(column.facet.as_str().to_string()),
                 SqlArg::Text(column.table_view_mode.as_str().to_string()),
                 SqlArg::Text(column.column_id.clone()),
@@ -1021,38 +1129,24 @@ fn row_to_ui_settings(row: &SqlRow) -> AppResult<UiSettings> {
         density: parse_ui_density(row.text("density")?)?,
         sidebar_mode: parse_ui_sidebar_mode(row.text("sidebar_mode")?)?,
         default_landing_view: parse_ui_default_landing_view(row.text("default_landing_view")?)?,
+        language: row.opt_text("language")?,
         table_columns: Vec::new(),
+        catalog_views: Vec::new(),
         created_at: Some(row.timestamp("created_at")?),
         updated_at: Some(row.timestamp("updated_at")?),
     })
 }
 
-async fn load_ui_table_columns_tx(
-    tx: &mut SqlTx<'_>,
-    user_id: &str,
-) -> AppResult<Vec<UiTableColumnSetting>> {
-    let rows = SqlRuntime::fetch_all(
-        SqlExec::Tx(tx),
-        "SELECT facet, table_view_mode, column_id, column_order, visible
-           FROM user_ui_table_columns
-          WHERE user_id = {}
-          ORDER BY facet, table_view_mode, column_order, column_id",
-        &[SqlArg::Text(user_id.to_string())],
-    )
-    .await?;
-    rows.iter().map(row_to_ui_table_column).collect()
-}
-
 async fn load_ui_table_columns(
-    datastore: &StoreDatastore,
+    exec: SqlExec<'_, '_>,
     user_id: &str,
 ) -> AppResult<Vec<UiTableColumnSetting>> {
     let rows = SqlRuntime::fetch_all(
-        datastore.read_exec(),
-        "SELECT facet, table_view_mode, column_id, column_order, visible
+        exec,
+        "SELECT device_class, facet, table_view_mode, column_id, column_order, visible
            FROM user_ui_table_columns
           WHERE user_id = {}
-          ORDER BY facet, table_view_mode, column_order, column_id",
+          ORDER BY device_class, facet, table_view_mode, column_order, column_id",
         &[SqlArg::Text(user_id.to_string())],
     )
     .await?;
@@ -1061,12 +1155,47 @@ async fn load_ui_table_columns(
 
 fn row_to_ui_table_column(row: &SqlRow) -> AppResult<UiTableColumnSetting> {
     Ok(UiTableColumnSetting {
+        device_class: parse_ui_device_class(row.text("device_class")?)?,
         facet: parse_ui_settings_facet(row.text("facet")?)?,
         table_view_mode: parse_ui_table_view_mode(row.text("table_view_mode")?)?,
         column_id: row.text("column_id")?,
         column_order: row.i32("column_order")?,
         visible: row.bool("visible")?,
     })
+}
+
+async fn load_ui_catalog_views(
+    exec: SqlExec<'_, '_>,
+    user_id: &str,
+) -> AppResult<Vec<UiCatalogViewSetting>> {
+    let rows = SqlRuntime::fetch_all(
+        exec,
+        "SELECT device_class, facet, view_mode
+           FROM user_ui_catalog_views
+          WHERE user_id = {}
+          ORDER BY device_class, facet",
+        &[SqlArg::Text(user_id.to_string())],
+    )
+    .await?;
+    rows.iter()
+        .map(|row| {
+            Ok(UiCatalogViewSetting {
+                device_class: parse_ui_device_class(row.text("device_class")?)?,
+                facet: parse_ui_settings_facet(row.text("facet")?)?,
+                view_mode: parse_ui_catalog_view_mode(row.text("view_mode")?)?,
+            })
+        })
+        .collect()
+}
+
+fn parse_ui_device_class(value: String) -> AppResult<UiDeviceClass> {
+    UiDeviceClass::parse(&value)
+        .ok_or_else(|| AppError::Repository(format!("invalid UI device class {value:?}")))
+}
+
+fn parse_ui_catalog_view_mode(value: String) -> AppResult<UiCatalogViewMode> {
+    UiCatalogViewMode::parse(&value)
+        .ok_or_else(|| AppError::Repository(format!("invalid UI catalog view mode {value:?}")))
 }
 
 fn parse_ui_theme(value: String) -> AppResult<UiTheme> {
@@ -1288,7 +1417,8 @@ mod tests {
                 password_change_required INTEGER NOT NULL DEFAULT 0,
                 account_kind TEXT NOT NULL DEFAULT 'local',
                 status TEXT NOT NULL DEFAULT 'active',
-                auth_session_version TEXT
+                auth_session_version TEXT,
+                locale TEXT
             )",
         )
         .execute(&pool)
@@ -1339,6 +1469,7 @@ mod tests {
         sqlx::query(
             "CREATE TABLE user_ui_table_columns (
                 user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                device_class TEXT NOT NULL DEFAULT 'desktop',
                 facet TEXT NOT NULL,
                 table_view_mode TEXT NOT NULL,
                 column_id TEXT NOT NULL,
@@ -1346,12 +1477,26 @@ mod tests {
                 visible INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
                 updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-                PRIMARY KEY (user_id, facet, table_view_mode, column_id)
+                PRIMARY KEY (user_id, device_class, facet, table_view_mode, column_id)
             )",
         )
         .execute(&pool)
         .await
         .expect("create user_ui_table_columns table");
+        sqlx::query(
+            "CREATE TABLE user_ui_catalog_views (
+                user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                device_class TEXT NOT NULL,
+                facet TEXT NOT NULL,
+                view_mode TEXT NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                PRIMARY KEY (user_id, device_class, facet)
+            )",
+        )
+        .execute(&pool)
+        .await
+        .expect("create user_ui_catalog_views table");
         sqlx::query(
             "CREATE UNIQUE INDEX idx_user_external_accounts_provider_identity
                ON user_external_accounts(provider, connection_id, external_user_id)",
@@ -1700,8 +1845,10 @@ mod tests {
                 density: UiDensity::Compact,
                 sidebar_mode: UiSidebarMode::Collapsed,
                 default_landing_view: UiDefaultLandingView::Calendar,
-                table_columns: vec![
+                language: Some(Some("fra".to_string())),
+                table_columns: Some(vec![
                     UiTableColumnSetting {
+                        device_class: UiDeviceClass::Desktop,
                         facet: UiSettingsFacet::Movies,
                         table_view_mode: UiTableViewMode::Compact,
                         column_id: "name".to_string(),
@@ -1709,13 +1856,14 @@ mod tests {
                         visible: true,
                     },
                     UiTableColumnSetting {
+                        device_class: UiDeviceClass::Mobile,
                         facet: UiSettingsFacet::Series,
                         table_view_mode: UiTableViewMode::PosterTable,
                         column_id: "episodes".to_string(),
                         column_order: 1,
                         visible: false,
                     },
-                ],
+                ]),
             },
         )
         .await
@@ -1727,6 +1875,8 @@ mod tests {
         assert_eq!(stored.table_columns.len(), 2);
         assert_eq!(stored.table_columns[0].column_id, "name");
         assert_eq!(stored.table_columns[1].column_id, "episodes");
+        assert_eq!(stored.table_columns[1].device_class, UiDeviceClass::Mobile);
+        assert_eq!(stored.language.as_deref(), Some("fra"));
 
         // Existing databases can retain the retired value until the next save.
         let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
@@ -1760,13 +1910,15 @@ mod tests {
                 density: UiDensity::Comfortable,
                 sidebar_mode: UiSidebarMode::Expanded,
                 default_landing_view: UiDefaultLandingView::Movies,
-                table_columns: vec![UiTableColumnSetting {
+                language: None,
+                table_columns: Some(vec![UiTableColumnSetting {
+                    device_class: UiDeviceClass::Desktop,
                     facet: UiSettingsFacet::Anime,
                     table_view_mode: UiTableViewMode::Compact,
                     column_id: "status".to_string(),
                     column_order: 0,
                     visible: true,
-                }],
+                }]),
             },
         )
         .await
@@ -1777,6 +1929,8 @@ mod tests {
         assert_eq!(replaced.table_columns.len(), 1);
         assert_eq!(replaced.table_columns[0].facet, UiSettingsFacet::Anime);
         assert_eq!(replaced.table_columns[0].column_id, "status");
+        // An update that leaves the language alone keeps the saved one.
+        assert_eq!(replaced.language.as_deref(), Some("fra"));
 
         UserRepository::delete(&store, &user.id)
             .await
@@ -1785,6 +1939,228 @@ mod tests {
             .await
             .expect("load UI settings after cascade");
         assert!(after_delete.is_none());
+    }
+
+    fn catalog_column(
+        device_class: UiDeviceClass,
+        facet: UiSettingsFacet,
+        column_id: &str,
+        visible: bool,
+    ) -> UiTableColumnSetting {
+        UiTableColumnSetting {
+            device_class,
+            facet,
+            table_view_mode: UiTableViewMode::Compact,
+            column_id: column_id.to_string(),
+            column_order: 0,
+            visible,
+        }
+    }
+
+    async fn count_user_rows(store: &UserStore, table: &str, user_id: &str) -> i64 {
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            panic!("expected SQLite test store");
+        };
+        let sql = match table {
+            "user_ui_settings" => "SELECT COUNT(*) FROM user_ui_settings WHERE user_id = ?",
+            "user_ui_table_columns" => {
+                "SELECT COUNT(*) FROM user_ui_table_columns WHERE user_id = ?"
+            }
+            "user_ui_catalog_views" => {
+                "SELECT COUNT(*) FROM user_ui_catalog_views WHERE user_id = ?"
+            }
+            other => panic!("unexpected table {other}"),
+        };
+        sqlx::query_scalar(sql)
+            .bind(user_id)
+            .fetch_one(pool)
+            .await
+            .expect("count user rows")
+    }
+
+    #[tokio::test]
+    async fn catalog_views_are_kept_per_user_device_class_and_facet() {
+        let store = test_store().await;
+        let user_a = UserRepository::create(&store, test_user("catalog_user_a"))
+            .await
+            .expect("create first user");
+        let user_b = UserRepository::create(&store, test_user("catalog_user_b"))
+            .await
+            .expect("create second user");
+
+        // A first catalog save creates the settings row with defaults.
+        let desktop = UserUiSettingsRepository::set_catalog_view(
+            &store,
+            &user_a.id,
+            UiCatalogViewUpdate {
+                device_class: UiDeviceClass::Desktop,
+                facet: UiSettingsFacet::Movies,
+                view_mode: Some(UiCatalogViewMode::PosterTable),
+                columns: Some(vec![catalog_column(
+                    UiDeviceClass::Desktop,
+                    UiSettingsFacet::Movies,
+                    "year",
+                    true,
+                )]),
+            },
+        )
+        .await
+        .expect("save desktop movies view");
+        assert_eq!(desktop.theme, UiTheme::default());
+        assert_eq!(
+            desktop.catalog_views,
+            vec![UiCatalogViewSetting {
+                device_class: UiDeviceClass::Desktop,
+                facet: UiSettingsFacet::Movies,
+                view_mode: UiCatalogViewMode::PosterTable,
+            }]
+        );
+
+        UserUiSettingsRepository::set_catalog_view(
+            &store,
+            &user_a.id,
+            UiCatalogViewUpdate {
+                device_class: UiDeviceClass::Mobile,
+                facet: UiSettingsFacet::Movies,
+                view_mode: Some(UiCatalogViewMode::Poster),
+                columns: Some(vec![catalog_column(
+                    UiDeviceClass::Mobile,
+                    UiSettingsFacet::Movies,
+                    "size",
+                    false,
+                )]),
+            },
+        )
+        .await
+        .expect("save mobile movies view");
+
+        // Replacing the desktop columns without a view mode keeps the desktop
+        // view mode and leaves the mobile layout untouched.
+        let replaced = UserUiSettingsRepository::set_catalog_view(
+            &store,
+            &user_a.id,
+            UiCatalogViewUpdate {
+                device_class: UiDeviceClass::Desktop,
+                facet: UiSettingsFacet::Movies,
+                view_mode: None,
+                columns: Some(vec![catalog_column(
+                    UiDeviceClass::Desktop,
+                    UiSettingsFacet::Movies,
+                    "runtime",
+                    true,
+                )]),
+            },
+        )
+        .await
+        .expect("replace desktop movies columns");
+        assert_eq!(
+            replaced.catalog_views,
+            vec![
+                UiCatalogViewSetting {
+                    device_class: UiDeviceClass::Desktop,
+                    facet: UiSettingsFacet::Movies,
+                    view_mode: UiCatalogViewMode::PosterTable,
+                },
+                UiCatalogViewSetting {
+                    device_class: UiDeviceClass::Mobile,
+                    facet: UiSettingsFacet::Movies,
+                    view_mode: UiCatalogViewMode::Poster,
+                },
+            ]
+        );
+        assert_eq!(
+            replaced.table_columns,
+            vec![
+                catalog_column(
+                    UiDeviceClass::Desktop,
+                    UiSettingsFacet::Movies,
+                    "runtime",
+                    true
+                ),
+                catalog_column(
+                    UiDeviceClass::Mobile,
+                    UiSettingsFacet::Movies,
+                    "size",
+                    false
+                ),
+            ]
+        );
+
+        // A view-mode-only save keeps the columns; whole-settings saves that
+        // omit columns keep them too.
+        UserUiSettingsRepository::set_catalog_view(
+            &store,
+            &user_a.id,
+            UiCatalogViewUpdate {
+                device_class: UiDeviceClass::Mobile,
+                facet: UiSettingsFacet::Movies,
+                view_mode: Some(UiCatalogViewMode::Compact),
+                columns: None,
+            },
+        )
+        .await
+        .expect("save mobile view mode");
+        let current = UserUiSettingsRepository::get_by_user_id(&store, &user_a.id)
+            .await
+            .expect("load settings")
+            .expect("settings exist");
+        let mut update = UiSettingsUpdate {
+            theme: UiTheme::Light,
+            date_time_format: current.date_time_format,
+            highlight_color: None,
+            secondary_color: None,
+            high_contrast_mode: false,
+            reduce_motion: false,
+            hide_sponsor_button: false,
+            density: current.density,
+            sidebar_mode: current.sidebar_mode,
+            default_landing_view: current.default_landing_view,
+            language: None,
+            table_columns: None,
+        };
+        let after_theme = UserUiSettingsRepository::upsert(&store, &user_a.id, update.clone())
+            .await
+            .expect("save theme");
+        assert_eq!(after_theme.theme, UiTheme::Light);
+        assert_eq!(after_theme.table_columns, replaced.table_columns);
+        assert_eq!(
+            after_theme.catalog_views[1].view_mode,
+            UiCatalogViewMode::Compact
+        );
+
+        // The language is saved on, and cleared from, the user's own row.
+        update.language = Some(Some("deu".to_string()));
+        let with_language = UserUiSettingsRepository::upsert(&store, &user_a.id, update.clone())
+            .await
+            .expect("save language");
+        assert_eq!(with_language.language.as_deref(), Some("deu"));
+        update.language = Some(None);
+        let cleared = UserUiSettingsRepository::upsert(&store, &user_a.id, update)
+            .await
+            .expect("clear language");
+        assert_eq!(cleared.language, None);
+
+        // Nothing leaks to the other user.
+        let other = UserUiSettingsRepository::get_by_user_id(&store, &user_b.id)
+            .await
+            .expect("load other user's settings");
+        assert!(other.is_none());
+
+        // Deleting the user removes every preference row it owned.
+        UserRepository::delete(&store, &user_a.id)
+            .await
+            .expect("delete user");
+        for table in [
+            "user_ui_settings",
+            "user_ui_table_columns",
+            "user_ui_catalog_views",
+        ] {
+            assert_eq!(
+                count_user_rows(&store, table, &user_a.id).await,
+                0,
+                "{table}"
+            );
+        }
     }
 
     #[tokio::test]

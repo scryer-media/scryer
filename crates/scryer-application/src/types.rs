@@ -4214,13 +4214,84 @@ impl UiTableViewMode {
     }
 }
 
+/// The class of screen a catalog layout was chosen on; each keeps its own layout.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum UiDeviceClass {
+    #[default]
+    Desktop,
+    Mobile,
+}
+
+impl UiDeviceClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Mobile => "mobile",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "desktop" => Some(Self::Desktop),
+            "mobile" => Some(Self::Mobile),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum UiCatalogViewMode {
+    Compact,
+    PosterTable,
+    Poster,
+}
+
+impl UiCatalogViewMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Compact => "compact",
+            Self::PosterTable => "poster-table",
+            Self::Poster => "poster",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "compact" => Some(Self::Compact),
+            "poster-table" => Some(Self::PosterTable),
+            "poster" => Some(Self::Poster),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiTableColumnSetting {
+    pub device_class: UiDeviceClass,
     pub facet: UiSettingsFacet,
     pub table_view_mode: UiTableViewMode,
     pub column_id: String,
     pub column_order: i32,
     pub visible: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiCatalogViewSetting {
+    pub device_class: UiDeviceClass,
+    pub facet: UiSettingsFacet,
+    pub view_mode: UiCatalogViewMode,
+}
+
+/// Saves one device class and facet's catalog layout without touching the others.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiCatalogViewUpdate {
+    pub device_class: UiDeviceClass,
+    pub facet: UiSettingsFacet,
+    /// `None` keeps the stored view mode.
+    pub view_mode: Option<UiCatalogViewMode>,
+    /// `None` keeps the stored columns; a list replaces every column row of this
+    /// device class and facet.
+    pub columns: Option<Vec<UiTableColumnSetting>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -4236,7 +4307,10 @@ pub struct UiSettings {
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
+    /// Interface language code chosen by the user; `None` follows the browser.
+    pub language: Option<String>,
     pub table_columns: Vec<UiTableColumnSetting>,
+    pub catalog_views: Vec<UiCatalogViewSetting>,
     pub created_at: Option<chrono::DateTime<chrono::Utc>>,
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -4253,7 +4327,10 @@ pub struct UiSettingsUpdate {
     pub density: UiDensity,
     pub sidebar_mode: UiSidebarMode,
     pub default_landing_view: UiDefaultLandingView,
-    pub table_columns: Vec<UiTableColumnSetting>,
+    /// `None` keeps the stored language; `Some(None)` clears it.
+    pub language: Option<Option<String>>,
+    /// `None` keeps the stored columns; a list replaces all of them.
+    pub table_columns: Option<Vec<UiTableColumnSetting>>,
 }
 
 impl UiSettings {
@@ -4270,7 +4347,9 @@ impl UiSettings {
             density: UiDensity::default(),
             sidebar_mode: UiSidebarMode::default(),
             default_landing_view: UiDefaultLandingView::default(),
+            language: None,
             table_columns: Vec::new(),
+            catalog_views: Vec::new(),
             created_at: None,
             updated_at: None,
         }

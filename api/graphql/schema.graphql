@@ -18112,9 +18112,18 @@ type MutationRoot {
 	"""
 	setMyUiSettings(
 		"""
-		Complete UI settings to save; omitted or null date_time_format keeps its current value.
+		Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value.
 		"""
 		input: SetMyUiSettingsInput!
+	): UiSettingsPayload!
+	"""
+	Saves the authenticated actor's catalog view mode and columns for one device class and facet, leaving every other layout unchanged.
+	"""
+	setMyCatalogView(
+		"""
+		Layout to save; a null view mode or column list keeps the saved value.
+		"""
+		input: SetMyCatalogViewInput!
 	): UiSettingsPayload!
 	"""
 	Saves subtitle preferences after checking the catalog-settings permission.
@@ -26827,6 +26836,28 @@ input SetMinimumSeedersFloorInput {
 }
 
 """
+The caller's catalog layout for one device class and facet.
+"""
+input SetMyCatalogViewInput {
+	"""
+	Device class the layout was chosen on.
+	"""
+	deviceClass: UiDeviceClassValue!
+	"""
+	Media facet the layout applies to.
+	"""
+	facet: UiSettingsFacetValue!
+	"""
+	Optional view mode; null preserves the saved value.
+	"""
+	viewMode: UiCatalogViewModeValue
+	"""
+	Optional complete column list for this device class and facet; null preserves the saved columns.
+	"""
+	columns: [UiCatalogColumnInput!]
+}
+
+"""
 Complete caller presentation-preferences update.
 """
 input SetMyUiSettingsInput {
@@ -26871,9 +26902,13 @@ input SetMyUiSettingsInput {
 	"""
 	defaultLandingView: UiDefaultLandingViewValue!
 	"""
-	Complete table-column setting list; empty clears all saved column settings.
+	Optional interface language code; null preserves the saved value and an empty string clears it.
 	"""
-	tableColumns: [UiTableColumnSettingInput!]!
+	language: String
+	"""
+	Optional complete table-column setting list; null preserves the saved columns and an empty list clears them.
+	"""
+	tableColumns: [UiTableColumnSettingInput!]
 }
 
 """
@@ -30113,6 +30148,64 @@ type TriggerTitleMismatchRecoverySearchPayload {
 }
 
 """
+One column of a catalog layout saved with setMyCatalogView.
+"""
+input UiCatalogColumnInput {
+	"""
+	Table mode to which the setting applies.
+	"""
+	tableViewMode: UiTableViewModeValue!
+	"""
+	Stable column identifier.
+	"""
+	columnId: String!
+	"""
+	Zero-based display order.
+	"""
+	columnOrder: Int!
+	"""
+	Whether the column should be visible.
+	"""
+	visible: Boolean!
+}
+
+"""
+Catalog presentation mode.
+"""
+enum UiCatalogViewModeValue {
+	"""
+	Compact table.
+	"""
+	COMPACT
+	"""
+	Table with posters.
+	"""
+	POSTER_TABLE
+	"""
+	Poster grid.
+	"""
+	POSTER
+}
+
+"""
+The catalog view mode saved for one device class and facet.
+"""
+type UiCatalogViewSettingPayload {
+	"""
+	Device class the view mode was chosen on.
+	"""
+	deviceClass: UiDeviceClassValue!
+	"""
+	Media facet the view mode applies to.
+	"""
+	facet: UiSettingsFacetValue!
+	"""
+	Saved view mode.
+	"""
+	viewMode: UiCatalogViewModeValue!
+}
+
+"""
 Date and time display format preference.
 """
 enum UiDateTimeFormatValue {
@@ -30183,6 +30276,20 @@ enum UiDensityValue {
 }
 
 """
+Screen class a catalog layout was chosen on; each class keeps its own layout.
+"""
+enum UiDeviceClassValue {
+	"""
+	Desktop and tablet-sized screens.
+	"""
+	DESKTOP
+	"""
+	Phone-sized screens.
+	"""
+	MOBILE
+}
+
+"""
 Media facet used by table-column settings.
 """
 enum UiSettingsFacetValue {
@@ -30245,9 +30352,17 @@ type UiSettingsPayload {
 	"""
 	defaultLandingView: UiDefaultLandingViewValue!
 	"""
+	Interface language code saved on the caller's profile, or null to follow the browser.
+	"""
+	language: String
+	"""
 	Persisted table-column settings.
 	"""
 	tableColumns: [UiTableColumnSettingPayload!]!
+	"""
+	Persisted catalog view modes, per device class and facet.
+	"""
+	catalogViews: [UiCatalogViewSettingPayload!]!
 }
 
 """
@@ -30268,6 +30383,10 @@ enum UiSidebarModeValue {
 Input form for one table-column preference.
 """
 input UiTableColumnSettingInput {
+	"""
+	Device class to which the setting applies; null means desktop.
+	"""
+	deviceClass: UiDeviceClassValue
 	"""
 	Media facet to which the setting applies.
 	"""
@@ -30291,9 +30410,13 @@ input UiTableColumnSettingInput {
 }
 
 """
-One persisted table-column preference for a facet and table mode.
+One persisted table-column preference for a device class, facet and table mode.
 """
 type UiTableColumnSettingPayload {
+	"""
+	Device class to which the column setting applies.
+	"""
+	deviceClass: UiDeviceClassValue!
 	"""
 	Media facet to which the column setting applies.
 	"""

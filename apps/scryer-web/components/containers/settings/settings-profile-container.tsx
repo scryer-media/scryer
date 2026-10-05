@@ -60,6 +60,7 @@ import type {
   TotpEnrollmentComplete,
   TotpEnrollmentStart,
   TotpStatus,
+  SetMyUiSettingsInput,
   UiSettings,
 } from "@/lib/types/settings";
 import type { UserAccountKind } from "@/lib/types/users";
@@ -408,7 +409,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       setUiSettings(next);
       try {
         const result = await client
-          .mutation<{ setMyUiSettings?: UiSettings }, { input: UiSettings }>(
+          .mutation<{ setMyUiSettings?: UiSettings }, { input: SetMyUiSettingsInput }>(
             setMyUiSettingsMutation,
             { input: uiSettingsInputFromSettings(next) },
           )
@@ -462,7 +463,7 @@ export function SettingsProfileContainer({ userId, username }: Props) {
       setUiSettings(next);
       try {
         const result = await client
-          .mutation<{ setMyUiSettings?: UiSettings }, { input: UiSettings }>(
+          .mutation<{ setMyUiSettings?: UiSettings }, { input: SetMyUiSettingsInput }>(
             setMyUiSettingsMutation,
             { input: uiSettingsInputFromSettings(next) },
           )

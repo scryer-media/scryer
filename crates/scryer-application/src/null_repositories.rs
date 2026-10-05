@@ -67,13 +67,14 @@ use crate::{
     SeedingProfileRepository, SettingsRepository, StagedNzbRef, StagedNzbStore, SystemInfoProvider,
     TitleEpisodeProgressSummary, TitleImageBlob, TitleImageKind, TitleImageProcessor,
     TitleImageRepository, TitleImageSourceResult, TitleImageSyncTask, TitleImageVariantSpec,
-    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary, UiSettings,
-    UiSettingsUpdate, UpstreamScheduler, UserExternalAccountRepository, UserUiSettingsRepository,
-    VerifiedExternalIdentity, WebauthnChallengeRecord, WebauthnCredentialRecord,
-    WebauthnRepository, WorkflowOperationInfo, WorkflowOperationRepository,
-    ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo, ports::LogicalBackupExporter,
-    ports::TotpRepository, types::TotpCredentialRecord, types::TotpEnrollmentChallengeRecord,
-    types::TotpFailedAttemptRecord, types::TotpRecoveryCodeRecord,
+    TitleMediaFile, TitleMediaSizeSummary, TitleMovieMediaSummary, TitleQualitySummary,
+    UiCatalogViewSetting, UiCatalogViewUpdate, UiSettings, UiSettingsUpdate, UpstreamScheduler,
+    UserExternalAccountRepository, UserUiSettingsRepository, VerifiedExternalIdentity,
+    WebauthnChallengeRecord, WebauthnCredentialRecord, WebauthnRepository, WorkflowOperationInfo,
+    WorkflowOperationRepository, ports::CatalogDiscoveryCandidatesRecord, ports::DatastoreInfo,
+    ports::LogicalBackupExporter, ports::TotpRepository, types::TotpCredentialRecord,
+    types::TotpEnrollmentChallengeRecord, types::TotpFailedAttemptRecord,
+    types::TotpRecoveryCodeRecord,
 };
 
 #[derive(Default)]
@@ -4042,7 +4043,25 @@ impl UserUiSettingsRepository for NullUserUiSettingsRepository {
         current.density = settings.density;
         current.sidebar_mode = settings.sidebar_mode;
         current.default_landing_view = settings.default_landing_view;
-        current.table_columns = settings.table_columns;
+        current.language = settings.language.flatten();
+        current.table_columns = settings.table_columns.unwrap_or_default();
+        Ok(current)
+    }
+
+    async fn set_catalog_view(
+        &self,
+        user_id: &str,
+        update: UiCatalogViewUpdate,
+    ) -> AppResult<UiSettings> {
+        let mut current = UiSettings::defaults_for_user(user_id.to_string());
+        if let Some(view_mode) = update.view_mode {
+            current.catalog_views.push(UiCatalogViewSetting {
+                device_class: update.device_class,
+                facet: update.facet,
+                view_mode,
+            });
+        }
+        current.table_columns = update.columns.unwrap_or_default();
         Ok(current)
     }
 }

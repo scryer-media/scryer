@@ -19,10 +19,10 @@ use scryer_application::{
 };
 
 use super::{
-    from_api_key, from_oauth_client_registration, from_plugin_auto_update_settings,
-    from_recycle_bin_settings, from_title_tag_definition, from_title_tag_rewrite_counts,
-    from_ui_settings, from_verification_settings, into_oauth_client_kind, to_verification_depth,
-    ui_settings_update_from_input,
+    catalog_view_update_from_input, from_api_key, from_oauth_client_registration,
+    from_plugin_auto_update_settings, from_recycle_bin_settings, from_title_tag_definition,
+    from_title_tag_rewrite_counts, from_ui_settings, from_verification_settings,
+    into_oauth_client_kind, to_verification_depth, ui_settings_update_from_input,
 };
 use scryer_interface_core::{
     AuthlessDefaultSession, LoginAttemptPrincipal, LoginErrorClassification,
@@ -771,7 +771,7 @@ impl SettingsMutations {
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Complete UI settings to save; omitted or null date_time_format keeps its current value."
+            desc = "Complete UI settings to save; omitted or null date_time_format, language or table_columns keeps its current value."
         )]
         input: SetMyUiSettingsInput,
     ) -> GqlResult<UiSettingsPayload> {
@@ -783,6 +783,22 @@ impl SettingsMutations {
                 &actor,
                 ui_settings_update_from_input(input, current.date_time_format),
             )
+            .await
+            .map_err(to_gql_error)?;
+        Ok(from_ui_settings(settings))
+    }
+
+    /// Saves the authenticated actor's catalog view mode and columns for one device class and facet, leaving every other layout unchanged.
+    async fn set_my_catalog_view(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Layout to save; a null view mode or column list keeps the saved value.")]
+        input: SetMyCatalogViewInput,
+    ) -> GqlResult<UiSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app
+            .set_my_catalog_view(&actor, catalog_view_update_from_input(input))
             .await
             .map_err(to_gql_error)?;
         Ok(from_ui_settings(settings))
