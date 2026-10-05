@@ -251,6 +251,25 @@ impl RootMoveFixture {
         paths
     }
 
+    /// Media rows of these titles that still have no full content hash.
+    async fn unhashed_media_count(&self, title_ids: &[&str]) -> usize {
+        let mut count = 0;
+        for title_id in title_ids {
+            count += self
+                .app
+                .services
+                .library
+                .media_files
+                .list_media_files_for_title(title_id)
+                .await
+                .expect("list media files")
+                .iter()
+                .filter(|file| file.content_hashes.is_none())
+                .count();
+        }
+        count
+    }
+
     async fn preview(&self, title_ids: &[&str]) -> crate::location::operations::RootMovePreview {
         self.app
             .preview_root_move(
@@ -2471,6 +2490,12 @@ async fn the_backfill_job_skips_files_owned_by_an_in_flight_operation() {
         "an interrupted operation keeps its claims"
     );
 
+    // Where same-filesystem placement is unavailable (any non-unix platform),
+    // the move places files by verified copy, which records the full hash of
+    // the file it already moved. Only files still awaiting a hash are queued;
+    // the second title was never reached, so its file always is.
+    let awaiting = fixture.unhashed_media_count(&[&first.id, &second.id]).await;
+    assert!(awaiting >= 1, "the unreached title still awaits its hash");
     let during = fixture
         .app
         .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
@@ -2478,8 +2503,8 @@ async fn the_backfill_job_skips_files_owned_by_an_in_flight_operation() {
         .expect("backfill during the operation");
     assert_eq!(during.hashed, 0);
     assert_eq!(
-        during.skipped_owned, 2,
-        "both titles are owned by the operation, so neither file is read"
+        during.skipped_owned, awaiting,
+        "both titles are owned by the operation, so no queued file is read"
     );
 
     // Finish the operation; its claims are released and the same files converge.
@@ -2498,13 +2523,19 @@ async fn the_backfill_job_skips_files_owned_by_an_in_flight_operation() {
     assert_eq!(outcome.state, LocationOperationState::Completed);
     assert_eq!(fixture.operations.open_claim_count(), 0);
 
+    let awaiting = fixture.unhashed_media_count(&[&first.id, &second.id]).await;
     let after = fixture
         .app
         .run_full_hash_backfill_with_options(FullHashBackfillOptions::unthrottled())
         .await
         .expect("backfill after the operation");
     assert_eq!(after.skipped_owned, 0);
-    assert_eq!(after.hashed, 2);
+    assert_eq!(after.hashed, awaiting);
+    assert_eq!(
+        fixture.unhashed_media_count(&[&first.id, &second.id]).await,
+        0,
+        "every file of both titles converges on a full hash"
+    );
 }
 
 // ── Activity (FR-091) ────────────────────────────────────────────────────────
