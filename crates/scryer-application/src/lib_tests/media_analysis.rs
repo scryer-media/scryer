@@ -757,3 +757,135 @@ async fn disc_title_selection_rejects_concurrent_selection_and_source_changes() 
         );
     }
 }
+
+async fn handed_off_file() -> (Arc<MockMediaFileRepo>, Arc<dyn MediaFileRepository>, String) {
+    let files = Arc::new(MockMediaFileRepo::default());
+    let id = files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: "synthetic-title".into(),
+            file_path: "/synthetic/library/Synthetic Feature (2024)/feature.mkv".into(),
+            size_bytes: 4_000,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    let repo: Arc<dyn MediaFileRepository> = files.clone();
+    (files, repo, id)
+}
+
+fn import_acceptance(
+    analysis: Option<MediaFileAnalysis>,
+    scan_error: Option<&str>,
+) -> crate::post_download_gate::ImportedFileAcceptance {
+    crate::post_download_gate::ImportedFileAcceptance {
+        analysis,
+        scan_error: scan_error.map(str::to_string),
+        rule_file_doc: None,
+        audio_language_warning: None,
+    }
+}
+
+fn disc_analysis(selected_title: &str) -> MediaFileAnalysis {
+    let mut analysis = MediaFileAnalysis::default();
+    analysis.details.revision = scryer_media_types::ANALYSIS_REVISION;
+    analysis.details.disc = Some(scryer_media_types::DiscMetadata {
+        disc_type: "bluray".into(),
+        selected_title_id: Some(selected_title.into()),
+        selection: scryer_media_types::DiscSelection {
+            title_id: Some(selected_title.into()),
+            episode_mappings: Vec::new(),
+        },
+        ..Default::default()
+    });
+    analysis.duration_seconds = Some(5_400);
+    analysis
+}
+
+#[tokio::test]
+async fn import_probe_results_are_written_onto_the_file_record() {
+    let (files, repo, id) = handed_off_file().await;
+    let mut analysis = MediaFileAnalysis::default();
+    analysis.details.revision = scryer_media_types::ANALYSIS_REVISION;
+    analysis.duration_seconds = Some(1_440);
+    analysis.video_width = Some(1_920);
+    analysis.video_height = Some(1_080);
+    analysis.audio_languages = vec!["jpn".into()];
+    analysis.container_format = Some("matroska".into());
+
+    crate::post_download_gate::persist_media_analysis_result(
+        &repo,
+        &id,
+        &import_acceptance(Some(analysis), None),
+    )
+    .await
+    .expect("hand-off succeeds");
+
+    let stored = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(stored.scan_status, "scanned");
+    assert_eq!(
+        stored.analysis_details.revision,
+        scryer_media_types::ANALYSIS_REVISION
+    );
+    assert_eq!(stored.duration_seconds, Some(1_440));
+    assert_eq!(
+        (stored.video_width, stored.video_height),
+        (Some(1_920), Some(1_080))
+    );
+    assert_eq!(stored.audio_languages, vec!["jpn".to_string()]);
+    assert_eq!(stored.container_format.as_deref(), Some("matroska"));
+}
+
+#[tokio::test]
+async fn a_failed_import_probe_marks_the_file_record_failed() {
+    let (files, repo, id) = handed_off_file().await;
+
+    crate::post_download_gate::persist_media_analysis_result(
+        &repo,
+        &id,
+        &import_acceptance(None, Some("synthetic probe failure")),
+    )
+    .await
+    .expect("a probe failure is recorded, not raised");
+
+    let stored = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(stored.scan_status, "failed");
+    assert_eq!(stored.analysis_details.revision, 0);
+}
+
+#[tokio::test]
+async fn a_disc_probe_publishes_only_onto_the_selection_it_was_made_for() {
+    let (files, repo, id) = handed_off_file().await;
+
+    // A first import of the disc publishes its analysis.
+    crate::post_download_gate::persist_media_analysis_result(
+        &repo,
+        &id,
+        &import_acceptance(Some(disc_analysis("00001")), None),
+    )
+    .await
+    .expect("first disc hand-off succeeds");
+    let stored = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(stored.scan_status, "scanned");
+    assert_eq!(stored.duration_seconds, Some(5_400));
+
+    // The operator picked another title in the meantime: the stale probe must
+    // not overwrite it, and the import is stopped for review.
+    let error = crate::post_download_gate::persist_media_analysis_result(
+        &repo,
+        &id,
+        &import_acceptance(Some(disc_analysis("00002")), None),
+    )
+    .await
+    .expect_err("a changed disc selection stops the import");
+    assert!(matches!(error, AppError::ManualReconciliationRequired(_)));
+    let stored = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    assert_eq!(stored.scan_status, "failed");
+    assert_eq!(
+        stored
+            .analysis_details
+            .disc
+            .as_ref()
+            .and_then(|disc| disc.selection.title_id.as_deref()),
+        Some("00001")
+    );
+}

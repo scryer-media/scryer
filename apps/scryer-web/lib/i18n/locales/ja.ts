@@ -3024,6 +3024,7 @@ const ja: LocaleDictionary = {
   "lists.accounts.private": "このリストとアカウント情報は自分だけが閲覧できます。",
   "lists.accounts.waiting": "プロバイダーのウィンドウで認証を完了してください。承認は自動的に確認されます。",
   "lists.accounts.linkFailed": "アカウントの接続に失敗しました。接続をやり直してください。",
+  "lists.accounts.pollRetrying": "現在、承認を確認できませんでした。セッションの期限が切れるまで再試行します。",
   "lists.accounts.originNotAllowed": "このアドレスからはアカウントを接続できません。管理者にScryerの公開URLの設定を依頼するか、許可されたローカルアドレスを開いてください。",
   "lists.accounts.linkExpired": "接続セッションの期限が切れました。リストから新しい接続を開始してください。",
   "lists.accounts.popupBlocked": "ポップアップを許可してアカウントを承認し、再接続してください。",

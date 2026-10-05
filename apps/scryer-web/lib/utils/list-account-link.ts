@@ -128,6 +128,57 @@ export function listAccountCompletionInput(pending: PendingListAccountLink, payl
   };
 }
 
+export const LIST_ACCOUNT_POLL_INTERVAL_MS = 1500;
+const LIST_ACCOUNT_POLL_UNAVAILABLE_MS = 5000;
+const LIST_ACCOUNT_POLL_RATE_LIMITED_MS = 30000;
+
+/** What to do after a poll the instance answered without an account. */
+export type ListAccountPollStep =
+  | { kind: "wait"; delayMs: number; retrying: boolean }
+  | { kind: "failed" };
+
+/**
+ * Pending and in-progress answers keep the normal pace. When the provider or
+ * the instance could not answer, polling slows down, and a rate limit waits
+ * longest. Any other status ends the link.
+ */
+export function listAccountPollStep(status: unknown): ListAccountPollStep {
+  switch (status) {
+    case "pending":
+    case "busy":
+      return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_INTERVAL_MS, retrying: false };
+    case "unavailable":
+      return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_UNAVAILABLE_MS, retrying: true };
+    case "rate_limited":
+      return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_RATE_LIMITED_MS, retrying: true };
+    default:
+      return { kind: "failed" };
+  }
+}
+
+/** Instance errors that say "not right now" rather than answering for the link. */
+const TRANSIENT_POLL_ERROR_CODES = new Set(["INTERNAL_ERROR", "TEMPORARY_UNAVAILABLE"]);
+
+/**
+ * How long to wait before repeating a failed poll request, or null when the
+ * failure ends the link. A request that never got a GraphQL answer (a dropped
+ * connection or a proxy error) and a passing internal or temporarily
+ * unavailable error are retried at the unavailable pace; any other error the
+ * instance returned is its final answer for this link.
+ */
+export function listAccountPollRetryDelay(reason: unknown): number | null {
+  if (!reason || typeof reason !== "object") return null;
+  const { graphQLErrors, networkError } = reason as { graphQLErrors?: unknown; networkError?: unknown };
+  if (!Array.isArray(graphQLErrors) || graphQLErrors.length === 0) {
+    return networkError ? LIST_ACCOUNT_POLL_UNAVAILABLE_MS : null;
+  }
+  const transient = graphQLErrors.every((error) => {
+    const code = (error as { extensions?: { code?: unknown } } | null)?.extensions?.code;
+    return typeof code === "string" && TRANSIENT_POLL_ERROR_CODES.has(code);
+  });
+  return transient ? LIST_ACCOUNT_POLL_UNAVAILABLE_MS : null;
+}
+
 export async function finishCurrentListAccountLink(
   isCurrent: () => boolean,
   refresh: (isCurrent: () => boolean) => Promise<void>,

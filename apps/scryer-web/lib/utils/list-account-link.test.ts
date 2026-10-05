@@ -7,6 +7,9 @@ import {
   LIST_ACCOUNT_LINK_TYPE,
   LIST_ACCOUNT_RELAY_ORIGIN,
   listAccountCompletionInput,
+  LIST_ACCOUNT_POLL_INTERVAL_MS,
+  listAccountPollRetryDelay,
+  listAccountPollStep,
   listAccountReturnMatches,
   parseListAccountPayload,
   parsePendingListAccountLink,
@@ -94,6 +97,40 @@ test("BYO callbacks require a pending provider and reject repeated and token par
   assert.equal(consumeListAccountReturn(location, history, null), null);
   assert.equal(consumeListAccountReturn({ ...location, search: `${location.search}&state=other` }, history, pending), null);
   assert.equal(consumeListAccountReturn({ ...location, search: `${location.search}&access_token=secret` }, history, pending), null);
+});
+
+test("dropped requests and passing instance errors are retried; every other instance error ends polling", () => {
+  const graphQl = (...codes: unknown[]) => ({ graphQLErrors: codes.map((code) => ({ message: "failed", extensions: { code } })) });
+  const unavailable = listAccountPollStep("unavailable");
+  assert.ok(unavailable.kind === "wait");
+  for (const reason of [
+    { networkError: new Error("offline"), graphQLErrors: [] },
+    { networkError: new Error("bad gateway") },
+    graphQl("INTERNAL_ERROR"),
+    graphQl("TEMPORARY_UNAVAILABLE"),
+    graphQl("INTERNAL_ERROR", "TEMPORARY_UNAVAILABLE"),
+  ]) {
+    assert.equal(listAccountPollRetryDelay(reason), unavailable.delayMs);
+  }
+  for (const code of ["NOT_FOUND", "UNAUTHORIZED", "VALIDATION_ERROR", 42]) {
+    assert.equal(listAccountPollRetryDelay(graphQl(code)), null);
+  }
+  assert.equal(listAccountPollRetryDelay(graphQl("INTERNAL_ERROR", "VALIDATION_ERROR")), null);
+  assert.equal(listAccountPollRetryDelay({ networkError: new Error("partial"), ...graphQl("VALIDATION_ERROR") }), null);
+  assert.equal(listAccountPollRetryDelay(new Error("thrown")), null);
+  assert.equal(listAccountPollRetryDelay(null), null);
+});
+
+test("poll statuses keep the normal pace, slow down when unavailable, wait longest when rate-limited, and otherwise fail", () => {
+  assert.deepEqual(listAccountPollStep("pending"), { kind: "wait", delayMs: LIST_ACCOUNT_POLL_INTERVAL_MS, retrying: false });
+  assert.deepEqual(listAccountPollStep("busy"), { kind: "wait", delayMs: LIST_ACCOUNT_POLL_INTERVAL_MS, retrying: false });
+  const unavailable = listAccountPollStep("unavailable");
+  const limited = listAccountPollStep("rate_limited");
+  assert.ok(unavailable.kind === "wait" && unavailable.retrying && unavailable.delayMs > LIST_ACCOUNT_POLL_INTERVAL_MS);
+  assert.ok(limited.kind === "wait" && limited.retrying && unavailable.kind === "wait" && limited.delayMs >= 30000 && limited.delayMs > unavailable.delayMs);
+  for (const status of ["FAILED", "EXPIRED", "linked", "", undefined, 3]) {
+    assert.deepEqual(listAccountPollStep(status), { kind: "failed" });
+  }
 });
 
 test("cancelled account refreshes cannot finish or fail a replacement link", { timeout: 10000 }, async () => {

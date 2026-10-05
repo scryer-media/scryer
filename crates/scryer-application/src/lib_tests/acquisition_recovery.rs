@@ -398,6 +398,11 @@ async fn failed_grab_retries_standby_candidate(
             .clone(),
         vec!["Standby.Release.1080p.WEB-DL".to_string()]
     );
+    assert_eq!(
+        release_grabbed_actors(&app, &title.id).await.len(),
+        1,
+        "the standby grab is recorded once"
+    );
     let mut covered = coverage.indexers_for_scope(&scope_key).await;
     covered.sort();
     assert_eq!(

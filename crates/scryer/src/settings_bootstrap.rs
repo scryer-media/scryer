@@ -803,6 +803,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "null",
             is_sensitive: false,
         },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_SERVICE,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: PLEX_CLIENT_IDENTIFIER_KEY,
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
         // SMG (Scryer Metadata Gateway) enrollment
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_SERVICE,
@@ -1327,6 +1335,48 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             is_sensitive: false,
         },
     ]
+}
+
+/// The device identifier this instance presents to Plex when members link
+/// accounts. It is generated once and kept, so every link reuses one device
+/// on the member's Plex account instead of adding a device per restart.
+pub(crate) const PLEX_CLIENT_IDENTIFIER_KEY: &str = "lists.plex_client_identifier";
+
+pub(crate) async fn load_or_create_plex_client_identifier(
+    store: Arc<SettingsStore>,
+) -> Result<String, String> {
+    use scryer_application::SettingsRepository;
+
+    let stored = SettingsRepository::get_setting_json(
+        &*store,
+        SETTINGS_SCOPE_SYSTEM,
+        PLEX_CLIENT_IDENTIFIER_KEY,
+        None,
+    )
+    .await
+    .map_err(|error| format!("failed to read the Plex client identifier: {error}"))?;
+    if let Some(existing) = stored
+        .and_then(|raw| serde_json::from_str::<Option<String>>(&raw).ok().flatten())
+        .filter(|value| uuid::Uuid::parse_str(value).is_ok())
+    {
+        return Ok(existing);
+    }
+
+    let identifier = uuid::Uuid::new_v4().to_string();
+    let value_json = serde_json::to_string(&identifier)
+        .map_err(|error| format!("failed to encode the Plex client identifier: {error}"))?;
+    SettingsRepository::upsert_setting_json(
+        &*store,
+        SETTINGS_SCOPE_SYSTEM,
+        PLEX_CLIENT_IDENTIFIER_KEY,
+        None,
+        value_json,
+        "system",
+        None,
+    )
+    .await
+    .map_err(|error| format!("failed to persist the Plex client identifier: {error}"))?;
+    Ok(identifier)
 }
 
 pub(crate) async fn seed_service_setting_definitions(
@@ -2805,6 +2855,44 @@ mod tests {
         )
         .await
         .expect("title credits rehydration state should persist");
+    }
+
+    #[tokio::test]
+    async fn plex_client_identifier_is_generated_once_and_reused() {
+        let (_temp, store) = bootstrap_settings_store().await;
+
+        let first = load_or_create_plex_client_identifier(store.clone())
+            .await
+            .expect("identifier is created");
+        assert!(uuid::Uuid::parse_str(&first).is_ok());
+        let again = load_or_create_plex_client_identifier(store.clone())
+            .await
+            .expect("identifier is reused");
+        assert_eq!(again, first);
+
+        // A value that cannot be presented to Plex is replaced, then kept.
+        SettingsRepository::upsert_setting_json(
+            &*store,
+            SETTINGS_SCOPE_SYSTEM,
+            PLEX_CLIENT_IDENTIFIER_KEY,
+            None,
+            "\"not a device id\"".to_string(),
+            "system",
+            None,
+        )
+        .await
+        .expect("fixture value persists");
+        let replaced = load_or_create_plex_client_identifier(store.clone())
+            .await
+            .expect("identifier is replaced");
+        assert_ne!(replaced, first);
+        assert!(uuid::Uuid::parse_str(&replaced).is_ok());
+        assert_eq!(
+            load_or_create_plex_client_identifier(store)
+                .await
+                .expect("replacement is reused"),
+            replaced
+        );
     }
 
     #[tokio::test]

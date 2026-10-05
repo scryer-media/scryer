@@ -7,8 +7,11 @@ import { completeListAccountLinkMutation, pollListAccountLinkMutation, startList
 import type { ListAccountLinkSession } from "@/lib/types/lists";
 import {
   LIST_ACCOUNT_LINK_STORAGE_KEY,
+  LIST_ACCOUNT_POLL_INTERVAL_MS,
   finishCurrentListAccountLink,
   listAccountCompletionInput,
+  listAccountPollRetryDelay,
+  listAccountPollStep,
   parsePendingListAccountLink,
   validateListAccountMessage,
   type PendingListAccountLink,
@@ -102,6 +105,7 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
 
       const poll = async () => {
         if (request !== generation.current || active.current?.consumed) return;
+        let delayMs = LIST_ACCOUNT_POLL_INTERVAL_MS;
         if (Date.now() >= Date.parse(pending.expiresAt)) {
           setError(t("lists.accounts.linkExpired"));
           cancel();
@@ -125,18 +129,39 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
               );
               return;
             }
-            if (["FAILED", "EXPIRED"].includes(polled.data?.pollListAccountLink?.status)) throw new Error(t("lists.accounts.linkFailed"));
+            const step = listAccountPollStep(polled.data?.pollListAccountLink?.status);
+            if (step.kind === "failed") {
+              setError(t("lists.accounts.linkFailed"));
+              cancel();
+              const refreshed = generation.current;
+              void onLinked(() => refreshed === generation.current).catch(() => undefined);
+              return;
+            }
+            delayMs = step.delayMs;
+            setError(step.retrying ? t("lists.accounts.pollRetrying") : null);
           } catch (reason) {
             if (request !== generation.current) return;
-            setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
-            cancel();
-            return;
+            const retryDelay = listAccountPollRetryDelay(reason);
+            if (retryDelay === null) {
+              setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
+              cancel();
+              // An earlier poll may have linked the account before this one
+              // failed; refresh once so it shows either way.
+              const refreshed = generation.current;
+              void onLinked(() => refreshed === generation.current).catch(() => undefined);
+              return;
+            }
+            // A dropped request or a passing instance error does not end the
+            // session; the instance keeps it, and answers a repeated poll even
+            // if the first one linked it.
+            delayMs = retryDelay;
+            setError(t("lists.accounts.pollRetrying"));
           }
         } else if (popup.closed) {
           cancel();
           return;
         }
-        if (request === generation.current) window.setTimeout(() => { void poll(); }, 1500);
+        if (request === generation.current) window.setTimeout(() => { void poll(); }, delayMs);
       };
       void poll();
     } catch (reason) {

@@ -3092,6 +3092,7 @@ const fr: LocaleDictionary = {
   "lists.accounts.private": "Vous seul pouvez voir ces listes et les informations du compte.",
   "lists.accounts.waiting": "Terminez l’autorisation dans la fenêtre du fournisseur. L’approbation est vérifiée automatiquement.",
   "lists.accounts.linkFailed": "La connexion du compte a échoué. Recommencez pour le reconnecter.",
+  "lists.accounts.pollRetrying": "Impossible de vérifier l’autorisation pour le moment. Nouvel essai jusqu’à l’expiration de la session.",
   "lists.accounts.originNotAllowed": "La connexion de comptes est indisponible depuis cette adresse. Demandez à un administrateur de configurer l’URL publique de Scryer, ou ouvrez une adresse locale autorisée.",
   "lists.accounts.linkExpired": "Cette session de connexion a expiré. Démarrez une nouvelle connexion depuis Listes.",
   "lists.accounts.popupBlocked": "Autorisez les fenêtres contextuelles pour approuver ce compte, puis reconnectez-le.",

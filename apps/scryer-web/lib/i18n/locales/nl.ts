@@ -3786,6 +3786,7 @@ const nl: LocaleDictionary = {
   "lists.accounts.private": "Deze lijsten en accountgegevens zijn alleen voor jou zichtbaar.",
   "lists.accounts.waiting": "Voltooi de toestemming in het venster van de aanbieder. Goedkeuring wordt automatisch gecontroleerd.",
   "lists.accounts.linkFailed": "Het account kon niet worden verbonden. Start de verbinding opnieuw.",
+  "lists.accounts.pollRetrying": "De goedkeuring kon nu niet worden gecontroleerd. Er wordt opnieuw geprobeerd tot de sessie verloopt.",
   "lists.accounts.originNotAllowed": "Accounts verbinden is niet beschikbaar via dit adres. Vraag een beheerder de openbare URL van Scryer in te stellen of open een toegestaan lokaal adres.",
   "lists.accounts.linkExpired": "Deze sessie is verlopen. Start een nieuwe verbinding vanuit Lijsten.",
   "lists.accounts.popupBlocked": "Sta pop-ups toe om dit account goed te keuren en verbind opnieuw.",
