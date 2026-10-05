@@ -123,6 +123,7 @@ async fn run_import(
     }
     let mut subtitles_pending =
         subtitle_failed || subtitle_plan.has_pending_sources(delivered_sources.into_iter());
+    let subtitles_outstanding = subtitles_pending;
     if !subtitles_pending
         && result
             .as_ref()
@@ -159,6 +160,25 @@ async fn run_import(
 
     if subtitles_pending {
         workspace_reference.retain();
+        if source_hold {
+            let reason = if target.archive_processing_pending {
+                HeldSourcesReason::ArchiveExtractionFailed
+            } else if subtitles_outstanding {
+                HeldSourcesReason::SubtitlesPending
+            } else {
+                HeldSourcesReason::SourceCleanupIncomplete
+            };
+            if app
+                .services
+                .workflow
+                .imports
+                .record_archive_hold_reason(import_id, reason.as_str())
+                .await
+                .is_err()
+            {
+                tracing::warn!(import_id, "could not record why sources are held");
+            }
+        }
         if let Ok(result) = &mut result
             && result.decision == ImportDecision::Imported
         {

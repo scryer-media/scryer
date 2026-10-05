@@ -232,6 +232,46 @@ fn schedule_partial_import_retry(td: &mut TrackedDownload) {
     });
 }
 
+/// Settle a download whose import was held for pending subtitles, once an
+/// operator released that hold, exactly as a successful pass that imported
+/// nothing new would settle it: imported only when import verification proves
+/// the download complete, and otherwise back to `ImportPending` behind the
+/// ordinary retry backoff, with nothing cleaned up. Returns whether the
+/// download is now imported; the caller persists and finalizes that state.
+pub(crate) async fn settle_released_import_hold(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+) -> bool {
+    let snapshot = td.clone();
+    match verify_import_inner_with_release_evidence(
+        app,
+        &snapshot,
+        0,
+        snapshot.completed_source.as_ref(),
+        None,
+    )
+    .await
+    {
+        Ok(true) => {
+            td.clear_no_video_import_retry();
+            td.clear_import_execution_retry();
+            td.state = TrackedDownloadState::Imported;
+            td.status = TrackedDownloadStatus::Ok;
+            td.status_messages.clear();
+            true
+        }
+        Ok(false) => {
+            schedule_partial_import_retry(td);
+            false
+        }
+        Err(error) => {
+            tracing::warn!(tracked_id = %td.id, error = %error, "import verification evidence is unavailable");
+            schedule_import_verification_retry(td);
+            false
+        }
+    }
+}
+
 #[cfg(test)]
 pub(super) async fn apply_import_result(
     app: &AppUseCase,

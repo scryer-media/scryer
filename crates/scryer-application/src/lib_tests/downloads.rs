@@ -17894,6 +17894,73 @@ mod held_sources {
             PathBuf::from(&self.fixture.completed.dest_dir)
                 .join("Held Source Movie.2026.1080p.WEB-DL.x264-GRP.mkv")
         }
+
+        fn source(&self) -> ClientJobLocator {
+            ClientJobLocator::new(
+                Some(&self.fixture.completed.client_id),
+                &self.fixture.completed.client_type,
+                &self.fixture.completed.download_client_item_id,
+            )
+        }
+
+        async fn offer(&self, actor: &User) -> Option<crate::HeldSourcesReleaseOffer> {
+            self.fixture
+                .app
+                .held_sources_release_for_download(actor, &self.source())
+                .await
+                .unwrap()
+        }
+
+        async fn import_holds(&self, import_id: &str) -> bool {
+            let record = self
+                .fixture
+                .import_repo
+                .get_import_by_id(import_id)
+                .await
+                .unwrap()
+                .expect("import record");
+            serde_json::from_str::<serde_json::Value>(&record.payload_json).unwrap()["archive_processing_pending"]
+                == true
+        }
+
+        /// Another completed import of the same download, for `title_id`,
+        /// that also holds the download's sources.
+        async fn push_co_held_import(&self, id: &str, title_id: &str, reason: Option<&str>) {
+            let mut payload = serde_json::json!({ "archive_processing_pending": true });
+            if let Some(reason) = reason {
+                payload[crate::ARCHIVE_HOLD_REASON_PAYLOAD_KEY] = reason.into();
+            }
+            self.push_record(import_record(
+                id,
+                &self.fixture.completed,
+                ImportType::ManualImport,
+                ImportStatus::Completed,
+                payload,
+                Some(serde_json::json!({
+                    "decision": "imported",
+                    "title_id": title_id,
+                    "error_message": PENDING_WARNING,
+                })),
+            ))
+            .await;
+        }
+
+        async fn add_title(&self, name: &str, facet: MediaFacet) -> scryer_domain::Title {
+            self.fixture
+                .app
+                .add_title(
+                    &self.fixture.user,
+                    NewTitle {
+                        name: name.to_string(),
+                        facet,
+                        monitored: true,
+                        year: Some(2026),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("create synthetic title")
+        }
     }
 
     fn import_record(
@@ -18082,10 +18149,16 @@ mod held_sources {
             .unwrap()
             .expect("the held import is offered for release");
         assert_eq!(offer.import_id, held.import_id);
+        assert_eq!(offer.import_ids, vec![held.import_id.clone()]);
+        assert_eq!(offer.title_names, vec![held.fixture.title.name.clone()]);
+        // A hold recorded before reasons existed is reported as unknown.
+        assert_eq!(offer.reason, crate::HeldSourcesReason::Unknown);
 
         let released = release(&held, &held.fixture.user).await.unwrap();
 
         assert_eq!(released.import_id, held.import_id);
+        assert_eq!(released.released_import_ids, vec![held.import_id.clone()]);
+        assert_eq!(released.settlement, crate::HeldSourcesSettlement::Untracked);
         assert!(!held.holds_sources().await);
         let record = held.record().await;
         assert_eq!(record.status, ImportStatus::Completed);
@@ -18110,6 +18183,202 @@ mod held_sources {
         assert!(matches!(error, AppError::Validation(_)), "{error:?}");
     }
 
+    #[tokio::test]
+    async fn offer_reports_the_most_severe_hold_reason_of_the_download() {
+        let held = held_import().await;
+        let other_title = held
+            .add_title("Held Source Companion", MediaFacet::Movie)
+            .await;
+        held.push_co_held_import(
+            "held-import-subtitles",
+            &held.fixture.title.id,
+            Some("subtitles_pending"),
+        )
+        .await;
+        let offer = held.offer(&held.fixture.user).await.expect("offered");
+        // The original import carries no reason, which is reported as unknown
+        // and outranks pending subtitles.
+        assert_eq!(offer.reason, crate::HeldSourcesReason::Unknown);
+
+        held.fixture
+            .import_repo
+            .record_archive_hold_reason(&held.import_id, "subtitles_pending")
+            .await
+            .unwrap();
+        assert_eq!(
+            held.offer(&held.fixture.user)
+                .await
+                .expect("offered")
+                .reason,
+            crate::HeldSourcesReason::SubtitlesPending
+        );
+
+        held.push_co_held_import(
+            "held-import-archives",
+            &other_title.id,
+            Some("archive_extraction_failed"),
+        )
+        .await;
+        let offer = held.offer(&held.fixture.user).await.expect("offered");
+        assert_eq!(
+            offer.reason,
+            crate::HeldSourcesReason::ArchiveExtractionFailed
+        );
+        assert_eq!(offer.import_ids.len(), 3);
+        let mut names = vec![held.fixture.title.name.clone(), other_title.name.clone()];
+        names.sort();
+        assert_eq!(offer.title_names, names);
+    }
+
+    #[tokio::test]
+    async fn release_is_refused_when_a_co_held_import_belongs_to_a_title_the_actor_may_not_resolve()
+    {
+        let held = held_import().await;
+        let other = held
+            .add_title("Held Source Serial", MediaFacet::Series)
+            .await;
+        assert_ne!(other.library_id, held.fixture.title.library_id);
+        held.push_co_held_import(
+            "held-import-other-library",
+            &other.id,
+            Some("subtitles_pending"),
+        )
+        .await;
+        let mut actor = view_only_actor(&held.fixture.title.library_id);
+        actor.authorization.libraries.insert(
+            held.fixture.title.library_id.clone(),
+            scryer_domain::LibraryPermissionMask::from_permissions([
+                scryer_domain::LibraryPermission::View,
+                scryer_domain::LibraryPermission::ResolveImports,
+            ]),
+        );
+        actor.authorization.libraries.insert(
+            other.library_id.clone(),
+            scryer_domain::LibraryPermissionMask::from_permissions([
+                scryer_domain::LibraryPermission::View,
+            ]),
+        );
+
+        let error = release(&held, &actor)
+            .await
+            .expect_err("every released title must be resolvable by the actor");
+
+        assert!(matches!(error, AppError::Unauthorized(_)), "{error:?}");
+        assert!(held.import_holds(&held.import_id).await);
+        assert!(held.import_holds("held-import-other-library").await);
+        assert!(held.offer(&actor).await.is_none());
+        // The same release goes through for an actor allowed on both.
+        let released = release(&held, &held.fixture.user).await.unwrap();
+        assert_eq!(released.released_import_ids.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn release_of_several_titles_in_one_library_releases_every_hold_together() {
+        let held = held_import().await;
+        let other = held
+            .add_title("Held Source Sequel", MediaFacet::Movie)
+            .await;
+        assert_eq!(other.library_id, held.fixture.title.library_id);
+        held.push_co_held_import("held-import-sequel", &other.id, Some("subtitles_pending"))
+            .await;
+
+        let released = release(&held, &held.fixture.user).await.unwrap();
+
+        let mut ids = released.released_import_ids.clone();
+        ids.sort();
+        assert_eq!(
+            ids,
+            vec![held.import_id.clone(), "held-import-sequel".to_string()]
+        );
+        assert!(!held.import_holds(&held.import_id).await);
+        assert!(!held.import_holds("held-import-sequel").await);
+        assert!(held.offer(&held.fixture.user).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn release_that_fails_before_changing_anything_keeps_every_hold_and_can_be_retried() {
+        let held = held_import().await;
+        held.push_co_held_import(
+            "held-import-second",
+            &held.fixture.title.id,
+            Some("subtitles_pending"),
+        )
+        .await;
+        held.fixture
+            .import_repo
+            .release_holds_fail
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        let error = release(&held, &held.fixture.user)
+            .await
+            .expect_err("the hold release failed");
+
+        assert!(matches!(error, AppError::Repository(_)), "{error:?}");
+        assert!(held.import_holds(&held.import_id).await);
+        assert!(held.import_holds("held-import-second").await);
+        assert!(
+            held.record()
+                .await
+                .result_json
+                .unwrap()
+                .contains(PENDING_WARNING),
+            "nothing about the import changed"
+        );
+        assert!(held.video_source().exists());
+
+        let released = release(&held, &held.fixture.user).await.unwrap();
+        assert_eq!(released.released_import_ids.len(), 2);
+        assert!(!held.import_holds(&held.import_id).await);
+    }
+
+    #[tokio::test]
+    async fn interrupted_release_resumes_from_the_pending_warning() {
+        let held = held_import().await;
+        // The holds were released, but the release stopped before the
+        // pending warning was cleared.
+        held.fixture
+            .import_repo
+            .release_archive_holds(&held.source(), None, &[held.import_id.clone()])
+            .await
+            .unwrap();
+        assert!(!held.holds_sources().await);
+        assert!(
+            held.offer(&held.fixture.user).await.is_some(),
+            "still offered"
+        );
+
+        let released = release(&held, &held.fixture.user).await.unwrap();
+
+        assert_eq!(released.released_import_ids, vec![held.import_id.clone()]);
+        assert!(
+            !held
+                .record()
+                .await
+                .result_json
+                .unwrap()
+                .contains(PENDING_WARNING)
+        );
+        assert!(held.offer(&held.fixture.user).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_import_that_never_held_sources_is_not_offered_for_its_warning_alone() {
+        let held = held_import().await;
+        held.fixture
+            .import_repo
+            .set_archive_processing_pending(&held.import_id, false)
+            .await
+            .unwrap();
+        assert!(
+            held.record()
+                .await
+                .result_json
+                .unwrap()
+                .contains(PENDING_WARNING)
+        );
+        assert!(held.offer(&held.fixture.user).await.is_none());
+    }
+
     #[cfg(feature = "runtime-archives")]
     mod workspaces {
         use super::*;
@@ -18126,7 +18395,7 @@ mod held_sources {
 
             let released = release(&held, &held.fixture.user).await.unwrap();
 
-            assert!(released.workspace_removed);
+            assert!(released.workspace_removed());
             assert!(!workspace.exists());
             assert!(
                 other.join("out").is_dir(),
@@ -18153,7 +18422,7 @@ mod held_sources {
 
             let released = release(&held, &held.fixture.user).await.unwrap();
 
-            assert!(!released.workspace_removed);
+            assert!(!released.workspace_removed());
             assert!(workspace.join("out/linked.srt").symlink_metadata().is_ok());
             assert!(outside.path().join("target.srt").exists());
             assert!(!held.holds_sources().await, "the hold is still released");
@@ -18180,13 +18449,156 @@ mod held_sources {
 
             let released = release(&held, &held.fixture.user).await.unwrap();
 
-            assert!(!released.workspace_removed);
+            assert!(!released.workspace_removed());
+            assert_eq!(
+                released.preserved_workspaces,
+                vec![crate::HeldWorkspacePreserved::InUse]
+            );
             assert!(workspace.join("out").is_dir());
             assert!(!held.holds_sources().await);
         }
 
         #[tokio::test]
-        async fn release_leaves_a_workspace_it_cannot_identify_for_the_sweeper() {
+        async fn release_keeps_a_workspace_an_open_manual_selection_was_built_from() {
+            let held = held_import().await;
+            let workspace =
+                create_test_archive_workspace_owned_by(&held.fixture.title_folder, &held.import_id);
+            // Selected for a manual import that has not been queued yet.
+            held.fixture
+                .import_repo
+                .open_selection_roots
+                .lock()
+                .await
+                .push(workspace.join("out").to_string_lossy().into_owned());
+
+            let released = release(&held, &held.fixture.user).await.unwrap();
+
+            assert!(!released.workspace_removed());
+            assert_eq!(
+                released.preserved_workspaces,
+                vec![crate::HeldWorkspacePreserved::InUse]
+            );
+            assert!(workspace.join("out").is_dir());
+            assert!(!held.holds_sources().await);
+        }
+
+        fn video_artifact(
+            held: &HeldImport,
+            import_id: &str,
+            file_name: &str,
+        ) -> crate::ImportArtifact {
+            crate::ImportArtifact {
+                id: Id::new().0,
+                source_client_id: Some(held.fixture.completed.client_id.clone()),
+                source_system: held.fixture.completed.client_type.clone(),
+                source_ref: held.fixture.completed.download_client_item_id.clone(),
+                import_id: Some(import_id.to_string()),
+                relative_path: None,
+                normalized_file_name: file_name.to_ascii_lowercase(),
+                media_kind: "movie".to_string(),
+                title_id: Some(held.fixture.title.id.clone()),
+                episode_id: None,
+                season_number: None,
+                episode_number: None,
+                result: "imported".to_string(),
+                reason_code: None,
+                imported_media_file_id: None,
+                created_at: Utc::now(),
+            }
+        }
+
+        #[tokio::test]
+        async fn release_keeps_a_workspace_holding_a_video_that_was_never_imported() {
+            let held = held_import().await;
+            let workspace =
+                create_test_archive_workspace_owned_by(&held.fixture.title_folder, &held.import_id);
+            std::fs::write(
+                workspace.join("out/Synthetic.Feature.mkv"),
+                b"imported video",
+            )
+            .unwrap();
+            std::fs::write(
+                workspace.join("out/Synthetic.Bonus.mkv"),
+                b"unimported video",
+            )
+            .unwrap();
+            let artifacts = Arc::new(RecordingImportArtifactRepo::default());
+            artifacts
+                .insert_artifact(video_artifact(
+                    &held,
+                    &held.import_id,
+                    "Synthetic.Feature.mkv",
+                ))
+                .await
+                .unwrap();
+            // Another import's success for the same name proves nothing here.
+            artifacts
+                .insert_artifact(video_artifact(
+                    &held,
+                    "another-import",
+                    "Synthetic.Bonus.mkv",
+                ))
+                .await
+                .unwrap();
+            let app = held
+                .fixture
+                .app
+                .with_test_overrides(|services| services.with_import_artifacts(artifacts.clone()));
+
+            let released =
+                crate::release_held_import_sources(&app, &held.fixture.user, &held.import_id)
+                    .await
+                    .unwrap();
+
+            assert!(!released.workspace_removed());
+            assert_eq!(
+                released.preserved_workspaces,
+                vec![crate::HeldWorkspacePreserved::HoldsUnimportedVideo]
+            );
+            assert!(workspace.join("out/Synthetic.Feature.mkv").exists());
+            assert!(workspace.join("out/Synthetic.Bonus.mkv").exists());
+            assert!(!held.holds_sources().await, "the hold is still released");
+        }
+
+        #[tokio::test]
+        async fn release_removes_a_workspace_whose_every_video_was_imported() {
+            let held = held_import().await;
+            let workspace =
+                create_test_archive_workspace_owned_by(&held.fixture.title_folder, &held.import_id);
+            std::fs::write(
+                workspace.join("out/Synthetic.Feature.mkv"),
+                b"imported video",
+            )
+            .unwrap();
+            std::fs::write(workspace.join("out/Synthetic.Feature.srt"), b"subtitle").unwrap();
+            std::fs::write(held.fixture.title_folder.join("keep.mkv"), b"library video").unwrap();
+            let artifacts = Arc::new(RecordingImportArtifactRepo::default());
+            artifacts
+                .insert_artifact(video_artifact(
+                    &held,
+                    &held.import_id,
+                    "Synthetic.Feature.mkv",
+                ))
+                .await
+                .unwrap();
+            let app = held
+                .fixture
+                .app
+                .with_test_overrides(|services| services.with_import_artifacts(artifacts.clone()));
+
+            let released =
+                crate::release_held_import_sources(&app, &held.fixture.user, &held.import_id)
+                    .await
+                    .unwrap();
+
+            assert!(released.workspace_removed(), "{released:?}");
+            assert!(!workspace.exists());
+            assert!(held.fixture.title_folder.join("keep.mkv").exists());
+            assert!(held.video_source().exists());
+        }
+
+        #[tokio::test]
+        async fn release_preserves_a_workspace_it_cannot_identify() {
             let held = held_import().await;
             // Staged outside the title folder recorded for the import, so its
             // location cannot be established from durable state.
@@ -18196,7 +18608,7 @@ mod held_sources {
 
             let released = release(&held, &held.fixture.user).await.unwrap();
 
-            assert!(!released.workspace_removed);
+            assert!(!released.workspace_removed());
             assert!(workspace.join("out").is_dir());
             assert!(!held.holds_sources().await);
         }

@@ -583,12 +583,12 @@ impl DownloadMutations {
         })
     }
 
-    /// Release the sources a completed import is holding for pending subtitles.
+    /// Release the sources a completed import is holding.
     async fn release_held_import_sources(
         &self,
         ctx: &Context<'_>,
         #[graphql(
-            desc = "Completed import that is holding its sources. Clears the hold and pending warning, lets the download client's removal policy act on the download, and removes the import's extraction workspace when it can be identified."
+            desc = "Completed import that is holding its download's sources. Clears the holds of every import of that download together, settles the download through import verification so the download client's removal policy applies only once it is proven imported, and removes the released imports' extraction workspaces only when every video in them was imported and nothing else uses them; any other workspace is preserved."
         )]
         input: ReleaseHeldImportSourcesInput,
     ) -> GqlResult<HeldImportSourcesReleasedPayload> {
@@ -598,10 +598,7 @@ impl DownloadMutations {
             scryer_application::release_held_import_sources(&app, &actor, input.import_id.as_ref())
                 .await
                 .map_err(to_gql_error)?;
-        Ok(HeldImportSourcesReleasedPayload {
-            import_id: released.import_id.into(),
-            workspace_removed: released.workspace_removed,
-        })
+        Ok(HeldImportSourcesReleasedPayload::from(released))
     }
 
     /// Cancel a queued or copying import operation by its server-issued stream identity.

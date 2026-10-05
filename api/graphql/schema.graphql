@@ -5532,7 +5532,7 @@ type DownloadQueueItemPayload {
 	"""
 	passwordRetryImportId: ID
 	"""
-	Completed import holding this download's sources for pending subtitles, when the viewer may release them.
+	Held sources of this download, with every title and the reason they are held, when the viewer may release them.
 	"""
 	heldImportSources: HeldImportSourcesPayload
 	"""
@@ -7427,31 +7427,167 @@ type GeneralSettingsPayload {
 }
 
 """
-A completed import whose held sources the viewer may release.
+What the download client's removal policy does with the download after release.
 """
-type HeldImportSourcesPayload {
+enum HeldDownloadClientPolicyValue {
 	"""
-	Completed import record ID holding the sources.
+	The client removes the completed download.
 	"""
-	importId: ID!
+	REMOVES
 	"""
-	Whether the download client's removal policy removes the completed download after release.
+	The client removes the completed download once its seeding requirements are met.
 	"""
-	clientRemovesDownload: Boolean!
+	REMOVES_AFTER_SEEDING
+	"""
+	The policy keeps the download, or no configured client can act on it.
+	"""
+	KEEPS
+	"""
+	The download's title could not be resolved, so the policy is unknown.
+	"""
+	UNKNOWN
 }
 
 """
-Outcome of releasing a completed import's held sources.
+Held sources of a download the viewer may release.
 """
-type HeldImportSourcesReleasedPayload {
+type HeldImportSourcesPayload {
 	"""
-	Import record ID whose sources were released.
+	Completed import record ID the release is requested through.
 	"""
 	importId: ID!
 	"""
-	Whether the import's extraction workspace was identified and removed; false leaves it for the stale-workspace sweeper.
+	Every import of the download the release covers.
+	"""
+	importIds: [ID!]!
+	"""
+	Distinct titles those imports belong to.
+	"""
+	titleNames: [String!]!
+	"""
+	The most severe reason the sources are held.
+	"""
+	reason: HeldImportSourcesReasonValue!
+	"""
+	What the download client's removal policy does with the download after release.
+	"""
+	clientPolicy: HeldDownloadClientPolicyValue!
+}
+
+"""
+Why a completed import kept its download's sources.
+"""
+enum HeldImportSourcesReasonValue {
+	"""
+	Subtitle discovery or delivery is still pending.
+	"""
+	SUBTITLES_PENDING
+	"""
+	The import finished, but removing its replaced sources did not.
+	"""
+	SOURCE_CLEANUP_INCOMPLETE
+	"""
+	The hold has no recorded reason.
+	"""
+	UNKNOWN
+	"""
+	Archive extraction failed; the unextracted archives were never imported.
+	"""
+	ARCHIVE_EXTRACTION_FAILED
+}
+
+"""
+Outcome of releasing a download's held sources.
+"""
+type HeldImportSourcesReleasedPayload {
+	"""
+	Import record ID the release was requested through.
+	"""
+	importId: ID!
+	"""
+	Every import of the download whose hold was released.
+	"""
+	releasedImportIds: [ID!]!
+	"""
+	What the release did to the tracked download.
+	"""
+	settlement: HeldImportSourcesSettlementValue!
+	"""
+	The download client's removal policy that now applies.
+	"""
+	clientPolicy: HeldDownloadClientPolicyValue!
+	"""
+	Whether every identified extraction workspace was removed and none could have been missed.
 	"""
 	workspaceRemoved: Boolean!
+	"""
+	Number of extraction workspaces removed.
+	"""
+	workspacesRemoved: Int!
+	"""
+	Distinct reasons extraction workspaces were preserved; preserved workspaces are never removed later by inference.
+	"""
+	preservedWorkspaceReasons: [HeldWorkspacePreservedValue!]!
+	"""
+	Whether a released import's workspaces could not be searched for in full; any not found are preserved.
+	"""
+	workspaceLookupIncomplete: Boolean!
+}
+
+"""
+What releasing held sources did to the tracked download.
+"""
+enum HeldImportSourcesSettlementValue {
+	"""
+	Verification proved the download complete; it is imported and the client's policy applies.
+	"""
+	IMPORTED
+	"""
+	Verification did not prove the download complete; it returned to import and nothing was cleaned up.
+	"""
+	AWAITING_IMPORT
+	"""
+	The download was not blocked on the hold; its own workflow decides.
+	"""
+	UNCHANGED
+	"""
+	The download is no longer tracked; it is settled when next observed.
+	"""
+	UNTRACKED
+	"""
+	The holds were released but the tracked download could not be reached; releasing again resumes.
+	"""
+	NOT_SETTLED
+}
+
+"""
+Why a released import's extraction workspace was preserved.
+"""
+enum HeldWorkspacePreservedValue {
+	"""
+	The workspace's ownership marker could not be authenticated.
+	"""
+	NOT_OWNED
+	"""
+	It contains a symlink, special file, unreadable entry, or too many entries.
+	"""
+	UNSAFE
+	"""
+	A video in it was never imported by the released imports.
+	"""
+	HOLDS_UNIMPORTED_VIDEO
+	"""
+	An unfinished import or open manual-import selection may still need it.
+	"""
+	IN_USE
+	"""
+	What was imported from it could not be established.
+	"""
+	UNVERIFIED
+	"""
+	Removal was attempted and the workspace remains.
+	"""
+	REMOVAL_FAILED
 }
 
 """
@@ -17830,11 +17966,11 @@ type MutationRoot {
 		input: RetryImportInput!
 	): ImportResultPayload!
 	"""
-	Release the sources a completed import is holding for pending subtitles.
+	Release the sources a completed import is holding.
 	"""
 	releaseHeldImportSources(
 		"""
-		Completed import that is holding its sources. Clears the hold and pending warning, lets the download client's removal policy act on the download, and removes the import's extraction workspace when it can be identified.
+		Completed import that is holding its download's sources. Clears the holds of every import of that download together, settles the download through import verification so the download client's removal policy applies only once it is proven imported, and removes the released imports' extraction workspaces only when every video in them was imported and nothing else uses them; any other workspace is preserved.
 		"""
 		input: ReleaseHeldImportSourcesInput!
 	): HeldImportSourcesReleasedPayload!
@@ -24864,7 +25000,7 @@ type ReleaseDecisionsPagePayload {
 }
 
 """
-Requests releasing the sources a completed import is holding for pending subtitles.
+Requests releasing the sources a completed import is holding.
 """
 input ReleaseHeldImportSourcesInput {
 	"""

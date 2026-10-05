@@ -1216,3 +1216,111 @@ async fn apply_result_clears_execution_retry_when_a_later_attempt_is_rejected() 
     assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
     assert!(td.import_execution_retry.is_none());
 }
+
+mod released_hold {
+    use super::*;
+    use crate::tracked_downloads::{
+        HeldImportReleaseSettlement, TrackedDownloadCommand, TrackedDownloadService,
+    };
+
+    const PACK_RELEASE: &str = "Quiet.Harbor.Signal.S03.Complete.1080p.WEB-DL.x264-SYNTH";
+
+    fn season_pack_app(imported_episodes: &[&str]) -> AppUseCase {
+        let title = build_title("title-1", "Quiet Harbor Signal", MediaFacet::Series);
+        let collection = build_collection("season-3", "title-1", "3");
+        let episodes = ["1", "2", "3"]
+            .iter()
+            .map(|number| {
+                build_episode(
+                    &format!("ep-30{number}"),
+                    "title-1",
+                    "season-3",
+                    "3",
+                    number,
+                    None,
+                )
+            })
+            .collect();
+        let artifacts = imported_episodes
+            .iter()
+            .map(|number| {
+                build_artifact(
+                    "dl-1",
+                    &format!("ep-30{number}"),
+                    &format!("Quiet.Harbor.Signal.S03E0{number}.mkv"),
+                )
+            })
+            .collect();
+        build_app(vec![title], vec![collection], episodes, artifacts)
+    }
+
+    fn held_download() -> TrackedDownload {
+        let mut td = build_tracked_download("title-1", "series", PACK_RELEASE);
+        td.state = TrackedDownloadState::ImportBlocked;
+        td.status = TrackedDownloadStatus::Warning;
+        td.status_messages = vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING.into()];
+        td
+    }
+
+    async fn release(
+        app: &AppUseCase,
+        td: TrackedDownload,
+    ) -> (HeldImportReleaseSettlement, TrackedDownload) {
+        let actor = scryer_domain::User::new_admin("synthetic-operator");
+        let mut tracker = TrackedDownloadService::new();
+        let id = td.id.clone();
+        let download_id = tracker.insert_for_tests(td);
+        let (reply, response) = tokio::sync::oneshot::channel();
+        crate::integration::workflow::run_tracked_download_command_for_tests(
+            app,
+            &actor,
+            &mut tracker,
+            TrackedDownloadCommand::ReleaseHeldImport {
+                id,
+                canonical_download_id: Some(download_id),
+                reply,
+            },
+        )
+        .await;
+        let settlement = response.await.expect("reply").expect("release settles");
+        let td = tracker
+            .get_by_download_id(download_id)
+            .expect("tracked download stays cached")
+            .clone();
+        (settlement, td)
+    }
+
+    #[tokio::test]
+    async fn releasing_a_partial_pack_returns_it_to_import_instead_of_imported() {
+        let app = season_pack_app(&["1", "2"]);
+
+        let (settlement, td) = release(&app, held_download()).await;
+
+        assert_eq!(settlement, HeldImportReleaseSettlement::AwaitingImport);
+        assert_eq!(td.state, TrackedDownloadState::ImportPending);
+        assert!(!td.state.counts_as_imported());
+    }
+
+    #[tokio::test]
+    async fn releasing_a_complete_pack_settles_it_as_imported() {
+        let app = season_pack_app(&["1", "2", "3"]);
+
+        let (settlement, td) = release(&app, held_download()).await;
+
+        assert_eq!(settlement, HeldImportReleaseSettlement::Imported);
+        assert!(td.state.counts_as_imported(), "{:?}", td.state);
+    }
+
+    #[tokio::test]
+    async fn releasing_a_download_not_blocked_on_the_hold_leaves_it_alone() {
+        let app = season_pack_app(&["1", "2", "3"]);
+        let mut td = held_download();
+        td.state = TrackedDownloadState::ImportPending;
+        td.status_messages.clear();
+
+        let (settlement, after) = release(&app, td).await;
+
+        assert_eq!(settlement, HeldImportReleaseSettlement::Unchanged);
+        assert_eq!(after.state, TrackedDownloadState::ImportPending);
+    }
+}

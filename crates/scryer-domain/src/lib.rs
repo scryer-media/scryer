@@ -4600,6 +4600,10 @@ impl DownloadQueueCommandAction {
 pub struct DownloadQueueItemCommandIssuedEventData {
     pub item_id: String,
     pub action: DownloadQueueCommandAction,
+    /// What the command did, for commands whose outcome is worth recording.
+    /// Holds identifiers and outcomes only, never names or paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

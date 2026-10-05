@@ -2009,6 +2009,20 @@ pub(crate) async fn assign_tracked_download_title_command(
     publish_runtime_tracked_download_and_activity_item(app, tracker, Some(activity_item)).await;
     Ok(())
 }
+
+/// Run one tracked-download command against `tracker` with no work in flight.
+#[cfg(test)]
+pub(crate) async fn run_tracked_download_command_for_tests(
+    app: &AppUseCase,
+    actor: &User,
+    tracker: &mut crate::tracked_downloads::TrackedDownloadService,
+    command: crate::tracked_downloads::TrackedDownloadCommand,
+) {
+    let mut in_flight = HashSet::new();
+    let (work_tx, _work_rx) = tokio::sync::mpsc::unbounded_channel();
+    handle_tracked_download_command(app, actor, tracker, &mut in_flight, &work_tx, command).await;
+}
+
 async fn handle_tracked_download_command(
     app: &AppUseCase,
     actor: &User,
@@ -2226,6 +2240,76 @@ async fn handle_tracked_download_command(
                     .await;
             }
             let _ = reply.send(result);
+        }
+        TrackedDownloadCommand::ReleaseHeldImport {
+            id,
+            canonical_download_id,
+            reply,
+        } => {
+            use crate::tracked_downloads::HeldImportReleaseSettlement;
+            let requested_id = id;
+            let (id, target) = resolve_tracked_command_target_for_download(
+                tracker,
+                canonical_download_id.as_ref(),
+                &requested_id,
+            );
+            if target.is_some() && tracked_work_in_flight.contains(&id) {
+                let _ = reply.send(Err(AppError::Validation(format!(
+                    "tracked download {requested_id} is busy processing"
+                ))));
+                return;
+            }
+            let Some(download_id) =
+                target.filter(|download_id| tracker.get_by_download_id(*download_id).is_some())
+            else {
+                let _ = reply.send(Err(AppError::NotFound(format!(
+                    "tracked download {requested_id}"
+                ))));
+                return;
+            };
+            // Only a download the hold itself blocked is settled here. Any
+            // other state belongs to the workflow that put it there.
+            let blocked_on_hold = tracker.get_by_download_id(download_id).is_some_and(|td| {
+                td.state == TrackedDownloadState::ImportBlocked
+                    && td.status_messages.iter().any(|message| {
+                        message == crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING
+                    })
+            });
+            if !blocked_on_hold {
+                let _ = reply.send(Ok(HeldImportReleaseSettlement::Unchanged));
+                return;
+            }
+            let Some(td) = tracker.get_mut_by_download_id(download_id) else {
+                let _ = reply.send(Err(AppError::NotFound(format!(
+                    "tracked download {requested_id}"
+                ))));
+                return;
+            };
+            let imported =
+                crate::completed_download_handler::settle_released_import_hold(app, td).await;
+            let activity_item = Some(tracked_download_activity_queue_item(td));
+            if imported {
+                tracker
+                    .persist_terminal_state_by_download_id(
+                        app,
+                        download_id,
+                        TrackedDownloadState::Imported,
+                    )
+                    .await;
+                finalize_tracked_terminal_state_for_download(
+                    app,
+                    tracker,
+                    download_id,
+                    TrackedDownloadState::Imported,
+                )
+                .await;
+            }
+            publish_runtime_tracked_download_and_activity_item(app, tracker, activity_item).await;
+            let _ = reply.send(Ok(if imported {
+                HeldImportReleaseSettlement::Imported
+            } else {
+                HeldImportReleaseSettlement::AwaitingImport
+            }));
         }
         TrackedDownloadCommand::MarkImportedIfAwaitingImport {
             source_identity: _,

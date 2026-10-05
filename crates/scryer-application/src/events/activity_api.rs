@@ -957,6 +957,19 @@ impl AppUseCase {
         item_id: impl Into<String>,
         action: DownloadQueueCommandAction,
     ) {
+        self.emit_download_queue_item_command_issued_event_with_detail(
+            actor, item_id, action, None,
+        )
+        .await;
+    }
+
+    pub(crate) async fn emit_download_queue_item_command_issued_event_with_detail(
+        &self,
+        actor: impl Into<DomainEventActor>,
+        item_id: impl Into<String>,
+        action: DownloadQueueCommandAction,
+        detail: Option<String>,
+    ) {
         let actor = actor.into();
         let item_id = item_id.into();
         if let Err(error) = self
@@ -967,6 +980,7 @@ impl AppUseCase {
                     DownloadQueueItemCommandIssuedEventData {
                         item_id: item_id.clone(),
                         action,
+                        detail,
                     },
                 ),
             ))

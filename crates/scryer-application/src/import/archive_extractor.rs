@@ -1917,30 +1917,36 @@ impl ArchiveWorkspaceInventory {
     }
 }
 
-fn archive_workspace_inventory(root: &Path) -> ArchiveWorkspaceInventory {
+/// The regular files of a workspace worth knowing about before letting it go.
+struct ArchiveWorkspaceScan {
+    has_subtitles: bool,
+    /// Lowercased file names of every video in the workspace.
+    video_names: Vec<String>,
+}
+
+/// Walk a workspace within the output bounds. `None` when it holds a symlink,
+/// a special file, an unreadable entry, or exceeds the depth or entry bound.
+fn scan_archive_workspace(root: &Path) -> Option<ArchiveWorkspaceScan> {
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     let mut entries = 0usize;
-    let mut has_subtitles = false;
+    let mut scan = ArchiveWorkspaceScan {
+        has_subtitles: false,
+        video_names: Vec::new(),
+    };
     while let Some((parent, depth)) = stack.pop() {
         if depth > 64 || entries > MAX_PLUGIN_OUTPUT_ENTRIES {
-            return ArchiveWorkspaceInventory::Unsafe;
+            return None;
         }
-        let Ok(children) = std::fs::read_dir(parent) else {
-            return ArchiveWorkspaceInventory::Unsafe;
-        };
+        let children = std::fs::read_dir(parent).ok()?;
         for child in children {
-            let Ok(child) = child else {
-                return ArchiveWorkspaceInventory::Unsafe;
-            };
+            let child = child.ok()?;
             entries += 1;
             if entries > MAX_PLUGIN_OUTPUT_ENTRIES {
-                return ArchiveWorkspaceInventory::Unsafe;
+                return None;
             }
-            let Ok(kind) = child.file_type() else {
-                return ArchiveWorkspaceInventory::Unsafe;
-            };
+            let kind = child.file_type().ok()?;
             if kind.is_symlink() || (!kind.is_dir() && !kind.is_file()) {
-                return ArchiveWorkspaceInventory::Unsafe;
+                return None;
             }
             let path = child.path();
             if kind.is_dir() {
@@ -1955,14 +1961,21 @@ fn archive_workspace_inventory(root: &Path) -> ArchiveWorkspaceInventory {
                     )
                 })
             {
-                has_subtitles = true;
+                scan.has_subtitles = true;
+            } else if scryer_domain::is_video_file(&path) {
+                scan.video_names
+                    .push(child.file_name().to_string_lossy().to_ascii_lowercase());
             }
         }
     }
-    if has_subtitles {
-        ArchiveWorkspaceInventory::HasSubtitles
-    } else {
-        ArchiveWorkspaceInventory::Clean
+    Some(scan)
+}
+
+fn archive_workspace_inventory(root: &Path) -> ArchiveWorkspaceInventory {
+    match scan_archive_workspace(root) {
+        None => ArchiveWorkspaceInventory::Unsafe,
+        Some(scan) if scan.has_subtitles => ArchiveWorkspaceInventory::HasSubtitles,
+        Some(_) => ArchiveWorkspaceInventory::Clean,
     }
 }
 
@@ -1985,18 +1998,37 @@ pub(crate) async fn abandon_extracted_dir(dir: &Path) {
 
 /// Owned workspaces directly under `parent` whose authenticated owner is
 /// `owner_id`. Ownership is proven by the keyed marker, never by name or age,
-/// so a match identifies the workspace with certainty. The scan is bounded.
-pub(crate) fn owned_archive_workspaces_for(parent: &Path, owner_id: &str) -> Vec<PathBuf> {
+/// so a match identifies the workspace with certainty. The scan is bounded;
+/// `complete` is false when the folder could not be read in full, so a
+/// workspace of that owner may exist that was not found.
+pub(crate) fn owned_archive_workspaces_for(
+    parent: &Path,
+    owner_id: &str,
+) -> crate::import_workflow::OwnedWorkspaceLookup {
     const MAX_SCANNED_ENTRIES: usize = 4096;
-    let Ok(entries) = std::fs::read_dir(parent) else {
-        return Vec::new();
+    let mut lookup = crate::import_workflow::OwnedWorkspaceLookup {
+        workspaces: Vec::new(),
+        complete: true,
     };
-    entries
-        .take(MAX_SCANNED_ENTRIES)
-        .filter_map(Result::ok)
-        .map(|entry| entry.path())
-        .filter(|path| archive_workspace_owned_by(path, owner_id))
-        .collect()
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        lookup.complete = !parent.exists();
+        return lookup;
+    };
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_SCANNED_ENTRIES {
+            lookup.complete = false;
+            break;
+        }
+        let Ok(entry) = entry else {
+            lookup.complete = false;
+            continue;
+        };
+        let path = entry.path();
+        if archive_workspace_owned_by(&path, owner_id) {
+            lookup.workspaces.push(path);
+        }
+    }
+    lookup
 }
 
 /// Whether `root` is an owned workspace whose authenticated owner is `owner_id`.
@@ -2005,16 +2037,31 @@ fn archive_workspace_owned_by(root: &Path, owner_id: &str) -> bool {
 }
 
 /// Remove a held workspace an operator released, through the ordinary
-/// cleanup. A workspace with an unsafe inventory, such as a symlink, is
-/// preserved. Returns whether the workspace is gone.
-pub(crate) async fn remove_released_held_workspace(root: &Path) -> bool {
-    if archive_workspace_owner(root).is_none()
-        || archive_workspace_inventory(root) == ArchiveWorkspaceInventory::Unsafe
+/// cleanup. The workspace is preserved when it is not owned, its inventory is
+/// unsafe (such as a symlink), or it holds a video whose lowercased file name
+/// is not in `imported_video_names`.
+pub(crate) async fn remove_released_held_workspace(
+    root: &Path,
+    imported_video_names: &std::collections::HashSet<String>,
+) -> Result<(), crate::import_workflow::HeldWorkspacePreserved> {
+    use crate::import_workflow::HeldWorkspacePreserved;
+    if archive_workspace_owner(root).is_none() {
+        return Err(HeldWorkspacePreserved::NotOwned);
+    }
+    let scan = scan_archive_workspace(root).ok_or(HeldWorkspacePreserved::Unsafe)?;
+    if scan
+        .video_names
+        .iter()
+        .any(|name| !imported_video_names.contains(name))
     {
-        return false;
+        return Err(HeldWorkspacePreserved::HoldsUnimportedVideo);
     }
     cleanup_extracted_dir(root).await;
-    !root.exists()
+    if root.exists() {
+        Err(HeldWorkspacePreserved::RemovalFailed)
+    } else {
+        Ok(())
+    }
 }
 
 /// Clean up the extraction directory after import completes.

@@ -5,15 +5,67 @@ import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
 import { releaseHeldImportSourcesMutation } from "@/lib/graphql/mutations";
-import type { DownloadQueueItem } from "@/lib/types";
+import type {
+  DownloadQueueItem,
+  HeldDownloadClientPolicy,
+  HeldImportSourcesReason,
+  HeldImportSourcesReleased,
+  HeldWorkspacePreservedReason,
+} from "@/lib/types";
+
+type Translate = ReturnType<typeof useTranslate>;
+
+const REASON_KEYS: Record<HeldImportSourcesReason, string> = {
+  SUBTITLES_PENDING: "queue.releaseHeldSourcesReasonSubtitlesPending",
+  SOURCE_CLEANUP_INCOMPLETE: "queue.releaseHeldSourcesReasonSourceCleanupIncomplete",
+  UNKNOWN: "queue.releaseHeldSourcesReasonUnknown",
+  ARCHIVE_EXTRACTION_FAILED: "queue.releaseHeldSourcesReasonArchiveExtractionFailed",
+};
+
+const POLICY_KEYS: Record<HeldDownloadClientPolicy, string> = {
+  REMOVES: "queue.releaseHeldSourcesClientRemoves",
+  REMOVES_AFTER_SEEDING: "queue.releaseHeldSourcesClientRemovesAfterSeeding",
+  KEEPS: "queue.releaseHeldSourcesClientKeeps",
+  UNKNOWN: "queue.releaseHeldSourcesClientPolicyUnknown",
+};
+
+const PRESERVED_KEYS: Record<HeldWorkspacePreservedReason, string> = {
+  NOT_OWNED: "queue.releaseHeldSourcesPreservedNotOwned",
+  UNSAFE: "queue.releaseHeldSourcesPreservedUnsafe",
+  HOLDS_UNIMPORTED_VIDEO: "queue.releaseHeldSourcesPreservedHoldsUnimportedVideo",
+  IN_USE: "queue.releaseHeldSourcesPreservedInUse",
+  UNVERIFIED: "queue.releaseHeldSourcesPreservedUnverified",
+  REMOVAL_FAILED: "queue.releaseHeldSourcesPreservedRemovalFailed",
+};
+
+/** Holds whose release can remove content that was never imported. */
+const SEVERE_REASONS: ReadonlySet<HeldImportSourcesReason> = new Set(["ARCHIVE_EXTRACTION_FAILED", "UNKNOWN"]);
 
 export function canReleaseHeldSources(item: DownloadQueueItem): boolean {
   return Boolean(item.heldImportSources?.importId);
 }
 
+/** The toast for a release, telling the operator what was left in place and why. */
+export function heldSourcesReleaseMessage(t: Translate, released: HeldImportSourcesReleased): string {
+  const parts = [
+    released.settlement === "AWAITING_IMPORT"
+      ? t("queue.releaseHeldSourcesAwaitingImport")
+      : released.settlement === "NOT_SETTLED"
+        ? t("queue.releaseHeldSourcesNotSettled")
+        : t("queue.releaseHeldSourcesSuccess"),
+  ];
+  const reasons = released.preservedWorkspaceReasons.map((reason) => t(PRESERVED_KEYS[reason]));
+  if (released.workspaceLookupIncomplete) reasons.push(t("queue.releaseHeldSourcesPreservedLookupIncomplete"));
+  if (!released.workspaceRemoved && reasons.length > 0) {
+    parts.push(t("queue.releaseHeldSourcesWorkspacesPreserved", { reasons: reasons.join(", ") }));
+  }
+  return parts.join(" ");
+}
+
 /**
- * Asks before releasing the sources a completed import is holding, naming the
- * download and what its client's removal policy will then do with it.
+ * Asks before releasing the sources a download's completed imports are
+ * holding, naming the download, every title the release covers, why the
+ * sources are held and what the client's removal policy will then do.
  */
 export function useReleaseHeldSources(onReleased: (item: DownloadQueueItem) => Promise<void> | void) {
   const t = useTranslate();
@@ -26,6 +78,7 @@ export function useReleaseHeldSources(onReleased: (item: DownloadQueueItem) => P
   }, []);
   const held = target?.heldImportSources ?? null;
   const client = target ? target.clientName || target.clientType : "";
+  const severe = held ? SEVERE_REASONS.has(held.reason) : false;
 
   const dialog = (
     <ConfirmDialog
@@ -33,6 +86,7 @@ export function useReleaseHeldSources(onReleased: (item: DownloadQueueItem) => P
       title={t("queue.releaseHeldSourcesConfirmTitle")}
       description={t("queue.releaseHeldSourcesConfirmDescription", {
         download: target?.titleName || target?.downloadClientItemId || "",
+        client,
       })}
       confirmLabel={t("queue.releaseHeldSources")}
       cancelLabel={t("label.cancel")}
@@ -47,7 +101,14 @@ export function useReleaseHeldSources(onReleased: (item: DownloadQueueItem) => P
             setStatus(userFacingGraphQlErrorMessage(result.error, t("queue.releaseHeldSourcesFailed")), { level: "ERROR" });
             return;
           }
-          setStatus(t("queue.releaseHeldSourcesSuccess"));
+          const released = result.data?.releaseHeldImportSources as HeldImportSourcesReleased | undefined;
+          if (released) {
+            const preservedSomething = !released.workspaceRemoved && (released.preservedWorkspaceReasons.length > 0 || released.workspaceLookupIncomplete);
+            const warn = released.settlement === "NOT_SETTLED" || preservedSomething;
+            setStatus(heldSourcesReleaseMessage(t, released), warn ? { level: "WARNING" } : undefined);
+          } else {
+            setStatus(t("queue.releaseHeldSourcesSuccess"));
+          }
           setTarget(null);
           await onReleased(target);
         } catch (error: unknown) {
@@ -58,9 +119,15 @@ export function useReleaseHeldSources(onReleased: (item: DownloadQueueItem) => P
       }}
     >
       {held ? (
-        <p className="text-xs text-muted-foreground">
-          {t(held.clientRemovesDownload ? "queue.releaseHeldSourcesClientRemoves" : "queue.releaseHeldSourcesClientKeeps", { client })}
-        </p>
+        <div className="space-y-2 text-xs">
+          {held.titleNames.length > 0 ? (
+            <p className="text-muted-foreground">
+              {t("queue.releaseHeldSourcesTitles", { titles: held.titleNames.join(", ") })}
+            </p>
+          ) : null}
+          <p className={severe ? "font-medium text-destructive" : "text-muted-foreground"}>{t(REASON_KEYS[held.reason])}</p>
+          <p className="text-muted-foreground">{t(POLICY_KEYS[held.clientPolicy], { client })}</p>
+        </div>
       ) : null}
     </ConfirmDialog>
   );

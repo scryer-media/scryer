@@ -504,7 +504,10 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
     passwordRetryImportId
     heldImportSources {
       importId
-      clientRemovesDownload
+      importIds
+      titleNames
+      reason
+      clientPolicy
     }
     downloadClientItemId
     downloadId

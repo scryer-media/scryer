@@ -12,12 +12,21 @@ impl ArchiveWorkspaceReference {
     pub(crate) fn mark_video_imported(&mut self) {}
 }
 
-pub(crate) fn owned_archive_workspaces_for(_parent: &Path, _owner_id: &str) -> Vec<PathBuf> {
-    Vec::new()
+pub(crate) fn owned_archive_workspaces_for(
+    _parent: &Path,
+    _owner_id: &str,
+) -> crate::import_workflow::OwnedWorkspaceLookup {
+    crate::import_workflow::OwnedWorkspaceLookup {
+        workspaces: Vec::new(),
+        complete: true,
+    }
 }
 
-pub(crate) async fn remove_released_held_workspace(_root: &Path) -> bool {
-    false
+pub(crate) async fn remove_released_held_workspace(
+    _root: &Path,
+    _imported_video_names: &std::collections::HashSet<String>,
+) -> Result<(), crate::import_workflow::HeldWorkspacePreserved> {
+    Err(crate::import_workflow::HeldWorkspacePreserved::NotOwned)
 }
 
 #[derive(Debug, Clone)]

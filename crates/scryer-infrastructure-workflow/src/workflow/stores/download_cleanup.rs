@@ -189,11 +189,18 @@ impl DownloadSubmissionStore {
             Box::pin(async move {
                 super::import_store::lock_retry_download(tx, &id).await?;
                 let imports = SqlRuntime::fetch_all(SqlExec::Tx(tx),
-                    "SELECT payload_json FROM imports WHERE canonical_download_id = {}",
+                    "SELECT import_type, status, payload_json FROM imports WHERE canonical_download_id = {}",
                     &[SqlArg::Text(id.clone())],
                 ).await?;
                 for import in imports {
                     if super::import_store::archive_import_has_pending_sources(&import)? {
+                        return Ok(DownloadCleanupClaim::Deferred);
+                    }
+                    // A manual import queued against this download reads its
+                    // files; cleanup waits until that import settles.
+                    if import.text("import_type")? == "manual_import"
+                        && matches!(import.text("status")?.as_str(), "pending" | "running" | "processing")
+                    {
                         return Ok(DownloadCleanupClaim::Deferred);
                     }
                 }

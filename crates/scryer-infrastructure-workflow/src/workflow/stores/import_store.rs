@@ -88,8 +88,14 @@ impl ImportRepository for ImportStore {
                 let mut payload: serde_json::Value = serde_json::from_str(&row.text("payload_json")?)
                     .map_err(|_| AppError::Repository("import payload is unavailable".into()))?;
                 let object = payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
-                if pending { object.insert("archive_processing_pending".into(), serde_json::Value::Bool(true)); }
-                else { object.remove("archive_processing_pending"); }
+                if pending {
+                    object.insert("archive_processing_pending".into(), serde_json::Value::Bool(true));
+                    object.remove(scryer_application::ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY);
+                }
+                else {
+                    object.remove("archive_processing_pending");
+                    object.remove(scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY);
+                }
                 let encoded = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
                 let payload = json_arg_for_tx(tx, Some(&encoded))?;
                 SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE imports SET payload_json = {} WHERE id = {}",
@@ -97,6 +103,142 @@ impl ImportRepository for ImportStore {
                 Ok(())
             })
         }).await
+    }
+
+    async fn record_archive_hold_reason(&self, import_id: &str, reason: &str) -> AppResult<()> {
+        let import_id = import_id.to_string();
+        let reason = reason.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "archive_import_hold_reason", move |tx| {
+            let import_id = import_id.clone();
+            let reason = reason.clone();
+            Box::pin(async move {
+                let Some(row) = SqlRuntime::fetch_optional(
+                    SqlExec::Tx(tx),
+                    "SELECT payload_json FROM imports WHERE id = {}",
+                    &[SqlArg::Text(import_id.clone())],
+                )
+                .await?
+                else {
+                    return Ok(());
+                };
+                let mut payload: serde_json::Value =
+                    serde_json::from_str(&row.text("payload_json")?).map_err(|_| {
+                        AppError::Repository("import payload is unavailable".into())
+                    })?;
+                // Annotates an existing hold only; never creates one.
+                if payload["archive_processing_pending"].as_bool() != Some(true) {
+                    return Ok(());
+                }
+                let object = payload
+                    .as_object_mut()
+                    .ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
+                object.insert(
+                    scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY.into(),
+                    serde_json::Value::String(reason),
+                );
+                let encoded = serde_json::to_string(&payload)
+                    .map_err(|error| AppError::Repository(error.to_string()))?;
+                let payload = json_arg_for_tx(tx, Some(&encoded))?;
+                SqlRuntime::execute(
+                    SqlExec::Tx(tx),
+                    "UPDATE imports SET payload_json = {} WHERE id = {}",
+                    &[payload, SqlArg::Text(import_id)],
+                )
+                .await?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn release_archive_holds(
+        &self,
+        source: &ClientJobLocator,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        import_ids: &[String],
+    ) -> AppResult<()> {
+        let source = source.clone();
+        let canonical_download_id = canonical_download_id.map(ToString::to_string);
+        let import_ids = import_ids.to_vec();
+        SqlRuntime::run_in_transaction(&self.datastore, "release_archive_holds", move |tx| {
+            let source = source.clone();
+            let canonical_download_id = canonical_download_id.clone();
+            let import_ids = import_ids.clone();
+            Box::pin(async move {
+                // The same lock the cleanup claim takes, so the claim sees
+                // either every hold or none of them.
+                if let Some(download_id) = canonical_download_id.as_deref() {
+                    lock_retry_download(tx, download_id).await?;
+                }
+                let rows = SqlRuntime::fetch_all(SqlExec::Tx(tx),
+                    "SELECT id, status, payload_json FROM imports
+                     WHERE (canonical_download_id = {})
+                        OR (COALESCE(source_client_id, '') = {} AND source_system = {} AND source_ref = {})",
+                    &[SqlArg::Text(canonical_download_id.clone().unwrap_or_default()),
+                      SqlArg::Text(source.client_id_or_empty().to_string()),
+                      SqlArg::Text(source.client_type.clone()), SqlArg::Text(source.item_id.clone())]).await?;
+                let mut releasable = Vec::new();
+                for row in &rows {
+                    let id = row.text("id")?;
+                    let status = row.text("status")?;
+                    if matches!(status.as_str(), "pending" | "running" | "processing" | "queued") {
+                        return Err(AppError::Validation(
+                            "this download is still being imported; release its sources once that finishes".into()));
+                    }
+                    let listed = import_ids.contains(&id);
+                    let held = archive_import_has_pending_sources(row)?;
+                    if listed {
+                        if status != "completed" {
+                            return Err(AppError::Validation(
+                                "the import changed while its release was requested; refresh the queue".into()));
+                        }
+                        if held {
+                            releasable.push(id);
+                        }
+                    } else if held {
+                        return Err(AppError::Validation(
+                            "another import of this download holds its sources; refresh the queue".into()));
+                    }
+                }
+                if import_ids.iter().any(|id| !rows.iter().any(|row| row.text("id").is_ok_and(|row_id| &row_id == id))) {
+                    return Err(AppError::Validation(
+                        "the import changed while its release was requested; refresh the queue".into()));
+                }
+                for id in releasable {
+                    let row = rows.iter().find(|row| row.text("id").is_ok_and(|row_id| row_id == id))
+                        .ok_or_else(|| AppError::Repository("released import disappeared".into()))?;
+                    let mut payload: serde_json::Value = serde_json::from_str(&row.text("payload_json")?)
+                        .map_err(|_| AppError::Repository("import payload is unavailable".into()))?;
+                    let object = payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
+                    object.remove("archive_processing_pending");
+                    object.remove(scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY);
+                    object.insert(scryer_application::ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY.into(), serde_json::Value::Bool(true));
+                    let encoded = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
+                    let payload = json_arg_for_tx(tx, Some(&encoded))?;
+                    SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE imports SET payload_json = {} WHERE id = {}",
+                        &[payload, SqlArg::Text(id)]).await?;
+                }
+                Ok(())
+            })
+        }).await
+    }
+
+    async fn open_manual_selection_roots(&self) -> AppResult<Vec<String>> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT trusted_source_root, archive_workspace_root FROM manual_import_selections
+             WHERE consumed_at IS NULL",
+            &[],
+        )
+        .await?;
+        let mut roots = Vec::with_capacity(rows.len() * 2);
+        for row in rows {
+            roots.push(row.text("trusted_source_root")?);
+            if let Some(root) = row.opt_text("archive_workspace_root")? {
+                roots.push(root);
+            }
+        }
+        Ok(roots)
     }
 
     async fn archive_processing_pending_for_download(

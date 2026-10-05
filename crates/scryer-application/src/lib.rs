@@ -99,7 +99,8 @@ pub use ports::{
 };
 pub use ports::{
     DOWNLOAD_PASSWORD_AMBIGUOUS_REASON, DOWNLOAD_PASSWORD_REQUIRED_REASON,
-    DOWNLOAD_PASSWORD_RETRY_REASON, DownloadPasswordRetryClaim, DownloadPasswordRetryClaimOutcome,
+    DOWNLOAD_PASSWORD_RETRY_DISPATCH_TIMEOUT, DOWNLOAD_PASSWORD_RETRY_REASON,
+    DownloadPasswordRetryClaim, DownloadPasswordRetryClaimOutcome,
     DownloadPasswordRetryObservation,
 };
 pub use ports::{DownloadCleanupClaim, DownloadCleanupRecord, DownloadClientObservation};
@@ -370,7 +371,8 @@ pub use events::activity_api::{
 };
 pub(crate) use import_workflow::fail_active_manual_import_for_source;
 pub use import_workflow::{
-    HeldSourcesRelease, HeldSourcesReleaseOffer, ManualImportCandidateMapping,
+    HeldDownloadClientPolicy, HeldSourcesReason, HeldSourcesRelease, HeldSourcesReleaseOffer,
+    HeldSourcesSettlement, HeldWorkspacePreserved, ManualImportCandidateMapping,
     ManualImportExecutionResult, ManualImportFileMapping, ManualImportFileResult,
     ManualImportRequestPayload, begin_manual_import_selection, execute_manual_import,
     execute_queued_manual_import, import_completed_download, release_held_import_sources,
@@ -571,6 +573,7 @@ pub use acquisition::rss::{
 pub use escalation_backoff::DownloadClientStatus as DownloadClientBackoffStatus;
 pub use null_repositories::{NullMediaServerSignalRepository, NullMediaServerSignalSource};
 pub use ports::{
+    ARCHIVE_HOLD_REASON_PAYLOAD_KEY, ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY,
     AcquisitionScopeStateRepository, AcquisitionStateRepository, ArchiveExtractorClient,
     ArchiveExtractorPluginProvider, ArchiveExtractorSelection, BlocklistRepository,
     BuiltinDownloadClientConnectionTester, DatastoreInfo, DiscoveryContextTitle,

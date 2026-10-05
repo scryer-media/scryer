@@ -1252,6 +1252,15 @@ pub(super) struct TrackingImportRepo {
     pub(super) identities: ImportIdentities,
     pub(super) manual_import_selection: Arc<Mutex<Option<crate::ManualImportSelection>>>,
     pub(super) manual_import_selection_consume_calls: Arc<std::sync::atomic::AtomicUsize>,
+    /// Roots of further unconsumed manual-import selections.
+    pub(super) open_selection_roots: Arc<Mutex<Vec<String>>>,
+    /// Makes the next hold release fail before it changes anything.
+    pub(super) release_holds_fail: Arc<std::sync::atomic::AtomicBool>,
+}
+
+fn tracking_payload_has_hold(record: &ImportRecord) -> bool {
+    serde_json::from_str::<serde_json::Value>(&record.payload_json)
+        .is_ok_and(|payload| payload["archive_processing_pending"] == true)
 }
 
 #[async_trait]
@@ -1271,12 +1280,106 @@ impl ImportRepository for TrackingImportRepo {
         if let Some(object) = payload.as_object_mut() {
             if pending {
                 object.insert("archive_processing_pending".into(), true.into());
+                object.remove(crate::ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY);
             } else {
                 object.remove("archive_processing_pending");
+                object.remove(crate::ARCHIVE_HOLD_REASON_PAYLOAD_KEY);
             }
         }
         record.payload_json = payload.to_string();
         Ok(())
+    }
+
+    async fn record_archive_hold_reason(&self, import_id: &str, reason: &str) -> AppResult<()> {
+        let mut records = self.records.lock().await;
+        let Some(record) = records.iter_mut().find(|record| record.id == import_id) else {
+            return Ok(());
+        };
+        if !tracking_payload_has_hold(record) {
+            return Ok(());
+        }
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&record.payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        payload[crate::ARCHIVE_HOLD_REASON_PAYLOAD_KEY] = reason.into();
+        record.payload_json = payload.to_string();
+        Ok(())
+    }
+
+    async fn release_archive_holds(
+        &self,
+        source: &ClientJobLocator,
+        canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+        import_ids: &[String],
+    ) -> AppResult<()> {
+        if self
+            .release_holds_fail
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository("hold release failed".into()));
+        }
+        let canonical_ids = self.canonical_ids.lock().await;
+        let mut records = self.records.lock().await;
+        let of_download = |record: &ImportRecord| {
+            (canonical_download_id.is_some()
+                && canonical_ids.get(&record.id) == canonical_download_id)
+                || (record.source_client_id.as_deref().unwrap_or("") == source.client_id_or_empty()
+                    && record.source_system == source.client_type
+                    && record.source_ref == source.item_id)
+        };
+        for record in records.iter().filter(|record| of_download(record)) {
+            if record.status.is_active() {
+                return Err(AppError::Validation(
+                    "this download is still being imported".into(),
+                ));
+            }
+            let listed = import_ids.contains(&record.id);
+            if listed && record.status != ImportStatus::Completed {
+                return Err(AppError::Validation("the import changed".into()));
+            }
+            if !listed && tracking_payload_has_hold(record) {
+                return Err(AppError::Validation(
+                    "another import of this download holds its sources".into(),
+                ));
+            }
+        }
+        if import_ids.iter().any(|id| {
+            !records
+                .iter()
+                .any(|record| &record.id == id && of_download(record))
+        }) {
+            return Err(AppError::Validation("the import changed".into()));
+        }
+        for record in records
+            .iter_mut()
+            .filter(|record| import_ids.contains(&record.id))
+        {
+            if !tracking_payload_has_hold(record) {
+                continue;
+            }
+            let mut payload: serde_json::Value = serde_json::from_str(&record.payload_json)
+                .unwrap_or_else(|_| serde_json::json!({}));
+            if let Some(object) = payload.as_object_mut() {
+                object.remove("archive_processing_pending");
+                object.remove(crate::ARCHIVE_HOLD_REASON_PAYLOAD_KEY);
+                object.insert(crate::ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY.into(), true.into());
+            }
+            record.payload_json = payload.to_string();
+        }
+        Ok(())
+    }
+
+    async fn open_manual_selection_roots(&self) -> AppResult<Vec<String>> {
+        let mut roots = self.open_selection_roots.lock().await.clone();
+        if self
+            .manual_import_selection_consume_calls
+            .load(std::sync::atomic::Ordering::SeqCst)
+            == 0
+            && let Some(selection) = self.manual_import_selection.lock().await.as_ref()
+        {
+            roots.push(selection.trusted_source_root.clone());
+            roots.extend(selection.archive_workspace_root.clone());
+        }
+        Ok(roots)
     }
 
     async fn archive_processing_pending_for_download(

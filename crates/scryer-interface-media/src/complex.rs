@@ -1648,7 +1648,7 @@ impl DownloadQueueItemPayload {
         .map_err(to_gql_error)
     }
 
-    /// Completed import holding this download's sources for pending subtitles, when the viewer may release them.
+    /// Held sources of this download, with every title and the reason they are held, when the viewer may release them.
     async fn held_import_sources(
         &self,
         ctx: &Context<'_>,
@@ -1656,24 +1656,21 @@ impl DownloadQueueItemPayload {
         if !matches!(self.import_status, Some(ImportStatusValue::Completed)) {
             return Ok(None);
         }
+        let source = scryer_application::ClientJobLocator::new(
+            Some(self.client_id.as_str()),
+            &self.client_type,
+            &self.download_client_item_id,
+        );
+        if let Some(loaders) = loaders_from_ctx(ctx) {
+            let offer = loaders.held_sources_offer.load_one(source).await?;
+            return Ok(offer.map(Into::into));
+        }
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        app.held_sources_release_for_download(
-            &actor,
-            &scryer_application::ClientJobLocator::new(
-                Some(self.client_id.as_str()),
-                &self.client_type,
-                &self.download_client_item_id,
-            ),
-        )
-        .await
-        .map(|offer| {
-            offer.map(|offer| HeldImportSourcesPayload {
-                import_id: offer.import_id.into(),
-                client_removes_download: offer.client_removes_download,
-            })
-        })
-        .map_err(to_gql_error)
+        app.held_sources_release_for_download(&actor, &source)
+            .await
+            .map(|offer| offer.map(Into::into))
+            .map_err(to_gql_error)
     }
 
     /// Acquisition scope for this queue item, or its episode scope when no more specific scope is available.

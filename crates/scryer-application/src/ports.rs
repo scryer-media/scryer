@@ -5365,6 +5365,12 @@ pub const DOWNLOAD_PASSWORD_RETRY_REASON: &str = "download_password_retry";
 pub const DOWNLOAD_PASSWORD_REQUIRED_REASON: &str = "archive_password_required";
 pub const DOWNLOAD_PASSWORD_AMBIGUOUS_REASON: &str = "archive_password_or_corruption";
 
+/// The longest a password retry's request to the download client may run.
+/// A request still unanswered after this is treated as an unknown outcome,
+/// so a claim never outlives its dispatch by more than this bound.
+pub const DOWNLOAD_PASSWORD_RETRY_DISPATCH_TIMEOUT: std::time::Duration =
+    std::time::Duration::from_secs(5 * 60);
+
 /// Durable dispatch ownership contains no password values.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct DownloadPasswordRetryClaim {
@@ -6483,6 +6489,14 @@ mod import_retry_locator {
 
 pub const IMPORT_RETRY_TRACKED_STATE_REASON: &str = "import_retry_recovery";
 
+/// Import payload key recording why an import holds its sources, beside the
+/// `archive_processing_pending` flag. It only ever annotates a hold.
+pub const ARCHIVE_HOLD_REASON_PAYLOAD_KEY: &str = "archive_processing_hold_reason";
+
+/// Import payload key set when an operator's release cleared the hold, so an
+/// interrupted release can be told apart from an import that never held.
+pub const ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY: &str = "archive_processing_released";
+
 #[async_trait]
 pub trait ImportRepository: Send + Sync {
     async fn set_archive_processing_pending(
@@ -6492,6 +6506,38 @@ pub trait ImportRepository: Send + Sync {
     ) -> AppResult<()> {
         Err(AppError::Repository(
             "archive source preservation is unavailable".into(),
+        ))
+    }
+
+    /// Record why an import that already holds its sources is holding them.
+    /// Never adds a hold: an import without one is left unchanged.
+    async fn record_archive_hold_reason(&self, _import_id: &str, _reason: &str) -> AppResult<()> {
+        Ok(())
+    }
+
+    /// Release the holds of exactly `import_ids`, all imports of `source`, in
+    /// one transaction under the download's retry lock. Refused, changing
+    /// nothing, when any listed import is missing or not completed, when any
+    /// import of the download is still pending or running, or when an import
+    /// of the download that is not listed also holds its sources. Each
+    /// cleared hold is marked with `ARCHIVE_HOLD_RELEASED_PAYLOAD_KEY`.
+    async fn release_archive_holds(
+        &self,
+        _source: &ClientJobLocator,
+        _canonical_download_id: Option<&DownloadId>,
+        _import_ids: &[String],
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "archive source preservation is unavailable".into(),
+        ))
+    }
+
+    /// The stored source and workspace roots of every unconsumed manual-import
+    /// selection, across all actors. A store that cannot answer refuses, so
+    /// callers preserve anything such a selection might still need.
+    async fn open_manual_selection_roots(&self) -> AppResult<Vec<String>> {
+        Err(AppError::Repository(
+            "manual import selections are unavailable".into(),
         ))
     }
 
