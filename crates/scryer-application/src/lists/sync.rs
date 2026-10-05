@@ -291,7 +291,18 @@ pub async fn sync_subscription(
                         Err(error) => {
                             // Only a refusal of the grant expires the account;
                             // a transient refresh failure is retried next sync.
+                            let rate_limited =
+                                crate::lists::account_transport::auth_failure_code(&error)
+                                    == Some(crate::lists::account_transport::RATE_LIMITED);
                             let class = match error {
+                                crate::AppError::TemporaryUnavailable { retry_after, .. }
+                                    if rate_limited =>
+                                {
+                                    ListFailureClass::RateLimited {
+                                        retry_after_seconds: retry_after
+                                            .map(|delay| delay.as_secs()),
+                                    }
+                                }
                                 crate::AppError::TemporaryUnavailable { .. }
                                 | crate::AppError::Repository(_) => ListFailureClass::Unavailable,
                                 _ => ListFailureClass::Unauthorized,
