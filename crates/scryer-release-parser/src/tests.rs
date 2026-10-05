@@ -3605,6 +3605,69 @@ fn beam_editions_project_with_canonical_casing() {
     assert_eq!(projected.edition.as_deref(), Some("Uncut"));
 }
 
+fn movie_file_edition(raw: &str, title: &str) -> Option<String> {
+    let mut target = context(ContextFacetHint::Movie, title);
+    target.known_years.push(2024);
+    analyze_release_for_target(raw, &target)
+        .best_candidate()
+        .expect("best candidate")
+        .projected
+        .edition
+        .clone()
+}
+
+#[test]
+fn alternate_cut_editions_are_recognised_after_the_title_and_year() {
+    for (marker, expected) in [
+        ("Directors.Cut", "Director's Cut"),
+        ("DIRECTORS.CUT", "Director's Cut"),
+        ("DC", "Director's Cut"),
+        ("Extended", "Extended"),
+        ("Extended.Cut", "Extended Cut"),
+        ("Extended.Edition", "Extended"),
+        ("Special.Edition", "Special Edition"),
+        ("Unrated", "Unrated"),
+        ("Uncut", "Uncut"),
+        ("Theatrical", "Theatrical"),
+        ("Theatrical.Cut", "Theatrical"),
+        ("Final.Cut", "Final Cut"),
+        ("Ultimate.Cut", "Ultimate Cut"),
+        ("Ultimate.Edition", "Ultimate Edition"),
+        ("Redux", "Redux"),
+        ("IMAX", "IMAX"),
+        ("Open.Matte", "Open Matte"),
+    ] {
+        let raw = format!("Fixture.Picture.2024.{marker}.1080p.BluRay.x264-GRP");
+        let edition = movie_file_edition(&raw, "Fixture Picture");
+        assert_eq!(edition.as_deref(), Some(expected), "{raw}");
+        assert!(crate::is_alternate_cut_edition(expected), "{expected}");
+        assert!(
+            crate::is_alternate_cut_edition(&expected.to_ascii_lowercase()),
+            "{expected} is matched case-insensitively"
+        );
+    }
+}
+
+#[test]
+fn restorations_and_labels_are_editions_but_not_alternate_cuts() {
+    for (marker, expected) in [("Remastered", "Remaster"), ("Criterion", "Criterion")] {
+        let raw = format!("Fixture.Picture.2024.{marker}.1080p.BluRay.x264-GRP");
+        let edition = movie_file_edition(&raw, "Fixture Picture");
+        assert_eq!(edition.as_deref(), Some(expected), "{raw}");
+        assert!(!crate::is_alternate_cut_edition(expected), "{expected}");
+    }
+}
+
+#[test]
+fn an_edition_word_inside_the_title_is_not_an_edition() {
+    let edition = movie_file_edition(
+        "The.Extended.Redux.Picture.2024.1080p.BluRay.x264-GRP",
+        "The Extended Redux Picture",
+    );
+
+    assert_eq!(edition, None);
+}
+
 #[test]
 fn fps_is_detected_in_dot_separated_names() {
     let mut target = context(ContextFacetHint::Movie, "Movie Title");

@@ -1178,6 +1178,38 @@ fn parse_fps(raw_title: &str) -> Option<f32> {
     None
 }
 
+/// The editions that mark a file as an alternate cut of a movie rather than
+/// its ordinary release, as the parser spells them in `edition`. Restorations
+/// and labels (Remaster, Criterion, Hybrid, Restored, Despecialized) are not
+/// alternate cuts and are deliberately absent.
+const ALTERNATE_CUT_EDITIONS: &[&str] = &[
+    "Director's Cut",
+    "Directors",
+    "Extended",
+    "Extended Cut",
+    "Extended Theatrical Version IMAX",
+    "Special Edition",
+    "Special Edition Remastered",
+    "Unrated",
+    "Uncut",
+    "Theatrical",
+    "Final Cut",
+    "Ultimate Cut",
+    "Ultimate Edition",
+    "Redux",
+    "IMAX",
+    "IMAX Enhanced",
+    "Open Matte",
+];
+
+/// Whether a parsed `edition` names an alternate cut of a movie.
+pub fn is_alternate_cut_edition(edition: &str) -> bool {
+    let edition = edition.trim();
+    ALTERNATE_CUT_EDITIONS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(edition))
+}
+
 fn parse_edition_at(tokens: &[String], index: usize) -> Option<(String, usize)> {
     let token = tokens.get(index)?.as_str();
     let next = tokens.get(index + 1).map(String::as_str);
@@ -1208,6 +1240,10 @@ fn parse_edition_at(tokens: &[String], index: usize) -> Option<(String, usize)> 
         "FINAL" if next == Some("CUT") => Some(("Final Cut".to_string(), 2)),
         "ASSEMBLY" if next == Some("CUT") => Some(("Assembly Cut".to_string(), 2)),
         "DIRECTORS" | "DIRECTOR" if next == Some("CUT") => Some(("Director's Cut".to_string(), 2)),
+        "DC" => Some(("Director's Cut".to_string(), 1)),
+        "ULTIMATE" if next == Some("CUT") => Some(("Ultimate Cut".to_string(), 2)),
+        "ULTIMATE" if next == Some("EDITION") => Some(("Ultimate Edition".to_string(), 2)),
+        "REDUX" => Some(("Redux".to_string(), 1)),
         "SPECIAL" if next == Some("EDITION") && third == Some("REMASTERED") => {
             Some(("Special Edition Remastered".to_string(), 3))
         }

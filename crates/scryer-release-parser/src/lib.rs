@@ -16,6 +16,7 @@ mod trash_guides;
 pub use context::{
     ContextAlias, ContextEpisode, ContextFacetHint, ContextTitle, ReleaseParseContext,
 };
+pub use enrichment::is_alternate_cut_edition;
 pub use lex::{BracketKind, CstNode, ReleaseCst, SeparatorKind, TextSpan, Token};
 pub use model::{
     AudioCodec, CandidateZones, ContextTitleMatch, ContextTitleMatchKind, ExternalIdSource,
