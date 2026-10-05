@@ -116,6 +116,7 @@ mod settings;
 pub mod stored_paths;
 pub mod subtitles;
 pub mod testing;
+pub mod title_folder_rules;
 mod types;
 pub mod upstream_scheduler;
 pub mod url_redaction;
@@ -196,6 +197,7 @@ pub use import::srrdb::{SRRDB_API_BASE_URL, SrrdbHttpFilenameLookup};
 pub use import::upgrade;
 pub use integration::tracked_downloads;
 pub use library::filesystem_walk;
+pub use library::leftover_title_folders::EmptyDuplicateTitleFolderReport;
 pub use library::recycle_bin;
 pub use metrics_support::describe_freshness_and_health_metrics;
 pub use notifications::runtime::{
@@ -376,8 +378,8 @@ pub use jobs::jobs::start_background_library_refresh_loop;
 pub use library::rename::{
     LibraryRenamer, NullLibraryRenamer, RenameApplyItemResult, RenameApplyResult,
     RenameApplyStatus, RenameCollisionPolicy, RenameMissingMetadataPolicy, RenamePlan,
-    RenamePlanItem, RenameWriteAction, build_rename_plan_fingerprint, render_rename_template,
-    sanitize_filesystem_component,
+    RenamePlanItem, RenamePlanTitleFolder, RenameWriteAction, build_rename_plan_fingerprint,
+    render_rename_template, sanitize_filesystem_component,
 };
 pub(crate) use library::rename::{
     effective_title_folder_path, normalize_season_folder_template_or_default,

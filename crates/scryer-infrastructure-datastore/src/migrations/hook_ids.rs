@@ -5,6 +5,7 @@ pub fn is_known_migration_hook_id(hook_id: &str) -> bool {
         "migrate_title_catalog_sort_keys" => true,
         "migrate_title_folder_ownership" => true,
         "migrate_title_folder_ownership_safe" => true,
+        "repair_root_title_folders" => true,
         "migrate_title_image_blobs" => true,
         "converge_post_0_16_6_prerelease_schema" => true,
         "backfill_canonical_download_identity" => true,

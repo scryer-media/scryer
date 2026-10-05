@@ -502,6 +502,7 @@ async fn ensure_import_title_folder_available(
     title: &Title,
     folder_path: &Path,
 ) -> AppResult<()> {
+    crate::folder_ownership::ensure_title_folder_is_not_a_library_root(app, title).await?;
     crate::folder_ownership::ensure_folder_available_to_title(app, title, folder_path).await
 }
 
@@ -510,6 +511,7 @@ async fn persist_title_folder_path_if_missing(
     title: &Title,
     folder_path: &Path,
 ) -> AppResult<()> {
+    crate::folder_ownership::ensure_title_folder_is_not_a_library_root(app, title).await?;
     let mut title = title.clone();
     crate::folder_ownership::claim_title_folder_if_missing(app, &mut title, folder_path).await
 }

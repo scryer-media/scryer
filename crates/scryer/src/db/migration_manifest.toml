@@ -2766,6 +2766,17 @@ file = "postgres/migrations/0267_reopen_pre_air_episode_coverage.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 268
+description = "repair title folders recorded at or above a library root"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "repair_root_title_folders"
+engine = "all"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

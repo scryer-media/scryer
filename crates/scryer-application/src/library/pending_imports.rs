@@ -807,6 +807,7 @@ impl AppUseCase {
             }
             let entry_path = pending_import_movie_entry_path(item);
             if metadata.is_dir() || entry_path != item_path {
+                refuse_library_root_as_title_folder(self, &entry_path).await?;
                 crate::folder_ownership::claim_title_folder_if_missing(
                     self,
                     &mut title,
@@ -873,6 +874,7 @@ impl AppUseCase {
                     "pending import directory contains no files to attach".into(),
                 ));
             }
+            refuse_library_root_as_title_folder(self, &item_path).await?;
             crate::folder_ownership::claim_title_folder_if_missing(self, &mut title, &item_path)
                 .await?;
             let summary = self
@@ -1276,4 +1278,20 @@ impl AppUseCase {
             metadata_hydration_state: AddTitleHydrationState::NotRequired,
         })
     }
+}
+
+/// A pending import attaches everything in its folder to one title, so that
+/// folder cannot be a library root.
+async fn refuse_library_root_as_title_folder(
+    app: &AppUseCase,
+    folder_path: &std::path::Path,
+) -> AppResult<()> {
+    let folder_path = path_to_stored_string(folder_path);
+    if crate::folder_ownership::folder_spans_a_library_root(app, &folder_path).await? {
+        return Err(AppError::Validation(format!(
+            "{} is a library root, not a title folder",
+            crate::stored_paths::stored_path_to_display_string(&folder_path)
+        )));
+    }
+    Ok(())
 }

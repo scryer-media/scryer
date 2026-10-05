@@ -144,6 +144,22 @@ pub struct RenamePlan {
     pub conflicts: usize,
     pub errors: usize,
     pub items: Vec<RenamePlanItem>,
+    /// The folder each planned title's files are placed under, resolved once
+    /// from the title, its root and the folder template when the plan was
+    /// built. Applying records this value rather than reconstructing a folder
+    /// from individual file moves.
+    ///
+    /// Optional and defaulted so a plan serialized before it existed still
+    /// round-trips; such a plan leaves the recorded folders alone.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub title_folders: Vec<RenamePlanTitleFolder>,
+}
+
+/// The destination folder a rename plan places one title's files under.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RenamePlanTitleFolder {
+    pub title_id: String,
+    pub folder_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -729,6 +745,9 @@ impl AppUseCase {
             }
         }
 
+        self.persist_rename_title_folders(&preview, &item_results)
+            .await;
+
         let mut applied = 0usize;
         let mut skipped = 0usize;
         let mut failed = 0usize;
@@ -946,38 +965,216 @@ impl AppUseCase {
         }
     }
 
+    /// Refuse a plan whose destination folder another title owns, or that is
+    /// not a folder any title may own. Checked once per title that has a file
+    /// to move, against the folder the plan resolved for it.
     async fn preflight_rename_folder_ownership(&self, preview: &RenamePlan) -> AppResult<()> {
+        let mut checked = HashSet::new();
         for item in &preview.items {
             if !matches!(
                 item.write_action,
                 RenameWriteAction::Move | RenameWriteAction::Replace
-            ) {
+            ) || item.proposed_path.is_none()
+            {
                 continue;
             }
-            let Some(proposed_path) = item.proposed_path.as_deref() else {
-                continue;
-            };
             let probe = rename_apply_probe_for_item(item);
             let Some(title) = self.resolve_title_for_rename_item(&probe).await? else {
                 continue;
             };
-            let use_season_folders = self.resolve_use_season_folders(&title).await?;
-            let Some(folder_path) = infer_title_folder_path_after_rename(
-                &title,
-                use_season_folders,
-                &item.current_path,
-                proposed_path,
-            ) else {
+            if !checked.insert(title.id.clone()) {
+                continue;
+            }
+            let Some(folder_path) = planned_rename_title_folder(preview, &title.id) else {
                 continue;
             };
+            if let Some(violation) = self
+                .rename_title_folder_root_violation(&title, folder_path)
+                .await?
+            {
+                return Err(AppError::Validation(format!(
+                    "refusing to rename {}: its destination folder {} is not a title folder ({})",
+                    title.name,
+                    folder_path,
+                    violation.as_str()
+                )));
+            }
             crate::folder_ownership::ensure_folder_move_available_to_title(
                 self,
                 &title,
-                &stored_path_to_path_buf(&folder_path),
+                &stored_path_to_path_buf(folder_path),
             )
             .await?;
         }
         Ok(())
+    }
+
+    /// Check a planned title folder against the configured roots.
+    async fn rename_title_folder_root_violation(
+        &self,
+        title: &Title,
+        folder_path: &str,
+    ) -> AppResult<Option<crate::title_folder_rules::TitleFolderRootViolation>> {
+        let all_roots = self
+            .all_library_root_folders()
+            .await?
+            .into_iter()
+            .map(|root| root.path)
+            .collect::<Vec<_>>();
+        let mut library_roots = self
+            .services
+            .catalog
+            .libraries
+            .get_by_id(&title.library_id)
+            .await?
+            .map(|library| {
+                library
+                    .roots
+                    .into_iter()
+                    .map(|root| root.path)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        if library_roots.is_empty() {
+            // A library without roots planned against the facet default root,
+            // which is the folder's parent by construction; only the checks
+            // against configured roots apply.
+            if let Some(parent) = stored_path_to_path_buf(folder_path).parent() {
+                library_roots.push(path_to_stored_string(parent));
+            }
+        }
+        Ok(crate::title_folder_rules::title_folder_root_violation(
+            folder_path,
+            &library_roots,
+            &all_roots,
+        ))
+    }
+
+    /// Record each renamed title's planned folder, once, after its files moved.
+    ///
+    /// The record follows the title's files: the folder is recorded when at
+    /// least as many of them sit inside it as outside it. A scan treats files
+    /// outside the recorded folder as a second copy and detaches them, so after
+    /// a partial apply (skipped, failed or rolled-back items) the record goes
+    /// wherever that costs the fewest. Files left behind are logged. A folder that cannot be
+    /// determined leaves the record unchanged.
+    async fn persist_rename_title_folders(
+        &self,
+        preview: &RenamePlan,
+        item_results: &[RenameApplyItemResult],
+    ) {
+        if preview.title_folders.is_empty() {
+            return;
+        }
+        let mut moved_titles = HashSet::new();
+        for item in item_results {
+            if item.status != RenameApplyStatus::Applied
+                || !matches!(
+                    item.write_action,
+                    RenameWriteAction::Move | RenameWriteAction::Replace
+                )
+            {
+                continue;
+            }
+            if let Ok(Some(title)) = self.resolve_title_for_rename_item(item).await {
+                moved_titles.insert(title.id);
+            }
+        }
+
+        for planned in &preview.title_folders {
+            if !moved_titles.contains(&planned.title_id) {
+                continue;
+            }
+            if let Err(error) = self.persist_rename_title_folder(planned).await {
+                warn!(
+                    title_id = %planned.title_id,
+                    folder_path = %planned.folder_path,
+                    error = %error,
+                    "failed to record the renamed title's folder; the previous folder is kept"
+                );
+            }
+        }
+    }
+
+    async fn persist_rename_title_folder(&self, planned: &RenamePlanTitleFolder) -> AppResult<()> {
+        let Some(title) = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&planned.title_id)
+            .await?
+        else {
+            return Ok(());
+        };
+        let folder_path = planned.folder_path.as_str();
+        if title
+            .folder_path
+            .as_deref()
+            .is_some_and(|current| crate::stored_paths::folder_paths_match(current, folder_path))
+        {
+            return Ok(());
+        }
+        if let Some(violation) = self
+            .rename_title_folder_root_violation(&title, folder_path)
+            .await?
+        {
+            warn!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                violation = violation.as_str(),
+                "not recording a renamed title folder that is not a title folder"
+            );
+            return Ok(());
+        }
+        let (inside, outside): (Vec<_>, Vec<_>) = self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await?
+            .into_iter()
+            .filter(|file| file.role.is_primary())
+            .partition(|file| {
+                crate::title_folder_rules::stored_path_is_inside_folder(
+                    folder_path,
+                    &file.file_path,
+                )
+            });
+        if inside.len() < outside.len() || inside.is_empty() {
+            warn!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                moved = inside.len(),
+                left_behind = outside.len(),
+                "keeping the title's previous folder: most of its media files are not in the renamed folder"
+            );
+            return Ok(());
+        }
+        if let Some(left_behind) = outside.first() {
+            warn!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                left_behind = outside.len(),
+                file_path = %left_behind.file_path,
+                "recording the renamed title folder although some media files did not move into it"
+            );
+        }
+        if let Some(owner) =
+            crate::folder_ownership::find_other_folder_owner(self, &title, folder_path).await?
+        {
+            warn!(
+                title_id = %title.id,
+                folder_path = %folder_path,
+                owner_title_id = %owner.id,
+                "keeping the title's previous folder: another title owns the renamed folder"
+            );
+            return Ok(());
+        }
+        self.services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, folder_path)
+            .await
     }
 
     async fn library_id_for_rename_item(&self, item: &RenameApplyItemResult) -> Option<String> {
@@ -1229,31 +1426,9 @@ impl AppUseCase {
             return Err(RenamePersistenceFailure { error, state });
         }
 
-        let title = match self.resolve_title_for_rename_item(item).await {
-            Ok(title) => title,
-            Err(error) => return Err(RenamePersistenceFailure { error, state }),
-        };
-        if let Some(title) = title {
-            let use_season_folders = match self.resolve_use_season_folders(&title).await {
-                Ok(value) => value,
-                Err(error) => return Err(RenamePersistenceFailure { error, state }),
-            };
-            if let Some(folder_path) = infer_title_folder_path_after_rename(
-                &title,
-                use_season_folders,
-                &item.current_path,
-                final_path,
-            ) && let Err(error) = self
-                .services
-                .catalog
-                .titles
-                .set_folder_path(&title.id, &folder_path)
-                .await
-            {
-                return Err(RenamePersistenceFailure { error, state });
-            }
-        }
-
+        // The title's folder is recorded once per title after every item has
+        // been applied (`persist_rename_title_folders`), never from a single
+        // file's move.
         Ok(())
     }
 
@@ -1325,12 +1500,13 @@ impl AppUseCase {
     ) -> AppResult<RenamePlan> {
         let mut planning = RenamePlanningState::default();
         let mut items = Vec::new();
+        let mut title_folders = Vec::new();
         for title in titles {
             let effective_language = effective_languages
                 .get(&title.id)
                 .map(String::as_str)
                 .unwrap_or("eng");
-            let mut title_items = self
+            let (mut title_items, title_folder) = self
                 .build_rename_plan_items_for_title(
                     title,
                     effective_language,
@@ -1339,16 +1515,19 @@ impl AppUseCase {
                 )
                 .await?;
             items.append(&mut title_items);
+            title_folders.extend(title_folder);
         }
 
-        Ok(build_rename_plan_from_items(
+        let mut plan = build_rename_plan_from_items(
             facet,
             title_id,
             settings.template,
             settings.collision_policy,
             settings.missing_metadata_policy,
             items,
-        ))
+        );
+        plan.title_folders = title_folders;
+        Ok(plan)
     }
 
     async fn build_rename_plan_items_for_title(
@@ -1357,7 +1536,7 @@ impl AppUseCase {
         _effective_language: &str,
         settings: &RenamePlanSettings,
         planning: &mut RenamePlanningState,
-    ) -> AppResult<Vec<RenamePlanItem>> {
+    ) -> AppResult<(Vec<RenamePlanItem>, Option<RenamePlanTitleFolder>)> {
         let title = title.clone();
         let use_season_folders = self.resolve_use_season_folders(&title).await?;
         let collections = self
@@ -1384,7 +1563,20 @@ impl AppUseCase {
             .rename_media_root_for_title(&title, &media_files)
             .await?
         else {
-            return Ok(rename_items_outside_library_roots(&media_files));
+            return Ok((rename_items_outside_library_roots(&media_files), None));
+        };
+        // Every Move/Replace target of this title lands under this one folder
+        // (see `episode_parent_path_for_renamed_file` and
+        // `title_folder_path_for_renamed_file`), so it is the folder the title
+        // owns once the plan is applied.
+        let title_folder = RenamePlanTitleFolder {
+            title_id: title.id.clone(),
+            folder_path: path_to_stored_string(configured_title_folder_path(
+                &media_root,
+                &title,
+                &settings.folder_template,
+                title.year,
+            )),
         };
         let episodes = match title.facet {
             MediaFacet::Movie => Vec::new(),
@@ -1450,7 +1642,8 @@ impl AppUseCase {
 
         let items = self.normalize_existing_rename_collisions(items).await?;
         let items = self.refuse_cross_root_rename_items(&title, items).await?;
-        self.plan_rename_companions(items, planning).await
+        let items = self.plan_rename_companions(items, planning).await?;
+        Ok((items, Some(title_folder)))
     }
 
     /// The root a rename must plan inside: the configured root of the title's
@@ -2540,6 +2733,10 @@ pub(crate) fn title_folder_path_for_renamed_file(
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
+        // A recorded folder that is the root itself (or above it) is not a
+        // title folder; keeping a file's path relative to it would carry the
+        // old title folder's name into the new one.
+        .filter(|value| crate::title_folder_rules::path_is_strictly_within(value, media_root))
         .map(stored_path_to_path_buf)
     else {
         return desired_root;
@@ -2588,51 +2785,13 @@ fn episode_parent_path_for_renamed_file(
     ))
 }
 
-fn infer_title_folder_path_after_rename(
-    title: &Title,
-    use_season_folders: bool,
-    current_path: &str,
-    final_path: &str,
-) -> Option<String> {
-    let final_path = stored_path_to_path_buf(final_path);
-    let final_parent = final_path.parent()?;
-    if let Some(existing_root) = title
-        .folder_path
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(stored_path_to_path_buf)
-    {
-        let current_path = stored_path_to_path_buf(current_path);
-        let current_parent = current_path.parent()?;
-        if let Ok(relative_parent) = current_parent.strip_prefix(&existing_root) {
-            let mut new_root = final_parent.to_path_buf();
-            for _ in relative_parent.components() {
-                new_root = new_root.parent()?.to_path_buf();
-            }
-            return Some(path_to_stored_string(&new_root));
-        }
-    }
-
-    infer_title_folder_path_from_final_path(title, use_season_folders, final_parent)
-        .map(|path| path_to_stored_string(&path))
-}
-
-fn infer_title_folder_path_from_final_path(
-    _title: &Title,
-    use_season_folders: bool,
-    final_parent: &Path,
-) -> Option<PathBuf> {
-    if use_season_folders
-        && final_parent
-            .file_name()
-            .and_then(|value| value.to_str())
-            .is_some_and(|value| value.starts_with("Season "))
-    {
-        return final_parent.parent().map(Path::to_path_buf);
-    }
-
-    Some(final_parent.to_path_buf())
+/// The folder a plan resolved for `title_id`, if it resolved one.
+fn planned_rename_title_folder<'a>(plan: &'a RenamePlan, title_id: &str) -> Option<&'a str> {
+    plan.title_folders
+        .iter()
+        .find(|planned| planned.title_id == title_id)
+        .map(|planned| planned.folder_path.as_str())
+        .filter(|folder_path| !folder_path.trim().is_empty())
 }
 
 /// Plan-wide state shared by every title in one preview.
@@ -3907,6 +4066,7 @@ pub(crate) fn build_rename_plan_from_items(
         conflicts,
         errors,
         items,
+        title_folders: Vec::new(),
     }
 }
 

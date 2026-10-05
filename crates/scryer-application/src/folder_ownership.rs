@@ -70,6 +70,65 @@ pub(crate) async fn title_folder_is_stale(title: &Title) -> bool {
     )
 }
 
+/// Whether `folder_path` is a library root or holds one.
+///
+/// No title owns such a folder. Recording one turns everything scoped to "the
+/// title's folder" into something scoped to a whole library.
+pub(crate) async fn folder_spans_a_library_root(
+    app: &AppUseCase,
+    folder_path: &str,
+) -> AppResult<bool> {
+    let all_roots = app
+        .all_library_root_folders()
+        .await?
+        .into_iter()
+        .map(|root| root.path)
+        .collect::<Vec<_>>();
+    Ok(matches!(
+        crate::title_folder_rules::title_folder_root_violation(folder_path, &all_roots, &all_roots),
+        Some(
+            crate::title_folder_rules::TitleFolderRootViolation::EqualsRoot
+                | crate::title_folder_rules::TitleFolderRootViolation::ContainsRoot
+        )
+    ))
+}
+
+/// Whether a title's recorded folder is a library root or holds one.
+///
+/// Such a record is damage, and treating it as ownership would make every
+/// other folder the title's files are in look like a second copy.
+pub(crate) async fn title_folder_spans_a_library_root(
+    app: &AppUseCase,
+    title: &Title,
+) -> AppResult<bool> {
+    match non_empty_folder_path(title.folder_path.as_deref()) {
+        Some(owned_path) => folder_spans_a_library_root(app, owned_path).await,
+        None => Ok(false),
+    }
+}
+
+/// Refuse to place or look for a title's files by a recorded folder that is a
+/// library root or holds one.
+///
+/// Importing by such a record drops the file straight into the library root,
+/// and walking it reads every other title's files as this title's. The
+/// operator corrects the title's folder first.
+pub(crate) async fn ensure_title_folder_is_not_a_library_root(
+    app: &AppUseCase,
+    title: &Title,
+) -> AppResult<()> {
+    if !title_folder_spans_a_library_root(app, title).await? {
+        return Ok(());
+    }
+    Err(AppError::Validation(format!(
+        "the recorded folder for \"{}\" ({}) is a library root, not a title folder; correct the title's folder first",
+        title.name,
+        crate::stored_paths::stored_path_to_display_string(
+            title.folder_path.as_deref().unwrap_or_default()
+        )
+    )))
+}
+
 /// Move a title's stale folder ownership to the folder a scan found its
 /// files in. Returns `false`, changing nothing, when another title already
 /// owns that folder — that is a real conflict, not a heal.
@@ -80,9 +139,10 @@ pub(crate) async fn reclaim_stale_title_folder(
 ) -> AppResult<bool> {
     let previous_folder_path = title.folder_path.clone().unwrap_or_default();
     let folder_path = path_to_stored_string(folder_path);
-    if find_other_folder_owner(app, title, &folder_path)
-        .await?
-        .is_some()
+    if folder_spans_a_library_root(app, &folder_path).await?
+        || find_other_folder_owner(app, title, &folder_path)
+            .await?
+            .is_some()
     {
         return Ok(false);
     }
@@ -192,6 +252,14 @@ pub(crate) async fn claim_title_folder_if_missing(
     }
 
     let folder_path = path_to_stored_string(folder_path);
+    if folder_spans_a_library_root(app, &folder_path).await? {
+        tracing::warn!(
+            title_id = %title.id,
+            folder_path = %folder_path,
+            "not recording a library root as a title's folder"
+        );
+        return Ok(());
+    }
     app.services
         .catalog
         .titles
@@ -217,6 +285,11 @@ pub(crate) async fn unlink_title_media_in_folder(
     if owned_folder_present(owned_path).await != Some(true) {
         return Ok(0);
     }
+    // A library root is always on disk, so a record that climbed to one would
+    // otherwise pass for a real second copy and strip the title's own files.
+    if title_folder_spans_a_library_root(app, title).await? {
+        return Ok(0);
+    }
 
     detach_title_media_in_folder(app, &title.id, folder_path).await
 }
@@ -234,6 +307,21 @@ pub(crate) async fn detach_title_media_in_folder(
     title_id: &str,
     folder_path: &Path,
 ) -> AppResult<u32> {
+    detach_title_media_in_folder_except(app, title_id, folder_path, None).await
+}
+
+/// [`detach_title_media_in_folder`], keeping the rows inside `kept_folder`.
+///
+/// A title re-pointed at a folder inside the one it gives up keeps the rows
+/// that are already in its new folder. That is the shape of correcting a
+/// record that had climbed to a library root: the old folder holds everything
+/// the title has, including the folder it is being pointed at.
+pub(crate) async fn detach_title_media_in_folder_except(
+    app: &AppUseCase,
+    title_id: &str,
+    folder_path: &Path,
+    kept_folder: Option<&str>,
+) -> AppResult<u32> {
     let folder_path = path_to_stored_string(folder_path);
     let media_file_ids = app
         .services
@@ -244,6 +332,12 @@ pub(crate) async fn detach_title_media_in_folder(
         .into_iter()
         .filter(|media_file| {
             crate::stored_paths::stored_path_is_within_folder(&folder_path, &media_file.file_path)
+                && !kept_folder.is_some_and(|kept_folder| {
+                    crate::stored_paths::stored_path_is_within_folder(
+                        kept_folder,
+                        &media_file.file_path,
+                    )
+                })
         })
         .map(|media_file| media_file.id)
         .collect::<Vec<_>>();

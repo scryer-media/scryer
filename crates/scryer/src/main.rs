@@ -1835,6 +1835,11 @@ async fn bootstrap_application(
         tracing::warn!(error = %e, "failed to reconcile default library roots on startup");
     }
 
+    // After root reconciliation, so it reads the roots the library really has.
+    application_migrator
+        .spawn_empty_duplicate_title_folder_cleanup(&app_use_case, previous_version)
+        .await;
+
     // A location operation is persisted and checkpointed precisely so a restart
     // can pick it up where it stopped, without repeating verified work
     // (FR-033). This runs after root reconciliation because a resumed move

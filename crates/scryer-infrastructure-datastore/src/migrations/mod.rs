@@ -21,6 +21,7 @@ mod migration_progress_tests;
 pub mod notification_targets;
 pub mod post_0_16_6_prerelease;
 pub mod post_processing_output;
+pub mod repair_root_title_folders;
 pub mod rule_set_runtime_wrapper;
 pub mod synthetic_root_ids;
 #[cfg(test)]
@@ -843,6 +844,9 @@ async fn run_rust_hook(
         }
         "migrate_title_folder_ownership_safe" => {
             title_folder_ownership_safe::migrate_title_folder_ownership_safe_sqlite(tx).await
+        }
+        "repair_root_title_folders" => {
+            repair_root_title_folders::repair_root_title_folders_sqlite(tx).await
         }
         "migrate_title_image_blobs" => {
             title_image_blobs::migrate_title_image_blobs_sqlite(tx).await

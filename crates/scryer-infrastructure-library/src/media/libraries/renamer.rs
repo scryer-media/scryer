@@ -406,6 +406,7 @@ mod tests {
                 item(&blocked_source, &blocked_target),
                 item(&movable_source, &movable_target),
             ],
+            title_folders: Vec::new(),
         };
 
         let results = FileSystemLibraryRenamer::new()

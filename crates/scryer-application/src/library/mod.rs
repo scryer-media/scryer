@@ -3,6 +3,7 @@ pub(crate) use crate::*;
 pub(crate) mod discovery;
 pub(crate) mod filename_parser;
 pub mod filesystem_walk;
+pub mod leftover_title_folders;
 pub(crate) mod movie_scan_scope;
 pub(crate) mod nfo;
 pub(crate) mod pending_imports;

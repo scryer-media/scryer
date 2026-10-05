@@ -5935,3 +5935,171 @@ async fn migration_0244_splits_the_external_id_key_by_entity_kind() {
     drop(pool);
     let _ = std::fs::remove_file(db);
 }
+
+/// The title folder repair, applied as part of a real upgrade: folders a
+/// rename recorded as the root or above it are repaired to the folder the
+/// media implies, ambiguous and healthy titles are untouched, no media row
+/// changes, and running the repair again changes nothing.
+#[tokio::test]
+async fn title_folder_repair_upgrade_repairs_root_folders_and_is_idempotent() {
+    let db = std::env::temp_dir().join(format!(
+        "scryer_migration_title_folder_repair_{}.db",
+        chrono::Utc::now().timestamp_micros()
+    ));
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("pre-repair database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(267), true)
+        .await
+        .expect("migrations through 0267 should apply");
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let library_id =
+        scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Series);
+    let (root_folder_id, root_path): (String, String) = sqlx::query_as(
+        "SELECT id, path FROM library_roots
+          WHERE library_id = ?1
+          ORDER BY is_default DESC, path
+          LIMIT 1",
+    )
+    .bind(&library_id)
+    .fetch_one(&pool)
+    .await
+    .expect("default series root should exist");
+    let root = root_path.trim_end_matches('/').to_string();
+    let above_root = std::path::Path::new(&root)
+        .parent()
+        .map(|parent| parent.to_string_lossy().to_string())
+        .unwrap_or_else(|| "/".to_string());
+
+    let titles = [
+        ("at-root", root.clone()),
+        ("above-root", above_root.clone()),
+        ("healthy", format!("{root}/Healthy Fixture")),
+        ("ambiguous", root.clone()),
+    ];
+    for (id, folder) in &titles {
+        sqlx::query(
+            "INSERT INTO titles (
+                id, name, name_normalized, library_id, root_folder_id, facet, created_at,
+                folder_path
+             ) VALUES (?1, ?1, ?1, ?2, ?3, 'series', ?4, ?5)",
+        )
+        .bind(id)
+        .bind(&library_id)
+        .bind(&root_folder_id)
+        .bind(&now)
+        .bind(folder)
+        .execute(&pool)
+        .await
+        .expect("title fixture should insert");
+    }
+    let media = [
+        (
+            "at-root",
+            format!("{root}/Root Fixture/Root Fixture - S01E01.mkv"),
+        ),
+        (
+            "at-root",
+            format!("{root}/Root Fixture/Root Fixture - S01E02.mkv"),
+        ),
+        (
+            "above-root",
+            format!("{root}/Above Fixture/Above Fixture - S01E01.mkv"),
+        ),
+        (
+            "above-root",
+            format!("{root}/Above Fixture/Season 02/Above Fixture - S02E01.mkv"),
+        ),
+        (
+            "healthy",
+            format!("{root}/Healthy Fixture/Season 01/Healthy Fixture - S01E01.mkv"),
+        ),
+        ("ambiguous", format!("{root}/Ambiguous A/e1.mkv")),
+        ("ambiguous", format!("{root}/Ambiguous B/e2.mkv")),
+    ];
+    for (index, (title_id, path)) in media.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO media_files (
+                id, title_id, file_path, size_bytes, scan_status, created_at
+             ) VALUES (?1, ?2, ?3, 100, 'complete', ?4)",
+        )
+        .bind(format!("media-{index}"))
+        .bind(title_id)
+        .bind(path)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .expect("media file fixture should insert");
+    }
+
+    async fn snapshot(pool: &sqlx::SqlitePool) -> Vec<(String, Option<String>, Option<String>)> {
+        sqlx::query_as("SELECT id, folder_path, root_folder_id FROM titles ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .expect("titles should load")
+    }
+    async fn media_snapshot(pool: &sqlx::SqlitePool) -> Vec<(String, String, String)> {
+        sqlx::query_as("SELECT id, title_id, file_path FROM media_files ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .expect("media files should load")
+    }
+    let media_before = media_snapshot(&pool).await;
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("upgrade to head should apply");
+
+    let after = snapshot(&pool).await;
+    let folder_of = |id: &str| {
+        after
+            .iter()
+            .find(|(title_id, _, _)| title_id == id)
+            .and_then(|(_, folder, _)| folder.clone())
+    };
+    assert_eq!(
+        folder_of("at-root"),
+        Some(format!("{root}/Root Fixture")),
+        "a folder recorded as the root is repaired"
+    );
+    assert_eq!(
+        folder_of("above-root"),
+        Some(format!("{root}/Above Fixture")),
+        "a folder recorded above the root is repaired"
+    );
+    assert_eq!(
+        folder_of("healthy"),
+        Some(format!("{root}/Healthy Fixture"))
+    );
+    assert_eq!(
+        folder_of("ambiguous"),
+        Some(root.clone()),
+        "ambiguous media leaves the record for the operator"
+    );
+    assert_eq!(
+        media_snapshot(&pool).await,
+        media_before,
+        "the repair never changes a media row"
+    );
+
+    let mut tx = pool.begin().await.expect("begin repair rerun");
+    scryer_infrastructure_datastore::migrations::repair_root_title_folders::repair_root_title_folders_sqlite(&mut tx)
+        .await
+        .expect("repair reruns");
+    tx.commit().await.expect("commit repair rerun");
+    assert_eq!(
+        snapshot(&pool).await,
+        after,
+        "a second repair changes nothing"
+    );
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::ValidateOnly)
+        .await
+        .expect("the repaired ledger validates");
+
+    drop(pool);
+    let _ = std::fs::remove_file(db);
+}
