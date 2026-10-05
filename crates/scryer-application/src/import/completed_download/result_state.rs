@@ -348,14 +348,16 @@ pub(crate) async fn settle_released_import_hold(
         }
         // The ordinary retry settles on the fallback verdict, so a download
         // that needs positive proof never goes back to it: it stays blocked
-        // for the operator whether the proof fell short, is missing, or could
-        // not be gathered.
-        verdict if verification.require_positive_proof => {
-            if let Err(error) = &verdict {
-                tracing::warn!(tracked_id = %td.id, error = %error, "import verification evidence is unavailable");
-            }
+        // for the operator whether the proof fell short or is missing. When
+        // the evidence could not be read at all, nothing is settled and the
+        // release stays open for another attempt.
+        Ok(_) if verification.require_positive_proof => {
             block_unproven_release(td);
             Ok(ReleasedHoldVerdict::Unproven)
+        }
+        Err(error) if verification.require_positive_proof => {
+            tracing::warn!(tracked_id = %td.id, error = %error, "import verification evidence is unavailable");
+            Err(error)
         }
         Ok(_) => {
             schedule_partial_import_retry(td);
