@@ -41,6 +41,7 @@ import {
   selectedLibraryIdsToQueryValue,
 } from "@/lib/utils/library-filter";
 import { buildOverviewDetailPath } from "@/lib/utils/routing";
+import { episodeTitleOrTba } from "@/lib/utils/episode-title";
 import {
   metadataResultExternalIds,
   type KindedExternalIdInput,
@@ -240,13 +241,13 @@ function formatBindingEpisodeKey(
   return null;
 }
 
-function formatBindingEpisodeLabel(episode: PendingImportBindingEpisode): string {
-  return episode.episodeLabel?.trim() || episode.title?.trim() || episode.id;
+function formatBindingEpisodeLabel(episode: PendingImportBindingEpisode, t: Translate): string {
+  return episode.episodeLabel?.trim() || episodeTitleOrTba(episode.title, t);
 }
 
 function formatBindingEpisodeDisplay(episode: PendingImportBindingEpisode, t: Translate) {
   const key = formatBindingEpisodeKey(episode, t);
-  const label = formatBindingEpisodeLabel(episode);
+  const label = formatBindingEpisodeLabel(episode, t);
   return {
     key,
     label,

@@ -68,6 +68,7 @@ import {
   isSpecialsCollection,
   formatDate,
   formatFileSize,
+  episodeDisplayTitle,
 } from "./helpers";
 import { TitleOverviewActions } from "../title-overview-actions";
 import { OverviewBackLink } from "../overview-back-link";
@@ -448,11 +449,10 @@ function SeriesOverviewViewImpl({
   const handleOpenEpisodeHistory = React.useCallback((episode: CollectionEpisode) => {
     setHistoryEpisodeScope({
       episodeId: episode.id,
-      episodeLabel:
-        episode.title ?? episode.episodeLabel ?? episode.episodeNumber ?? episode.id,
+      episodeLabel: episodeDisplayTitle(episode, t),
     });
     setHistoryOpen(true);
-  }, []);
+  }, [t]);
 
   const defaultExpandedRef = React.useRef(false);
   const lastDeepLinkedEpisodeIdRef = React.useRef<string | null>(null);

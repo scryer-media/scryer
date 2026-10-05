@@ -10,6 +10,7 @@ import type { UiDateTimeFormat } from "@/lib/types/settings";
 // `node --test`, which cannot resolve bundler path aliases. The type-only alias
 // imports above are erased by type stripping and are fine.
 import { formatUiDate } from "../../../lib/utils/date-format.ts";
+import { episodeTitleOrTba } from "../../../lib/utils/episode-title.ts";
 
 export function formatDate(
   iso: string | null | undefined,
@@ -134,7 +135,7 @@ export function episodeDisplayTitle(
   episode: Pick<CollectionEpisode, "title" | "episodeLabel">,
   t: (key: string) => string,
 ) {
-  return episode.title?.trim() || episode.episodeLabel?.trim() || t("episode.titleTba");
+  return episodeTitleOrTba(episode.title?.trim() || episode.episodeLabel, t);
 }
 
 export function isEpisodeCountableForProgress(episode: CollectionEpisode) {

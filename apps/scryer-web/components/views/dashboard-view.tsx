@@ -97,6 +97,7 @@ import {
 import { selectPosterVariantUrl } from "@/lib/utils/poster-images";
 import { combinePanelStates, type DashboardPanelState, type DashboardPanelStates } from "@/lib/utils/dashboard-refresh";
 import { buildOverviewDetailPath, buildViewPath } from "@/lib/utils/routing";
+import { episodeTitleOrTba } from "@/lib/utils/episode-title";
 
 /** Rows visible before the top panels start scrolling. */
 const PREVIEW_PANE_CLASS = "max-h-[172px] overflow-y-auto";
@@ -910,7 +911,7 @@ function RecentlyImportedPanel({ items }: { items: DashboardImportedItem[] }) {
                     <Link className="truncate text-[12px] font-medium text-[var(--scry-ink2)] hover:underline" to={`${buildOverviewDetailPath(facet === "MOVIE" ? "movies" : facet === "ANIME" ? "anime" : "series", null, null)}?id=${encodeURIComponent(item.titleId)}${item.episode ? `&episodeId=${encodeURIComponent(item.episode.id)}` : ""}`}>
                       {item.titleName ?? item.titleId}
                     </Link>
-                    {item.episode ? <span className="truncate text-[11px]">{`S${item.episode.seasonNumber ?? "?"}E${item.episode.episodeNumber ?? "?"}`} {item.episode.title}</span> : null}
+                    {item.episode ? <span className="truncate text-[11px]">{`S${item.episode.seasonNumber ?? "?"}E${item.episode.episodeNumber ?? "?"}`} {episodeTitleOrTba(item.episode.title, t)}</span> : null}
                     <span className="flex min-w-0 items-center gap-1.5 text-[11px] text-[var(--scry-muted2)]">
                       {facet ? <FacetChip facet={facet} /> : null}
                       {item.quality ? (

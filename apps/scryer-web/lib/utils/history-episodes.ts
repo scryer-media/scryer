@@ -1,3 +1,6 @@
+// Relative import so this module stays loadable by plain `node --test`.
+import { episodeTitleOrTba } from "./episode-title.ts";
+
 export type HistoryEpisodeDisplay = {
   id: string;
   seasonNumber: string | number | null;
@@ -29,6 +32,7 @@ export function compareHistoryEpisodes(
 export function formatHistoryEpisodeLabel(
   episode: HistoryEpisodeDisplay | null,
   episodeId: string,
+  t: (key: string) => string,
 ): string {
   if (!episode) {
     return episodeId;
@@ -41,7 +45,7 @@ export function formatHistoryEpisodeLabel(
       ? `S${String(seasonNumber).padStart(2, "0")}E${String(episodeNumber).padStart(2, "0")}`
       : null;
   const label = numberedLabel || episode.episodeLabel?.trim() || "Episode";
-  const title = episode.title?.trim();
+  const title = episodeTitleOrTba(episode.title, t);
 
-  return title && title !== label ? `${label} · ${title}` : label;
+  return title !== label ? `${label} · ${title}` : label;
 }
