@@ -680,3 +680,392 @@ async fn relay_unavailable_answers_on_renew_and_revoke_are_transient_not_reconne
         }
     }
 }
+
+fn failure_code(error: &AppError) -> Option<&str> {
+    scryer_application::lists::account_transport::auth_failure_code(error)
+}
+fn tmdb_app() -> ListProviderAppConfig {
+    ListProviderAppConfig {
+        access_token: Some("fixture-read-token".into()),
+        ..Default::default()
+    }
+}
+fn relay_credential() -> ListAccountCredential {
+    ListAccountCredential {
+        access_token: "fixture-access".into(),
+        refresh_handle: Some("fixture-handle".into()),
+        ..Default::default()
+    }
+}
+fn direct_credential() -> ListAccountCredential {
+    ListAccountCredential {
+        access_token: "fixture-access".into(),
+        refresh_token: Some("fixture-refresh".into()),
+        client_id: Some("fixture-client".into()),
+        direct: true,
+        ..Default::default()
+    }
+}
+
+#[tokio::test]
+async fn tmdb_refusal_without_pending_status_is_provider_rejected() {
+    let server = MockServer::start().await;
+    let transport = transport(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/access_token"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({"success":false,"status_code":7})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = transport
+        .poll("tmdb", "fixture-request", Some(&tmdb_app()))
+        .await
+        .unwrap_err();
+    assert_eq!(failure_code(&error), Some("provider_rejected"));
+}
+
+#[tokio::test]
+async fn tmdb_pending_approval_still_reads_as_pending() {
+    let server = MockServer::start().await;
+    let transport = transport(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/access_token"))
+        .respond_with(
+            ResponseTemplate::new(401).set_body_json(json!({"success":false,"status_code":41})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let result = transport
+        .poll("tmdb", "fixture-request", Some(&tmdb_app()))
+        .await
+        .unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn tmdb_html_server_error_is_unavailable_not_an_invalid_response() {
+    let server = MockServer::start().await;
+    let transport = transport(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/access_token"))
+        .respond_with(
+            ResponseTemplate::new(503).set_body_string("<html><body>fixture outage</body></html>"),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = transport
+        .poll("tmdb", "fixture-request", Some(&tmdb_app()))
+        .await
+        .unwrap_err();
+    assert_eq!(failure_code(&error), Some("provider_unavailable"));
+}
+
+#[tokio::test]
+async fn plex_missing_pin_is_provider_rejected() {
+    let server = MockServer::start().await;
+    let transport = transport(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/pins/42"))
+        .respond_with(ResponseTemplate::new(404))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let poll = encode(&PlexPoll {
+        id: 42,
+        code: "fixture-code".into(),
+        client_id: "fixture-plex-client".into(),
+    })
+    .unwrap();
+    let error = transport.poll("plex", &poll, None).await.unwrap_err();
+    assert_eq!(failure_code(&error), Some("provider_rejected"));
+}
+
+#[tokio::test]
+async fn rate_limited_answer_keeps_the_requested_pause() {
+    let server = MockServer::start().await;
+    let transport = transport(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/auth/v1/simkl/renew"))
+        .respond_with(
+            ResponseTemplate::new(429)
+                .insert_header("Retry-After", "120")
+                .set_body_json(json!({"error":"rate_limited"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = transport
+        .renew("simkl", &relay_credential(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(failure_code(&error), Some("rate_limited"));
+    match error {
+        AppError::TemporaryUnavailable {
+            message,
+            retry_after,
+            ..
+        } => {
+            assert_eq!(message, "list account authentication failed: rate_limited");
+            assert_eq!(retry_after, Some(Duration::from_secs(120)));
+        }
+        other => panic!("expected a temporary failure, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn relay_renew_answers_map_to_reconnect_only_for_refused_grants() {
+    use scryer_application::lists::account_transport::renew_requires_reconnect;
+    let cases: &[(u16, Option<&str>, &str)] = &[
+        (400, Some("invalid_grant"), "reconnect_required"),
+        (400, Some("invalid_refresh_handle"), "reconnect_required"),
+        (400, Some("expired_token"), "reconnect_required"),
+        (400, Some("access_denied"), "access_denied"),
+        (400, Some("invalid_scope"), "provider_rejected"),
+        (400, Some("invalid_request"), "invalid_request"),
+        (413, Some("request_too_large"), "invalid_request"),
+        (
+            401,
+            Some("instance_auth_required"),
+            "instance_auth_required",
+        ),
+        (404, Some("not_found"), "unsupported_provider"),
+        (405, Some("method_not_allowed"), "unsupported_provider"),
+        (503, Some("relay_busy"), "provider_unavailable"),
+        (503, Some("relay_key_unavailable"), "provider_unavailable"),
+        (400, Some("relay_busy"), "provider_unavailable"),
+        (500, Some("relay_unavailable"), "provider_unavailable"),
+        (503, Some("relay_not_configured"), "provider_not_configured"),
+        (
+            503,
+            Some("provider_not_configured"),
+            "provider_not_configured",
+        ),
+        (
+            503,
+            Some("provider_configuration_error"),
+            "provider_not_configured",
+        ),
+        (502, Some("provider_unavailable"), "provider_unavailable"),
+        (
+            502,
+            Some("invalid_provider_response"),
+            "provider_unavailable",
+        ),
+        (408, None, "provider_unavailable"),
+        (403, None, "provider_rejected"),
+    ];
+    for &(status, error, expected) in cases {
+        let server = MockServer::start().await;
+        let transport = transport(&server).await;
+        let body = error.map_or_else(|| json!({}), |error| json!({ "error": error }));
+        Mock::given(method("POST"))
+            .and(path("/auth/v1/simkl/renew"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let failure = transport
+            .renew("simkl", &relay_credential(), None)
+            .await
+            .unwrap_err();
+        let code = failure_code(&failure);
+        assert_eq!(code, Some(expected), "relay {status} {error:?}");
+        let reconnect = matches!(
+            error,
+            Some(
+                "invalid_grant"
+                    | "invalid_refresh_handle"
+                    | "expired_token"
+                    | "access_denied"
+                    | "invalid_scope"
+            )
+        ) || (status == 403 && error.is_none());
+        assert_eq!(
+            renew_requires_reconnect(expected),
+            reconnect,
+            "relay {status} {error:?} reconnect"
+        );
+    }
+}
+
+#[tokio::test]
+async fn direct_renew_refusals_require_reconnect_and_outages_do_not() {
+    use scryer_application::lists::account_transport::renew_requires_reconnect;
+    let cases: &[(u16, Option<&str>, bool, &str)] = &[
+        (400, Some("invalid_grant"), true, "reconnect_required"),
+        (401, Some("invalid_client"), true, "reconnect_required"),
+        (400, Some("unauthorized_client"), true, "reconnect_required"),
+        (400, Some("invalid_request"), true, "provider_rejected"),
+        (401, None, true, "provider_rejected"),
+        (403, None, true, "provider_rejected"),
+        (400, None, true, "provider_rejected"),
+        (500, None, false, "provider_unavailable"),
+        (502, Some("invalid_grant"), true, "reconnect_required"),
+        (503, None, false, "provider_unavailable"),
+        (408, None, false, "provider_unavailable"),
+    ];
+    for &(status, error, reconnect, expected) in cases {
+        let server = MockServer::start().await;
+        let transport = transport(&server).await;
+        let body = error.map_or_else(|| json!({}), |error| json!({ "error": error }));
+        Mock::given(method("POST"))
+            .and(path("/trakt/token"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let failure = transport
+            .renew("trakt", &direct_credential(), Some(&app()))
+            .await
+            .unwrap_err();
+        let code = failure_code(&failure).unwrap();
+        assert_eq!(code, expected, "direct {status} {error:?}");
+        assert_eq!(
+            renew_requires_reconnect(code),
+            reconnect,
+            "direct {status} {error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn built_in_mal_client_refusal_is_a_configuration_fault_not_a_reconnect() {
+    let server = MockServer::start().await;
+    let transport = transport(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/mal/token"))
+        .respond_with(ResponseTemplate::new(401).set_body_json(json!({"error":"invalid_client"})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let error = transport
+        .renew("mal", &direct_credential(), None)
+        .await
+        .unwrap_err();
+    assert_eq!(failure_code(&error), Some("provider_not_configured"));
+}
+
+#[tokio::test]
+async fn link_exchange_keeps_its_specific_codes() {
+    let cases: &[(u16, Option<&str>, &str)] = &[
+        (400, Some("invalid_grant"), "reconnect_required"),
+        (400, Some("access_denied"), "access_denied"),
+        (401, Some("invalid_client"), "provider_not_configured"),
+        (400, Some("unauthorized_client"), "provider_not_configured"),
+        (400, None, "provider_rejected"),
+        (504, None, "provider_unavailable"),
+    ];
+    for &(status, error, expected) in cases {
+        let server = MockServer::start().await;
+        let transport = transport(&server).await;
+        let body = error.map_or_else(|| json!({}), |error| json!({ "error": error }));
+        Mock::given(method("POST"))
+            .and(path("/trakt/token"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut request = complete_request("trakt");
+        request.app = Some(app());
+        let failure = transport.complete(request).await.unwrap_err();
+        assert_eq!(
+            failure_code(&failure),
+            Some(expected),
+            "exchange {status} {error:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_empty_stored_refresh_credential_requires_reconnect_before_any_request() {
+    let server = MockServer::start().await;
+    let transport = transport(&server).await;
+    let mut relay = relay_credential();
+    relay.refresh_handle = Some(String::new());
+    let mut direct = direct_credential();
+    direct.refresh_token = Some(String::new());
+    for (provider, credential, app) in [
+        ("simkl", relay.clone(), None),
+        ("trakt", direct.clone(), Some(app())),
+        (
+            "trakt",
+            ListAccountCredential {
+                refresh_token: None,
+                ..direct
+            },
+            Some(app()),
+        ),
+        (
+            "simkl",
+            ListAccountCredential {
+                refresh_handle: None,
+                ..relay
+            },
+            None,
+        ),
+    ] {
+        let error = transport
+            .renew(provider, &credential, app.as_ref())
+            .await
+            .unwrap_err();
+        assert_eq!(
+            failure_code(&error),
+            Some("reconnect_required"),
+            "{provider}"
+        );
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+/// Callers parse `list account authentication failed: <code>` from these
+/// errors, and the set of codes is closed. Emitting, removing or renaming a
+/// code must update `AUTH_FAILURE_CODES` and every caller that reads it.
+#[test]
+fn auth_failure_message_format_and_code_set_are_pinned() {
+    use scryer_application::lists::account_transport::{
+        AUTH_FAILURE_CODES, auth_failure, rate_limited_failure,
+    };
+    let source = include_str!("client_list_accounts.rs");
+    let source = source.split("#[cfg(test)]").next().unwrap();
+    let flat = source.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut emitted = std::collections::BTreeSet::new();
+    for marker in ["failure(\"", "=> Some(\"", "=> { Some(\""] {
+        for (index, _) in flat.match_indices(marker) {
+            let rest = &flat[index + marker.len()..];
+            emitted.insert(rest[..rest.find('"').unwrap()].to_string());
+        }
+    }
+    // Codes the gateway emits through named constants.
+    for (constant, code) in [
+        ("RECONNECT_REQUIRED", "reconnect_required"),
+        ("PROVIDER_REJECTED", "provider_rejected"),
+        ("rate_limited_failure(", "rate_limited"),
+    ] {
+        if flat.contains(constant) {
+            emitted.insert(code.to_string());
+        }
+    }
+    let declared = AUTH_FAILURE_CODES
+        .iter()
+        .map(|code| code.to_string())
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(emitted, declared);
+
+    for code in AUTH_FAILURE_CODES {
+        let expected = format!("list account authentication failed: {code}");
+        match auth_failure(code) {
+            AppError::Validation(message) => assert_eq!(message, expected),
+            other => panic!("unexpected {other:?}"),
+        }
+    }
+    match rate_limited_failure(None) {
+        AppError::TemporaryUnavailable { message, .. } => {
+            assert_eq!(message, "list account authentication failed: rate_limited")
+        }
+        other => panic!("unexpected {other:?}"),
+    }
+}

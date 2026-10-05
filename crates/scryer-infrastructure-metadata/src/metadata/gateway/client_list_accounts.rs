@@ -8,7 +8,8 @@ use chrono::{DateTime, Utc};
 use reqwest::{Client, RequestBuilder, StatusCode};
 use scryer_application::lists::account_transport::{
     ListAccountAuthGateway, ListAccountCompleteRequest, ListAccountStartRequest,
-    ListAccountStartResponse, ListProviderAppConfig,
+    ListAccountStartResponse, ListProviderAppConfig, PROVIDER_REJECTED, RECONNECT_REQUIRED,
+    rate_limited_failure,
 };
 use scryer_application::{AppError, AppResult};
 use scryer_domain::ListAccountCredential;
@@ -21,11 +22,17 @@ use super::{MetadataGatewayClient, apply_instance_auth_headers};
 const RELAY_ORIGIN: &str = "https://smg.scryer.media";
 const RESPONSE_LIMIT: usize = 64 * 1024;
 const REQUEST_LIMIT: usize = 16 * 1024;
-/// Deadline for a direct provider token request.
+/// Deadline for starts, polls, revokes and every other short call.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(20);
+/// Deadline for a direct provider token exchange or renew.
 const OAUTH_TIMEOUT: Duration = Duration::from_secs(100);
 /// The relay waits up to 90 s on the provider itself, so Scryer waits a
-/// little longer to receive the relay's own answer rather than its silence.
+/// little longer on a relayed exchange or renew to receive the relay's own
+/// answer rather than its silence.
 const RELAY_TIMEOUT: Duration = Duration::from_secs(110);
+/// Upper bound on a provider's requested pause, so a hostile or broken
+/// `Retry-After` cannot park an account indefinitely.
+const RETRY_AFTER_CAP: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Uses the existing instance enrollment for relay requests. Provider URLs are
 /// protocol constants; operator configuration supplies app credentials only.
@@ -70,7 +77,7 @@ impl HttpListAccountAuthGateway {
     ) -> AppResult<Self> {
         require_value(&client_identifier, 512)?;
         let http = Client::builder()
-            .timeout(OAUTH_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
             .connect_timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -91,7 +98,7 @@ impl HttpListAccountAuthGateway {
         request: RequestBuilder,
         provider: &str,
         operation: &str,
-    ) -> AppResult<(StatusCode, Vec<u8>)> {
+    ) -> AppResult<Reply> {
         let _permit = self.inflight.try_acquire().map_err(|_| failure("busy"))?;
         let request = request
             .header("Accept", "application/json")
@@ -110,6 +117,12 @@ impl HttpListAccountAuthGateway {
             .await
             .map_err(|_| failure("provider_unavailable"))?;
         let status = response.status();
+        let retry_after = response
+            .headers()
+            .get(reqwest::header::RETRY_AFTER)
+            .and_then(|value| value.to_str().ok())
+            .and_then(scryer_outbound_http::parse_retry_after)
+            .map(|(delay, _)| delay.min(RETRY_AFTER_CAP));
         // Bounded server-owned labels only: no URL, state, body or credentials.
         tracing::debug!(
             provider,
@@ -134,7 +147,11 @@ impl HttpListAccountAuthGateway {
             }
             body.extend_from_slice(&chunk);
         }
-        Ok((status, body))
+        Ok(Reply {
+            status,
+            body,
+            retry_after,
+        })
     }
 
     async fn json<T: DeserializeOwned>(
@@ -142,18 +159,14 @@ impl HttpListAccountAuthGateway {
         request: RequestBuilder,
         provider: &str,
         operation: &str,
+        source: Source,
     ) -> AppResult<T> {
-        let (status, body) = self.send(request, provider, operation).await?;
-        ensure_success(status, &body)?;
-        serde_json::from_slice(&body).map_err(|_| failure("invalid_provider_response"))
+        let reply = self.send(request, provider, operation).await?;
+        ensure_success(&reply, source)?;
+        serde_json::from_slice(&reply.body).map_err(|_| failure("invalid_provider_response"))
     }
 
-    async fn relay(
-        &self,
-        provider: &str,
-        operation: &str,
-        body: Value,
-    ) -> AppResult<(StatusCode, Vec<u8>)> {
+    async fn relay(&self, provider: &str, operation: &str, body: Value) -> AppResult<Reply> {
         if !matches!(provider, "trakt" | "anilist" | "mal" | "simkl")
             || !matches!(operation, "start" | "exchange" | "renew" | "revoke")
         {
@@ -177,7 +190,11 @@ impl HttpListAccountAuthGateway {
         let request = self
             .http
             .post(url.clone())
-            .timeout(RELAY_TIMEOUT)
+            .timeout(if matches!(operation, "exchange" | "renew") {
+                RELAY_TIMEOUT
+            } else {
+                REQUEST_TIMEOUT
+            })
             .header("Content-Type", "application/json")
             .body(body.clone());
         let request = apply_instance_auth_headers(request, &auth, "POST", &url, &body)
@@ -192,9 +209,9 @@ impl HttpListAccountAuthGateway {
         operation: &str,
         body: Value,
     ) -> AppResult<T> {
-        let (status, body) = self.relay(provider, operation, body).await?;
-        ensure_success(status, &body)?;
-        serde_json::from_slice(&body).map_err(|_| failure("invalid_provider_response"))
+        let reply = self.relay(provider, operation, body).await?;
+        ensure_success(&reply, Source::Relay)?;
+        serde_json::from_slice(&reply.body).map_err(|_| failure("invalid_provider_response"))
     }
 
     fn token_request(
@@ -218,7 +235,9 @@ impl HttpListAccountAuthGateway {
             "mal" => &self.endpoints.mal,
             _ => return Err(failure("unsupported_provider")),
         };
-        let mut request = self.http.post(endpoint);
+        // Token requests are exchanges and renews: the provider may be slow, and
+        // abandoning one mid-flight can spend a single-use code or token.
+        let mut request = self.http.post(endpoint).timeout(OAUTH_TIMEOUT);
         if provider == "mal" {
             let mut body = url::form_urlencoded::Serializer::new(String::new());
             for (key, value) in &fields {
@@ -251,6 +270,7 @@ impl HttpListAccountAuthGateway {
                     .body("strong=true"),
                 "plex",
                 "start",
+                Source::Provider,
             )
             .await?;
         require_value(&pin.code, 256)?;
@@ -286,6 +306,7 @@ impl HttpListAccountAuthGateway {
                     .json(&json!({})),
                 "tmdb",
                 "start",
+                Source::Provider,
             )
             .await?;
         if !reply.success {
@@ -362,6 +383,7 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                             .query(&[("code", &poll.code)]),
                         provider,
                         "poll",
+                        Source::Provider,
                     )
                     .await?;
                 if reply.id != poll.id || reply.code != poll.code {
@@ -387,14 +409,19 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                     .post(format!("{}/auth/access_token", self.endpoints.tmdb))
                     .bearer_auth(tmdb_app_token(app)?)
                     .json(&json!({"request_token": poll_token}));
-                let (status, body) = self.send(request, provider, "poll").await?;
-                let reply: TmdbAccessToken = serde_json::from_slice(&body)
-                    .map_err(|_| failure("invalid_provider_response"))?;
-                // TMDb's documented status 41 means the user has not approved yet.
-                if status == StatusCode::UNAUTHORIZED && reply.status_code == Some(41) {
+                let answer = self.send(request, provider, "poll").await?;
+                // TMDb's documented status 41 means the user has not approved
+                // yet. Only a 401 can carry it; any other status is judged on the
+                // status alone, so an HTML 5xx page reads as unavailable.
+                if answer.status == StatusCode::UNAUTHORIZED
+                    && serde_json::from_slice::<TmdbAccessToken>(&answer.body)
+                        .is_ok_and(|reply| reply.status_code == Some(41))
+                {
                     return Ok(None);
                 }
-                ensure_success(status, &body)?;
+                ensure_success(&answer, Source::Provider)?;
+                let reply: TmdbAccessToken = serde_json::from_slice(&answer.body)
+                    .map_err(|_| failure("invalid_provider_response"))?;
                 if !reply.success {
                     return Err(failure("authorization_failed"));
                 }
@@ -467,6 +494,7 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                 self.token_request(provider, &app, fields)?,
                 provider,
                 "exchange",
+                Source::Provider,
             )
             .await?;
         let mut credential = tokens.credential(provider, true, TokenGrant::Exchange)?;
@@ -484,6 +512,7 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
             let handle = credential
                 .refresh_handle
                 .as_deref()
+                .filter(|handle| !handle.is_empty())
                 .ok_or_else(|| failure("reconnect_required"))?;
             require_value(handle, 12000)?;
             let tokens: Tokens = self
@@ -494,8 +523,17 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
             let refresh_token = credential
                 .refresh_token
                 .as_deref()
+                .filter(|token| !token.is_empty())
                 .ok_or_else(|| failure("reconnect_required"))?;
             require_value(refresh_token, 8192)?;
+            // An operator's own app answering invalid_client means that app no
+            // longer accepts this grant. The built-in public client answering
+            // the same is a Scryer configuration fault no reconnect can fix.
+            let source = if app.is_some() {
+                Source::OperatorAppRenew
+            } else {
+                Source::Provider
+            };
             let mut app = app.cloned().unwrap_or_default();
             if provider == "mal" && app.client_id.is_empty() {
                 app.client_id = credential
@@ -522,6 +560,7 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                     self.token_request(provider, &app, fields)?,
                     provider,
                     "renew",
+                    source,
                 )
                 .await?;
             tokens.credential(provider, true, TokenGrant::Renew)?
@@ -545,10 +584,10 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                 .as_deref()
                 .ok_or_else(|| failure("reconnect_required"))?;
             require_value(handle, 12000)?;
-            let (status, body) = self
+            let reply = self
                 .relay(provider, "revoke", json!({"refresh_handle": handle}))
                 .await?;
-            ensure_success(status, &body)?;
+            ensure_success(&reply, Source::Relay)?;
         }
         Ok(())
     }
@@ -726,30 +765,71 @@ fn require_value(value: &str, max: usize) -> AppResult<()> {
     }
     Ok(())
 }
-fn ensure_success(status: StatusCode, body: &[u8]) -> AppResult<()> {
+/// A bounded HTTP answer: status, body, and any pause the server asked for.
+struct Reply {
+    status: StatusCode,
+    body: Vec<u8>,
+    retry_after: Option<Duration>,
+}
+
+/// Who answered, which decides how an error code is read.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Source {
+    /// A provider endpoint called directly.
+    Provider,
+    /// A provider token endpoint renewing a grant through the operator's own app.
+    OperatorAppRenew,
+    /// The SMG relay, whose error codes describe the relay as well as the provider.
+    Relay,
+}
+
+fn ensure_success(reply: &Reply, source: Source) -> AppResult<()> {
+    let status = reply.status;
     if status.is_success() {
         return Ok(());
     }
     if status == StatusCode::TOO_MANY_REQUESTS {
-        return Err(failure("rate_limited"));
+        return Err(rate_limited_failure(reply.retry_after));
     }
-    let code = serde_json::from_slice::<Value>(body)
+    let error = serde_json::from_slice::<Value>(&reply.body)
         .ok()
-        .and_then(|body| match body.get("error").and_then(Value::as_str) {
-            Some("invalid_grant" | "invalid_refresh_handle" | "expired_token") => {
-                Some("reconnect_required")
-            }
-            Some("access_denied") => Some("access_denied"),
-            Some(
-                "provider_not_configured"
-                | "relay_not_configured"
-                | "provider_configuration_error"
-                | "invalid_client"
-                | "unauthorized_client",
-            ) => Some("provider_not_configured"),
+        .and_then(|body| body.get("error").and_then(Value::as_str).map(str::to_owned));
+    let code = match error.as_deref() {
+        Some("invalid_grant" | "invalid_refresh_handle" | "expired_token") => {
+            Some(RECONNECT_REQUIRED)
+        }
+        Some("access_denied") => Some("access_denied"),
+        // The relay's documented transient answers, whatever status carries them.
+        Some("relay_busy" | "relay_key_unavailable" | "relay_unavailable") => {
+            Some("provider_unavailable")
+        }
+        Some("invalid_client" | "unauthorized_client") if source == Source::OperatorAppRenew => {
+            Some(RECONNECT_REQUIRED)
+        }
+        Some(
+            "provider_not_configured"
+            | "relay_not_configured"
+            | "provider_configuration_error"
+            | "invalid_client"
+            | "unauthorized_client",
+        ) => Some("provider_not_configured"),
+        // The relay's own refusals say nothing about the provider grant.
+        Some(code) if source == Source::Relay => match code {
+            "instance_auth_required" => Some("instance_auth_required"),
+            "invalid_request" | "request_too_large" => Some("invalid_request"),
+            "not_found" | "method_not_allowed" => Some("unsupported_provider"),
+            "invalid_exchange" => Some("authorization_failed"),
             _ => None,
-        })
-        .unwrap_or("provider_unavailable");
+        },
+        _ => None,
+    };
+    let code = code.unwrap_or(
+        if status.is_client_error() && status != StatusCode::REQUEST_TIMEOUT {
+            PROVIDER_REJECTED
+        } else {
+            "provider_unavailable"
+        },
+    );
     Err(failure(code))
 }
 fn encode<T: Serialize>(value: &T) -> AppResult<String> {
