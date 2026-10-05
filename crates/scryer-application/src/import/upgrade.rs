@@ -232,6 +232,8 @@ pub(crate) async fn execute_upgrade(
             old_score,
             final_score,
             episode_ids: target_episode_ids,
+            import_id,
+            source_ref: completed.map(|download| download.download_client_item_id.as_str()),
         },
     )
     .await?;
@@ -1939,6 +1941,10 @@ struct UpgradeEventDetails<'a> {
     old_score: i32,
     final_score: i32,
     episode_ids: &'a [String],
+    /// Identity of the import that caused the upgrade, carried onto the event
+    /// exactly as the matching import-complete event records it.
+    import_id: &'a str,
+    source_ref: Option<&'a str>,
 }
 
 async fn append_upgrade_event(
@@ -1973,6 +1979,8 @@ async fn append_upgrade_event(
             old_score: Some(details.old_score),
             new_score: Some(details.final_score),
             size_bytes: Some(details.new_size_bytes),
+            import_id: Some(details.import_id.to_string()),
+            source_ref: details.source_ref.map(str::to_string),
         }),
     ))
     .await

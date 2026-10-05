@@ -28815,6 +28815,10 @@ enum TitleHistoryEventTypeValue {
 	"""
 	IMPORT_SKIPPED
 	"""
+	A post-download rule refused the import.
+	"""
+	IMPORT_REJECTED_BY_RULE
+	"""
 	Existing file was upgraded.
 	"""
 	FILE_UPGRADED

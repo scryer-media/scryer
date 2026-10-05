@@ -1712,6 +1712,7 @@ const zh_CN: LocaleDictionary = {
   "history.imported": "已导入",
   "history.importFailed": "导入失败",
   "history.importSkipped": "导入已跳过",
+  "history.importRejectedByRule": "被规则拒绝",
   "history.downloadCompleted": "已下载",
   "history.fileDeleted": "已删除",
   "history.fileRestored": "已恢复",

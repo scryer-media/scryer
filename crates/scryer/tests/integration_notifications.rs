@@ -2798,6 +2798,8 @@ async fn notification_dispatcher_delivers_structured_lifecycle_metadata() {
                     old_score: None,
                     new_score: None,
                     size_bytes: None,
+                    import_id: None,
+                    source_ref: None,
                 }),
             ),
         ),

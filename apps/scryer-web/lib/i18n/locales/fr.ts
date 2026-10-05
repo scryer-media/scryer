@@ -1885,6 +1885,7 @@ const fr: LocaleDictionary = {
   "history.imported": "Importé",
   "history.importFailed": "Échec de l'importation",
   "history.importSkipped": "Importation ignorée",
+  "history.importRejectedByRule": "Rejetée par une règle",
   "history.downloadCompleted": "Téléchargé",
   "history.fileDeleted": "Supprimé",
   "history.fileRestored": "Restauré",

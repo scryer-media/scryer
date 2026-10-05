@@ -3019,6 +3019,7 @@ const zh_TW: LocaleDictionary = {
   "history.imported": "已匯入",
   "history.importFailed": "匯入失敗",
   "history.importSkipped": "匯入已跳過",
+  "history.importRejectedByRule": "被規則拒絕",
   "history.downloadCompleted": "已下載",
   "history.fileUpgraded": "已升級",
   "history.fileRecycled": "已回收",

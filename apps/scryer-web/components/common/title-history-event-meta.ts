@@ -5,6 +5,7 @@ import {
   ArchiveRestore,
   EyeOff,
   FileEdit,
+  Gavel,
   HardDrive,
   Replace,
   RefreshCcw,
@@ -25,6 +26,7 @@ export const TITLE_HISTORY_FILTERS = [
   "imported",
   "import_failed",
   "import_skipped",
+  "import_rejected_by_rule",
   "file_upgraded",
   "file_recycled",
   "file_deleted",
@@ -44,6 +46,7 @@ export const WANTED_HISTORY_FILTERS = [
   "imported",
   "import_failed",
   "import_skipped",
+  "import_rejected_by_rule",
 ] as const;
 
 type EventMeta = {
@@ -95,6 +98,14 @@ const eventMeta: Record<string, EventMeta> = {
     iconClassName: "text-[var(--scry-warning-text)]",
     labelKey: "history.importSkipped",
     badgeClassName: "border-[var(--scry-warning-border)] bg-[var(--scry-warning-bg)] text-[var(--scry-warning-text)]",
+  },
+  // A rule doing what the operator wrote is not a failure: accent styling, not
+  // the danger or warning palettes failures and skips use.
+  import_rejected_by_rule: {
+    icon: Gavel,
+    iconClassName: "text-[var(--scry-accent-text)]",
+    labelKey: "history.importRejectedByRule",
+    badgeClassName: "border-[rgba(var(--scry-accent-rgb),0.4)] bg-[rgba(var(--scry-accent-rgb),0.1)] text-[var(--scry-accent-text)]",
   },
   file_upgraded: {
     icon: Replace,
@@ -195,6 +206,7 @@ const DOMAIN_EVENT_TYPES_BY_HISTORY_EVENT: Record<string, readonly string[]> = {
   imported: ["IMPORT_COMPLETED"],
   import_failed: ["IMPORT_REJECTED"],
   import_skipped: ["IMPORT_REJECTED"],
+  import_rejected_by_rule: ["IMPORT_REJECTED"],
   file_upgraded: ["MEDIA_FILE_UPGRADED"],
   file_recycled: ["MEDIA_FILE_DELETED"],
   file_deleted: ["MEDIA_FILE_DELETED"],

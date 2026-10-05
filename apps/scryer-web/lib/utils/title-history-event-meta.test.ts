@@ -93,3 +93,32 @@ test("every history filter maps to the domain events that produce it", () => {
   ]);
   assert.deepEqual(domainEventTypesForHistoryEvents(["unknown"]), []);
 });
+
+test("a rule's rejection is its own history status, apart from failures and skips", () => {
+  const meta = getTitleHistoryEventMeta("import_rejected_by_rule");
+  assert.equal(meta.labelKey, "history.importRejectedByRule");
+  for (const other of ["import_failed", "import_skipped"]) {
+    assert.notEqual(meta.labelKey, getTitleHistoryEventMeta(other).labelKey);
+  }
+  assert.doesNotMatch(
+    `${meta.badgeClassName} ${meta.iconClassName}`,
+    /danger|warning/,
+    "a rule doing its job is not styled as an error",
+  );
+  for (const filters of [TITLE_HISTORY_FILTERS, WANTED_HISTORY_FILTERS]) {
+    assert.ok(
+      (filters as readonly string[]).includes("import_rejected_by_rule"),
+      "rule rejections must stay listed by default and be filterable",
+    );
+  }
+  assert.deepEqual(domainEventTypesForHistoryEvents(["import_rejected_by_rule"]), [
+    "IMPORT_REJECTED",
+  ]);
+  for (const [name, dictionary] of Object.entries({ de, en, es, fr, it, ja, ko, pt_BR, zh_CN })) {
+    assert.equal(
+      typeof (dictionary as Record<string, string>)["history.importRejectedByRule"],
+      "string",
+      `missing history.importRejectedByRule in ${name}`,
+    );
+  }
+});

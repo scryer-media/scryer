@@ -545,6 +545,14 @@ async fn run_postgres_rust_hook(
             crate::migrations::post_processing_output::compress_post_processing_output_postgres(tx)
                 .await
         }
+        "backfill_import_skip_reason_projection" => {
+            crate::migrations::event_storage::backfill_import_skip_reason_projection_postgres(tx)
+                .await
+        }
+        "scrub_stored_release_url_credentials" => {
+            crate::migrations::release_url_scrub::scrub_stored_release_url_credentials_postgres(tx)
+                .await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

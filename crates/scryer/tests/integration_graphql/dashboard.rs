@@ -192,6 +192,8 @@ fn upgraded_payload(title_name: &str) -> DomainEventPayload {
         old_score: Some(100),
         new_score: Some(200),
         size_bytes: Some(UPGRADED_SIZE_BYTES),
+        import_id: None,
+        source_ref: None,
     })
 }
 

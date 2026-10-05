@@ -3597,6 +3597,9 @@ pub enum TitleHistoryEventType {
     Imported,
     ImportFailed,
     ImportSkipped,
+    /// A post-download rule refused the import. A decision the operator's
+    /// rules made, kept apart from failures and plain skips.
+    ImportRejectedByRule,
     FileUpgraded,
     FileRecycled,
     FileDeleted,
@@ -3626,6 +3629,7 @@ impl TitleHistoryEventType {
             Self::Imported => "imported",
             Self::ImportFailed => "import_failed",
             Self::ImportSkipped => "import_skipped",
+            Self::ImportRejectedByRule => "import_rejected_by_rule",
             Self::FileUpgraded => "file_upgraded",
             Self::FileRecycled => "file_recycled",
             Self::FileDeleted => "file_deleted",
@@ -3650,6 +3654,7 @@ impl TitleHistoryEventType {
             "imported" => Some(Self::Imported),
             "import_failed" => Some(Self::ImportFailed),
             "import_skipped" => Some(Self::ImportSkipped),
+            "import_rejected_by_rule" => Some(Self::ImportRejectedByRule),
             "file_upgraded" => Some(Self::FileUpgraded),
             "file_recycled" => Some(Self::FileRecycled),
             "file_deleted" => Some(Self::FileDeleted),
@@ -3674,6 +3679,7 @@ impl TitleHistoryEventType {
         Self::Imported,
         Self::ImportFailed,
         Self::ImportSkipped,
+        Self::ImportRejectedByRule,
         Self::FileUpgraded,
         Self::FileRecycled,
         Self::FileDeleted,
@@ -4513,6 +4519,15 @@ pub struct MediaFileUpgradedEventData {
     /// `None`.
     #[serde(default)]
     pub size_bytes: Option<i64>,
+    /// The import that produced the upgrade, matching the `import_id` of the
+    /// `ImportCompleted` event it raised. Events persisted before this field
+    /// existed read back as `None`.
+    #[serde(default)]
+    pub import_id: Option<String>,
+    /// The download client's item id for that import, matching the
+    /// `source_ref` of its `ImportCompleted` event.
+    #[serde(default)]
+    pub source_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
