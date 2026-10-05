@@ -254,6 +254,11 @@ pub(crate) struct MockMediaFileRepo {
     /// Title-wide and episode-scoped file reads, for read-budget tests.
     pub(super) title_file_reads: Arc<std::sync::atomic::AtomicUsize>,
     pub(super) scoped_file_reads: Arc<std::sync::atomic::AtomicUsize>,
+    /// Each file's title-wide role, as `media_files.role` holds it. Episode
+    /// elections change only the per-link role (`role` on the link rows in
+    /// `store`), the way the real store changes only `file_episode_map`, so
+    /// an election's losing file keeps this role.
+    pub(super) title_roles: Arc<Mutex<std::collections::HashMap<String, crate::MediaFileRole>>>,
 }
 
 impl MockMediaFileRepo {
@@ -393,6 +398,7 @@ impl MediaFileRepository for MockMediaFileRepo {
             .lock()
             .await
             .push(mock_media_file(id.clone(), input));
+        self.title_roles.lock().await.insert(id.clone(), input.role);
         Ok(id)
     }
 
@@ -450,6 +456,7 @@ impl MediaFileRepository for MockMediaFileRepo {
         file.episode_id = associations.episode_ids.first().cloned();
         file.series_movie_link_ids = associations.series_movie_link_ids.clone();
         files.push(file);
+        self.title_roles.lock().await.insert(id.clone(), input.role);
         Ok(crate::ClaimedMediaFile {
             media_file_id: id,
             disposition: crate::MediaFileCatalogDisposition::Created,
@@ -678,6 +685,7 @@ impl MediaFileRepository for MockMediaFileRepo {
         // spanning two episodes comes back **once** with both ids. Modelling it
         // as one row per link here would let a test pass against a span the
         // product never sees.
+        let title_roles = self.title_roles.lock().await.clone();
         let mut spans: Vec<(TitleMediaFile, Vec<String>)> = Vec::new();
         for entry in self.store.lock().await.iter() {
             if entry.title_id != title_id {
@@ -703,7 +711,10 @@ impl MediaFileRepository for MockMediaFileRepo {
                     .any(|episode_id| requested.contains(episode_id.as_str()))
             })
             .map(|(media_file, episode_ids)| {
-                let title_role = media_file.role;
+                let title_role = title_roles
+                    .get(&media_file.id)
+                    .copied()
+                    .unwrap_or(media_file.role);
                 let primary_episode_ids = if media_file.role.is_primary() {
                     episode_ids.clone()
                 } else {
@@ -1036,6 +1047,11 @@ impl MediaFileRepository for MockMediaFileRepo {
             return Err(AppError::NotFound(format!(
                 "media files for title {title_id}"
             )));
+        }
+        let mut title_roles = self.title_roles.lock().await;
+        title_roles.insert(primary_file_id.to_string(), crate::MediaFileRole::Primary);
+        for file_id in additional_ids {
+            title_roles.insert(file_id.to_string(), crate::MediaFileRole::Additional);
         }
         Ok(())
     }

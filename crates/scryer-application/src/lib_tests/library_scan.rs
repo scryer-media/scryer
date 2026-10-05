@@ -2423,10 +2423,82 @@ async fn series_title_scan_leaves_a_series_movie_episode_additional_only() {
     );
 }
 
-/// Scans new files into a series that has one regular episode (1x01) and a
-/// series movie, "Lantern Vale Feature" (2026), linked to its special S00E01.
-/// Returns each file's role, in the order given.
-async fn series_title_scan_roles_for_new_files(names: &[(&str, usize)]) -> Vec<MediaFileRole> {
+/// A series with one regular episode (1x01) and a series movie, "Lantern
+/// Vale Feature" (2026), linked to its special S00E01, whose folder holds
+/// the given files. Nothing has been scanned yet.
+struct LanternValeSeries {
+    _tempdir: tempfile::TempDir,
+    app: AppUseCase,
+    user: User,
+    title: Title,
+    library_scanner: Arc<MutableLibraryScanner>,
+    paths: Vec<PathBuf>,
+    /// The special the series movie is linked to, then the regular episode.
+    episode_ids: Vec<String>,
+}
+
+impl LanternValeSeries {
+    async fn roles(&self) -> Vec<MediaFileRole> {
+        let files = self
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&self.title.id)
+            .await
+            .expect("list media files");
+        self.paths
+            .iter()
+            .map(|path| media_file_role_for_path(&files, path))
+            .collect()
+    }
+
+    /// Whether any file is Primary for `episode_id`.
+    async fn episode_has_primary(&self, episode_id: &str) -> bool {
+        self.app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&self.title.id)
+            .await
+            .expect("list media files")
+            .iter()
+            .any(|file| file.episode_id.as_deref() == Some(episode_id) && file.role.is_primary())
+    }
+
+    /// Takes the file at `index` out of the folder and the catalog, as a
+    /// file that vanished or was deleted without any promotion running.
+    async fn remove_file(&mut self, index: usize) {
+        let path = self.paths.remove(index);
+        let file_id = self
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&self.title.id)
+            .await
+            .expect("list media files")
+            .into_iter()
+            .find(|file| file.file_path == path.to_string_lossy())
+            .expect("file to remove")
+            .id;
+        self.app
+            .services
+            .library
+            .media_files
+            .delete_media_file(&file_id)
+            .await
+            .expect("remove catalog row");
+        std::fs::remove_file(&path).expect("remove file from disk");
+        self.library_scanner
+            .set_library_files(build_test_library_files(
+                &self.paths.iter().map(PathBuf::as_path).collect::<Vec<_>>(),
+            ))
+            .await;
+    }
+}
+
+async fn lantern_vale_series(names: &[(&str, usize)]) -> LanternValeSeries {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let title_dir = tempdir.path().join("Lantern Vale (2026)");
     std::fs::create_dir(&title_dir).expect("create series folder");
@@ -2455,7 +2527,7 @@ async fn series_title_scan_roles_for_new_files(names: &[(&str, usize)]) -> Vec<M
         .await;
     let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
         settings,
-        library_scanner,
+        library_scanner.clone(),
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
         Arc::new(EmptySearchMetadataGateway),
     );
@@ -2547,21 +2619,104 @@ async fn series_title_scan_roles_for_new_files(names: &[(&str, usize)]) -> Vec<M
         .await
         .expect("record series movie link");
 
-    app.scan_title_library(&user, &title.id)
+    LanternValeSeries {
+        _tempdir: tempdir,
+        app,
+        user,
+        title,
+        library_scanner,
+        paths,
+        episode_ids,
+    }
+}
+
+/// Scans new files into the Lantern Vale series and returns each file's
+/// role, in the order given.
+async fn series_title_scan_roles_for_new_files(names: &[(&str, usize)]) -> Vec<MediaFileRole> {
+    let series = lantern_vale_series(names).await;
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
         .await
         .expect("scan series title");
+    series.roles().await
+}
 
-    let files = app
-        .services
-        .library
-        .media_files
-        .list_media_files_for_title(&title.id)
+/// Two files for one episode: the scan elects the larger, which then goes
+/// away without a promotion, and the episode is scanned again in a library
+/// scan (`full_scan`) or a one-off title scan. Returns the remaining file's
+/// role for the episode and whether the episode has a Primary afterwards.
+async fn episode_role_after_elected_file_goes(
+    names: [&str; 2],
+    episode_index: usize,
+    full_scan: bool,
+) -> (MediaFileRole, bool) {
+    let mut series = lantern_vale_series(&[(names[0], 1024), (names[1], 256)]).await;
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
         .await
-        .expect("list media files");
-    paths
-        .iter()
-        .map(|path| media_file_role_for_path(&files, path))
-        .collect()
+        .expect("first scan");
+    assert_eq!(
+        series.roles().await,
+        vec![MediaFileRole::Primary, MediaFileRole::Additional],
+        "the first scan elects the larger file"
+    );
+
+    series.remove_file(0).await;
+    if full_scan {
+        series
+            .app
+            .scan_library(&series.user, MediaFacet::Series)
+            .await
+            .expect("library scan");
+    } else {
+        series
+            .app
+            .scan_title_library(&series.user, &series.title.id)
+            .await
+            .expect("title scan");
+    }
+
+    let episode_id = series.episode_ids[episode_index].clone();
+    (
+        series.roles().await[0],
+        series.episode_has_primary(&episode_id).await,
+    )
+}
+
+const SERIES_MOVIE_FILES: [&str; 2] = [
+    "Lantern Vale Feature (2026) Bluray-1080p.mkv",
+    "Lantern Vale Feature (2026) WEBDL-720p.mkv",
+];
+const REGULAR_EPISODE_FILES: [&str; 2] = [
+    "Lantern Vale - 1x01 - Pilot Bluray-1080p.mkv",
+    "Lantern Vale - 1x01 - Pilot WEBDL-720p.mkv",
+];
+
+/// The losing file of a series movie's election keeps its title role
+/// Primary, but no later scan of any mode makes it the episode's Primary.
+#[tokio::test]
+async fn scans_never_promote_a_series_movie_episodes_losing_file() {
+    for full_scan in [true, false] {
+        assert_eq!(
+            episode_role_after_elected_file_goes(SERIES_MOVIE_FILES, 0, full_scan).await,
+            (MediaFileRole::Additional, false),
+            "full scan: {full_scan}"
+        );
+    }
+}
+
+/// A regular episode's losing file is still promoted by a later scan.
+#[tokio::test]
+async fn scans_promote_a_regular_episodes_losing_file() {
+    for full_scan in [true, false] {
+        assert_eq!(
+            episode_role_after_elected_file_goes(REGULAR_EPISODE_FILES, 1, full_scan).await,
+            (MediaFileRole::Primary, true),
+            "full scan: {full_scan}"
+        );
+    }
 }
 
 #[tokio::test]

@@ -563,10 +563,40 @@ async fn normalize_movie_file_roles_after_scan(
     }
 }
 
+/// What an episode's election may draw on when no file is Primary for it.
+struct EpisodeElectionGate<'a> {
+    /// Files the automatic-promotion allow-list accepts as ordinary episode
+    /// files. Empty when the title's rows or series movie links could not be
+    /// read, which promotes nothing.
+    ordinary_file_ids: &'a HashSet<String>,
+    /// Every (file, episode) link stored before this scan. A link this scan
+    /// created carries no stored role for the episode yet, so electing among
+    /// such links is the scan's first election, not a promotion.
+    stored_episode_links: &'a HashSet<(String, String)>,
+    /// Whether a file with no Primary role at all may be promoted (one-off
+    /// title scans only).
+    allow_additional_promotion: bool,
+}
+
+impl EpisodeElectionGate<'_> {
+    fn is_newly_linked(&self, file_id: &str, episode_id: &str) -> bool {
+        !self
+            .stored_episode_links
+            .contains(&(file_id.to_string(), episode_id.to_string()))
+    }
+
+    /// Whether the scan may make `file_id` Primary for `episode_id` when the
+    /// episode has no Primary: an ordinary episode file, or a file this scan
+    /// just linked to the episode.
+    fn may_elect(&self, file_id: &str, episode_id: &str) -> bool {
+        self.ordinary_file_ids.contains(file_id) || self.is_newly_linked(file_id, episode_id)
+    }
+}
+
 fn select_primary_episodic_media_file(
     files: &[&crate::EpisodeScopedMediaFile],
     episode_id: &str,
-    promotable_file_ids: Option<&HashSet<String>>,
+    gate: &EpisodeElectionGate<'_>,
 ) -> Option<String> {
     let association_primary_files = files
         .iter()
@@ -582,19 +612,26 @@ fn select_primary_episodic_media_file(
     }
 
     let mut ranked = if association_primary_files.is_empty() {
+        // A file that lost an earlier election keeps its title role Primary
+        // and is only Additional for the episode, so the title role alone
+        // never qualifies it: a series movie's episode keeps that file
+        // Additional until the operator picks.
         let title_primary_files = files
             .iter()
             .copied()
-            .filter(|file| file.title_role.is_primary())
+            .filter(|file| {
+                file.title_role.is_primary() && gate.may_elect(&file.media_file.id, episode_id)
+            })
             .collect::<Vec<_>>();
         if title_primary_files.is_empty() {
-            // Only an ordinary episode file may be promoted out of Additional;
-            // a series movie's file keeps its role until the operator picks.
-            let promotable_file_ids = promotable_file_ids?;
+            if !gate.allow_additional_promotion {
+                return None;
+            }
+            // Only an ordinary episode file may be promoted out of Additional.
             let promotable = files
                 .iter()
                 .copied()
-                .filter(|file| promotable_file_ids.contains(&file.media_file.id))
+                .filter(|file| gate.ordinary_file_ids.contains(&file.media_file.id))
                 .collect::<Vec<_>>();
             if promotable.is_empty() {
                 return None;
@@ -661,6 +698,7 @@ async fn normalize_episodic_file_roles_after_scan(
     app: &AppUseCase,
     title: &Title,
     episode_ids: &HashSet<String>,
+    stored_episode_links: &HashSet<(String, String)>,
     allow_existing_additional_role_promotion: bool,
 ) -> bool {
     if episode_ids.is_empty() {
@@ -691,13 +729,9 @@ async fn normalize_episodic_file_roles_after_scan(
         return false;
     }
 
-    // Promotion out of Additional is limited to files the automatic-promotion
-    // allow-list positively identifies as ordinary episode files.
-    let promotable_file_ids = if allow_existing_additional_role_promotion {
-        Some(promotable_episode_file_ids(app, title).await)
-    } else {
-        None
-    };
+    // The automatic-promotion allow-list, read once and only when an episode
+    // without a Primary has a file whose link was stored before this scan.
+    let mut ordinary_file_ids: Option<HashSet<String>> = None;
 
     let mut title_updated = false;
     for episode_id in episode_ids {
@@ -709,11 +743,27 @@ async fn normalize_episodic_file_roles_after_scan(
             continue;
         }
 
-        let Some(selected_primary_id) = select_primary_episodic_media_file(
-            &candidates,
-            &episode_id,
-            promotable_file_ids.as_ref(),
-        ) else {
+        let has_episode_primary = candidates.iter().any(|file| {
+            file.primary_episode_ids
+                .iter()
+                .any(|primary_episode_id| primary_episode_id == &episode_id)
+        });
+        let has_stored_link = candidates.iter().any(|file| {
+            stored_episode_links.contains(&(file.media_file.id.clone(), episode_id.clone()))
+        });
+        if !has_episode_primary && has_stored_link && ordinary_file_ids.is_none() {
+            ordinary_file_ids = Some(promotable_episode_file_ids(app, title).await);
+        }
+        let no_ordinary_files = HashSet::new();
+        let gate = EpisodeElectionGate {
+            ordinary_file_ids: ordinary_file_ids.as_ref().unwrap_or(&no_ordinary_files),
+            stored_episode_links,
+            allow_additional_promotion: allow_existing_additional_role_promotion,
+        };
+
+        let Some(selected_primary_id) =
+            select_primary_episodic_media_file(&candidates, &episode_id, &gate)
+        else {
             continue;
         };
         let additional_file_ids = candidates
@@ -2703,6 +2753,8 @@ impl AppUseCase {
                     .insert(episode_id.clone());
             }
         }
+        // The links that carried a stored role before this scan touched them.
+        let stored_episode_links = episode_links.clone();
         let mut remaining_existing_paths = existing_records_by_path
             .keys()
             .cloned()
@@ -3307,6 +3359,7 @@ impl AppUseCase {
                 self,
                 &title,
                 &role_normalization_episode_ids,
+                &stored_episode_links,
                 mode.allows_existing_additional_role_promotion(),
             )
             .await

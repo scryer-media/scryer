@@ -1882,22 +1882,16 @@ pub(crate) struct PrimaryPromotionBatch {
     scopes: Vec<PrimaryPromotionScope>,
 }
 
-/// What `file_id` is Primary for, read from the title's rows, or `None` when
-/// automatic promotion must leave its scope alone.
+/// The one gate for automatic promotion, after a delete and in a scan: the
+/// rows of `file_id` and the episodes they cover when the file is positively
+/// an ordinary episode file, or `None` otherwise.
 ///
-/// This is the one gate for automatic promotion, and it is an allow-list:
-/// only a file positively identified as an ordinary episode file qualifies.
-/// That means every row of the file is linked to an episode, the file has no
-/// series movie link, and none of its episodes is the linked episode of a
-/// series movie (`series_movie_episode_ids`; `None` when those links could
-/// not be read, which qualifies nothing). Movie files, series movie files and
-/// anything else keep their Additional file as it is until the operator
-/// chooses a Primary.
-/// The allow-list behind every automatic promotion: the rows of `file_id`
-/// and the episodes they cover when the file is positively an ordinary
-/// episode file, or `None` for a movie file, a series movie file, a file
-/// linked to a series movie's episode, or when the series movie links could
-/// not be read.
+/// It is an allow-list. A file qualifies only when every row of it is linked
+/// to an episode, it has no series movie link, and none of its episodes is
+/// the linked episode of a series movie (`series_movie_episode_ids`; `None`
+/// when those links could not be read, which qualifies nothing). Movie
+/// files, series movie files and anything else keep their Additional file as
+/// it is until the operator chooses a Primary.
 pub(crate) fn ordinary_episode_file_rows<'a>(
     title_rows: &'a [TitleMediaFile],
     series_movie_episode_ids: Option<&std::collections::BTreeSet<String>>,
@@ -1928,6 +1922,9 @@ pub(crate) fn ordinary_episode_file_rows<'a>(
     Some((rows, episode_ids))
 }
 
+/// What `file_id` is Primary for, read from the title's rows, or `None` when
+/// automatic promotion must leave its scope alone (see
+/// [`ordinary_episode_file_rows`]).
 fn primary_promotion_scope_from_rows(
     title_rows: &[TitleMediaFile],
     series_movie_episode_ids: Option<&std::collections::BTreeSet<String>>,
