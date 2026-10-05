@@ -2480,3 +2480,177 @@ async fn delete_preview_checks_the_title_folder_against_its_own_library_roots() 
         Some(1)
     );
 }
+
+/// The default movie library on `roots` plus a second movie library on
+/// `/Volumes/Media/Other Movies`, and an unhydrated title in the default one.
+async fn folder_ownership_two_movie_libraries(roots: &[&str]) -> (AppUseCase, Title) {
+    let (app, user) = bootstrap();
+    let movie_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let movie_library = app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&movie_library_id)
+        .await
+        .expect("movie library should load")
+        .expect("movie library should exist");
+    app.services
+        .catalog
+        .libraries
+        .update(
+            &movie_library_id,
+            movie_library.name.clone(),
+            movie_library.slug.clone(),
+            roots
+                .iter()
+                .enumerate()
+                .map(|(index, path)| LibraryRootDraft {
+                    path: path.to_string(),
+                    is_default: index == 0,
+                })
+                .collect(),
+        )
+        .await
+        .expect("movie library roots should update");
+    app.create_library(
+        &user,
+        MediaFacet::Movie,
+        "Other Movies".to_string(),
+        vec![LibraryRootDraft {
+            path: "/Volumes/Media/Other Movies".to_string(),
+            is_default: true,
+        }],
+        None,
+    )
+    .await
+    .expect("second movie library should be created");
+    let created = app
+        .create_title_without_hydration_in_library(
+            &user,
+            NewTitle {
+                name: "Synthetic Ownership Film".into(),
+                facet: MediaFacet::Movie,
+                monitored: false,
+                ..Default::default()
+            },
+            movie_library_id,
+        )
+        .await
+        .expect("title should be created");
+    (app, created.title)
+}
+
+#[tokio::test]
+async fn folder_ownership_accepts_a_folder_in_any_root_of_the_titles_own_library() {
+    let (app, title) = folder_ownership_two_movie_libraries(&[
+        "/Volumes/Media/Movies",
+        "/Volumes/Media/Movies 4K",
+    ])
+    .await;
+
+    for folder in [
+        "/Volumes/Media/Movies/Synthetic Ownership Film (2024)",
+        "/Volumes/Media/Movies 4K/Synthetic Ownership Film (2024)",
+    ] {
+        assert!(
+            !crate::folder_ownership::title_folder_is_outside_its_library(&app, &title, folder)
+                .await
+                .unwrap(),
+            "{folder} is inside the title's own library"
+        );
+    }
+
+    let mut claimant = title.clone();
+    crate::folder_ownership::claim_title_folder_if_missing(
+        &app,
+        &mut claimant,
+        Path::new("/Volumes/Media/Movies 4K/Synthetic Ownership Film (2024)"),
+    )
+    .await
+    .expect("claim");
+    assert_eq!(
+        claimant.folder_path.as_deref(),
+        Some("/Volumes/Media/Movies 4K/Synthetic Ownership Film (2024)"),
+        "a second root of the same library is claimed as before"
+    );
+}
+
+#[tokio::test]
+async fn folder_ownership_refuses_a_folder_inside_another_librarys_root() {
+    let (app, title) = folder_ownership_two_movie_libraries(&["/Volumes/Media/Movies"]).await;
+    let foreign = "/Volumes/Media/Other Movies/Synthetic Ownership Film (2024)";
+
+    assert!(
+        crate::folder_ownership::title_folder_is_outside_its_library(&app, &title, foreign)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !crate::folder_ownership::folder_spans_a_library_root(&app, foreign)
+            .await
+            .unwrap(),
+        "the all-roots check alone lets it through"
+    );
+
+    let mut claimant = title.clone();
+    crate::folder_ownership::claim_title_folder_if_missing(&app, &mut claimant, Path::new(foreign))
+        .await
+        .expect("claim is skipped, not failed");
+    assert_eq!(claimant.folder_path, None);
+    let stored = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&title.id)
+        .await
+        .unwrap()
+        .expect("title");
+    assert_eq!(stored.folder_path, None);
+
+    let mut reclaimant = title.clone();
+    reclaimant.folder_path =
+        Some("/Volumes/Media/Movies/Synthetic Ownership Film (2024)".to_string());
+    assert!(
+        !crate::folder_ownership::reclaim_stale_title_folder(
+            &app,
+            &mut reclaimant,
+            Path::new(foreign),
+        )
+        .await
+        .unwrap(),
+        "a reclaim into another library's root is refused"
+    );
+    assert_eq!(
+        reclaimant.folder_path.as_deref(),
+        Some("/Volumes/Media/Movies/Synthetic Ownership Film (2024)")
+    );
+}
+
+#[tokio::test]
+async fn folder_ownership_holds_a_multi_root_library_to_all_of_its_roots() {
+    let (app, title) =
+        folder_ownership_two_movie_libraries(&["/Volumes/Media/Movies", "/Volumes/Archive/Movies"])
+            .await;
+
+    assert!(
+        !crate::folder_ownership::title_folder_is_outside_its_library(
+            &app,
+            &title,
+            "/Volumes/Archive/Movies/Synthetic Ownership Film (2024)",
+        )
+        .await
+        .unwrap()
+    );
+    for outside in [
+        "/Volumes/Archive/Synthetic Ownership Film (2024)",
+        "/Volumes/Media/Movies",
+        "/Volumes/Media/Movies/../Other Movies/Synthetic Ownership Film (2024)",
+    ] {
+        assert!(
+            crate::folder_ownership::title_folder_is_outside_its_library(&app, &title, outside)
+                .await
+                .unwrap(),
+            "{outside} is not strictly inside a root of the title's library"
+        );
+    }
+}

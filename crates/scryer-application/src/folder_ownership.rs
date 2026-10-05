@@ -93,6 +93,41 @@ pub(crate) async fn folder_spans_a_library_root(
     ))
 }
 
+/// Whether `folder_path` lies outside every root of `title`'s own library.
+///
+/// [`folder_spans_a_library_root`] checks against every library's roots, so a
+/// folder inside another library's root passes it. A title folder belongs to
+/// its own library, so claiming one elsewhere would hand the title a folder
+/// that library's scans, renames and moves never look at. A library with no
+/// configured roots places titles under the facet default, so there is nothing
+/// to hold the folder against and it passes.
+pub(crate) async fn title_folder_is_outside_its_library(
+    app: &AppUseCase,
+    title: &Title,
+    folder_path: &str,
+) -> AppResult<bool> {
+    let library_roots = app
+        .services
+        .catalog
+        .libraries
+        .get_by_id(&title.library_id)
+        .await?
+        .map(|library| {
+            library
+                .roots
+                .into_iter()
+                .map(|root| root.path)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    if library_roots.is_empty() {
+        return Ok(false);
+    }
+    Ok(!library_roots
+        .iter()
+        .any(|root| crate::title_folder_rules::path_is_strictly_within(folder_path, root)))
+}
+
 /// Whether a title's recorded folder is a library root or holds one.
 ///
 /// Such a record is damage, and treating it as ownership would make every
@@ -131,7 +166,8 @@ pub(crate) async fn ensure_title_folder_is_not_a_library_root(
 
 /// Move a title's stale folder ownership to the folder a scan found its
 /// files in. Returns `false`, changing nothing, when another title already
-/// owns that folder — that is a real conflict, not a heal.
+/// owns that folder — that is a real conflict, not a heal — or when the folder
+/// is a library root or outside every root of the title's library.
 pub(crate) async fn reclaim_stale_title_folder(
     app: &AppUseCase,
     title: &mut Title,
@@ -140,6 +176,7 @@ pub(crate) async fn reclaim_stale_title_folder(
     let previous_folder_path = title.folder_path.clone().unwrap_or_default();
     let folder_path = path_to_stored_string(folder_path);
     if folder_spans_a_library_root(app, &folder_path).await?
+        || title_folder_is_outside_its_library(app, title, &folder_path).await?
         || find_other_folder_owner(app, title, &folder_path)
             .await?
             .is_some()
@@ -257,6 +294,15 @@ pub(crate) async fn claim_title_folder_if_missing(
             title_id = %title.id,
             folder_path = %folder_path,
             "not recording a library root as a title's folder"
+        );
+        return Ok(());
+    }
+    if title_folder_is_outside_its_library(app, title, &folder_path).await? {
+        tracing::warn!(
+            title_id = %title.id,
+            library_id = %title.library_id,
+            folder_path = %folder_path,
+            "not recording a folder outside the title's library roots as its folder"
         );
         return Ok(());
     }
