@@ -96,7 +96,7 @@ impl AppUseCase {
                 || !redirect.path().ends_with("/lists/oauth/callback")
             {
                 return Err(AppError::Validation(
-                    "a provider app needs a client ID, secret and valid account callback URI"
+                    "a provider app needs a client ID, a secret where the provider requires one, and a valid account callback URI"
                         .into(),
                 ));
             }

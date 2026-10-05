@@ -323,7 +323,9 @@ async fn byo_trakt_and_anilist_exchange_json_at_fixed_endpoints() {
         }
         let mut body = json!({"grant_type":"authorization_code","code":"fixture-exchange", "client_id":"fixture-client","client_secret":"fixture-secret","redirect_uri":"http://instance.example/lists/oauth/callback"});
         if provider == "trakt" {
+            // A stored legacy secret never joins a PKCE code exchange.
             body["code_verifier"] = json!("v".repeat(43));
+            body.as_object_mut().unwrap().remove("client_secret");
         }
         Mock::given(method("POST"))
             .and(path(format!("/{provider}/token")))

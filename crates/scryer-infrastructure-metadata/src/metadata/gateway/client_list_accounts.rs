@@ -457,9 +457,20 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
         if matches!(provider, "trakt" | "mal") {
             fields.push(("code_verifier", request.code_verifier));
         }
+        // Trakt proves a PKCE code exchange with the verifier alone and asks
+        // that no client secret accompany it; a configured secret is still
+        // sent on renewal.
+        let exchange_app = if provider == "trakt" {
+            ListProviderAppConfig {
+                client_secret: String::new(),
+                ..app.clone()
+            }
+        } else {
+            app.clone()
+        };
         let tokens: Tokens = self
             .json(
-                self.token_request(provider, &app, fields)?,
+                self.token_request(provider, &exchange_app, fields)?,
                 provider,
                 "exchange",
             )
