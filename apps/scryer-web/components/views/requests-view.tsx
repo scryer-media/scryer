@@ -1383,9 +1383,12 @@ export function RequestsView({
   };
 
   return (
+    // The gutter is kept whether or not the list overflows, so switching to a
+    // tab with fewer requests does not drop the scrollbar and slide the page
+    // sideways.
     <section
       id="requests-view"
-      className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-[var(--scry-surfE)]"
+      className="scry-scroll flex min-h-0 flex-1 overflow-y-auto bg-[var(--scry-surfE)] [scrollbar-gutter:stable]"
     >
       <div className="mx-auto flex w-full max-w-[1240px] flex-col gap-4 px-4 py-6 sm:px-6 lg:px-8">
         <div className="flex items-start gap-4">
@@ -1396,11 +1399,14 @@ export function RequestsView({
             <h1 className="font-display text-[25px] font-bold leading-tight text-[var(--scry-ink)]">
               {headingTitle}
             </h1>
-            {headingCopy ? (
-              <p className="mt-1 max-w-2xl text-[13.5px] text-[var(--scry-muted)]">
-                {headingCopy}
-              </p>
-            ) : null}
+            {/* The subtitle line is held in both modes so switching between
+                Queue and Mine does not move the filters below it. */}
+            <p
+              aria-hidden={headingCopy ? undefined : true}
+              className="mt-1 min-h-5 max-w-2xl text-[13.5px] leading-5 text-[var(--scry-muted)]"
+            >
+              {headingCopy}
+            </p>
           </div>
         </div>
 
