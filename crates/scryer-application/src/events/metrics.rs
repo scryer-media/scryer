@@ -1273,6 +1273,7 @@ mod tests {
                 DownloadQueueItemCommandIssuedEventData {
                     item_id: "queue-1".to_string(),
                     action: DownloadQueueCommandAction::Pause,
+                    detail: None,
                 },
             ),
             DomainEventPayload::PostProcessingCompleted(PostProcessingCompletedEventData {

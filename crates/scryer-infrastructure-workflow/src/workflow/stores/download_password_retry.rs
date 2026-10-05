@@ -4,6 +4,81 @@ use scryer_application::{
     DownloadPasswordRetryClaimOutcome, DownloadPasswordRetryObservation,
 };
 
+/// A retry whose dispatch outcome was never classified stops blocking a new
+/// attempt after this long. Matches the stale-import recovery window.
+const PASSWORD_RETRY_UNCERTAIN_TIMEOUT: chrono::Duration = chrono::Duration::minutes(45);
+
+/// Marks a retry whose request to the client ended without a known outcome.
+const PASSWORD_RETRY_DISPATCH_FINISHED_KEY: &str = "dispatch_finished_at";
+
+fn parse_retry_timestamp(value: &serde_json::Value) -> Option<chrono::DateTime<Utc>> {
+    chrono::DateTime::parse_from_rfc3339(value.as_str()?)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+/// The reason the download held before an unconfirmed retry, when that retry's
+/// dispatch outcome is unknown and old enough to replace. A claim whose
+/// dispatch finished uncertain is replaceable `timeout` after it finished. A
+/// claim with no such marker may still be dispatching, so it is replaceable
+/// only once its dispatch can no longer be running: `timeout` beyond the
+/// dispatch bound after the claim (a process that stopped mid-dispatch never
+/// writes the marker). Acknowledged or confirmed retries never time out here.
+/// Replacement happens in the claiming transaction, so the download never
+/// leaves its retry fence and nothing is deleted or released.
+async fn expired_uncertain_password_retry(
+    tx: &mut SqlTx<'_>,
+    id: &str,
+    now: chrono::DateTime<Utc>,
+    timeout: chrono::Duration,
+) -> AppResult<Option<String>> {
+    let Some(row) = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+        "SELECT s.password_retry_state, st.updated_at FROM download_submissions s
+         JOIN download_identity_states st ON st.identity_key = {} AND st.canonical_download_id = s.id
+         WHERE s.id = {} AND s.password_retry_state IS NOT NULL AND st.tracked_state = 'failed' AND st.reason = {}",
+        &[SqlArg::Text(format!("download:{id}")), SqlArg::Text(id.to_owned()),
+          SqlArg::Text(DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await? else {
+        return Ok(None);
+    };
+    let Ok(detail) = serde_json::from_str::<serde_json::Value>(&row.text("password_retry_state")?)
+    else {
+        return Ok(None);
+    };
+    if detail["confirmed"].as_bool() == Some(true) || detail.get("accepted_item_id").is_some() {
+        return Ok(None);
+    }
+    let replaceable_at = if let Some(finished) = detail.get(PASSWORD_RETRY_DISPATCH_FINISHED_KEY) {
+        let Some(finished_at) = parse_retry_timestamp(finished) else {
+            return Ok(None);
+        };
+        finished_at + timeout
+    } else {
+        let claimed_at = match detail.get("claimed_at") {
+            Some(value) => match parse_retry_timestamp(value) {
+                Some(value) => value,
+                None => return Ok(None),
+            },
+            None => row.timestamp("updated_at")?,
+        };
+        let Ok(dispatch_bound) = chrono::Duration::from_std(
+            scryer_application::DOWNLOAD_PASSWORD_RETRY_DISPATCH_TIMEOUT,
+        ) else {
+            return Ok(None);
+        };
+        claimed_at + dispatch_bound + timeout
+    };
+    if now < replaceable_at {
+        return Ok(None);
+    }
+    Ok(Some(
+        detail["previous_reason"]
+            .as_str()
+            .filter(|reason| *reason != DOWNLOAD_PASSWORD_RETRY_REASON)
+            .unwrap_or(DOWNLOAD_PASSWORD_REQUIRED_REASON)
+            .to_owned(),
+    ))
+}
+
 impl DownloadSubmissionStore {
     async fn read_password_retry_observation(
         &self,
@@ -104,13 +179,35 @@ impl DownloadSubmissionStore {
         let claim = claim.clone();
         let password = password.to_owned();
         let key = crate::config_store::current_encryption_key(&self.encryption_key)?;
+        let uncertain_timeout = self.password_retry_uncertain_timeout;
+        let clock = self.password_retry_clock.clone();
         SqlRuntime::run_in_transaction(&self.datastore, "claim_download_password_retry", move |tx| {
             let claim = claim.clone();
             let password = password.clone();
             let key = key.clone();
+            let clock = clock.clone();
             Box::pin(async move {
                 let id = claim.download_id.to_string();
                 super::import_store::lock_retry_download(tx, &id).await?;
+                let now = clock();
+                // An unconfirmed retry whose dispatch outcome is unknown may be
+                // replaced once it is old enough; it stays fenced until then.
+                let replaced_reason = expired_uncertain_password_retry(tx, &id, now, uncertain_timeout).await?;
+                // A replaceable retry is excluded from the busy check only for
+                // its own identity row; any other retry fence still applies.
+                let retry_fence_sql = if replaced_reason.is_some() {
+                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND (reason = {} OR (reason = {} AND identity_key <> {})) LIMIT 1"
+                } else {
+                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason IN ({}, {}) LIMIT 1"
+                };
+                let mut retry_fence_args = vec![
+                    SqlArg::Text(id.clone()),
+                    SqlArg::Text(scryer_application::IMPORT_RETRY_TRACKED_STATE_REASON.into()),
+                    SqlArg::Text(DOWNLOAD_PASSWORD_RETRY_REASON.into()),
+                ];
+                if replaced_reason.is_some() {
+                    retry_fence_args.push(SqlArg::Text(format!("download:{id}")));
+                }
                 // An expired lease still means deletion may have started. It is
                 // not safe to retry a download until its owner has reconciled it.
                 if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
@@ -120,24 +217,27 @@ impl DownloadSubmissionStore {
                     || SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                     "SELECT id FROM imports WHERE canonical_download_id = {} AND status IN ('pending', 'processing', 'running', 'queued') LIMIT 1",
                     &[SqlArg::Text(id.clone())]).await?.is_some()
-                    || SqlRuntime::fetch_optional(SqlExec::Tx(tx),
-                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason IN ({}, {}) LIMIT 1",
-                    &[SqlArg::Text(id.clone()), SqlArg::Text(scryer_application::IMPORT_RETRY_TRACKED_STATE_REASON.into()),
-                      SqlArg::Text(DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?.is_some() {
+                    || SqlRuntime::fetch_optional(SqlExec::Tx(tx), retry_fence_sql, &retry_fence_args).await?.is_some() {
                     return Ok(DownloadPasswordRetryClaimOutcome::Busy);
                 }
+                let replaceable_reason = if replaced_reason.is_some() { DOWNLOAD_PASSWORD_RETRY_REASON } else { DOWNLOAD_PASSWORD_REQUIRED_REASON };
                 let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                     "SELECT s.password_candidates, st.reason FROM download_submissions s
                      JOIN download_client_bindings b ON b.download_id = s.id
                      JOIN download_identity_states st ON st.identity_key = {} AND st.canonical_download_id = s.id
                      WHERE s.id = {} AND b.client_config_id = {} AND b.client_type_snapshot = {}
                        AND b.native_item_id = {} AND b.ended_at IS NULL AND st.tracked_state = 'failed'
-                       AND st.reason IN ({}, {}) AND s.title_id = {}",
+                       AND st.reason IN ({}, {}, {}) AND s.title_id = {}",
                     &[SqlArg::Text(format!("download:{id}")), SqlArg::Text(id.clone()),
                       SqlArg::OptText(claim.source.client_id.clone()), SqlArg::Text(claim.source.client_type.clone()),
                       SqlArg::Text(claim.source.item_id.clone()), SqlArg::Text(DOWNLOAD_PASSWORD_REQUIRED_REASON.into()),
-                      SqlArg::Text(DOWNLOAD_PASSWORD_AMBIGUOUS_REASON.into()), SqlArg::Text(claim.authorized_title_id.clone())]).await?;
+                      SqlArg::Text(DOWNLOAD_PASSWORD_AMBIGUOUS_REASON.into()), SqlArg::Text(replaceable_reason.into()),
+                      SqlArg::Text(claim.authorized_title_id.clone())]).await?;
                 let Some(row) = row else { return Ok(DownloadPasswordRetryClaimOutcome::Busy); };
+                let previous_reason = match replaced_reason {
+                    Some(reason) => reason,
+                    None => row.text("reason")?,
+                };
                 let mut candidates = scryer_application::DownloadPasswordCandidates::default();
                 candidates.push(&password);
                 let old = crate::config_store::decrypt_optional_value(key.as_ref(), row.opt_text("password_candidates")?, "download passwords", true)?;
@@ -149,14 +249,19 @@ impl DownloadSubmissionStore {
                 let json = serde_json::to_string(&candidates)
                     .map_err(|_| AppError::Repository("could not encode download passwords".into()))?;
                 let encrypted = crate::config_store::encrypt_optional_value(key.as_ref(), Some(&json), "download passwords", true)?;
-                let detail = serde_json::json!({"claim": claim, "previous_reason": row.text("reason")?}).to_string();
+                let detail = serde_json::json!({
+                    "claim": claim,
+                    "previous_reason": previous_reason,
+                    "claimed_at": now.to_rfc3339(),
+                })
+                .to_string();
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE download_submissions SET password_candidates = {}, password_retry_state = {} WHERE id = {}",
                     &[SqlArg::OptText(encrypted), SqlArg::Text(detail.clone()), SqlArg::Text(id.clone())]).await?;
                 SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE download_identity_states SET reason = {}, detail = {}, updated_at = {} WHERE identity_key = {}",
                     &[SqlArg::Text(DOWNLOAD_PASSWORD_RETRY_REASON.into()), SqlArg::Text(detail),
-                      SqlArg::Timestamp(Utc::now()), SqlArg::Text(format!("download:{id}"))]).await?;
+                      SqlArg::Timestamp(now), SqlArg::Text(format!("download:{id}"))]).await?;
                 Ok(DownloadPasswordRetryClaimOutcome::Claimed)
             })
         }).await
@@ -167,14 +272,13 @@ impl DownloadSubmissionStore {
         claim: &DownloadPasswordRetryClaim,
         outcome: &DownloadClientRetryOutcome,
     ) -> AppResult<()> {
-        if matches!(outcome, DownloadClientRetryOutcome::Uncertain) {
-            return Ok(());
-        }
         let claim = claim.clone();
         let outcome = outcome.clone();
+        let clock = self.password_retry_clock.clone();
         SqlRuntime::run_in_transaction(&self.datastore, "finish_download_password_retry", move |tx| {
             let claim = claim.clone();
             let outcome = outcome.clone();
+            let clock = clock.clone();
             Box::pin(async move {
                 let id = claim.download_id.to_string();
                 super::import_store::lock_retry_download(tx, &id).await?;
@@ -202,6 +306,22 @@ impl DownloadSubmissionStore {
                             &[SqlArg::Text(detail.to_string()), SqlArg::Text(id)]).await?;
                     }
                     // Fresh progress outranks a late acknowledgement/refusal.
+                    return Ok(());
+                }
+                if matches!(outcome, DownloadClientRetryOutcome::Uncertain) {
+                    // The request has ended; only now may its claim time out.
+                    if detail.get(PASSWORD_RETRY_DISPATCH_FINISHED_KEY).is_none() {
+                        detail[PASSWORD_RETRY_DISPATCH_FINISHED_KEY] =
+                            serde_json::Value::String(clock().to_rfc3339());
+                        let detail = detail.to_string();
+                        SqlRuntime::execute(SqlExec::Tx(tx),
+                            "UPDATE download_submissions SET password_retry_state = {} WHERE id = {}",
+                            &[SqlArg::Text(detail.clone()), SqlArg::Text(id.clone())]).await?;
+                        SqlRuntime::execute(SqlExec::Tx(tx),
+                            "UPDATE download_identity_states SET detail = {} WHERE identity_key = {} AND reason = {}",
+                            &[SqlArg::Text(detail), SqlArg::Text(format!("download:{id}")),
+                              SqlArg::Text(DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?;
+                    }
                     return Ok(());
                 }
                 let (state, reason, item_id) = match outcome {

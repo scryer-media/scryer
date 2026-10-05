@@ -21,14 +21,34 @@ include!("download_password_retry.rs");
 pub struct DownloadSubmissionStore {
     datastore: StoreDatastore,
     encryption_key: std::sync::Arc<std::sync::RwLock<Option<crate::encryption::EncryptionKey>>>,
+    password_retry_uncertain_timeout: chrono::Duration,
+    password_retry_clock: std::sync::Arc<dyn Fn() -> chrono::DateTime<Utc> + Send + Sync>,
 }
 
 impl DownloadSubmissionStore {
+    /// The clock password-retry claims are timed against.
+    pub fn with_password_retry_clock(
+        mut self,
+        clock: impl Fn() -> chrono::DateTime<Utc> + Send + Sync + 'static,
+    ) -> Self {
+        self.password_retry_clock = std::sync::Arc::new(clock);
+        self
+    }
+
     pub fn new(datastore: StoreDatastore) -> Self {
         Self {
             datastore,
             encryption_key: Default::default(),
+            password_retry_uncertain_timeout: PASSWORD_RETRY_UNCERTAIN_TIMEOUT,
+            password_retry_clock: std::sync::Arc::new(Utc::now),
         }
+    }
+
+    /// How long a password retry whose dispatch outcome is unknown keeps
+    /// refusing a replacement attempt.
+    pub fn with_password_retry_uncertain_timeout(mut self, timeout: chrono::Duration) -> Self {
+        self.password_retry_uncertain_timeout = timeout;
+        self
     }
 
     pub fn with_encryption_key(
@@ -2622,6 +2642,7 @@ mod seed_goal_tests {
              CREATE TABLE imports (
                  id TEXT PRIMARY KEY,
                  canonical_download_id TEXT,
+                 import_type TEXT NOT NULL DEFAULT 'movie_download',
                  payload_json TEXT NOT NULL DEFAULT '{}',
                  status TEXT NOT NULL DEFAULT 'completed'
              )",
@@ -2883,6 +2904,244 @@ mod seed_goal_tests {
                 )
                 .await
                 .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn password_retry_with_unknown_outcome_is_replaceable_only_after_its_timeout() {
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "synthetic-first")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        store
+            .finish_password_retry(&claim, &DownloadClientRetryOutcome::Uncertain)
+            .await
+            .unwrap();
+        let replacement = DownloadPasswordRetryClaim {
+            attempt_id: "synthetic-replacement".into(),
+            ..claim.clone()
+        };
+
+        // Inside the window the unknown outcome keeps fencing new attempts.
+        let fenced = store
+            .clone()
+            .with_password_retry_uncertain_timeout(chrono::Duration::days(365));
+        assert_eq!(
+            fenced
+                .claim_password_retry(&replacement, "synthetic-early")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Busy
+        );
+
+        // Once expired, a new attempt replaces the claim in the same
+        // transaction: cleanup stays fenced and nothing is released.
+        let expired = store
+            .clone()
+            .with_password_retry_uncertain_timeout(chrono::Duration::zero());
+        assert_eq!(
+            expired
+                .claim_password_retry(&replacement, "synthetic-second")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        assert_eq!(
+            expired
+                .password_candidates(&claim.download_id)
+                .await
+                .unwrap()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["synthetic-second", "synthetic-first"]
+        );
+        assert!(matches!(
+            expired.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+        // The superseded attempt no longer owns the job.
+        assert!(
+            expired
+                .finish_password_retry(&claim, &DownloadClientRetryOutcome::Refused)
+                .await
+                .is_err()
+        );
+        // A refusal of the replacement restores the original failure reason,
+        // so the download is eligible for an ordinary retry again.
+        expired
+            .finish_password_retry(&replacement, &DownloadClientRetryOutcome::Refused)
+            .await
+            .unwrap();
+        let ordinary = DownloadPasswordRetryClaim {
+            attempt_id: "synthetic-ordinary".into(),
+            ..claim.clone()
+        };
+        assert_eq!(
+            fenced
+                .claim_password_retry(&ordinary, "synthetic-third")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+    }
+
+    fn manual_retry_clock(
+        store: DownloadSubmissionStore,
+        start: chrono::DateTime<Utc>,
+    ) -> (
+        DownloadSubmissionStore,
+        std::sync::Arc<std::sync::Mutex<chrono::DateTime<Utc>>>,
+    ) {
+        let now = std::sync::Arc::new(std::sync::Mutex::new(start));
+        let clock = now.clone();
+        (
+            store.with_password_retry_clock(move || *clock.lock().unwrap()),
+            now,
+        )
+    }
+
+    #[tokio::test]
+    async fn password_retry_still_dispatching_is_never_replaced_while_its_request_can_run() {
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        let start = Utc::now();
+        let (store, now) = manual_retry_clock(store, start);
+        let store = store.with_password_retry_uncertain_timeout(chrono::Duration::zero());
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "synthetic-first")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        let replacement = DownloadPasswordRetryClaim {
+            attempt_id: "synthetic-replacement".into(),
+            ..claim.clone()
+        };
+        let dispatch_bound = chrono::Duration::from_std(
+            scryer_application::DOWNLOAD_PASSWORD_RETRY_DISPATCH_TIMEOUT,
+        )
+        .unwrap();
+
+        // No finish was recorded, so the request may still be running: even a
+        // zero replacement timeout does not let a new attempt in.
+        *now.lock().unwrap() = start + dispatch_bound - chrono::Duration::seconds(1);
+        assert_eq!(
+            store
+                .claim_password_retry(&replacement, "must-not-replace")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Busy
+        );
+
+        // Past the dispatch bound the request cannot be running any more (the
+        // process stopped before recording an outcome), so it may be replaced.
+        *now.lock().unwrap() = start + dispatch_bound + chrono::Duration::seconds(1);
+        assert_eq!(
+            store
+                .claim_password_retry(&replacement, "synthetic-second")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        assert!(matches!(
+            store.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+    }
+
+    #[tokio::test]
+    async fn password_retry_finished_uncertain_is_replaced_only_after_its_timeout() {
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        let start = Utc::now();
+        let (store, now) = manual_retry_clock(store, start);
+        let store = store.with_password_retry_uncertain_timeout(chrono::Duration::minutes(10));
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "synthetic-first")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        let finished = start + chrono::Duration::minutes(1);
+        *now.lock().unwrap() = finished;
+        store
+            .finish_password_retry(&claim, &DownloadClientRetryOutcome::Uncertain)
+            .await
+            .unwrap();
+        let replacement = DownloadPasswordRetryClaim {
+            attempt_id: "synthetic-replacement".into(),
+            ..claim.clone()
+        };
+
+        *now.lock().unwrap() =
+            finished + chrono::Duration::minutes(10) - chrono::Duration::seconds(1);
+        assert_eq!(
+            store
+                .claim_password_retry(&replacement, "must-not-replace")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Busy
+        );
+
+        *now.lock().unwrap() = finished + chrono::Duration::minutes(10);
+        assert_eq!(
+            store
+                .claim_password_retry(&replacement, "synthetic-second")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        assert!(matches!(
+            store.claim_cleanup(&claim.download_id).await.unwrap(),
+            DownloadCleanupClaim::Deferred
+        ));
+    }
+
+    #[tokio::test]
+    async fn acknowledged_password_retry_never_times_out_into_a_replacement() {
+        let (store, claim) = password_retry_fixture(Some(DOWNLOAD_PASSWORD_REQUIRED_REASON)).await;
+        let store = store.with_password_retry_uncertain_timeout(chrono::Duration::zero());
+        assert_eq!(
+            store
+                .claim_password_retry(&claim, "synthetic-first")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Claimed
+        );
+        store
+            .finish_password_retry(
+                &claim,
+                &DownloadClientRetryOutcome::Accepted {
+                    item_id: claim.source.item_id.clone(),
+                },
+            )
+            .await
+            .unwrap();
+        let replacement = DownloadPasswordRetryClaim {
+            attempt_id: "synthetic-replacement".into(),
+            ..claim.clone()
+        };
+        assert_eq!(
+            store
+                .claim_password_retry(&replacement, "must-not-replace")
+                .await
+                .unwrap(),
+            DownloadPasswordRetryClaimOutcome::Busy
+        );
+        assert_eq!(
+            store
+                .password_candidates(&claim.download_id)
+                .await
+                .unwrap()
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            ["synthetic-first"]
         );
     }
 

@@ -40,7 +40,7 @@ enum ImportVerificationMode {
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
-enum ImportArtifactSourceKey {
+pub(crate) enum ImportArtifactSourceKey {
     RelativePath(String),
     NormalizedFileName(String),
 }
@@ -70,6 +70,30 @@ pub async fn verify_manual_import(
         files_imported_this_pass,
         None,
         None,
+        ImportVerificationMode::Manual {
+            expected_mapping_count,
+        },
+        false,
+    )
+    .await
+}
+
+/// Manual verification of a download whose release evidence was resolved
+/// the way the import path resolves it.
+pub(crate) async fn verify_manual_import_with_release_evidence(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    files_imported_this_pass: usize,
+    completed: Option<&CompletedDownload>,
+    release_evidence: Option<&crate::import_workflow::ReleaseEvidence>,
+    expected_mapping_count: Option<usize>,
+) -> AppResult<bool> {
+    verify_import_with_mode(
+        app,
+        td,
+        files_imported_this_pass,
+        completed,
+        release_evidence,
         ImportVerificationMode::Manual {
             expected_mapping_count,
         },
@@ -1012,7 +1036,11 @@ fn episode_units_from_artifact_rows<'a>(
     (!units.is_empty()).then_some(units)
 }
 
-fn import_artifact_source_key(artifact: &crate::ImportArtifact) -> Option<ImportArtifactSourceKey> {
+/// The source file an artifact was recorded for: its path relative to the
+/// completed download's folder when known, otherwise its file name.
+pub(crate) fn import_artifact_source_key(
+    artifact: &crate::ImportArtifact,
+) -> Option<ImportArtifactSourceKey> {
     if let Some(relative_path) = artifact
         .relative_path
         .as_deref()

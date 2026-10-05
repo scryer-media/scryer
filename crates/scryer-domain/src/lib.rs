@@ -4571,6 +4571,8 @@ pub enum DownloadQueueCommandAction {
     Pause,
     Resume,
     Delete,
+    /// An operator released the sources a completed import was holding.
+    ReleaseHeldSources,
 }
 
 impl DownloadQueueCommandAction {
@@ -4579,6 +4581,7 @@ impl DownloadQueueCommandAction {
             Self::Pause => "pause",
             Self::Resume => "resume",
             Self::Delete => "delete",
+            Self::ReleaseHeldSources => "release_held_sources",
         }
     }
 
@@ -4587,6 +4590,7 @@ impl DownloadQueueCommandAction {
             "pause" => Some(Self::Pause),
             "resume" => Some(Self::Resume),
             "delete" => Some(Self::Delete),
+            "release_held_sources" => Some(Self::ReleaseHeldSources),
             _ => None,
         }
     }
@@ -4596,6 +4600,10 @@ impl DownloadQueueCommandAction {
 pub struct DownloadQueueItemCommandIssuedEventData {
     pub item_id: String,
     pub action: DownloadQueueCommandAction,
+    /// What the command did, for commands whose outcome is worth recording.
+    /// Holds identifiers and outcomes only, never names or paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]

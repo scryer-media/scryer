@@ -270,11 +270,18 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
         DomainEventPayload::DownloadQueueItemCommandIssued(data) => (
             ActivityKind::SystemNotice,
             ActivitySeverity::Info,
-            format!(
-                "download {}: {}",
-                download_queue_command_label(data.action),
-                data.item_id
-            ),
+            match data.detail.as_deref() {
+                Some(detail) => format!(
+                    "download {}: {} ({detail})",
+                    download_queue_command_label(data.action),
+                    data.item_id
+                ),
+                None => format!(
+                    "download {}: {}",
+                    download_queue_command_label(data.action),
+                    data.item_id
+                ),
+            },
         ),
         DomainEventPayload::PostProcessingCompleted(data) => (
             ActivityKind::PostProcessingCompleted,
@@ -1206,6 +1213,7 @@ fn download_queue_command_label(action: scryer_domain::DownloadQueueCommandActio
         scryer_domain::DownloadQueueCommandAction::Pause => "paused",
         scryer_domain::DownloadQueueCommandAction::Resume => "resumed",
         scryer_domain::DownloadQueueCommandAction::Delete => "delete queued",
+        scryer_domain::DownloadQueueCommandAction::ReleaseHeldSources => "held sources released",
     }
 }
 
@@ -1536,6 +1544,7 @@ mod tests {
                     DownloadQueueItemCommandIssuedEventData {
                         item_id: "queue-1".to_string(),
                         action: DownloadQueueCommandAction::Delete,
+                        detail: None,
                     },
                 ),
                 r#"{"type":"download_queue_item_command_issued","data":{"item_id":"queue-1","action":"delete"}}"#,

@@ -54,6 +54,7 @@ import type {
 } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
+import { useReleaseHeldSources } from "@/lib/hooks/use-release-held-sources";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { cn } from "@/lib/utils";
 import { downloadQueueItemIdentityKey } from "@/lib/utils/download-queue";
@@ -357,6 +358,8 @@ export function ActivityView({
     requestRefresh,
     queueRefreshing,
   } = state;
+  const { request: requestReleaseHeldSources, dialog: releaseHeldSourcesDialog } =
+    useReleaseHeldSources(() => requestRefresh());
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
   const [deleteConfirmItem, setDeleteConfirmItem] = useState<DownloadQueueItem | null>(null);
   const [cancelImportConfirmStream, setCancelImportConfirmStream] =
@@ -1027,6 +1030,7 @@ export function ActivityView({
             setActionLoadingId((current) => (current === rowId ? null : current));
           });
         },
+        onReleaseHeldSources: () => requestReleaseHeldSources(queueItem),
         onMarkFailedSearchAgain: () => {
           setActionLoadingId(rowId);
           setRowBusy(rowId, true);
@@ -1059,6 +1063,7 @@ export function ActivityView({
       requestManualImport,
       requestMarkFailed,
       requestPause,
+      requestReleaseHeldSources,
       requestResume,
       rowActionBusy,
       selectedImportItemKeys,
@@ -1292,6 +1297,7 @@ export function ActivityView({
 
   return (
     <>
+      {releaseHeldSourcesDialog}
       <ConfirmDialog
         open={cancelImportConfirmStream !== null}
         title="Cancel import?"

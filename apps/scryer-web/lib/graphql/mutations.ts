@@ -3106,6 +3106,19 @@ export const retryImportMutation = `mutation RetryImport($input: RetryImportInpu
   }
 }`;
 
+export const releaseHeldImportSourcesMutation = `mutation ReleaseHeldImportSources($input: ReleaseHeldImportSourcesInput!) {
+  releaseHeldImportSources(input: $input) {
+    importId
+    releasedImportIds
+    settlement
+    clientPolicy
+    workspaceRemoved
+    workspacesRemoved
+    preservedWorkspaceReasons
+    workspaceLookupIncomplete
+  }
+}`;
+
 export const cancelActiveImportMutation = `mutation CancelActiveImport($streamId: ID!) {
   cancelActiveImport(streamId: $streamId)
 }`;

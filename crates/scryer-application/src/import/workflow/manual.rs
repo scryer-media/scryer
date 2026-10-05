@@ -3099,9 +3099,47 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
             for file in results.iter_mut().filter(|file| file.success) {
                 file.error_message = Some(SCENE_SUBTITLE_PENDING_WARNING.into());
             }
+            record_manual_hold_reason(
+                app,
+                import_id,
+                archive_source,
+                HeldSourcesReason::SourceCleanupIncomplete,
+            )
+            .await;
         }
+    } else if results
+        .iter()
+        .any(|file| file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING))
+    {
+        record_manual_hold_reason(
+            app,
+            import_id,
+            archive_source,
+            HeldSourcesReason::SubtitlesPending,
+        )
+        .await;
     }
+    // Any other hold keeps no recorded reason and is reported as unknown.
     Ok(results)
+}
+
+async fn record_manual_hold_reason(
+    app: &AppUseCase,
+    import_id: &str,
+    archive_source: bool,
+    reason: HeldSourcesReason,
+) {
+    if archive_source
+        && app
+            .services
+            .workflow
+            .imports
+            .record_archive_hold_reason(import_id, reason.as_str())
+            .await
+            .is_err()
+    {
+        tracing::warn!(import_id, "could not record why sources are held");
+    }
 }
 
 #[expect(

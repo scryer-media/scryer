@@ -364,9 +364,11 @@ fn archive_workspace_release(root: &Path) -> Option<SystemTime> {
 
 impl Drop for ArchiveWorkspaceLease {
     fn drop(&mut self) {
+        // An unpublished workspace was never handed out, so no video from it
+        // can have been imported.
         if !self.published
             && archive_workspace_owner(&self.root).is_some()
-            && !archive_workspace_has_pending_subtitles(&self.root)
+            && archive_workspace_inventory(&self.root).permits_release(false)
             && let Err(error) = release_archive_workspace(&self.root)
         {
             tracing::warn!(error = %redact_archive_diagnostic(&error.to_string()), "unpublished archive workspace could not be released");
@@ -1258,8 +1260,13 @@ impl ArchiveExtractionWorkspace {
 
 #[cfg(test)]
 pub(crate) fn create_test_archive_workspace(parent: &Path) -> PathBuf {
+    create_test_archive_workspace_owned_by(parent, "test-import")
+}
+
+#[cfg(test)]
+pub(crate) fn create_test_archive_workspace_owned_by(parent: &Path, owner_id: &str) -> PathBuf {
     let mut workspace = ArchiveExtractionWorkspace::create_sync(
-        &ArchiveExtractionDestination::new(parent, "test-import"),
+        &ArchiveExtractionDestination::new(parent, owner_id),
     )
     .unwrap();
     workspace.lease.published = true;
@@ -1844,30 +1851,40 @@ fn rar_volume_info_from_name(file_name: &str) -> Option<(String, usize)> {
     Some((group.to_string(), family_offset * 100 + number + 1))
 }
 
-/// Release an abandoned automatic import without touching downloads. A
-/// pending subtitle or unreadable inventory keeps the workspace referenced.
+/// Release an abandoned automatic import without touching downloads. An
+/// unreadable or unsafe inventory keeps the workspace referenced, and so do
+/// subtitles once a video from the workspace may have been imported.
 #[derive(Default)]
-pub(crate) struct ArchiveWorkspaceReference(Option<PathBuf>);
+pub(crate) struct ArchiveWorkspaceReference {
+    root: Option<PathBuf>,
+    video_imported: bool,
+}
 
 impl ArchiveWorkspaceReference {
     pub(crate) fn track(&mut self, root: Option<&Path>) {
-        self.0 = root.map(Path::to_path_buf);
+        self.root = root.map(Path::to_path_buf);
     }
 
     pub(crate) fn retain(&mut self) {
-        self.0 = None;
+        self.root = None;
+    }
+
+    /// Record that a video from the workspace may have been placed, so its
+    /// subtitles stay available for delivery.
+    pub(crate) fn mark_video_imported(&mut self) {
+        self.video_imported = true;
     }
 }
 
 impl Drop for ArchiveWorkspaceReference {
     fn drop(&mut self) {
-        let Some(root) = &self.0 else {
+        let Some(root) = &self.root else {
             return;
         };
         if archive_workspace_owner(root).is_none() {
             return;
         }
-        if archive_workspace_has_pending_subtitles(root) {
+        if !archive_workspace_inventory(root).permits_release(self.video_imported) {
             return;
         }
         if release_archive_workspace(root).is_err() {
@@ -1876,29 +1893,60 @@ impl Drop for ArchiveWorkspaceReference {
     }
 }
 
-fn archive_workspace_has_pending_subtitles(root: &Path) -> bool {
+/// What a workspace inventory permits when the workspace is let go.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ArchiveWorkspaceInventory {
+    /// Only regular files and directories, none of them subtitles.
+    Clean,
+    /// Regular files and directories, including at least one subtitle.
+    HasSubtitles,
+    /// A symlink, special file, unreadable entry, or a depth or entry count
+    /// beyond the bound. Such a workspace is always preserved.
+    Unsafe,
+}
+
+impl ArchiveWorkspaceInventory {
+    /// Whether the workspace may be released for later removal. Subtitles keep
+    /// it only when a video from it was imported and is waiting for them.
+    fn permits_release(self, video_imported: bool) -> bool {
+        match self {
+            Self::Clean => true,
+            Self::HasSubtitles => !video_imported,
+            Self::Unsafe => false,
+        }
+    }
+}
+
+/// The regular files of a workspace worth knowing about before letting it go.
+struct ArchiveWorkspaceScan {
+    has_subtitles: bool,
+    /// Every video in the workspace, as a path under the scanned root.
+    videos: Vec<PathBuf>,
+}
+
+/// Walk a workspace within the output bounds. `None` when it holds a symlink,
+/// a special file, an unreadable entry, or exceeds the depth or entry bound.
+fn scan_archive_workspace(root: &Path) -> Option<ArchiveWorkspaceScan> {
     let mut stack = vec![(root.to_path_buf(), 0usize)];
     let mut entries = 0usize;
+    let mut scan = ArchiveWorkspaceScan {
+        has_subtitles: false,
+        videos: Vec::new(),
+    };
     while let Some((parent, depth)) = stack.pop() {
         if depth > 64 || entries > MAX_PLUGIN_OUTPUT_ENTRIES {
-            return true;
+            return None;
         }
-        let Ok(children) = std::fs::read_dir(parent) else {
-            return true;
-        };
+        let children = std::fs::read_dir(parent).ok()?;
         for child in children {
-            let Ok(child) = child else {
-                return true;
-            };
+            let child = child.ok()?;
             entries += 1;
             if entries > MAX_PLUGIN_OUTPUT_ENTRIES {
-                return true;
+                return None;
             }
-            let Ok(kind) = child.file_type() else {
-                return true;
-            };
+            let kind = child.file_type().ok()?;
             if kind.is_symlink() || (!kind.is_dir() && !kind.is_file()) {
-                return true;
+                return None;
             }
             let path = child.path();
             if kind.is_dir() {
@@ -1913,16 +1961,114 @@ fn archive_workspace_has_pending_subtitles(root: &Path) -> bool {
                     )
                 })
             {
-                return true;
+                scan.has_subtitles = true;
+            } else if scryer_domain::is_video_file(&path) {
+                scan.videos.push(path);
             }
         }
     }
-    false
+    Some(scan)
 }
 
+fn archive_workspace_inventory(root: &Path) -> ArchiveWorkspaceInventory {
+    match scan_archive_workspace(root) {
+        None => ArchiveWorkspaceInventory::Unsafe,
+        Some(scan) if scan.has_subtitles => ArchiveWorkspaceInventory::HasSubtitles,
+        Some(_) => ArchiveWorkspaceInventory::Clean,
+    }
+}
+
+/// Let go of a workspace no video was imported from. A clean workspace is
+/// removed at once; one holding subtitles is only released, so the stale
+/// sweeper removes it later. An unsafe inventory is preserved.
 pub(crate) async fn abandon_extracted_dir(dir: &Path) {
-    if !archive_workspace_has_pending_subtitles(dir) {
-        cleanup_extracted_dir(dir).await;
+    match archive_workspace_inventory(dir) {
+        ArchiveWorkspaceInventory::Clean => cleanup_extracted_dir(dir).await,
+        ArchiveWorkspaceInventory::HasSubtitles => {
+            if archive_workspace_owner(dir).is_some()
+                && let Err(error) = release_archive_workspace(dir)
+            {
+                tracing::warn!(error = %redact_archive_diagnostic(&error.to_string()), "abandoned archive workspace could not be released; output preserved");
+            }
+        }
+        ArchiveWorkspaceInventory::Unsafe => {}
+    }
+}
+
+/// Owned workspaces directly under `parent` whose authenticated owner is
+/// `owner_id`. Ownership is proven by the keyed marker, never by name or age,
+/// so a match identifies the workspace with certainty. The scan is bounded;
+/// `complete` is false when the folder could not be read in full, so a
+/// workspace of that owner may exist that was not found.
+pub(crate) fn owned_archive_workspaces_for(
+    parent: &Path,
+    owner_id: &str,
+) -> crate::import_workflow::OwnedWorkspaceLookup {
+    const MAX_SCANNED_ENTRIES: usize = 4096;
+    let mut lookup = crate::import_workflow::OwnedWorkspaceLookup {
+        workspaces: Vec::new(),
+        complete: true,
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        lookup.complete = !parent.exists();
+        return lookup;
+    };
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_SCANNED_ENTRIES {
+            lookup.complete = false;
+            break;
+        }
+        let Ok(entry) = entry else {
+            lookup.complete = false;
+            continue;
+        };
+        let path = entry.path();
+        if archive_workspace_owned_by(&path, owner_id) {
+            lookup.workspaces.push(path);
+        }
+    }
+    lookup
+}
+
+/// Whether `root` is an owned workspace whose authenticated owner is `owner_id`.
+fn archive_workspace_owned_by(root: &Path, owner_id: &str) -> bool {
+    archive_workspace_owner(root).is_some_and(|owner| owner.import_id == owner_id)
+}
+
+/// Remove a held workspace an operator released, through the ordinary
+/// cleanup. The workspace is preserved when it is not owned, its inventory is
+/// unsafe (such as a symlink), or any video in it is not proven imported.
+///
+/// A video is proven imported only when its path relative to `download_root`
+/// (the folder import artifacts record their source paths against) is one of
+/// `imported_relative_paths`. A video with no path relative to that folder
+/// cannot be matched, so it counts as never imported.
+pub(crate) async fn remove_released_held_workspace(
+    root: &Path,
+    download_root: &Path,
+    imported_relative_paths: &std::collections::HashSet<String>,
+) -> Result<(), crate::import_workflow::HeldWorkspacePreserved> {
+    use crate::import_workflow::HeldWorkspacePreserved;
+    if archive_workspace_owner(root).is_none() {
+        return Err(HeldWorkspacePreserved::NotOwned);
+    }
+    let scan = scan_archive_workspace(root).ok_or(HeldWorkspacePreserved::Unsafe)?;
+    let proven_imported = |video: &PathBuf| {
+        video
+            .strip_prefix(download_root)
+            .ok()
+            .map(crate::stored_paths::path_to_stored_string)
+            .filter(|relative| !relative.is_empty())
+            .is_some_and(|relative| imported_relative_paths.contains(&relative))
+    };
+    if !scan.videos.iter().all(proven_imported) {
+        return Err(HeldWorkspacePreserved::HoldsUnimportedVideo);
+    }
+    cleanup_extracted_dir(root).await;
+    if root.exists() {
+        Err(HeldWorkspacePreserved::RemovalFailed)
+    } else {
+        Ok(())
     }
 }
 
@@ -2036,12 +2182,14 @@ mod tests {
         let pending_root = workspace.root.clone();
         let mut reference = ArchiveWorkspaceReference::default();
         reference.track(Some(&workspace.root));
+        reference.mark_video_imported();
         drop(reference);
         assert!(archive_workspace_release(&workspace.root).is_none());
+        let mut workspace = workspace;
+        workspace.lease.published = true;
         drop(workspace);
-        abandon_extracted_dir(&pending_root).await;
         cleanup_archive_artifacts_older_than(destination.path(), Duration::ZERO).await;
-        assert_eq!(fs::read(pending_path).unwrap(), b"pending");
+        assert_eq!(fs::read(&pending_path).unwrap(), b"pending");
         assert!(archive_workspace_release(&pending_root).is_none());
 
         let retained = create_test_archive_workspace(destination.path());
@@ -2052,6 +2200,101 @@ mod tests {
         drop(reference);
         cleanup_archive_artifacts_older_than(destination.path(), Duration::ZERO).await;
         assert!(retained.join("out/movie.mkv").exists());
+    }
+
+    fn workspace_with_subtitle(parent: &Path) -> PathBuf {
+        let root = create_test_archive_workspace(parent);
+        fs::create_dir_all(root.join("out/Subs")).unwrap();
+        fs::write(root.join("out/feature.mkv"), b"synthetic video").unwrap();
+        fs::write(root.join("out/Subs/feature.srt"), b"synthetic subtitle").unwrap();
+        root
+    }
+
+    #[tokio::test]
+    async fn workspace_without_an_imported_video_is_released_despite_subtitles() {
+        let destination = tempfile::tempdir().unwrap();
+        let unrelated = destination.path().join("keep.srt");
+        fs::write(&unrelated, b"keep").unwrap();
+
+        // Dropped reference, nothing imported: released, then swept.
+        let dropped = workspace_with_subtitle(destination.path());
+        let mut reference = ArchiveWorkspaceReference::default();
+        reference.track(Some(&dropped));
+        drop(reference);
+        assert!(archive_workspace_release(&dropped).is_some());
+
+        // Abandoned after a failed resolution: released, not removed at once.
+        let abandoned = workspace_with_subtitle(destination.path());
+        abandon_extracted_dir(&abandoned).await;
+        assert!(archive_workspace_release(&abandoned).is_some());
+        assert!(abandoned.join("out/Subs/feature.srt").exists());
+
+        // An unpublished workspace was never handed out.
+        let mut unpublished = ArchiveExtractionWorkspace::create(
+            &ArchiveExtractionDestination::new(destination.path(), "synthetic-unpublished"),
+        )
+        .await
+        .unwrap();
+        fs::write(unpublished.output_dir.join("feature.ass"), b"synthetic").unwrap();
+        let unpublished_root = unpublished.root.clone();
+        unpublished.lease.published = false;
+        drop(unpublished);
+        assert!(archive_workspace_release(&unpublished_root).is_some());
+
+        // A video was imported and its subtitles are pending: kept.
+        let pending = workspace_with_subtitle(destination.path());
+        let mut reference = ArchiveWorkspaceReference::default();
+        reference.track(Some(&pending));
+        reference.mark_video_imported();
+        drop(reference);
+        assert!(archive_workspace_release(&pending).is_none());
+
+        // The sweeper honours its stale window, then removes only released
+        // workspaces.
+        cleanup_archive_artifacts_older_than(destination.path(), STALE_ARCHIVE_STAGING_AFTER).await;
+        assert!(dropped.exists() && abandoned.exists() && unpublished_root.exists());
+        cleanup_archive_artifacts_older_than(destination.path(), Duration::ZERO).await;
+        assert!(!dropped.exists());
+        assert!(!abandoned.exists());
+        assert!(!unpublished_root.exists());
+        assert_eq!(
+            fs::read(pending.join("out/Subs/feature.srt")).unwrap(),
+            b"synthetic subtitle"
+        );
+        assert_eq!(fs::read(&unrelated).unwrap(), b"keep");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn workspace_with_a_symlink_is_never_released_even_without_an_imported_video() {
+        let destination = tempfile::tempdir().unwrap();
+        let outside = tempfile::tempdir().unwrap();
+        let target = outside.path().join("outside.mkv");
+        fs::write(&target, b"outside").unwrap();
+
+        let linked = create_test_archive_workspace(destination.path());
+        std::os::unix::fs::symlink(&target, linked.join("out/link.mkv")).unwrap();
+        let mut reference = ArchiveWorkspaceReference::default();
+        reference.track(Some(&linked));
+        drop(reference);
+        abandon_extracted_dir(&linked).await;
+        assert!(archive_workspace_release(&linked).is_none());
+
+        let mut unpublished = ArchiveExtractionWorkspace::create(
+            &ArchiveExtractionDestination::new(destination.path(), "synthetic-linked"),
+        )
+        .await
+        .unwrap();
+        std::os::unix::fs::symlink(&target, unpublished.output_dir.join("link.srt")).unwrap();
+        let unpublished_root = unpublished.root.clone();
+        unpublished.lease.published = false;
+        drop(unpublished);
+        assert!(archive_workspace_release(&unpublished_root).is_none());
+
+        cleanup_archive_artifacts_older_than(destination.path(), Duration::ZERO).await;
+        assert!(linked.join("out/link.mkv").symlink_metadata().is_ok());
+        assert!(unpublished_root.exists());
+        assert_eq!(fs::read(&target).unwrap(), b"outside");
     }
 
     #[test]

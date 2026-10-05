@@ -64,13 +64,20 @@ impl AppUseCase {
         }
         // The durable claim and encrypted replacement precede the single remote
         // mutation. A dropped request or process retains that claim for recovery.
-        let outcome = self
-            .services
-            .integrations
-            .download_client
-            .retry_failed_job_for_client(&client_id, &claim.source.item_id, password)
-            .await
-            .unwrap_or(crate::DownloadClientRetryOutcome::Uncertain);
+        // The request is bounded, so the claim's store can tell a dispatch
+        // still in flight from one that ended without a known outcome.
+        let outcome = match tokio::time::timeout(
+            crate::DOWNLOAD_PASSWORD_RETRY_DISPATCH_TIMEOUT,
+            self.services
+                .integrations
+                .download_client
+                .retry_failed_job_for_client(&client_id, &claim.source.item_id, password),
+        )
+        .await
+        {
+            Ok(Ok(outcome)) => outcome,
+            Ok(Err(_)) | Err(_) => crate::DownloadClientRetryOutcome::Uncertain,
+        };
         if repository
             .finish_password_retry(&claim, &outcome)
             .await

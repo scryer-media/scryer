@@ -232,6 +232,112 @@ fn schedule_partial_import_retry(td: &mut TrackedDownload) {
     });
 }
 
+/// What settling a released hold did to the tracked download.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReleasedHoldVerdict {
+    /// Verification proved the download complete. `download_root` is the
+    /// folder the import's artifacts record their source paths against.
+    Imported { download_root: std::path::PathBuf },
+    /// Not proven complete: back to `ImportPending` behind the ordinary retry
+    /// backoff, with nothing cleaned up.
+    AwaitingImport,
+}
+
+/// Settle a download whose import was held, once an operator released that
+/// hold, exactly as the import path would verify it: with the release
+/// evidence resolved from the download's submission, and in the same mode the
+/// held imports used. Imported only when that verification proves the
+/// download complete.
+///
+/// An error means nothing was settled and the download was left untouched:
+/// its completed source is unknown, or the release evidence of a download
+/// Scryer grabbed could not be resolved. Without that evidence a pack whose
+/// name does not parse could verify against its imported files alone.
+pub(crate) async fn settle_released_import_hold(
+    app: &AppUseCase,
+    td: &mut TrackedDownload,
+    verification: crate::tracked_downloads::HeldImportVerification,
+) -> AppResult<ReleasedHoldVerdict> {
+    let Some(completed) = td.completed_source.clone() else {
+        return Err(crate::AppError::Validation(
+            "the completed download has not been observed yet; release again once it has".into(),
+        ));
+    };
+    let (completed, release_evidence) =
+        match resolve_completed_download_origin_for_import(app, &completed, Some(&td.client_item))
+            .await?
+        {
+            ResolvedCompletedDownloadOriginForImport::Ready {
+                completed,
+                release_evidence,
+            } => (*completed, Some(release_evidence)),
+            ResolvedCompletedDownloadOriginForImport::NoScryerOrigin => {
+                if td.client_item.is_scryer_origin {
+                    return Err(crate::AppError::Validation(
+                        "the grab this download came from could not be resolved; release again \
+                         once it can"
+                            .into(),
+                    ));
+                }
+                (completed, None)
+            }
+        };
+    let snapshot = td.clone();
+    let verified = async {
+        // A held automatic import with no recorded mode is verified as one.
+        let automatic =
+            verification.automatic || verification.manual_expected_mapping_count.is_none();
+        if automatic
+            && !verify_import_inner_with_release_evidence(
+                app,
+                &snapshot,
+                0,
+                Some(&completed),
+                release_evidence.as_ref(),
+            )
+            .await?
+        {
+            return Ok(false);
+        }
+        if let Some(expected) = verification.manual_expected_mapping_count
+            && !super::verification::verify_manual_import_with_release_evidence(
+                app,
+                &snapshot,
+                0,
+                Some(&completed),
+                release_evidence.as_ref(),
+                Some(expected),
+            )
+            .await?
+        {
+            return Ok(false);
+        }
+        Ok::<_, crate::AppError>(true)
+    }
+    .await;
+    match verified {
+        Ok(true) => {
+            td.clear_no_video_import_retry();
+            td.clear_import_execution_retry();
+            td.state = TrackedDownloadState::Imported;
+            td.status = TrackedDownloadStatus::Ok;
+            td.status_messages.clear();
+            Ok(ReleasedHoldVerdict::Imported {
+                download_root: std::path::PathBuf::from(&completed.dest_dir),
+            })
+        }
+        Ok(false) => {
+            schedule_partial_import_retry(td);
+            Ok(ReleasedHoldVerdict::AwaitingImport)
+        }
+        Err(error) => {
+            tracing::warn!(tracked_id = %td.id, error = %error, "import verification evidence is unavailable");
+            schedule_import_verification_retry(td);
+            Ok(ReleasedHoldVerdict::AwaitingImport)
+        }
+    }
+}
+
 #[cfg(test)]
 pub(super) async fn apply_import_result(
     app: &AppUseCase,
