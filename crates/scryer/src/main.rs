@@ -213,6 +213,7 @@ use oauth_routes::{OAuthRouteState, oauth_router};
 use rate_limit::ScryerRateLimiter;
 use settings_bootstrap::{
     MOVIES_PATH_KEY, SERIES_PATH_KEY, extract_pending_migration_ids,
+    load_or_create_plex_client_identifier,
     migrate_legacy_download_client_default_category_settings,
     migrate_legacy_download_client_routing_settings, normalize_media_path_setting,
     normalize_quality_profile_settings, parse_migration_mode, seed_service_setting_definitions,
@@ -1593,6 +1594,15 @@ async fn bootstrap_application(
         )
         .with_archive_extractor_provider(dynamic_archive_extractor_plugin_provider.clone()),
     );
+    let plex_client_identifier =
+        match load_or_create_plex_client_identifier(bootstrap_settings_store.clone()).await {
+            Ok(identifier) => identifier,
+            Err(error) => {
+                // Linking still works; this run presents a one-off device.
+                tracing::warn!(error = %error, "could not keep a stable Plex client identifier");
+                uuid::Uuid::new_v4().to_string()
+            }
+        };
     let services = datastore
         .app_services_builder(indexer_client, download_client)
         .with_runtime_environment(
@@ -1609,7 +1619,11 @@ async fn bootstrap_application(
         )
         .with_smg_gateway_url(Some(metadata_gateway_url.into_string()))
         .with_list_account_auth_gateway(Arc::new(
-            scryer_infrastructure_metadata::metadata::gateway::client::HttpListAccountAuthGateway::new(metadata_gateway.clone()).map_err(|error| error.to_string())?
+            scryer_infrastructure_metadata::metadata::gateway::client::HttpListAccountAuthGateway::new_with_client_identifier(
+                metadata_gateway.clone(),
+                plex_client_identifier,
+            )
+            .map_err(|error| error.to_string())?,
         ))
         .with_metadata_gateway(metadata_gateway)
         .with_image_proxy_cache_control(image_proxy_runtime.clone())
