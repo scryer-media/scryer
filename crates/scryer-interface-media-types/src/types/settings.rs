@@ -907,6 +907,59 @@ pub struct ServiceSettingsPayload {
     pub trusted_proxy_override: Option<Vec<String>>,
     /// Whether the effective policy comes from settings or environment.
     pub trusted_proxy_source: String,
+    /// Effective public URL; null when unset or invalid.
+    pub public_url: Option<String>,
+    /// Where the public URL comes from: environment, settings, or default.
+    pub public_url_source: String,
+    /// Saved public URL, shown even while the environment overrides it.
+    pub public_url_saved: Option<String>,
+    /// Why the configured public URL is not in effect, when it is invalid.
+    pub public_url_error: Option<String>,
+    /// Stable reason code for public_url_error, for localized messages.
+    pub public_url_error_code: Option<String>,
+    /// False while SCRYER_PUBLIC_URL is set, because the environment wins.
+    pub public_url_editable: bool,
+    /// Base path the instance serves under; empty at the root.
+    pub base_path: String,
+    /// Where the base path comes from: environment or default.
+    pub base_path_source: String,
+    /// Listening address and port.
+    pub bind_address: String,
+    /// Where the listening address comes from: environment or default.
+    pub bind_source: String,
+    /// Passkey relying-party ID in effect since startup.
+    pub passkey_rp_id: Option<String>,
+    /// Passkey relying-party origin in effect since startup.
+    pub passkey_rp_origin: Option<String>,
+    /// Where the passkey relying party comes from: environment, public_url, or none.
+    pub passkey_rp_source: String,
+    /// Users with at least one passkey; null when the count could not be read.
+    pub passkey_user_count: Option<i64>,
+    /// Users whose only second factor is a passkey; null when unknown.
+    pub passkey_only_user_count: Option<i64>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// What saving a proposed public URL would do, without saving it.
+pub struct PublicUrlChangePreviewPayload {
+    /// The value as it would be stored; null for a reset or a rejected value.
+    pub normalized_public_url: Option<String>,
+    /// Why the value would be refused.
+    pub error: Option<String>,
+    /// Stable reason code for error, for localized messages.
+    pub error_code: Option<String>,
+    /// Effect on passkeys after the next restart: unaffected, unchanged, changed, or disabled.
+    pub passkey_impact: String,
+    /// Passkey relying-party ID in effect now.
+    pub current_passkey_rp_id: Option<String>,
+    /// Passkey relying-party ID after the next restart; null when passkeys would be off.
+    pub next_passkey_rp_id: Option<String>,
+    /// Users with at least one passkey; null when the count could not be read.
+    pub passkey_user_count: Option<i64>,
+    /// Users whose only second factor is a passkey; null when unknown.
+    pub passkey_only_user_count: Option<i64>,
+    /// Whether the save must set acknowledgePasskeyImpact.
+    pub acknowledgement_required: bool,
 }
 
 #[derive(InputObject, Clone)]
@@ -1037,6 +1090,14 @@ pub struct UpdateServiceSettingsInput {
     pub trusted_proxy_ips: Option<Vec<String>>,
     /// Clear the saved override and use environment configuration.
     pub reset_trusted_proxy_ips: Option<bool>,
+    /// Save the instance public URL. Omission preserves the saved value.
+    pub public_url: Option<String>,
+    /// Clear the saved public URL.
+    pub reset_public_url: Option<bool>,
+    /// Confirm that registered passkeys stop working after the next restart.
+    /// Required when the public URL change moves or disables passkeys while
+    /// any are registered.
+    pub acknowledge_passkey_impact: Option<bool>,
 }
 
 #[derive(InputObject, Clone)]

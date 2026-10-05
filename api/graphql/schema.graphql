@@ -22068,6 +22068,48 @@ type ProxyTestResultPayload {
 }
 
 """
+What saving a proposed public URL would do, without saving it.
+"""
+type PublicUrlChangePreviewPayload {
+	"""
+	The value as it would be stored; null for a reset or a rejected value.
+	"""
+	normalizedPublicUrl: String
+	"""
+	Why the value would be refused.
+	"""
+	error: String
+	"""
+	Stable reason code for error, for localized messages.
+	"""
+	errorCode: String
+	"""
+	Effect on passkeys after the next restart: unaffected, unchanged, changed, or disabled.
+	"""
+	passkeyImpact: String!
+	"""
+	Passkey relying-party ID in effect now.
+	"""
+	currentPasskeyRpId: String
+	"""
+	Passkey relying-party ID after the next restart; null when passkeys would be off.
+	"""
+	nextPasskeyRpId: String
+	"""
+	Users with at least one passkey; null when the count could not be read.
+	"""
+	passkeyUserCount: Int
+	"""
+	Users whose only second factor is a passkey; null when unknown.
+	"""
+	passkeyOnlyUserCount: Int
+	"""
+	Whether the save must set acknowledgePasskeyImpact.
+	"""
+	acknowledgementRequired: Boolean!
+}
+
+"""
 Quality constraints and scoring rules for release selection.
 """
 input QualityProfileCriteriaInput {
@@ -23347,6 +23389,21 @@ type QueryRoot {
 	Returns service TLS configuration and related settings.
 	"""
 	serviceSettings: ServiceSettingsPayload!
+	"""
+	Previews saving a public URL, or clearing it, without saving: the
+	stored form, any refusal, and the effect on passkeys after the next
+	restart.
+	"""
+	publicUrlChangePreview(
+		"""
+		Proposed public URL; omit it and set reset to preview clearing.
+		"""
+		publicUrl: String,
+		"""
+		Preview clearing the saved public URL.
+		"""
+		reset: Boolean
+	): PublicUrlChangePreviewPayload!
 	"""
 	Returns quality profiles and the current global and facet selections.
 	"""
@@ -26682,6 +26739,66 @@ type ServiceSettingsPayload {
 	Whether the effective policy comes from settings or environment.
 	"""
 	trustedProxySource: String!
+	"""
+	Effective public URL; null when unset or invalid.
+	"""
+	publicUrl: String
+	"""
+	Where the public URL comes from: environment, settings, or default.
+	"""
+	publicUrlSource: String!
+	"""
+	Saved public URL, shown even while the environment overrides it.
+	"""
+	publicUrlSaved: String
+	"""
+	Why the configured public URL is not in effect, when it is invalid.
+	"""
+	publicUrlError: String
+	"""
+	Stable reason code for public_url_error, for localized messages.
+	"""
+	publicUrlErrorCode: String
+	"""
+	False while SCRYER_PUBLIC_URL is set, because the environment wins.
+	"""
+	publicUrlEditable: Boolean!
+	"""
+	Base path the instance serves under; empty at the root.
+	"""
+	basePath: String!
+	"""
+	Where the base path comes from: environment or default.
+	"""
+	basePathSource: String!
+	"""
+	Listening address and port.
+	"""
+	bindAddress: String!
+	"""
+	Where the listening address comes from: environment or default.
+	"""
+	bindSource: String!
+	"""
+	Passkey relying-party ID in effect since startup.
+	"""
+	passkeyRpId: String
+	"""
+	Passkey relying-party origin in effect since startup.
+	"""
+	passkeyRpOrigin: String
+	"""
+	Where the passkey relying party comes from: environment, public_url, or none.
+	"""
+	passkeyRpSource: String!
+	"""
+	Users with at least one passkey; null when the count could not be read.
+	"""
+	passkeyUserCount: Int
+	"""
+	Users whose only second factor is a passkey; null when unknown.
+	"""
+	passkeyOnlyUserCount: Int
 }
 
 """
@@ -31589,6 +31706,20 @@ input UpdateServiceSettingsInput {
 	Clear the saved override and use environment configuration.
 	"""
 	resetTrustedProxyIps: Boolean
+	"""
+	Save the instance public URL. Omission preserves the saved value.
+	"""
+	publicUrl: String
+	"""
+	Clear the saved public URL.
+	"""
+	resetPublicUrl: Boolean
+	"""
+	Confirm that registered passkeys stop working after the next restart.
+	Required when the public URL change moves or disables passkeys while
+	any are registered.
+	"""
+	acknowledgePasskeyImpact: Boolean
 }
 
 """

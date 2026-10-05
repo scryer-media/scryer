@@ -44,7 +44,7 @@ use crate::queries::{
         replace_title_search_projection_tx,
     },
 };
-use crate::title_images::normalized_base_path_from_env;
+use crate::title_images::normalized_base_path;
 
 const TITLE_INSERT_SQL: &str = "INSERT INTO titles (
     id, library_id, name, facet, monitored, tags, external_ids, root_folder_id, created_by, created_at,
@@ -1365,7 +1365,7 @@ impl TitleRepository for TitleStore {
         }
 
         let rows = SqlRuntime::fetch_all(self.datastore.read_exec(), &sql, &args).await?;
-        let base_path = normalized_base_path_from_env();
+        let base_path = normalized_base_path();
         let mut matches = rows
             .iter()
             .map(|row| {
@@ -3140,7 +3140,7 @@ fn decode_runtime_title_rows(
     mode: PersistedTitleReadMode,
     include_external_ids: bool,
 ) -> AppResult<Vec<Title>> {
-    let base_path = normalized_base_path_from_env();
+    let base_path = normalized_base_path();
     rows.iter()
         .map(|row| title_from_projection_row(row, mode, include_external_ids, &base_path))
         .collect()
@@ -3151,7 +3151,7 @@ fn decode_optional_runtime_title_row(
     mode: PersistedTitleReadMode,
     include_external_ids: bool,
 ) -> AppResult<Option<Title>> {
-    let base_path = normalized_base_path_from_env();
+    let base_path = normalized_base_path();
     row.map(|row| title_from_projection_row(row, mode, include_external_ids, &base_path))
         .transpose()
 }

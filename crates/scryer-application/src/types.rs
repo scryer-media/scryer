@@ -3062,6 +3062,15 @@ pub struct WebauthnCredentialRecord {
     pub last_used_at: Option<String>,
 }
 
+/// How many users have registered a passkey, and how many of those have no
+/// other second factor (no TOTP), so a passkey is the only way they can finish
+/// signing in.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PasskeyEnrollmentCounts {
+    pub users_with_passkeys: i64,
+    pub passkey_only_users: i64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WebauthnChallengeRecord {
     pub id: String,

@@ -4055,6 +4055,13 @@ pub trait WebauthnRepository: Send + Sync {
         &self,
         user_id: &str,
     ) -> AppResult<Vec<WebauthnCredentialRecord>>;
+    /// Counts users with passkeys in one query, for settings that warn before
+    /// a change would stop those passkeys from working.
+    async fn passkey_enrollment_counts(&self) -> AppResult<crate::PasskeyEnrollmentCounts> {
+        Err(AppError::Repository(
+            "passkey enrollment counts are not configured".into(),
+        ))
+    }
     async fn get_credential_by_id_for_user(
         &self,
         credential_record_id: &str,

@@ -274,12 +274,53 @@ pub fn from_library_paths_settings(settings: LibraryPathsSettings) -> LibraryPat
 }
 
 pub fn from_service_settings(settings: ServiceSettings) -> ServiceSettingsPayload {
+    let public_url = settings.public_url;
+    let addressing = public_url.addressing;
     ServiceSettingsPayload {
+        public_url: public_url.effective,
+        public_url_source: public_url.source.as_str().to_string(),
+        public_url_saved: public_url.saved,
+        public_url_error: public_url.error.as_ref().map(|error| error.message.clone()),
+        public_url_error_code: public_url.error.map(|error| error.code.to_string()),
+        public_url_editable: public_url.editable,
+        base_path: addressing.base_path,
+        base_path_source: addressing.base_path_source.as_str().to_string(),
+        bind_address: addressing.bind_address,
+        bind_source: addressing.bind_source.as_str().to_string(),
+        passkey_rp_id: addressing.passkey_rp_id,
+        passkey_rp_origin: addressing.passkey_rp_origin,
+        passkey_rp_source: addressing.passkey_rp_source.as_str().to_string(),
+        passkey_user_count: public_url
+            .passkey_enrollment
+            .map(|counts| counts.users_with_passkeys),
+        passkey_only_user_count: public_url
+            .passkey_enrollment
+            .map(|counts| counts.passkey_only_users),
         trusted_proxy_ips: settings.trusted_proxy_ips,
         trusted_proxy_override: settings.trusted_proxy_override,
         trusted_proxy_source: settings.trusted_proxy_source,
         tls_cert_path: settings.tls_cert_path,
         tls_key_path: settings.tls_key_path,
+    }
+}
+
+pub fn from_public_url_change_preview(
+    preview: scryer_application::PublicUrlChangePreview,
+) -> PublicUrlChangePreviewPayload {
+    PublicUrlChangePreviewPayload {
+        normalized_public_url: preview.normalized,
+        error: preview.error.as_ref().map(|error| error.message.clone()),
+        error_code: preview.error.map(|error| error.code.to_string()),
+        passkey_impact: preview.passkey_impact.as_str().to_string(),
+        current_passkey_rp_id: preview.current_passkey_rp_id,
+        next_passkey_rp_id: preview.next_passkey_rp_id,
+        passkey_user_count: preview
+            .passkey_enrollment
+            .map(|counts| counts.users_with_passkeys),
+        passkey_only_user_count: preview
+            .passkey_enrollment
+            .map(|counts| counts.passkey_only_users),
+        acknowledgement_required: preview.acknowledgement_required,
     }
 }
 

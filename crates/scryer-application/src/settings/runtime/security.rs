@@ -5,6 +5,39 @@ pub struct ServiceSettings {
     pub trusted_proxy_ips: Vec<String>,
     pub trusted_proxy_override: Option<Vec<String>>,
     pub trusted_proxy_source: String,
+    pub public_url: PublicUrlSettings,
+}
+/// The effective public URL and the read-only addressing facts beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicUrlSettings {
+    /// Effective, valid public URL; absent when unset or invalid.
+    pub effective: Option<String>,
+    pub source: crate::public_url::ConfigValueSource,
+    /// Saved value, shown even when the environment overrides it.
+    pub saved: Option<String>,
+    /// Validation error for the winning value.
+    pub error: Option<crate::public_url::PublicUrlError>,
+    /// False while `SCRYER_PUBLIC_URL` is set.
+    pub editable: bool,
+    pub addressing: crate::public_url::InstanceAddressing,
+    /// Passkey enrollment, absent when it could not be read.
+    pub passkey_enrollment: Option<crate::PasskeyEnrollmentCounts>,
+}
+/// What saving a proposed public URL would do, computed with the same rules
+/// the save and the next start apply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicUrlChangePreview {
+    /// The stored form of the proposed value; absent for a reset or a
+    /// rejected value.
+    pub normalized: Option<String>,
+    /// Why the proposed value would be refused.
+    pub error: Option<crate::public_url::PublicUrlError>,
+    pub passkey_impact: crate::public_url::PasskeyImpact,
+    pub current_passkey_rp_id: Option<String>,
+    pub next_passkey_rp_id: Option<String>,
+    pub passkey_enrollment: Option<crate::PasskeyEnrollmentCounts>,
+    /// The save must carry an explicit acknowledgement.
+    pub acknowledgement_required: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecuritySettings {
@@ -38,10 +71,156 @@ pub struct UpdateServiceSettings {
     pub tls_key_path: Option<String>,
     pub trusted_proxy_ips: Option<Vec<String>>,
     pub reset_trusted_proxy_ips: bool,
+    /// Save a public URL. Omission preserves the saved value.
+    pub public_url: Option<String>,
+    /// Clear the saved public URL.
+    pub reset_public_url: bool,
+    /// The administrator confirmed that existing passkeys stop working.
+    pub acknowledge_passkey_impact: bool,
 }
 impl AppUseCase {
     pub fn trusted_proxy_runtime(&self) -> crate::rate_limit_proxy_policy::TrustedProxyRuntime {
         self.runtime.security.trusted_proxies.clone()
+    }
+
+    /// The shared public URL that transport adapters read per request.
+    pub fn public_url_runtime(&self) -> crate::public_url::PublicUrlRuntime {
+        self.runtime.security.public_url.clone()
+    }
+
+    /// Install the startup public URL policy and addressing facts. The saved
+    /// value is read by the composition root before passkeys are built.
+    pub fn install_public_url(
+        &self,
+        policy: crate::public_url::PublicUrlPolicy,
+        addressing: crate::public_url::InstanceAddressing,
+    ) {
+        self.runtime.security.public_url.install(policy, addressing);
+    }
+
+    /// Passkey enrollment counts in one query. A failed read is logged and
+    /// reported as unknown so it never fails the settings page.
+    async fn passkey_enrollment(&self) -> Option<crate::PasskeyEnrollmentCounts> {
+        match self
+            .services
+            .identity
+            .webauthn
+            .passkey_enrollment_counts()
+            .await
+        {
+            Ok(counts) => Some(counts),
+            Err(error) => {
+                tracing::warn!(error = %error, "could not count registered passkeys");
+                None
+            }
+        }
+    }
+
+    async fn public_url_settings(&self) -> AppResult<PublicUrlSettings> {
+        let policy = self.runtime.security.public_url.snapshot();
+        Ok(PublicUrlSettings {
+            effective: policy.url().map(|_| {
+                policy
+                    .configured_value()
+                    .unwrap_or_default()
+                    .trim_end_matches('/')
+                    .to_string()
+            }),
+            source: policy.source(),
+            saved: policy.saved_value().map(str::to_string),
+            error: policy.error(),
+            editable: policy.environment_value().is_none(),
+            addressing: (*self.runtime.security.public_url.addressing()).clone(),
+            passkey_enrollment: self.passkey_enrollment().await,
+        })
+    }
+
+    /// Preview what saving `value` (or clearing it) would do, without saving.
+    pub async fn preview_public_url_change(
+        &self,
+        actor: &User,
+        value: Option<&str>,
+        reset: bool,
+    ) -> AppResult<PublicUrlChangePreview> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageSystemSettings)
+            .await?;
+        let addressing = self.runtime.security.public_url.addressing();
+        let mut preview = PublicUrlChangePreview {
+            normalized: None,
+            error: None,
+            passkey_impact: crate::public_url::PasskeyImpact::Unchanged,
+            current_passkey_rp_id: addressing.passkey_rp_id.clone(),
+            next_passkey_rp_id: addressing.passkey_rp_id.clone(),
+            passkey_enrollment: None,
+            acknowledgement_required: false,
+        };
+        let change = match self.validated_public_url_change(value, reset) {
+            Ok(change) => change,
+            Err(AppError::PublicUrlRejected { message, code }) => {
+                preview.error = Some(crate::public_url::PublicUrlError::new(code, message));
+                return Ok(preview);
+            }
+            Err(error) => return Err(error),
+        };
+        let Some(next) = change else {
+            return Ok(preview);
+        };
+        let (impact, next_rp_id) =
+            crate::public_url::passkey_impact_of_saved_value(&addressing, next.as_deref());
+        preview.normalized = next;
+        preview.passkey_impact = impact;
+        if impact != crate::public_url::PasskeyImpact::Unaffected {
+            preview.next_passkey_rp_id = next_rp_id;
+        }
+        preview.passkey_enrollment = self.passkey_enrollment().await;
+        preview.acknowledgement_required =
+            crate::public_url::passkey_acknowledgement_required(impact, preview.passkey_enrollment);
+        Ok(preview)
+    }
+
+    /// `Some(Some(url))` saves, `Some(None)` clears, `None` leaves it alone.
+    fn validated_public_url_change(
+        &self,
+        value: Option<&str>,
+        reset: bool,
+    ) -> AppResult<Option<Option<String>>> {
+        if value.is_none() && !reset {
+            return Ok(None);
+        }
+        use crate::public_url::error_codes;
+        let rejected = |code: &'static str, message: String| AppError::PublicUrlRejected {
+            message,
+            code,
+        };
+        if value.is_some() && reset {
+            return Err(rejected(
+                error_codes::SAVE_AND_RESET,
+                "cannot save and reset the public URL together".into(),
+            ));
+        }
+        if self
+            .runtime
+            .security
+            .public_url
+            .snapshot()
+            .environment_value()
+            .is_some()
+        {
+            return Err(rejected(
+                error_codes::ENVIRONMENT_LOCKED,
+                format!(
+                    "the public URL is set by {} and cannot be changed here",
+                    crate::public_url::PUBLIC_URL_ENV
+                ),
+            ));
+        }
+        let Some(value) = value else {
+            return Ok(Some(None));
+        };
+        let base_path = self.runtime.security.public_url.addressing().base_path.clone();
+        crate::public_url::normalize_saved_public_url(value, &base_path)
+            .map(|saved| Some(Some(saved)))
+            .map_err(|error| rejected(error.code, error.message))
     }
 
     pub async fn initialize_trusted_proxy_policy(&self, environment: &str) -> AppResult<()> {
@@ -202,6 +381,7 @@ impl AppUseCase {
                 .read_setting_string_value(TLS_KEY_PATH_KEY, None)
                 .await?
                 .unwrap_or_default(),
+            public_url: self.public_url_settings().await?,
         })
     }
 }
@@ -421,6 +601,29 @@ impl AppUseCase {
         } else {
             None
         };
+        let public_url = self.validated_public_url_change(
+            input.public_url.as_deref(),
+            input.reset_public_url,
+        )?;
+        if let Some(next) = &public_url {
+            let addressing = self.runtime.security.public_url.addressing();
+            let (impact, _) =
+                crate::public_url::passkey_impact_of_saved_value(&addressing, next.as_deref());
+            if impact.breaks_existing_passkeys()
+                && !input.acknowledge_passkey_impact
+                && crate::public_url::passkey_acknowledgement_required(
+                    impact,
+                    self.passkey_enrollment().await,
+                )
+            {
+                return Err(AppError::PublicUrlRejected {
+                    message: "this change stops registered passkeys from working after the next \
+                              restart; confirm it explicitly to save"
+                        .into(),
+                    code: crate::public_url::error_codes::PASSKEY_ACKNOWLEDGEMENT_REQUIRED,
+                });
+            }
+        }
         let mut saved_keys = Vec::new();
         for (key, value) in [
             (TLS_CERT_PATH_KEY, input.tls_cert_path),
@@ -441,6 +644,17 @@ impl AppUseCase {
             .await?;
             self.runtime.security.trusted_proxies.replace(policy);
             saved_keys.push(TRUSTED_PROXIES_KEY.to_string());
+        }
+        if let Some(saved) = public_url {
+            use crate::public_url::{PUBLIC_URL_KEY, PublicUrlPolicy};
+            self.upsert_system_setting_json(PUBLIC_URL_KEY, &saved, Some(actor.id.clone()))
+                .await?;
+            let current = self.runtime.security.public_url.snapshot();
+            self.runtime.security.public_url.replace(PublicUrlPolicy::new(
+                current.environment_value(),
+                saved.as_deref(),
+            ));
+            saved_keys.push(PUBLIC_URL_KEY.to_string());
         }
         self.emit_settings_saved(actor, "service_settings", None, saved_keys)
             .await;

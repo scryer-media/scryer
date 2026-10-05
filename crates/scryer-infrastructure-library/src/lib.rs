@@ -23,7 +23,7 @@ pub(crate) mod storage {
 }
 
 pub(crate) mod title_images {
-    pub(crate) use crate::media::images::{content_type_for_format, normalized_base_path_from_env};
+    pub(crate) use crate::media::images::{content_type_for_format, normalized_base_path};
 }
 
 pub(crate) use scryer_infrastructure_workflow as workflow;

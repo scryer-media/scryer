@@ -1333,7 +1333,22 @@ const serviceSettingsFieldSelection = `
     tlsKeyPath
     trustedProxyIps
     trustedProxyOverride
-    trustedProxySource`;
+    trustedProxySource
+    publicUrl
+    publicUrlSource
+    publicUrlSaved
+    publicUrlError
+    publicUrlErrorCode
+    publicUrlEditable
+    basePath
+    basePathSource
+    bindAddress
+    bindSource
+    passkeyRpId
+    passkeyRpOrigin
+    passkeyRpSource
+    passkeyUserCount
+    passkeyOnlyUserCount`;
 
 export const saveQualityProfileSettingsMutation = `mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
   saveQualityProfileSettings(input: $input) {${qualityProfileSettingsFieldSelection}

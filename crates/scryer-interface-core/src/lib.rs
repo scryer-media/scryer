@@ -279,18 +279,49 @@ pub fn default_persist_session_from_ctx(ctx: &Context<'_>) -> bool {
 #[derive(Clone, Copy)]
 pub struct RequestClientIp(pub std::net::IpAddr);
 
-/// Server-approved callback origins for this HTTP request. Transport adapters
-/// derive these from operator configuration, never from client headers.
-#[derive(Clone, Default)]
-pub struct RequestListAccountLinkOrigins(pub std::sync::Arc<[String]>);
+/// Where the callback origins approved for account linking come from.
+/// Transport adapters implement it from operator configuration, never from
+/// client headers. It is consulted only when a resolver links an account, so
+/// ordinary requests pay nothing for it.
+pub trait ListAccountLinkOriginSource: Send + Sync {
+    fn approved_origins(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = std::sync::Arc<[String]>> + Send + '_>>;
+}
 
-pub fn list_account_link_origin_from_ctx(ctx: &Context<'_>, requested: &str) -> GqlResult<String> {
-    ctx.data_opt::<RequestListAccountLinkOrigins>()
-        .and_then(|policy| policy.0.iter().find(|origin| origin.as_str() == requested))
+/// The account-link origin source for this HTTP request. Absent from
+/// schema-level and WebSocket contexts, which therefore approve nothing.
+#[derive(Clone, Default)]
+pub struct RequestListAccountLinkOrigins(Option<std::sync::Arc<dyn ListAccountLinkOriginSource>>);
+
+impl RequestListAccountLinkOrigins {
+    pub fn new(source: std::sync::Arc<dyn ListAccountLinkOriginSource>) -> Self {
+        Self(Some(source))
+    }
+
+    pub async fn approved_origins(&self) -> std::sync::Arc<[String]> {
+        match &self.0 {
+            Some(source) => source.approved_origins().await,
+            None => std::sync::Arc::from([]),
+        }
+    }
+}
+
+pub async fn list_account_link_origin_from_ctx(
+    ctx: &Context<'_>,
+    requested: &str,
+) -> GqlResult<String> {
+    let approved = match ctx.data_opt::<RequestListAccountLinkOrigins>() {
+        Some(source) => source.approved_origins().await,
+        None => std::sync::Arc::from([]),
+    };
+    approved
+        .iter()
+        .find(|origin| origin.as_str() == requested)
         .cloned()
         .ok_or_else(|| {
             coded_gql_error(
-                "Account linking is unavailable from this address; configure SCRYER_PUBLIC_URL or use an approved local address",
+                "Account linking is unavailable from this address. When Scryer is reached through a published container port, a reverse proxy, or a hostname, set the public URL in settings or SCRYER_PUBLIC_URL; otherwise open Scryer at localhost or the address it listens on",
                 "LIST_ACCOUNT_ORIGIN_NOT_ALLOWED",
             )
         })
@@ -307,8 +338,23 @@ pub fn persist_session_or_default(requested: Option<bool>, default: bool) -> boo
 
 #[cfg(test)]
 mod request_list_account_origin_tests {
-    use super::{RequestListAccountLinkOrigins, list_account_link_origin_from_ctx};
+    use super::{
+        ListAccountLinkOriginSource, RequestListAccountLinkOrigins,
+        list_account_link_origin_from_ctx,
+    };
     use async_graphql::{Context, EmptyMutation, EmptySubscription, Object, Request, Schema};
+    use std::sync::Arc;
+
+    struct FixedOrigins(Arc<[String]>);
+
+    impl ListAccountLinkOriginSource for FixedOrigins {
+        fn approved_origins(
+            &self,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Arc<[String]>> + Send + '_>>
+        {
+            Box::pin(async move { self.0.clone() })
+        }
+    }
 
     struct Query;
 
@@ -319,14 +365,16 @@ mod request_list_account_origin_tests {
             ctx: &Context<'_>,
             origin: String,
         ) -> async_graphql::Result<String> {
-            list_account_link_origin_from_ctx(ctx, &origin)
+            list_account_link_origin_from_ctx(ctx, &origin).await
         }
     }
 
     #[tokio::test]
     async fn account_link_origin_requires_transport_context_and_exact_approved_origin() {
         let schema = Schema::build(Query, EmptyMutation, EmptySubscription).finish();
-        let policy = RequestListAccountLinkOrigins(vec!["https://media.home".into()].into());
+        let policy = RequestListAccountLinkOrigins::new(Arc::new(FixedOrigins(
+            vec!["https://media.home".to_string()].into(),
+        )));
         for (requested, context, accepted) in [
             ("https://media.home", None, false),
             (
@@ -534,6 +582,14 @@ pub fn to_gql_error(err: AppError) -> Error {
                 extensions.set("refusalCode", code);
             })
         }
+        // A refused public URL change. The reason is a stable code the web
+        // client localizes.
+        AppError::PublicUrlRejected { message, code } => {
+            Error::new(format!("validation: {message}")).extend_with(|_, extensions| {
+                extensions.set("code", "PUBLIC_URL_REJECTED");
+                extensions.set("reason", code);
+            })
+        }
         // The retired direct root write (FR-077). Its own code, so a client can
         // route the user into the move workflow instead of surfacing a generic
         // validation failure, and the title id so a bulk edit can name the row
@@ -714,6 +770,7 @@ fn app_error_kind(err: &AppError) -> &'static str {
         AppError::LocationOperationBusy(_) => "LocationOperationBusy",
         AppError::LocationPlanRefused { .. } => "LocationPlanRefused",
         AppError::LocationRootRefused { .. } => "LocationRootRefused",
+        AppError::PublicUrlRejected { .. } => "PublicUrlRejected",
         AppError::DirectRootWriteRetired { .. } => "DirectRootWriteRetired",
         AppError::NoAutoEligibleRelease { .. } => "NoAutoEligibleRelease",
         AppError::PluginInstallInProgress(_) => "PluginInstallInProgress",
@@ -1062,6 +1119,23 @@ mod tests {
             assert_eq!(error.message, LOGIN_FAILED_MESSAGE);
             assert_eq!(graphql_error_code(&error), Some("LOGIN_FAILED"));
         }
+    }
+
+    #[test]
+    fn a_rejected_public_url_carries_its_reason_code() {
+        let error = to_gql_error(AppError::PublicUrlRejected {
+            message: "the public URL must name a single host".into(),
+            code: "wildcard_host",
+        });
+        assert_eq!(
+            error.message,
+            "validation: the public URL must name a single host"
+        );
+        assert_eq!(graphql_error_code(&error), Some("PUBLIC_URL_REJECTED"));
+        assert_eq!(
+            graphql_error_extension_string(&error, "reason"),
+            Some("wildcard_host")
+        );
     }
 
     #[test]
