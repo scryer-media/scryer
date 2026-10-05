@@ -3,6 +3,24 @@ use crate::{AppError, AppResult};
 use async_trait::async_trait;
 use scryer_domain::ListAccountCredential;
 
+const AUTH_FAILURE_PREFIX: &str = "list account authentication failed: ";
+
+/// The provider or relay answered that the stored grant is no longer usable.
+pub const RECONNECT_REQUIRED: &str = "reconnect_required";
+
+/// A failed account authentication carrying a bounded, server-owned code.
+pub fn auth_failure(code: &str) -> AppError {
+    AppError::Validation(format!("{AUTH_FAILURE_PREFIX}{code}"))
+}
+
+/// The code of an `auth_failure`, or `None` for any other error.
+pub fn auth_failure_code(error: &AppError) -> Option<&str> {
+    match error {
+        AppError::Validation(message) => message.strip_prefix(AUTH_FAILURE_PREFIX),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct ListProviderAppConfig {
     pub client_id: String,

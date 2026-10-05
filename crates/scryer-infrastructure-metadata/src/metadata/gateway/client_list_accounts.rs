@@ -691,7 +691,7 @@ impl Tokens {
 }
 
 fn failure(code: &str) -> AppError {
-    AppError::Validation(format!("list account authentication failed: {code}"))
+    scryer_application::lists::account_transport::auth_failure(code)
 }
 fn require_value(value: &str, max: usize) -> AppResult<()> {
     if value.is_empty() || value.len() > max || value.bytes().any(|b| b <= 32 || b == 127) {

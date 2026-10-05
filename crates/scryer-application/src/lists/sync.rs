@@ -288,16 +288,20 @@ pub async fn sync_subscription(
                 {
                     match context.actions.prepare_account(account).await {
                         Ok(account) => Some(account),
-                        Err(_) => {
+                        Err(error) => {
+                            // Only a refusal of the grant expires the account;
+                            // a transient refresh failure is retried next sync.
+                            let class = match error {
+                                crate::AppError::TemporaryUnavailable { .. }
+                                | crate::AppError::Repository(_) => ListFailureClass::Unavailable,
+                                _ => ListFailureClass::Unauthorized,
+                            };
                             return record_failure(
                                 context,
                                 subscription,
                                 run,
                                 now,
-                                ListFailure::new(
-                                    ListFailureClass::Unauthorized,
-                                    &subscription.source.provider,
-                                ),
+                                ListFailure::new(class, &subscription.source.provider),
                             )
                             .await;
                         }

@@ -739,12 +739,11 @@ impl AppUseCase {
                 redirect_uri: values.get("redirect_uri").cloned().unwrap_or_default(),
                 access_token: values.get("access_token").cloned(),
             });
-        // Claim the one-shot refresh durably first. A crash, cancellation or
-        // failed rotated-token write leaves this account requiring reconnect.
-        account.status = UserListAccountStatus::Expired;
-        account.error_message = Some("Reconnect this list account to resume syncing.".into());
-        account.updated_at = now;
-        self.services.lists.accounts.update(account.clone()).await?;
+        // Callers hold the account lock, so concurrent refreshes cannot spend a
+        // rotating refresh credential twice. Only an answer that the grant is
+        // gone requires reconnect; any other failure leaves the account linked
+        // so the next sync retries it.
+        let previous = account.clone();
         match self
             .services
             .lists
@@ -759,17 +758,39 @@ impl AppUseCase {
                 account.error_message = None;
                 account.last_refresh_at = Some(now);
                 account.updated_at = now;
-                self.services.lists.accounts.update(account).await
+                match self.services.lists.accounts.update(account).await {
+                    Ok(account) => Ok(account),
+                    Err(error) => {
+                        // The provider has already spent the stored refresh
+                        // credential; replaying it can never succeed.
+                        let _ = self
+                            .mark_list_account_reconnect_required(previous, now)
+                            .await;
+                        Err(error)
+                    }
+                }
             }
-            Err(_) => {
-                account.status = UserListAccountStatus::Expired;
-                account.error_message =
-                    Some("Reconnect this list account to resume syncing.".into());
-                account.updated_at = now;
-                self.services.lists.accounts.update(account).await?;
+            Err(error) if auth_failure_code(&error) == Some(RECONNECT_REQUIRED) => {
+                self.mark_list_account_reconnect_required(previous, now)
+                    .await?;
                 Err(AppError::Validation("reconnect this list account".into()))
             }
+            Err(_) => Err(AppError::TemporaryUnavailable {
+                message: "list account refresh is temporarily unavailable".into(),
+                retry_after: None,
+                rate_limit_cooldown: Default::default(),
+            }),
         }
+    }
+    async fn mark_list_account_reconnect_required(
+        &self,
+        mut account: UserListAccount,
+        now: DateTime<Utc>,
+    ) -> AppResult<UserListAccount> {
+        account.status = UserListAccountStatus::Expired;
+        account.error_message = Some("Reconnect this list account to resume syncing.".into());
+        account.updated_at = now;
+        self.services.lists.accounts.update(account).await
     }
     pub async fn unlink_list_account(&self, actor: &User, id: &str) -> AppResult<String> {
         let guard = self.services.lists.account_runtime.lock_account(id).await;
