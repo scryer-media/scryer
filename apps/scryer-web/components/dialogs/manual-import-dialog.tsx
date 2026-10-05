@@ -125,17 +125,22 @@ function formatFileSize(bytes: number) {
   return `${val.toFixed(i > 0 ? 1 : 0)} ${units[i]}`;
 }
 
-function episodeLabel(ep: AvailableEpisode, t: (key: string) => string): string {
+/**
+ * The picker label for an episode. Without `t` (search matching) an untitled
+ * episode contributes only its numbers, so searching "TBA" matches nothing.
+ */
+function episodeLabel(ep: AvailableEpisode, t?: (key: string) => string): string {
   const season = ep.seasonNumber?.replace(/\D/g, "") ?? "";
   const episode = ep.episodeNumber?.replace(/\D/g, "") ?? "";
   const seasonTag = season ? season.padStart(2, "0") : "??";
   const episodeTag = episode ? episode.padStart(2, "0") : "??";
   const tag = `S${seasonTag}E${episodeTag}`;
   const absolute = ep.absoluteNumber?.trim();
+  const title = t ? episodeTitleOrTba(ep.title, t) : ep.title?.trim();
   if (absolute) {
-    return `${tag} (${absolute}) ${episodeTitleOrTba(ep.title, t)}`;
+    return title ? `${tag} (${absolute}) ${title}` : `${tag} (${absolute})`;
   }
-  return `${tag} - ${episodeTitleOrTba(ep.title, t)}`;
+  return title ? `${tag} - ${title}` : tag;
 }
 
 function seriesMovieLabel(movie: AvailableSeriesMovie): string {
@@ -258,7 +263,7 @@ function buildManualImportTargetRows(
 
   groupedEpisodes.forEach((episodesInSeason, seasonLabel) => {
     const matchingEpisodes = episodesInSeason.filter((episode) =>
-      matches(episodeLabel(episode, t), seasonLabel),
+      matches(episodeLabel(episode), seasonLabel),
     );
     if (matchingEpisodes.length === 0) {
       return;
