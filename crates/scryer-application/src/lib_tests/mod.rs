@@ -27,6 +27,7 @@ mod episode_metadata_refresh;
 mod folder_match;
 mod full_hash_backfill;
 mod golden_resolution_corpus;
+mod import_existing_score;
 mod import_rejection_reopen;
 mod indexer_backoff_reset;
 mod indexer_download_client_mappings;

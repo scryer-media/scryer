@@ -961,6 +961,29 @@ impl AppUseCase {
         queued
     }
 
+    /// The best bar among the primary files occupying an import scope, scored
+    /// under the rules in force now. This is the `existing_score` the import
+    /// probe hands to rules: the stored `acquisition_score` is what the file
+    /// scored when it landed, and a rule edited since must see the file as the
+    /// current rules judge it, exactly as admission does.
+    pub(crate) async fn current_incumbent_score_for_import_scope(
+        &self,
+        title: &Title,
+        scope: &crate::SubmissionScope,
+        context: &ResolvedScoringContext,
+        runtime_minutes: Option<i32>,
+    ) -> Option<i32> {
+        self.admission_subject_for_scope(
+            title,
+            scope,
+            context,
+            runtime_minutes,
+            SubjectIntent::Import,
+        )
+        .await
+        .best_score()
+    }
+
     /// The bar a candidate must clear to displace `file`.
     ///
     /// Always re-derived from the row, never read back from
