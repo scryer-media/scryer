@@ -116,8 +116,16 @@ pub(crate) fn enrich_candidate(
             continue;
         }
 
-        if enrichment.edition.is_none()
+        // The first edition in the name is kept, except that an alternate cut
+        // named later replaces an edition that is not one: a theatrical or
+        // remastered release that also carries an alternate ending is still
+        // an alternate cut.
+        if enrichment
+            .edition
+            .as_deref()
+            .is_none_or(|current| !is_alternate_cut_edition(current))
             && let Some((edition, consumed)) = parse_edition_at(&normalized_tokens, index)
+            && (enrichment.edition.is_none() || is_alternate_cut_edition(&edition))
         {
             enrichment.edition = Some(edition);
             index += consumed;
@@ -1199,6 +1207,8 @@ const ALTERNATE_CUT_EDITIONS: &[&str] = &[
     "Ultimate Cut",
     "Ultimate Edition",
     "Redux",
+    "Alternate Ending",
+    "Alternate Cut",
 ];
 
 /// Whether a parsed `edition` names an alternate cut of a movie.
@@ -1246,6 +1256,20 @@ fn parse_edition_at(tokens: &[String], index: usize) -> Option<(String, usize)> 
             Some(("Special Edition Remastered".to_string(), 3))
         }
         "SPECIAL" if next == Some("EDITION") => Some(("Special Edition".to_string(), 2)),
+        // Never a bare ALTERNATE, ALT or ENDING: only the whole phrase.
+        "ALTERNATE" | "ALTERNATIVE" | "ALT" if next == Some("ENDING") => {
+            Some(("Alternate Ending".to_string(), 2))
+        }
+        "ALTERNATE" | "ALTERNATIVE" if next == Some("CUT") => {
+            Some(("Alternate Cut".to_string(), 2))
+        }
+        // An alternate theatrical version is another cut of the film, not
+        // necessarily another ending, so it reads as an alternate cut.
+        "ALTERNATE" | "ALTERNATIVE"
+            if next == Some("THEATRICAL") && matches!(third, Some("VERSION" | "CUT")) =>
+        {
+            Some(("Alternate Cut".to_string(), 3))
+        }
         _ => None,
     }
 }

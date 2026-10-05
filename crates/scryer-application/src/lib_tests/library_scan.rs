@@ -1737,6 +1737,21 @@ async fn movie_title_scan_records_an_alternate_cut_additional_whatever_its_quali
 }
 
 #[tokio::test]
+async fn movie_title_scan_records_an_alternate_ending_additional_beside_the_ordinary_file() {
+    assert_eq!(
+        movie_title_scan_roles_for_new_folder(
+            "Harbor Echo",
+            &[
+                ("Harbor.Echo.2026.Alternate.Ending.1080p.BluRay.mkv", 1024),
+                ("Harbor.Echo.2026.720p.WEB-DL.mkv", 128),
+            ],
+        )
+        .await,
+        vec![MediaFileRole::Additional, MediaFileRole::Primary]
+    );
+}
+
+#[tokio::test]
 async fn movie_title_scan_elects_nobody_when_every_file_is_an_alternate_cut() {
     assert_eq!(
         movie_title_scan_roles_for_new_folder(
