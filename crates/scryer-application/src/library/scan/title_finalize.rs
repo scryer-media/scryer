@@ -21,6 +21,23 @@ struct PersistedScannedMediaFile {
     db_elapsed: Duration,
 }
 
+/// The role a movie or series movie file found on disk is recorded with when
+/// a scan inserts it. A file whose name marks it as an alternate cut is
+/// recorded Additional, so the scan's election never makes it Primary; every
+/// other file starts Primary and takes part in the election. Only new rows
+/// use this: a file that already has a stored role keeps it.
+fn scanned_movie_file_role(parsed: &crate::ParsedReleaseMetadata) -> crate::MediaFileRole {
+    if parsed
+        .edition
+        .as_deref()
+        .is_some_and(scryer_release_parser::is_alternate_cut_edition)
+    {
+        crate::MediaFileRole::Additional
+    } else {
+        crate::MediaFileRole::Primary
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "media-file persistence combines source metadata, cache state, and summary accounting"
@@ -33,6 +50,7 @@ async fn persist_or_reuse_scanned_media_file(
     snapshot: &FileSourceSnapshot,
     existing: Option<ExistingScannedMediaFile<'_>>,
     original_file_path: Option<String>,
+    new_file_role: crate::MediaFileRole,
     summary: &mut LibraryScanSummary,
     update_error_message: &'static str,
     insert_error_message: &'static str,
@@ -90,7 +108,7 @@ async fn persist_or_reuse_scanned_media_file(
         title_id: title.id.clone(),
         file_path: file.path.clone(),
         size_bytes: snapshot.size_bytes,
-        role: crate::MediaFileRole::Primary,
+        role: new_file_role,
         source_signature_scheme,
         source_signature_value,
         quality_label: None,
@@ -397,6 +415,13 @@ pub(crate) async fn finalize_title_scan_file(
         .acquire_destination(&destination_path)
         .await;
 
+    // Ordinary episode files always start Primary; only a series movie's
+    // file is judged by its edition.
+    let new_file_role = if series_movie_link_id.is_some() {
+        scanned_movie_file_role(&parsed)
+    } else {
+        crate::MediaFileRole::Primary
+    };
     let Some(persisted_file) = persist_or_reuse_scanned_media_file(
         app,
         title,
@@ -405,6 +430,7 @@ pub(crate) async fn finalize_title_scan_file(
         &snapshot,
         existing,
         original_file_path,
+        new_file_role,
         summary,
         "failed to refresh media file source signature during title scan",
         "failed to insert media file during title scan",
@@ -779,6 +805,7 @@ pub(super) async fn finalize_movie_scan_file(
         &snapshot,
         existing,
         None,
+        scanned_movie_file_role(&parsed),
         summary,
         "failed to refresh movie media file source signature during library scan",
         "failed to insert movie media file during library scan",

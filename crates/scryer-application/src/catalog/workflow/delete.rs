@@ -1777,7 +1777,7 @@ impl AppUseCase {
 
     /// The episodes a series movie of `title_id` is linked to, or `None` when
     /// the links could not be read, which then blocks automatic promotion.
-    async fn series_movie_linked_episode_ids(
+    pub(crate) async fn series_movie_linked_episode_ids(
         &self,
         title_id: &str,
     ) -> Option<std::collections::BTreeSet<String>> {
@@ -1893,12 +1893,16 @@ pub(crate) struct PrimaryPromotionBatch {
 /// not be read, which qualifies nothing). Movie files, series movie files and
 /// anything else keep their Additional file as it is until the operator
 /// chooses a Primary.
-fn primary_promotion_scope_from_rows(
-    title_rows: &[TitleMediaFile],
+/// The allow-list behind every automatic promotion: the rows of `file_id`
+/// and the episodes they cover when the file is positively an ordinary
+/// episode file, or `None` for a movie file, a series movie file, a file
+/// linked to a series movie's episode, or when the series movie links could
+/// not be read.
+pub(crate) fn ordinary_episode_file_rows<'a>(
+    title_rows: &'a [TitleMediaFile],
     series_movie_episode_ids: Option<&std::collections::BTreeSet<String>>,
-    title_id: &str,
     file_id: &str,
-) -> Option<PrimaryPromotionScope> {
+) -> Option<(Vec<&'a TitleMediaFile>, std::collections::BTreeSet<String>)> {
     let series_movie_episode_ids = series_movie_episode_ids?;
     let rows = title_rows
         .iter()
@@ -1921,6 +1925,17 @@ fn primary_promotion_scope_from_rows(
     {
         return None;
     }
+    Some((rows, episode_ids))
+}
+
+fn primary_promotion_scope_from_rows(
+    title_rows: &[TitleMediaFile],
+    series_movie_episode_ids: Option<&std::collections::BTreeSet<String>>,
+    title_id: &str,
+    file_id: &str,
+) -> Option<PrimaryPromotionScope> {
+    let (rows, episode_ids) =
+        ordinary_episode_file_rows(title_rows, series_movie_episode_ids, file_id)?;
     let primary_episode_ids = rows
         .iter()
         .filter(|row| row.role.is_primary())
