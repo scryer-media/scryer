@@ -816,55 +816,101 @@ async fn rate_limited_answer_keeps_the_requested_pause() {
     }
 }
 
+/// An error answer body in a renew table.
+#[derive(Clone, Copy, Debug)]
+enum Answer {
+    /// `{"error": <code>}`, the OAuth and relay error shape.
+    Code(&'static str),
+    /// No body at all.
+    Empty,
+    /// A proxy, CDN or maintenance page.
+    Html,
+}
+fn answer(status: u16, body: Answer) -> ResponseTemplate {
+    let template = ResponseTemplate::new(status);
+    match body {
+        Answer::Code(error) => template.set_body_json(json!({ "error": error })),
+        Answer::Empty => template,
+        Answer::Html => template
+            .insert_header("content-type", "text/html")
+            .set_body_string("<html><body>fixture gateway page</body></html>"),
+    }
+}
+
 #[tokio::test]
-async fn relay_renew_answers_map_to_reconnect_only_for_refused_grants() {
+async fn relay_renew_answers_map_to_reconnect_only_for_explicit_grant_codes() {
+    use Answer::*;
     use scryer_application::lists::account_transport::renew_requires_reconnect;
-    let cases: &[(u16, Option<&str>, &str)] = &[
-        (400, Some("invalid_grant"), "reconnect_required"),
-        (400, Some("invalid_refresh_handle"), "reconnect_required"),
-        (400, Some("expired_token"), "reconnect_required"),
-        (400, Some("access_denied"), "access_denied"),
-        (400, Some("invalid_scope"), "provider_rejected"),
-        (400, Some("invalid_request"), "invalid_request"),
-        (413, Some("request_too_large"), "invalid_request"),
+    let cases: &[(u16, Answer, &str)] = &[
+        (400, Code("invalid_grant"), "reconnect_required"),
+        (400, Code("invalid_refresh_handle"), "reconnect_required"),
+        (400, Code("expired_token"), "reconnect_required"),
+        (400, Code("access_denied"), "access_denied"),
+        (400, Code("invalid_scope"), "provider_unavailable"),
+        (400, Code("invalid_request"), "invalid_request"),
+        (413, Code("request_too_large"), "invalid_request"),
         (
             401,
-            Some("instance_auth_required"),
+            Code("instance_auth_required"),
             "instance_auth_required",
         ),
-        (404, Some("not_found"), "unsupported_provider"),
-        (405, Some("method_not_allowed"), "unsupported_provider"),
-        (503, Some("relay_busy"), "provider_unavailable"),
-        (503, Some("relay_key_unavailable"), "provider_unavailable"),
-        (400, Some("relay_busy"), "provider_unavailable"),
-        (500, Some("relay_unavailable"), "provider_unavailable"),
-        (503, Some("relay_not_configured"), "provider_not_configured"),
+        (404, Code("not_found"), "unsupported_provider"),
+        (405, Code("method_not_allowed"), "unsupported_provider"),
+        (503, Code("relay_busy"), "provider_unavailable"),
+        (503, Code("relay_key_unavailable"), "provider_unavailable"),
+        (400, Code("relay_busy"), "provider_unavailable"),
+        (500, Code("relay_unavailable"), "provider_unavailable"),
+        (503, Code("relay_not_configured"), "provider_not_configured"),
         (
             503,
-            Some("provider_not_configured"),
+            Code("provider_not_configured"),
             "provider_not_configured",
         ),
         (
             503,
-            Some("provider_configuration_error"),
+            Code("provider_configuration_error"),
             "provider_not_configured",
         ),
-        (502, Some("provider_unavailable"), "provider_unavailable"),
+        (502, Code("provider_unavailable"), "provider_unavailable"),
         (
             502,
-            Some("invalid_provider_response"),
+            Code("invalid_provider_response"),
             "provider_unavailable",
         ),
-        (408, None, "provider_unavailable"),
-        (403, None, "provider_rejected"),
+        (408, Empty, "provider_unavailable"),
+        // SMG's instance authentication answers in free text. None of it says
+        // anything about the provider grant.
+        (
+            401,
+            Code("timestamp skew too large: 412s"),
+            "instance_auth_required",
+        ),
+        (401, Code("unknown PQ key"), "instance_auth_required"),
+        (
+            401,
+            Code("instance auth required"),
+            "instance_auth_required",
+        ),
+        (401, Code("nonce already used"), "instance_auth_required"),
+        (
+            403,
+            Code("access denied: client IP does not match enrollment"),
+            "instance_auth_required",
+        ),
+        (403, Code("access denied"), "instance_auth_required"),
+        (404, Code("not found"), "provider_unavailable"),
+        (403, Empty, "instance_auth_required"),
+        (401, Html, "instance_auth_required"),
+        (404, Empty, "provider_unavailable"),
+        (400, Html, "provider_unavailable"),
+        (400, Code("fixture_unknown_code"), "provider_unavailable"),
     ];
-    for &(status, error, expected) in cases {
+    for &(status, body, expected) in cases {
         let server = MockServer::start().await;
         let transport = transport(&server).await;
-        let body = error.map_or_else(|| json!({}), |error| json!({ "error": error }));
         Mock::given(method("POST"))
             .and(path("/auth/v1/simkl/renew"))
-            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .respond_with(answer(status, body))
             .expect(1)
             .mount(&server)
             .await;
@@ -873,48 +919,58 @@ async fn relay_renew_answers_map_to_reconnect_only_for_refused_grants() {
             .await
             .unwrap_err();
         let code = failure_code(&failure);
-        assert_eq!(code, Some(expected), "relay {status} {error:?}");
+        assert_eq!(code, Some(expected), "relay {status} {body:?}");
         let reconnect = matches!(
-            error,
-            Some(
-                "invalid_grant"
-                    | "invalid_refresh_handle"
-                    | "expired_token"
-                    | "access_denied"
-                    | "invalid_scope"
-            )
-        ) || (status == 403 && error.is_none());
+            body,
+            Code("invalid_grant" | "invalid_refresh_handle" | "expired_token" | "access_denied")
+        );
         assert_eq!(
             renew_requires_reconnect(expected),
             reconnect,
-            "relay {status} {error:?} reconnect"
+            "relay {status} {body:?} reconnect"
         );
     }
 }
 
 #[tokio::test]
 async fn direct_renew_refusals_require_reconnect_and_outages_do_not() {
+    use Answer::*;
     use scryer_application::lists::account_transport::renew_requires_reconnect;
-    let cases: &[(u16, Option<&str>, bool, &str)] = &[
-        (400, Some("invalid_grant"), true, "reconnect_required"),
-        (401, Some("invalid_client"), true, "reconnect_required"),
-        (400, Some("unauthorized_client"), true, "reconnect_required"),
-        (400, Some("invalid_request"), true, "provider_rejected"),
-        (401, None, true, "provider_rejected"),
-        (403, None, true, "provider_rejected"),
-        (400, None, true, "provider_rejected"),
-        (500, None, false, "provider_unavailable"),
-        (502, Some("invalid_grant"), true, "reconnect_required"),
-        (503, None, false, "provider_unavailable"),
-        (408, None, false, "provider_unavailable"),
+    let cases: &[(u16, Answer, bool, &str)] = &[
+        (400, Code("invalid_grant"), true, "reconnect_required"),
+        (400, Code("invalid_request"), true, "provider_rejected"),
+        (401, Code("invalid_token"), true, "provider_rejected"),
+        (502, Code("invalid_grant"), true, "reconnect_required"),
+        // The operator's own app refusing its client credentials keeps every
+        // account linked through it.
+        (
+            401,
+            Code("invalid_client"),
+            false,
+            "provider_not_configured",
+        ),
+        (
+            400,
+            Code("unauthorized_client"),
+            false,
+            "provider_not_configured",
+        ),
+        // A bare or HTML 4xx is a proxy or maintenance page, not a refusal.
+        (401, Empty, false, "provider_unavailable"),
+        (403, Empty, false, "provider_unavailable"),
+        (400, Empty, false, "provider_unavailable"),
+        (403, Html, false, "provider_unavailable"),
+        (404, Html, false, "provider_unavailable"),
+        (500, Empty, false, "provider_unavailable"),
+        (503, Html, false, "provider_unavailable"),
+        (408, Empty, false, "provider_unavailable"),
     ];
-    for &(status, error, reconnect, expected) in cases {
+    for &(status, body, reconnect, expected) in cases {
         let server = MockServer::start().await;
         let transport = transport(&server).await;
-        let body = error.map_or_else(|| json!({}), |error| json!({ "error": error }));
         Mock::given(method("POST"))
             .and(path("/trakt/token"))
-            .respond_with(ResponseTemplate::new(status).set_body_json(body))
+            .respond_with(answer(status, body))
             .expect(1)
             .mount(&server)
             .await;
@@ -923,13 +979,26 @@ async fn direct_renew_refusals_require_reconnect_and_outages_do_not() {
             .await
             .unwrap_err();
         let code = failure_code(&failure).unwrap();
-        assert_eq!(code, expected, "direct {status} {error:?}");
+        assert_eq!(code, expected, "direct {status} {body:?}");
         assert_eq!(
             renew_requires_reconnect(code),
             reconnect,
-            "direct {status} {error:?}"
+            "direct {status} {body:?}"
         );
     }
+}
+
+#[tokio::test]
+async fn unreachable_endpoint_is_a_transport_failure_not_a_provider_answer() {
+    let server = MockServer::start().await;
+    let mut transport = transport(&server).await;
+    // Port 0 can never accept a connection: it fails before any HTTP answer.
+    transport.endpoints.trakt = "http://127.0.0.1:0/trakt/token".into();
+    let error = transport
+        .renew("trakt", &direct_credential(), Some(&app()))
+        .await
+        .unwrap_err();
+    assert_eq!(failure_code(&error), Some("transport_unavailable"));
 }
 
 #[tokio::test]
@@ -1033,7 +1102,7 @@ fn auth_failure_message_format_and_code_set_are_pinned() {
     let source = source.split("#[cfg(test)]").next().unwrap();
     let flat = source.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut emitted = std::collections::BTreeSet::new();
-    for marker in ["failure(\"", "=> Some(\"", "=> { Some(\""] {
+    for marker in ["failure(\"", "=> Some(\"", "=> { Some(\"", "=> \""] {
         for (index, _) in flat.match_indices(marker) {
             let rest = &flat[index + marker.len()..];
             emitted.insert(rest[..rest.find('"').unwrap()].to_string());

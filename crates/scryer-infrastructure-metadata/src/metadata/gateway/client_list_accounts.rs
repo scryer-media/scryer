@@ -115,7 +115,7 @@ impl HttpListAccountAuthGateway {
             .http
             .execute(request)
             .await
-            .map_err(|_| failure("provider_unavailable"))?;
+            .map_err(|_| failure("transport_unavailable"))?;
         let status = response.status();
         let retry_after = response
             .headers()
@@ -140,7 +140,7 @@ impl HttpListAccountAuthGateway {
         while let Some(chunk) = response
             .chunk()
             .await
-            .map_err(|_| failure("provider_unavailable"))?
+            .map_err(|_| failure("transport_unavailable"))?
         {
             if chunk.len() > RESPONSE_LIMIT.saturating_sub(body.len()) {
                 return Err(failure("invalid_provider_response"));
@@ -526,14 +526,6 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                 .filter(|token| !token.is_empty())
                 .ok_or_else(|| failure("reconnect_required"))?;
             require_value(refresh_token, 8192)?;
-            // An operator's own app answering invalid_client means that app no
-            // longer accepts this grant. The built-in public client answering
-            // the same is a Scryer configuration fault no reconnect can fix.
-            let source = if app.is_some() {
-                Source::OperatorAppRenew
-            } else {
-                Source::Provider
-            };
             let mut app = app.cloned().unwrap_or_default();
             if provider == "mal" && app.client_id.is_empty() {
                 app.client_id = credential
@@ -560,7 +552,7 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                     self.token_request(provider, &app, fields)?,
                     provider,
                     "renew",
-                    source,
+                    Source::DirectRenew,
                 )
                 .await?;
             tokens.credential(provider, true, TokenGrant::Renew)?
@@ -777,8 +769,9 @@ struct Reply {
 enum Source {
     /// A provider endpoint called directly.
     Provider,
-    /// A provider token endpoint renewing a grant through the operator's own app.
-    OperatorAppRenew,
+    /// A provider token endpoint renewing a stored grant. Only an OAuth error
+    /// body makes a refusal final; a bare or HTML 4xx is a proxy or outage page.
+    DirectRenew,
     /// The SMG relay, whose error codes describe the relay as well as the provider.
     Relay,
 }
@@ -803,9 +796,8 @@ fn ensure_success(reply: &Reply, source: Source) -> AppResult<()> {
         Some("relay_busy" | "relay_key_unavailable" | "relay_unavailable") => {
             Some("provider_unavailable")
         }
-        Some("invalid_client" | "unauthorized_client") if source == Source::OperatorAppRenew => {
-            Some(RECONNECT_REQUIRED)
-        }
+        // A rotated or mistyped client secret is the app's fault, not the
+        // grant's, so it never expires the accounts linked through that app.
         Some(
             "provider_not_configured"
             | "relay_not_configured"
@@ -823,13 +815,23 @@ fn ensure_success(reply: &Reply, source: Source) -> AppResult<()> {
         },
         _ => None,
     };
-    let code = code.unwrap_or(
-        if status.is_client_error() && status != StatusCode::REQUEST_TIMEOUT {
-            PROVIDER_REJECTED
-        } else {
-            "provider_unavailable"
-        },
-    );
+    if let Some(code) = code {
+        return Err(failure(code));
+    }
+    let refused = status.is_client_error() && status != StatusCode::REQUEST_TIMEOUT;
+    let code = match source {
+        // Only an explicit grant code above ends a relayed grant. SMG's instance
+        // authentication answers 401 and 403 in free text (clock skew, unknown
+        // key, replayed nonce); any other unrecognised 4xx is relay trouble.
+        Source::Relay if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => {
+            "instance_auth_required"
+        }
+        Source::Relay => "provider_unavailable",
+        Source::DirectRenew if refused && error.is_some() => PROVIDER_REJECTED,
+        Source::DirectRenew => "provider_unavailable",
+        Source::Provider if refused => PROVIDER_REJECTED,
+        Source::Provider => "provider_unavailable",
+    };
     Err(failure(code))
 }
 fn encode<T: Serialize>(value: &T) -> AppResult<String> {
