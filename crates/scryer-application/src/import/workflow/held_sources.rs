@@ -78,6 +78,11 @@ pub enum HeldSourcesSettlement {
     /// The holds were released but the tracked download could not be reached.
     /// Releasing again resumes from here.
     NotSettled,
+    /// A held import's reason means the download may hold content that was
+    /// never extracted or imported, and nothing proved every expected unit
+    /// imported. It was not marked imported, no retry was scheduled and
+    /// nothing was cleaned up.
+    Unproven,
 }
 
 impl HeldSourcesSettlement {
@@ -88,6 +93,7 @@ impl HeldSourcesSettlement {
             Self::Unchanged => "unchanged",
             Self::Untracked => "untracked",
             Self::NotSettled => "not_settled",
+            Self::Unproven => "unproven",
         }
     }
 }
@@ -442,7 +448,14 @@ fn held_release_verification(
 ) -> crate::tracked_downloads::HeldImportVerification {
     let mut automatic = false;
     let mut manual: Option<usize> = None;
+    let mut require_positive_proof = false;
     for record in pending {
+        // A hold released by an interrupted release no longer carries its
+        // reason, which reads as unknown and so also requires proof.
+        require_positive_proof |= matches!(
+            import_hold_reason(record),
+            HeldSourcesReason::ArchiveExtractionFailed | HeldSourcesReason::Unknown
+        );
         if record.import_type == ImportType::ManualImport {
             // A mapping that cannot be read cannot be verified; no import
             // covers `usize::MAX` files, so the download never settles on it.
@@ -456,20 +469,20 @@ fn held_release_verification(
     crate::tracked_downloads::HeldImportVerification {
         automatic,
         manual_expected_mapping_count: manual,
+        require_positive_proof,
     }
 }
 
-/// Settle the tracked download. On `Imported`, also the folder its import
-/// artifacts record their source paths against.
+/// Settle the tracked download.
 async fn settle_tracked_download(
     app: &AppUseCase,
     record: &ImportRecord,
     canonical_download_id: Option<scryer_domain::download_identity::DownloadId>,
     verification: crate::tracked_downloads::HeldImportVerification,
-) -> (HeldSourcesSettlement, Option<PathBuf>) {
+) -> HeldSourcesSettlement {
     use crate::tracked_downloads::HeldImportReleaseSettlement;
     let Some(handle) = app.runtime.acquisition.tracked_download_handle.as_ref() else {
-        return (HeldSourcesSettlement::Untracked, None);
+        return HeldSourcesSettlement::Untracked;
     };
     let tracked_id = crate::tracked_downloads::tracked_download_id(
         record.source_client_id.as_deref(),
@@ -480,34 +493,32 @@ async fn settle_tracked_download(
         .release_held_import_for_download(tracked_id, canonical_download_id, verification)
         .await
     {
-        Ok(HeldImportReleaseSettlement::Imported { download_root }) => {
-            (HeldSourcesSettlement::Imported, Some(download_root))
-        }
-        Ok(HeldImportReleaseSettlement::AwaitingImport) => {
-            (HeldSourcesSettlement::AwaitingImport, None)
-        }
-        Ok(HeldImportReleaseSettlement::Unchanged) => (HeldSourcesSettlement::Unchanged, None),
-        Err(AppError::NotFound(_)) => (HeldSourcesSettlement::Untracked, None),
+        Ok(HeldImportReleaseSettlement::Imported) => HeldSourcesSettlement::Imported,
+        Ok(HeldImportReleaseSettlement::AwaitingImport) => HeldSourcesSettlement::AwaitingImport,
+        Ok(HeldImportReleaseSettlement::Unchanged) => HeldSourcesSettlement::Unchanged,
+        Ok(HeldImportReleaseSettlement::Unproven) => HeldSourcesSettlement::Unproven,
+        Err(AppError::NotFound(_)) => HeldSourcesSettlement::Untracked,
         Err(error) => {
             tracing::warn!(import_id = %record.id, error = %error,
                 "held sources were released but the tracked download could not be settled");
-            (HeldSourcesSettlement::NotSettled, None)
+            HeldSourcesSettlement::NotSettled
         }
     }
 }
 
 /// Remove the released imports' own workspaces, keeping any that are not
-/// proven safe to remove. Nothing is removed unless the download was proven
-/// imported (`download_root` is the folder its import artifacts record their
-/// source paths against). A workspace is checked only against what the
-/// import that owns it imported, never against another import's files.
+/// proven safe to remove. Nothing is removed unless the download settled as
+/// imported. A workspace is checked only against the paths the import owning
+/// it recorded as imported from that very workspace (the recorded path names
+/// the workspace directory), never against another import's files or another
+/// workspace of the same import.
 async fn remove_released_workspaces(
     app: &AppUseCase,
     source: &ClientJobLocator,
     canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
     released: &[&ImportRecord],
     titles: &HashMap<String, Title>,
-    download_root: Option<&Path>,
+    settlement: HeldSourcesSettlement,
 ) -> (usize, Vec<HeldWorkspacePreserved>, bool) {
     let mut lookup_incomplete = false;
     let mut workspaces: Vec<(PathBuf, Vec<String>)> = Vec::new();
@@ -530,10 +541,10 @@ async fn remove_released_workspaces(
     }
 
     let mut preserved = std::collections::BTreeSet::<HeldWorkspacePreserved>::new();
-    let Some(download_root) = download_root else {
+    if settlement != HeldSourcesSettlement::Imported {
         preserved.insert(HeldWorkspacePreserved::DownloadNotImported);
         return (0, preserved.into_iter().collect(), lookup_incomplete);
-    };
+    }
     let artifacts = app
         .services
         .workflow
@@ -579,26 +590,27 @@ async fn remove_released_workspaces(
             preserved.insert(HeldWorkspacePreserved::Unverified);
             continue;
         };
-        let imported_relative_paths: HashSet<String> =
-            artifacts
-                .iter()
-                .filter(|artifact| {
-                    artifact.import_id.as_deref() == Some(owner.as_str())
-                        && matches!(artifact.result.as_str(), "imported" | "already_present")
-                })
-                .filter_map(|artifact| {
-                    match crate::completed_download_handler::import_artifact_source_key(artifact) {
-                    Some(crate::completed_download_handler::ImportArtifactSourceKey::RelativePath(
-                        relative,
-                    )) => Some(relative),
-                    _ => None,
-                }
-                })
-                .collect();
+        let owner_imports: Vec<&crate::ImportArtifact> = artifacts
+            .iter()
+            .filter(|artifact| {
+                artifact.import_id.as_deref() == Some(owner.as_str())
+                    && matches!(artifact.result.as_str(), "imported" | "already_present")
+            })
+            .collect();
+        let imported_workspace_paths: HashSet<String> = owner_imports
+            .iter()
+            .filter_map(|artifact| artifact.workspace_relative_path.clone())
+            .filter(|path| !path.is_empty())
+            .collect();
+        // Recorded with neither path, as every import before workspace paths
+        // were kept was: such an import may account for a video here.
+        let imports_of_unknown_origin = owner_imports.iter().any(|artifact| {
+            artifact.workspace_relative_path.is_none() && artifact.relative_path.is_none()
+        });
         match crate::archive_extractor::remove_released_held_workspace(
             &workspace,
-            download_root,
-            &imported_relative_paths,
+            &imported_workspace_paths,
+            imports_of_unknown_origin,
         )
         .await
         {
@@ -676,7 +688,7 @@ pub async fn release_held_import_sources(
 
     // From here the holds are released; every outcome below is reported as
     // what it is rather than as a failure of the release.
-    let (settlement, download_root) = settle_tracked_download(
+    let settlement = settle_tracked_download(
         app,
         &record,
         canonical_download_id.clone(),
@@ -710,7 +722,7 @@ pub async fn release_held_import_sources(
             canonical_download_id.as_ref(),
             &pending,
             &titles,
-            download_root.as_deref(),
+            settlement,
         )
         .await;
 

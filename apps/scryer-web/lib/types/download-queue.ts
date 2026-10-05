@@ -120,6 +120,7 @@ export type HeldImportSourcesSettlement =
   | "AWAITING_IMPORT"
   | "UNCHANGED"
   | "UNTRACKED"
+  | "UNPROVEN"
   | "NOT_SETTLED";
 
 export type HeldWorkspacePreservedReason =

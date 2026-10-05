@@ -1048,10 +1048,10 @@ impl ImportArtifactRepository for ImportStore {
                 SqlRuntime::execute(
                     SqlExec::Tx(tx),
                     "INSERT INTO download_import_artifacts
-                     (id, source_client_id, source_system, source_ref, canonical_download_id, import_id, relative_path, normalized_file_name,
+                     (id, source_client_id, source_system, source_ref, canonical_download_id, import_id, relative_path, workspace_relative_path, normalized_file_name,
                       media_kind, title_id, episode_id, season_number, episode_number,
                       result, reason_code, imported_media_file_id, created_at)
-                     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                     VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                     &[
                         SqlArg::Text(artifact.id),
                         SqlArg::OptText(artifact.source_client_id),
@@ -1060,6 +1060,7 @@ impl ImportArtifactRepository for ImportStore {
                         SqlArg::OptText(canonical_download_id),
                         SqlArg::OptText(artifact.import_id),
                         SqlArg::OptText(artifact.relative_path),
+                        SqlArg::OptText(artifact.workspace_relative_path),
                         SqlArg::Text(artifact.normalized_file_name),
                         SqlArg::Text(artifact.media_kind),
                         SqlArg::OptText(artifact.title_id),
@@ -1093,10 +1094,10 @@ impl ImportArtifactRepository for ImportStore {
                     SqlRuntime::execute(
                         SqlExec::Tx(&mut *tx),
                         "INSERT INTO download_import_artifacts
-                         (id, source_client_id, source_system, source_ref, canonical_download_id, import_id, relative_path, normalized_file_name,
+                         (id, source_client_id, source_system, source_ref, canonical_download_id, import_id, relative_path, workspace_relative_path, normalized_file_name,
                           media_kind, title_id, episode_id, season_number, episode_number,
                           result, reason_code, imported_media_file_id, created_at)
-                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
+                         VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
                         &[
                             SqlArg::Text(artifact.id),
                             SqlArg::OptText(artifact.source_client_id),
@@ -1105,6 +1106,7 @@ impl ImportArtifactRepository for ImportStore {
                             SqlArg::OptText(canonical_download_id.clone()),
                             SqlArg::OptText(artifact.import_id),
                             SqlArg::OptText(artifact.relative_path),
+                        SqlArg::OptText(artifact.workspace_relative_path),
                             SqlArg::Text(artifact.normalized_file_name),
                             SqlArg::Text(artifact.media_kind),
                             SqlArg::OptText(artifact.title_id),
@@ -1136,7 +1138,7 @@ impl ImportArtifactRepository for ImportStore {
         ];
         let exact = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path,
+            "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path, workspace_relative_path,
                     normalized_file_name, media_kind, title_id, episode_id,
                     season_number, episode_number, result, reason_code,
                     imported_media_file_id, created_at
@@ -1151,7 +1153,7 @@ impl ImportArtifactRepository for ImportStore {
         let rows = if exact.is_empty() {
             SqlRuntime::fetch_all(
                 self.datastore.read_exec(),
-                "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path,
+                "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path, workspace_relative_path,
                         normalized_file_name, media_kind, title_id, episode_id,
                         season_number, episode_number, result, reason_code,
                         imported_media_file_id, created_at
@@ -1187,7 +1189,7 @@ impl ImportArtifactRepository for ImportStore {
         };
         let canonical = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path,
+            "SELECT id, source_client_id, source_system, source_ref, import_id, relative_path, workspace_relative_path,
                     normalized_file_name, media_kind, title_id, episode_id,
                     season_number, episode_number, result, reason_code,
                     imported_media_file_id, created_at
@@ -1343,6 +1345,12 @@ mod tests {
         .execute(&pool)
         .await
         .expect("import artifacts table should be created");
+        sqlx::query(include_str!(
+            "../../../../scryer/src/db/migrations/0275_import_artifact_workspace_relative_path.sql"
+        ))
+        .execute(&pool)
+        .await
+        .expect("import artifact workspace path migration should apply");
         sqlx::query(
             "CREATE TABLE manual_import_selections (
                  id TEXT PRIMARY KEY,
@@ -1393,6 +1401,7 @@ mod tests {
             source_ref: source_identity.item_id.clone(),
             import_id: None,
             relative_path: None,
+            workspace_relative_path: None,
             normalized_file_name: format!("{id}.mkv"),
             media_kind: "episode".to_string(),
             title_id: Some("title-1".to_string()),
@@ -1506,6 +1515,58 @@ mod tests {
                 .await
                 .expect("canonical artifact count should succeed"),
             1
+        );
+    }
+
+    #[tokio::test]
+    async fn artifact_workspace_relative_path_round_trips_and_stays_null_when_unset() {
+        let store = store().await;
+        let canonical_download_id = scryer_domain::download_identity::DownloadId::new();
+        let identity = source_identity("workspace-artifacts");
+        let mut from_workspace = artifact("from-workspace", &identity, "imported");
+        from_workspace.workspace_relative_path = Some("out/Disc.One/quiet.harbor.mkv".into());
+        let mut from_download = artifact("from-download", &identity, "imported");
+        from_download.relative_path = Some("quiet.harbor.mkv".into());
+        let mut single = artifact("single-insert", &identity, "imported");
+        single.workspace_relative_path = Some("out/quiet.harbor.extra.mkv".into());
+        store
+            .insert_artifacts_for_download(
+                vec![from_workspace, from_download],
+                Some(&canonical_download_id),
+            )
+            .await
+            .unwrap();
+        store
+            .insert_artifact_for_download(single, Some(&canonical_download_id))
+            .await
+            .unwrap();
+
+        let mut rows = store
+            .list_by_source_identity_for_download(Some(&canonical_download_id), &identity)
+            .await
+            .unwrap();
+        rows.sort_by(|left, right| left.id.cmp(&right.id));
+        let paths: Vec<_> = rows
+            .iter()
+            .map(|row| {
+                (
+                    row.id.as_str(),
+                    row.workspace_relative_path.as_deref(),
+                    row.relative_path.as_deref(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                ("from-download", None, Some("quiet.harbor.mkv")),
+                (
+                    "from-workspace",
+                    Some("out/Disc.One/quiet.harbor.mkv"),
+                    None
+                ),
+                ("single-insert", Some("out/quiet.harbor.extra.mkv"), None),
+            ]
         );
     }
 

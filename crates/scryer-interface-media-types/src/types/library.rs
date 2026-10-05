@@ -261,6 +261,8 @@ pub enum HeldImportSourcesSettlementValue {
     Untracked,
     /// The holds were released but the tracked download could not be reached; releasing again resumes.
     NotSettled,
+    /// A held import may hold content never extracted or imported, and nothing proved every expected file imported; not marked imported, no retry scheduled and nothing cleaned up.
+    Unproven,
 }
 
 impl From<scryer_application::HeldSourcesSettlement> for HeldImportSourcesSettlementValue {
@@ -272,6 +274,7 @@ impl From<scryer_application::HeldSourcesSettlement> for HeldImportSourcesSettle
             Settlement::Unchanged => Self::Unchanged,
             Settlement::Untracked => Self::Untracked,
             Settlement::NotSettled => Self::NotSettled,
+            Settlement::Unproven => Self::Unproven,
         }
     }
 }

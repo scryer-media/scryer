@@ -7558,6 +7558,10 @@ enum HeldImportSourcesSettlementValue {
 	The holds were released but the tracked download could not be reached; releasing again resumes.
 	"""
 	NOT_SETTLED
+	"""
+	A held import may hold content never extracted or imported, and nothing proved every expected file imported; not marked imported, no retry scheduled and nothing cleaned up.
+	"""
+	UNPROVEN
 }
 
 """
