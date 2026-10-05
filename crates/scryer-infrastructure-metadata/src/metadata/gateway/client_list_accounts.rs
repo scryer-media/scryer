@@ -21,7 +21,11 @@ use super::{MetadataGatewayClient, apply_instance_auth_headers};
 const RELAY_ORIGIN: &str = "https://smg.scryer.media";
 const RESPONSE_LIMIT: usize = 64 * 1024;
 const REQUEST_LIMIT: usize = 16 * 1024;
-const OAUTH_TIMEOUT: Duration = Duration::from_secs(20);
+/// Deadline for a direct provider token request.
+const OAUTH_TIMEOUT: Duration = Duration::from_secs(100);
+/// The relay waits up to 100 s on the provider itself, so Scryer waits a
+/// little longer to receive the relay's own answer rather than its silence.
+const RELAY_TIMEOUT: Duration = Duration::from_secs(110);
 
 /// Uses the existing instance enrollment for relay requests. Provider URLs are
 /// protocol constants; operator configuration supplies app credentials only.
@@ -173,6 +177,7 @@ impl HttpListAccountAuthGateway {
         let request = self
             .http
             .post(url.clone())
+            .timeout(RELAY_TIMEOUT)
             .header("Content-Type", "application/json")
             .body(body.clone());
         let request = apply_instance_auth_headers(request, &auth, "POST", &url, &body)
