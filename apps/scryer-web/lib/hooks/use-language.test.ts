@@ -76,6 +76,8 @@ function openTab(options: {
   browserLanguage: string;
   profile: Profile;
   signedOutLogin?: boolean;
+  /** A language whose dictionary loads only when the test releases it. */
+  heldDictionary?: string;
 }) {
   const sessionStorage = new MemoryStorage();
   Object.assign(globalThis, {
@@ -101,6 +103,7 @@ function openTab(options: {
   let pendingEffects: (() => void)[] = [];
   let flushing = false;
   let scheduled: Promise<void> | null = null;
+  const heldLoads: (() => void)[] = [];
 
   function slot(): Slot {
     assert.ok(active, "hooks only run while rendering");
@@ -230,7 +233,16 @@ function openTab(options: {
     "@/lib/i18n": {
       ...i18n,
       isLocaleLoaded: () => true,
-      loadLocaleDictionary: () => {
+      loadLocaleDictionary: (code: string) => {
+        if (code === options.heldDictionary) {
+          return new Promise<object>((settle) => {
+            heldLoads.push(() => {
+              const done = Promise.resolve({});
+              loads.push(done);
+              settle(done);
+            });
+          });
+        }
         const done = Promise.resolve({});
         loads.push(done);
         return done;
@@ -292,6 +304,9 @@ function openTab(options: {
           instance.result!.setLanguagePreference(code);
         },
       };
+    },
+    releaseDictionary() {
+      for (const release of heldLoads.splice(0)) release();
     },
     setProfile(next: Profile) {
       profile = next;
@@ -395,7 +410,48 @@ test("a profile language is never replaced by the picked language", async () => 
   await tab.settle();
   assert.equal(page.uiLanguage, "deu", "the profile language wins");
   assert.equal(tab.saves.length, 0);
-  assert.equal(localStorage.getItem(CHOICE_KEY), "ita");
+  assert.equal(localStorage.getItem(CHOICE_KEY), "deu", "an older pick here does not outlive it");
+
+  const login = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+    signedOutLogin: true,
+  });
+  assert.equal(login.mount().uiLanguage, "deu", "signing out keeps the language");
+});
+
+test("a pick whose dictionary arrives after the profile loaded is saved on the profile", async () => {
+  const localStorage = new MemoryStorage();
+  localStorage.setItem(CHOICE_KEY, "ita");
+  const tab = openTab({
+    localStorage,
+    browserLanguage: "es-ES",
+    profile: PENDING,
+    heldDictionary: "fra",
+  });
+  const page = tab.mount();
+
+  page.pick("fra");
+  tab.setProfile(loaded(null));
+  assert.deepEqual(
+    tab.saves.map((save) => save.language),
+    ["ita"],
+    "the empty profile first takes over the older pick",
+  );
+
+  tab.releaseDictionary();
+  await tab.settle();
+  assert.deepEqual(
+    tab.saves.map((save) => save.language),
+    ["ita", "fra"],
+  );
+  await tab.saves[0]!.settle({ data: { setMyUiSettings: { language: "ita" } } });
+  await tab.saves[1]!.settle({ data: { setMyUiSettings: { language: "fra" } } });
+  await tab.settle();
+  assert.equal(page.uiLanguage, "fra");
+  assert.equal(localStorage.getItem(CHOICE_KEY), "fra");
+  assert.equal(localStorage.getItem(PROFILE_HINT_KEY), "fra");
 });
 
 test("a failed profile load saves nothing and shows the picked language", async () => {
