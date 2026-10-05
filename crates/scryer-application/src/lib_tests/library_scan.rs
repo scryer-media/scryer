@@ -10857,18 +10857,18 @@ async fn movie_library_scan_roles_after_primary_leaves(
 }
 
 #[tokio::test]
-async fn movie_library_scan_promotes_the_sole_additional_file_when_the_primary_vanishes() {
+async fn movie_library_scan_leaves_the_sole_additional_file_when_the_primary_vanishes() {
     assert_eq!(
         movie_library_scan_roles_after_primary_leaves(false, 1).await,
-        vec![MediaFileRole::Primary]
+        vec![MediaFileRole::Additional]
     );
 }
 
 #[tokio::test]
-async fn movie_library_scan_promotes_the_sole_additional_file_when_the_primary_is_detached() {
+async fn movie_library_scan_leaves_the_sole_additional_file_when_the_primary_is_detached() {
     assert_eq!(
         movie_library_scan_roles_after_primary_leaves(true, 1).await,
-        vec![MediaFileRole::Primary]
+        vec![MediaFileRole::Additional]
     );
 }
 
@@ -10884,6 +10884,15 @@ async fn movie_library_scan_leaves_two_additional_files_when_the_primary_vanishe
 /// episode's vanished Primary, plus the role of another episode's file.
 async fn series_library_scan_roles_after_primary_vanishes(
     additional_count: usize,
+) -> (Vec<MediaFileRole>, MediaFileRole) {
+    series_library_scan_roles_after_primary_vanishes_for(additional_count, false).await
+}
+
+/// As above; `series_movie_episode` links a series movie to the episode whose
+/// Primary vanishes.
+async fn series_library_scan_roles_after_primary_vanishes_for(
+    additional_count: usize,
+    series_movie_episode: bool,
 ) -> (Vec<MediaFileRole>, MediaFileRole) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let title_dir = tempdir.path().join("Lantern Vale (2026)");
@@ -10999,6 +11008,17 @@ async fn series_library_scan_roles_after_primary_vanishes(
             .expect("create episode");
         episode_ids.push(episode.id);
     }
+    if series_movie_episode {
+        let mut link =
+            test_series_movie_link(&title.id, "Lantern Vale Movie", Some(2026), None, None);
+        link.linked_episode_id = Some(episode_ids[0].clone());
+        app.services
+            .catalog
+            .shows
+            .upsert_series_movie_link(link)
+            .await
+            .expect("record series movie link");
+    }
     let media_files = &app.services.library.media_files;
     let seed = |path: PathBuf, role: MediaFileRole, episode_id: String| {
         let title_id = title.id.clone();
@@ -11079,6 +11099,14 @@ async fn series_library_scan_promotes_the_sole_additional_file_when_the_primary_
     assert_eq!(
         series_library_scan_roles_after_primary_vanishes(1).await,
         (vec![MediaFileRole::Primary], MediaFileRole::Additional)
+    );
+}
+
+#[tokio::test]
+async fn series_library_scan_leaves_a_series_movie_additional_file_when_the_primary_vanishes() {
+    assert_eq!(
+        series_library_scan_roles_after_primary_vanishes_for(1, true).await,
+        (vec![MediaFileRole::Additional], MediaFileRole::Additional)
     );
 }
 
