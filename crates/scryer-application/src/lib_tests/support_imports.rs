@@ -1109,11 +1109,12 @@ impl MediaFileRepository for MockMediaFileRepo {
             return Err(AppError::Repository(error));
         }
         let mut list = self.store.lock().await;
-        let position = list
-            .iter()
-            .position(|entry| entry.id == file_id)
-            .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
-        list.remove(position);
+        if !list.iter().any(|entry| entry.id == file_id) {
+            return Err(AppError::NotFound(format!("media file {}", file_id)));
+        }
+        // One row per episode link: removing the file removes every link, as
+        // the store's cascade does.
+        list.retain(|entry| entry.id != file_id);
         Ok(())
     }
 
