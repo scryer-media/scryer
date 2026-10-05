@@ -3621,21 +3621,16 @@ fn alternate_cut_editions_are_recognised_after_the_title_and_year() {
     for (marker, expected) in [
         ("Directors.Cut", "Director's Cut"),
         ("DIRECTORS.CUT", "Director's Cut"),
-        ("DC", "Director's Cut"),
         ("Extended", "Extended"),
         ("Extended.Cut", "Extended Cut"),
         ("Extended.Edition", "Extended"),
         ("Special.Edition", "Special Edition"),
         ("Unrated", "Unrated"),
         ("Uncut", "Uncut"),
-        ("Theatrical", "Theatrical"),
-        ("Theatrical.Cut", "Theatrical"),
         ("Final.Cut", "Final Cut"),
         ("Ultimate.Cut", "Ultimate Cut"),
         ("Ultimate.Edition", "Ultimate Edition"),
         ("Redux", "Redux"),
-        ("IMAX", "IMAX"),
-        ("Open.Matte", "Open Matte"),
     ] {
         let raw = format!("Fixture.Picture.2024.{marker}.1080p.BluRay.x264-GRP");
         let edition = movie_file_edition(&raw, "Fixture Picture");
@@ -3649,13 +3644,41 @@ fn alternate_cut_editions_are_recognised_after_the_title_and_year() {
 }
 
 #[test]
-fn restorations_and_labels_are_editions_but_not_alternate_cuts() {
-    for (marker, expected) in [("Remastered", "Remaster"), ("Criterion", "Criterion")] {
+fn theatrical_framing_restorations_and_labels_are_editions_but_not_alternate_cuts() {
+    for (marker, expected) in [
+        ("Theatrical", "Theatrical"),
+        ("Theatrical.Cut", "Theatrical"),
+        ("IMAX", "IMAX"),
+        ("IMAX.Enhanced", "IMAX Enhanced"),
+        ("Open.Matte", "Open Matte"),
+        ("Remastered", "Remaster"),
+        ("Criterion", "Criterion"),
+    ] {
         let raw = format!("Fixture.Picture.2024.{marker}.1080p.BluRay.x264-GRP");
         let edition = movie_file_edition(&raw, "Fixture Picture");
         assert_eq!(edition.as_deref(), Some(expected), "{raw}");
         assert!(!crate::is_alternate_cut_edition(expected), "{expected}");
     }
+}
+
+/// "DC" is a franchise and studio token far more often than an abbreviation
+/// of a director's cut, so it is never read as an edition.
+#[test]
+fn a_bare_dc_token_is_not_an_edition() {
+    assert_eq!(
+        movie_file_edition(
+            "Fixture.Picture.2024.DC.Universe.Animated.1080p.BluRay.x264-GRP",
+            "Fixture Picture",
+        ),
+        None
+    );
+    assert_eq!(
+        movie_file_edition(
+            "Fixture.Picture.2024.DC.1080p.BluRay.x264-GRP",
+            "Fixture Picture",
+        ),
+        None
+    );
 }
 
 #[test]

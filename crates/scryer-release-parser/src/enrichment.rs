@@ -1179,9 +1179,12 @@ fn parse_fps(raw_title: &str) -> Option<f32> {
 }
 
 /// The editions that mark a file as an alternate cut of a movie rather than
-/// its ordinary release, as the parser spells them in `edition`. Restorations
-/// and labels (Remaster, Criterion, Hybrid, Restored, Despecialized) are not
-/// alternate cuts and are deliberately absent.
+/// its ordinary release, as the parser spells them in `edition`. Only cuts
+/// that change the film's content are listed; "Extended Theatrical Version
+/// IMAX" is an extended cut and stays. The theatrical cut is the ordinary
+/// release, and framing or presentation (IMAX, IMAX Enhanced, Open Matte),
+/// restorations and labels (Remaster, Criterion, Hybrid, Restored,
+/// Despecialized) are not alternate cuts, so all of those are absent.
 const ALTERNATE_CUT_EDITIONS: &[&str] = &[
     "Director's Cut",
     "Directors",
@@ -1192,14 +1195,10 @@ const ALTERNATE_CUT_EDITIONS: &[&str] = &[
     "Special Edition Remastered",
     "Unrated",
     "Uncut",
-    "Theatrical",
     "Final Cut",
     "Ultimate Cut",
     "Ultimate Edition",
     "Redux",
-    "IMAX",
-    "IMAX Enhanced",
-    "Open Matte",
 ];
 
 /// Whether a parsed `edition` names an alternate cut of a movie.
@@ -1240,7 +1239,6 @@ fn parse_edition_at(tokens: &[String], index: usize) -> Option<(String, usize)> 
         "FINAL" if next == Some("CUT") => Some(("Final Cut".to_string(), 2)),
         "ASSEMBLY" if next == Some("CUT") => Some(("Assembly Cut".to_string(), 2)),
         "DIRECTORS" | "DIRECTOR" if next == Some("CUT") => Some(("Director's Cut".to_string(), 2)),
-        "DC" => Some(("Director's Cut".to_string(), 1)),
         "ULTIMATE" if next == Some("CUT") => Some(("Ultimate Cut".to_string(), 2)),
         "ULTIMATE" if next == Some("EDITION") => Some(("Ultimate Edition".to_string(), 2)),
         "REDUX" => Some(("Redux".to_string(), 1)),

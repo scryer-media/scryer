@@ -1748,6 +1748,23 @@ async fn movie_title_scan_elects_nobody_when_every_file_is_an_alternate_cut() {
     );
 }
 
+/// Theatrical, IMAX and open-matte releases are ordinary releases of the
+/// film, so the folder's election treats them like any other file.
+#[tokio::test]
+async fn movie_title_scan_elects_theatrical_and_framing_editions_normally() {
+    for name in [
+        "Harbor.Echo.2026.Theatrical.1080p.BluRay.mkv",
+        "Harbor.Echo.2026.IMAX.1080p.BluRay.mkv",
+        "Harbor.Echo.2026.Open.Matte.1080p.BluRay.mkv",
+    ] {
+        assert_eq!(
+            movie_title_scan_roles_for_new_folder("Harbor Echo", &[(name, 512)]).await,
+            vec![MediaFileRole::Primary],
+            "{name}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn movie_title_scan_reads_an_edition_word_in_the_title_as_title() {
     assert_eq!(
