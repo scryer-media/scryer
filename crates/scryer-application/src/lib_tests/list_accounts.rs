@@ -125,6 +125,8 @@ impl ListAccountAuthGateway for Auth {
 struct Client {
     descriptor: PluginDescriptor,
     fetch_gate: Option<Arc<FetchGate>>,
+    /// Identity reads that fail as "provider unavailable" before one succeeds.
+    account_outages: AtomicUsize,
 }
 #[derive(Default)]
 struct FetchGate {
@@ -165,6 +167,21 @@ impl ListProviderClient for Client {
         &self,
         input: ListCredential,
     ) -> AppResult<PluginResult<ListPluginAccountResponse>> {
+        if self
+            .account_outages
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Ok(PluginResult::Err(scryer_plugin_sdk::PluginError {
+                code: scryer_plugin_sdk::PluginErrorCode::UpstreamUnavailable,
+                public_message: "provider unavailable".into(),
+                debug_message: None,
+                retry_after_seconds: None,
+                details: None,
+            }));
+        }
         Ok(PluginResult::Ok(ListPluginAccountResponse {
             external_user_id: input
                 .external_user_id
@@ -182,7 +199,7 @@ struct Plugins {
 }
 impl Plugins {
     fn new() -> Self {
-        let clients=["trakt","plex","tmdb","anilist","mal","simkl"].into_iter().map(|provider|Arc::new(Client {fetch_gate:None,descriptor:serde_json::from_value(serde_json::json!({"id":format!("{provider}-list"),"name":provider,"version":"1.0.0","sdk_version":scryer_plugin_sdk::SDK_VERSION,"sdk_constraint":scryer_plugin_sdk::current_sdk_constraint(),"provider":{"kind":"list_provider","provider_type":provider,"auth":{"type":"member_account","flow":{"type":"authorization_code","pkce":true},"exchange":"smg_relay"},"capabilities":{"account":true},"groups":[{"label":"Personal","auth_badge":"member_account","items":[{"id":"watchlist","name":"Watchlist","kinds":["movie"],"source_type":"watchlist","personal":true,"default_interval_seconds":3600}]}]}})).unwrap()})).collect();
+        let clients=["trakt","plex","tmdb","anilist","mal","simkl"].into_iter().map(|provider|Arc::new(Client {fetch_gate:None,account_outages:AtomicUsize::new(0),descriptor:serde_json::from_value(serde_json::json!({"id":format!("{provider}-list"),"name":provider,"version":"1.0.0","sdk_version":scryer_plugin_sdk::SDK_VERSION,"sdk_constraint":scryer_plugin_sdk::current_sdk_constraint(),"provider":{"kind":"list_provider","provider_type":provider,"auth":{"type":"member_account","flow":{"type":"authorization_code","pkce":true},"exchange":"smg_relay"},"capabilities":{"account":true},"groups":[{"label":"Personal","auth_badge":"member_account","items":[{"id":"watchlist","name":"Watchlist","kinds":["movie"],"source_type":"watchlist","personal":true,"default_interval_seconds":3600}]}]}})).unwrap()})).collect();
         Self { clients }
     }
 }
@@ -525,6 +542,27 @@ async fn private_account_poll_retries_a_failed_account_write_without_asking_the_
         "retrying the write never adds a second account"
     );
     assert_eq!(accounts[0].account.id, view.account.id);
+}
+#[tokio::test]
+async fn private_account_poll_keeps_the_grant_when_the_identity_read_is_briefly_unavailable() {
+    let auth = Arc::new(Auth::default());
+    let mut harness = harness(auth.clone()).await;
+    let mut plugins = Plugins::new();
+    for client in &mut plugins.clients {
+        Arc::get_mut(client).unwrap().account_outages = AtomicUsize::new(1);
+    }
+    harness.app.services.lists.plugins = Arc::new(plugins);
+    let session = start_plex(&harness).await;
+    assert_eq!(poll_status(&harness, &session).await, "unavailable");
+    let view = harness
+        .app
+        .poll_list_account_link(&harness.user, &session)
+        .await
+        .unwrap()
+        .account
+        .expect("the kept grant links once the identity can be read");
+    assert_eq!(view.account.user_id, harness.user.id);
+    assert_eq!(auth.polls.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
 async fn private_account_poll_in_progress_is_busy_then_reports_the_link() {

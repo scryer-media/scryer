@@ -8,7 +8,7 @@ use scryer_domain::{
     Id, ListAccountCredential, ListPolicy, User, UserListAccount, UserListAccountStatus,
 };
 use scryer_plugin_sdk::{
-    ListCredential, ListPluginAccountResponse, ListProviderAuth, PluginResult,
+    ListCredential, ListPluginAccountResponse, ListProviderAuth, PluginErrorCode, PluginResult,
 };
 use std::collections::{BTreeMap, HashMap};
 use tokio::sync::Mutex;
@@ -977,6 +977,24 @@ impl AppUseCase {
         });
         match client.account(input).await {
             Ok(PluginResult::Ok(identity)) => Ok(identity),
+            // The provider could not be asked right now; the same credential
+            // may verify on the next attempt.
+            Ok(PluginResult::Err(error))
+                if matches!(
+                    error.code,
+                    PluginErrorCode::RateLimited
+                        | PluginErrorCode::UpstreamUnavailable
+                        | PluginErrorCode::Temporary
+                ) =>
+            {
+                Err(AppError::temporary_unavailable(
+                    "list account identity could not be verified right now",
+                    None,
+                ))
+            }
+            Err(error @ (AppError::Repository(_) | AppError::TemporaryUnavailable { .. })) => {
+                Err(error)
+            }
             _ => Err(AppError::Validation(
                 "list account identity could not be verified; reconnect the account".into(),
             )),
