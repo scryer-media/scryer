@@ -1126,6 +1126,9 @@ impl AppUseCase {
             );
             return Ok(());
         }
+        // A file linked to several episodes is listed once per episode; it is
+        // still one file, so it is counted once.
+        let mut counted_files = HashSet::new();
         let (inside, outside): (Vec<_>, Vec<_>) = self
             .services
             .library
@@ -1133,7 +1136,7 @@ impl AppUseCase {
             .list_media_files_for_title(&title.id)
             .await?
             .into_iter()
-            .filter(|file| file.role.is_primary())
+            .filter(|file| file.role.is_primary() && counted_files.insert(file.id.clone()))
             .partition(|file| {
                 crate::title_folder_rules::stored_path_is_inside_folder(
                     folder_path,

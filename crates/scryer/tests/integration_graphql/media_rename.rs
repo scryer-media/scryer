@@ -269,6 +269,128 @@ async fn partly_applied_rename_records_the_folder_the_files_moved_into() {
     );
 }
 
+/// A file linked to two episodes is one file on disk. Counted once per
+/// episode, the one file left behind would outweigh the one that moved and
+/// keep the record on the folder the moved file no longer lives in.
+#[tokio::test]
+async fn partly_applied_rename_counts_a_multi_episode_file_once() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+    let sandbox = tempfile::tempdir().expect("synthetic sandbox");
+    let media_root = sandbox.path().join("Videos/Anime");
+    std::fs::create_dir_all(&media_root).unwrap();
+    configure_library_roots(&ctx, MediaFacet::Anime, &[&media_root]).await;
+    let title = create_catalog_title(
+        &ctx,
+        "Paired Fixture",
+        MediaFacet::Anime,
+        vec![ExternalId::new("tvdb", "93003")],
+        vec!["scryer:season-folder:disabled".into()],
+        true,
+    )
+    .await;
+    let old_folder = media_root.join("Paired Fixture");
+    let season = old_folder.join("Season 01");
+    std::fs::create_dir_all(&season).unwrap();
+    set_title_folder_path(&ctx, &title.id, &old_folder).await;
+    let collection = ctx
+        .shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Season,
+            collection_index: "1".into(),
+            label: Some("Season 1".into()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    let mut episodes = Vec::new();
+    for number in 1..=3 {
+        episodes.push(
+            create_series_scan_episode(
+                &ctx,
+                &title,
+                &collection,
+                "1",
+                &number.to_string(),
+                &format!("S01E{number:02}"),
+            )
+            .await,
+        );
+    }
+    let mut seed_file = async |file_name: &str, linked: &[&Episode]| {
+        let source = season.join(file_name);
+        std::fs::write(&source, file_name.as_bytes()).unwrap();
+        let file_id = ctx
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: source.to_string_lossy().into_owned(),
+                size_bytes: file_name.len() as i64,
+                quality_label: Some("1080p".into()),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        for episode in linked {
+            ctx.link_primary_file_to_episode(&title.id, &file_id, &episode.id)
+                .await
+                .unwrap();
+        }
+        source
+    };
+    let paired = seed_file("Fixture.S01E01-E02.mkv", &[&episodes[0], &episodes[1]]).await;
+    let single = seed_file("Fixture.S01E03.mkv", &[&episodes[2]]).await;
+    let actor = ctx.app.find_or_create_default_user().await.unwrap();
+    let first_preview = ctx
+        .app
+        .preview_rename_for_facet(&actor, MediaFacet::Anime)
+        .await
+        .unwrap();
+    assert_eq!(first_preview.renamable, 2);
+    // An untracked file already sits where the two-episode file would go, so
+    // only the single-episode file moves.
+    let occupied = first_preview
+        .items
+        .iter()
+        .find(|item| item.current_path == paired.to_string_lossy())
+        .and_then(|item| item.proposed_path.clone())
+        .unwrap();
+    let expected_folder = media_root.join("Paired Fixture (2024)");
+    std::fs::create_dir_all(&expected_folder).unwrap();
+    std::fs::write(&occupied, b"untracked synthetic video").unwrap();
+
+    let preview = ctx
+        .app
+        .preview_rename_for_facet(&actor, MediaFacet::Anime)
+        .await
+        .unwrap();
+    let result = ctx
+        .app
+        .apply_rename_for_facet(&actor, MediaFacet::Anime, &preview.fingerprint)
+        .await
+        .unwrap();
+    assert_eq!(result.applied, 1, "only the single-episode file moves");
+    assert!(paired.exists(), "the two-episode file stays where it was");
+    assert!(!single.exists());
+
+    let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.folder_path.as_deref(),
+        expected_folder.to_str(),
+        "one file moved and one stayed, so the record follows the moved file"
+    );
+}
+
 #[tokio::test]
 async fn graphql_media_rename_preview_for_anime_uses_media_file_rows() {
     let ctx = TestContext::new().await;
