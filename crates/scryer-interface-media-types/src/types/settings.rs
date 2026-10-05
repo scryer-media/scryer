@@ -386,9 +386,33 @@ pub enum UiTableViewModeValue {
     PosterTable,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Screen class a catalog layout was chosen on; each class keeps its own layout.
+pub enum UiDeviceClassValue {
+    /// Desktop and tablet-sized screens.
+    Desktop,
+    /// Phone-sized screens.
+    Mobile,
+}
+
+#[derive(Enum, Copy, Clone, Eq, PartialEq)]
+#[graphql(rename_items = "SCREAMING_SNAKE_CASE")]
+/// Catalog presentation mode.
+pub enum UiCatalogViewModeValue {
+    /// Compact table.
+    Compact,
+    /// Table with posters.
+    PosterTable,
+    /// Poster grid.
+    Poster,
+}
+
 #[derive(SimpleObject, Clone)]
-/// One persisted table-column preference for a facet and table mode.
+/// One persisted table-column preference for a device class, facet and table mode.
 pub struct UiTableColumnSettingPayload {
+    /// Device class to which the column setting applies.
+    pub device_class: UiDeviceClassValue,
     /// Media facet to which the column setting applies.
     pub facet: UiSettingsFacetValue,
     /// Table mode to which the column setting applies.
@@ -424,13 +448,30 @@ pub struct UiSettingsPayload {
     pub sidebar_mode: UiSidebarModeValue,
     /// Content area opened by default.
     pub default_landing_view: UiDefaultLandingViewValue,
+    /// Interface language code saved on the caller's profile, or null to follow the browser.
+    pub language: Option<String>,
     /// Persisted table-column settings.
     pub table_columns: Vec<UiTableColumnSettingPayload>,
+    /// Persisted catalog view modes, per device class and facet.
+    pub catalog_views: Vec<UiCatalogViewSettingPayload>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// The catalog view mode saved for one device class and facet.
+pub struct UiCatalogViewSettingPayload {
+    /// Device class the view mode was chosen on.
+    pub device_class: UiDeviceClassValue,
+    /// Media facet the view mode applies to.
+    pub facet: UiSettingsFacetValue,
+    /// Saved view mode.
+    pub view_mode: UiCatalogViewModeValue,
 }
 
 #[derive(InputObject, Clone)]
 /// Input form for one table-column preference.
 pub struct UiTableColumnSettingInput {
+    /// Device class to which the setting applies; null means desktop.
+    pub device_class: Option<UiDeviceClassValue>,
     /// Media facet to which the setting applies.
     pub facet: UiSettingsFacetValue,
     /// Table mode to which the setting applies.
@@ -466,8 +507,36 @@ pub struct SetMyUiSettingsInput {
     pub sidebar_mode: UiSidebarModeValue,
     /// Content area to open by default.
     pub default_landing_view: UiDefaultLandingViewValue,
-    /// Complete table-column setting list; empty clears all saved column settings.
-    pub table_columns: Vec<UiTableColumnSettingInput>,
+    /// Optional interface language code; null preserves the saved value and an empty string clears it.
+    pub language: Option<String>,
+    /// Optional complete table-column setting list; null preserves the saved columns and an empty list clears them.
+    pub table_columns: Option<Vec<UiTableColumnSettingInput>>,
+}
+
+#[derive(InputObject, Clone)]
+/// One column of a catalog layout saved with setMyCatalogView.
+pub struct UiCatalogColumnInput {
+    /// Table mode to which the setting applies.
+    pub table_view_mode: UiTableViewModeValue,
+    /// Stable column identifier.
+    pub column_id: String,
+    /// Zero-based display order.
+    pub column_order: i32,
+    /// Whether the column should be visible.
+    pub visible: bool,
+}
+
+#[derive(InputObject, Clone)]
+/// The caller's catalog layout for one device class and facet.
+pub struct SetMyCatalogViewInput {
+    /// Device class the layout was chosen on.
+    pub device_class: UiDeviceClassValue,
+    /// Media facet the layout applies to.
+    pub facet: UiSettingsFacetValue,
+    /// Optional view mode; null preserves the saved value.
+    pub view_mode: Option<UiCatalogViewModeValue>,
+    /// Optional complete column list for this device class and facet; null preserves the saved columns.
+    pub columns: Option<Vec<UiCatalogColumnInput>>,
 }
 
 #[derive(SimpleObject, Clone)]

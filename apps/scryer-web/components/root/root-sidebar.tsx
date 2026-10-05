@@ -79,7 +79,7 @@ import {
   uiSettingsInputFromSettings,
 } from "@/lib/context/ui-settings-context";
 import type { AuthUser } from "@/lib/hooks/use-auth";
-import type { UiSettings } from "@/lib/types/settings";
+import type { SetMyUiSettingsInput, UiSettings } from "@/lib/types/settings";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
@@ -213,6 +213,7 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       { kind: "view", id: "calendar" },
       { kind: "view", id: "lists" },
       { kind: "view", id: "activity" },
+      { kind: "settings", id: "acquisition", icon: Rss },
       { kind: "settings", id: "subtitles", icon: Captions },
       // Scoring, maintenance and request rules share this entry; the Rules
       // page's own gutter picks the kind, so the sidebar names the subject once.
@@ -714,7 +715,7 @@ function RootSidebarContent({
     const next: UiSettings = { ...uiSettings, theme: toUiThemeValue(nextTheme) };
     setUiSettings(next);
     void client
-      .mutation<{ setMyUiSettings?: UiSettings }, { input: UiSettings }>(
+      .mutation<{ setMyUiSettings?: UiSettings }, { input: SetMyUiSettingsInput }>(
         setMyUiSettingsMutation,
         { input: uiSettingsInputFromSettings(next) },
       )

@@ -3339,6 +3339,11 @@ pub trait UserRepository: Send + Sync {
 pub trait UserUiSettingsRepository: Send + Sync {
     async fn get_by_user_id(&self, user_id: &str) -> AppResult<Option<UiSettings>>;
     async fn upsert(&self, user_id: &str, settings: UiSettingsUpdate) -> AppResult<UiSettings>;
+    async fn set_catalog_view(
+        &self,
+        user_id: &str,
+        update: UiCatalogViewUpdate,
+    ) -> AppResult<UiSettings>;
 }
 
 #[async_trait]

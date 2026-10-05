@@ -2861,12 +2861,19 @@ export const myUiSettingsQuery = `query MyUiSettings {
     density
     sidebarMode
     defaultLandingView
+    language
     tableColumns {
+      deviceClass
       facet
       tableViewMode
       columnId
       columnOrder
       visible
+    }
+    catalogViews {
+      deviceClass
+      facet
+      viewMode
     }
   }
 }`;

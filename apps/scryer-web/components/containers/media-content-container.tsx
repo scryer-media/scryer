@@ -114,6 +114,7 @@ import { useBulkDelete } from "@/lib/hooks/use-bulk-delete";
 import { useBulkRename } from "@/lib/hooks/use-bulk-rename";
 import { useDownloadClientRouting } from "@/lib/hooks/use-download-client-routing";
 import { useIndexerRouting } from "@/lib/hooks/use-indexer-routing";
+import { useCatalogViewPreferences } from "@/lib/hooks/use-catalog-view-preferences";
 import { useMediaSettings } from "@/lib/hooks/use-media-settings";
 import { useIsMobile } from "@/lib/hooks/use-mobile";
 import { useQueueFormState } from "@/lib/hooks/use-queue-form-state";
@@ -176,23 +177,16 @@ import { toast } from "sonner";
 import { BulkTitleEditDialog } from "@/components/views/media-content/bulk-title-edit-dialog";
 import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import {
-  readStoredContentViewMode,
-  writeStoredContentViewMode,
-  type ContentViewMode,
-} from "@/components/views/media-content/content-view-mode";
-import {
   filterTitlesByQuickFilters,
   type TitleQuickFilterCounts,
   type TitleQuickFilters,
 } from "@/components/views/media-content/title-quick-filters";
 import {
-  defaultTitleTableVisibleColumnsForView,
   defaultSortDirectionForTitleKey,
   isTitleTableColumnSupportedForView,
   type TitleTableColumnKey,
   type TitleTableSortDirection,
   type TitleTableSortKey,
-  type TitleTableVisibleColumns,
 } from "@/components/views/media-content/title-table-shared";
 import {
   assertNoReplaceConflict,
@@ -1063,12 +1057,12 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     shouldLoadCatalogTitles,
   ]);
 
-  const [desktopViewModes, setDesktopViewModes] = React.useState<
-    Partial<Record<ViewId, ContentViewMode>>
-  >(() => ({ [view]: readStoredContentViewMode(view) }));
-  const desktopViewMode =
-    desktopViewModes[view] ?? readStoredContentViewMode(view);
-  const effectiveViewMode: ContentViewMode = desktopViewMode;
+  const {
+    viewMode: effectiveViewMode,
+    setViewMode,
+    visibleColumns: visibleTitleTableColumns,
+    setColumnVisible: setTitleTableColumnVisible,
+  } = useCatalogViewPreferences(view, t);
   const [selectedTitleIds, setSelectedTitleIds] = React.useState<Set<string>>(
     () => new Set(),
   );
@@ -1104,19 +1098,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     React.useState<TitleQuickFilters>(EMPTY_TITLE_QUICK_FILTERS);
   const [titleCatalogSort, setTitleCatalogSort] =
     React.useState<TitleCatalogSortState>(defaultTitleCatalogSortState);
-  const [visibleTitleTableColumns, setVisibleTitleTableColumns] =
-    React.useState<TitleTableVisibleColumns>(() =>
-      defaultTitleTableVisibleColumnsForView(view),
-    );
-  const setTitleTableColumnVisible = React.useCallback(
-    (key: TitleTableColumnKey, checked: boolean) => {
-      setVisibleTitleTableColumns((current) => ({
-        ...current,
-        [key]: checked,
-      }));
-    },
-    [],
-  );
   const effectiveTitleCatalogSort = React.useMemo<TitleCatalogSortState>(() => {
     if (effectiveViewMode === "poster") {
       return defaultTitleCatalogSortState;
@@ -1698,22 +1679,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   React.useEffect(() => {
     activeCatalogQueryRef.current = debouncedTitleFilter;
   }, [debouncedTitleFilter]);
-
-  React.useEffect(() => {
-    setDesktopViewModes((current) => {
-      if (current[view]) {
-        return current;
-      }
-      return {
-        ...current,
-        [view]: readStoredContentViewMode(view),
-      };
-    });
-  }, [view]);
-
-  React.useEffect(() => {
-    writeStoredContentViewMode(desktopViewMode, view);
-  }, [desktopViewMode, view]);
 
   React.useEffect(() => {
     if (
@@ -3874,16 +3839,6 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     clearSelectedOverviewTitle();
     onCloseOverview();
   }, [clearSelectedOverviewTitle, onCloseOverview]);
-
-  const setViewMode = React.useCallback(
-    (nextMode: ContentViewMode) => {
-      setDesktopViewModes((current) => ({
-        ...current,
-        [view]: nextMode,
-      }));
-    },
-    [view],
-  );
 
   const bulkMonitorTitles = React.useCallback(
     async (monitored: boolean) => {
