@@ -7,7 +7,9 @@ import {
   LIST_ACCOUNT_LINK_TYPE,
   LIST_ACCOUNT_RELAY_ORIGIN,
   listAccountCompletionInput,
-  listAccountPollFailureIsFinal,
+  LIST_ACCOUNT_POLL_INTERVAL_MS,
+  listAccountPollFailureIsTransient,
+  listAccountPollStep,
   listAccountReturnMatches,
   parseListAccountPayload,
   parsePendingListAccountLink,
@@ -97,17 +99,28 @@ test("BYO callbacks require a pending provider and reject repeated and token par
   assert.equal(consumeListAccountReturn({ ...location, search: `${location.search}&access_token=secret` }, history, pending), null);
 });
 
-test("only a gone session or a lost permission ends polling; transient failures keep the link alive", () => {
+test("only a request that never got an answer is retried; every instance error ends polling", () => {
   const graphQl = (code: unknown) => ({ graphQLErrors: [{ message: "failed", extensions: { code } }] });
-  assert.equal(listAccountPollFailureIsFinal(graphQl("NOT_FOUND")), true);
-  assert.equal(listAccountPollFailureIsFinal(graphQl("UNAUTHORIZED")), true);
-  assert.equal(listAccountPollFailureIsFinal({ graphQLErrors: [{ extensions: {} }, { extensions: { code: "NOT_FOUND" } }] }), true);
-  assert.equal(listAccountPollFailureIsFinal(graphQl("VALIDATION_ERROR")), false);
-  assert.equal(listAccountPollFailureIsFinal(graphQl("INTERNAL_SERVER_ERROR")), false);
-  assert.equal(listAccountPollFailureIsFinal(graphQl(42)), false);
-  assert.equal(listAccountPollFailureIsFinal({ networkError: new Error("offline"), graphQLErrors: [] }), false);
-  assert.equal(listAccountPollFailureIsFinal(new Error("offline")), false);
-  assert.equal(listAccountPollFailureIsFinal(null), false);
+  assert.equal(listAccountPollFailureIsTransient({ networkError: new Error("offline"), graphQLErrors: [] }), true);
+  assert.equal(listAccountPollFailureIsTransient({ networkError: new Error("bad gateway") }), true);
+  for (const code of ["NOT_FOUND", "UNAUTHORIZED", "VALIDATION_ERROR", "INTERNAL_SERVER_ERROR", 42]) {
+    assert.equal(listAccountPollFailureIsTransient(graphQl(code)), false);
+  }
+  assert.equal(listAccountPollFailureIsTransient({ networkError: new Error("partial"), ...graphQl("VALIDATION_ERROR") }), false);
+  assert.equal(listAccountPollFailureIsTransient(new Error("thrown")), false);
+  assert.equal(listAccountPollFailureIsTransient(null), false);
+});
+
+test("poll statuses keep the normal pace, slow down when unavailable, wait longest when rate-limited, and otherwise fail", () => {
+  assert.deepEqual(listAccountPollStep("pending"), { kind: "wait", delayMs: LIST_ACCOUNT_POLL_INTERVAL_MS, retrying: false });
+  assert.deepEqual(listAccountPollStep("busy"), { kind: "wait", delayMs: LIST_ACCOUNT_POLL_INTERVAL_MS, retrying: false });
+  const unavailable = listAccountPollStep("unavailable");
+  const limited = listAccountPollStep("rate_limited");
+  assert.ok(unavailable.kind === "wait" && unavailable.retrying && unavailable.delayMs > LIST_ACCOUNT_POLL_INTERVAL_MS);
+  assert.ok(limited.kind === "wait" && limited.retrying && unavailable.kind === "wait" && limited.delayMs >= 30000 && limited.delayMs > unavailable.delayMs);
+  for (const status of ["FAILED", "EXPIRED", "linked", "", undefined, 3]) {
+    assert.deepEqual(listAccountPollStep(status), { kind: "failed" });
+  }
 });
 
 test("cancelled account refreshes cannot finish or fail a replacement link", { timeout: 10000 }, async () => {

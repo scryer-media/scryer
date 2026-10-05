@@ -128,22 +128,43 @@ export function listAccountCompletionInput(pending: PendingListAccountLink, payl
   };
 }
 
-/** Poll answers that end a link: the session is gone or expired, or the member may no longer link. */
-const FINAL_POLL_ERROR_CODES = new Set(["NOT_FOUND", "UNAUTHORIZED"]);
+export const LIST_ACCOUNT_POLL_INTERVAL_MS = 1500;
+const LIST_ACCOUNT_POLL_UNAVAILABLE_MS = 5000;
+const LIST_ACCOUNT_POLL_RATE_LIMITED_MS = 30000;
+
+/** What to do after a poll the instance answered without an account. */
+export type ListAccountPollStep =
+  | { kind: "wait"; delayMs: number; retrying: boolean }
+  | { kind: "failed" };
 
 /**
- * Whether a failed poll ends the link. Network failures and provider hiccups
- * are retried at the normal interval until the session expires; only an
- * authoritative answer from the instance stops polling.
+ * Pending and in-progress answers keep the normal pace. When the provider or
+ * the instance could not answer, polling slows down, and a rate limit waits
+ * longest. Any other status ends the link.
  */
-export function listAccountPollFailureIsFinal(reason: unknown): boolean {
+export function listAccountPollStep(status: unknown): ListAccountPollStep {
+  switch (status) {
+    case "pending":
+    case "busy":
+      return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_INTERVAL_MS, retrying: false };
+    case "unavailable":
+      return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_UNAVAILABLE_MS, retrying: true };
+    case "rate_limited":
+      return { kind: "wait", delayMs: LIST_ACCOUNT_POLL_RATE_LIMITED_MS, retrying: true };
+    default:
+      return { kind: "failed" };
+  }
+}
+
+/**
+ * Whether a failed poll request is worth repeating. Only a request that never
+ * got a GraphQL answer (a dropped connection or a proxy error) is retried; an
+ * error the instance returned is its final answer for this link.
+ */
+export function listAccountPollFailureIsTransient(reason: unknown): boolean {
   if (!reason || typeof reason !== "object") return false;
-  const errors = (reason as { graphQLErrors?: unknown }).graphQLErrors;
-  if (!Array.isArray(errors)) return false;
-  return errors.some((error) => {
-    const code = (error as { extensions?: { code?: unknown } } | null)?.extensions?.code;
-    return typeof code === "string" && FINAL_POLL_ERROR_CODES.has(code);
-  });
+  const { graphQLErrors, networkError } = reason as { graphQLErrors?: unknown; networkError?: unknown };
+  return !!networkError && (!Array.isArray(graphQLErrors) || graphQLErrors.length === 0);
 }
 
 export async function finishCurrentListAccountLink(

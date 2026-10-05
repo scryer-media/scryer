@@ -24,7 +24,20 @@ struct Auth {
     release: Notify,
     renew_client: Mutex<Option<String>>,
     identity: Option<String>,
-    failing_polls: AtomicUsize,
+    /// Failure codes the provider poll answers with, in order, before it approves.
+    poll_failures: std::sync::Mutex<std::collections::VecDeque<&'static str>>,
+    polls: AtomicUsize,
+    block_poll: bool,
+    poll_entered: Notify,
+    poll_release: Notify,
+}
+impl Auth {
+    fn failing_polls(codes: &[&'static str]) -> Self {
+        Self {
+            poll_failures: std::sync::Mutex::new(codes.iter().copied().collect()),
+            ..Default::default()
+        }
+    }
 }
 fn token() -> ListAccountCredential {
     ListAccountCredential {
@@ -50,16 +63,17 @@ impl ListAccountAuthGateway for Auth {
         _: &str,
         _: Option<&ListProviderAppConfig>,
     ) -> AppResult<Option<ListAccountCredential>> {
-        if self
-            .failing_polls
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
-                left.checked_sub(1)
-            })
-            .is_ok()
-        {
-            return Err(AppError::Validation(
-                "list account authentication failed: provider_unavailable".into(),
-            ));
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        self.poll_entered.notify_one();
+        if self.block_poll {
+            timeout(Duration::from_secs(30), self.poll_release.notified())
+                .await
+                .expect("poll released");
+        }
+        if let Some(code) = self.poll_failures.lock().unwrap().pop_front() {
+            return Err(AppError::Validation(format!(
+                "list account authentication failed: {code}"
+            )));
         }
         self.exchanges.fetch_add(1, Ordering::SeqCst);
         Ok(Some(token()))
@@ -295,52 +309,217 @@ async fn private_account_start_complete_and_poll_store_verified_owner_accounts()
             .is_empty()
     );
 }
-#[tokio::test]
-async fn private_account_poll_keeps_the_session_after_a_failed_provider_check() {
-    let auth = Arc::new(Auth {
-        failing_polls: AtomicUsize::new(2),
-        ..Default::default()
-    });
-    let harness = harness(auth.clone()).await;
+async fn start_plex(harness: &MediaRequestTestHarness) -> String {
     let start = harness
         .app
         .start_list_account_link(&harness.user, "plex", "https://instance.invalid")
         .await
         .unwrap();
     assert!(start.poll_required);
+    start.session_id
+}
+async fn poll_status(harness: &MediaRequestTestHarness, session: &str) -> String {
+    harness
+        .app
+        .poll_list_account_link(&harness.user, session)
+        .await
+        .unwrap()
+        .status
+}
+#[tokio::test]
+async fn private_account_poll_keeps_the_session_after_a_failed_provider_check() {
+    let auth = Arc::new(Auth::failing_polls(&[
+        "provider_unavailable",
+        "provider_unavailable",
+    ]));
+    let harness = harness(auth.clone()).await;
+    let session = start_plex(&harness).await;
     for _ in 0..2 {
-        assert!(matches!(
-            harness
-                .app
-                .poll_list_account_link(&harness.user, &start.session_id)
-                .await,
-            Err(AppError::Validation(_))
-        ));
+        assert_eq!(poll_status(&harness, &session).await, "unavailable");
     }
     // Another member still cannot reach the retained session.
     assert!(matches!(
         harness
             .app
-            .poll_list_account_link(&harness.manager, &start.session_id)
+            .poll_list_account_link(&harness.manager, &session)
             .await,
         Err(AppError::NotFound(_))
     ));
     let view = harness
         .app
-        .poll_list_account_link(&harness.user, &start.session_id)
+        .poll_list_account_link(&harness.user, &session)
         .await
         .unwrap()
         .account
         .expect("the retained session links once the provider answers");
     assert_eq!(view.account.user_id, harness.user.id);
     assert_eq!(auth.exchanges.load(Ordering::SeqCst), 1);
-    assert!(matches!(
+    // A later poll repeats the answer without asking the provider again.
+    let replay = harness
+        .app
+        .poll_list_account_link(&harness.user, &session)
+        .await
+        .unwrap();
+    assert_eq!(replay.status, "linked");
+    assert_eq!(replay.account.unwrap().account.id, view.account.id);
+    assert_eq!(auth.polls.load(Ordering::SeqCst), 3);
+}
+#[tokio::test]
+async fn private_account_poll_ends_on_a_definitive_provider_refusal() {
+    for code in [
+        "access_denied",
+        "provider_not_configured",
+        "invalid_request",
+    ] {
+        let auth = Arc::new(Auth::failing_polls(&[code]));
+        let harness = harness(auth.clone()).await;
+        let session = start_plex(&harness).await;
+        let Err(AppError::Validation(message)) = harness
+            .app
+            .poll_list_account_link(&harness.user, &session)
+            .await
+        else {
+            panic!("{code} must end the link with the provider's reason");
+        };
+        assert!(message.ends_with(code), "{message}");
+        assert!(matches!(
+            harness
+                .app
+                .poll_list_account_link(&harness.user, &session)
+                .await,
+            Err(AppError::NotFound(_))
+        ));
+        assert_eq!(auth.polls.load(Ordering::SeqCst), 1);
+        assert!(
+            harness
+                .app
+                .my_list_accounts(&harness.user)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+#[tokio::test]
+async fn private_account_poll_pauses_provider_checks_after_a_rate_limit() {
+    let auth = Arc::new(Auth::failing_polls(&["rate_limited"]));
+    let harness = harness(auth.clone()).await;
+    let session = start_plex(&harness).await;
+    assert_eq!(poll_status(&harness, &session).await, "rate_limited");
+    assert_eq!(poll_status(&harness, &session).await, "rate_limited");
+    assert_eq!(
+        auth.polls.load(Ordering::SeqCst),
+        1,
+        "a rate-limited link waits before asking the provider again"
+    );
+}
+#[tokio::test]
+async fn private_account_poll_retries_a_failed_account_write_without_asking_the_provider_again() {
+    let auth = Arc::new(Auth::default());
+    let harness = harness(auth.clone()).await;
+    let session = start_plex(&harness).await;
+    harness
+        .domain_events
+        .fail_append
+        .store(true, Ordering::SeqCst);
+    assert_eq!(poll_status(&harness, &session).await, "unavailable");
+    harness
+        .domain_events
+        .fail_append
+        .store(false, Ordering::SeqCst);
+    let view = harness
+        .app
+        .poll_list_account_link(&harness.user, &session)
+        .await
+        .unwrap()
+        .account
+        .expect("the kept grant links on the next poll");
+    assert_eq!(auth.polls.load(Ordering::SeqCst), 1);
+    let accounts = harness.app.my_list_accounts(&harness.user).await.unwrap();
+    assert_eq!(
+        accounts.len(),
+        1,
+        "retrying the write never adds a second account"
+    );
+    assert_eq!(accounts[0].account.id, view.account.id);
+}
+#[tokio::test]
+async fn private_account_poll_in_progress_is_busy_then_reports_the_link() {
+    let auth = Arc::new(Auth {
+        block_poll: true,
+        ..Default::default()
+    });
+    let harness = harness(auth.clone()).await;
+    let session = start_plex(&harness).await;
+    let mut first = Box::pin(harness.app.poll_list_account_link(&harness.user, &session));
+    timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            result = &mut first => panic!("poll finished before the provider answered: {}", result.is_ok()),
+            _ = auth.poll_entered.notified() => {}
+        }
+    })
+    .await
+    .expect("provider check entered");
+    // The browser lost the first response and asks again meanwhile.
+    assert_eq!(poll_status(&harness, &session).await, "busy");
+    auth.poll_release.notify_one();
+    let linked = timeout(Duration::from_secs(30), first)
+        .await
+        .expect("first poll finished")
+        .unwrap()
+        .account
+        .expect("first poll links");
+    let again = harness
+        .app
+        .poll_list_account_link(&harness.user, &session)
+        .await
+        .unwrap();
+    assert_eq!(again.status, "linked");
+    assert_eq!(again.account.unwrap().account.id, linked.account.id);
+    assert_eq!(auth.polls.load(Ordering::SeqCst), 1);
+    assert_eq!(
         harness
             .app
-            .poll_list_account_link(&harness.user, &start.session_id)
-            .await,
-        Err(AppError::NotFound(_))
-    ));
+            .my_list_accounts(&harness.user)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+#[tokio::test]
+async fn private_account_cancelled_poll_leaves_the_link_pollable() {
+    let auth = Arc::new(Auth {
+        block_poll: true,
+        ..Default::default()
+    });
+    let harness = harness(auth.clone()).await;
+    let session = start_plex(&harness).await;
+    {
+        let mut first = Box::pin(harness.app.poll_list_account_link(&harness.user, &session));
+        timeout(Duration::from_secs(30), async {
+            tokio::select! {
+                result = &mut first => panic!("poll finished before the provider answered: {}", result.is_ok()),
+                _ = auth.poll_entered.notified() => {}
+            }
+        })
+        .await
+        .expect("provider check entered");
+    }
+    // The dropped request released its claim, so the next poll checks again.
+    let next = harness.app.poll_list_account_link(&harness.user, &session);
+    let next = async {
+        auth.poll_release.notify_one();
+        next.await
+    };
+    let view = timeout(Duration::from_secs(30), next)
+        .await
+        .expect("second poll finished")
+        .unwrap()
+        .account
+        .expect("second poll links");
+    assert_eq!(view.account.user_id, harness.user.id);
+    assert_eq!(auth.polls.load(Ordering::SeqCst), 2);
 }
 #[tokio::test]
 async fn private_account_completion_is_single_use_and_gate_rechecked() {

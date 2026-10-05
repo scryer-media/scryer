@@ -7,9 +7,11 @@ import { completeListAccountLinkMutation, pollListAccountLinkMutation, startList
 import type { ListAccountLinkSession } from "@/lib/types/lists";
 import {
   LIST_ACCOUNT_LINK_STORAGE_KEY,
+  LIST_ACCOUNT_POLL_INTERVAL_MS,
   finishCurrentListAccountLink,
   listAccountCompletionInput,
-  listAccountPollFailureIsFinal,
+  listAccountPollFailureIsTransient,
+  listAccountPollStep,
   parsePendingListAccountLink,
   validateListAccountMessage,
   type PendingListAccountLink,
@@ -103,6 +105,7 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
 
       const poll = async () => {
         if (request !== generation.current || active.current?.consumed) return;
+        let delayMs = LIST_ACCOUNT_POLL_INTERVAL_MS;
         if (Date.now() >= Date.parse(pending.expiresAt)) {
           setError(t("lists.accounts.linkExpired"));
           cancel();
@@ -126,28 +129,30 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
               );
               return;
             }
-            if (["FAILED", "EXPIRED"].includes(polled.data?.pollListAccountLink?.status)) {
+            const step = listAccountPollStep(polled.data?.pollListAccountLink?.status);
+            if (step.kind === "failed") {
               setError(t("lists.accounts.linkFailed"));
               cancel();
               return;
             }
-            setError(null);
+            delayMs = step.delayMs;
+            setError(step.retrying ? t("lists.accounts.pollRetrying") : null);
           } catch (reason) {
             if (request !== generation.current) return;
-            if (listAccountPollFailureIsFinal(reason)) {
+            if (!listAccountPollFailureIsTransient(reason)) {
               setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
               cancel();
               return;
             }
-            // A dropped request or a provider hiccup does not end the session;
-            // keep checking at the normal pace until it expires or is cancelled.
+            // A dropped request does not end the session; the instance keeps
+            // it, and answers a repeated poll even if the first one linked it.
             setError(t("lists.accounts.pollRetrying"));
           }
         } else if (popup.closed) {
           cancel();
           return;
         }
-        if (request === generation.current) window.setTimeout(() => { void poll(); }, 1500);
+        if (request === generation.current) window.setTimeout(() => { void poll(); }, delayMs);
       };
       void poll();
     } catch (reason) {
