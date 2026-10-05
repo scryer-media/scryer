@@ -986,7 +986,7 @@ impl MediaFileRepository for MediaFileStore {
                   LEFT JOIN episodes e ON e.id = fem.episode_id
                  WHERE media_files.title_id IN ({placeholders})
                    AND {}
-                   AND media_files.role = 'primary' AND media_files.scan_status <> 'review_required'
+                   AND media_files.role = 'primary'
                    AND {normalized_quality} IS NOT NULL
                    AND (fem.episode_id IS NULL OR {})
              ) ranked
@@ -1039,10 +1039,11 @@ impl MediaFileRepository for MediaFileStore {
         } else {
             "1 = 1".to_string()
         };
-        let live_file = format!(
-            "{} AND mf.scan_status <> 'review_required'",
-            live_media_file_predicate(dialect, "mf")
-        );
+        // A file awaiting review is still the scope's file: the scope is not
+        // missing, and it is searched only as an upgrade below cutoff. Leaving
+        // it out made every review-held scope look missing, so each search
+        // grabbed a release that import then refused against that same file.
+        let live_file = live_media_file_predicate(dialect, "mf");
         let title_filter = if title_id.is_some() {
             "AND t.id = {}"
         } else {
@@ -2905,10 +2906,7 @@ mod tests {
             .await
             .expect("sqlite services should initialize");
 
-        let live_file = format!(
-            "{} AND mf.scan_status <> 'review_required'",
-            live_media_file_predicate(SqlDialect::Sqlite, "mf")
-        );
+        let live_file = live_media_file_predicate(SqlDialect::Sqlite, "mf");
         let sql = missing_scope_episode_sql(
             SqlDialect::Sqlite,
             &bool_column_is_true(SqlDialect::Sqlite, "t.monitored"),
@@ -3992,6 +3990,136 @@ mod tests {
         }
 
         let _ = std::fs::remove_file(db);
+    }
+
+    /// A scope whose Primary file awaits review keeps that file for search
+    /// purposes: it is not a missing candidate (so the missing walk never
+    /// grabs a release that import would refuse against it again), and it is
+    /// still enumerated as an upgrade candidate below cutoff.
+    #[tokio::test]
+    async fn a_file_awaiting_review_keeps_its_scope_out_of_the_missing_search() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let services = SqliteServices::new(dir.path().join("review.db").to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let shows = show_store(&services);
+        let media_files = media_file_store(&services);
+        let title = make_test_series_title("title-review-held");
+        titles
+            .create(title.clone())
+            .await
+            .expect("title should insert");
+        let collection = Collection {
+            id: "collection-review-held".to_string(),
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: None,
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("2".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        };
+        ShowRepository::create_collection(&shows, collection.clone())
+            .await
+            .expect("collection should insert");
+        for number in ["1", "2"] {
+            ShowRepository::create_episode(
+                &shows,
+                Episode {
+                    id: format!("episode-review-held-{number}"),
+                    title_id: title.id.clone(),
+                    collection_id: Some(collection.id.clone()),
+                    episode_type: scryer_domain::EpisodeType::Standard,
+                    episode_number: Some(number.to_string()),
+                    season_number: Some("1".to_string()),
+                    episode_label: Some(format!("S01E0{number}")),
+                    title: Some(format!("Episode {number}")),
+                    air_date: Some("2026-04-01".to_string()),
+                    duration_seconds: None,
+                    has_multi_audio: false,
+                    has_subtitle: false,
+                    is_filler: false,
+                    is_recap: false,
+                    absolute_number: None,
+                    contiguous_absolute_number: None,
+                    overview: None,
+                    tvdb_id: None,
+                    tmdb_id: None,
+                    image_url: None,
+                    monitored: true,
+                    created_at: Utc::now(),
+                },
+            )
+            .await
+            .expect("episode should insert");
+        }
+        let file_id = media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: "/data/series/Harbor Lights/Season 1/Harbor Lights - S01E01.mkv"
+                    .to_string(),
+                size_bytes: 1_000,
+                quality_label: Some("720p".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("media file should insert");
+        media_files
+            .link_file_to_episode(&file_id, "episode-review-held-1")
+            .await
+            .expect("file should link");
+        media_files
+            .set_media_file_roles_for_episode(&title.id, "episode-review-held-1", &file_id, &[])
+            .await
+            .expect("file should be primary");
+        execute_write(
+            &services.datastore(),
+            "test_hold_for_review",
+            "UPDATE media_files SET scan_status = 'review_required' WHERE id = {}",
+            vec![SqlArg::Text(file_id.clone())],
+        )
+        .await
+        .expect("hold file for review");
+
+        let missing = media_files
+            .list_missing_scope_candidates_for_title(Some(&title.id))
+            .await
+            .expect("missing candidates");
+        assert_eq!(
+            missing
+                .episodes
+                .iter()
+                .map(|episode| episode.episode_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["episode-review-held-2"],
+            "only the episode with no file at all is missing"
+        );
+        let cutoff = media_files
+            .list_cutoff_unmet_quality_summaries(std::slice::from_ref(&title.id))
+            .await
+            .expect("cutoff summaries");
+        assert_eq!(
+            cutoff
+                .iter()
+                .map(|summary| summary.episode_id.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("episode-review-held-1")],
+            "the held file is still weighed as an upgrade candidate"
+        );
+        let availability = media_files
+            .list_episode_media_availability(std::slice::from_ref(&title.id))
+            .await
+            .expect("availability");
+        assert!(
+            availability
+                .iter()
+                .any(|episode| episode.episode_id == "episode-review-held-1"
+                    && episode.state == EpisodeMediaAvailabilityState::ReviewRequired)
+        );
     }
 
     /// Conditional promotion relabels the sole Additional file of episodes
