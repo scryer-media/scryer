@@ -502,6 +502,10 @@ const DOWNLOAD_QUEUE_ITEM_FIELDS = `
     attentionReason
     passwordFailureCode
     passwordRetryImportId
+    heldImportSources {
+      importId
+      clientRemovesDownload
+    }
     downloadClientItemId
     downloadId
     importStatus

@@ -1766,6 +1766,13 @@ const en: LocaleDictionary = {
   "queue.ignore": "Ignore",
   "queue.ignoreSuccess": "Download ignored.",
   "queue.ignoreFailed": "Failed to ignore download.",
+  "queue.releaseHeldSources": "Release held sources",
+  "queue.releaseHeldSourcesConfirmTitle": "Release held sources?",
+  "queue.releaseHeldSourcesConfirmDescription": "{{download}} imported its video, but its sources are being kept for subtitles that still need attention. Releasing stops waiting for them, clears the warning and removes the import's temporary extraction folder.",
+  "queue.releaseHeldSourcesClientRemoves": "{{client}} is set to remove completed downloads, so this download and its files will be removed from the download client.",
+  "queue.releaseHeldSourcesClientKeeps": "{{client}} is set to keep completed downloads, so this download stays in the download client.",
+  "queue.releaseHeldSourcesSuccess": "Held sources released.",
+  "queue.releaseHeldSourcesFailed": "Failed to release held sources.",
   "queue.markFailedSearchAgain": "Mark Failed and Search Again",
   "queue.markFailedOnly": "Mark Failed Only",
   "queue.markFailedSearchSuccess":

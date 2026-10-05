@@ -86,6 +86,9 @@ async fn run_import(
         }
     };
     drop(preparation_permit.take());
+    // From here a video may be placed from the workspace, so its subtitles
+    // stay with it whatever the outcome.
+    workspace_reference.mark_video_imported();
     let mut subtitle_deliveries = Vec::new();
     let (mut result, source_cleanups) =
         collect_deferred_import_source_cleanup(dispatch_completed_import_target(

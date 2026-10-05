@@ -1256,6 +1256,41 @@ pub(super) struct TrackingImportRepo {
 
 #[async_trait]
 impl ImportRepository for TrackingImportRepo {
+    async fn set_archive_processing_pending(
+        &self,
+        import_id: &str,
+        pending: bool,
+    ) -> AppResult<()> {
+        let mut records = self.records.lock().await;
+        let record = records
+            .iter_mut()
+            .find(|record| record.id == import_id)
+            .ok_or_else(|| AppError::NotFound(format!("import record {import_id}")))?;
+        let mut payload: serde_json::Value =
+            serde_json::from_str(&record.payload_json).unwrap_or_else(|_| serde_json::json!({}));
+        if let Some(object) = payload.as_object_mut() {
+            if pending {
+                object.insert("archive_processing_pending".into(), true.into());
+            } else {
+                object.remove("archive_processing_pending");
+            }
+        }
+        record.payload_json = payload.to_string();
+        Ok(())
+    }
+
+    async fn archive_processing_pending_for_download(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<bool> {
+        let canonical_ids = self.canonical_ids.lock().await;
+        Ok(self.records.lock().await.iter().any(|record| {
+            canonical_ids.get(&record.id) == Some(download_id)
+                && serde_json::from_str::<serde_json::Value>(&record.payload_json)
+                    .is_ok_and(|payload| payload["archive_processing_pending"] == true)
+        }))
+    }
+
     async fn queue_import_request_with_identity_for_download(
         &self,
         source: ClientJobLocator,

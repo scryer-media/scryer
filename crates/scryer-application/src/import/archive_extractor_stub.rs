@@ -9,6 +9,15 @@ pub(crate) struct ArchiveWorkspaceReference;
 impl ArchiveWorkspaceReference {
     pub(crate) fn track(&mut self, _root: Option<&Path>) {}
     pub(crate) fn retain(&mut self) {}
+    pub(crate) fn mark_video_imported(&mut self) {}
+}
+
+pub(crate) fn owned_archive_workspaces_for(_parent: &Path, _owner_id: &str) -> Vec<PathBuf> {
+    Vec::new()
+}
+
+pub(crate) async fn remove_released_held_workspace(_root: &Path) -> bool {
+    false
 }
 
 #[derive(Debug, Clone)]

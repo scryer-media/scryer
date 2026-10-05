@@ -1,9 +1,11 @@
 import { canRetryDownloadPassword } from "@/lib/hooks/use-download-password-retry";
+import { canReleaseHeldSources } from "@/lib/hooks/use-release-held-sources";
 import {
   ArrowDownToLine,
   CircleAlert,
   CircleOff,
   Link2,
+  PackageOpen,
   Pause,
   Play,
   Trash2,
@@ -54,6 +56,7 @@ export type QueueRowItemProps = {
   onManualImport: () => void;
   onAssignTitle: () => void;
   onIgnore: () => void;
+  onReleaseHeldSources: () => void;
   onMarkFailedSearchAgain: () => void;
   onMarkFailedOnly: () => void;
   onRequestDelete: () => void;
@@ -81,6 +84,7 @@ export const QueueRowItem = memo(function QueueRowItem({
   onManualImport,
   onAssignTitle,
   onIgnore,
+  onReleaseHeldSources,
   onMarkFailedSearchAgain,
   onMarkFailedOnly,
   onRequestDelete,
@@ -282,6 +286,25 @@ export const QueueRowItem = memo(function QueueRowItem({
           >
             <CircleOff className="h-4 w-4" />
             <span>{t("queue.ignore")}</span>
+          </Button>
+        )}
+        {canReleaseHeldSources(queueItem) && (
+          <Button
+            type="button"
+            id={selectorId("activity", activeTab, "release-held-sources", rowSelectorKey)}
+            size="sm"
+            variant="secondary"
+            className={`flex-1 ${rowActionVisualClass}`}
+            disabled={isRowFullyBusy}
+            onClick={() => {
+              if (isActionLoading || isRowBlocked) {
+                return;
+              }
+              onReleaseHeldSources();
+            }}
+          >
+            <PackageOpen className="h-4 w-4" />
+            <span>{t("queue.releaseHeldSources")}</span>
           </Button>
         )}
         {row.canMarkFailed && (

@@ -1482,6 +1482,13 @@ const nl: LocaleDictionary = {
   "queue.ignore": "Negeren",
   "queue.ignoreSuccess": "Download genegeerd.",
   "queue.ignoreFailed": "Download negeren mislukt.",
+  "queue.releaseHeldSources": "Vastgehouden bronnen vrijgeven",
+  "queue.releaseHeldSourcesConfirmTitle": "Vastgehouden bronnen vrijgeven?",
+  "queue.releaseHeldSourcesConfirmDescription": "De video van {{download}} is geïmporteerd, maar de bronnen worden bewaard voor ondertitels die nog aandacht nodig hebben. Vrijgeven stopt het wachten, wist de waarschuwing en verwijdert de tijdelijke uitpakmap van de import.",
+  "queue.releaseHeldSourcesClientRemoves": "{{client}} is ingesteld om voltooide downloads te verwijderen, dus deze download en zijn bestanden worden uit de downloadclient verwijderd.",
+  "queue.releaseHeldSourcesClientKeeps": "{{client}} is ingesteld om voltooide downloads te bewaren, dus deze download blijft in de downloadclient.",
+  "queue.releaseHeldSourcesSuccess": "Vastgehouden bronnen vrijgegeven.",
+  "queue.releaseHeldSourcesFailed": "Vastgehouden bronnen vrijgeven mislukt.",
   "queue.markFailedSearchAgain": "Als mislukt markeren en opnieuw zoeken",
   "queue.markFailedOnly": "Alleen als mislukt markeren",
   "queue.markFailedSearchSuccess":

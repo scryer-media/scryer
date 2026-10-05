@@ -26,7 +26,7 @@ export type DownloadQueueDisplayStateInput = Pick<
 
 type QueueItemValueKey = Exclude<
   keyof DownloadQueueItem,
-  "trackedStatusMessages" | "queueScope"
+  "trackedStatusMessages" | "queueScope" | "heldImportSources"
 >;
 
 const QUEUE_ITEM_VALUE_KEYS: readonly QueueItemValueKey[] = [
@@ -88,7 +88,9 @@ export function sameDownloadQueueItem(
       currentStatusMessages.every(
         (message, index) => message === nextStatusMessages[index],
       ) &&
-      JSON.stringify(current.queueScope) === JSON.stringify(next.queueScope))
+      JSON.stringify(current.queueScope) === JSON.stringify(next.queueScope) &&
+      JSON.stringify(current.heldImportSources ?? null) ===
+        JSON.stringify(next.heldImportSources ?? null))
   );
 }
 

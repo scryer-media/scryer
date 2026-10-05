@@ -134,6 +134,8 @@ export type DownloadQueueItem = {
   attentionReason: string | null;
   passwordFailureCode?: "archive_password_required" | "archive_password_or_corruption" | null;
   passwordRetryImportId?: string | null;
+  /** A completed import holding this download's sources that the viewer may release. */
+  heldImportSources?: { importId: string; clientRemovesDownload: boolean } | null;
   downloadClientItemId: string;
   downloadId: string | null;
   importStatus: ImportStatus | null;

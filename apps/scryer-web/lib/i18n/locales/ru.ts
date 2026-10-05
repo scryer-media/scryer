@@ -1711,6 +1711,13 @@ const ru: LocaleDictionary = {
     "queue.ignore": "Игнорировать",
     "queue.ignoreSuccess": "Загрузка проигнорирована.",
     "queue.ignoreFailed": "Не удалось проигнорировать загрузку.",
+    "queue.releaseHeldSources": "Освободить удерживаемые источники",
+    "queue.releaseHeldSourcesConfirmTitle": "Освободить удерживаемые источники?",
+    "queue.releaseHeldSourcesConfirmDescription": "Видео из {{download}} импортировано, но источники сохраняются из-за субтитров, которые ещё требуют внимания. Освобождение прекращает ожидание, снимает предупреждение и удаляет временную папку распаковки импорта.",
+    "queue.releaseHeldSourcesClientRemoves": "{{client}} настроен удалять завершённые загрузки, поэтому эта загрузка и её файлы будут удалены из клиента загрузок.",
+    "queue.releaseHeldSourcesClientKeeps": "{{client}} настроен сохранять завершённые загрузки, поэтому эта загрузка останется в клиенте загрузок.",
+    "queue.releaseHeldSourcesSuccess": "Удерживаемые источники освобождены.",
+    "queue.releaseHeldSourcesFailed": "Не удалось освободить удерживаемые источники.",
 
     "queue.markFailedSearchAgain": "Пометить как ошибочную и выполнить повторный поиск",
     "queue.markFailedOnly": "Только пометить как ошибочную",

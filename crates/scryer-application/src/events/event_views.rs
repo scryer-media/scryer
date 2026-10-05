@@ -1206,6 +1206,7 @@ fn download_queue_command_label(action: scryer_domain::DownloadQueueCommandActio
         scryer_domain::DownloadQueueCommandAction::Pause => "paused",
         scryer_domain::DownloadQueueCommandAction::Resume => "resumed",
         scryer_domain::DownloadQueueCommandAction::Delete => "delete queued",
+        scryer_domain::DownloadQueueCommandAction::ReleaseHeldSources => "held sources released",
     }
 }
 

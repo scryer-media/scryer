@@ -370,9 +370,10 @@ pub use events::activity_api::{
 };
 pub(crate) use import_workflow::fail_active_manual_import_for_source;
 pub use import_workflow::{
-    ManualImportCandidateMapping, ManualImportExecutionResult, ManualImportFileMapping,
-    ManualImportFileResult, ManualImportRequestPayload, begin_manual_import_selection,
-    execute_manual_import, execute_queued_manual_import, import_completed_download,
+    HeldSourcesRelease, HeldSourcesReleaseOffer, ManualImportCandidateMapping,
+    ManualImportExecutionResult, ManualImportFileMapping, ManualImportFileResult,
+    ManualImportRequestPayload, begin_manual_import_selection, execute_manual_import,
+    execute_queued_manual_import, import_completed_download, release_held_import_sources,
     retry_failed_import, start_background_manual_import_poller,
 };
 pub use integration::download_queue_commands::start_background_download_delete_poller;

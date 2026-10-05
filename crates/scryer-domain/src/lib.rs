@@ -4571,6 +4571,8 @@ pub enum DownloadQueueCommandAction {
     Pause,
     Resume,
     Delete,
+    /// An operator released the sources a completed import was holding.
+    ReleaseHeldSources,
 }
 
 impl DownloadQueueCommandAction {
@@ -4579,6 +4581,7 @@ impl DownloadQueueCommandAction {
             Self::Pause => "pause",
             Self::Resume => "resume",
             Self::Delete => "delete",
+            Self::ReleaseHeldSources => "release_held_sources",
         }
     }
 
@@ -4587,6 +4590,7 @@ impl DownloadQueueCommandAction {
             "pause" => Some(Self::Pause),
             "resume" => Some(Self::Resume),
             "delete" => Some(Self::Delete),
+            "release_held_sources" => Some(Self::ReleaseHeldSources),
             _ => None,
         }
     }

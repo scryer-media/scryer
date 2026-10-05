@@ -5532,6 +5532,10 @@ type DownloadQueueItemPayload {
 	"""
 	passwordRetryImportId: ID
 	"""
+	Completed import holding this download's sources for pending subtitles, when the viewer may release them.
+	"""
+	heldImportSources: HeldImportSourcesPayload
+	"""
 	Acquisition scope for this queue item, or its episode scope when no more specific scope is available.
 	"""
 	queueScope: QueueDownloadScopePayload
@@ -7420,6 +7424,34 @@ type GeneralSettingsPayload {
 	Additional trusted plugin HTTP certificates.
 	"""
 	pluginHttpTrustedCertificates: [PluginHttpTrustedCertificatePayload!]!
+}
+
+"""
+A completed import whose held sources the viewer may release.
+"""
+type HeldImportSourcesPayload {
+	"""
+	Completed import record ID holding the sources.
+	"""
+	importId: ID!
+	"""
+	Whether the download client's removal policy removes the completed download after release.
+	"""
+	clientRemovesDownload: Boolean!
+}
+
+"""
+Outcome of releasing a completed import's held sources.
+"""
+type HeldImportSourcesReleasedPayload {
+	"""
+	Import record ID whose sources were released.
+	"""
+	importId: ID!
+	"""
+	Whether the import's extraction workspace was identified and removed; false leaves it for the stale-workspace sweeper.
+	"""
+	workspaceRemoved: Boolean!
 }
 
 """
@@ -17798,6 +17830,15 @@ type MutationRoot {
 		input: RetryImportInput!
 	): ImportResultPayload!
 	"""
+	Release the sources a completed import is holding for pending subtitles.
+	"""
+	releaseHeldImportSources(
+		"""
+		Completed import that is holding its sources. Clears the hold and pending warning, lets the download client's removal policy act on the download, and removes the import's extraction workspace when it can be identified.
+		"""
+		input: ReleaseHeldImportSourcesInput!
+	): HeldImportSourcesReleasedPayload!
+	"""
 	Cancel a queued or copying import operation by its server-issued stream identity.
 	"""
 	cancelActiveImport(
@@ -24820,6 +24861,16 @@ type ReleaseDecisionsPagePayload {
 	Whether another page exists after this page.
 	"""
 	hasMore: Boolean!
+}
+
+"""
+Requests releasing the sources a completed import is holding for pending subtitles.
+"""
+input ReleaseHeldImportSourcesInput {
+	"""
+	Completed import record ID whose held sources are released.
+	"""
+	importId: ID!
 }
 
 """

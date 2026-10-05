@@ -189,6 +189,31 @@ pub struct RetryImportInput {
 }
 
 #[derive(InputObject)]
+/// Requests releasing the sources a completed import is holding for pending subtitles.
+pub struct ReleaseHeldImportSourcesInput {
+    /// Completed import record ID whose held sources are released.
+    pub import_id: ID,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Outcome of releasing a completed import's held sources.
+pub struct HeldImportSourcesReleasedPayload {
+    /// Import record ID whose sources were released.
+    pub import_id: ID,
+    /// Whether the import's extraction workspace was identified and removed; false leaves it for the stale-workspace sweeper.
+    pub workspace_removed: bool,
+}
+
+#[derive(SimpleObject, Clone)]
+/// A completed import whose held sources the viewer may release.
+pub struct HeldImportSourcesPayload {
+    /// Completed import record ID holding the sources.
+    pub import_id: ID,
+    /// Whether the download client's removal policy removes the completed download after release.
+    pub client_removes_download: bool,
+}
+
+#[derive(InputObject)]
 /// Identifies a tracked download to ignore without deleting it from the download client.
 pub struct IgnoreTrackedDownloadInput {
     /// Download-client ID, or null when the provider identity is sufficient.
