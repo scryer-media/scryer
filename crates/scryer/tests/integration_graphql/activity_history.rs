@@ -329,6 +329,7 @@ async fn graphql_title_history_includes_download_failed_and_blocklisted_events()
                 title_id: title.id.clone(),
             },
             payload: DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+                canonical_download_id: None,
                 title: Some(title_context.clone()),
                 source_title: Some("Fixture.S01.1080p.WEB-DL".to_string()),
                 source_hint: Some("https://indexer.example/release".to_string()),

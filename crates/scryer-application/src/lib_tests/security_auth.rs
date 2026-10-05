@@ -1072,7 +1072,11 @@ async fn release_candidate_token_resolves_password_without_exposing_it() {
     assert_eq!(decoded.source_hint, selection.source_hint);
     assert_eq!(decoded.source_kind, selection.source_kind);
     assert_eq!(decoded.source_title, selection.source_title);
-    assert_eq!(decoded.source_password.as_deref(), Some("release-password"));
+    // Passwords are literal secrets: surrounding whitespace is part of them.
+    assert_eq!(
+        decoded.source_password.as_deref(),
+        Some(" release-password ")
+    );
 }
 
 #[tokio::test]
@@ -1134,7 +1138,7 @@ async fn release_candidate_token_rejects_missing_password_ticket() {
 }
 
 #[tokio::test]
-async fn release_candidate_token_drops_placeholder_password_flags() {
+async fn release_candidate_token_keeps_flag_like_passwords_behind_a_ticket() {
     let (app, admin) = bootstrap();
     let (_created, authenticated_user) = create_authenticated_user(
         &app,
@@ -1170,7 +1174,10 @@ async fn release_candidate_token_drops_placeholder_password_flags() {
     let claims = jsonwebtoken::dangerous::insecure_decode::<ReleaseCandidateTokenClaims>(&token)
         .expect("candidate token should decode")
         .claims;
-    assert_eq!(claims.password_ref, None);
+    // Provider marker fields are classified by the indexer adapter; a value
+    // that reaches the token issuer is a literal password and stays behind a
+    // server-side ticket like any other.
+    assert!(claims.password_ref.is_some());
     let decoded = app
         .verify_release_candidate_token(
             &authenticated_user,
@@ -1180,7 +1187,7 @@ async fn release_candidate_token_drops_placeholder_password_flags() {
         )
         .await
         .expect("candidate token should verify");
-    assert_eq!(decoded.source_password, None);
+    assert_eq!(decoded.source_password.as_deref(), Some("protected"));
 }
 
 #[tokio::test]

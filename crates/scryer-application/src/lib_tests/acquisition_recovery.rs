@@ -6630,7 +6630,7 @@ async fn acquisition_cycle_duplicate_url_does_not_mark_second_wanted_grabbed_wit
 }
 
 #[tokio::test]
-async fn insert_pending_release_normalizes_source_password_flags() {
+async fn insert_pending_release_keeps_literal_passwords_and_drops_blank_ones() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
@@ -6656,13 +6656,16 @@ async fn insert_pending_release_normalizes_source_password_flags() {
         .expect("load wanted item")
         .expect("wanted item exists");
 
+    // Provider marker fields are classified by the indexer adapter, so a
+    // flag-like value that reaches the host is a literal password.
     for (index, (label, raw, expected)) in [
-        ("one", Some("1"), None),
-        ("true", Some("true"), None),
-        ("protected", Some("protected"), None),
-        ("zero", Some("0"), None),
-        ("false", Some("false"), None),
+        ("one", Some("1"), Some("1")),
+        ("true", Some("true"), Some("true")),
+        ("protected", Some("protected"), Some("protected")),
+        ("zero", Some("0"), Some("0")),
+        ("false", Some("false"), Some("false")),
         ("empty", Some("  "), None),
+        ("absent", None, None),
         ("real", Some("actual-password"), Some("actual-password")),
     ]
     .into_iter()
@@ -6702,7 +6705,7 @@ async fn insert_pending_release_normalizes_source_password_flags() {
 }
 
 #[tokio::test]
-async fn legacy_pending_release_placeholder_password_is_normalized_on_grab() {
+async fn pending_release_flag_like_password_is_submitted_literally_on_grab() {
     let release_title = "Legacy.Placeholder.Password.Movie.2024.1080p-GRP";
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
@@ -6742,6 +6745,8 @@ async fn legacy_pending_release_placeholder_password_is_normalized_on_grab() {
         .await
         .expect("force grab pending release");
 
+    // A stored password is literal at the host; marker classification happens
+    // in the indexer adapter before a release is parked.
     assert!(grabbed);
     assert_eq!(
         download_client
@@ -6749,7 +6754,7 @@ async fn legacy_pending_release_placeholder_password_is_normalized_on_grab() {
             .lock()
             .await
             .as_slice(),
-        &[None]
+        &[Some("1".to_string())]
     );
     assert!(
         release_attempts
@@ -6757,7 +6762,7 @@ async fn legacy_pending_release_placeholder_password_is_normalized_on_grab() {
             .lock()
             .await
             .iter()
-            .all(|attempt| attempt.source_password.is_none())
+            .all(|attempt| attempt.source_password.as_deref() == Some("1"))
     );
 }
 

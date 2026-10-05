@@ -1661,12 +1661,11 @@ fn movie_rename_items_use_saved_hydrated_localized_title_name() {
         items[0].normalized_filename.as_deref(),
         Some("サンドライン.mkv")
     );
-    assert!(
-        items[0]
-            .proposed_path
-            .as_deref()
-            .is_some_and(|path| path.ends_with("/サンドライン.mkv"))
-    );
+    assert!(items[0].proposed_path.as_deref().is_some_and(|path| {
+        std::path::Path::new(path)
+            .file_name()
+            .is_some_and(|name| name == "サンドライン.mkv")
+    }));
 }
 
 #[test]
