@@ -23,7 +23,7 @@ const RESPONSE_LIMIT: usize = 64 * 1024;
 const REQUEST_LIMIT: usize = 16 * 1024;
 /// Deadline for a direct provider token request.
 const OAUTH_TIMEOUT: Duration = Duration::from_secs(100);
-/// The relay waits up to 100 s on the provider itself, so Scryer waits a
+/// The relay waits up to 90 s on the provider itself, so Scryer waits a
 /// little longer to receive the relay's own answer rather than its silence.
 const RELAY_TIMEOUT: Duration = Duration::from_secs(110);
 
@@ -431,7 +431,7 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                     }),
                 )
                 .await?;
-            let mut credential = tokens.credential(provider, false)?;
+            let mut credential = tokens.credential(provider, false, TokenGrant::Exchange)?;
             let poll: RelayPoll = decode(
                 request
                     .poll_token
@@ -469,7 +469,7 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                 "exchange",
             )
             .await?;
-        let mut credential = tokens.credential(provider, true)?;
+        let mut credential = tokens.credential(provider, true, TokenGrant::Exchange)?;
         credential.client_id = Some(app.client_id);
         Ok(credential)
     }
@@ -489,7 +489,7 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
             let tokens: Tokens = self
                 .relay_json(provider, "renew", json!({"refresh_handle": handle}))
                 .await?;
-            tokens.credential(provider, false)?
+            tokens.credential(provider, false, TokenGrant::Renew)?
         } else if credential.direct && matches!(provider, "trakt" | "mal") {
             let refresh_token = credential
                 .refresh_token
@@ -524,7 +524,7 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
                     "renew",
                 )
                 .await?;
-            tokens.credential(provider, true)?
+            tokens.credential(provider, true, TokenGrant::Renew)?
         } else {
             return Err(failure("reconnect_required"));
         };
@@ -610,15 +610,33 @@ struct Tokens {
     #[serde(default)]
     refresh_expires_in: Option<i64>,
 }
+/// Simkl refresh credentials live for exactly this long from an exchange.
+const SIMKL_REFRESH_LIFETIME_SECS: i64 = 180 * 24 * 60 * 60;
+
+/// Which grant produced a token reply. A renew without a new refresh
+/// credential keeps the original deadline, so it may report less than the
+/// full Simkl lifetime; an exchange always starts a fresh one.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TokenGrant {
+    Exchange,
+    Renew,
+}
+
 impl Tokens {
-    fn credential(self, provider: &str, direct: bool) -> AppResult<ListAccountCredential> {
-        self.credential_at(provider, direct, Utc::now())
+    fn credential(
+        self,
+        provider: &str,
+        direct: bool,
+        grant: TokenGrant,
+    ) -> AppResult<ListAccountCredential> {
+        self.credential_at(provider, direct, grant, Utc::now())
     }
 
     fn credential_at(
         self,
         provider: &str,
         direct: bool,
+        grant: TokenGrant,
         now: DateTime<Utc>,
     ) -> AppResult<ListAccountCredential> {
         require_value(&self.access_token, 8192)?;
@@ -643,11 +661,15 @@ impl Tokens {
                 require_value(self.refresh_handle.as_deref().unwrap_or_default(), 12000)?;
             }
         }
-        if provider == "simkl"
-            && (self.scope.as_deref() != Some("media:read")
-                || self.refresh_expires_in != Some(180 * 24 * 60 * 60))
-        {
-            return Err(failure("invalid_provider_response"));
+        if provider == "simkl" {
+            let refresh_lifetime_ok = match (grant, self.refresh_expires_in) {
+                (TokenGrant::Exchange, Some(secs)) => secs == SIMKL_REFRESH_LIFETIME_SECS,
+                (TokenGrant::Renew, Some(secs)) => secs > 0 && secs <= SIMKL_REFRESH_LIFETIME_SECS,
+                (_, None) => false,
+            };
+            if self.scope.as_deref() != Some("media:read") || !refresh_lifetime_ok {
+                return Err(failure("invalid_provider_response"));
+            }
         }
         // Allow small provider clock skew, but never extend a token lifetime by
         // accepting a future issue time. Older issue times retain their expiry.

@@ -408,7 +408,7 @@ fn token_validation_rejects_raw_relay_refresh_wrong_scope_and_overflow() {
     assert!(
         serde_json::from_value::<Tokens>(reply)
             .unwrap()
-            .credential("trakt", false)
+            .credential("trakt", false, TokenGrant::Exchange)
             .is_err()
     );
     let mut reply = token_reply("simkl");
@@ -416,7 +416,7 @@ fn token_validation_rejects_raw_relay_refresh_wrong_scope_and_overflow() {
     assert!(
         serde_json::from_value::<Tokens>(reply)
             .unwrap()
-            .credential("simkl", false)
+            .credential("simkl", false, TokenGrant::Exchange)
             .is_err()
     );
     let mut reply = token_reply("trakt");
@@ -424,7 +424,7 @@ fn token_validation_rejects_raw_relay_refresh_wrong_scope_and_overflow() {
     assert!(
         serde_json::from_value::<Tokens>(reply)
             .unwrap()
-            .credential("trakt", false)
+            .credential("trakt", false, TokenGrant::Exchange)
             .is_err()
     );
 }
@@ -486,7 +486,7 @@ fn token_issue_time_accepts_small_positive_skew_but_rejects_stale_and_impossible
     reply["created_at"] = json!((now + chrono::Duration::minutes(2)).timestamp());
     let credential = serde_json::from_value::<Tokens>(reply)
         .unwrap()
-        .credential_at("trakt", false, now)
+        .credential_at("trakt", false, TokenGrant::Exchange, now)
         .unwrap();
     assert_eq!(
         credential.expires_at.unwrap(),
@@ -503,7 +503,7 @@ fn token_issue_time_accepts_small_positive_skew_but_rejects_stale_and_impossible
         assert!(
             serde_json::from_value::<Tokens>(reply)
                 .unwrap()
-                .credential_at("trakt", false, now)
+                .credential_at("trakt", false, TokenGrant::Exchange, now)
                 .is_err()
         );
     }
@@ -544,4 +544,139 @@ async fn simkl_byo_is_refused_before_network() {
     request.app = Some(app());
     assert!(transport.start(request).await.is_err());
     assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+fn simkl_reply_with_refresh_lifetime(refresh_expires_in: Option<i64>) -> Tokens {
+    let mut reply = token_reply("simkl");
+    match refresh_expires_in {
+        Some(secs) => reply["refresh_expires_in"] = json!(secs),
+        None => {
+            reply.as_object_mut().unwrap().remove("refresh_expires_in");
+        }
+    }
+    serde_json::from_value(reply).unwrap()
+}
+
+#[test]
+fn simkl_renew_keeps_a_shortened_refresh_deadline_but_exchange_requires_the_full_lifetime() {
+    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let full = SIMKL_REFRESH_LIFETIME_SECS;
+    let remaining = 30 * 24 * 60 * 60;
+
+    for secs in [1, remaining, full] {
+        let credential = simkl_reply_with_refresh_lifetime(Some(secs))
+            .credential_at("simkl", false, TokenGrant::Renew, now)
+            .unwrap();
+        assert_eq!(
+            credential.refresh_expires_at,
+            Some(now + chrono::Duration::seconds(secs)),
+            "renew stores the deadline the relay reported"
+        );
+    }
+    for secs in [Some(0), Some(-1), Some(full + 1), None] {
+        assert!(
+            simkl_reply_with_refresh_lifetime(secs)
+                .credential_at("simkl", false, TokenGrant::Renew, now)
+                .is_err(),
+            "renew rejects refresh lifetime {secs:?}"
+        );
+    }
+
+    let credential = simkl_reply_with_refresh_lifetime(Some(full))
+        .credential_at("simkl", false, TokenGrant::Exchange, now)
+        .unwrap();
+    assert_eq!(
+        credential.refresh_expires_at,
+        Some(now + chrono::Duration::seconds(full))
+    );
+    for secs in [Some(remaining), Some(0), Some(full + 1), None] {
+        assert!(
+            simkl_reply_with_refresh_lifetime(secs)
+                .credential_at("simkl", false, TokenGrant::Exchange, now)
+                .is_err(),
+            "exchange rejects refresh lifetime {secs:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn simkl_relay_renew_accepts_the_remaining_refresh_lifetime() {
+    let server = MockServer::start().await;
+    let transport = transport(&server).await;
+    let remaining = 30 * 24 * 60 * 60;
+    let mut reply = token_reply("simkl");
+    reply["refresh_expires_in"] = json!(remaining);
+    Mock::given(method("POST"))
+        .and(path("/auth/v1/simkl/renew"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(reply.clone()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .and(path("/auth/v1/simkl/exchange"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(reply))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let stored = ListAccountCredential {
+        access_token: "fixture-access".into(),
+        refresh_handle: Some("fixture-handle".into()),
+        ..Default::default()
+    };
+
+    let before = Utc::now();
+    let renewed = transport.renew("simkl", &stored, None).await.unwrap();
+    let after = Utc::now();
+    let deadline = renewed.refresh_expires_at.expect("refresh deadline");
+    assert!(deadline >= before + chrono::Duration::seconds(remaining));
+    assert!(deadline <= after + chrono::Duration::seconds(remaining));
+
+    let error = transport
+        .complete(complete_request("simkl"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        scryer_application::lists::account_transport::auth_failure_code(&error),
+        Some("invalid_provider_response"),
+        "an exchange must report the full lifetime"
+    );
+}
+
+#[tokio::test]
+async fn relay_unavailable_answers_on_renew_and_revoke_are_transient_not_reconnect() {
+    for relay_error in ["relay_key_unavailable", "relay_busy"] {
+        let server = MockServer::start().await;
+        let transport = transport(&server).await;
+        for operation in ["renew", "revoke"] {
+            Mock::given(method("POST"))
+                .and(path(format!("/auth/v1/simkl/{operation}")))
+                .respond_with(
+                    ResponseTemplate::new(503)
+                        .insert_header("Retry-After", "300")
+                        .set_body_json(json!({ "error": relay_error })),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let stored = ListAccountCredential {
+            access_token: "fixture-access".into(),
+            refresh_handle: Some("fixture-handle".into()),
+            ..Default::default()
+        };
+
+        let renew_error = transport.renew("simkl", &stored, None).await.unwrap_err();
+        let revoke_error = transport.revoke("simkl", &stored, None).await.unwrap_err();
+
+        // `provider_unavailable` is a transient failure: the account keeps its
+        // link and the next sync retries (see the application's
+        // transient-refresh tests). It must never read as reconnect_required.
+        for (operation, error) in [("renew", renew_error), ("revoke", revoke_error)] {
+            assert_eq!(
+                scryer_application::lists::account_transport::auth_failure_code(&error),
+                Some("provider_unavailable"),
+                "{relay_error} on {operation}"
+            );
+        }
+    }
 }
