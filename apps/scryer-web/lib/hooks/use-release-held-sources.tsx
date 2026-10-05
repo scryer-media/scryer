@@ -10,6 +10,7 @@ import type {
   HeldDownloadClientPolicy,
   HeldImportSourcesReason,
   HeldImportSourcesReleased,
+  HeldImportSourcesSettlement,
   HeldWorkspacePreservedReason,
 } from "@/lib/types";
 
@@ -36,7 +37,21 @@ const PRESERVED_KEYS: Record<HeldWorkspacePreservedReason, string> = {
   IN_USE: "queue.releaseHeldSourcesPreservedInUse",
   UNVERIFIED: "queue.releaseHeldSourcesPreservedUnverified",
   REMOVAL_FAILED: "queue.releaseHeldSourcesPreservedRemovalFailed",
+  DOWNLOAD_NOT_IMPORTED: "queue.releaseHeldSourcesPreservedDownloadNotImported",
 };
+
+const SETTLEMENT_KEYS: Record<HeldImportSourcesSettlement, string> = {
+  IMPORTED: "queue.releaseHeldSourcesSuccess",
+  AWAITING_IMPORT: "queue.releaseHeldSourcesAwaitingImport",
+  NOT_SETTLED: "queue.releaseHeldSourcesNotSettled",
+  // The holds were released, but nothing settled the download, so nothing of
+  // it was cleaned up. Never reported as success.
+  UNCHANGED: "queue.releaseHeldSourcesNotSettledNothingCleaned",
+  UNTRACKED: "queue.releaseHeldSourcesNotSettledNothingCleaned",
+};
+
+/** Settlements the operator should look at: the download was not settled. */
+const WARNING_SETTLEMENTS: ReadonlySet<HeldImportSourcesSettlement> = new Set(["NOT_SETTLED", "UNCHANGED", "UNTRACKED"]);
 
 /** Holds whose release can remove content that was never imported. */
 const SEVERE_REASONS: ReadonlySet<HeldImportSourcesReason> = new Set(["ARCHIVE_EXTRACTION_FAILED", "UNKNOWN"]);
@@ -47,13 +62,7 @@ export function canReleaseHeldSources(item: DownloadQueueItem): boolean {
 
 /** The toast for a release, telling the operator what was left in place and why. */
 export function heldSourcesReleaseMessage(t: Translate, released: HeldImportSourcesReleased): string {
-  const parts = [
-    released.settlement === "AWAITING_IMPORT"
-      ? t("queue.releaseHeldSourcesAwaitingImport")
-      : released.settlement === "NOT_SETTLED"
-        ? t("queue.releaseHeldSourcesNotSettled")
-        : t("queue.releaseHeldSourcesSuccess"),
-  ];
+  const parts = [t(SETTLEMENT_KEYS[released.settlement])];
   const reasons = released.preservedWorkspaceReasons.map((reason) => t(PRESERVED_KEYS[reason]));
   if (released.workspaceLookupIncomplete) reasons.push(t("queue.releaseHeldSourcesPreservedLookupIncomplete"));
   if (!released.workspaceRemoved && reasons.length > 0) {
@@ -104,7 +113,7 @@ export function useReleaseHeldSources(onReleased: (item: DownloadQueueItem) => P
           const released = result.data?.releaseHeldImportSources as HeldImportSourcesReleased | undefined;
           if (released) {
             const preservedSomething = !released.workspaceRemoved && (released.preservedWorkspaceReasons.length > 0 || released.workspaceLookupIncomplete);
-            const warn = released.settlement === "NOT_SETTLED" || preservedSomething;
+            const warn = WARNING_SETTLEMENTS.has(released.settlement) || preservedSomething;
             setStatus(heldSourcesReleaseMessage(t, released), warn ? { level: "WARNING" } : undefined);
           } else {
             setStatus(t("queue.releaseHeldSourcesSuccess"));

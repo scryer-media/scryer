@@ -564,6 +564,111 @@ async fn hold_reason_only_annotates_an_existing_hold() {
     );
 }
 
+async fn hold_reason(store: &ImportStore, import_id: &str) -> Option<String> {
+    payload_of(store, import_id).await[scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY]
+        .as_str()
+        .map(str::to_string)
+}
+
+#[tokio::test]
+async fn hold_reason_keeps_the_most_severe_reason_recorded() {
+    let (store, _cleanup, claim, _) = retry_fixture().await;
+    store
+        .set_archive_processing_pending(&claim.import_id, true)
+        .await
+        .unwrap();
+    store
+        .record_archive_hold_reason(&claim.import_id, "subtitles_pending")
+        .await
+        .unwrap();
+    store
+        .record_archive_hold_reason(&claim.import_id, "archive_extraction_failed")
+        .await
+        .unwrap();
+    assert_eq!(
+        hold_reason(&store, &claim.import_id).await.as_deref(),
+        Some("archive_extraction_failed")
+    );
+    // A milder reason recorded later never downgrades the hold.
+    store
+        .record_archive_hold_reason(&claim.import_id, "subtitles_pending")
+        .await
+        .unwrap();
+    store
+        .record_archive_hold_reason(&claim.import_id, "source_cleanup_incomplete")
+        .await
+        .unwrap();
+    assert_eq!(
+        hold_reason(&store, &claim.import_id).await.as_deref(),
+        Some("archive_extraction_failed")
+    );
+}
+
+#[tokio::test]
+async fn import_retry_carries_the_hold_reason_forward() {
+    let (store, _cleanup, claim, expected) = retry_fixture().await;
+    store
+        .set_archive_processing_pending(&claim.import_id, true)
+        .await
+        .unwrap();
+    store
+        .record_archive_hold_reason(&claim.import_id, "archive_extraction_failed")
+        .await
+        .unwrap();
+    let expected = {
+        let record = store
+            .get_import_by_id(&claim.import_id)
+            .await
+            .unwrap()
+            .unwrap();
+        chrono::DateTime::parse_from_rfc3339(&record.updated_at)
+            .map(|updated| updated.with_timezone(&Utc))
+            .unwrap_or(expected)
+    };
+
+    assert!(
+        store
+            .claim_import_retry(&claim, expected, "{\"replacement\":true}")
+            .await
+            .unwrap()
+            .is_claimed()
+    );
+
+    let payload = payload_of(&store, &claim.import_id).await;
+    assert_eq!(payload["replacement"], true);
+    assert_eq!(payload["archive_processing_pending"], true);
+    assert_eq!(
+        payload[scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY],
+        "archive_extraction_failed"
+    );
+}
+
+#[tokio::test]
+async fn hold_release_without_a_canonical_download_is_refused_and_changes_nothing() {
+    let (store, cleanup, claim, _) = retry_fixture().await;
+    complete_held(&store, &claim.import_id, "subtitles_pending").await;
+
+    let error = store
+        .release_archive_holds(&claim.source, None, &[claim.import_id.clone()])
+        .await
+        .expect_err("nothing serializes the release against the cleanup claim");
+
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    let payload = payload_of(&store, &claim.import_id).await;
+    assert_eq!(payload["archive_processing_pending"], true);
+    assert_eq!(
+        payload[scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY],
+        "subtitles_pending"
+    );
+    assert!(matches!(
+        cleanup
+            .claim_download_cleanup(&claim.download_id)
+            .await
+            .unwrap(),
+        DownloadCleanupClaim::Deferred
+    ));
+}
+
 #[tokio::test]
 async fn released_holds_clear_together_and_let_the_cleanup_claim_proceed() {
     let (store, cleanup, claim, _) = retry_fixture().await;

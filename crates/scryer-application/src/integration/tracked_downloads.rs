@@ -1959,17 +1959,31 @@ pub fn manual_import_recovery_verdict(
 }
 
 /// What releasing a held import did to its tracked download.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum HeldImportReleaseSettlement {
     /// Import verification proved the download complete: it is imported and
     /// the ordinary terminal cleanup ran under the client's policy.
-    Imported,
+    /// `download_root` is the folder the import's artifacts record their
+    /// source paths against.
+    Imported { download_root: std::path::PathBuf },
     /// Verification did not prove the download complete, or could not run:
     /// it went back to the ordinary import retry and nothing was cleaned up.
     AwaitingImport,
     /// The download was not blocked on the pending-subtitle warning, so it
     /// was left exactly as it was.
     Unchanged,
+}
+
+/// How a released download is verified: the same way the held imports were.
+/// Every listed verification must prove the download complete.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HeldImportVerification {
+    /// An automatic import of the download was held.
+    pub automatic: bool,
+    /// Manual imports of the download were held, mapping this many files in
+    /// total. `usize::MAX` when a manual mapping could not be read, which no
+    /// import can satisfy.
+    pub manual_expected_mapping_count: Option<usize>,
 }
 
 /// Commands sent from GraphQL mutations to the poller's TrackedDownloadService.
@@ -1992,6 +2006,7 @@ pub enum TrackedDownloadCommand {
     ReleaseHeldImport {
         id: String,
         canonical_download_id: Option<DownloadId>,
+        verification: HeldImportVerification,
         reply: oneshot::Sender<AppResult<HeldImportReleaseSettlement>>,
     },
     /// Recovery for a manual-import record that reached `Completed` (at
@@ -2293,12 +2308,14 @@ impl TrackedDownloadHandle {
         &self,
         id: String,
         canonical_download_id: Option<DownloadId>,
+        verification: HeldImportVerification,
     ) -> AppResult<HeldImportReleaseSettlement> {
         let (reply_tx, reply_rx) = oneshot::channel();
         self.tx
             .send(TrackedDownloadCommand::ReleaseHeldImport {
                 id,
                 canonical_download_id,
+                verification,
                 reply: reply_tx,
             })
             .await

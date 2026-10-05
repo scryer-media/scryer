@@ -24,7 +24,8 @@ impl HeldSourcesReason {
         }
     }
 
-    fn parse(value: Option<&str>) -> Self {
+    /// Reads a stored reason; a missing or unrecognised one is `Unknown`.
+    pub fn parse(value: Option<&str>) -> Self {
         match value {
             Some("subtitles_pending") => Self::SubtitlesPending,
             Some("source_cleanup_incomplete") => Self::SourceCleanupIncomplete,
@@ -98,7 +99,8 @@ pub enum HeldWorkspacePreserved {
     NotOwned,
     /// A symlink, special file, unreadable entry or an entry beyond the bound.
     Unsafe,
-    /// A video in it has no successful import recorded for the released imports.
+    /// A video in it is not recorded, by its path, as imported by the import
+    /// that owns the workspace.
     HoldsUnimportedVideo,
     /// An unfinished import or an open manual-import selection may still need it.
     InUse,
@@ -106,6 +108,8 @@ pub enum HeldWorkspacePreserved {
     Unverified,
     /// Removal was attempted and the workspace is still there.
     RemovalFailed,
+    /// The download was not proven imported, so nothing of it is removed.
+    DownloadNotImported,
 }
 
 impl HeldWorkspacePreserved {
@@ -117,6 +121,7 @@ impl HeldWorkspacePreserved {
             Self::InUse => "in_use",
             Self::Unverified => "unverified",
             Self::RemovalFailed => "removal_failed",
+            Self::DownloadNotImported => "download_not_imported",
         }
     }
 }
@@ -431,14 +436,40 @@ async fn held_download_client_policy(
     })
 }
 
+/// Verify the released download the way its held imports were verified.
+fn held_release_verification(
+    pending: &[&ImportRecord],
+) -> crate::tracked_downloads::HeldImportVerification {
+    let mut automatic = false;
+    let mut manual: Option<usize> = None;
+    for record in pending {
+        if record.import_type == ImportType::ManualImport {
+            // A mapping that cannot be read cannot be verified; no import
+            // covers `usize::MAX` files, so the download never settles on it.
+            let mapped = serde_json::from_str::<ManualImportRequestPayload>(&record.payload_json)
+                .map_or(usize::MAX, |payload| payload.files.len());
+            manual = Some(manual.unwrap_or(0).saturating_add(mapped));
+        } else {
+            automatic = true;
+        }
+    }
+    crate::tracked_downloads::HeldImportVerification {
+        automatic,
+        manual_expected_mapping_count: manual,
+    }
+}
+
+/// Settle the tracked download. On `Imported`, also the folder its import
+/// artifacts record their source paths against.
 async fn settle_tracked_download(
     app: &AppUseCase,
     record: &ImportRecord,
     canonical_download_id: Option<scryer_domain::download_identity::DownloadId>,
-) -> HeldSourcesSettlement {
+    verification: crate::tracked_downloads::HeldImportVerification,
+) -> (HeldSourcesSettlement, Option<PathBuf>) {
     use crate::tracked_downloads::HeldImportReleaseSettlement;
     let Some(handle) = app.runtime.acquisition.tracked_download_handle.as_ref() else {
-        return HeldSourcesSettlement::Untracked;
+        return (HeldSourcesSettlement::Untracked, None);
     };
     let tracked_id = crate::tracked_downloads::tracked_download_id(
         record.source_client_id.as_deref(),
@@ -446,32 +477,40 @@ async fn settle_tracked_download(
         &record.source_ref,
     );
     match handle
-        .release_held_import_for_download(tracked_id, canonical_download_id)
+        .release_held_import_for_download(tracked_id, canonical_download_id, verification)
         .await
     {
-        Ok(HeldImportReleaseSettlement::Imported) => HeldSourcesSettlement::Imported,
-        Ok(HeldImportReleaseSettlement::AwaitingImport) => HeldSourcesSettlement::AwaitingImport,
-        Ok(HeldImportReleaseSettlement::Unchanged) => HeldSourcesSettlement::Unchanged,
-        Err(AppError::NotFound(_)) => HeldSourcesSettlement::Untracked,
+        Ok(HeldImportReleaseSettlement::Imported { download_root }) => {
+            (HeldSourcesSettlement::Imported, Some(download_root))
+        }
+        Ok(HeldImportReleaseSettlement::AwaitingImport) => {
+            (HeldSourcesSettlement::AwaitingImport, None)
+        }
+        Ok(HeldImportReleaseSettlement::Unchanged) => (HeldSourcesSettlement::Unchanged, None),
+        Err(AppError::NotFound(_)) => (HeldSourcesSettlement::Untracked, None),
         Err(error) => {
             tracing::warn!(import_id = %record.id, error = %error,
                 "held sources were released but the tracked download could not be settled");
-            HeldSourcesSettlement::NotSettled
+            (HeldSourcesSettlement::NotSettled, None)
         }
     }
 }
 
 /// Remove the released imports' own workspaces, keeping any that are not
-/// proven safe to remove.
+/// proven safe to remove. Nothing is removed unless the download was proven
+/// imported (`download_root` is the folder its import artifacts record their
+/// source paths against). A workspace is checked only against what the
+/// import that owns it imported, never against another import's files.
 async fn remove_released_workspaces(
     app: &AppUseCase,
     source: &ClientJobLocator,
     canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
     released: &[&ImportRecord],
     titles: &HashMap<String, Title>,
+    download_root: Option<&Path>,
 ) -> (usize, Vec<HeldWorkspacePreserved>, bool) {
     let mut lookup_incomplete = false;
-    let mut workspaces: Vec<PathBuf> = Vec::new();
+    let mut workspaces: Vec<(PathBuf, Vec<String>)> = Vec::new();
     for record in released {
         let Some(title) = held_import_title_id(record).and_then(|id| titles.get(&id)) else {
             lookup_incomplete = true;
@@ -480,8 +519,9 @@ async fn remove_released_workspaces(
         let lookup = held_import_workspaces(record, title);
         lookup_incomplete |= !lookup.complete;
         for workspace in lookup.workspaces {
-            if !workspaces.contains(&workspace) {
-                workspaces.push(workspace);
+            match workspaces.iter_mut().find(|(path, _)| *path == workspace) {
+                Some((_, owners)) => owners.push(record.id.clone()),
+                None => workspaces.push((workspace, vec![record.id.clone()])),
             }
         }
     }
@@ -490,27 +530,17 @@ async fn remove_released_workspaces(
     }
 
     let mut preserved = std::collections::BTreeSet::<HeldWorkspacePreserved>::new();
-    let released_ids: HashSet<&str> = released.iter().map(|record| record.id.as_str()).collect();
-    let imported_video_names: Option<HashSet<String>> = app
+    let Some(download_root) = download_root else {
+        preserved.insert(HeldWorkspacePreserved::DownloadNotImported);
+        return (0, preserved.into_iter().collect(), lookup_incomplete);
+    };
+    let artifacts = app
         .services
         .workflow
         .import_artifacts
         .list_by_source_identity_for_download(canonical_download_id, source)
         .await
-        .ok()
-        .map(|artifacts| {
-            artifacts
-                .into_iter()
-                .filter(|artifact| {
-                    artifact
-                        .import_id
-                        .as_deref()
-                        .is_some_and(|id| released_ids.contains(id))
-                        && matches!(artifact.result.as_str(), "imported" | "already_present")
-                })
-                .map(|artifact| artifact.normalized_file_name.trim().to_ascii_lowercase())
-                .collect()
-        });
+        .ok();
     let selection_roots = app
         .services
         .workflow
@@ -527,7 +557,7 @@ async fn remove_released_workspaces(
         .ok();
 
     let mut removed = 0usize;
-    for workspace in workspaces {
+    for (workspace, owners) in workspaces {
         let in_use = match (&selection_roots, &unfinished) {
             (Some(roots), Some(unfinished)) => {
                 roots
@@ -544,13 +574,31 @@ async fn remove_released_workspaces(
             preserved.insert(HeldWorkspacePreserved::InUse);
             continue;
         }
-        let Some(imported_video_names) = imported_video_names.as_ref() else {
+        // One owner, and its artifacts readable, or nothing is proven.
+        let (Some(artifacts), [owner]) = (artifacts.as_ref(), owners.as_slice()) else {
             preserved.insert(HeldWorkspacePreserved::Unverified);
             continue;
         };
+        let imported_relative_paths: HashSet<String> =
+            artifacts
+                .iter()
+                .filter(|artifact| {
+                    artifact.import_id.as_deref() == Some(owner.as_str())
+                        && matches!(artifact.result.as_str(), "imported" | "already_present")
+                })
+                .filter_map(|artifact| {
+                    match crate::completed_download_handler::import_artifact_source_key(artifact) {
+                    Some(crate::completed_download_handler::ImportArtifactSourceKey::RelativePath(
+                        relative,
+                    )) => Some(relative),
+                    _ => None,
+                }
+                })
+                .collect();
         match crate::archive_extractor::remove_released_held_workspace(
             &workspace,
-            imported_video_names,
+            download_root,
+            &imported_relative_paths,
         )
         .await
         {
@@ -605,7 +653,15 @@ pub async fn release_held_import_sources(
         )));
     }
     let titles = authorized_release_titles(app, actor, &pending).await?;
-    let canonical_download_id = imports.canonical_download_id_for_import(&record.id).await?;
+    // The cleanup claim and the release serialize on the canonical download.
+    // Without one there is nothing to serialize on, so the sources stay held.
+    let Some(canonical_download_id) = imports.canonical_download_id_for_import(&record.id).await?
+    else {
+        return Err(AppError::Validation(
+            "this download has no stable identity yet; its sources stay held".into(),
+        ));
+    };
+    let canonical_download_id = Some(canonical_download_id);
     let client_policy =
         held_download_client_policy(app, &source, canonical_download_id.as_ref()).await?;
 
@@ -620,7 +676,13 @@ pub async fn release_held_import_sources(
 
     // From here the holds are released; every outcome below is reported as
     // what it is rather than as a failure of the release.
-    let settlement = settle_tracked_download(app, &record, canonical_download_id.clone()).await;
+    let (settlement, download_root) = settle_tracked_download(
+        app,
+        &record,
+        canonical_download_id.clone(),
+        held_release_verification(&pending),
+    )
+    .await;
     if settlement != HeldSourcesSettlement::NotSettled {
         for other in &pending {
             if let Some(result_json) = other
@@ -648,6 +710,7 @@ pub async fn release_held_import_sources(
             canonical_download_id.as_ref(),
             &pending,
             &titles,
+            download_root.as_deref(),
         )
         .await;
 
@@ -730,21 +793,43 @@ impl AppUseCase {
             else {
                 continue;
             };
+            // A failure for one queue item drops only that item's offer.
             let titles = match authorized_release_titles(self, actor, &pending).await {
                 Ok(titles) => titles,
-                Err(
-                    AppError::NotFound(_) | AppError::Validation(_) | AppError::Unauthorized(_),
-                ) => continue,
-                Err(error) => return Err(error),
+                Err(AppError::Unauthorized(_)) => continue,
+                Err(error) => {
+                    tracing::warn!(import_id = %latest.id, error = %error,
+                        "held sources offer skipped: its titles could not be authorized");
+                    continue;
+                }
             };
-            let canonical_download_id = self
+            let canonical_download_id = match self
                 .services
                 .workflow
                 .imports
                 .canonical_download_id_for_import(&latest.id)
-                .await?;
+                .await
+            {
+                // Without a canonical download the release refuses, so
+                // nothing is offered.
+                Ok(Some(canonical_download_id)) => canonical_download_id,
+                Ok(None) => continue,
+                Err(error) => {
+                    tracing::warn!(import_id = %latest.id, error = %error,
+                        "held sources offer skipped: its download identity is unavailable");
+                    continue;
+                }
+            };
             let client_policy =
-                held_download_client_policy(self, source, canonical_download_id.as_ref()).await?;
+                match held_download_client_policy(self, source, Some(&canonical_download_id)).await
+                {
+                    Ok(policy) => policy,
+                    Err(error) => {
+                        tracing::warn!(import_id = %latest.id, error = %error,
+                            "held sources offer skipped: the client policy is unavailable");
+                        continue;
+                    }
+                };
             let reason = pending
                 .iter()
                 .filter(|record| import_holds_sources(record))

@@ -128,7 +128,8 @@ export type HeldWorkspacePreservedReason =
   | "HOLDS_UNIMPORTED_VIDEO"
   | "IN_USE"
   | "UNVERIFIED"
-  | "REMOVAL_FAILED";
+  | "REMOVAL_FAILED"
+  | "DOWNLOAD_NOT_IMPORTED";
 
 /** Held sources of a download: every import and title a release covers. */
 export type HeldImportSources = {

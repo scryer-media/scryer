@@ -1727,6 +1727,7 @@ const ru: LocaleDictionary = {
     "queue.releaseHeldSourcesClientPolicyUnknown": "Scryer не удалось определить, что {{client}} сделает с этой загрузкой после освобождения.",
     "queue.releaseHeldSourcesAwaitingImport": "Удерживаемые источники освобождены. Загрузка импортирована не полностью, поэтому она возвращена к импорту и ничего не удалено.",
     "queue.releaseHeldSourcesNotSettled": "Удерживаемые источники освобождены, но загрузку не удалось обновить. Освободите ещё раз, чтобы завершить.",
+    "queue.releaseHeldSourcesNotSettledNothingCleaned": "Удерживаемые источники освобождены, но загрузка не была завершена, и ничего не было очищено.",
     "queue.releaseHeldSourcesWorkspacesPreserved": "Некоторые временные папки распаковки сохранены: {{reasons}}.",
     "queue.releaseHeldSourcesPreservedNotOwned": "не удалось подтвердить владельца",
     "queue.releaseHeldSourcesPreservedUnsafe": "неожиданное или нечитаемое содержимое",
@@ -1734,6 +1735,7 @@ const ru: LocaleDictionary = {
     "queue.releaseHeldSourcesPreservedInUse": "ещё нужна другому импорту",
     "queue.releaseHeldSourcesPreservedUnverified": "не удалось подтвердить импортированные файлы",
     "queue.releaseHeldSourcesPreservedRemovalFailed": "не удалось удалить",
+    "queue.releaseHeldSourcesPreservedDownloadNotImported": "импорт загрузки не подтверждён",
     "queue.releaseHeldSourcesPreservedLookupIncomplete": "не все папки удалось проверить",
 
     "queue.markFailedSearchAgain": "Пометить как ошибочную и выполнить повторный поиск",

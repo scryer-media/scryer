@@ -129,6 +129,16 @@ impl ImportRepository for ImportStore {
                 if payload["archive_processing_pending"].as_bool() != Some(true) {
                     return Ok(());
                 }
+                // A later, milder reason never hides a more severe one
+                // already recorded for the same hold.
+                let reason =
+                    match payload[scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY].as_str() {
+                        Some(stored) => scryer_application::HeldSourcesReason::parse(Some(stored))
+                            .max(scryer_application::HeldSourcesReason::parse(Some(&reason)))
+                            .as_str()
+                            .to_string(),
+                        None => reason,
+                    };
                 let object = payload
                     .as_object_mut()
                     .ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
@@ -166,10 +176,13 @@ impl ImportRepository for ImportStore {
             let import_ids = import_ids.clone();
             Box::pin(async move {
                 // The same lock the cleanup claim takes, so the claim sees
-                // either every hold or none of them.
-                if let Some(download_id) = canonical_download_id.as_deref() {
-                    lock_retry_download(tx, download_id).await?;
-                }
+                // either every hold or none of them. Without a canonical
+                // download there is no lock to take, so nothing is released.
+                let Some(download_id) = canonical_download_id.as_deref() else {
+                    return Err(AppError::Validation(
+                        "this download has no stable identity yet; its sources stay held".into()));
+                };
+                lock_retry_download(tx, download_id).await?;
                 let rows = SqlRuntime::fetch_all(SqlExec::Tx(tx),
                     "SELECT id, status, payload_json FROM imports
                      WHERE (canonical_download_id = {})

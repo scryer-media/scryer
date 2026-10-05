@@ -121,8 +121,26 @@ impl ImportStore {
                 let mut payload: serde_json::Value = serde_json::from_str(&payload_json)
                     .map_err(|_| AppError::Repository("retry payload is unavailable".into()))?;
                 if previous.as_ref().map(archive_import_has_pending_sources).transpose()?.unwrap_or(false) {
-                    payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid retry payload".into()))?
-                        .insert("archive_processing_pending".into(), serde_json::Value::Bool(true));
+                    // The reason travels with the hold so the operator is
+                    // still told why the sources are kept.
+                    let previous_reason = previous
+                        .as_ref()
+                        .map(|row| row.text("payload_json"))
+                        .transpose()?
+                        .and_then(|json| serde_json::from_str::<serde_json::Value>(&json).ok())
+                        .and_then(|previous| {
+                            previous[scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY]
+                                .as_str()
+                                .map(str::to_string)
+                        });
+                    let object = payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid retry payload".into()))?;
+                    object.insert("archive_processing_pending".into(), serde_json::Value::Bool(true));
+                    if let Some(reason) = previous_reason {
+                        object.insert(
+                            scryer_application::ARCHIVE_HOLD_REASON_PAYLOAD_KEY.into(),
+                            serde_json::Value::String(reason),
+                        );
+                    }
                 }
                 let payload_json = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
                 let payload_arg = json_arg_for_tx(tx, Some(&payload_json))?;

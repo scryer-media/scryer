@@ -7573,7 +7573,7 @@ enum HeldWorkspacePreservedValue {
 	"""
 	UNSAFE
 	"""
-	A video in it was never imported by the released imports.
+	A video in it is not recorded, by its path, as imported by the import that owns it.
 	"""
 	HOLDS_UNIMPORTED_VIDEO
 	"""
@@ -7588,6 +7588,10 @@ enum HeldWorkspacePreservedValue {
 	Removal was attempted and the workspace remains.
 	"""
 	REMOVAL_FAILED
+	"""
+	The download was not proven imported, so nothing of it was removed.
+	"""
+	DOWNLOAD_NOT_IMPORTED
 }
 
 """

@@ -1920,8 +1920,8 @@ impl ArchiveWorkspaceInventory {
 /// The regular files of a workspace worth knowing about before letting it go.
 struct ArchiveWorkspaceScan {
     has_subtitles: bool,
-    /// Lowercased file names of every video in the workspace.
-    video_names: Vec<String>,
+    /// Every video in the workspace, as a path under the scanned root.
+    videos: Vec<PathBuf>,
 }
 
 /// Walk a workspace within the output bounds. `None` when it holds a symlink,
@@ -1931,7 +1931,7 @@ fn scan_archive_workspace(root: &Path) -> Option<ArchiveWorkspaceScan> {
     let mut entries = 0usize;
     let mut scan = ArchiveWorkspaceScan {
         has_subtitles: false,
-        video_names: Vec::new(),
+        videos: Vec::new(),
     };
     while let Some((parent, depth)) = stack.pop() {
         if depth > 64 || entries > MAX_PLUGIN_OUTPUT_ENTRIES {
@@ -1963,8 +1963,7 @@ fn scan_archive_workspace(root: &Path) -> Option<ArchiveWorkspaceScan> {
             {
                 scan.has_subtitles = true;
             } else if scryer_domain::is_video_file(&path) {
-                scan.video_names
-                    .push(child.file_name().to_string_lossy().to_ascii_lowercase());
+                scan.videos.push(path);
             }
         }
     }
@@ -2038,22 +2037,31 @@ fn archive_workspace_owned_by(root: &Path, owner_id: &str) -> bool {
 
 /// Remove a held workspace an operator released, through the ordinary
 /// cleanup. The workspace is preserved when it is not owned, its inventory is
-/// unsafe (such as a symlink), or it holds a video whose lowercased file name
-/// is not in `imported_video_names`.
+/// unsafe (such as a symlink), or any video in it is not proven imported.
+///
+/// A video is proven imported only when its path relative to `download_root`
+/// (the folder import artifacts record their source paths against) is one of
+/// `imported_relative_paths`. A video with no path relative to that folder
+/// cannot be matched, so it counts as never imported.
 pub(crate) async fn remove_released_held_workspace(
     root: &Path,
-    imported_video_names: &std::collections::HashSet<String>,
+    download_root: &Path,
+    imported_relative_paths: &std::collections::HashSet<String>,
 ) -> Result<(), crate::import_workflow::HeldWorkspacePreserved> {
     use crate::import_workflow::HeldWorkspacePreserved;
     if archive_workspace_owner(root).is_none() {
         return Err(HeldWorkspacePreserved::NotOwned);
     }
     let scan = scan_archive_workspace(root).ok_or(HeldWorkspacePreserved::Unsafe)?;
-    if scan
-        .video_names
-        .iter()
-        .any(|name| !imported_video_names.contains(name))
-    {
+    let proven_imported = |video: &PathBuf| {
+        video
+            .strip_prefix(download_root)
+            .ok()
+            .map(crate::stored_paths::path_to_stored_string)
+            .filter(|relative| !relative.is_empty())
+            .is_some_and(|relative| imported_relative_paths.contains(&relative))
+    };
+    if !scan.videos.iter().all(proven_imported) {
         return Err(HeldWorkspacePreserved::HoldsUnimportedVideo);
     }
     cleanup_extracted_dir(root).await;

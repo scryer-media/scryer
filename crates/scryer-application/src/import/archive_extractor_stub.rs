@@ -24,7 +24,8 @@ pub(crate) fn owned_archive_workspaces_for(
 
 pub(crate) async fn remove_released_held_workspace(
     _root: &Path,
-    _imported_video_names: &std::collections::HashSet<String>,
+    _download_root: &Path,
+    _imported_relative_paths: &std::collections::HashSet<String>,
 ) -> Result<(), crate::import_workflow::HeldWorkspacePreserved> {
     Err(crate::import_workflow::HeldWorkspacePreserved::NotOwned)
 }

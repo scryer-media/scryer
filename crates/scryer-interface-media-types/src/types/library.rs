@@ -284,7 +284,7 @@ pub enum HeldWorkspacePreservedValue {
     NotOwned,
     /// It contains a symlink, special file, unreadable entry, or too many entries.
     Unsafe,
-    /// A video in it was never imported by the released imports.
+    /// A video in it is not recorded, by its path, as imported by the import that owns it.
     HoldsUnimportedVideo,
     /// An unfinished import or open manual-import selection may still need it.
     InUse,
@@ -292,6 +292,8 @@ pub enum HeldWorkspacePreservedValue {
     Unverified,
     /// Removal was attempted and the workspace remains.
     RemovalFailed,
+    /// The download was not proven imported, so nothing of it was removed.
+    DownloadNotImported,
 }
 
 impl From<scryer_application::HeldWorkspacePreserved> for HeldWorkspacePreservedValue {
@@ -304,6 +306,7 @@ impl From<scryer_application::HeldWorkspacePreserved> for HeldWorkspacePreserved
             Preserved::InUse => Self::InUse,
             Preserved::Unverified => Self::Unverified,
             Preserved::RemovalFailed => Self::RemovalFailed,
+            Preserved::DownloadNotImported => Self::DownloadNotImported,
         }
     }
 }

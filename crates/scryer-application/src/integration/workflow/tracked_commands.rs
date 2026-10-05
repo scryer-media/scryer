@@ -2244,6 +2244,7 @@ async fn handle_tracked_download_command(
         TrackedDownloadCommand::ReleaseHeldImport {
             id,
             canonical_download_id,
+            verification,
             reply,
         } => {
             use crate::tracked_downloads::HeldImportReleaseSettlement;
@@ -2285,8 +2286,28 @@ async fn handle_tracked_download_command(
                 ))));
                 return;
             };
-            let imported =
-                crate::completed_download_handler::settle_released_import_hold(app, td).await;
+            let verdict = match crate::completed_download_handler::settle_released_import_hold(
+                app,
+                td,
+                verification,
+            )
+            .await
+            {
+                Ok(verdict) => verdict,
+                Err(error) => {
+                    // Not settled: the download stays blocked on the hold's
+                    // warning and nothing is cleaned up.
+                    let _ = reply.send(Err(error));
+                    return;
+                }
+            };
+            let download_root = match verdict {
+                crate::completed_download_handler::ReleasedHoldVerdict::Imported { download_root } => {
+                    Some(download_root)
+                }
+                crate::completed_download_handler::ReleasedHoldVerdict::AwaitingImport => None,
+            };
+            let imported = download_root.is_some();
             let activity_item = Some(tracked_download_activity_queue_item(td));
             if imported {
                 tracker
@@ -2305,10 +2326,9 @@ async fn handle_tracked_download_command(
                 .await;
             }
             publish_runtime_tracked_download_and_activity_item(app, tracker, activity_item).await;
-            let _ = reply.send(Ok(if imported {
-                HeldImportReleaseSettlement::Imported
-            } else {
-                HeldImportReleaseSettlement::AwaitingImport
+            let _ = reply.send(Ok(match download_root {
+                Some(download_root) => HeldImportReleaseSettlement::Imported { download_root },
+                None => HeldImportReleaseSettlement::AwaitingImport,
             }));
         }
         TrackedDownloadCommand::MarkImportedIfAwaitingImport {
