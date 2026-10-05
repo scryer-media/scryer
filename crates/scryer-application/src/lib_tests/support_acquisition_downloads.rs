@@ -323,6 +323,16 @@ pub(super) struct TrackingDownloadSubmissionRepo {
     /// Downloads whose `reassign_download_to_title` fails with an error.
     pub(super) failing_reassignments:
         Arc<Mutex<HashSet<scryer_domain::download_identity::DownloadId>>>,
+    /// Release password candidates persisted per download, as the real store
+    /// keeps them for archive extraction and password retry.
+    pub(super) password_candidates: Arc<
+        Mutex<
+            HashMap<
+                scryer_domain::download_identity::DownloadId,
+                crate::DownloadPasswordCandidates,
+            >,
+        >,
+    >,
 }
 
 #[derive(Default, Clone)]
@@ -810,6 +820,31 @@ pub(super) fn test_tracked_state_key(
 
 #[async_trait]
 impl DownloadSubmissionRepository for TrackingDownloadSubmissionRepo {
+    async fn set_password_candidates(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+        candidates: &crate::DownloadPasswordCandidates,
+    ) -> AppResult<()> {
+        self.password_candidates
+            .lock()
+            .await
+            .insert(*id, candidates.clone());
+        Ok(())
+    }
+
+    async fn password_candidates(
+        &self,
+        id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<crate::DownloadPasswordCandidates> {
+        Ok(self
+            .password_candidates
+            .lock()
+            .await
+            .get(id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
     fn supports_durable_download_cleanup(&self) -> bool {
         self.durable_cleanup
             .load(std::sync::atomic::Ordering::Relaxed)

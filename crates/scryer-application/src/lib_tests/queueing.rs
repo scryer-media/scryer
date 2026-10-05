@@ -1286,9 +1286,10 @@ async fn queue_existing_title_download_submits_source_password_hint() {
         panic!("queue should not conflict");
     };
 
+    // Passwords are literal secrets: surrounding whitespace is part of them.
     assert_eq!(
         queued.queued_release.source_password.as_deref(),
-        Some("archive-password")
+        Some(" archive-password ")
     );
     assert_eq!(
         download_client
@@ -1296,12 +1297,21 @@ async fn queue_existing_title_download_submits_source_password_hint() {
             .lock()
             .await
             .as_slice(),
-        &[Some("archive-password".to_string())]
+        &[Some(" archive-password ".to_string())]
+    );
+    let persisted = download_submissions.password_candidates.lock().await;
+    assert_eq!(persisted.len(), 1);
+    assert_eq!(
+        persisted
+            .values()
+            .next()
+            .and_then(|candidates| candidates.first()),
+        Some(" archive-password ")
     );
 }
 
 #[tokio::test]
-async fn queue_existing_title_download_drops_source_password_flags() {
+async fn queue_existing_title_download_keeps_flag_like_passwords_literal() {
     let download_client = Arc::new(StubDownloadClient::default());
     let download_submissions = Arc::new(TrackingDownloadSubmissionRepo::default());
     let pending_releases = Arc::new(TrackingPendingReleaseRepo::default());
@@ -1311,10 +1321,10 @@ async fn queue_existing_title_download_drops_source_password_flags() {
         pending_releases,
     );
 
-    for (index, marker) in ["1", "true", "protected", "0", "false", "no", "  "]
-        .into_iter()
-        .enumerate()
-    {
+    // Provider marker fields are classified by the indexer adapter; a value
+    // that reaches the host is a literal password unless it is blank.
+    let markers = ["1", "true", "protected", "0", "false", "no", "  "];
+    for (index, marker) in markers.into_iter().enumerate() {
         let title = app
             .add_title(
                 &user,
@@ -1353,19 +1363,24 @@ async fn queue_existing_title_download_drops_source_password_flags() {
         let QueueDownloadOutcome::Queued(queued) = outcome else {
             panic!("queue should not conflict");
         };
+        let expected = (!marker.trim().is_empty()).then(|| marker.to_string());
         assert_eq!(
-            queued.queued_release.source_password, None,
-            "marker {marker:?} should not be retained as a password"
+            queued.queued_release.source_password, expected,
+            "marker {marker:?} should be kept literally unless blank"
         );
     }
 
-    assert!(
+    let expected_submitted = markers
+        .iter()
+        .map(|marker| (!marker.trim().is_empty()).then(|| marker.to_string()))
+        .collect::<Vec<_>>();
+    assert_eq!(
         download_client
             .submitted_source_passwords
             .lock()
             .await
-            .iter()
-            .all(Option::is_none)
+            .as_slice(),
+        expected_submitted.as_slice()
     );
 }
 

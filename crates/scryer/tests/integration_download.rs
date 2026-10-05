@@ -688,6 +688,7 @@ fn request_with_resolved_nzb(
     let mut request = request_with_staged_nzb(
         title,
         StagedNzbRef {
+            password_candidates: Default::default(),
             id: "unused".into(),
             compressed_path: std::path::PathBuf::new(),
             raw_size_bytes: 0,
@@ -696,6 +697,7 @@ fn request_with_resolved_nzb(
     );
     request.staged_nzb = None;
     request.resolved_download_artifact = Some(scryer_application::ResolvedDownloadArtifact::Nzb {
+        password_candidates: Default::default(),
         bytes,
         file_name: None,
         content_type: Some("application/x-nzb".into()),
