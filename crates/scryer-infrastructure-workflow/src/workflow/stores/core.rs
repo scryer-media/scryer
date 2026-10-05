@@ -1790,6 +1790,7 @@ pub fn import_artifact_from_row(row: &SqlRow) -> AppResult<ImportArtifact> {
         source_ref: row.text("source_ref")?,
         import_id: row.opt_text("import_id")?,
         relative_path: row.opt_text("relative_path")?,
+        workspace_relative_path: row.opt_text("workspace_relative_path")?,
         normalized_file_name: row.text("normalized_file_name")?,
         media_kind: row.text("media_kind")?,
         title_id: row.opt_text("title_id")?,

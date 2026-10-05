@@ -24,10 +24,14 @@ pub(crate) fn owned_archive_workspaces_for(
 
 pub(crate) async fn remove_released_held_workspace(
     _root: &Path,
-    _download_root: &Path,
-    _imported_relative_paths: &std::collections::HashSet<String>,
+    _imported_workspace_paths: &std::collections::HashSet<String>,
+    _imports_of_unknown_origin: bool,
 ) -> Result<(), crate::import_workflow::HeldWorkspacePreserved> {
     Err(crate::import_workflow::HeldWorkspacePreserved::NotOwned)
+}
+
+pub(crate) fn owned_archive_workspace_relative_path(_source: &Path) -> Option<String> {
+    None
 }
 
 #[derive(Debug, Clone)]

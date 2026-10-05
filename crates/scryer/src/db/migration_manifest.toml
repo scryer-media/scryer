@@ -2868,6 +2868,23 @@ file = "postgres/migrations/0273_ui_catalog_view_device_classes.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 274
+description = "import artifact workspace relative path"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0274_import_artifact_workspace_relative_path.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0274_import_artifact_workspace_relative_path.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

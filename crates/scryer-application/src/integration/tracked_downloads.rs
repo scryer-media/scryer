@@ -1963,15 +1963,17 @@ pub fn manual_import_recovery_verdict(
 pub enum HeldImportReleaseSettlement {
     /// Import verification proved the download complete: it is imported and
     /// the ordinary terminal cleanup ran under the client's policy.
-    /// `download_root` is the folder the import's artifacts record their
-    /// source paths against.
-    Imported { download_root: std::path::PathBuf },
+    Imported,
     /// Verification did not prove the download complete, or could not run:
     /// it went back to the ordinary import retry and nothing was cleaned up.
     AwaitingImport,
     /// The download was not blocked on the pending-subtitle warning, so it
     /// was left exactly as it was.
     Unchanged,
+    /// Verification accepted the download only on its fallback while a held
+    /// import's reason says it may hold content never extracted or imported.
+    /// It stays blocked for the operator and nothing was cleaned up.
+    Unproven,
 }
 
 /// How a released download is verified: the same way the held imports were.
@@ -1984,6 +1986,10 @@ pub struct HeldImportVerification {
     /// total. `usize::MAX` when a manual mapping could not be read, which no
     /// import can satisfy.
     pub manual_expected_mapping_count: Option<usize>,
+    /// A held import's reason means the download may hold content that was
+    /// never extracted or imported, so only proof that every expected unit
+    /// was imported settles it.
+    pub require_positive_proof: bool,
 }
 
 /// Commands sent from GraphQL mutations to the poller's TrackedDownloadService.

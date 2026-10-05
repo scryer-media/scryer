@@ -1953,6 +1953,7 @@ fn build_artifact_with_result(
         source_ref: source_ref.to_string(),
         import_id: None,
         relative_path: None,
+        workspace_relative_path: None,
         normalized_file_name: normalized_file_name.to_string(),
         media_kind: "episode".to_string(),
         title_id: Some("title-1".to_string()),

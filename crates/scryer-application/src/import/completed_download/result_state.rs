@@ -235,19 +235,31 @@ fn schedule_partial_import_retry(td: &mut TrackedDownload) {
 /// What settling a released hold did to the tracked download.
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum ReleasedHoldVerdict {
-    /// Verification proved the download complete. `download_root` is the
-    /// folder the import's artifacts record their source paths against.
-    Imported { download_root: std::path::PathBuf },
+    /// Verification proved the download complete.
+    Imported,
     /// Not proven complete: back to `ImportPending` behind the ordinary retry
     /// backoff, with nothing cleaned up.
     AwaitingImport,
+    /// Verification accepted the download only on its fallback, and a held
+    /// import's reason means the download may hold content that was never
+    /// extracted or imported. It is left blocked for the operator, with no
+    /// retry scheduled and nothing cleaned up.
+    Unproven,
 }
+
+/// Shown on a download whose release was refused because nothing proves
+/// every file in it was imported.
+pub(crate) const RELEASED_HOLD_UNPROVEN_WARNING: &str = "Held sources were released, but nothing \
+     proves every file in this download was imported, so it was not marked imported and \
+     nothing was removed. Import the rest or remove the download yourself.";
 
 /// Settle a download whose import was held, once an operator released that
 /// hold, exactly as the import path would verify it: with the release
 /// evidence resolved from the download's submission, and in the same mode the
 /// held imports used. Imported only when that verification proves the
-/// download complete.
+/// download complete. When `require_positive_proof` is set, a verdict that
+/// rests on the verifier's fallback (expected units not established, partly
+/// covered, or only visible files accounted for) does not settle it.
 ///
 /// An error means nothing was settled and the download was left untouched:
 /// its completed source is unknown, or the release evidence of a download
@@ -284,49 +296,64 @@ pub(crate) async fn settle_released_import_hold(
         };
     let snapshot = td.clone();
     let verified = async {
+        use super::verification::{VerificationOutcome, verify_released_hold_outcome};
+        let mut outcomes = Vec::with_capacity(2);
         // A held automatic import with no recorded mode is verified as one.
-        let automatic =
-            verification.automatic || verification.manual_expected_mapping_count.is_none();
-        if automatic
-            && !verify_import_inner_with_release_evidence(
-                app,
-                &snapshot,
-                0,
-                Some(&completed),
-                release_evidence.as_ref(),
-            )
-            .await?
-        {
-            return Ok(false);
+        if verification.automatic || verification.manual_expected_mapping_count.is_none() {
+            outcomes.push(
+                verify_released_hold_outcome(
+                    app,
+                    &snapshot,
+                    &completed,
+                    release_evidence.as_ref(),
+                    None,
+                )
+                .await?,
+            );
         }
-        if let Some(expected) = verification.manual_expected_mapping_count
-            && !super::verification::verify_manual_import_with_release_evidence(
-                app,
-                &snapshot,
-                0,
-                Some(&completed),
-                release_evidence.as_ref(),
-                Some(expected),
-            )
-            .await?
-        {
-            return Ok(false);
+        if let Some(expected) = verification.manual_expected_mapping_count {
+            outcomes.push(
+                verify_released_hold_outcome(
+                    app,
+                    &snapshot,
+                    &completed,
+                    release_evidence.as_ref(),
+                    Some(expected),
+                )
+                .await?,
+            );
         }
-        Ok::<_, crate::AppError>(true)
+        Ok::<_, crate::AppError>(if outcomes.contains(&VerificationOutcome::NotProven) {
+            VerificationOutcome::NotProven
+        } else if outcomes.contains(&VerificationOutcome::Fallback) {
+            VerificationOutcome::Fallback
+        } else {
+            VerificationOutcome::Proven
+        })
     }
     .await;
     match verified {
-        Ok(true) => {
+        Ok(outcome)
+            if outcome == super::verification::VerificationOutcome::Proven
+                || (outcome == super::verification::VerificationOutcome::Fallback
+                    && !verification.require_positive_proof) =>
+        {
             td.clear_no_video_import_retry();
             td.clear_import_execution_retry();
             td.state = TrackedDownloadState::Imported;
             td.status = TrackedDownloadStatus::Ok;
             td.status_messages.clear();
-            Ok(ReleasedHoldVerdict::Imported {
-                download_root: std::path::PathBuf::from(&completed.dest_dir),
-            })
+            Ok(ReleasedHoldVerdict::Imported)
         }
-        Ok(false) => {
+        Ok(super::verification::VerificationOutcome::Fallback) => {
+            td.clear_no_video_import_retry();
+            td.clear_import_execution_retry();
+            td.state = TrackedDownloadState::ImportBlocked;
+            td.status = TrackedDownloadStatus::Warning;
+            td.status_messages = vec![RELEASED_HOLD_UNPROVEN_WARNING.to_string()];
+            Ok(ReleasedHoldVerdict::Unproven)
+        }
+        Ok(_) => {
             schedule_partial_import_retry(td);
             Ok(ReleasedHoldVerdict::AwaitingImport)
         }

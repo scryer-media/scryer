@@ -48,14 +48,15 @@ pub(crate) use lookup::{
     load_completed_download_lookup_for_items_excluding_client_types,
     load_completed_download_lookup_for_tracked_client_items_excluding_client_types,
 };
+#[cfg(test)]
+pub(crate) use result_state::RELEASED_HOLD_UNPROVEN_WARNING;
 pub(crate) use result_state::apply_import_result_with_completed;
 pub(crate) use result_state::schedule_non_destructive_import_mark;
 pub(crate) use result_state::{ReleasedHoldVerdict, settle_released_import_hold};
-pub(crate) use verification::{
-    ImportArtifactSourceKey, import_artifact_source_key, verify_retry_import_with_release_evidence,
-    verify_skipped_import_with_release_evidence,
-};
 pub use verification::{verify_import, verify_manual_import};
+pub(crate) use verification::{
+    verify_retry_import_with_release_evidence, verify_skipped_import_with_release_evidence,
+};
 
 #[cfg(test)]
 mod tests;

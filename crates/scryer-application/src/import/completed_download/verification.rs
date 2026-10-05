@@ -40,7 +40,7 @@ enum ImportVerificationMode {
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
-pub(crate) enum ImportArtifactSourceKey {
+enum ImportArtifactSourceKey {
     RelativePath(String),
     NormalizedFileName(String),
 }
@@ -70,30 +70,6 @@ pub async fn verify_manual_import(
         files_imported_this_pass,
         None,
         None,
-        ImportVerificationMode::Manual {
-            expected_mapping_count,
-        },
-        false,
-    )
-    .await
-}
-
-/// Manual verification of a download whose release evidence was resolved
-/// the way the import path resolves it.
-pub(crate) async fn verify_manual_import_with_release_evidence(
-    app: &AppUseCase,
-    td: &TrackedDownload,
-    files_imported_this_pass: usize,
-    completed: Option<&CompletedDownload>,
-    release_evidence: Option<&crate::import_workflow::ReleaseEvidence>,
-    expected_mapping_count: Option<usize>,
-) -> AppResult<bool> {
-    verify_import_with_mode(
-        app,
-        td,
-        files_imported_this_pass,
-        completed,
-        release_evidence,
         ImportVerificationMode::Manual {
             expected_mapping_count,
         },
@@ -178,23 +154,91 @@ async fn verify_import_with_mode(
     mode: ImportVerificationMode,
     require_terminal_artifact_members: bool,
 ) -> AppResult<bool> {
+    Ok(verify_import_outcome_with_mode(
+        app,
+        td,
+        files_imported_this_pass,
+        completed,
+        release_evidence,
+        mode,
+        require_terminal_artifact_members,
+    )
+    .await?
+    .is_success())
+}
+
+/// How a verification reached its verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VerificationOutcome {
+    /// Every expected unit was imported (or, for a movie, the movie was).
+    Proven,
+    /// Accepted without that proof: the expected units could not be
+    /// established, were only partly covered, or only the files visible in
+    /// the download folder were accounted for.
+    Fallback,
+    /// Not shown complete.
+    NotProven,
+}
+
+impl VerificationOutcome {
+    fn fallback_if(accepted: bool) -> Self {
+        if accepted {
+            Self::Fallback
+        } else {
+            Self::NotProven
+        }
+    }
+
+    pub(crate) fn is_success(self) -> bool {
+        !matches!(self, Self::NotProven)
+    }
+}
+
+/// Verification of a released hold, reporting how the verdict was reached.
+pub(crate) async fn verify_released_hold_outcome(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    completed: &CompletedDownload,
+    release_evidence: Option<&crate::import_workflow::ReleaseEvidence>,
+    manual_expected_mapping_count: Option<usize>,
+) -> AppResult<VerificationOutcome> {
+    let mode = match manual_expected_mapping_count {
+        Some(count) => ImportVerificationMode::Manual {
+            expected_mapping_count: Some(count),
+        },
+        None => ImportVerificationMode::Automatic,
+    };
+    verify_import_outcome_with_mode(app, td, 0, Some(completed), release_evidence, mode, false)
+        .await
+}
+
+async fn verify_import_outcome_with_mode(
+    app: &AppUseCase,
+    td: &TrackedDownload,
+    files_imported_this_pass: usize,
+    completed: Option<&CompletedDownload>,
+    release_evidence: Option<&crate::import_workflow::ReleaseEvidence>,
+    mode: ImportVerificationMode,
+    require_terminal_artifact_members: bool,
+) -> AppResult<VerificationOutcome> {
+    use VerificationOutcome::{Fallback, NotProven, Proven};
     let mut artifacts = import_artifacts_for_completed_download(app, td, completed).await?;
     if matches!(mode, ImportVerificationMode::Retry) {
         let Some(title_id) = tracked_title_id(td) else {
-            return Ok(false);
+            return Ok(NotProven);
         };
         // Reassignment must not turn an earlier title's artifacts into success.
         artifacts.retain(|artifact| artifact_matches_tracked_title(artifact, title_id));
     }
 
     if artifacts.is_empty() {
-        return Ok(false);
+        return Ok(NotProven);
     }
 
     let artifact_members = artifact_member_completion(&artifacts, td);
     if require_terminal_artifact_members && artifact_members == ArtifactMemberCompletion::Incomplete
     {
-        return Ok(false);
+        return Ok(NotProven);
     }
 
     let current_visible_files = match mode {
@@ -213,7 +257,7 @@ async fn verify_import_with_mode(
     )
     .await;
     if visible_sources_terminal == Some(false) {
-        return Ok(false);
+        return Ok(NotProven);
     }
     let mut successful_units = HashSet::new();
     let mut successful_source_files = HashSet::new();
@@ -244,11 +288,15 @@ async fn verify_import_with_mode(
     ) && artifact_members
         == ArtifactMemberCompletion::AllIntentionallyIgnored;
     if successful_units.is_empty() && !all_sources_intentionally_ignored {
-        return Ok(false);
+        return Ok(NotProven);
     }
 
     if td.facet.as_deref() == Some("movie") {
-        return Ok(!successful_units.is_empty());
+        return Ok(if successful_units.is_empty() {
+            NotProven
+        } else {
+            Proven
+        });
     }
 
     let manual_source_coverage = match mode {
@@ -259,7 +307,7 @@ async fn verify_import_with_mode(
             .map(|expected| expected > 0 && successful_source_files.len() >= expected),
     };
     if manual_source_coverage == Some(false) {
-        return Ok(false);
+        return Ok(NotProven);
     }
 
     match expected_episode_units_with_release_evidence(app, td, release_evidence).await {
@@ -279,11 +327,16 @@ async fn verify_import_with_mode(
                 expected_episode_units
             };
             if expected_episode_units.is_empty() {
-                return Ok(all_sources_intentionally_ignored);
+                return Ok(VerificationOutcome::fallback_if(
+                    all_sources_intentionally_ignored,
+                ));
             }
             if successful_units.is_empty() {
-                return Ok(false);
+                return Ok(NotProven);
             }
+            let every_expected_unit_imported = expected_episode_units
+                .iter()
+                .all(|unit| successful_units.contains(unit));
 
             // A retry may have moved only part of the source before interruption.
             // Its surviving files/artifacts cannot narrow the advertised episode set.
@@ -294,12 +347,22 @@ async fn verify_import_with_mode(
                     &expected_episode_units,
                 )
             {
-                return Ok(source_units_complete);
+                // Complete for the videos visible in the download folder, but
+                // only every expected unit imported is proof of the whole.
+                return Ok(if !source_units_complete {
+                    NotProven
+                } else if every_expected_unit_imported {
+                    Proven
+                } else {
+                    Fallback
+                });
             }
 
-            return Ok(expected_episode_units
-                .iter()
-                .all(|unit| successful_units.contains(unit)));
+            return Ok(if every_expected_unit_imported {
+                Proven
+            } else {
+                NotProven
+            });
         }
         ExpectedEpisodeResolution::AtLeastOne(expected_episode_units) => {
             let expected_episode_units = if matches!(
@@ -317,19 +380,23 @@ async fn verify_import_with_mode(
                 expected_episode_units
             };
             if expected_episode_units.is_empty() {
-                return Ok(all_sources_intentionally_ignored);
+                return Ok(VerificationOutcome::fallback_if(
+                    all_sources_intentionally_ignored,
+                ));
             }
             if successful_units.is_empty() {
-                return Ok(false);
+                return Ok(NotProven);
             }
 
-            return Ok(expected_episode_units
-                .iter()
-                .any(|unit| successful_units.contains(unit)));
+            return Ok(VerificationOutcome::fallback_if(
+                expected_episode_units
+                    .iter()
+                    .any(|unit| successful_units.contains(unit)),
+            ));
         }
         ExpectedEpisodeResolution::Unresolved => {
             if matches!(mode, ImportVerificationMode::Retry) || successful_units.is_empty() {
-                return Ok(false);
+                return Ok(NotProven);
             }
             if matches!(
                 mode,
@@ -338,33 +405,30 @@ async fn verify_import_with_mode(
                 successful_units.len(),
                 current_visible_files,
             ) {
-                return Ok(true);
+                return Ok(Fallback);
             }
 
-            return Ok(match mode {
+            return Ok(VerificationOutcome::fallback_if(match mode {
                 ImportVerificationMode::Automatic => {
                     files_imported_this_pass > 0 && rejected_units.is_empty()
                 }
                 ImportVerificationMode::Retry => false,
                 ImportVerificationMode::Manual { .. } => manual_source_coverage.unwrap_or(false),
-            });
+            }));
         }
         ExpectedEpisodeResolution::NotApplicable => {}
     }
 
     if successful_units.is_empty() {
-        return Ok(false);
+        return Ok(NotProven);
     }
 
-    Ok(match mode {
+    Ok(VerificationOutcome::fallback_if(match mode {
         ImportVerificationMode::Automatic | ImportVerificationMode::Retry => {
-            if successful_units_cover_visible_files(successful_units.len(), current_visible_files) {
-                return Ok(true);
-            }
             !successful_units.is_empty()
         }
         ImportVerificationMode::Manual { .. } => manual_source_coverage.unwrap_or(false),
-    })
+    }))
 }
 
 fn source_video_expected_units_are_complete(
@@ -1038,9 +1102,7 @@ fn episode_units_from_artifact_rows<'a>(
 
 /// The source file an artifact was recorded for: its path relative to the
 /// completed download's folder when known, otherwise its file name.
-pub(crate) fn import_artifact_source_key(
-    artifact: &crate::ImportArtifact,
-) -> Option<ImportArtifactSourceKey> {
+fn import_artifact_source_key(artifact: &crate::ImportArtifact) -> Option<ImportArtifactSourceKey> {
     if let Some(relative_path) = artifact
         .relative_path
         .as_deref()

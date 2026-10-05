@@ -2650,6 +2650,10 @@ async fn persist_file_import_artifact(
         .ok()
         .map(path_to_stored_string)
         .filter(|path| !path.is_empty());
+    // Kept apart from `relative_path`, which verification matches against the
+    // files visible in the download folder.
+    let workspace_relative_path =
+        crate::archive_extractor::owned_archive_workspace_relative_path(source_path);
     let normalized_file_name = source_path
         .file_name()
         .and_then(|name| name.to_str())
@@ -2710,6 +2714,7 @@ async fn persist_file_import_artifact(
                 source_ref: source_identity.item_id.clone(),
                 import_id: Some(import_id.to_string()),
                 relative_path: relative_path.clone(),
+                workspace_relative_path: workspace_relative_path.clone(),
                 normalized_file_name: normalized_file_name.clone(),
                 media_kind: media_kind.to_string(),
                 title_id: Some(title_id.to_string()),

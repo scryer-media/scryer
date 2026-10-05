@@ -17892,8 +17892,14 @@ mod held_sources {
         }
 
         fn video_source(&self) -> PathBuf {
-            PathBuf::from(&self.fixture.completed.dest_dir)
+            self.download_folder()
                 .join("Held Source Movie.2026.1080p.WEB-DL.x264-GRP.mkv")
+        }
+
+        /// The download folder, kept apart from the title folder.
+        #[cfg_attr(not(feature = "runtime-archives"), allow(dead_code))]
+        fn download_folder(&self) -> PathBuf {
+            PathBuf::from(&self.fixture.completed.dest_dir)
         }
 
         fn source(&self) -> ClientJobLocator {
@@ -18489,8 +18495,60 @@ mod held_sources {
             &[crate::tracked_downloads::HeldImportVerification {
                 automatic: true,
                 manual_expected_mapping_count: None,
+                // The held import records no reason, which reads as unknown.
+                require_positive_proof: true,
             }]
         );
+        assert!(held.video_source().exists());
+    }
+
+    #[tokio::test]
+    async fn release_of_a_pending_subtitles_hold_does_not_demand_positive_proof() {
+        let held = held_import().await;
+        held.fixture
+            .import_repo
+            .record_archive_hold_reason(&held.import_id, "subtitles_pending")
+            .await
+            .unwrap();
+        let (app, seen) = settled_by(
+            &held.fixture.app,
+            Settles::With(crate::tracked_downloads::HeldImportReleaseSettlement::AwaitingImport),
+        );
+
+        crate::release_held_import_sources(&app, &held.fixture.user, &held.import_id)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            seen.lock().unwrap().as_slice(),
+            &[crate::tracked_downloads::HeldImportVerification {
+                automatic: true,
+                manual_expected_mapping_count: None,
+                require_positive_proof: false,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn release_of_a_failed_extraction_hold_demands_positive_proof() {
+        let held = held_import().await;
+        held.fixture
+            .import_repo
+            .record_archive_hold_reason(&held.import_id, "archive_extraction_failed")
+            .await
+            .unwrap();
+        let (app, seen) = settled_by(
+            &held.fixture.app,
+            Settles::With(crate::tracked_downloads::HeldImportReleaseSettlement::Unproven),
+        );
+
+        let released =
+            crate::release_held_import_sources(&app, &held.fixture.user, &held.import_id)
+                .await
+                .unwrap();
+
+        assert!(seen.lock().unwrap()[0].require_positive_proof);
+        assert_eq!(released.settlement, crate::HeldSourcesSettlement::Unproven);
         assert!(held.video_source().exists());
     }
 
@@ -18572,12 +18630,10 @@ mod held_sources {
         use crate::archive_extractor::create_test_archive_workspace_owned_by;
         use crate::tracked_downloads::HeldImportReleaseSettlement;
 
-        /// Settled as imported. The fake download folder is the title folder,
-        /// so a workspace staged there has artifact paths relative to it.
-        fn imported(held: &HeldImport) -> Settles {
-            Settles::With(HeldImportReleaseSettlement::Imported {
-                download_root: held.fixture.title_folder.clone(),
-            })
+        /// Settled as imported. As in production, held workspaces are staged
+        /// under the title folder while the download folder is elsewhere.
+        fn imported() -> Settles {
+            Settles::With(HeldImportReleaseSettlement::Imported)
         }
 
         async fn release_settled(
@@ -18591,12 +18647,10 @@ mod held_sources {
                 .unwrap()
         }
 
-        /// The path of `file` relative to the fake download folder, as an
-        /// import artifact records it.
-        fn relative_to_download(held: &HeldImport, file: &Path) -> String {
-            crate::stored_paths::path_to_stored_string(
-                file.strip_prefix(&held.fixture.title_folder).unwrap(),
-            )
+        /// The path of `file` relative to `workspace`, as an import artifact
+        /// records a file it imported from that workspace.
+        fn relative_to_workspace(workspace: &Path, file: &Path) -> String {
+            crate::stored_paths::path_to_stored_string(file.strip_prefix(workspace).unwrap())
         }
 
         fn write_video(path: &Path) {
@@ -18627,7 +18681,7 @@ mod held_sources {
             let other = create_test_archive_workspace_owned_by(folder, "another-import");
             std::fs::write(folder.join("keep.srt"), b"operator subtitle").unwrap();
 
-            let released = release_settled(&held, &held.fixture.app, imported(&held)).await;
+            let released = release_settled(&held, &held.fixture.app, imported()).await;
 
             assert!(released.workspace_removed());
             assert!(!workspace.exists());
@@ -18654,7 +18708,7 @@ mod held_sources {
             )
             .unwrap();
 
-            let released = release_settled(&held, &held.fixture.app, imported(&held)).await;
+            let released = release_settled(&held, &held.fixture.app, imported()).await;
 
             assert!(!released.workspace_removed());
             assert_eq!(
@@ -18685,7 +18739,7 @@ mod held_sources {
             ))
             .await;
 
-            let released = release_settled(&held, &held.fixture.app, imported(&held)).await;
+            let released = release_settled(&held, &held.fixture.app, imported()).await;
 
             assert!(!released.workspace_removed());
             assert_eq!(
@@ -18709,7 +18763,7 @@ mod held_sources {
                 .await
                 .push(workspace.join("out").to_string_lossy().into_owned());
 
-            let released = release_settled(&held, &held.fixture.app, imported(&held)).await;
+            let released = release_settled(&held, &held.fixture.app, imported()).await;
 
             assert!(!released.workspace_removed());
             assert_eq!(
@@ -18720,13 +18774,20 @@ mod held_sources {
             assert!(!held.holds_sources().await);
         }
 
+        /// An artifact recording a video imported by `import_id`.
+        /// `workspace_relative_path` is where it was taken from inside the
+        /// import's workspace, and `relative_path` where it was taken from
+        /// inside the download folder; an artifact written before workspace
+        /// paths were kept has neither.
         fn video_artifact(
             held: &HeldImport,
             import_id: &str,
+            workspace_relative_path: Option<String>,
             relative_path: Option<String>,
         ) -> crate::ImportArtifact {
-            let file_name = relative_path
+            let file_name = workspace_relative_path
                 .as_deref()
+                .or(relative_path.as_deref())
                 .and_then(|path| path.rsplit('/').next())
                 .unwrap_or("synthetic.feature.mkv")
                 .to_ascii_lowercase();
@@ -18737,6 +18798,7 @@ mod held_sources {
                 source_ref: held.fixture.completed.download_client_item_id.clone(),
                 import_id: Some(import_id.to_string()),
                 relative_path,
+                workspace_relative_path,
                 normalized_file_name: file_name,
                 media_kind: "movie".to_string(),
                 title_id: Some(held.fixture.title.id.clone()),
@@ -18750,11 +18812,21 @@ mod held_sources {
             }
         }
 
+        /// The held import's workspace under the title folder.
+        fn held_workspace(held: &HeldImport) -> PathBuf {
+            let workspace =
+                create_test_archive_workspace_owned_by(&held.fixture.title_folder, &held.import_id);
+            assert!(
+                !workspace.starts_with(held.download_folder()),
+                "the workspace is staged outside the download folder"
+            );
+            workspace
+        }
+
         /// A held workspace with one extracted video, and an app whose
         /// artifacts record that video as imported by the held import.
         async fn fully_imported_workspace(held: &HeldImport) -> (PathBuf, AppUseCase) {
-            let workspace =
-                create_test_archive_workspace_owned_by(&held.fixture.title_folder, &held.import_id);
+            let workspace = held_workspace(held);
             let video = workspace.join("out/Synthetic.Feature.mkv");
             write_video(&video);
             let app = with_artifacts(
@@ -18762,7 +18834,8 @@ mod held_sources {
                 vec![video_artifact(
                     held,
                     &held.import_id,
-                    Some(relative_to_download(held, &video)),
+                    Some(relative_to_workspace(&workspace, &video)),
+                    None,
                 )],
             )
             .await;
@@ -18770,10 +18843,33 @@ mod held_sources {
         }
 
         #[tokio::test]
+        async fn release_removes_a_workspace_whose_every_video_was_imported() {
+            let held = held_import().await;
+            let (workspace, app) = fully_imported_workspace(&held).await;
+            std::fs::write(workspace.join("out/Synthetic.Feature.srt"), b"subtitle").unwrap();
+            let library_video = held.fixture.title_folder.join("Synthetic Feature.mkv");
+            write_video(&library_video);
+            let sibling = held.fixture.title_folder.join("Synthetic Extras");
+            write_video(&sibling.join("Synthetic.Feature.mkv"));
+
+            let released = release_settled(&held, &app, imported()).await;
+
+            assert_eq!(released.settlement, crate::HeldSourcesSettlement::Imported);
+            assert!(released.workspace_removed(), "{released:?}");
+            assert!(released.preserved_workspaces.is_empty());
+            assert!(!workspace.exists());
+            assert!(library_video.exists(), "the library file stays");
+            assert!(
+                sibling.join("Synthetic.Feature.mkv").exists(),
+                "a sibling folder stays"
+            );
+            assert!(held.video_source().exists(), "the download stays");
+        }
+
+        #[tokio::test]
         async fn release_keeps_a_workspace_holding_a_video_that_was_never_imported() {
             let held = held_import().await;
-            let workspace =
-                create_test_archive_workspace_owned_by(&held.fixture.title_folder, &held.import_id);
+            let workspace = held_workspace(&held);
             let feature = workspace.join("out/Synthetic.Feature.mkv");
             let bonus = workspace.join("out/Synthetic.Bonus.mkv");
             write_video(&feature);
@@ -18783,12 +18879,13 @@ mod held_sources {
                 vec![video_artifact(
                     &held,
                     &held.import_id,
-                    Some(relative_to_download(&held, &feature)),
+                    Some(relative_to_workspace(&workspace, &feature)),
+                    None,
                 )],
             )
             .await;
 
-            let released = release_settled(&held, &app, imported(&held)).await;
+            let released = release_settled(&held, &app, imported()).await;
 
             assert!(!released.workspace_removed());
             assert_eq!(
@@ -18803,8 +18900,7 @@ mod held_sources {
         #[tokio::test]
         async fn release_keeps_a_workspace_where_only_one_of_two_same_named_videos_was_imported() {
             let held = held_import().await;
-            let workspace =
-                create_test_archive_workspace_owned_by(&held.fixture.title_folder, &held.import_id);
+            let workspace = held_workspace(&held);
             let first = workspace.join("out/Disc.One/Synthetic.Feature.mkv");
             let second = workspace.join("out/Disc.Two/Synthetic.Feature.mkv");
             write_video(&first);
@@ -18814,12 +18910,13 @@ mod held_sources {
                 vec![video_artifact(
                     &held,
                     &held.import_id,
-                    Some(relative_to_download(&held, &first)),
+                    Some(relative_to_workspace(&workspace, &first)),
+                    None,
                 )],
             )
             .await;
 
-            let released = release_settled(&held, &app, imported(&held)).await;
+            let released = release_settled(&held, &app, imported()).await;
 
             assert_eq!(
                 released.preserved_workspaces,
@@ -18838,8 +18935,7 @@ mod held_sources {
                 Some("subtitles_pending"),
             )
             .await;
-            let workspace =
-                create_test_archive_workspace_owned_by(&held.fixture.title_folder, &held.import_id);
+            let workspace = held_workspace(&held);
             let video = workspace.join("out/Synthetic.Feature.mkv");
             write_video(&video);
             let app = with_artifacts(
@@ -18847,12 +18943,13 @@ mod held_sources {
                 vec![video_artifact(
                     &held,
                     "held-import-companion",
-                    Some(relative_to_download(&held, &video)),
+                    Some(relative_to_workspace(&workspace, &video)),
+                    None,
                 )],
             )
             .await;
 
-            let released = release_settled(&held, &app, imported(&held)).await;
+            let released = release_settled(&held, &app, imported()).await;
 
             assert_eq!(released.released_import_ids.len(), 2);
             assert_eq!(
@@ -18863,16 +18960,47 @@ mod held_sources {
         }
 
         #[tokio::test]
-        async fn release_keeps_a_workspace_whose_imported_video_has_no_recorded_path() {
+        async fn release_keeps_a_workspace_whose_imports_predate_workspace_paths() {
             let held = held_import().await;
-            let workspace =
-                create_test_archive_workspace_owned_by(&held.fixture.title_folder, &held.import_id);
+            let workspace = held_workspace(&held);
             let video = workspace.join("out/Synthetic.Feature.mkv");
             write_video(&video);
-            let app =
-                with_artifacts(&held, vec![video_artifact(&held, &held.import_id, None)]).await;
+            let app = with_artifacts(
+                &held,
+                vec![video_artifact(&held, &held.import_id, None, None)],
+            )
+            .await;
 
-            let released = release_settled(&held, &app, imported(&held)).await;
+            let released = release_settled(&held, &app, imported()).await;
+
+            assert!(!released.workspace_removed());
+            assert_eq!(
+                released.preserved_workspaces,
+                vec![crate::HeldWorkspacePreserved::Unverified]
+            );
+            assert!(video.exists());
+        }
+
+        #[tokio::test]
+        async fn release_does_not_match_a_workspace_video_by_its_download_folder_path() {
+            let held = held_import().await;
+            let workspace = held_workspace(&held);
+            let video = workspace.join("out/Synthetic.Feature.mkv");
+            write_video(&video);
+            // Imported from the download folder itself, under a path that
+            // reads the same as the workspace video's.
+            let app = with_artifacts(
+                &held,
+                vec![video_artifact(
+                    &held,
+                    &held.import_id,
+                    None,
+                    Some(relative_to_workspace(&workspace, &video)),
+                )],
+            )
+            .await;
+
+            let released = release_settled(&held, &app, imported()).await;
 
             assert_eq!(
                 released.preserved_workspaces,
@@ -18888,6 +19016,11 @@ mod held_sources {
                     "awaiting import",
                     Some(Settles::With(HeldImportReleaseSettlement::AwaitingImport)),
                     crate::HeldSourcesSettlement::AwaitingImport,
+                ),
+                (
+                    "unproven",
+                    Some(Settles::With(HeldImportReleaseSettlement::Unproven)),
+                    crate::HeldSourcesSettlement::Unproven,
                 ),
                 (
                     "unchanged",
@@ -18929,25 +19062,6 @@ mod held_sources {
                 );
                 assert!(held.video_source().exists(), "{label}");
             }
-        }
-
-        #[tokio::test]
-        async fn release_removes_a_workspace_whose_every_video_was_imported() {
-            let held = held_import().await;
-            let (workspace, app) = fully_imported_workspace(&held).await;
-            std::fs::write(workspace.join("out/Synthetic.Feature.srt"), b"subtitle").unwrap();
-            std::fs::write(held.fixture.title_folder.join("keep.mkv"), b"library video").unwrap();
-            let sibling = held.fixture.title_folder.join("Synthetic Extras");
-            write_video(&sibling.join("Synthetic.Feature.mkv"));
-
-            let released = release_settled(&held, &app, imported(&held)).await;
-
-            assert_eq!(released.settlement, crate::HeldSourcesSettlement::Imported);
-            assert!(released.workspace_removed(), "{released:?}");
-            assert!(!workspace.exists());
-            assert!(held.fixture.title_folder.join("keep.mkv").exists());
-            assert!(sibling.join("Synthetic.Feature.mkv").exists());
-            assert!(held.video_source().exists());
         }
 
         #[tokio::test]

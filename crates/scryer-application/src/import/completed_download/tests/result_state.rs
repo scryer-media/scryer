@@ -1230,6 +1230,14 @@ mod released_hold {
     const AUTOMATIC: HeldImportVerification = HeldImportVerification {
         automatic: true,
         manual_expected_mapping_count: None,
+        require_positive_proof: false,
+    };
+    /// A held automatic import whose hold reason (a failed archive extraction,
+    /// or an unknown reason) demands proof that every expected unit imported.
+    const AUTOMATIC_PROOF_REQUIRED: HeldImportVerification = HeldImportVerification {
+        automatic: true,
+        manual_expected_mapping_count: None,
+        require_positive_proof: true,
     };
 
     fn season_episodes() -> Vec<Episode> {
@@ -1384,7 +1392,7 @@ mod released_hold {
     }
 
     #[tokio::test]
-    async fn a_fully_imported_batch_settles_as_imported_with_its_download_folder() {
+    async fn a_fully_imported_batch_settles_as_imported() {
         let download = held_download_dir();
         let app = batch_app(
             Some(&["ep-301", "ep-302", "ep-303"]),
@@ -1396,9 +1404,7 @@ mod released_hold {
 
         assert_eq!(
             settlement.expect("release settles"),
-            HeldImportReleaseSettlement::Imported {
-                download_root: download.path().to_path_buf(),
-            }
+            HeldImportReleaseSettlement::Imported
         );
         assert!(td.state.counts_as_imported(), "{:?}", td.state);
     }
@@ -1444,6 +1450,7 @@ mod released_hold {
         let manual = HeldImportVerification {
             automatic: false,
             manual_expected_mapping_count: Some(3),
+            require_positive_proof: false,
         };
 
         let (settlement, td) = release(&app, held_download(download.path()), manual).await;
@@ -1462,14 +1469,15 @@ mod released_hold {
         let manual = HeldImportVerification {
             automatic: false,
             manual_expected_mapping_count: Some(2),
+            require_positive_proof: false,
         };
 
         let (settlement, td) = release(&app, held_download(download.path()), manual).await;
 
-        assert!(matches!(
+        assert_eq!(
             settlement.expect("release settles"),
-            HeldImportReleaseSettlement::Imported { .. }
-        ));
+            HeldImportReleaseSettlement::Imported
+        );
         assert!(td.state.counts_as_imported(), "{:?}", td.state);
     }
 
@@ -1492,5 +1500,144 @@ mod released_hold {
             HeldImportReleaseSettlement::Unchanged
         );
         assert_eq!(after.state, TrackedDownloadState::ImportPending);
+    }
+
+    /// A download Scryer did not grab, with no grab to scope it, so its
+    /// expected units cannot be established from a name that does not parse.
+    fn adopted_held_download(download_dir: &std::path::Path) -> TrackedDownload {
+        let mut td = held_download(download_dir);
+        td.client_item.is_scryer_origin = false;
+        td
+    }
+
+    /// A download whose archives failed to extract: one loose episode video
+    /// beside the archive parts that still hold the rest.
+    fn failed_extraction_download_dir() -> tempfile::TempDir {
+        let download = tempfile::tempdir().expect("download dir");
+        std::fs::File::create(download.path().join(source_file_name("ep-301")))
+            .and_then(|file| file.set_len(51 * 1024 * 1024))
+            .expect("write held source");
+        for part in FAILED_ARCHIVE_PARTS {
+            std::fs::write(download.path().join(part), b"archive part").expect("write part");
+        }
+        download
+    }
+
+    const FAILED_ARCHIVE_PARTS: [&str; 2] = ["quiet.harbor.part01.rar", "quiet.harbor.part02.rar"];
+
+    fn held_sources_remain(download: &std::path::Path) -> bool {
+        download.join(source_file_name("ep-301")).exists()
+            && FAILED_ARCHIVE_PARTS
+                .iter()
+                .all(|part| download.join(part).exists())
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_is_not_settled_on_the_fallback_verdict() {
+        // Every visible video was imported, which the ordinary verdict accepts,
+        // but nothing proves the archives' contents were.
+        let download = failed_extraction_download_dir();
+        let app = batch_app(None, &["ep-301"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            adopted_held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unproven
+        );
+        assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+        assert!(!td.state.counts_as_imported());
+        assert_eq!(
+            td.status_messages,
+            vec![crate::completed_download_handler::RELEASED_HOLD_UNPROVEN_WARNING.to_string()]
+        );
+        assert!(td.import_execution_retry.is_none(), "no retry is scheduled");
+        assert!(held_sources_remain(download.path()));
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_with_nothing_visible_in_the_download_is_not_settled() {
+        let download = tempfile::tempdir().expect("download dir");
+        std::fs::write(download.path().join("quiet.harbor.r00"), b"archive part").unwrap();
+        let app = batch_app(None, &["ep-301", "ep-302"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            adopted_held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unproven
+        );
+        assert!(!td.state.counts_as_imported());
+        assert!(download.path().join("quiet.harbor.r00").exists());
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_whose_scoped_batch_is_only_partly_accounted_for_is_not_settled()
+     {
+        // Nothing is visible, so the imported files alone stand in for the
+        // download's contents; that is no proof the whole batch was imported.
+        let download = tempfile::tempdir().expect("download dir");
+        let app = batch_app(Some(&["ep-301", "ep-302", "ep-303"]), &["ep-301"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_ne!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Imported
+        );
+        assert!(!td.state.counts_as_imported());
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_settles_when_every_scoped_unit_was_imported() {
+        let download = held_download_dir();
+        let app = batch_app(
+            Some(&["ep-301", "ep-302", "ep-303"]),
+            &["ep-301", "ep-302", "ep-303"],
+        )
+        .await;
+
+        let (settlement, td) = release(
+            &app,
+            held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Imported
+        );
+        assert!(td.state.counts_as_imported(), "{:?}", td.state);
+    }
+
+    #[tokio::test]
+    async fn a_pending_subtitles_hold_still_settles_on_the_fallback_verdict() {
+        let download = failed_extraction_download_dir();
+        let app = batch_app(None, &["ep-301"]).await;
+
+        let (settlement, td) =
+            release(&app, adopted_held_download(download.path()), AUTOMATIC).await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Imported
+        );
+        assert!(td.state.counts_as_imported(), "{:?}", td.state);
     }
 }

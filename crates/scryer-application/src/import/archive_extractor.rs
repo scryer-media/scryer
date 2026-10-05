@@ -2039,14 +2039,13 @@ fn archive_workspace_owned_by(root: &Path, owner_id: &str) -> bool {
 /// cleanup. The workspace is preserved when it is not owned, its inventory is
 /// unsafe (such as a symlink), or any video in it is not proven imported.
 ///
-/// A video is proven imported only when its path relative to `download_root`
-/// (the folder import artifacts record their source paths against) is one of
-/// `imported_relative_paths`. A video with no path relative to that folder
-/// cannot be matched, so it counts as never imported.
+/// A video is proven imported only when its path relative to the workspace
+/// root is exactly one of `imported_workspace_paths`, the paths the owning
+/// import recorded as imported from this workspace.
 pub(crate) async fn remove_released_held_workspace(
     root: &Path,
-    download_root: &Path,
-    imported_relative_paths: &std::collections::HashSet<String>,
+    imported_workspace_paths: &std::collections::HashSet<String>,
+    imports_of_unknown_origin: bool,
 ) -> Result<(), crate::import_workflow::HeldWorkspacePreserved> {
     use crate::import_workflow::HeldWorkspacePreserved;
     if archive_workspace_owner(root).is_none() {
@@ -2055,14 +2054,20 @@ pub(crate) async fn remove_released_held_workspace(
     let scan = scan_archive_workspace(root).ok_or(HeldWorkspacePreserved::Unsafe)?;
     let proven_imported = |video: &PathBuf| {
         video
-            .strip_prefix(download_root)
+            .strip_prefix(root)
             .ok()
             .map(crate::stored_paths::path_to_stored_string)
             .filter(|relative| !relative.is_empty())
-            .is_some_and(|relative| imported_relative_paths.contains(&relative))
+            .is_some_and(|relative| imported_workspace_paths.contains(&relative))
     };
     if !scan.videos.iter().all(proven_imported) {
-        return Err(HeldWorkspacePreserved::HoldsUnimportedVideo);
+        // An import recorded before workspace paths were kept may account for
+        // the video, so what was imported cannot be established either way.
+        return Err(if imports_of_unknown_origin {
+            HeldWorkspacePreserved::Unverified
+        } else {
+            HeldWorkspacePreserved::HoldsUnimportedVideo
+        });
     }
     cleanup_extracted_dir(root).await;
     if root.exists() {
@@ -2070,6 +2075,23 @@ pub(crate) async fn remove_released_held_workspace(
     } else {
         Ok(())
     }
+}
+
+/// `source`'s path relative to the root of the owned archive workspace it
+/// lies in. Ownership is the authenticated marker, never a name or pattern;
+/// a path in no owned workspace has none.
+pub(crate) fn owned_archive_workspace_relative_path(source: &Path) -> Option<String> {
+    source.ancestors().skip(1).find_map(|ancestor| {
+        let name = ancestor.file_name()?.to_str()?;
+        if !is_archive_workspace_name(name) || archive_workspace_owner(ancestor).is_none() {
+            return None;
+        }
+        source
+            .strip_prefix(ancestor)
+            .ok()
+            .map(crate::stored_paths::path_to_stored_string)
+            .filter(|relative| !relative.is_empty())
+    })
 }
 
 /// Clean up the extraction directory after import completes.
@@ -5181,5 +5203,31 @@ mod tests {
         );
         assert!(!error.to_string().contains("split"), "{error}");
         assert!(run.staging_dirs().is_empty());
+    }
+
+    #[test]
+    fn a_workspace_relative_path_is_recorded_only_inside_an_owned_workspace() {
+        let parent = tempfile::tempdir().unwrap();
+        let workspace = create_test_archive_workspace_owned_by(parent.path(), "synthetic-import");
+        assert_eq!(
+            owned_archive_workspace_relative_path(&workspace.join("out/Disc.One/quiet.harbor.mkv")),
+            Some("out/Disc.One/quiet.harbor.mkv".to_string())
+        );
+
+        // Named like a workspace but carrying no owner marker.
+        let lookalike = parent
+            .path()
+            .join(format!("{ARCHIVE_STAGING_PREFIX}0123456789abcdef"));
+        std::fs::create_dir_all(lookalike.join("out")).unwrap();
+        assert_eq!(
+            owned_archive_workspace_relative_path(&lookalike.join("out/quiet.harbor.mkv")),
+            None
+        );
+
+        assert_eq!(
+            owned_archive_workspace_relative_path(&parent.path().join("quiet.harbor.mkv")),
+            None
+        );
+        assert_eq!(owned_archive_workspace_relative_path(&workspace), None);
     }
 }

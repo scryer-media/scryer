@@ -48,10 +48,18 @@ const SETTLEMENT_KEYS: Record<HeldImportSourcesSettlement, string> = {
   // it was cleaned up. Never reported as success.
   UNCHANGED: "queue.releaseHeldSourcesNotSettledNothingCleaned",
   UNTRACKED: "queue.releaseHeldSourcesNotSettledNothingCleaned",
+  // Nothing proves every file was imported, so the download was neither
+  // marked imported nor cleaned up.
+  UNPROVEN: "queue.releaseHeldSourcesUnproven",
 };
 
 /** Settlements the operator should look at: the download was not settled. */
-const WARNING_SETTLEMENTS: ReadonlySet<HeldImportSourcesSettlement> = new Set(["NOT_SETTLED", "UNCHANGED", "UNTRACKED"]);
+const WARNING_SETTLEMENTS: ReadonlySet<HeldImportSourcesSettlement> = new Set([
+  "NOT_SETTLED",
+  "UNCHANGED",
+  "UNTRACKED",
+  "UNPROVEN",
+]);
 
 /** Holds whose release can remove content that was never imported. */
 const SEVERE_REASONS: ReadonlySet<HeldImportSourcesReason> = new Set(["ARCHIVE_EXTRACTION_FAILED", "UNKNOWN"]);
