@@ -570,6 +570,109 @@ async fn private_account_renewed_credential_survives_a_failed_save() {
     );
     assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
 }
+/// Holds the first save of a renewed credential until released.
+struct GatedRotatedWrite {
+    store: Arc<MemoryListStore>,
+    gated: std::sync::atomic::AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
+#[async_trait]
+impl UserListAccountRepository for GatedRotatedWrite {
+    async fn create(&self, account: UserListAccount) -> AppResult<UserListAccount> {
+        UserListAccountRepository::create(self.store.as_ref(), account).await
+    }
+    async fn update(&self, account: UserListAccount) -> AppResult<UserListAccount> {
+        if account.credential.refresh_handle.as_deref() == Some("fixture-rotated-handle")
+            && self.gated.swap(false, Ordering::SeqCst)
+        {
+            self.entered.notify_one();
+            timeout(Duration::from_secs(30), self.release.notified())
+                .await
+                .expect("renewed save released");
+        }
+        UserListAccountRepository::update(self.store.as_ref(), account).await
+    }
+    async fn get_by_id(&self, id: &str) -> AppResult<Option<UserListAccount>> {
+        UserListAccountRepository::get_by_id(self.store.as_ref(), id).await
+    }
+    async fn list_by_user_id(&self, id: &str) -> AppResult<Vec<UserListAccount>> {
+        self.store.list_by_user_id(id).await
+    }
+    async fn delete(&self, id: &str) -> AppResult<()> {
+        UserListAccountRepository::delete(self.store.as_ref(), id).await
+    }
+}
+#[tokio::test]
+async fn private_account_sync_cancelled_after_the_provider_answered_still_saves_the_renewal() {
+    let auth = Arc::new(Auth::default());
+    let mut harness = harness(auth.clone()).await;
+    let account = seed_expired(&harness).await;
+    follow_private_list(&harness, &account).await;
+    let accounts = Arc::new(GatedRotatedWrite {
+        store: harness.lists.clone(),
+        gated: std::sync::atomic::AtomicBool::new(true),
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    harness.app.services.lists.accounts = accounts.clone();
+    let app = harness.app.clone();
+    let sync = tokio::spawn(async move { app.run_list_sync_job(None).await });
+    timeout(Duration::from_secs(30), accounts.entered.notified())
+        .await
+        .expect("renewed save entered");
+    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+    sync.abort();
+    assert!(
+        timeout(Duration::from_secs(30), sync)
+            .await
+            .expect("cancelled sync finished")
+            .unwrap_err()
+            .is_cancelled()
+    );
+    // The renewal outlives the cancelled sync and keeps the lock until saved.
+    accounts.release.notify_one();
+    drop(
+        timeout(
+            Duration::from_secs(30),
+            harness
+                .app
+                .services
+                .lists
+                .account_runtime
+                .lock_account(&account.id),
+        )
+        .await
+        .expect("renewal released the lock"),
+    );
+    let mut stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, UserListAccountStatus::Active);
+    assert_eq!(
+        stored.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+
+    // The next renewal starts from the saved handle, never the spent one.
+    stored.credential.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    UserListAccountRepository::update(harness.lists.as_ref(), stored)
+        .await
+        .unwrap();
+    harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        auth.renewed_handles.lock().unwrap().as_slice(),
+        [
+            Some("fixture-old-handle".to_string()),
+            Some("fixture-rotated-handle".to_string())
+        ]
+    );
+}
 #[tokio::test]
 async fn private_account_cancelled_sync_renewal_never_replays_the_old_handle() {
     let auth = Arc::new(Auth {
@@ -592,8 +695,17 @@ async fn private_account_cancelled_sync_renewal_never_replays_the_old_handle() {
             .unwrap_err()
             .is_cancelled()
     );
-    // The inline renewal was abandoned with the sync: the account keeps its
-    // stored grant, nothing rotated was lost, and the lock is free again.
+    // Cancelling the sync does not abandon its renewal mid-flight: until the
+    // provider answers, the account keeps its stored grant.
+    let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.credential.refresh_handle.as_deref(),
+        Some("fixture-old-handle")
+    );
+    auth.release.notify_one();
     drop(
         timeout(
             Duration::from_secs(30),
@@ -605,8 +717,9 @@ async fn private_account_cancelled_sync_renewal_never_replays_the_old_handle() {
                 .lock_account(&account.id),
         )
         .await
-        .expect("cancelled sync released the lock"),
+        .expect("the renewal released the lock"),
     );
+    // Once it answers, the renewed handle is saved, not lost with the sync.
     let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
         .await
         .unwrap()
@@ -614,7 +727,7 @@ async fn private_account_cancelled_sync_renewal_never_replays_the_old_handle() {
     assert_eq!(stored.status, UserListAccountStatus::Active);
     assert_eq!(
         stored.credential.refresh_handle.as_deref(),
-        Some("fixture-old-handle")
+        Some("fixture-rotated-handle")
     );
     assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
 }

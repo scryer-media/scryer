@@ -218,7 +218,7 @@ pub async fn sync_subscription(
     now: DateTime<Utc>,
     job_run_id: Option<String>,
 ) -> AppResult<SubscriptionSyncOutcome> {
-    let _account_guard = context.actions.lock_account(subscription).await;
+    let mut account_guard = context.actions.lock_account(subscription).await;
     // Due-job snapshots can wait behind owner edits or unlink. Read the
     // authoritative row under the same account guard before any effects.
     let current;
@@ -286,7 +286,11 @@ pub async fn sync_subscription(
                     if account.user_id == subscription.owner_user_id
                         && account.provider == subscription.source.provider =>
                 {
-                    match context.actions.prepare_account(account).await {
+                    match context
+                        .actions
+                        .prepare_account(account, &mut account_guard)
+                        .await
+                    {
                         Ok(account) => Some(account),
                         Err(error) => {
                             // Only a refusal of the grant expires the account;
