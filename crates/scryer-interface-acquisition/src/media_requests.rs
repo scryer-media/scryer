@@ -117,6 +117,24 @@ impl MediaRequestMutations {
         })
     }
 
+    /// Put a dismissed media request back into the queue as pending, keeping its requester and creation date.
+    async fn reopen_media_request(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Request identity to reopen.")] request_id: ID,
+    ) -> GqlResult<MediaRequestActionPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let request_id = String::from(request_id);
+        app.reopen_media_request(&actor, &request_id)
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(MediaRequestActionPayload {
+            request_id: ID::from(request_id),
+        })
+    }
+
     /// Update the caller's pending request preferences and return the current request.
     async fn update_my_media_request(
         &self,

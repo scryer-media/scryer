@@ -9,6 +9,7 @@ import {
   dismissMediaRequestMutation,
   extendTitleClaimMutation,
   releaseTitleClaimMutation,
+  reopenMediaRequestMutation,
   updateMyMediaRequestMutation,
 } from "@/lib/graphql/mutations";
 import {
@@ -541,6 +542,31 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
     [actionRequestId, client, markRecentlyActed, refresh, setGlobalStatus, t],
   );
 
+  const reopenRequest = React.useCallback(
+    async (request: MediaRequestRecord) => {
+      if (actionRequestId) {
+        return;
+      }
+
+      setActionRequestId(request.id);
+      markRecentlyActed(request.id);
+      try {
+        const { error } = await client
+          .mutation(reopenMediaRequestMutation, { requestId: request.id })
+          .toPromise();
+        if (error) throw error;
+        setGlobalStatus(t("status.requestReopened", { name: request.title }));
+        dispatchNavigationBadgesRefresh();
+        await refresh();
+      } catch (error) {
+        setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
+      } finally {
+        setActionRequestId(null);
+      }
+    },
+    [actionRequestId, client, markRecentlyActed, refresh, setGlobalStatus, t],
+  );
+
   const updateRequest = React.useCallback(
     async (request: MediaRequestRecord, values: UpdateRequestValues) => {
       if (actionRequestId) {
@@ -734,6 +760,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         void approveRequest(request, values)
       }
       onDismiss={(request) => void dismissRequest(request)}
+      onReopen={(request) => void reopenRequest(request)}
       onUpdateRequest={(request, values) => void updateRequest(request, values)}
       onCancelRequest={(request) => void cancelRequest(request)}
       claimsByRequestId={claimsByRequestId}

@@ -1625,6 +1625,160 @@ async fn requester_cannot_update_or_cancel_after_manager_resolution() {
 }
 
 #[tokio::test]
+async fn manager_reopens_a_dismissed_request_keeping_requester_and_recording_the_reopen() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id, 9036))
+        .await
+        .expect("request should succeed");
+    let original = harness.media_requests.requests.lock().await[0].clone();
+    harness
+        .app
+        .dismiss_media_request(&harness.manager, &original.id)
+        .await
+        .expect("manager should dismiss request");
+
+    let reopened = harness
+        .app
+        .reopen_media_request(&harness.manager, &original.id)
+        .await
+        .expect("manager should reopen the dismissed request");
+
+    assert_eq!(reopened.status, MediaRequestStatus::Pending);
+    assert_eq!(reopened.created_by_user_id, original.created_by_user_id);
+    assert_eq!(reopened.created_at, original.created_at);
+    assert_eq!(reopened.resolved_by_user_id, None);
+    assert_eq!(reopened.resolved_at, None);
+    assert_eq!(harness.media_requests.requests.lock().await.len(), 1);
+
+    let reopen_events = harness
+        .domain_events
+        .events
+        .lock()
+        .await
+        .iter()
+        .filter_map(|event| match &event.payload {
+            DomainEventPayload::MediaRequestReopened(data) => {
+                Some((event.actor_user_id.clone(), data.request_id.clone()))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        reopen_events,
+        vec![(Some(harness.manager.id.clone()), original.id.clone())]
+    );
+
+    // From here the ordinary pending paths apply unchanged.
+    harness
+        .app
+        .update_my_media_request(
+            &harness.user,
+            UpdateMediaRequestInput {
+                request_id: original.id.clone(),
+                requested_quality_profile_id: "1080p".to_string(),
+                requested_monitor_type: None,
+                requested_monitor_selection: None,
+                requested_lease_days: None,
+            },
+        )
+        .await
+        .expect("requester can edit the reopened request");
+    harness
+        .app
+        .approve_media_request(
+            &harness.manager,
+            &original.id,
+            "1080p",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("manager can approve the reopened request");
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Approved
+    );
+}
+
+#[tokio::test]
+async fn only_a_resolver_can_reopen_and_only_a_dismissed_request() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+
+    harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id.clone(), 9037))
+        .await
+        .expect("request should succeed");
+    let request_id = harness.media_requests.requests.lock().await[0].id.clone();
+
+    let pending_error = harness
+        .app
+        .reopen_media_request(&harness.manager, &request_id)
+        .await
+        .expect_err("a pending request is not reopened");
+    assert!(
+        matches!(pending_error, AppError::Validation(ref message) if message.contains("dismissed")),
+        "unexpected error: {pending_error:?}"
+    );
+
+    harness
+        .app
+        .dismiss_media_request(&harness.manager, &request_id)
+        .await
+        .expect("manager should dismiss request");
+    let requester_error = harness
+        .app
+        .reopen_media_request(&harness.user, &request_id)
+        .await
+        .expect_err("the requester cannot reopen their dismissed request");
+    assert!(
+        matches!(requester_error, AppError::Unauthorized(_)),
+        "unexpected error: {requester_error:?}"
+    );
+    assert_eq!(
+        harness.media_requests.requests.lock().await[0].status,
+        MediaRequestStatus::Rejected
+    );
+
+    harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id, 9038))
+        .await
+        .expect("second request should succeed");
+    let canceled_id = harness.media_requests.requests.lock().await[1].id.clone();
+    harness
+        .app
+        .cancel_my_media_request(&harness.user, &canceled_id)
+        .await
+        .expect("requester should cancel");
+    let canceled_error = harness
+        .app
+        .reopen_media_request(&harness.manager, &canceled_id)
+        .await
+        .expect_err("a canceled request is not reopened");
+    assert!(
+        matches!(canceled_error, AppError::Validation(_)),
+        "unexpected error: {canceled_error:?}"
+    );
+    assert!(
+        !harness
+            .domain_events
+            .events
+            .lock()
+            .await
+            .iter()
+            .any(|event| matches!(event.payload, DomainEventPayload::MediaRequestReopened(_)))
+    );
+}
+
+#[tokio::test]
 async fn approval_waits_for_destructive_title_ownership() {
     let harness = bootstrap_media_request_app();
     let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);

@@ -3507,6 +3507,8 @@ const ru: LocaleDictionary = {
     "requests.approvedQualityProfile": "Одобренный профиль качества",
     "requests.approvedMonitorType": "Одобренный режим отслеживания",
     "requests.dismiss": "Отклонить",
+    "requests.reopen": "Открыть снова",
+    "status.requestReopened": "Запрос на {{name}} снова открыт.",
     "requests.modify": "Изменить",
     "requests.modifyTitle": "Изменить запрос",
     "requests.saveChanges": "Сохранить изменения",

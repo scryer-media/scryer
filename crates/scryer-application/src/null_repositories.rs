@@ -3318,6 +3318,16 @@ impl MediaRequestRepository for NullMediaRequestRepository {
         ))
     }
 
+    async fn reopen_rejected(
+        &self,
+        _request_id: &str,
+        _reopened_event: NewDomainEvent,
+    ) -> AppResult<MediaRequestUpdateResult> {
+        Err(AppError::Repository(
+            "media request repository not configured".into(),
+        ))
+    }
+
     async fn count_pending_by_facet(
         &self,
         _library_ids: &[String],

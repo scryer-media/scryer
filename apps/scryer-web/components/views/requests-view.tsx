@@ -8,6 +8,7 @@ import {
   Inbox,
   Pencil,
   RefreshCw,
+  RotateCcw,
   ScrollText,
   ShieldX,
   SlidersVertical,
@@ -61,6 +62,7 @@ import {
   requestCountByStatus,
   requestsWithStatus,
 } from "@/lib/utils/media-request-filters";
+import { mediaRequestRowActions } from "@/lib/utils/media-request-actions";
 import type { LibraryRecord, MediaRequestRecord } from "@/lib/types";
 import type {
   RequestRuleDecisionRecord,
@@ -113,6 +115,7 @@ import {
   mediaRequestMonitorSelectionId,
   mediaRequestPolicyTagsId,
   mediaRequestProfileOptionId,
+  mediaRequestReopenId,
   mediaRequestRowId,
   mediaRequestStatusId,
   titleClaimExtendId,
@@ -194,6 +197,8 @@ type RequestsViewProps = {
   onLoadQualityProfileOptions: () => void;
   onApprove: (request: MediaRequestRecord, values: ApproveRequestValues) => void;
   onDismiss: (request: MediaRequestRecord) => void;
+  /// Put a dismissed request back into the pending queue.
+  onReopen: (request: MediaRequestRecord) => void;
   onUpdateRequest: (request: MediaRequestRecord, values: UpdateRequestValues) => void;
   onCancelRequest: (request: MediaRequestRecord) => void;
   /// Retention claims for the titles requests created, keyed by request id and
@@ -719,6 +724,7 @@ export function RequestsView({
   onLoadQualityProfileOptions,
   onApprove,
   onDismiss,
+  onReopen,
   onUpdateRequest,
   onCancelRequest,
   claimsByRequestId,
@@ -1000,8 +1006,10 @@ export function RequestsView({
     const approveDisabled = actionRequestId !== null;
     const statusMeta = requestStatusTone(t, request.status);
     const StatusIcon = statusMeta.Icon;
-    const canResolveRequest = mode === "admin" && request.status === "PENDING";
-    const canEditOwnRequest = mode === "mine" && request.status === "PENDING";
+    const rowActions = mediaRequestRowActions(mode, request.status);
+    const canResolveRequest = rowActions.resolve;
+    const canEditOwnRequest = rowActions.editOwn;
+    const canReopenRequest = rowActions.reopen;
     const decision = request.decision ?? null;
     const policyTags = request.policyTags ?? [];
     // Claim actions belong to whoever manages the library; admin mode only ever
@@ -1184,6 +1192,23 @@ export function RequestsView({
                       {t("requests.dismiss")}
                     </Button>
                   </>
+                ) : null}
+                {canReopenRequest ? (
+                  <Button
+                    id={mediaRequestReopenId(request.id)}
+                    type="button"
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => onReopen(request)}
+                    disabled={actionsDisabled}
+                  >
+                    {isResolving ? (
+                      <LoadingMark className="h-4 w-4" />
+                    ) : (
+                      <RotateCcw className="h-4 w-4" />
+                    )}
+                    {t("requests.reopen")}
+                  </Button>
                 ) : null}
                 {canEditOwnRequest ? (
                   <>

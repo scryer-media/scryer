@@ -4582,6 +4582,10 @@ enum DomainEventTypeValue {
 	"""
 	MEDIA_REQUEST_UPDATED
 	"""
+	A dismissed media request was reopened.
+	"""
+	MEDIA_REQUEST_REOPENED
+	"""
 	A media request was approved.
 	"""
 	MEDIA_REQUEST_APPROVED
@@ -19035,6 +19039,15 @@ type MutationRoot {
 	dismissMediaRequest(
 		"""
 		Request identity to dismiss.
+		"""
+		requestId: ID!
+	): MediaRequestActionPayload!
+	"""
+	Put a dismissed media request back into the queue as pending, keeping its requester and creation date.
+	"""
+	reopenMediaRequest(
+		"""
+		Request identity to reopen.
 		"""
 		requestId: ID!
 	): MediaRequestActionPayload!

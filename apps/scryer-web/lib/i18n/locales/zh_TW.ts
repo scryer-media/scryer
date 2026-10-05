@@ -2549,6 +2549,8 @@ const zh_TW: LocaleDictionary = {
   "requests.approvedQualityProfile": "已核准的品質設定檔",
   "requests.approvedMonitorType": "已核准的監控設定",
   "requests.dismiss": "關閉",
+  "requests.reopen": "重新開啟",
+  "status.requestReopened": "已重新開啟 {{name}} 的請求。",
   "requests.modify": "修改",
   "requests.modifyTitle": "修改請求",
   "requests.saveChanges": "儲存變更",
