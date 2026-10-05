@@ -787,11 +787,10 @@ async fn cleanup_missing_movie_title_records(
         }
     };
 
-    let mut promotions = crate::catalog::workflow::PrimaryPromotionBatch::default();
+    // A movie's remaining Additional file is never promoted automatically;
+    // the operator chooses its Primary.
     for media_file in media_files {
         if movie_scope.file_is_outside_canonical_folder(&media_file.file_path) {
-            app.record_primary_promotion_candidate(&mut promotions, &title.id, &media_file.id)
-                .await;
             if let Err(error) = app
                 .delete_media_file_record_with_dependents(&media_file.id)
                 .await
@@ -813,8 +812,6 @@ async fn cleanup_missing_movie_title_records(
         if !tracked_movie_path_confirmed_missing(file_path.as_path()).await {
             continue;
         }
-        app.record_primary_promotion_candidate(&mut promotions, &title.id, &media_file.id)
-            .await;
         if let Err(error) = app
             .delete_media_file_record_with_dependents(&media_file.id)
             .await
@@ -831,8 +828,6 @@ async fn cleanup_missing_movie_title_records(
             lost_file = true;
         }
     }
-    app.finish_primary_promotion_batch(&DomainEventActor::system(), promotions)
-        .await;
     if lost_file && title.monitored {
         let scope_key = crate::acquisition::convergence::convergence_scope_key(
             &SubmissionScope::Title,
@@ -3208,8 +3203,21 @@ impl AppUseCase {
                         ));
                     }
                 }
-                self.finish_primary_promotion_batch(&actor_event, promotions)
+                let promoted_episode_ids = self
+                    .finish_primary_promotion_batch(&actor_event, promotions)
                     .await;
+                // An episode whose Additional file just became its Primary
+                // still has a file: its coverage stays as it is.
+                let promoted_scope_keys = promoted_episode_ids
+                    .into_iter()
+                    .filter_map(|episode_id| {
+                        crate::acquisition::convergence::convergence_scope_key(
+                            &SubmissionScope::Episode { episode_id },
+                            &title.id,
+                        )
+                    })
+                    .collect::<std::collections::HashSet<_>>();
+                lost_scope_keys.retain(|scope_key| !promoted_scope_keys.contains(scope_key));
                 lost_scope_keys.sort_unstable();
                 lost_scope_keys.dedup();
                 reopen_lost_file_coverage(self, &title.id, lost_scope_keys).await;

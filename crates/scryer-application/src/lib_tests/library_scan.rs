@@ -10885,15 +10885,18 @@ async fn movie_library_scan_leaves_two_additional_files_when_the_primary_vanishe
 async fn series_library_scan_roles_after_primary_vanishes(
     additional_count: usize,
 ) -> (Vec<MediaFileRole>, MediaFileRole) {
-    series_library_scan_roles_after_primary_vanishes_for(additional_count, false).await
+    let (roles, other_role, _) =
+        series_library_scan_roles_after_primary_vanishes_for(additional_count, false).await;
+    (roles, other_role)
 }
 
 /// As above; `series_movie_episode` links a series movie to the episode whose
-/// Primary vanishes.
+/// Primary vanishes. Also reports whether that episode's search coverage
+/// survived the scan.
 async fn series_library_scan_roles_after_primary_vanishes_for(
     additional_count: usize,
     series_movie_episode: bool,
-) -> (Vec<MediaFileRole>, MediaFileRole) {
+) -> (Vec<MediaFileRole>, MediaFileRole, bool) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let title_dir = tempdir.path().join("Lantern Vale (2026)");
     std::fs::create_dir(&title_dir).expect("create series folder");
@@ -10933,6 +10936,9 @@ async fn series_library_scan_roles_after_primary_vanishes_for(
         Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
         Arc::new(EmptySearchMetadataGateway),
     );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::default());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
     app.reconcile_default_library_roots()
         .await
         .expect("reconcile series root");
@@ -11008,6 +11014,17 @@ async fn series_library_scan_roles_after_primary_vanishes_for(
             .expect("create episode");
         episode_ids.push(episode.id);
     }
+    let episode_scope_key = crate::acquisition::convergence::convergence_scope_key(
+        &SubmissionScope::Episode {
+            episode_id: episode_ids[0].clone(),
+        },
+        &title.id,
+    )
+    .expect("episode scope key");
+    coverage
+        .record_coverage(&episode_scope_key, "series", "indexer-1", "fingerprint")
+        .await
+        .expect("record coverage");
     if series_movie_episode {
         let mut link =
             test_series_movie_link(&title.id, "Lantern Vale Movie", Some(2026), None, None);
@@ -11091,6 +11108,10 @@ async fn series_library_scan_roles_after_primary_vanishes_for(
             .map(|path| media_file_role_for_path(&files, path))
             .collect(),
         media_file_role_for_path(&files, other_episode_path.as_path()),
+        !coverage
+            .indexers_for_scope(&episode_scope_key)
+            .await
+            .is_empty(),
     )
 }
 
@@ -11104,10 +11125,34 @@ async fn series_library_scan_promotes_the_sole_additional_file_when_the_primary_
 
 #[tokio::test]
 async fn series_library_scan_leaves_a_series_movie_additional_file_when_the_primary_vanishes() {
+    let (roles, other_role, _) =
+        series_library_scan_roles_after_primary_vanishes_for(1, true).await;
     assert_eq!(
-        series_library_scan_roles_after_primary_vanishes_for(1, true).await,
+        (roles, other_role),
         (vec![MediaFileRole::Additional], MediaFileRole::Additional)
     );
+}
+
+#[tokio::test]
+async fn series_library_scan_keeps_coverage_for_an_episode_whose_additional_file_was_promoted() {
+    let (roles, _, coverage_kept) =
+        series_library_scan_roles_after_primary_vanishes_for(1, false).await;
+    assert_eq!(roles, vec![MediaFileRole::Primary]);
+    assert!(
+        coverage_kept,
+        "an episode that still has a Primary file is not reopened for search"
+    );
+}
+
+#[tokio::test]
+async fn series_library_scan_reopens_coverage_when_no_additional_file_was_promoted() {
+    let (roles, _, coverage_kept) =
+        series_library_scan_roles_after_primary_vanishes_for(2, false).await;
+    assert_eq!(
+        roles,
+        vec![MediaFileRole::Additional, MediaFileRole::Additional]
+    );
+    assert!(!coverage_kept, "the lost Primary reopens the episode");
 }
 
 #[tokio::test]

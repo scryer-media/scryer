@@ -1851,14 +1851,19 @@ impl AppUseCase {
     }
 
     /// Evaluate promotion once for every scope a finished batch recorded.
+    /// Returns the episodes that got a Primary file back.
     pub(crate) async fn finish_primary_promotion_batch(
         &self,
         actor: &DomainEventActor,
         batch: PrimaryPromotionBatch,
-    ) {
+    ) -> std::collections::BTreeSet<String> {
+        let mut promoted_episode_ids = std::collections::BTreeSet::new();
         for scope in &batch.scopes {
-            self.promote_sole_additional_media_file(actor, scope).await;
+            if self.promote_sole_additional_media_file(actor, scope).await {
+                promoted_episode_ids.extend(scope.primary_episode_ids.iter().cloned());
+            }
         }
+        promoted_episode_ids
     }
 }
 
@@ -1956,22 +1961,26 @@ impl AppUseCase {
     /// The store applies the change only if no Primary has appeared for those
     /// episodes in the meantime, and it never demotes anything. Only catalog
     /// roles change; nothing on disk is touched. Failures are logged, because
-    /// the delete itself has already completed.
+    /// the delete itself has already completed. Returns whether it promoted.
     async fn promote_sole_additional_media_file(
         &self,
         actor: &DomainEventActor,
         scope: &PrimaryPromotionScope,
-    ) {
-        if let Err(error) = self
+    ) -> bool {
+        match self
             .try_promote_sole_additional_media_file(actor, scope)
             .await
         {
-            warn!(
-                error = %error,
-                title_id = %scope.title_id,
-                deleted_file_id = %scope.deleted_file_id,
-                "failed to promote the remaining additional media file to primary"
-            );
+            Ok(promoted) => promoted,
+            Err(error) => {
+                warn!(
+                    error = %error,
+                    title_id = %scope.title_id,
+                    deleted_file_id = %scope.deleted_file_id,
+                    "failed to promote the remaining additional media file to primary"
+                );
+                false
+            }
         }
     }
 
@@ -1979,7 +1988,7 @@ impl AppUseCase {
         &self,
         actor: &DomainEventActor,
         scope: &PrimaryPromotionScope,
-    ) -> AppResult<()> {
+    ) -> AppResult<bool> {
         let _location_guard = self
             .acquire_location_title_mutation(
                 &crate::location::ownership_guard::MEDIA_FILE_PRIMARY_ENTRY,
@@ -1992,7 +2001,7 @@ impl AppUseCase {
             .await?
             .is_some()
         {
-            return Ok(());
+            return Ok(false);
         }
         let Some(title) = self
             .services
@@ -2001,7 +2010,7 @@ impl AppUseCase {
             .get_by_id(&scope.title_id)
             .await?
         else {
-            return Ok(());
+            return Ok(false);
         };
         let rows = media_files.list_media_files_for_title(&title.id).await?;
         let mut candidate_ids = rows
@@ -2016,7 +2025,7 @@ impl AppUseCase {
             .into_iter();
         let candidate_id = match (candidate_ids.next(), candidate_ids.next()) {
             (Some(file_id), None) => file_id.to_string(),
-            _ => return Ok(()),
+            _ => return Ok(false),
         };
         let candidate_rows = rows
             .iter()
@@ -2030,7 +2039,7 @@ impl AppUseCase {
             .iter()
             .all(|row| row.episode_id.is_some() && row.series_movie_link_ids.is_empty());
         if candidate_episode_ids != scope.episode_ids || !candidate_is_episode_file {
-            return Ok(());
+            return Ok(false);
         }
         let primary_episode_ids = scope
             .primary_episode_ids
@@ -2045,7 +2054,7 @@ impl AppUseCase {
             )
             .await?
         {
-            return Ok(());
+            return Ok(false);
         }
         info!(
             title_id = %title.id,
@@ -2055,7 +2064,7 @@ impl AppUseCase {
         );
         self.emit_title_updated_activity(actor.clone(), &title)
             .await;
-        Ok(())
+        Ok(true)
     }
 }
 impl AppUseCase {
