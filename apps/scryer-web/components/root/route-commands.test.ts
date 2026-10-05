@@ -117,6 +117,19 @@ test("post-processing is grouped with Automation", () => {
   assert.equal(command?.groupLabel, "nav.group.automation");
 });
 
+test("acquisition is grouped with Automation for system-settings managers only", () => {
+  const find = (appPermissions: AuthUser["appPermissions"]) =>
+    buildRouteCommands({
+      t,
+      user: user({ appPermissions }),
+      onNavigate: () => {},
+    }).find((candidate) => candidate.id === "settings-acquisition");
+
+  const command = find([APP_PERMISSIONS.manageSystemSettings]);
+  assert.equal(command?.groupLabel, "nav.group.automation");
+  assert.equal(find([APP_PERMISSIONS.manageCatalogSettings]), undefined);
+});
+
 test("maintenance-rules command appears only when experimental features are on", () => {
   const catalogManager = user({
     appPermissions: [APP_PERMISSIONS.manageCatalogSettings],
