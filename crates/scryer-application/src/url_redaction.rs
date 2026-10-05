@@ -15,17 +15,54 @@ use regex::{Captures, Regex};
 /// Replacement written in place of a credential value.
 pub const REDACTED_SECRET: &str = "[redacted]";
 
-fn credential_query_param_regex() -> &'static Regex {
+/// Every query parameter that carries a credential, lowercased with `_` and
+/// `-` removed. The single source for both the redactor and the stored
+/// release-attempt hint.
+const CREDENTIAL_PARAMETER_NAMES: &[&str] = &[
+    "apikey",
+    "apiaccess",
+    "token",
+    "auth",
+    "password",
+    "passkey",
+    "jackettapikey",
+    "rsskey",
+    "authkey",
+    "torrentpass",
+];
+
+/// Whether a query parameter name carries a credential. Case and `_`/`-`
+/// separators are ignored; a name that merely contains a credential word
+/// (`oauth`, `x_token`, `torrent_passes`) does not.
+pub fn is_credential_parameter_name(name: &str) -> bool {
+    let normalized = name.to_ascii_lowercase().replace(['_', '-'], "");
+    CREDENTIAL_PARAMETER_NAMES.contains(&normalized.as_str())
+}
+
+fn query_param_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
-        // `\b` keeps names that merely end in a credential word (`oauth=`,
-        // `x_token=`) out, while `-`/`_` separators and case are tolerated.
-        // An already-redacted value is matched first so redaction is
-        // idempotent instead of growing a stray `]` on each pass.
+        // The whole parameter name is captured and checked against the list,
+        // so a name that only ends in a credential word is kept. An
+        // already-redacted value is matched first so redaction is idempotent
+        // instead of growing a stray `]` on each pass.
         Regex::new(
-            r#"(?i)(?P<prefix>\b(?:api[_-]?key|pass[_-]?key|rss[_-]?key|token|auth|authkey|jackett_apikey|torrent_pass)=)(?P<value>\[redacted\]|[^&#;\s"'<>),\]}]+)"#,
+            r#"(?P<prefix>\b(?P<name>[A-Za-z0-9_-]+)=)(?P<value>\[redacted\]|[^&#;\s"'<>),\]}]+)"#,
         )
-        .expect("credential query parameter regex should compile")
+        .expect("query parameter regex should compile")
+    })
+}
+
+fn encoded_query_param_regex() -> &'static Regex {
+    static REGEX: OnceLock<Regex> = OnceLock::new();
+    REGEX.get_or_init(|| {
+        // A URL carried percent-encoded inside another one, such as a magnet
+        // link's `tr=` announce URL: `%3F`/`%26` start a parameter, `%3D`
+        // ends its name, and the value runs to the next `&` or `%26`.
+        Regex::new(
+            r#"(?i)(?P<prefix>(?:%3F|%26)(?P<name>[A-Za-z0-9_-]+)%3D)(?P<value>%5Bredacted%5D|(?:[^&#;%\s"'<>),\]}]|%(?:[013-9a-f][0-9a-f]|2[0-57-9a-f]))+)"#,
+        )
+        .expect("encoded query parameter regex should compile")
     })
 }
 
@@ -50,11 +87,42 @@ pub fn redact_url_credentials(raw: &str) -> String {
     let without_userinfo = url_userinfo_regex().replace_all(raw, |captures: &Captures<'_>| {
         format!("{}{REDACTED_SECRET}@", &captures["scheme"])
     });
-    credential_query_param_regex()
-        .replace_all(&without_userinfo, |captures: &Captures<'_>| {
-            format!("{}{REDACTED_SECRET}", &captures["prefix"])
+    let plain = redact_plain_query_params(&without_userinfo);
+    encoded_query_param_regex()
+        .replace_all(&plain, |captures: &Captures<'_>| {
+            if is_credential_parameter_name(&captures["name"]) {
+                format!("{}%5Bredacted%5D", &captures["prefix"])
+            } else {
+                captures[0].to_string()
+            }
         })
         .into_owned()
+}
+
+fn redact_plain_query_params(raw: &str) -> String {
+    query_param_regex()
+        .replace_all(raw, |captures: &Captures<'_>| {
+            if is_credential_parameter_name(&captures["name"]) {
+                format!("{}{REDACTED_SECRET}", &captures["prefix"])
+            } else {
+                // A kept value can itself be a URL with credentials, such as
+                // a magnet's unencoded `tr=` announce URL.
+                format!(
+                    "{}{}",
+                    &captures["prefix"],
+                    redact_plain_query_params(&captures["value"])
+                )
+            }
+        })
+        .into_owned()
+}
+
+/// Remove credentials from a domain event before it is stored, so the event
+/// log never holds a live indexer or tracker key.
+pub(crate) fn redact_new_domain_event(event: &mut scryer_domain::NewDomainEvent) {
+    if let scryer_domain::DomainEventPayload::ReleaseGrabbed(data) = &mut event.payload {
+        data.source_hint = redact_optional_url_credentials(data.source_hint.take());
+    }
 }
 
 /// [`redact_url_credentials`] over an optional value.
@@ -98,6 +166,10 @@ mod tests {
             "authkey",
             "jackett_apikey",
             "torrent_pass",
+            "apiaccess",
+            "api_access",
+            "password",
+            "Password",
         ] {
             let url = format!("https://indexer.invalid/api?t=get&{name}=s3cret&id=42");
             assert_eq!(
@@ -192,6 +264,90 @@ mod tests {
     fn userinfo_redaction_is_idempotent() {
         let once = redact_url_credentials("https://u:p@lists.invalid/a");
         assert_eq!(redact_url_credentials(&once), once);
+    }
+
+    #[test]
+    fn redacts_credentials_of_a_magnet_announce_url() {
+        assert_eq!(
+            redact_url_credentials(
+                "magnet:?xt=urn:btih:abcdef&dn=Harbor+Lights&tr=https%3A%2F%2Ftracker.invalid%2Fannounce%3Fpasskey%3Ds3cret%26torrent_id%3D7"
+            ),
+            "magnet:?xt=urn:btih:abcdef&dn=Harbor+Lights&tr=https%3A%2F%2Ftracker.invalid%2Fannounce%3Fpasskey%3D%5Bredacted%5D%26torrent_id%3D7"
+        );
+        assert_eq!(
+            redact_url_credentials(
+                "magnet:?xt=urn:btih:abcdef&tr=https://tracker.invalid/announce?authkey=s3cret"
+            ),
+            "magnet:?xt=urn:btih:abcdef&tr=https://tracker.invalid/announce?authkey=[redacted]"
+        );
+        let once = redact_url_credentials(
+            "magnet:?xt=urn:btih:abcdef&tr=http%3A%2F%2Ft.invalid%2Fa%3Fpasskey%3Dk",
+        );
+        assert_eq!(redact_url_credentials(&once), once);
+    }
+
+    #[test]
+    fn credential_parameter_names_are_one_list() {
+        for name in [
+            "ApiKey",
+            "api-access",
+            "PASSWORD",
+            "torrent_pass",
+            "Rss_Key",
+        ] {
+            assert!(is_credential_parameter_name(name), "{name}");
+        }
+        for name in ["oauth", "x_token", "torrent_passes", "x_authkey", "id"] {
+            assert!(!is_credential_parameter_name(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn a_grab_event_loses_its_indexer_key_before_it_is_stored() {
+        use scryer_domain::{
+            DomainEventActorKind, DomainEventPayload, DomainEventStream, DomainExternalIds,
+            MediaFacet, NewDomainEvent, ReleaseGrabbedEventData, TitleContextSnapshot,
+        };
+        let mut event = NewDomainEvent {
+            event_id: "event-1".to_string(),
+            occurred_at: chrono::Utc::now(),
+            actor_kind: DomainEventActorKind::System,
+            actor_user_id: None,
+            actor_display_name: "system".to_string(),
+            title_id: Some("title-1".to_string()),
+            facet: Some(MediaFacet::Movie),
+            correlation_id: None,
+            causation_id: None,
+            schema_version: 1,
+            stream: DomainEventStream::Title {
+                title_id: "title-1".to_string(),
+            },
+            payload: DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
+                title: TitleContextSnapshot {
+                    title_name: "Harbor Lights".to_string(),
+                    facet: MediaFacet::Movie,
+                    external_ids: DomainExternalIds::default(),
+                    poster_url: None,
+                    year: None,
+                },
+                source_title: Some("Harbor.Lights.2031.1080p.WEB-DL-NOGRP".to_string()),
+                source_hint: Some(
+                    "https://indexer.invalid/api?t=get&id=9&apiaccess=s3cret".to_string(),
+                ),
+                source_provider: None,
+                download_id: None,
+                episode_ids: Vec::new(),
+                release_facts: None,
+            }),
+        };
+        redact_new_domain_event(&mut event);
+        let DomainEventPayload::ReleaseGrabbed(data) = event.payload else {
+            panic!("payload kind should not change");
+        };
+        assert_eq!(
+            data.source_hint.as_deref(),
+            Some("https://indexer.invalid/api?t=get&id=9&apiaccess=[redacted]")
+        );
     }
 
     #[test]

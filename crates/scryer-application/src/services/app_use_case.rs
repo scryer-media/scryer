@@ -177,7 +177,8 @@ impl AppUseCase {
         }
     }
 
-    pub async fn append_domain_event(&self, event: NewDomainEvent) -> AppResult<DomainEvent> {
+    pub async fn append_domain_event(&self, mut event: NewDomainEvent) -> AppResult<DomainEvent> {
+        crate::url_redaction::redact_new_domain_event(&mut event);
         let stored = self.services.events.domain_events.append(event).await?;
         self.publish_stored_domain_event(&stored).await;
         Ok(stored)
@@ -224,8 +225,11 @@ impl AppUseCase {
 
     pub async fn append_domain_events(
         &self,
-        events: Vec<NewDomainEvent>,
+        mut events: Vec<NewDomainEvent>,
     ) -> AppResult<Vec<DomainEvent>> {
+        events
+            .iter_mut()
+            .for_each(crate::url_redaction::redact_new_domain_event);
         let stored = self
             .services
             .events
