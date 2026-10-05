@@ -3132,6 +3132,8 @@ const en: LocaleDictionary = {
   "requests.approvedMonitorType": "Approved monitoring",
   "requests.dismiss": "Dismiss",
   "requests.reopen": "Reopen",
+  "requests.requesterFilter.label": "Requester",
+  "requests.requesterFilter.all": "All requesters",
   "status.requestReopened": "Reopened request for {{name}}.",
   "requests.modify": "Modify",
   "requests.modifyTitle": "Modify request",

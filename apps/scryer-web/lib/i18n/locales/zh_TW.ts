@@ -2550,6 +2550,8 @@ const zh_TW: LocaleDictionary = {
   "requests.approvedMonitorType": "已核准的監控設定",
   "requests.dismiss": "關閉",
   "requests.reopen": "重新開啟",
+  "requests.requesterFilter.label": "請求者",
+  "requests.requesterFilter.all": "所有請求者",
   "status.requestReopened": "已重新開啟 {{name}} 的請求。",
   "requests.modify": "修改",
   "requests.modifyTitle": "修改請求",

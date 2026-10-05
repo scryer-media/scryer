@@ -139,6 +139,9 @@ pub struct ListMediaRequestsInput {
     pub facet: Option<MediaFacet>,
     pub library_ids: Option<Vec<String>>,
     pub status: Option<MediaRequestStatus>,
+    /// Restrict the queue to requests this user is a requester on. Only the
+    /// manager queue reads it; the caller's own list is always their own.
+    pub requester_user_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -506,7 +509,10 @@ impl AppUseCase {
                 facet: input.facet,
                 library_ids: Some(library_ids),
                 status: input.status,
-                requester_user_id: None,
+                requester_user_id: input
+                    .requester_user_id
+                    .map(|user_id| user_id.trim().to_string())
+                    .filter(|user_id| !user_id.is_empty()),
             })
             .await
     }

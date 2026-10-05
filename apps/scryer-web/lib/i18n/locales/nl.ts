@@ -2655,6 +2655,8 @@ const nl: LocaleDictionary = {
   "requests.approvedMonitorType": "Goedgekeurde monitoring",
   "requests.dismiss": "Afwijzen",
   "requests.reopen": "Heropenen",
+  "requests.requesterFilter.label": "Aanvrager",
+  "requests.requesterFilter.all": "Alle aanvragers",
   "status.requestReopened": "Aanvraag voor {{name}} heropend.",
   "requests.modify": "Wijzigen",
   "requests.modifyTitle": "Aanvraag wijzigen",

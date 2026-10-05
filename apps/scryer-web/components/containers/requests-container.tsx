@@ -37,6 +37,10 @@ import {
   LIBRARY_PERMISSIONS,
 } from "@/lib/utils/permissions";
 import { normalizeLibraryFilterSelection } from "@/lib/utils/library-filter";
+import {
+  requesterFilterOptions,
+  type RequesterFilterOption,
+} from "@/lib/utils/media-request-filters";
 import { createTrailingThrottle, type TrailingThrottle } from "@/lib/utils/trailing-throttle";
 
 type RequestsContainerProps = {
@@ -187,6 +191,11 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
   const [adminLibraries, setAdminLibraries] = React.useState<LibraryRecord[]>([]);
   const [requesterLibraries, setRequesterLibraries] = React.useState<LibraryRecord[]>([]);
   const [selectedLibraryIds, setSelectedLibraryIds] = React.useState<string[]>([]);
+  /// The queue's requester filter. Only the manager queue offers it: that
+  /// queue already shows every requester in the libraries the reader manages,
+  /// and the server narrows it further rather than widening it.
+  const [selectedRequesterId, setSelectedRequesterId] = React.useState<string | null>(null);
+  const [requesterOptions, setRequesterOptions] = React.useState<RequesterFilterOption[]>([]);
   const [requests, setRequests] = React.useState<MediaRequestRecord[]>([]);
   const [qualityProfileOptions, setQualityProfileOptions] = React.useState<
     QualityProfileOption[]
@@ -242,6 +251,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
     requesterLibrariesRef.current = [];
     loadedLibrariesKeyRef.current = null;
     setRequests([]);
+    setRequesterOptions([]);
   }, [canManageAnyTitle, facet, user?.id]);
 
   const markRecentlyActed = React.useCallback((requestId: string) => {
@@ -340,6 +350,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       }
 
       const requestsQuery = nextMode === "admin" ? mediaRequestsQuery : myMediaRequestsQuery;
+      const requesterUserId = nextMode === "admin" ? selectedRequesterId : null;
       const requestsResult = await client.query(requestsQuery, {
         facet: requestFacet,
         libraryIds:
@@ -347,6 +358,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
             ? normalizedSelectedLibraryIds
             : null,
         status: null,
+        ...(nextMode === "admin" ? { requesterUserId } : {}),
       }).toPromise();
       if (
         refreshSeq !== refreshSeqRef.current ||
@@ -362,11 +374,15 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         nextMode === "admin"
           ? requestsResult.data?.mediaRequests
           : requestsResult.data?.myMediaRequests;
-      setRequests(
-        nextMode === "admin"
-          ? collapseMediaRequestsPerStatus((loadedRequests ?? []) as MediaRequestRecord[])
-          : ((loadedRequests ?? []) as MediaRequestRecord[]),
-      );
+      if (nextMode === "admin") {
+        const adminRequests = (loadedRequests ?? []) as MediaRequestRecord[];
+        setRequesterOptions((previous) =>
+          requesterFilterOptions(adminRequests, previous, requesterUserId !== null),
+        );
+        setRequests(collapseMediaRequestsPerStatus(adminRequests));
+      } else {
+        setRequests((loadedRequests ?? []) as MediaRequestRecord[]);
+      }
     } catch (error) {
       setGlobalStatus(error instanceof Error ? error.message : t("status.apiError"));
     } finally {
@@ -377,7 +393,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
         setLoading(false);
       }
     }
-  }, [client, librariesKey, mode, refreshContextKey, requestFacet, selectedLibraryIds, setGlobalStatus, t]);
+  }, [client, librariesKey, mode, refreshContextKey, requestFacet, selectedLibraryIds, selectedRequesterId, setGlobalStatus, t]);
 
   const refreshQualityProfileOptions = React.useCallback(async () => {
     try {
@@ -454,6 +470,7 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
 
   React.useEffect(() => {
     setSelectedLibraryIds([]);
+    setSelectedRequesterId(null);
   }, [facet, mode]);
 
   const changeMode = React.useCallback((nextMode: RequestsMode) => {
@@ -750,6 +767,9 @@ export function RequestsContainer({ facet }: RequestsContainerProps) {
       libraries={libraries}
       selectedLibraryIds={selectedLibraryIds}
       onSelectedLibraryIdsChange={setSelectedLibraryIds}
+      requesterOptions={requesterOptions}
+      selectedRequesterId={selectedRequesterId}
+      onSelectedRequesterIdChange={setSelectedRequesterId}
       requests={requests}
       qualityProfileOptions={qualityProfileOptions}
       loading={loading}

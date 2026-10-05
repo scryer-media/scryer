@@ -1354,6 +1354,7 @@ async fn list_media_requests_filters_by_facet_and_manageable_libraries() {
                 facet: Some(MediaFacet::Movie),
                 library_ids: Some(vec![default_library_id, alternate_library_id.clone()]),
                 status: Some(MediaRequestStatus::Pending),
+                requester_user_id: None,
             },
         )
         .await
@@ -1362,6 +1363,85 @@ async fn list_media_requests_filters_by_facet_and_manageable_libraries() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].library_id, alternate_library_id);
     assert_eq!(requests[0].requesters.len(), 1);
+}
+
+#[tokio::test]
+async fn manager_queue_filters_by_requester_within_manageable_libraries() {
+    let harness = bootstrap_media_request_app();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+    let other_library_id = "movie-library-unmanaged".to_string();
+    harness
+        .libraries
+        .libraries
+        .lock()
+        .await
+        .push(custom_movie_library(&other_library_id, "Unmanaged Movies"));
+    let second_requester = library_permission_user(
+        "queue-filter-requester",
+        &library_id,
+        &[scryer_domain::LibraryPermission::Request],
+    );
+
+    harness
+        .app
+        .submit_media_request(&harness.user, media_request_input(library_id.clone(), 9041))
+        .await
+        .expect("first requester's request should succeed");
+    harness
+        .app
+        .submit_media_request(
+            &second_requester,
+            media_request_input(library_id.clone(), 9042),
+        )
+        .await
+        .expect("second requester's request should succeed");
+    harness
+        .app
+        .submit_media_request(
+            &harness.user,
+            media_request_input(other_library_id.clone(), 9043),
+        )
+        .await
+        .expect("unmanaged library request should succeed");
+
+    let queue_manager = library_permission_user(
+        "queue-filter-manager",
+        &library_id,
+        &[scryer_domain::LibraryPermission::ManageTitles],
+    );
+    let list = |requester_user_id: Option<String>| {
+        harness.app.list_media_requests(
+            &queue_manager,
+            ListMediaRequestsInput {
+                facet: Some(MediaFacet::Movie),
+                library_ids: None,
+                status: None,
+                requester_user_id,
+            },
+        )
+    };
+
+    let unfiltered = list(None).await.expect("queue should load");
+    assert_eq!(unfiltered.len(), 2);
+
+    let filtered = list(Some(second_requester.id.clone()))
+        .await
+        .expect("filtered queue should load");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].created_by_user_id, second_requester.id);
+
+    // The filter narrows the manager's queue; it never reaches a library the
+    // manager cannot already see.
+    let first_requester = list(Some(harness.user.id.clone()))
+        .await
+        .expect("filtered queue should load");
+    assert_eq!(first_requester.len(), 1);
+    assert_eq!(first_requester[0].library_id, library_id);
+
+    let blank = list(Some("   ".to_string()))
+        .await
+        .expect("blank filter should load");
+    assert_eq!(blank.len(), 2);
 }
 
 #[tokio::test]
@@ -1393,6 +1473,7 @@ async fn list_my_media_requests_filters_to_requester_owned_requests() {
                 facet: Some(MediaFacet::Movie),
                 library_ids: None,
                 status: None,
+                requester_user_id: None,
             },
         )
         .await
@@ -1444,6 +1525,7 @@ async fn request_only_user_can_list_submitted_bluey_series_request() {
                 facet: Some(MediaFacet::Series),
                 library_ids: None,
                 status: Some(MediaRequestStatus::Pending),
+                requester_user_id: None,
             },
         )
         .await
@@ -2189,6 +2271,7 @@ async fn media_request_admin_surfaces_require_manage_titles_library_permission()
                 facet: Some(MediaFacet::Movie),
                 library_ids: None,
                 status: Some(MediaRequestStatus::Pending),
+                requester_user_id: None,
             },
         )
         .await
@@ -2851,6 +2934,7 @@ async fn a_title_manager_sees_and_cancels_their_own_held_request() {
                 facet: Some(MediaFacet::Movie),
                 library_ids: None,
                 status: None,
+                requester_user_id: None,
             },
         )
         .await

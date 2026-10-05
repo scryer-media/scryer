@@ -29,3 +29,43 @@ export function requestCountByFacet(
 ): number {
   return requests.filter((request) => request.facet === facet).length;
 }
+
+export type RequesterFilterOption = {
+  userId: string;
+  username: string;
+};
+
+// The requester filter offers only people who already appear on a request the
+// reader can see, so it never lists accounts the reader has no other way to
+// learn about. While a requester is selected the server returns only their
+// rows, so the options seen before the selection are kept rather than
+// collapsing to the one person picked.
+export function requesterFilterOptions(
+  requests: readonly MediaRequestRecord[],
+  previous: readonly RequesterFilterOption[],
+  keepPrevious: boolean,
+): RequesterFilterOption[] {
+  const byUserId = new Map<string, RequesterFilterOption>();
+  if (keepPrevious) {
+    for (const option of previous) {
+      byUserId.set(option.userId, option);
+    }
+  }
+  for (const request of requests) {
+    for (const requester of request.requesters ?? []) {
+      const userId = requester.userId?.trim();
+      if (!userId) {
+        continue;
+      }
+      byUserId.set(userId, {
+        userId,
+        username: requester.username?.trim() || userId,
+      });
+    }
+  }
+  return Array.from(byUserId.values()).sort(
+    (left, right) =>
+      left.username.localeCompare(right.username) ||
+      left.userId.localeCompare(right.userId),
+  );
+}

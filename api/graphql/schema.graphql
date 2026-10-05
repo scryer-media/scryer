@@ -22432,7 +22432,11 @@ type QueryRoot {
 		"""
 		Restrict requests to one status; omitted includes all statuses.
 		"""
-		status: MediaRequestStatusValue
+		status: MediaRequestStatusValue,
+		"""
+		Restrict requests to those this user is a requester on; omitted includes every requester.
+		"""
+		requesterUserId: ID
 	): [MediaRequestPayload!]!
 	"""
 	List only the caller's media requests, optionally filtered by facet, libraries, and status.

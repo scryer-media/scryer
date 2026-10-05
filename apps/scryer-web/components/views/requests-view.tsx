@@ -61,6 +61,7 @@ import {
   requestCountByFacet,
   requestCountByStatus,
   requestsWithStatus,
+  type RequesterFilterOption,
 } from "@/lib/utils/media-request-filters";
 import { mediaRequestRowActions } from "@/lib/utils/media-request-actions";
 import type { LibraryRecord, MediaRequestRecord } from "@/lib/types";
@@ -137,6 +138,10 @@ type QualityProfileOption = {
 };
 
 type RequestsMode = "admin" | "mine";
+
+/// Radix selects cannot hold an empty value, so "every requester" needs a
+/// sentinel that no user id can take.
+const ALL_REQUESTERS_VALUE = "__all_requesters__";
 type RequestStatusFilter = "all" | MediaRequestRecord["status"];
 type RequestFacetFilter = MediaRequestRecord["facet"];
 
@@ -189,6 +194,10 @@ type RequestsViewProps = {
   libraries: LibraryRecord[];
   selectedLibraryIds: string[];
   onSelectedLibraryIdsChange: (libraryIds: string[]) => void;
+  /// People on the queue's visible requests; the queue mode alone offers them.
+  requesterOptions: RequesterFilterOption[];
+  selectedRequesterId: string | null;
+  onSelectedRequesterIdChange: (userId: string | null) => void;
   requests: MediaRequestRecord[];
   qualityProfileOptions: QualityProfileOption[];
   loading: boolean;
@@ -716,6 +725,9 @@ export function RequestsView({
   libraries,
   selectedLibraryIds,
   onSelectedLibraryIdsChange,
+  requesterOptions,
+  selectedRequesterId,
+  onSelectedRequesterIdChange,
   requests,
   qualityProfileOptions,
   loading,
@@ -1452,6 +1464,36 @@ export function RequestsView({
               onSelectedLibraryIdsChange={onSelectedLibraryIdsChange}
               triggerClassName="h-10 min-w-56 rounded-[11px]"
             />
+            {mode === "admin" &&
+            (requesterOptions.length > 0 || selectedRequesterId !== null) ? (
+              <Select
+                value={selectedRequesterId ?? ALL_REQUESTERS_VALUE}
+                onValueChange={(value) =>
+                  onSelectedRequesterIdChange(
+                    value === ALL_REQUESTERS_VALUE ? null : value,
+                  )
+                }
+              >
+                <SelectTrigger
+                  id="requests-requester-filter"
+                  aria-label={t("requests.requesterFilter.label")}
+                  className="h-10 min-w-44 rounded-[11px]"
+                >
+                  <User className="h-4 w-4 shrink-0 text-[var(--scry-muted3)]" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_REQUESTERS_VALUE}>
+                    {t("requests.requesterFilter.all")}
+                  </SelectItem>
+                  {requesterOptions.map((option) => (
+                    <SelectItem key={option.userId} value={option.userId}>
+                      {option.username}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : null}
             {mode === "mine" ? (
               <Button
                 type="button"
