@@ -3063,6 +3063,7 @@ const de: LocaleDictionary = {
   "lists.accounts.private": "Diese Listen und Kontodaten sind nur für dich sichtbar.",
   "lists.accounts.waiting": "Schließe die Autorisierung im Anbieterfenster ab. Die Bestätigung wird automatisch geprüft.",
   "lists.accounts.linkFailed": "Das Konto konnte nicht verbunden werden. Starte die Verbindung erneut.",
+  "lists.accounts.pollRetrying": "Die Freigabe konnte gerade nicht geprüft werden. Es wird weiter versucht, bis die Sitzung abläuft.",
   "lists.accounts.originNotAllowed": "Unter dieser Adresse können keine Konten verbunden werden. Bitte einen Administrator, die öffentliche URL von Scryer zu konfigurieren, oder öffne eine zugelassene lokale Adresse.",
   "lists.accounts.linkExpired": "Diese Sitzung ist abgelaufen. Starte unter Listen eine neue Verbindung.",
   "lists.accounts.popupBlocked": "Erlaube Pop-ups, um dieses Konto zu bestätigen, und verbinde es erneut.",

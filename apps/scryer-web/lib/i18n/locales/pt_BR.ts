@@ -3071,6 +3071,7 @@ const pt_BR: LocaleDictionary = {
   "lists.accounts.private": "Estas listas e os dados da conta são visíveis apenas para você.",
   "lists.accounts.waiting": "Conclua a autorização na janela do provedor. A aprovação é verificada automaticamente.",
   "lists.accounts.linkFailed": "Não foi possível conectar a conta. Inicie novamente a conexão.",
+  "lists.accounts.pollRetrying": "Não foi possível verificar a autorização agora. Tentando novamente até a sessão expirar.",
   "lists.accounts.originNotAllowed": "Não é possível conectar contas por este endereço. Peça a um administrador para configurar a URL pública do Scryer ou abra um endereço local permitido.",
   "lists.accounts.linkExpired": "Esta sessão expirou. Inicie uma nova conexão em Listas.",
   "lists.accounts.popupBlocked": "Permita pop-ups para aprovar esta conta e conecte novamente.",

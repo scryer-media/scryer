@@ -2899,6 +2899,7 @@ const zh_CN: LocaleDictionary = {
   "lists.accounts.private": "只有你能查看这些列表和账户信息。",
   "lists.accounts.waiting": "在提供方窗口中完成授权。系统会自动检查批准状态。",
   "lists.accounts.linkFailed": "账户连接失败。请重新开始连接。",
+  "lists.accounts.pollRetrying": "暂时无法检查授权状态。将持续重试，直到会话过期。",
   "lists.accounts.originNotAllowed": "无法从此地址连接账户。请管理员配置 Scryer 的公开 URL，或打开允许的本地地址。",
   "lists.accounts.linkExpired": "此账户连接会话已过期。请从列表页面重新连接。",
   "lists.accounts.popupBlocked": "请允许弹出窗口以批准此账户，然后重新连接。",

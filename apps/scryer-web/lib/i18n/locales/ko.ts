@@ -2980,6 +2980,7 @@ const ko: LocaleDictionary = {
   "lists.accounts.private": "이 목록과 계정 정보는 본인만 볼 수 있습니다.",
   "lists.accounts.waiting": "제공자 창에서 인증을 완료하세요. 승인은 자동으로 확인됩니다.",
   "lists.accounts.linkFailed": "계정을 연결하지 못했습니다. 다시 연결을 시작하세요.",
+  "lists.accounts.pollRetrying": "지금은 승인 여부를 확인하지 못했습니다. 세션이 만료될 때까지 계속 시도합니다.",
   "lists.accounts.originNotAllowed": "이 주소에서는 계정을 연결할 수 없습니다. 관리자에게 Scryer의 공개 URL을 설정해 달라고 요청하거나 허용된 로컬 주소를 여세요.",
   "lists.accounts.linkExpired": "계정 연결 세션이 만료되었습니다. 목록에서 새 연결을 시작하세요.",
   "lists.accounts.popupBlocked": "팝업을 허용하여 계정을 승인한 후 다시 연결하세요.",
