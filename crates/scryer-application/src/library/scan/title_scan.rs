@@ -787,8 +787,11 @@ async fn cleanup_missing_movie_title_records(
         }
     };
 
+    let mut promotions = crate::catalog::workflow::PrimaryPromotionBatch::default();
     for media_file in media_files {
         if movie_scope.file_is_outside_canonical_folder(&media_file.file_path) {
+            app.record_primary_promotion_candidate(&mut promotions, &title.id, &media_file.id)
+                .await;
             if let Err(error) = app
                 .delete_media_file_record_with_dependents(&media_file.id)
                 .await
@@ -810,6 +813,8 @@ async fn cleanup_missing_movie_title_records(
         if !tracked_movie_path_confirmed_missing(file_path.as_path()).await {
             continue;
         }
+        app.record_primary_promotion_candidate(&mut promotions, &title.id, &media_file.id)
+            .await;
         if let Err(error) = app
             .delete_media_file_record_with_dependents(&media_file.id)
             .await
@@ -826,6 +831,8 @@ async fn cleanup_missing_movie_title_records(
             lost_file = true;
         }
     }
+    app.finish_primary_promotion_batch(&DomainEventActor::system(), promotions)
+        .await;
     if lost_file && title.monitored {
         let scope_key = crate::acquisition::convergence::convergence_scope_key(
             &SubmissionScope::Title,
@@ -3166,6 +3173,7 @@ impl AppUseCase {
                 )
                 .await?;
                 let mut lost_scope_keys = Vec::new();
+                let mut promotions = crate::catalog::workflow::PrimaryPromotionBatch::default();
                 for stale_path in remaining_existing_paths {
                     let Some(record) = existing_records_by_path.get(&stale_path).cloned() else {
                         continue;
@@ -3178,6 +3186,8 @@ impl AppUseCase {
                         continue;
                     }
                     let db_started = Instant::now();
+                    self.record_primary_promotion_candidate(&mut promotions, &title.id, &record.id)
+                        .await;
                     let delete_result = self
                         .delete_media_file_record_with_dependents(&record.id)
                         .await;
@@ -3198,6 +3208,8 @@ impl AppUseCase {
                         ));
                     }
                 }
+                self.finish_primary_promotion_batch(&actor_event, promotions)
+                    .await;
                 lost_scope_keys.sort_unstable();
                 lost_scope_keys.dedup();
                 reopen_lost_file_coverage(self, &title.id, lost_scope_keys).await;

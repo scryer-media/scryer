@@ -604,7 +604,7 @@ impl AppUseCase {
 
     pub(crate) async fn run_scheduled_housekeeping(&self) -> AppResult<HousekeepingReport> {
         info!("starting housekeeping");
-        let orphaned_media_files = {
+        let (orphaned_media_files, promotions) = {
             let _same_path_upgrade_guard = self
                 .runtime
                 .imports
@@ -646,6 +646,7 @@ impl AppUseCase {
                 .list_media_files_with_roots()
                 .await?;
             let mut orphaned_media_files = 0u32;
+            let mut promotions = crate::catalog::workflow::PrimaryPromotionBatch::default();
             for media_file in all_files {
                 if protected_upgrade_file_ids.contains(&media_file.media_file_id) {
                     continue;
@@ -683,6 +684,12 @@ impl AppUseCase {
                     }
                 }
 
+                self.record_primary_promotion_candidate(
+                    &mut promotions,
+                    &media_file.title_id,
+                    &media_file.media_file_id,
+                )
+                .await;
                 if let Err(error) = self
                     .delete_media_file_record_with_dependents(&media_file.media_file_id)
                     .await
@@ -696,8 +703,10 @@ impl AppUseCase {
                 }
                 orphaned_media_files = orphaned_media_files.saturating_add(1);
             }
-            orphaned_media_files
+            (orphaned_media_files, promotions)
         };
+        self.finish_primary_promotion_batch(&DomainEventActor::system(), promotions)
+            .await;
 
         let general_settings = self.general_settings().await?;
         let history_retention_days = general_settings.history_retention_days as i64;
