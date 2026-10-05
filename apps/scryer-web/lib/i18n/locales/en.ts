@@ -2913,6 +2913,10 @@ const en: LocaleDictionary = {
     "You do not have permission to rename titles in every selected library.",
   "status.titleMatchUpdated": "Updated match for {{name}}.",
   "status.languageChanged": "Interface language set to {{language}}.",
+  "status.languageSaveFailed":
+    "Could not save the language to your profile; other browsers keep their current language.",
+  "status.catalogViewSaveFailed":
+    "Could not save this layout to your profile; it applies in this browser only.",
 
   "status.editingIndexer": "Editing indexer {{name}}",
   "status.editingDownloadClient": "Editing download client {{name}}",
