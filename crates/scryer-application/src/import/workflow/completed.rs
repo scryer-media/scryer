@@ -853,6 +853,11 @@ pub(crate) async fn run_claimed_download_cleanup(
         &record.item_id,
     );
     let result = async {
+        if app.services.workflow.imports.archive_processing_pending_for_download(&record.download_id).await? {
+            finish_cleanup_attempt(app, &record, "cleanup_deferred", false, record.history_offset,
+                Some("archive or subtitle delivery is pending; sources preserved")).await;
+            return Ok(None);
+        }
         let persisted = app.services.workflow.download_submissions
             .get_identity_tracked_state_for_download(
                 Some(&record.download_id), &crate::DownloadSubmissionIdentity::default(), Some(&locator),

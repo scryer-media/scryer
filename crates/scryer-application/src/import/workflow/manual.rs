@@ -297,7 +297,17 @@ async fn process_pending_manual_import(app: AppUseCase, record: scryer_domain::I
     let has_successful_import = outcome.files_imported_this_pass > 0
         || outcome.status == ImportStatus::Completed
         || outcome.prior_import_proven;
-    let terminalized = if has_successful_import {
+    let subtitles_pending = outcome
+        .result_json
+        .as_deref()
+        .and_then(|json| serde_json::from_str::<ManualImportExecutionResult>(json).ok())
+        .is_some_and(|result| {
+            result
+                .file_results
+                .iter()
+                .any(|file| file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING))
+        });
+    let terminalized = if has_successful_import && !subtitles_pending {
         let canonical_download_id = match app
             .services
             .workflow
@@ -2673,7 +2683,14 @@ fn manual_import_terminal_status_and_error(
     }
 
     match first_failure {
-        None if succeeded > 0 => (ImportStatus::Completed, None, None),
+        None if succeeded > 0 => (
+            ImportStatus::Completed,
+            None,
+            results
+                .iter()
+                .any(|file| file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING))
+                .then(|| SCENE_SUBTITLE_PENDING_WARNING.into()),
+        ),
         None => (
             ImportStatus::Failed,
             Some(ImportErrorCode::Unknown),
@@ -3042,6 +3059,65 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
     files: Vec<ManualImportFileMapping>,
     trusted_source_root: Option<PathBuf>,
 ) -> AppResult<Vec<ManualImportFileResult>> {
+    let archive_source = trusted_source_root
+        .as_deref()
+        .is_some_and(crate::archive_extractor::is_owned_archive_workspace);
+    let (result, cleanups) =
+        collect_deferred_import_source_cleanup(execute_manual_import_with_release_evidence_inner(
+            app,
+            actor,
+            import_id,
+            title_id,
+            completed,
+            release_evidence,
+            files,
+            trusted_source_root,
+        ))
+        .await;
+    let mut results = result?;
+    let can_release = results
+        .iter()
+        .filter(|file| !file.skipped)
+        .all(|file| file.success)
+        && !results
+            .iter()
+            .any(|file| file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING));
+    if can_release {
+        let cleanup_succeeded = complete_deferred_import_source_cleanup(app, cleanups)
+            .await
+            .is_ok();
+        let hold_released = cleanup_succeeded
+            && (!archive_source
+                || app
+                    .services
+                    .workflow
+                    .imports
+                    .set_archive_processing_pending(import_id, false)
+                    .await
+                    .is_ok());
+        if !hold_released {
+            for file in results.iter_mut().filter(|file| file.success) {
+                file.error_message = Some(SCENE_SUBTITLE_PENDING_WARNING.into());
+            }
+        }
+    }
+    Ok(results)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "manual execution carries explicit user mappings, trusted root, and durable release evidence"
+)]
+async fn execute_manual_import_with_release_evidence_inner(
+    app: &AppUseCase,
+    actor: &User,
+    import_id: &str,
+    title_id: &str,
+    completed: Option<&CompletedDownload>,
+    release_evidence: &ReleaseEvidence,
+    files: Vec<ManualImportFileMapping>,
+    trusted_source_root: Option<PathBuf>,
+) -> AppResult<Vec<ManualImportFileResult>> {
     if let Some(submission_title_id) = release_evidence.title_id()
         && submission_title_id != title_id
     {
@@ -3103,8 +3179,16 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                 .cloned(),
         )
         .collect::<Vec<_>>();
-    let mut subtitle_plan =
-        if crate::archive_extractor::is_owned_archive_workspace(&trusted_source_root) {
+    let mut subtitle_failed = false;
+    let mut subtitle_plan = if crate::archive_extractor::is_owned_archive_workspace(
+        &trusted_source_root,
+    ) {
+        app.services
+            .workflow
+            .imports
+            .set_archive_processing_pending(import_id, true)
+            .await?;
+        let discovery = async {
             let mut subtitle_videos = Vec::new();
             let replaced_sources =
                 crate::archive_extractor::replaced_archive_sources(&trusted_source_root)?;
@@ -3125,10 +3209,24 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
                 &subtitle_videos,
                 &subtitle_roots,
             )
-            .await?
-        } else {
-            sidecars::SceneSubtitlePlan::default()
-        };
+            .await
+        }
+        .await;
+        match discovery {
+            Ok(plan) => plan,
+            Err(AppError::Canceled(message)) => return Err(AppError::Canceled(message)),
+            Err(_) => {
+                subtitle_failed = true;
+                tracing::warn!(
+                    import_id,
+                    "manual scene subtitle discovery failed; preserving sources and continuing video import"
+                );
+                sidecars::SceneSubtitlePlan::default()
+            }
+        }
+    } else {
+        sidecars::SceneSubtitlePlan::default()
+    };
     subtitle_plan.retain_sources(
         &files
             .iter()
@@ -3660,31 +3758,37 @@ pub(crate) async fn execute_manual_import_with_release_evidence(
         }
     }
 
+    let mut delivered_sources = Vec::new();
     for result in &results {
         if result.success
             && let Some(destination) = result.dest_path.as_deref()
         {
-            subtitle_plan
+            let delivery = subtitle_plan
                 .deliver(
                     app,
                     &title.id,
                     &stored_path_to_path_buf(&result.file_path),
                     &stored_path_to_path_buf(destination),
                 )
-                .await?;
+                .await;
+            if delivery.is_ok() {
+                delivered_sources.push(stored_path_to_path_buf(&result.file_path));
+            } else {
+                subtitle_failed = true;
+                tracing::warn!(
+                    import_id,
+                    "manual scene subtitle delivery failed; imported video and sources preserved"
+                );
+            }
         }
     }
 
-    let delivered_sources = results
-        .iter()
-        .filter(|result| result.success && result.dest_path.is_some())
-        .map(|result| stored_path_to_path_buf(&result.file_path))
-        .collect::<Vec<_>>();
-    if subtitle_plan.has_pending_sources(delivered_sources.iter().map(PathBuf::as_path)) {
-        return Err(AppError::ManualReconciliationRequired(
-            "scene subtitles require an exact completed import destination; workspace preserved"
-                .into(),
-        ));
+    if subtitle_failed
+        || subtitle_plan.has_pending_sources(delivered_sources.iter().map(PathBuf::as_path))
+    {
+        for result in results.iter_mut().filter(|result| result.success) {
+            result.error_message = Some(SCENE_SUBTITLE_PENDING_WARNING.into());
+        }
     }
 
     // Successful files the manual-level Import Complete still has to report.
@@ -3952,7 +4056,9 @@ fn completed_manual_import_recovery(
     if result.import_id != record.id
         || result.status != ImportStatus::Completed
         || attempted.is_empty()
-        || attempted.iter().any(|file| !file.success)
+        || attempted.iter().any(|file| {
+            !file.success || file.error_message.as_deref() == Some(SCENE_SUBTITLE_PENDING_WARNING)
+        })
         || !result
             .client_type
             .eq_ignore_ascii_case(&record.source_system)
@@ -4048,9 +4154,22 @@ async fn execute_queued_manual_import_with_outcome(
     payload: &ManualImportRequestPayload,
 ) -> AppResult<QueuedManualImportOutcome> {
     let outcome = execute_queued_manual_import_with_outcome_inner(app, import_id, payload).await;
+    let preservation_pending = app
+        .services
+        .workflow
+        .imports
+        .get_import_by_id(import_id)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|record| serde_json::from_str::<serde_json::Value>(&record.payload_json).ok())
+        .map_or(true, |payload| {
+            payload["archive_processing_pending"].as_bool() == Some(true)
+        });
     if outcome
         .as_ref()
         .is_ok_and(|outcome| outcome.status == ImportStatus::Completed)
+        && !preservation_pending
         && let Some(workspace_root) = payload.archive_workspace_root.as_deref()
     {
         crate::archive_extractor::cleanup_extracted_dir(&stored_path_to_path_buf(workspace_root))
@@ -4678,6 +4797,25 @@ mod manual_import_recovery_tests {
             error_code: (!success).then_some(ImportErrorCode::PolicyMismatch),
             error_message: message.map(str::to_string),
         }
+    }
+
+    #[test]
+    fn manual_import_terminal_status_retains_success_and_pending_subtitle_warning() {
+        let results = [attempted(
+            "movie.mkv",
+            true,
+            Some(SCENE_SUBTITLE_PENDING_WARNING),
+        )];
+        let (status, code, message) = manual_import_terminal_status_and_error(&results);
+        assert_eq!(status, ImportStatus::Completed);
+        assert_eq!(code, None);
+        assert_eq!(message.as_deref(), Some(SCENE_SUBTITLE_PENDING_WARNING));
+        let mut record = completed_manual_import_record("qbittorrent", true);
+        let mut result: ManualImportExecutionResult =
+            serde_json::from_str(record.result_json.as_deref().unwrap()).unwrap();
+        result.file_results = results.to_vec();
+        record.result_json = Some(serde_json::to_string(&result).unwrap());
+        assert!(completed_manual_import_recovery(&record).is_none());
     }
 
     #[test]

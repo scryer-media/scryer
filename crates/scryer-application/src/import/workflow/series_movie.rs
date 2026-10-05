@@ -1,3 +1,6 @@
+pub(crate) const SCENE_SUBTITLE_PENDING_WARNING: &str =
+    "Video imported; archive or subtitle processing needs attention. Sources are preserved.";
+
 #[expect(
     clippy::too_many_arguments,
     reason = "completed import orchestration carries durable evidence and retry context explicitly"
@@ -41,6 +44,19 @@ async fn run_import(
         CompletedImportTargetResolution::Finished(result) => return Ok(*result),
     };
 
+    let mut workspace_reference = crate::archive_extractor::ArchiveWorkspaceReference::default();
+    workspace_reference.track(target.extracted_dir.as_deref());
+    let source_hold = target.archive_preservation_acquired
+        || target.extracted_dir.is_some()
+        || target.archive_processing_pending;
+    if source_hold {
+        app.services
+            .workflow
+            .imports
+            .set_archive_processing_pending(import_id, true)
+            .await?;
+    }
+
     let subtitle_roots = std::iter::once(PathBuf::from(&completed.dest_dir))
         .chain(target.extracted_dir.iter().cloned())
         .collect::<Vec<_>>();
@@ -56,33 +72,111 @@ async fn run_import(
         &subtitle_videos,
         &subtitle_roots,
     )
-    .await?;
+    .await;
+    let mut subtitle_failed = subtitle_plan.is_err() || target.archive_processing_pending;
+    let subtitle_plan = match subtitle_plan {
+        Ok(plan) => plan,
+        Err(AppError::Canceled(message)) => return Err(AppError::Canceled(message)),
+        Err(_) => {
+            tracing::warn!(
+                import_id,
+                "scene subtitle discovery failed; preserving sources and continuing video import"
+            );
+            sidecars::SceneSubtitlePlan::default()
+        }
+    };
     drop(preparation_permit.take());
     let mut subtitle_deliveries = Vec::new();
-    let result = dispatch_completed_import_target(
-        app,
-        actor,
-        import_id,
-        completed,
-        release_evidence,
-        started_at,
-        &target,
-        &mut subtitle_deliveries,
-    )
-    .await;
+    let (mut result, source_cleanups) =
+        collect_deferred_import_source_cleanup(dispatch_completed_import_target(
+            app,
+            actor,
+            import_id,
+            completed,
+            release_evidence,
+            started_at,
+            &target,
+            &mut subtitle_deliveries,
+        ))
+        .await;
 
     // Delivery uses the original names captured before a move import. A
     // failure retains extracted subtitles for inspection and a safe retry.
+    let mut delivered_sources = Vec::new();
     for (source, destination) in &subtitle_deliveries {
-        subtitle_plan
+        match subtitle_plan
             .deliver(app, &target.title.id, source, destination)
-            .await?;
+            .await
+        {
+            Ok(()) => delivered_sources.push(source.as_path()),
+            Err(_) => {
+                subtitle_failed = true;
+                tracing::warn!(
+                    import_id,
+                    "scene subtitle delivery failed; imported video and subtitle sources preserved"
+                );
+            }
+        }
     }
-    let subtitles_pending = subtitle_plan.has_pending_sources(
-        subtitle_deliveries
-            .iter()
-            .map(|(source, _)| source.as_path()),
-    );
+    let mut subtitles_pending =
+        subtitle_failed || subtitle_plan.has_pending_sources(delivered_sources.into_iter());
+    if !subtitles_pending
+        && result
+            .as_ref()
+            .is_ok_and(|result| result.decision == ImportDecision::Imported)
+        && complete_deferred_import_source_cleanup(app, source_cleanups)
+            .await
+            .is_err()
+    {
+        subtitles_pending = true;
+        tracing::warn!(
+            import_id,
+            "verified source cleanup could not finish; import remains successful and sources retained"
+        );
+    }
+    if source_hold
+        && !subtitles_pending
+        && result
+            .as_ref()
+            .is_ok_and(|result| result.decision == ImportDecision::Imported)
+        && app
+            .services
+            .workflow
+            .imports
+            .set_archive_processing_pending(import_id, false)
+            .await
+            .is_err()
+    {
+        subtitles_pending = true;
+        tracing::warn!(
+            import_id,
+            "could not release archive preservation hold; sources retained"
+        );
+    }
+
+    if subtitles_pending {
+        workspace_reference.retain();
+        if let Ok(result) = &mut result
+            && result.decision == ImportDecision::Imported
+        {
+            result.error_message = Some(SCENE_SUBTITLE_PENDING_WARNING.into());
+            // Keep the placed video successful while persisting the cleanup hold.
+            if app
+                .update_import_status_and_notify(
+                    import_id,
+                    ImportStatus::Completed,
+                    serde_json::to_string(result).ok(),
+                )
+                .await
+                .is_err()
+            {
+                tracing::warn!(
+                    import_id,
+                    "could not persist scene subtitle warning; source cleanup remains held"
+                );
+            }
+        }
+    }
 
     // Clean up extracted archive directory if we created one
     if result
@@ -91,6 +185,7 @@ async fn run_import(
         && !subtitles_pending
         && let Some(ref dir) = target.extracted_dir
     {
+        workspace_reference.retain();
         crate::archive_extractor::cleanup_extracted_dir(dir).await;
     }
 
@@ -239,6 +334,8 @@ struct CompletedImportTarget {
     is_series: bool,
     video_files: Vec<ImportVideoFile>,
     extracted_dir: Option<PathBuf>,
+    archive_processing_pending: bool,
+    archive_preservation_acquired: bool,
     series_movie_link_id: Option<String>,
 }
 
@@ -326,13 +423,13 @@ async fn relocate_titleless_archive_workspace_for_title(
     // Keep the name recorded by the ownership marker and never replace an
     // existing directory. Unsupported filesystems can extract under the title.
     let Some(result) = crate::fs_safety::exclusive_rename(&extracted_dir, &target).await else {
-        crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
         return Ok(TitlelessArchiveRelocation::ReextractUnderMatchedTitle);
     };
     match result {
         Ok(()) => Ok(TitlelessArchiveRelocation::Ready(target)),
         Err(error) => {
-            crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+            crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
             if crate::fs_safety::is_cross_device_error(&error)
                 || error.kind() == std::io::ErrorKind::AlreadyExists
             {
@@ -537,6 +634,13 @@ async fn try_match_titleless_archive_from_inner_video(
         .available()
         .cloned();
 
+    // Fence source cleanup before any set can produce pending subtitles,
+    // including cancellation or a later set failing before target resolution.
+    app.services
+        .workflow
+        .imports
+        .set_archive_processing_pending(import_id, true)
+        .await?;
     mark_import_extracting(app, import_id).await?;
     let Some(extracted_dir) = ({
         let _archive_extraction_permit = app
@@ -557,6 +661,8 @@ async fn try_match_titleless_archive_from_inner_video(
         return Ok(None);
     };
 
+    let mut workspace_reference = crate::archive_extractor::ArchiveWorkspaceReference::default();
+    workspace_reference.track(Some(&extracted_dir));
     let is_series = matches!(facet, MediaFacet::Series | MediaFacet::Anime);
     let video_files = match (|| {
         let mut files = find_video_files(&extracted_dir, is_series)?;
@@ -573,12 +679,12 @@ async fn try_match_titleless_archive_from_inner_video(
     })() {
         Ok(video_files) => video_files,
         Err(error) => {
-            crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+            crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
             return Err(error);
         }
     };
     if video_files.is_empty() {
-        crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
         return Ok(None);
     }
 
@@ -606,7 +712,7 @@ async fn try_match_titleless_archive_from_inner_video(
                 match archive_extraction_destination_for_title(app, import_id, &title).await {
                     Ok(destination) => destination,
                     Err(error) => {
-                        crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+                        crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
                         return Err(error);
                     }
                 };
@@ -646,6 +752,7 @@ async fn try_match_titleless_archive_from_inner_video(
                     })?
                 }
             };
+            workspace_reference.retain();
             return Ok(Some(TitlelessArchiveMatch {
                 title,
                 extracted_dir,
@@ -653,7 +760,7 @@ async fn try_match_titleless_archive_from_inner_video(
         }
     }
 
-    crate::archive_extractor::cleanup_extracted_dir(&extracted_dir).await;
+    crate::archive_extractor::abandon_extracted_dir(&extracted_dir).await;
     Ok(None)
 }
 
@@ -676,6 +783,9 @@ async fn resolve_completed_import_target(
     let mut title = None;
     let dest_dir = Path::new(&completed.dest_dir);
     let mut extracted_dir: Option<PathBuf> = None;
+    let mut archive_processing_pending = false;
+    let mut archive_preservation_acquired = extracted_dir.is_some();
+    let mut workspace_reference = crate::archive_extractor::ArchiveWorkspaceReference::default();
     // One srrdb session for this whole `run_import` call: the setting is read
     // at most once, results are reused between the titleless probe below and
     // the final file list, and one outage stops the rest of this import.
@@ -743,6 +853,7 @@ async fn resolve_completed_import_target(
         if let Some(archive_match) = archive_match? {
             title = Some(archive_match.title);
             extracted_dir = Some(archive_match.extracted_dir);
+            workspace_reference.track(extracted_dir.as_deref());
         }
     }
 
@@ -849,14 +960,32 @@ async fn resolve_completed_import_target(
     // 3. FIND VIDEO FILES (extract archives first if needed)
     let is_series = matches!(title.facet, MediaFacet::Series | MediaFacet::Anime);
     if extracted_dir.is_none() {
-        let extraction_destination = if archive_extraction_would_be_needed_best_effort(
+        let loose_video_available =
+            find_video_files(dest_dir, is_series).is_ok_and(|files| !files.is_empty());
+        let archive_provider = app
+            .services
+            .integrations
+            .archive_extractor_plugin_provider
+            .available()
+            .cloned();
+        let needs_archives = archive_extraction_would_be_needed_best_effort(
             dest_dir,
             automatic_scan_sample_rule(&title.facet),
-        ) {
-            Some(archive_extraction_destination_for_title(app, import_id, &title).await?)
-        } else {
-            None
-        };
+        );
+        if needs_archives {
+            archive_preservation_acquired = true;
+            app.services
+                .workflow
+                .imports
+                .set_archive_processing_pending(import_id, true)
+                .await?;
+        }
+        let extraction_destination =
+            if needs_archives && !(loose_video_available && archive_provider.is_none()) {
+                Some(archive_extraction_destination_for_title(app, import_id, &title).await?)
+            } else {
+                None
+            };
         let passwords = if extraction_destination.is_some() {
             archive_password_candidates(app, completed, release_evidence, archive_password).await
         } else {
@@ -904,11 +1033,7 @@ async fn resolve_completed_import_target(
                 automatic_scan_sample_rule(&title.facet),
                 extraction_destination,
                 &passwords,
-                app.services
-                    .integrations
-                    .archive_extractor_plugin_provider
-                    .available()
-                    .cloned(),
+                archive_provider,
             )
             .await
         }.await;
@@ -922,7 +1047,20 @@ async fn resolve_completed_import_target(
                 .acquire_preparation()
                 .await,
         );
-        extracted_dir = extraction?;
+        extracted_dir = match extraction {
+            Ok(dir) => dir,
+            Err(AppError::Canceled(message)) => return Err(AppError::Canceled(message)),
+            Err(_) if loose_video_available => {
+                archive_processing_pending = true;
+                tracing::warn!(
+                    import_id,
+                    "adjacent archive processing failed; continuing loose video import and preserving download"
+                );
+                None
+            }
+            Err(error) => return Err(error),
+        };
+        workspace_reference.track(extracted_dir.as_deref());
     }
     let effective_dir = extracted_dir.as_deref().unwrap_or(dest_dir);
     let video_files = match (|| {
@@ -943,7 +1081,7 @@ async fn resolve_completed_import_target(
         Ok(video_files) => video_files,
         Err(error) => {
             if let Some(ref dir) = extracted_dir {
-                crate::archive_extractor::cleanup_extracted_dir(dir).await;
+                crate::archive_extractor::abandon_extracted_dir(dir).await;
             }
             return Err(error);
         }
@@ -967,7 +1105,7 @@ async fn resolve_completed_import_target(
 
     if video_files.is_empty() {
         if let Some(ref dir) = extracted_dir {
-            crate::archive_extractor::cleanup_extracted_dir(dir).await;
+            crate::archive_extractor::abandon_extracted_dir(dir).await;
         }
         let result = ImportResult {
             decision: ImportDecision::Skipped,
@@ -1011,12 +1149,15 @@ async fn resolve_completed_import_target(
         _ => None,
     };
 
+    workspace_reference.retain();
     Ok(CompletedImportTargetResolution::Ready(Box::new(
         CompletedImportTarget {
             title,
             is_series,
             video_files,
             extracted_dir,
+            archive_processing_pending,
+            archive_preservation_acquired,
             series_movie_link_id,
         },
     )))

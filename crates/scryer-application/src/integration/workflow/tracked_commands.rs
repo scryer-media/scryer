@@ -1066,6 +1066,10 @@ async fn process_tracked_download_snapshot(
     // transaction rather than one per row inside a resolution transaction.
     crate::download_identity::flush_shared_observation_touches(app).await;
 
+    // A definitive refusal can clear its durable claim after the native job
+    // disappears. Keep ambiguous claims visible, clear only settled holds.
+    runtime.tracker.reconcile_password_retry_holds(app).await;
+
     let full_authoritative_listing = matches!(
         prune,
         TrackedDownloadSnapshotPrune::GlobalExcludingClientTypes
@@ -1357,6 +1361,23 @@ pub(crate) async fn drop_source_removed_from_client(
             return;
         }
     };
+
+    if let Some(binding) = &binding {
+        match app
+            .services
+            .workflow
+            .download_submissions
+            .password_retry_observation(&binding.download_id)
+            .await
+        {
+            Ok(None) => {}
+            Ok(Some(_)) | Err(_) => {
+                tracing::warn!(download_id = %binding.download_id,
+                    "client job absence cannot retire a pending password retry; awaiting reconciliation");
+                return;
+            }
+        }
+    }
 
     if let Err(error) = finalize_scryer_download_ignored_for_download(
         app,

@@ -758,6 +758,22 @@ impl WeaverDownloadClient {
             .with_backoff(Duration::from_secs(1), Duration::from_secs(15))
     }
 
+    async fn supports_password_candidates(&self) -> bool {
+        // Optional input fields require positive schema evidence. Failed or
+        // disabled introspection must leave the published single-password API
+        // usable, including its independent request/cooldown scope.
+        let policy = RequestPolicy::safe_read(
+            format!("weaver-capabilities:{}", self.graphql_url),
+            "weaver_password_capabilities",
+        )
+        .with_max_retries(0);
+        self.graphql_request_typed::<Value>(policy,
+            "query PasswordCapabilities { __type(name: \"SubmitNzbInput\") { inputFields { name } } }",
+            json!({}),
+        ).await.ok().and_then(|data| data["__type"]["inputFields"].as_array().cloned())
+            .is_some_and(|fields| fields.iter().any(|field| field["name"] == "passwordCandidates"))
+    }
+
     /// Test connectivity by querying metrics.
     pub async fn test_connection(&self) -> AppResult<String> {
         match self
@@ -1475,17 +1491,19 @@ impl DownloadClient for WeaverDownloadClient {
             });
 
         let result: AppResult<DownloadGrabResult> = async {
-            let variables = json!({
+            let mut variables = json!({
                 "input": {
                     "nzbUpload": Value::Null,
                     "filename": nzb_filename,
                     "password": password,
-                    "passwordCandidates": password_candidates,
                     "category": category,
                     "attributes": attributes,
                     "clientRequestId": client_request_id,
                 }
             });
+            if password_candidates.iter().nth(1).is_some() && self.supports_password_candidates().await {
+                variables["input"]["passwordCandidates"] = json!(password_candidates);
+            }
 
             debug!(
                 endpoint = self.graphql_url.as_str(),
@@ -1871,7 +1889,7 @@ impl DownloadClient for WeaverDownloadClient {
                 "replacement password is required".into(),
             ));
         }
-        let result = self.graphql_request_with_policy::<Value>(
+        let result = self.graphql_request_typed::<Value>(
             self.mutation_policy("weaver_password_retry"),
             "mutation PasswordRetry($id: Int!, $password: String!) { reprocessJob(id: $id, password: $password) }",
             json!({ "id": job_id, "password": password }),
@@ -1884,6 +1902,14 @@ impl DownloadClient for WeaverDownloadClient {
                 })
             }
             Ok(data) if data.get("reprocessJob").and_then(Value::as_bool) == Some(false) => {
+                Ok(Outcome::Refused)
+            }
+            // Schema validation cannot execute the mutation. In particular,
+            // older Weaver rejects the optional password argument definitively.
+            Err(error)
+                if error.is_schema_error("Unknown argument \"password\"")
+                    || error.is_schema_error("Unknown field \"reprocessJob\"") =>
+            {
                 Ok(Outcome::Refused)
             }
             _ => Ok(Outcome::Uncertain),
@@ -2205,6 +2231,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn older_weaver_rejects_password_retry_without_an_uncertain_claim() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "errors":[{"message":"Unknown argument \"password\" on field \"reprocessJob\"."}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = WeaverDownloadClient::new(server.uri(), None);
+        assert_eq!(
+            client
+                .retry_failed_job("42", "synthetic-key")
+                .await
+                .unwrap(),
+            scryer_application::DownloadClientRetryOutcome::Refused
+        );
+    }
+
+    #[tokio::test]
+    async fn older_weaver_submission_keeps_single_password_when_candidates_are_unavailable() {
+        for capabilities in [
+            json!({"data":{"__type":{"inputFields":[{"name":"password"}]}}}),
+            json!({"errors":[{"message":"Introspection disabled"}]}),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/graphql"))
+                .and(body_string_contains("PasswordCapabilities"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(capabilities))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST")).and(path("/graphql"))
+                .and(|request: &wiremock::Request| String::from_utf8_lossy(&request.body).contains("mutation SubmitNzb"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data":{"submitNzb":{"accepted":true,"status":"ACCEPTED","jobId":77,"item":{"id":77}}}
+                }))).expect(1).mount(&server).await;
+            let directory = tempfile::tempdir().unwrap();
+            let store = Arc::new(
+                FileSystemStagedNzbStore::new(directory.path())
+                    .await
+                    .unwrap(),
+            );
+            let mut staged = store
+                .stage_nzb_bytes_for_test(b"<nzb></nzb>")
+                .await
+                .unwrap();
+            let compressed = tokio::fs::read(&staged.compressed_path).await.unwrap();
+            assert_eq!(
+                zstd::stream::decode_all(compressed.as_slice()).unwrap(),
+                b"<nzb></nzb>"
+            );
+            staged
+                .password_candidates
+                .extend(["synthetic-first", "synthetic-second"]);
+            let mut request =
+                test_add_request("scryer-download:00000000-0000-4000-8000-000000000024");
+            request.staged_nzb = Some(staged);
+            let client = WeaverDownloadClient::with_staged_nzb_store(
+                server.uri(),
+                None,
+                store,
+                Arc::new(Semaphore::new(1)),
+            );
+            assert_eq!(client.submit_download(&request).await.unwrap().job_id, "77");
+            let requests = server.received_requests().await.unwrap();
+            let upload = requests
+                .iter()
+                .find(|request| {
+                    String::from_utf8_lossy(&request.body).contains("mutation SubmitNzb")
+                })
+                .unwrap();
+            let body = String::from_utf8_lossy(&upload.body);
+            assert!(body.contains("\"password\":\"synthetic-first\""));
+            assert!(!body.contains("passwordCandidates"));
+            assert!(
+                upload
+                    .body
+                    .windows(compressed.len())
+                    .any(|window| window == compressed)
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn password_retry_sends_replacement_without_replaying_ambiguous_mutation() {
         use scryer_application::DownloadClientRetryOutcome as Outcome;
         for valid_reply in [true, false] {
@@ -2313,7 +2426,6 @@ mod tests {
                 "nzbUpload": null,
                 "filename": "Test Release.nzb",
                 "password": "archive-password",
-                "passwordCandidates": ["archive-password"],
                 "category": "movies",
                 "attributes": [
                     { "key": "*scryer_title_id", "value": "title-1" },
@@ -2355,8 +2467,17 @@ mod tests {
                 .mount(&server)
                 .await;
             Mock::given(method("POST")).and(path("/graphql"))
+                .and(|request: &wiremock::Request| String::from_utf8_lossy(&request.body).contains("mutation SubmitNzb"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"data":{"submitNzb":{"accepted":true,"status":"ACCEPTED","jobId":77,"item":{"id":77}}}})))
                 .mount(&server).await;
+            Mock::given(method("POST"))
+                .and(path("/graphql"))
+                .and(body_string_contains("PasswordCapabilities"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "data":{"__type":{"inputFields":[{"name":"passwordCandidates"}]}}
+                })))
+                .mount(&server)
+                .await;
             Mock::given(method("POST"))
                 .and(path("/jsonrpc"))
                 .and(wiremock::matchers::body_partial_json(
@@ -2420,6 +2541,9 @@ mod tests {
                 .iter()
                 .find(|request| {
                     request.method.as_str() == "POST"
+                        && (request.url.path() != "/graphql"
+                            || String::from_utf8_lossy(&request.body)
+                                .contains("mutation SubmitNzb"))
                         && (request.url.path() != "/jsonrpc"
                             || serde_json::from_slice::<Value>(&request.body).unwrap()["method"]
                                 == "append")

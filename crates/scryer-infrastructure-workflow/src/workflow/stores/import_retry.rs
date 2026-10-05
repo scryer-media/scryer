@@ -113,6 +113,18 @@ impl ImportStore {
                     &[SqlArg::OptText(claim.source.client_id.clone()), SqlArg::Text(claim.source.item_id.clone()), SqlArg::Text(id.clone())]).await?.is_some() {
                     return Ok(scryer_application::ImportRetryClaimOutcome::Busy);
                 }
+                // A retry replaces submission details, never preservation
+                // evidence. Only an explicit post-delivery release clears it.
+                let previous = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT payload_json FROM imports WHERE id = {}",
+                    &[SqlArg::Text(claim.import_id.clone())]).await?;
+                let mut payload: serde_json::Value = serde_json::from_str(&payload_json)
+                    .map_err(|_| AppError::Repository("retry payload is unavailable".into()))?;
+                if previous.as_ref().map(archive_import_has_pending_sources).transpose()?.unwrap_or(false) {
+                    payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid retry payload".into()))?
+                        .insert("archive_processing_pending".into(), serde_json::Value::Bool(true));
+                }
+                let payload_json = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
                 let payload_arg = json_arg_for_tx(tx, Some(&payload_json))?;
                 let changed = SqlRuntime::execute(SqlExec::Tx(tx),
                     "UPDATE imports SET status = 'processing', result_json = NULL, payload_json = {}, started_at = {}, finished_at = NULL, updated_at = {}

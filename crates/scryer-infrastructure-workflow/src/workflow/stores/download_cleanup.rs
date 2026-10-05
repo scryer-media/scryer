@@ -188,6 +188,15 @@ impl DownloadSubmissionStore {
             let id = id.clone();
             Box::pin(async move {
                 super::import_store::lock_retry_download(tx, &id).await?;
+                let imports = SqlRuntime::fetch_all(SqlExec::Tx(tx),
+                    "SELECT payload_json FROM imports WHERE canonical_download_id = {}",
+                    &[SqlArg::Text(id.clone())],
+                ).await?;
+                for import in imports {
+                    if super::import_store::archive_import_has_pending_sources(&import)? {
+                        return Ok(DownloadCleanupClaim::Deferred);
+                    }
+                }
                 if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
                     "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason IN ({}, {}, {}, {}) LIMIT 1",
                     &[SqlArg::Text(id.clone()), SqlArg::Text(scryer_application::IMPORT_RETRY_TRACKED_STATE_REASON.into()),

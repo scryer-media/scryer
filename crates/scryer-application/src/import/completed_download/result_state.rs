@@ -250,6 +250,15 @@ pub(crate) async fn apply_import_result_with_completed(
     completed: Option<&CompletedDownload>,
     release_evidence: Option<&crate::import_workflow::ReleaseEvidence>,
 ) -> bool {
+    if result.decision == ImportDecision::Imported
+        && result.error_message.as_deref()
+            == Some(crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING)
+    {
+        td.state = TrackedDownloadState::ImportBlocked;
+        td.status = TrackedDownloadStatus::Warning;
+        td.status_messages = vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING.into()];
+        return false;
+    }
     let already_imported = result.decision == ImportDecision::Skipped
         && result.skip_reason == Some(ImportSkipReason::AlreadyImported);
     let intentionally_ignored_aggregate =

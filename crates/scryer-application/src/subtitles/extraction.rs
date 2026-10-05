@@ -35,6 +35,13 @@ struct ArchiveCandidate {
     file: SubtitleFile,
 }
 
+#[derive(Default)]
+struct SubtitleArchiveBudget {
+    expanded: usize,
+    entries: usize,
+    execution_time: std::time::Duration,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ArtifactKind {
     Zip,
@@ -74,22 +81,15 @@ pub async fn normalize_downloaded_subtitle_with_passwords(
     let mut passwords = crate::import::archive_passwords::ArchivePasswordCandidates::default();
     passwords.push_release_name(file.filename.as_deref());
     passwords.extend_settings(settings);
-    tokio::time::timeout(
-        std::time::Duration::from_secs(60 * 60),
-        normalize_recursive(
-            file,
-            &context,
-            archive_provider.as_ref(),
-            &passwords,
-            0,
-            &mut 0,
-            &mut 0,
-        ),
+    normalize_recursive(
+        file,
+        &context,
+        archive_provider.as_ref(),
+        &passwords,
+        0,
+        &mut SubtitleArchiveBudget::default(),
     )
     .await
-    .map_err(|_| {
-        AppError::archive_extraction_timed_out("subtitle extraction exceeded its attempt budget")
-    })?
     .map_err(redact_subtitle_archive_error)?
     .ok_or_else(|| {
         AppError::Validation("subtitle archive did not contain a supported subtitle file".into())
@@ -111,8 +111,7 @@ async fn normalize_recursive(
     provider: Option<&Arc<dyn ArchiveExtractorPluginProvider>>,
     passwords: &crate::import::archive_passwords::ArchivePasswordCandidates,
     depth: usize,
-    expanded: &mut usize,
-    entries: &mut usize,
+    budget: &mut SubtitleArchiveBudget,
 ) -> AppResult<Option<SubtitleFile>> {
     if depth > MAX_RECURSION_DEPTH || file.content.len() > MAX_ARTIFACT_BYTES {
         return Err(AppError::Validation(
@@ -128,16 +127,8 @@ async fn normalize_recursive(
         let mut set_passwords = passwords.clone();
         set_passwords.push_release_name(file.filename.as_deref());
         set_passwords.extend(selection.passwords);
-        normalize_with_archive_plugin(
-            file,
-            kind,
-            format,
-            selection.client,
-            &set_passwords,
-            MAX_EXPANDED_BYTES.saturating_sub(*expanded),
-            MAX_ARCHIVE_FILES.saturating_sub(*entries),
-        )
-        .await?
+        normalize_with_archive_plugin(file, kind, format, selection.client, &set_passwords, budget)
+            .await?
     } else {
         let Some(kind) = detect_artifact_kind(&file) else {
             if depth > 0 && final_subtitle_format(&file).is_none() {
@@ -154,13 +145,16 @@ async fn normalize_recursive(
             } else {
                 ".zst"
             };
-            let content = if kind == ArtifactKind::Gzip {
-                read_limited(GzDecoder::new(Cursor::new(file.content)))?
-            } else {
-                let decoder = zstd::stream::read::Decoder::new(Cursor::new(file.content))
-                    .map_err(|e| AppError::Repository(format!("invalid subtitle stream: {e}")))?;
-                read_limited(decoder)?
-            };
+            let content =
+                if kind == ArtifactKind::Gzip {
+                    read_limited_memory(GzDecoder::new(Cursor::new(file.content)))?
+                } else {
+                    let decoder = zstd::stream::read::Decoder::new(Cursor::new(file.content))
+                        .map_err(|_| AppError::ArchiveExtractionFailed {
+                            message: "invalid subtitle stream".into(),
+                        })?;
+                    read_limited_memory(decoder)?
+                };
             let inner = inner_file_from_parts(file.filename, file.format, content, suffix);
             Ok(vec![ArchiveCandidate {
                 filename: inner.filename.clone().unwrap_or_default(),
@@ -171,10 +165,10 @@ async fn normalize_recursive(
         .map_err(|e| AppError::Repository(format!("subtitle extraction task failed: {e}")))??
     };
     let mut normalized = Vec::new();
-    for candidate in candidates {
-        *expanded = checked_expanded_size(*expanded, candidate.file.content.len())?;
-        *entries += 1;
-        if *entries > MAX_ARCHIVE_FILES {
+    for (ordinal, candidate) in candidates.into_iter().enumerate() {
+        budget.expanded = checked_expanded_size(budget.expanded, candidate.file.content.len())?;
+        budget.entries += 1;
+        if budget.entries > MAX_ARCHIVE_FILES {
             return Err(AppError::Validation(
                 "subtitle artifacts contain too many files".into(),
             ));
@@ -185,10 +179,20 @@ async fn normalize_recursive(
             provider,
             passwords,
             depth + 1,
-            expanded,
-            entries,
+            budget,
         ))
-        .await?;
+        .await;
+        let file = match file {
+            Ok(file) => file,
+            Err(AppError::ArchiveExtractionFailed { .. }) => {
+                tracing::warn!(
+                    entry_ordinal = ordinal,
+                    "corrupt nested subtitle stream skipped"
+                );
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
         if let Some(file) = file {
             normalized.push((candidate.filename, file));
         }
@@ -206,8 +210,7 @@ async fn normalize_with_archive_plugin(
     format: ArchivePluginFormat,
     client: Arc<dyn ArchiveExtractorClient>,
     passwords: &crate::import::archive_passwords::ArchivePasswordCandidates,
-    remaining_bytes: usize,
-    remaining_entries: usize,
+    budget: &mut SubtitleArchiveBudget,
 ) -> AppResult<Vec<ArchiveCandidate>> {
     let temp_dir = tempfile::tempdir().map_err(|error| {
         AppError::Repository(format!(
@@ -225,12 +228,19 @@ async fn normalize_with_archive_plugin(
     let mut password = None;
     let mut attempt = 0usize;
     let output_dir = loop {
+        let remaining_time =
+            std::time::Duration::from_secs(60 * 60).saturating_sub(budget.execution_time);
+        if remaining_time.is_zero() {
+            return Err(AppError::archive_extraction_timed_out(
+                "subtitle execution budget exhausted",
+            ));
+        }
         let output_dir = temp_dir.path().join(format!("output-{attempt}"));
         fs::create_dir(&output_dir).map_err(|_| {
             AppError::Repository("failed to create subtitle archive output directory".into())
         })?;
-        let response = client
-            .process_with_limits(
+        let (response, elapsed) = client
+            .process_with_budget(
                 ArchivePluginProcessRequest {
                     operation: ArchivePluginOperation::ExtractArchive {
                         archive_path: input_path.to_string_lossy().into_owned(),
@@ -241,13 +251,15 @@ async fn normalize_with_archive_plugin(
                 },
                 ArchiveExtractionLimits {
                     max_input_bytes: MAX_ARTIFACT_BYTES as u64,
-                    max_output_bytes: remaining_bytes as u64,
-                    max_entries: remaining_entries as u64,
+                    max_output_bytes: MAX_EXPANDED_BYTES.saturating_sub(budget.expanded) as u64,
+                    max_entries: MAX_ARCHIVE_FILES.saturating_sub(budget.entries) as u64,
                     max_directories: MAX_ARCHIVE_FILES as u64,
                     max_scratch_bytes: MAX_EXPANDED_BYTES as u64,
                 },
+                remaining_time,
             )
             .await?;
+        budget.execution_time = budget.execution_time.saturating_add(elapsed);
         if format != ArchivePluginFormat::Xz
             && matches!(
                 response.status,
@@ -784,10 +796,33 @@ fn is_safe_relative_path(path: &str) -> bool {
 }
 
 fn read_limited<R: Read>(reader: R) -> AppResult<Vec<u8>> {
+    read_limited_with_context(reader, false)
+}
+
+fn read_limited_memory<R: Read>(reader: R) -> AppResult<Vec<u8>> {
+    read_limited_with_context(reader, true)
+}
+
+fn read_limited_with_context<R: Read>(reader: R, in_memory: bool) -> AppResult<Vec<u8>> {
     let mut limited = reader.take((MAX_EXPANDED_BYTES + 1) as u64);
     let mut out = Vec::new();
     limited.read_to_end(&mut out).map_err(|error| {
-        AppError::Repository(format!("failed to read subtitle artifact: {error}"))
+        if in_memory
+            && matches!(
+                error.kind(),
+                std::io::ErrorKind::InvalidData
+                    | std::io::ErrorKind::InvalidInput
+                    | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::Other
+            )
+        {
+            // In-memory decoders can use Other for malformed stream headers.
+            AppError::ArchiveExtractionFailed {
+                message: "subtitle stream is corrupt or truncated".into(),
+            }
+        } else {
+            AppError::Repository(format!("failed to read subtitle artifact: {error}"))
+        }
     })?;
     ensure_expanded_size(out.len())?;
     Ok(out)
@@ -1106,8 +1141,7 @@ mod tests {
             ArchivePluginFormat::Zip,
             Arc::new(PartialClient(std::sync::Mutex::new(None))),
             &passwords,
-            MAX_EXPANDED_BYTES,
-            MAX_ARCHIVE_FILES,
+            &mut SubtitleArchiveBudget::default(),
         )
         .await
         .unwrap();
@@ -1333,6 +1367,29 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn corrupt_nested_subtitle_stream_does_not_hide_supported_sibling() {
+        let mut outer = Vec::new();
+        {
+            let mut builder = tar::Builder::new(&mut outer);
+            for (name, content) in [
+                ("broken.srt.gz", b"\x1f\x8btruncated".as_slice()),
+                ("Show.S01E17.eng.srt", SRT_CONTENT),
+            ] {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(content.len() as u64);
+                header.set_cksum();
+                builder.append_data(&mut header, name, content).unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        let normalized =
+            normalize_downloaded_subtitle(subtitle_file("release.tar", outer), context())
+                .await
+                .unwrap();
+        assert_eq!(normalized.content, SRT_CONTENT);
     }
 
     #[tokio::test]

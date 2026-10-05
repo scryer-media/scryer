@@ -19,6 +19,8 @@ use crate::{
 
 const DEFAULT_TRACKED_DOWNLOAD_CACHE_TTL_HOURS: i64 = 24;
 const DEFAULT_TRACKED_DOWNLOAD_CACHE_MAX_ENTRIES: usize = 5_000;
+const PASSWORD_RETRY_RECONCILIATION_MESSAGE: &str =
+    "Password retry is awaiting confirmation from the download client; sources are preserved.";
 
 // ── TrackedDownload ──────────────────────────────────────────────────────────
 
@@ -500,11 +502,15 @@ impl TrackedDownloadService {
                     .observe_download(&observation.source, 0)
                     .await
                 else {
+                    self.hold_password_retry(app, download_id, client_item)
+                        .await;
                     return None;
                 };
                 if crate::download_identity::observed_queue_item_job(&fresh).locator
                     != observation.source
                 {
+                    self.hold_password_retry(app, download_id, client_item)
+                        .await;
                     return None;
                 }
                 if !app
@@ -515,14 +521,34 @@ impl TrackedDownloadService {
                     .await
                     .unwrap_or(false)
                 {
+                    self.hold_password_retry(app, download_id, client_item)
+                        .await;
                     return None;
                 }
-                if !observation.confirmed {
+                if !observation.confirmed
+                    || self.cache.get(&download_id).is_some_and(|tracked| {
+                        tracked
+                            .status_messages
+                            .iter()
+                            .any(|message| message == PASSWORD_RETRY_RECONCILIATION_MESSAGE)
+                    })
+                {
                     self.stop_tracking_download(download_id);
                 }
                 *fresh
             }
-            Ok(None) => client_item,
+            Ok(None) => {
+                if self.cache.get(&download_id).is_some_and(|tracked| {
+                    tracked
+                        .status_messages
+                        .iter()
+                        .any(|message| message == PASSWORD_RETRY_RECONCILIATION_MESSAGE)
+                }) {
+                    // A definitive refusal may arrive after the pending poll.
+                    self.stop_tracking_download(download_id);
+                }
+                client_item
+            }
             Err(_) => return None,
         };
         let id = tracked_download_id_for_item(&client_item);
@@ -589,6 +615,66 @@ impl TrackedDownloadService {
             download_id,
             newly_tracked: true,
         })
+    }
+
+    async fn hold_password_retry(
+        &mut self,
+        app: &AppUseCase,
+        download_id: DownloadId,
+        item: DownloadQueueItem,
+    ) {
+        let id = tracked_download_id_for_item(&item);
+        if !self.cache.contains_key(&download_id) {
+            let tracked =
+                Self::build_new_tracked_download(app, download_id, id.clone(), item).await;
+            self.cache.insert(download_id, tracked);
+        }
+        let tracked = self
+            .cache
+            .get_mut(&download_id)
+            .expect("pending retry was inserted");
+        tracked.is_trackable = true;
+        tracked.state = TrackedDownloadState::ImportBlocked;
+        tracked.import_attempted = true;
+        tracked.status = TrackedDownloadStatus::Warning;
+        tracked.status_messages = vec![PASSWORD_RETRY_RECONCILIATION_MESSAGE.into()];
+        self.current_download_for_id.insert(id, download_id);
+        self.last_seen_at.insert(download_id, Utc::now());
+    }
+
+    pub(crate) async fn reconcile_password_retry_holds(&mut self, app: &AppUseCase) {
+        let pending = self
+            .cache
+            .iter()
+            .filter(|(_, tracked)| {
+                tracked
+                    .status_messages
+                    .iter()
+                    .any(|message| message == PASSWORD_RETRY_RECONCILIATION_MESSAGE)
+            })
+            .map(|(id, _)| *id)
+            .collect::<Vec<_>>();
+        for id in pending {
+            if matches!(
+                app.services
+                    .workflow
+                    .download_submissions
+                    .password_retry_observation(&id)
+                    .await,
+                Ok(None)
+            ) {
+                if let Some(held) = self.cache.get(&id) {
+                    let refreshed = Self::build_new_tracked_download(
+                        app,
+                        id,
+                        held.id.clone(),
+                        held.client_item.clone(),
+                    )
+                    .await;
+                    self.cache.insert(id, refreshed);
+                }
+            }
+        }
     }
 
     /// Build a new TrackedDownload, resolving title and reconstructing state.
@@ -900,6 +986,13 @@ impl TrackedDownloadService {
     /// closes. A foreign row whose import is genuinely under way still keeps
     /// today's lifecycle, and so does every row Scryer submitted.
     pub(crate) fn should_preserve_tracked_download(td: &TrackedDownload) -> bool {
+        if td
+            .status_messages
+            .iter()
+            .any(|message| message == PASSWORD_RETRY_RECONCILIATION_MESSAGE)
+        {
+            return true;
+        }
         if !Self::should_preserve_tracking(td.state) {
             return false;
         }
@@ -2712,6 +2805,8 @@ mod tests {
         canonical_identity_tracked_states: Arc<Mutex<HashMap<DownloadId, String>>>,
         canonical_identity_tracked_state_reasons: Arc<Mutex<HashMap<DownloadId, String>>>,
         canonical_identity_tracked_state_details: Arc<Mutex<HashMap<DownloadId, String>>>,
+        password_retry: Mutex<Option<crate::DownloadPasswordRetryObservation>>,
+        password_retry_read_failure: std::sync::atomic::AtomicBool,
     }
 
     struct TestDownloadRegistry {
@@ -2845,6 +2940,27 @@ mod tests {
 
     #[async_trait]
     impl DownloadSubmissionRepository for TestDownloadSubmissionRepo {
+        async fn password_retry_observation(
+            &self,
+            _: &DownloadId,
+        ) -> AppResult<Option<crate::DownloadPasswordRetryObservation>> {
+            if self
+                .password_retry_read_failure
+                .load(std::sync::atomic::Ordering::Relaxed)
+            {
+                return Err(AppError::Repository("synthetic retry read failure".into()));
+            }
+            Ok(self.password_retry.lock().await.clone())
+        }
+
+        async fn confirm_password_retry_observation(
+            &self,
+            _: &crate::DownloadPasswordRetryObservation,
+            _: DownloadQueueState,
+        ) -> AppResult<bool> {
+            Ok(true)
+        }
+
         async fn record_submission(&self, submission: crate::DownloadSubmission) -> AppResult<()> {
             self.recorded_submissions.lock().await.push(submission);
             Ok(())
@@ -4211,6 +4327,88 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn password_retry_hold_recovers_after_confirmed_observation_failure_and_refusal() {
+        let repo = Arc::new(TestDownloadSubmissionRepo::default());
+        let queue_items = Arc::new(Mutex::new(Vec::new()));
+        let client = Arc::new(TestDownloadClient {
+            queue_items: queue_items.clone(),
+            recent_activity: Default::default(),
+            completed_downloads: Default::default(),
+        });
+        let app = build_app_with_title_repo_and_download_client(
+            Arc::new(NullTitleRepository),
+            client,
+            repo.clone(),
+            Arc::new(TestImportRepo::default()),
+        );
+        let mut tracker = TrackedDownloadService::new();
+        let item = build_client_item();
+        let id = tracker.track(&app, item.clone()).await.unwrap().download_id;
+        let source = crate::download_identity::observed_queue_item_job(&item).locator;
+        *repo.password_retry.lock().await = Some(crate::DownloadPasswordRetryObservation {
+            claim: crate::DownloadPasswordRetryClaim {
+                download_id: id,
+                authorized_title_id: "synthetic-title".into(),
+                source: source.clone(),
+                attempt_id: "synthetic-attempt".into(),
+            },
+            source,
+            confirmed: true,
+        });
+        assert!(tracker.track(&app, item.clone()).await.is_none());
+        assert_eq!(
+            tracker.get_by_download_id(id).unwrap().state,
+            TrackedDownloadState::ImportBlocked
+        );
+        assert!(
+            tracker
+                .get_by_download_id(id)
+                .unwrap()
+                .status_messages
+                .iter()
+                .any(|message| message == PASSWORD_RETRY_RECONCILIATION_MESSAGE)
+        );
+        *queue_items.lock().await = vec![item.clone()];
+        assert!(tracker.track(&app, item.clone()).await.is_some());
+        assert!(
+            !tracker
+                .get_by_download_id(id)
+                .unwrap()
+                .status_messages
+                .iter()
+                .any(|message| message == PASSWORD_RETRY_RECONCILIATION_MESSAGE)
+        );
+        queue_items.lock().await.clear();
+        assert!(tracker.track(&app, item).await.is_none());
+        repo.password_retry_read_failure
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        tracker.reconcile_password_retry_holds(&app).await;
+        assert!(tracker.get_by_download_id(id).is_some());
+        repo.password_retry_read_failure
+            .store(false, std::sync::atomic::Ordering::Relaxed);
+        *repo.password_retry.lock().await = None;
+        repo.canonical_identity_tracked_states
+            .lock()
+            .await
+            .insert(id, "failed".into());
+        tracker.reconcile_password_retry_holds(&app).await;
+        assert!(
+            !tracker
+                .get_by_download_id(id)
+                .unwrap()
+                .status_messages
+                .iter()
+                .any(|message| message == PASSWORD_RETRY_RECONCILIATION_MESSAGE)
+        );
+        let unavailable = tracker.update_trackable(&HashSet::new());
+        assert_eq!(
+            unavailable.len(),
+            1,
+            "normal absence retirement still sees the binding"
+        );
+    }
+
+    #[tokio::test]
     async fn cache_coalesces_observation_shapes_by_canonical_download_id_and_tracks_foreign_items()
     {
         let canonical_download_id = DownloadId::new();
@@ -5374,6 +5572,8 @@ mod tests {
             canonical_identity_tracked_states: Arc::new(Mutex::new(HashMap::new())),
             canonical_identity_tracked_state_reasons: Arc::new(Mutex::new(HashMap::new())),
             canonical_identity_tracked_state_details: Arc::new(Mutex::new(HashMap::new())),
+            password_retry: Default::default(),
+            password_retry_read_failure: Default::default(),
         });
         let imports = Arc::new(TestImportRepo {
             import_record: Some(ImportRecord {
@@ -5684,6 +5884,8 @@ mod tests {
             canonical_identity_tracked_states: Arc::new(Mutex::new(HashMap::new())),
             canonical_identity_tracked_state_reasons: Arc::new(Mutex::new(HashMap::new())),
             canonical_identity_tracked_state_details: Arc::new(Mutex::new(HashMap::new())),
+            password_retry: Default::default(),
+            password_retry_read_failure: Default::default(),
         });
         let imports = Arc::new(TestImportRepo::default());
         let tempdir = tempfile::tempdir().expect("tempdir");

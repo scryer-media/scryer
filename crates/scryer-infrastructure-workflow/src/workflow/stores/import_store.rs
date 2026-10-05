@@ -9,9 +9,15 @@ use scryer_application::{
 };
 use scryer_domain::{ImportRecord, ImportStatus, ImportTransferPhase, ImportType};
 
-use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRuntime, StoreDatastore};
+use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore};
 
 include!("import_retry.rs");
+
+pub(super) fn archive_import_has_pending_sources(row: &SqlRow) -> AppResult<bool> {
+    let payload: serde_json::Value = serde_json::from_str(&row.text("payload_json")?)
+        .map_err(|_| AppError::Repository("import preservation metadata is unavailable".into()))?;
+    Ok(payload["archive_processing_pending"].as_bool() == Some(true))
+}
 
 #[derive(Clone)]
 pub struct ImportStore {
@@ -58,6 +64,59 @@ async fn active_binding_download_id(
 
 #[async_trait]
 impl ImportRepository for ImportStore {
+    async fn set_archive_processing_pending(
+        &self,
+        import_id: &str,
+        pending: bool,
+    ) -> AppResult<()> {
+        let import_id = import_id.to_string();
+        SqlRuntime::run_in_transaction(&self.datastore, "archive_import_preservation", move |tx| {
+            let import_id = import_id.clone();
+            Box::pin(async move {
+                let row = SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT canonical_download_id, payload_json FROM imports WHERE id = {}",
+                    &[SqlArg::Text(import_id.clone())]).await?
+                    .ok_or_else(|| AppError::NotFound("import not found".into()))?;
+                if let Some(download_id) = row.opt_text("canonical_download_id")? {
+                    lock_retry_download(tx, &download_id).await?;
+                    if pending && SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                        "SELECT download_id FROM download_cleanup WHERE download_id = {} AND (lease_until IS NOT NULL OR payload_checkpoint IS NOT NULL OR (attempts > 0 AND (status <> 'completed' OR outcome IS NULL OR outcome NOT IN ('policy_retained', 'client_removed', 'client_unresolved', 'cleanup_abandoned', 'entry_absent_payload_unverified'))))",
+                        &[SqlArg::Text(download_id)]).await?.is_some() {
+                        return Err(AppError::Validation("source cleanup already owns this download".into()));
+                    }
+                }
+                let mut payload: serde_json::Value = serde_json::from_str(&row.text("payload_json")?)
+                    .map_err(|_| AppError::Repository("import payload is unavailable".into()))?;
+                let object = payload.as_object_mut().ok_or_else(|| AppError::Repository("invalid import payload".into()))?;
+                if pending { object.insert("archive_processing_pending".into(), serde_json::Value::Bool(true)); }
+                else { object.remove("archive_processing_pending"); }
+                let encoded = serde_json::to_string(&payload).map_err(|error| AppError::Repository(error.to_string()))?;
+                let payload = json_arg_for_tx(tx, Some(&encoded))?;
+                SqlRuntime::execute(SqlExec::Tx(tx), "UPDATE imports SET payload_json = {} WHERE id = {}",
+                    &[payload, SqlArg::Text(import_id)]).await?;
+                Ok(())
+            })
+        }).await
+    }
+
+    async fn archive_processing_pending_for_download(
+        &self,
+        download_id: &scryer_domain::download_identity::DownloadId,
+    ) -> AppResult<bool> {
+        let rows = SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT payload_json FROM imports WHERE canonical_download_id = {}",
+            &[SqlArg::Text(download_id.to_string())],
+        )
+        .await?;
+        for row in rows {
+            if archive_import_has_pending_sources(&row)? {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
     async fn queue_import_request(
         &self,
         source_identity: ClientJobLocator,

@@ -79,6 +79,123 @@ async fn retry_fixture() -> (
     (store, cleanup, claim, expected)
 }
 
+#[tokio::test]
+async fn archive_preservation_hold_survives_completion_and_restart_until_released() {
+    let (store, cleanup, claim, _) = retry_fixture().await;
+    store
+        .set_archive_processing_pending(&claim.import_id, true)
+        .await
+        .unwrap();
+    store
+        .update_import_status(
+            &claim.import_id,
+            ImportStatus::Completed,
+            Some(r#"{"decision":"imported"}"#.into()),
+        )
+        .await
+        .unwrap();
+    let recovered = ImportStore::new(store.datastore.clone());
+    assert!(
+        recovered
+            .archive_processing_pending_for_download(&claim.download_id)
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        cleanup
+            .claim_download_cleanup(&claim.download_id)
+            .await
+            .unwrap(),
+        DownloadCleanupClaim::Deferred
+    ));
+    recovered
+        .set_archive_processing_pending(&claim.import_id, false)
+        .await
+        .unwrap();
+    assert!(
+        !recovered
+            .archive_processing_pending_for_download(&claim.download_id)
+            .await
+            .unwrap()
+    );
+    assert!(matches!(
+        cleanup
+            .claim_download_cleanup(&claim.download_id)
+            .await
+            .unwrap(),
+        DownloadCleanupClaim::Claimed(_)
+    ));
+}
+
+#[tokio::test]
+async fn archive_preservation_hold_survives_retry_payload_replacement() {
+    let (store, cleanup, claim, expected) = retry_fixture().await;
+    store
+        .set_archive_processing_pending(&claim.import_id, true)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .claim_import_retry(&claim, expected, "{\"replacement\":true}")
+            .await
+            .unwrap()
+            .is_claimed()
+    );
+    assert!(
+        store
+            .archive_processing_pending_for_download(&claim.download_id)
+            .await
+            .unwrap()
+    );
+    retry_record_result(&store, &claim).await;
+    assert!(
+        store
+            .finish_import_retry(&claim, TrackedDownloadState::ImportBlocked, None, None)
+            .await
+            .unwrap()
+            .is_finalized()
+    );
+    assert!(matches!(
+        cleanup
+            .claim_download_cleanup(&claim.download_id)
+            .await
+            .unwrap(),
+        DownloadCleanupClaim::Deferred
+    ));
+}
+
+#[tokio::test]
+async fn archive_preservation_refuses_active_cleanup_but_accepts_retained_attempts() {
+    let (store, cleanup, claim, _) = retry_fixture().await;
+    assert!(matches!(
+        cleanup
+            .claim_download_cleanup(&claim.download_id)
+            .await
+            .unwrap(),
+        DownloadCleanupClaim::Claimed(_)
+    ));
+    assert!(
+        store
+            .set_archive_processing_pending(&claim.import_id, true)
+            .await
+            .is_err()
+    );
+    cleanup
+        .finish_download_cleanup(&claim.download_id, "policy_retained", true, 0, 0, None)
+        .await
+        .unwrap();
+    store
+        .set_archive_processing_pending(&claim.import_id, true)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .archive_processing_pending_for_download(&claim.download_id)
+            .await
+            .unwrap()
+    );
+}
+
 async fn retry_record_result(store: &ImportStore, claim: &ImportRetryClaim) {
     store
         .update_import_status(

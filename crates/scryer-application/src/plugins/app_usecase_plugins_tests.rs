@@ -4647,6 +4647,23 @@ async fn builtin_settings_failure_isolates_only_the_misconfigured_plugin() {
 }
 
 #[tokio::test]
+async fn installed_plugin_without_settings_descriptor_has_no_settings_panel() {
+    let h = bootstrap_plugins(None);
+    let mut installation = make_installation("synthetic-builtin", "1.0.0", true, true);
+    installation.descriptor_json = None;
+    h.plugin_repo.installations.lock().await.push(installation);
+    let view = h
+        .app
+        .installed_plugin_settings(&admin(), "synthetic-builtin")
+        .await
+        .unwrap();
+    assert_eq!(
+        view,
+        serde_json::json!({"pluginId":"synthetic-builtin", "fields":[]})
+    );
+}
+
+#[tokio::test]
 async fn reconcile_creates_config_for_default_url_plugin() {
     let provider = MockPluginProvider::new().with_provider(
         "example_indexer",

@@ -2622,6 +2622,7 @@ mod seed_goal_tests {
              CREATE TABLE imports (
                  id TEXT PRIMARY KEY,
                  canonical_download_id TEXT,
+                 payload_json TEXT NOT NULL DEFAULT '{}',
                  status TEXT NOT NULL DEFAULT 'completed'
              )",
         )

@@ -6470,6 +6470,22 @@ pub const IMPORT_RETRY_TRACKED_STATE_REASON: &str = "import_retry_recovery";
 
 #[async_trait]
 pub trait ImportRepository: Send + Sync {
+    async fn set_archive_processing_pending(
+        &self,
+        _import_id: &str,
+        _pending: bool,
+    ) -> AppResult<()> {
+        Err(AppError::Repository(
+            "archive source preservation is unavailable".into(),
+        ))
+    }
+
+    async fn archive_processing_pending_for_download(
+        &self,
+        _download_id: &DownloadId,
+    ) -> AppResult<bool> {
+        Ok(false)
+    }
     async fn queue_import_request(
         &self,
         source_identity: ClientJobLocator,
@@ -10071,6 +10087,22 @@ pub trait ArchiveExtractorClient: Send + Sync {
     ) -> AppResult<ArchivePluginProcessResponse> {
         self.process(request).await
     }
+
+    /// Execution time excludes coordinator admission when the host owns a gate.
+    async fn process_with_budget(
+        &self,
+        request: ArchivePluginProcessRequest,
+        limits: scryer_plugin_sdk::ArchiveExtractionLimits,
+        budget: std::time::Duration,
+    ) -> AppResult<(ArchivePluginProcessResponse, std::time::Duration)> {
+        let started = tokio::time::Instant::now();
+        let response = tokio::time::timeout(budget, self.process_with_limits(request, limits))
+            .await
+            .map_err(|_| {
+                AppError::archive_extraction_timed_out("archive execution budget exhausted")
+            })??;
+        Ok((response, started.elapsed()))
+    }
 }
 
 #[derive(Clone)]
@@ -10863,9 +10895,7 @@ pub trait DownloadClient: Send + Sync {
         _id: &str,
         _password: &str,
     ) -> AppResult<crate::DownloadClientRetryOutcome> {
-        Err(AppError::Validation(
-            "password-aware retry is not supported by this download client".into(),
-        ))
+        Ok(crate::DownloadClientRetryOutcome::Refused)
     }
 
     async fn retry_failed_job_for_client(
