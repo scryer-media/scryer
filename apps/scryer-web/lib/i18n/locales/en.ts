@@ -5809,6 +5809,7 @@ const en: LocaleDictionary = {
   "lists.providerApps.useOwn": "Use your own provider app",
   "lists.providerApps.clientId": "Client ID",
   "lists.providerApps.clientSecret": "Client secret",
+  "lists.providerApps.traktSecretHint": "Optional for Trakt. Trakt signs members in with PKCE; only legacy Trakt apps need a secret.",
   "lists.providerApps.redirectUri": "Redirect URI",
   "lists.providerApps.redirectHelp": "Register this instance's /lists/oauth/callback URL with the provider. Leave the secret blank to keep the stored value.",
   "title.listProvenance.added": "Added by list {{name}}",

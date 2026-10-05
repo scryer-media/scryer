@@ -3069,6 +3069,7 @@ const ko: LocaleDictionary = {
   "lists.providerApps.useOwn": "자체 제공자 앱 사용",
   "lists.providerApps.clientId": "클라이언트 ID",
   "lists.providerApps.clientSecret": "클라이언트 비밀",
+  "lists.providerApps.traktSecretHint": "Trakt에서는 선택 사항입니다. Trakt는 PKCE로 회원을 로그인시키며, 비밀은 기존 Trakt 앱에만 필요합니다.",
   "lists.providerApps.redirectUri": "리디렉션 URI",
   "lists.providerApps.redirectHelp": "이 인스턴스의 /lists/oauth/callback URL을 제공자에 등록하세요. 비밀을 비워 두면 저장된 값이 유지됩니다.",
 };

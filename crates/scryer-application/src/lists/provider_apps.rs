@@ -85,7 +85,8 @@ impl AppUseCase {
                 || app.client_id.len() > 512
                 || app.client_secret.len() > 4096
                 || app.redirect_uri.len() > 2048
-                || (provider != "mal" && app.client_secret.is_empty())
+                // Trakt signs members in with PKCE; only its legacy apps carry a secret.
+                || (provider == "anilist" && app.client_secret.is_empty())
                 || !matches!(redirect.scheme(), "http" | "https")
                 || redirect.host_str().is_none()
                 || !redirect.username().is_empty()

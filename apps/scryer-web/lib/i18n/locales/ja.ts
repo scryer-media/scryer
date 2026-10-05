@@ -3113,6 +3113,7 @@ const ja: LocaleDictionary = {
   "lists.providerApps.useOwn": "独自のプロバイダーアプリを使用",
   "lists.providerApps.clientId": "クライアント ID",
   "lists.providerApps.clientSecret": "クライアントシークレット",
+  "lists.providerApps.traktSecretHint": "Trakt では任意です。Trakt は PKCE でメンバーをサインインさせるため、シークレットが必要なのは旧来の Trakt アプリだけです。",
   "lists.providerApps.redirectUri": "リダイレクト URI",
   "lists.providerApps.redirectHelp": "このインスタンスの /lists/oauth/callback URL をプロバイダーに登録してください。シークレットを空欄にすると保存済みの値を保持します。",
 };

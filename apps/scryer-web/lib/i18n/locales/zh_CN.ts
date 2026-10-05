@@ -2988,6 +2988,7 @@ const zh_CN: LocaleDictionary = {
   "lists.providerApps.useOwn": "使用自己的提供方应用",
   "lists.providerApps.clientId": "客户端 ID",
   "lists.providerApps.clientSecret": "客户端密钥",
+  "lists.providerApps.traktSecretHint": "Trakt 可不填。Trakt 使用 PKCE 让成员登录；只有旧版 Trakt 应用才需要密钥。",
   "lists.providerApps.redirectUri": "重定向 URI",
   "lists.providerApps.redirectHelp": "在提供方注册此实例的 /lists/oauth/callback URL。将密钥留空可保留已保存的值。",
 };

@@ -30,6 +30,10 @@ struct Auth {
     block_poll: bool,
     poll_entered: Notify,
     poll_release: Notify,
+    /// Provider, challenge and app each start was asked to authorize with.
+    starts: std::sync::Mutex<Vec<(String, String, Option<ListProviderAppConfig>)>>,
+    /// Verifier each exchange was asked to prove the link with.
+    verifiers: std::sync::Mutex<Vec<String>>,
 }
 impl Auth {
     fn failing_polls(codes: &[&'static str]) -> Self {
@@ -50,6 +54,11 @@ fn token() -> ListAccountCredential {
 #[async_trait]
 impl ListAccountAuthGateway for Auth {
     async fn start(&self, input: ListAccountStartRequest) -> AppResult<ListAccountStartResponse> {
+        self.starts.lock().unwrap().push((
+            input.provider.clone(),
+            input.code_challenge.clone(),
+            input.app.clone(),
+        ));
         Ok(ListAccountStartResponse {
             authorize_url: format!("https://provider.invalid/authorize?state={}", input.state),
             poll_token: matches!(input.provider.as_str(), "plex" | "tmdb")
@@ -83,6 +92,10 @@ impl ListAccountAuthGateway for Auth {
         input: ListAccountCompleteRequest,
     ) -> AppResult<ListAccountCredential> {
         self.exchanges.fetch_add(1, Ordering::SeqCst);
+        self.verifiers
+            .lock()
+            .unwrap()
+            .push(input.code_verifier.clone());
         let mut token = token();
         token.direct = input.app.is_some();
         token.account_id = self.identity.clone();
@@ -983,6 +996,107 @@ async fn private_account_byo_links_snapshot_registration_and_rejects_simkl_overr
             .await
             .is_err()
     );
+}
+
+#[tokio::test]
+async fn provider_app_secret_is_optional_only_for_trakt_and_mal() {
+    let harness = harness(Arc::new(Auth::default())).await;
+    for (provider, secret, saved) in [
+        ("trakt", None, true),
+        ("trakt", Some("legacy-secret"), true),
+        ("anilist", None, false),
+        ("anilist", Some("issuing-secret"), true),
+        ("mal", None, true),
+        ("mal", Some("issuing-secret"), true),
+        ("simkl", None, false),
+        ("simkl", Some("issuing-secret"), false),
+    ] {
+        // Start each case from no stored app, so an earlier secret is never kept.
+        let _ = harness
+            .app
+            .update_list_provider_app(&harness.manager, provider, None, None, None, false)
+            .await;
+        let result = harness
+            .app
+            .update_list_provider_app(
+                &harness.manager,
+                provider,
+                Some("issuing-client".into()),
+                secret.map(Into::into),
+                Some("https://instance.invalid/lists/oauth/callback".into()),
+                true,
+            )
+            .await;
+        assert_eq!(result.is_ok(), saved, "{provider} with secret {secret:?}");
+        if let Ok(view) = result {
+            assert!(view.enabled);
+            assert_eq!(view.client_secret_set, secret.is_some());
+        }
+    }
+}
+
+#[tokio::test]
+async fn byo_trakt_link_without_a_secret_proves_a_fresh_s256_verifier() {
+    let auth = Arc::new(Auth::default());
+    let harness = harness(auth.clone()).await;
+    harness
+        .app
+        .update_list_provider_app(
+            &harness.manager,
+            "trakt",
+            Some("issuing-client".into()),
+            None,
+            Some("https://instance.invalid/lists/oauth/callback".into()),
+            true,
+        )
+        .await
+        .unwrap();
+    for _ in 0..2 {
+        let start = harness
+            .app
+            .start_list_account_link(&harness.user, "trakt", "https://instance.invalid")
+            .await
+            .unwrap();
+        let linked = harness
+            .app
+            .complete_list_account_link(
+                &harness.user,
+                &start.session_id,
+                &start.state,
+                "trakt",
+                "fixture-code",
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(linked.account.credential.direct);
+        assert_eq!(
+            linked.account.credential.app_config.as_ref().unwrap()["client_secret"],
+            ""
+        );
+    }
+    let starts = auth.starts.lock().unwrap().clone();
+    let verifiers = auth.verifiers.lock().unwrap().clone();
+    assert_eq!(starts.len(), 2);
+    assert_eq!(verifiers.len(), 2);
+    assert_ne!(verifiers[0], verifiers[1]);
+    for ((provider, challenge, app), verifier) in starts.iter().zip(&verifiers) {
+        use base64::Engine as _;
+        assert_eq!(provider, "trakt");
+        let app = app.as_ref().unwrap();
+        assert_eq!(app.client_id, "issuing-client");
+        assert!(app.client_secret.is_empty());
+        assert!((43..=128).contains(&verifier.len()));
+        assert!(
+            verifier
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-._~".contains(&byte))
+        );
+        let expected = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(
+            aws_lc_rs::digest::digest(&aws_lc_rs::digest::SHA256, verifier.as_bytes()).as_ref(),
+        );
+        assert_eq!(challenge, &expected);
+    }
 }
 
 #[tokio::test]
