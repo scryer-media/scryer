@@ -3708,6 +3708,7 @@ const en: LocaleDictionary = {
   "history.imported": "Imported",
   "history.importFailed": "Import Failed",
   "history.importSkipped": "Import Skipped",
+  "history.importRejectedByRule": "Rejected by Rule",
   "history.downloadCompleted": "Downloaded",
   "history.fileUpgraded": "Upgraded",
   "history.fileRecycled": "Recycled",

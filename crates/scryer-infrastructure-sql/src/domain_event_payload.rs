@@ -13,6 +13,9 @@ pub struct DomainEventPayloadCodecError(String);
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct DomainEventProjections {
     pub import_status: Option<String>,
+    /// An import rejection's skip reason, so history can tell a rule's
+    /// refusal from a failure or a plain skip without decoding the payload.
+    pub import_skip_reason: Option<String>,
     pub media_file_delete_reason: Option<String>,
     pub download_id: Option<String>,
 }
@@ -39,6 +42,9 @@ pub fn derive_domain_event_projections(
     DomainEventProjections {
         import_status: (event_type == "import_rejected")
             .then(|| field("status"))
+            .flatten(),
+        import_skip_reason: (event_type == "import_rejected")
+            .then(|| field("skip_reason"))
             .flatten(),
         media_file_delete_reason: (event_type == "media_file_deleted")
             .then(|| field("reason"))
@@ -162,6 +168,24 @@ mod tests {
             &json!({"data": {"status": "failed"}}),
         );
         assert_eq!(import.import_status.as_deref(), Some("failed"));
+        assert_eq!(import.import_skip_reason, None);
+
+        let rule_rejection = derive_domain_event_projections(
+            "import_rejected",
+            &json!({"data": {"status": "failed", "skip_reason": "post_download_rule_blocked"}}),
+        );
+        assert_eq!(
+            rule_rejection.import_skip_reason.as_deref(),
+            Some("post_download_rule_blocked")
+        );
+        assert_eq!(
+            derive_domain_event_projections(
+                "import_completed",
+                &json!({"data": {"skip_reason": "post_download_rule_blocked"}}),
+            )
+            .import_skip_reason,
+            None
+        );
 
         let deletion = derive_domain_event_projections(
             "media_file_deleted",

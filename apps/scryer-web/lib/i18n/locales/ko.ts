@@ -1783,6 +1783,7 @@ const ko: LocaleDictionary = {
   "history.imported": "가져오기 완료",
   "history.importFailed": "가져오기 실패",
   "history.importSkipped": "가져오기 건너뜀",
+  "history.importRejectedByRule": "규칙으로 거부됨",
   "history.downloadCompleted": "다운로드 완료",
   "history.fileDeleted": "삭제됨",
   "history.fileRestored": "복원됨",

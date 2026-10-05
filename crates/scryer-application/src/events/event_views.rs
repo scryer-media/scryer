@@ -608,6 +608,11 @@ pub(crate) fn title_history_record_from_domain_event(
             data.title.as_ref().map(|title| title.title_name.clone()),
             data.title.as_ref().map(|title| title.facet.clone()),
             match data.status {
+                ImportStatus::Failed | ImportStatus::Skipped
+                    if data.skip_reason == Some(ImportSkipReason::PostDownloadRuleBlocked) =>
+                {
+                    TitleHistoryEventType::ImportRejectedByRule
+                }
                 ImportStatus::Failed => TitleHistoryEventType::ImportFailed,
                 ImportStatus::Skipped => TitleHistoryEventType::ImportSkipped,
                 _ => return None,
@@ -2037,6 +2042,67 @@ mod tests {
         assert_eq!(activity.severity, ActivitySeverity::Warning);
         assert_eq!(activity.title_id.as_deref(), Some("title-1"));
         assert_eq!(activity.facet.as_deref(), Some("series"));
+    }
+
+    #[test]
+    fn rule_rejected_imports_get_their_own_history_type_with_the_reason_kept() {
+        let rejection = |status, skip_reason| {
+            event(
+                1,
+                Utc::now(),
+                DomainEventPayload::ImportRejected(ImportRejectedEventData {
+                    title: Some(title_snapshot("Example", MediaFacet::Movie)),
+                    status,
+                    import_id: Some("import-1".to_string()),
+                    source_system: Some("sabnzbd".to_string()),
+                    source_ref: Some("job-1".to_string()),
+                    source_title: Some("Example.2024.1080p".to_string()),
+                    source_path: Some("/downloads/Example.2024.1080p".to_string()),
+                    dest_path: None,
+                    quality: Some("1080p".to_string()),
+                    reason: Some("post-download score -100 rejected import: no-hdr".to_string()),
+                    skip_reason,
+                    episode_ids: Vec::new(),
+                }),
+            )
+        };
+        let history_type = |status, skip_reason| {
+            title_history_record_from_domain_event(&rejection(status, skip_reason))
+                .expect("an import rejection projects to history")
+                .event_type
+        };
+
+        for status in [ImportStatus::Failed, ImportStatus::Skipped] {
+            assert_eq!(
+                history_type(status, Some(ImportSkipReason::PostDownloadRuleBlocked)),
+                TitleHistoryEventType::ImportRejectedByRule
+            );
+        }
+        assert_eq!(
+            history_type(ImportStatus::Failed, None),
+            TitleHistoryEventType::ImportFailed
+        );
+        assert_eq!(
+            history_type(
+                ImportStatus::Skipped,
+                Some(ImportSkipReason::PolicyMismatch)
+            ),
+            TitleHistoryEventType::ImportSkipped
+        );
+
+        let record = title_history_record_from_domain_event(&rejection(
+            ImportStatus::Failed,
+            Some(ImportSkipReason::PostDownloadRuleBlocked),
+        ))
+        .expect("an import rejection projects to history");
+        assert_eq!(
+            record.skip_reason.as_deref(),
+            Some("post_download_rule_blocked")
+        );
+        assert_eq!(
+            record.failure_reason.as_deref(),
+            Some("post-download score -100 rejected import: no-hdr")
+        );
     }
 
     #[test]

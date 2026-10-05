@@ -102,6 +102,12 @@ fn normalize_domain_event_import_object(object: &mut JsonMap<String, JsonValue>)
             .map_or(JsonValue::Null, JsonValue::String),
     );
     object.insert(
+        "import_skip_reason".to_string(),
+        projections
+            .import_skip_reason
+            .map_or(JsonValue::Null, JsonValue::String),
+    );
+    object.insert(
         "media_file_delete_reason".to_string(),
         projections
             .media_file_delete_reason

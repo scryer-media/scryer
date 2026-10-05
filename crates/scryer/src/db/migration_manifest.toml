@@ -2817,6 +2817,29 @@ file = "postgres/migrations/0271_foreign_key_child_indexes.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 273
+description = "import rejection skip reason projection"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0273_import_rejection_skip_reason.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0273_import_rejection_skip_reason.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "backfill_import_skip_reason_projection"
+engine = "all"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

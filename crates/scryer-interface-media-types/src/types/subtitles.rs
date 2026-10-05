@@ -177,6 +177,8 @@ pub enum TitleHistoryEventTypeValue {
     ImportFailed,
     /// Import was skipped.
     ImportSkipped,
+    /// A post-download rule refused the import.
+    ImportRejectedByRule,
     /// Existing file was upgraded.
     FileUpgraded,
     /// File was moved to the recycle bin.
@@ -210,6 +212,7 @@ impl TitleHistoryEventTypeValue {
             Self::Imported => TitleHistoryEventType::Imported,
             Self::ImportFailed => TitleHistoryEventType::ImportFailed,
             Self::ImportSkipped => TitleHistoryEventType::ImportSkipped,
+            Self::ImportRejectedByRule => TitleHistoryEventType::ImportRejectedByRule,
             Self::FileUpgraded => TitleHistoryEventType::FileUpgraded,
             Self::FileRecycled => TitleHistoryEventType::FileRecycled,
             Self::FileDeleted => TitleHistoryEventType::FileDeleted,

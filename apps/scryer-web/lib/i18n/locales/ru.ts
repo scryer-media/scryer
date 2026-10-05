@@ -4437,6 +4437,7 @@ const ru: LocaleDictionary = {
     "history.importFailed": "Ошибка импорта",
 
     "history.importSkipped": "Импорт пропущен",
+    "history.importRejectedByRule": "Отклонено правилом",
 
     "history.downloadCompleted": "Загружено",
 

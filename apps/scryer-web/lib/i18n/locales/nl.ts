@@ -3187,6 +3187,7 @@ const nl: LocaleDictionary = {
   "history.imported": "Geïmporteerd",
   "history.importFailed": "Import mislukt",
   "history.importSkipped": "Import overgeslagen",
+  "history.importRejectedByRule": "Afgewezen door regel",
   "history.downloadCompleted": "Gedownload",
   "history.fileUpgraded": "Bijgewerkt",
   "history.fileRecycled": "Naar de prullenbak",

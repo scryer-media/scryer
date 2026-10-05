@@ -871,6 +871,9 @@ async fn run_rust_hook(
         "compress_post_processing_output" => {
             post_processing_output::compress_post_processing_output_sqlite(tx).await
         }
+        "backfill_import_skip_reason_projection" => {
+            event_storage::backfill_import_skip_reason_projection_sqlite(tx).await
+        }
         #[cfg(test)]
         "test_insert_hook_marker" => {
             let marker = match install_kind {

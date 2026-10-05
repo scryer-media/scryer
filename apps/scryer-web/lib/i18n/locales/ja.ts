@@ -1826,6 +1826,7 @@ const ja: LocaleDictionary = {
   "history.imported": "インポート済み",
   "history.importFailed": "インポート失敗",
   "history.importSkipped": "インポートスキップ",
+  "history.importRejectedByRule": "ルールにより拒否",
   "history.downloadCompleted": "ダウンロード完了",
   "history.fileDeleted": "削除済み",
   "history.fileRestored": "復元済み",

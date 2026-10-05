@@ -302,6 +302,7 @@ pub const SUPPORTED_TITLE_HISTORY_EVENT_TYPES: &[TitleHistoryEventType] = &[
     TitleHistoryEventType::Imported,
     TitleHistoryEventType::ImportFailed,
     TitleHistoryEventType::ImportSkipped,
+    TitleHistoryEventType::ImportRejectedByRule,
     TitleHistoryEventType::FileUpgraded,
     TitleHistoryEventType::FileRecycled,
     TitleHistoryEventType::FileDeleted,
