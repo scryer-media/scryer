@@ -8,7 +8,7 @@ import {
   LIST_ACCOUNT_RELAY_ORIGIN,
   listAccountCompletionInput,
   LIST_ACCOUNT_POLL_INTERVAL_MS,
-  listAccountPollFailureIsTransient,
+  listAccountPollRetryDelay,
   listAccountPollStep,
   listAccountReturnMatches,
   parseListAccountPayload,
@@ -99,16 +99,26 @@ test("BYO callbacks require a pending provider and reject repeated and token par
   assert.equal(consumeListAccountReturn({ ...location, search: `${location.search}&access_token=secret` }, history, pending), null);
 });
 
-test("only a request that never got an answer is retried; every instance error ends polling", () => {
-  const graphQl = (code: unknown) => ({ graphQLErrors: [{ message: "failed", extensions: { code } }] });
-  assert.equal(listAccountPollFailureIsTransient({ networkError: new Error("offline"), graphQLErrors: [] }), true);
-  assert.equal(listAccountPollFailureIsTransient({ networkError: new Error("bad gateway") }), true);
-  for (const code of ["NOT_FOUND", "UNAUTHORIZED", "VALIDATION_ERROR", "INTERNAL_SERVER_ERROR", 42]) {
-    assert.equal(listAccountPollFailureIsTransient(graphQl(code)), false);
+test("dropped requests and passing instance errors are retried; every other instance error ends polling", () => {
+  const graphQl = (...codes: unknown[]) => ({ graphQLErrors: codes.map((code) => ({ message: "failed", extensions: { code } })) });
+  const unavailable = listAccountPollStep("unavailable");
+  assert.ok(unavailable.kind === "wait");
+  for (const reason of [
+    { networkError: new Error("offline"), graphQLErrors: [] },
+    { networkError: new Error("bad gateway") },
+    graphQl("INTERNAL_ERROR"),
+    graphQl("TEMPORARY_UNAVAILABLE"),
+    graphQl("INTERNAL_ERROR", "TEMPORARY_UNAVAILABLE"),
+  ]) {
+    assert.equal(listAccountPollRetryDelay(reason), unavailable.delayMs);
   }
-  assert.equal(listAccountPollFailureIsTransient({ networkError: new Error("partial"), ...graphQl("VALIDATION_ERROR") }), false);
-  assert.equal(listAccountPollFailureIsTransient(new Error("thrown")), false);
-  assert.equal(listAccountPollFailureIsTransient(null), false);
+  for (const code of ["NOT_FOUND", "UNAUTHORIZED", "VALIDATION_ERROR", 42]) {
+    assert.equal(listAccountPollRetryDelay(graphQl(code)), null);
+  }
+  assert.equal(listAccountPollRetryDelay(graphQl("INTERNAL_ERROR", "VALIDATION_ERROR")), null);
+  assert.equal(listAccountPollRetryDelay({ networkError: new Error("partial"), ...graphQl("VALIDATION_ERROR") }), null);
+  assert.equal(listAccountPollRetryDelay(new Error("thrown")), null);
+  assert.equal(listAccountPollRetryDelay(null), null);
 });
 
 test("poll statuses keep the normal pace, slow down when unavailable, wait longest when rate-limited, and otherwise fail", () => {

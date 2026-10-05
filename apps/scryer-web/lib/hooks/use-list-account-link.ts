@@ -10,7 +10,7 @@ import {
   LIST_ACCOUNT_POLL_INTERVAL_MS,
   finishCurrentListAccountLink,
   listAccountCompletionInput,
-  listAccountPollFailureIsTransient,
+  listAccountPollRetryDelay,
   listAccountPollStep,
   parsePendingListAccountLink,
   validateListAccountMessage,
@@ -133,19 +133,28 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
             if (step.kind === "failed") {
               setError(t("lists.accounts.linkFailed"));
               cancel();
+              const refreshed = generation.current;
+              void onLinked(() => refreshed === generation.current).catch(() => undefined);
               return;
             }
             delayMs = step.delayMs;
             setError(step.retrying ? t("lists.accounts.pollRetrying") : null);
           } catch (reason) {
             if (request !== generation.current) return;
-            if (!listAccountPollFailureIsTransient(reason)) {
+            const retryDelay = listAccountPollRetryDelay(reason);
+            if (retryDelay === null) {
               setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
               cancel();
+              // An earlier poll may have linked the account before this one
+              // failed; refresh once so it shows either way.
+              const refreshed = generation.current;
+              void onLinked(() => refreshed === generation.current).catch(() => undefined);
               return;
             }
-            // A dropped request does not end the session; the instance keeps
-            // it, and answers a repeated poll even if the first one linked it.
+            // A dropped request or a passing instance error does not end the
+            // session; the instance keeps it, and answers a repeated poll even
+            // if the first one linked it.
+            delayMs = retryDelay;
             setError(t("lists.accounts.pollRetrying"));
           }
         } else if (popup.closed) {

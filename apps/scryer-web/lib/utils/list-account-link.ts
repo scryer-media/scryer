@@ -156,15 +156,27 @@ export function listAccountPollStep(status: unknown): ListAccountPollStep {
   }
 }
 
+/** Instance errors that say "not right now" rather than answering for the link. */
+const TRANSIENT_POLL_ERROR_CODES = new Set(["INTERNAL_ERROR", "TEMPORARY_UNAVAILABLE"]);
+
 /**
- * Whether a failed poll request is worth repeating. Only a request that never
- * got a GraphQL answer (a dropped connection or a proxy error) is retried; an
- * error the instance returned is its final answer for this link.
+ * How long to wait before repeating a failed poll request, or null when the
+ * failure ends the link. A request that never got a GraphQL answer (a dropped
+ * connection or a proxy error) and a passing internal or temporarily
+ * unavailable error are retried at the unavailable pace; any other error the
+ * instance returned is its final answer for this link.
  */
-export function listAccountPollFailureIsTransient(reason: unknown): boolean {
-  if (!reason || typeof reason !== "object") return false;
+export function listAccountPollRetryDelay(reason: unknown): number | null {
+  if (!reason || typeof reason !== "object") return null;
   const { graphQLErrors, networkError } = reason as { graphQLErrors?: unknown; networkError?: unknown };
-  return !!networkError && (!Array.isArray(graphQLErrors) || graphQLErrors.length === 0);
+  if (!Array.isArray(graphQLErrors) || graphQLErrors.length === 0) {
+    return networkError ? LIST_ACCOUNT_POLL_UNAVAILABLE_MS : null;
+  }
+  const transient = graphQLErrors.every((error) => {
+    const code = (error as { extensions?: { code?: unknown } } | null)?.extensions?.code;
+    return typeof code === "string" && TRANSIENT_POLL_ERROR_CODES.has(code);
+  });
+  return transient ? LIST_ACCOUNT_POLL_UNAVAILABLE_MS : null;
 }
 
 export async function finishCurrentListAccountLink(

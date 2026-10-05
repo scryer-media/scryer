@@ -597,6 +597,12 @@ impl AppUseCase {
         &self,
         job_run_id: Option<String>,
     ) -> AppResult<ListSyncReport> {
+        // Expired account links, and any provider grant one still held, go
+        // even when nobody starts or polls another link.
+        self.services
+            .lists
+            .account_runtime
+            .prune_expired_links(Utc::now());
         if !self.experimental_features_enabled().await? {
             return Ok(ListSyncReport::default());
         }

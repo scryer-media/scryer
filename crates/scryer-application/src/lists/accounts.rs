@@ -18,10 +18,15 @@ const LINK_TTL_SECONDS: i64 = 600;
 /// How long a rate-limited link waits before the provider is asked again,
 /// whatever pace the browser polls at.
 const RATE_LIMITED_PAUSE_SECONDS: i64 = 30;
+/// Linked records kept per member only to replay an answer whose response was
+/// lost; the oldest goes first.
+const LINKED_RECORDS_PER_OWNER: usize = 4;
 pub struct ListAccountRuntime {
     /// Held only for map edits, never across an await, so a dropped poll can
     /// release its claim synchronously.
     sessions: std::sync::Mutex<HashMap<String, LinkSession>>,
+    /// Orders linked records so the oldest is evicted first.
+    linked_order: std::sync::atomic::AtomicU64,
     /// Fixed stripes bound coordination memory while separating most accounts.
     operations: [std::sync::Arc<Mutex<()>>; 64],
     links: Mutex<()>,
@@ -31,6 +36,7 @@ impl Default for ListAccountRuntime {
     fn default() -> Self {
         Self {
             sessions: std::sync::Mutex::new(HashMap::new()),
+            linked_order: std::sync::atomic::AtomicU64::new(0),
             operations: std::array::from_fn(|_| std::sync::Arc::new(Mutex::new(()))),
             links: Mutex::new(()),
             revocations: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
@@ -139,6 +145,23 @@ mod tests {
         );
     }
     #[test]
+    fn pruning_drops_expired_links_and_the_grants_they_held() {
+        let runtime = ListAccountRuntime::default();
+        let now = Utc::now();
+        let mut held = session(now);
+        held.credential = Some(ListAccountCredential {
+            access_token: "fixture-grant".into(),
+            ..Default::default()
+        });
+        runtime.sessions().insert("expired".into(), held.clone());
+        held.expires_at = now + Duration::seconds(1200);
+        runtime.sessions().insert("live".into(), held);
+        runtime.prune_expired_links(now + Duration::seconds(600));
+        let sessions = runtime.sessions();
+        assert!(!sessions.contains_key("expired"));
+        assert!(sessions.contains_key("live"));
+    }
+    #[test]
     fn link_origins_are_origins_and_credentials_redact_every_secret() {
         assert!(origin("https://instance.invalid/prefix").is_err());
         assert!(origin("https://member:secret@instance.invalid").is_err());
@@ -191,7 +214,11 @@ enum LinkPhase {
     /// One request is checking the provider or writing the account.
     Checking,
     /// Linked by an earlier poll; later polls replay that answer until expiry.
-    Linked { account_id: String },
+    /// Holds no provider material.
+    Linked { account_id: String, order: u64 },
+}
+fn prune_expired(sessions: &mut HashMap<String, LinkSession>, now: DateTime<Utc>) {
+    sessions.retain(|_, session| session.expires_at > now);
 }
 /// Poll statuses besides the account-bearing `linked` answer.
 pub const LIST_ACCOUNT_POLL_PENDING: &str = "pending";
@@ -217,7 +244,9 @@ struct PollClaimGuard<'a> {
 impl PollClaimGuard<'_> {
     fn settle(mut self, change: impl FnOnce(&mut HashMap<String, LinkSession>, &str)) {
         self.settled = true;
-        change(&mut self.runtime.sessions(), self.id);
+        let mut sessions = self.runtime.sessions();
+        change(&mut sessions, self.id);
+        prune_expired(&mut sessions, Utc::now());
     }
     fn release(self) {
         self.settle(|sessions, id| {
@@ -240,11 +269,35 @@ impl PollClaimGuard<'_> {
         }
     }
     fn linked(self, account_id: String) {
+        let order = self
+            .runtime
+            .linked_order
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         self.settle(|sessions, id| {
-            if let Some(session) = sessions.get_mut(id) {
-                session.phase = LinkPhase::Linked { account_id };
-                session.credential = None;
-                session.poll_token = None;
+            let Some(session) = sessions.get_mut(id) else {
+                return;
+            };
+            session.phase = LinkPhase::Linked { account_id, order };
+            session.credential = None;
+            session.poll_token = None;
+            session.app = None;
+            session.verifier.clear();
+            session.paused_until = None;
+            let owner = session.owner.clone();
+            let mut linked = sessions
+                .iter()
+                .filter_map(|(key, session)| match &session.phase {
+                    LinkPhase::Linked { order, .. } if session.owner == owner => {
+                        Some((*order, key.clone()))
+                    }
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            if linked.len() > LINKED_RECORDS_PER_OWNER {
+                linked.sort();
+                for (_, key) in &linked[..linked.len() - LINKED_RECORDS_PER_OWNER] {
+                    sessions.remove(key);
+                }
             }
         });
     }
@@ -256,12 +309,16 @@ impl PollClaimGuard<'_> {
 }
 impl Drop for PollClaimGuard<'_> {
     fn drop(&mut self) {
-        if !self.settled
-            && let Some(session) = self.runtime.sessions().get_mut(self.id)
+        if self.settled {
+            return;
+        }
+        let mut sessions = self.runtime.sessions();
+        if let Some(session) = sessions.get_mut(self.id)
             && session.phase == LinkPhase::Checking
         {
             session.phase = LinkPhase::Waiting;
         }
+        prune_expired(&mut sessions, Utc::now());
     }
 }
 /// Whether a provider poll failure is worth asking again, as the status to
@@ -281,10 +338,17 @@ fn transient_poll_status(error: &AppError) -> Option<&'static str> {
         _ => None,
     }
 }
-/// Whether a failure while recording an approved link ends it. The provider
-/// grant is kept for anything else, so the next poll retries the write.
-fn link_write_failure_is_final(error: &AppError) -> bool {
-    matches!(error, AppError::NotFound(_) | AppError::Unauthorized(_))
+/// Whether a failure while recording an approved link is worth retrying with
+/// the same provider grant: storage trouble, a temporarily unavailable
+/// service, or a transient gateway failure. Anything else (the lists feature
+/// or the member's permission turned off, the provider plugin unavailable, no
+/// account identity) cannot succeed by asking again, so the link ends and the
+/// grant is dropped with it.
+fn link_write_failure_is_transient(error: &AppError) -> bool {
+    matches!(
+        error,
+        AppError::Repository(_) | AppError::TemporaryUnavailable { .. }
+    ) || transient_poll_status(error).is_some()
 }
 fn poll_answer(status: &str) -> ListAccountPoll {
     ListAccountPoll {
@@ -353,6 +417,10 @@ impl ListAccountRuntime {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+    /// Drops every expired session, and with it any provider grant it held.
+    pub(crate) fn prune_expired_links(&self, now: DateTime<Utc>) {
+        prune_expired(&mut self.sessions(), now);
+    }
     fn take(
         &self,
         id: &str,
@@ -362,7 +430,7 @@ impl ListAccountRuntime {
         now: DateTime<Utc>,
     ) -> AppResult<LinkSession> {
         let mut sessions = self.sessions();
-        sessions.retain(|_, session| session.expires_at > now);
+        prune_expired(&mut sessions, now);
         let session = sessions.get(id).ok_or_else(missing)?;
         if session.owner != owner
             || session.phase != LinkPhase::Waiting
@@ -377,14 +445,14 @@ impl ListAccountRuntime {
     /// concurrent polls see it in progress rather than gone.
     fn claim_poll(&self, id: &str, owner: &str, now: DateTime<Utc>) -> AppResult<PollClaim> {
         let mut sessions = self.sessions();
-        sessions.retain(|_, session| session.expires_at > now);
+        prune_expired(&mut sessions, now);
         let session = sessions
             .get_mut(id)
             .filter(|session| session.owner == owner)
             .ok_or_else(missing)?;
         Ok(match &session.phase {
             LinkPhase::Checking => PollClaim::Answer(LIST_ACCOUNT_POLL_BUSY),
-            LinkPhase::Linked { account_id } => PollClaim::Linked(account_id.clone()),
+            LinkPhase::Linked { account_id, .. } => PollClaim::Linked(account_id.clone()),
             LinkPhase::Waiting
                 if session.credential.is_none()
                     && session.paused_until.is_some_and(|until| until > now) =>
@@ -519,13 +587,13 @@ impl AppUseCase {
         {
             let mut sessions = self.services.lists.account_runtime.sessions();
             sessions.retain(|_, session| session.expires_at > now);
-            if sessions.len() >= MAX_LINK_SESSIONS
+            let unlinked =
+                |session: &&LinkSession| !matches!(session.phase, LinkPhase::Linked { .. });
+            if sessions.values().filter(unlinked).count() >= MAX_LINK_SESSIONS
                 || sessions
                     .values()
-                    .filter(|session| {
-                        session.owner == actor.id
-                            && !matches!(session.phase, LinkPhase::Linked { .. })
-                    })
+                    .filter(unlinked)
+                    .filter(|session| session.owner == actor.id)
                     .count()
                     >= 8
             {
@@ -648,9 +716,18 @@ impl AppUseCase {
         actor: &User,
         id: &str,
     ) -> AppResult<ListAccountPoll> {
+        self.poll_list_account_link_at(actor, id, Utc::now()).await
+    }
+    /// Polls as of `now`, which decides session claims and the rate-limit pause.
+    pub(crate) async fn poll_list_account_link_at(
+        &self,
+        actor: &User,
+        id: &str,
+        now: DateTime<Utc>,
+    ) -> AppResult<ListAccountPoll> {
         self.require_personal_lists_allowed(actor).await?;
         let runtime = &self.services.lists.account_runtime;
-        let session = match runtime.claim_poll(id, &actor.id, Utc::now())? {
+        let session = match runtime.claim_poll(id, &actor.id, now)? {
             PollClaim::Answer(status) => return Ok(poll_answer(status)),
             PollClaim::Linked(account_id) => {
                 // The request that linked it may have lost its response; answer
@@ -705,7 +782,7 @@ impl AppUseCase {
                                 provider = %session.provider,
                                 "list account provider rate-limited a link check; pausing it"
                             );
-                            claim.pause(Utc::now() + Duration::seconds(RATE_LIMITED_PAUSE_SECONDS));
+                            claim.pause(now + Duration::seconds(RATE_LIMITED_PAUSE_SECONDS));
                             return Ok(poll_answer(LIST_ACCOUNT_POLL_RATE_LIMITED));
                         }
                         Some(status) => {
@@ -746,11 +823,7 @@ impl AppUseCase {
                     account: Some(view),
                 })
             }
-            Err(error) if link_write_failure_is_final(&error) => {
-                claim.end();
-                Err(error)
-            }
-            Err(error) => {
+            Err(error) if link_write_failure_is_transient(&error) => {
                 tracing::warn!(
                     provider = %session.provider,
                     error = %error,
@@ -758,6 +831,10 @@ impl AppUseCase {
                 );
                 claim.release();
                 Ok(poll_answer(LIST_ACCOUNT_POLL_UNAVAILABLE))
+            }
+            Err(error) => {
+                claim.end();
+                Err(error)
             }
         }
     }

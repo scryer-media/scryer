@@ -369,6 +369,7 @@ async fn private_account_poll_ends_on_a_definitive_provider_refusal() {
     for code in [
         "access_denied",
         "provider_not_configured",
+        "provider_rejected",
         "invalid_request",
     ] {
         let auth = Arc::new(Auth::failing_polls(&[code]));
@@ -405,13 +406,95 @@ async fn private_account_poll_pauses_provider_checks_after_a_rate_limit() {
     let auth = Arc::new(Auth::failing_polls(&["rate_limited"]));
     let harness = harness(auth.clone()).await;
     let session = start_plex(&harness).await;
-    assert_eq!(poll_status(&harness, &session).await, "rate_limited");
-    assert_eq!(poll_status(&harness, &session).await, "rate_limited");
+    let limited_at = chrono::Utc::now();
+    let poll_at = |seconds: i64| {
+        harness.app.poll_list_account_link_at(
+            &harness.user,
+            &session,
+            limited_at + chrono::Duration::seconds(seconds),
+        )
+    };
+    assert_eq!(poll_at(0).await.unwrap().status, "rate_limited");
+    assert_eq!(poll_at(29).await.unwrap().status, "rate_limited");
     assert_eq!(
         auth.polls.load(Ordering::SeqCst),
         1,
         "a rate-limited link waits before asking the provider again"
     );
+    let linked = poll_at(31).await.unwrap();
+    assert_eq!(linked.status, "linked");
+    assert_eq!(auth.polls.load(Ordering::SeqCst), 2);
+}
+#[tokio::test]
+async fn private_account_poll_ends_when_the_approved_link_can_never_be_recorded() {
+    let auth = Arc::new(Auth {
+        block_poll: true,
+        ..Default::default()
+    });
+    let harness = harness(auth.clone()).await;
+    let session = start_plex(&harness).await;
+    let mut first = Box::pin(harness.app.poll_list_account_link(&harness.user, &session));
+    timeout(Duration::from_secs(30), async {
+        tokio::select! {
+            result = &mut first => panic!("poll finished before the provider answered: {}", result.is_ok()),
+            _ = auth.poll_entered.notified() => {}
+        }
+    })
+    .await
+    .expect("provider check entered");
+    // Lists are turned off while the provider is approving the link.
+    super::list_experimental_gate::set_experimental_features(&harness, false).await;
+    auth.poll_release.notify_one();
+    let Err(AppError::Validation(message)) = timeout(Duration::from_secs(30), first)
+        .await
+        .expect("first poll finished")
+    else {
+        panic!("a write that cannot succeed must end the link with its reason");
+    };
+    assert!(message.contains("experimental"), "{message}");
+    super::list_experimental_gate::set_experimental_features(&harness, true).await;
+    assert!(matches!(
+        harness
+            .app
+            .poll_list_account_link(&harness.user, &session)
+            .await,
+        Err(AppError::NotFound(_))
+    ));
+    assert_eq!(auth.polls.load(Ordering::SeqCst), 1);
+    assert!(
+        harness
+            .app
+            .my_list_accounts(&harness.user)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+#[tokio::test]
+async fn private_account_linked_replays_are_bounded_per_member_and_do_not_block_new_links() {
+    let auth = Arc::new(Auth::default());
+    let harness = harness(auth.clone()).await;
+    let mut sessions = Vec::new();
+    // More completed links than the per-member pending cap of 8.
+    for _ in 0..10 {
+        let session = start_plex(&harness).await;
+        assert_eq!(poll_status(&harness, &session).await, "linked");
+        sessions.push(session);
+    }
+    for (index, session) in sessions.iter().enumerate() {
+        let replay = harness
+            .app
+            .poll_list_account_link(&harness.user, session)
+            .await;
+        if index < sessions.len() - 4 {
+            assert!(
+                matches!(replay, Err(AppError::NotFound(_))),
+                "older linked record {index} is evicted"
+            );
+        } else {
+            assert_eq!(replay.unwrap().status, "linked");
+        }
+    }
 }
 #[tokio::test]
 async fn private_account_poll_retries_a_failed_account_write_without_asking_the_provider_again() {
