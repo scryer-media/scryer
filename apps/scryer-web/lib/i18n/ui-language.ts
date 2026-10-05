@@ -14,6 +14,11 @@ export type UiLanguageSources = {
    * value while the profile is still loading. Null when there is none.
    */
   profile: string | null;
+  /**
+   * The language last picked from the menu in this browser, kept even when
+   * the pick could not be saved on a profile.
+   */
+  choice: string | null;
   /** The language this tab last showed. */
   cached: string | null;
   /** `navigator.language`. */
@@ -42,13 +47,15 @@ export function recognizedLanguageCode(
 
 /**
  * Picks the interface language: an explicit URL choice, then the user's
- * profile, then what this tab last showed, then the browser's language.
+ * profile, then the language picked in this browser, then what this tab last
+ * showed, then the browser's language.
  */
 export function resolveUiLanguage(sources: UiLanguageSources): LocaleCode {
   return (
     parseLanguageFromParam(sources.query) ??
     recognizedLanguageCode(sources.urlOverride) ??
     recognizedLanguageCode(sources.profile) ??
+    recognizedLanguageCode(sources.choice) ??
     recognizedLanguageCode(sources.cached) ??
     normalizeLocale(sources.browser)
   );
