@@ -316,6 +316,13 @@ impl AppUseCase {
         if selected_folder.is_empty() {
             return Err(AppError::Validation("folder path is required".into()));
         }
+        // The root check below compares spellings, so `root/../elsewhere`
+        // would pass for a folder inside the root.
+        if crate::title_folder_rules::path_has_dot_segments(selected_folder) {
+            return Err(AppError::Validation(format!(
+                "folder {selected_folder} must not contain . or .. components"
+            )));
+        }
         let selected_folder = path_to_stored_string(stored_path_to_path_buf(selected_folder));
 
         // FR-001: candidates are restricted to the title's current library roots.

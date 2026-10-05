@@ -1287,6 +1287,12 @@ async fn refuse_library_root_as_title_folder(
     folder_path: &std::path::Path,
 ) -> AppResult<()> {
     let folder_path = path_to_stored_string(folder_path);
+    if crate::title_folder_rules::path_has_dot_segments(&folder_path) {
+        return Err(AppError::Validation(format!(
+            "{} must not contain . or .. components",
+            crate::stored_paths::stored_path_to_display_string(&folder_path)
+        )));
+    }
     if crate::folder_ownership::folder_spans_a_library_root(app, &folder_path).await? {
         return Err(AppError::Validation(format!(
             "{} is a library root, not a title folder",

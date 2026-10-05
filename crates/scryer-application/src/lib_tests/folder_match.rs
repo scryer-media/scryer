@@ -1322,6 +1322,41 @@ async fn folders_outside_the_titles_library_roots_are_rejected() {
     assert!(matches!(error, AppError::Validation(_)));
 }
 
+/// A folder spelled with `..` can read as inside a root while naming somewhere
+/// else entirely, so dotted spellings are refused before any root check.
+#[tokio::test]
+async fn folders_spelled_with_dot_components_are_rejected() {
+    let fixture = FolderMatchFixture::new().await;
+    let folder = fixture.folder("Dotted Spelling (2024)");
+    let title = create_movie_title_with_folder(
+        &fixture.app,
+        &fixture.user,
+        "Dotted Spelling",
+        folder.as_path(),
+    )
+    .await;
+
+    for spelled in [
+        folder.join("..").join("..").join("Elsewhere"),
+        folder.join(".."),
+        fixture.root.path().join(".").join("Dotted Spelling (2024)"),
+    ] {
+        let error = fixture
+            .app
+            .change_title_folder_preview(&fixture.user, &title.id, &spelled.to_string_lossy())
+            .await
+            .expect_err("a dotted folder should be refused");
+        assert!(
+            matches!(&error, AppError::Validation(message) if message.contains(". or .. components")),
+            "expected a dot-component validation error, got {error:?}"
+        );
+    }
+    assert_eq!(
+        fixture.folder_path_of(&title.id).await.as_deref(),
+        Some(folder.to_string_lossy().as_ref())
+    );
+}
+
 /// FR-083 — the workflow needs management permission on the title's library.
 #[tokio::test]
 async fn changing_a_folder_match_requires_library_management_permission() {
