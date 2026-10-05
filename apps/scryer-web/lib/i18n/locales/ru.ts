@@ -2875,6 +2875,7 @@ const ru: LocaleDictionary = {
     "episode.filler": "Филлер",
     "episode.recap": "Рекап",
     "episode.absoluteNumber": "Абс. №{{number}}",
+    "episode.titleTba": "Будет объявлено",
     "episode.special": "Спецвыпуск",
     "episode.ova": "OVA",
     "episode.ona": "ONA",

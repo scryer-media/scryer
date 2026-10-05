@@ -150,7 +150,7 @@ async fn series_hydration_persists_and_clears_episode_image_url() {
 }
 
 #[tokio::test]
-async fn series_hydration_refreshes_episode_air_dates_and_keeps_them_when_upstream_drops_one() {
+async fn series_hydration_refreshes_episode_air_dates_and_clears_one_upstream_drops() {
     let (app, user) = bootstrap();
     let title = app
         .add_title(
@@ -253,7 +253,8 @@ async fn series_hydration_refreshes_episode_air_dates_and_keeps_them_when_upstre
         ]
     );
 
-    // A later payload that omits E02's date leaves the stored date alone.
+    // Upstream is authoritative: a later payload that omits E02's date
+    // clears the stored one.
     app.create_series_seasons_and_episodes(
         &title,
         &seasons,
@@ -262,13 +263,16 @@ async fn series_hydration_refreshes_episode_air_dates_and_keeps_them_when_upstre
         &[],
     )
     .await;
-    let retained = app
+    let cleared = app
         .list_episodes(&user, &collection.id)
         .await
         .expect("list episodes after date drop");
     assert_eq!(
-        air_dates_by_number(&retained),
-        air_dates_by_number(&refreshed)
+        air_dates_by_number(&cleared),
+        vec![
+            ("1".to_string(), Some("2026-03-08".to_string())),
+            ("2".to_string(), None),
+        ]
     );
 }
 

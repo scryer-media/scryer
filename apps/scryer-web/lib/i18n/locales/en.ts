@@ -2655,6 +2655,7 @@ const en: LocaleDictionary = {
   "episode.untitledRelease": "Untitled release",
   "episode.filler": "Filler",
   "episode.recap": "Recap",
+  "episode.titleTba": "TBA",
   "episode.special": "Special",
   "episode.ova": "OVA",
   "episode.ona": "ONA",

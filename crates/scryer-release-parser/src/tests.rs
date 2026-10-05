@@ -4193,6 +4193,76 @@ fn single_token_bracketed_group_with_many_trailing_brackets_is_unchanged() {
     );
 }
 
+/// A leading bracketed group is the group whatever its script, and stays out
+/// of the title zone. The ampersand keeps its usual ` and ` rendering.
+#[test]
+fn leading_bracketed_group_in_any_script_is_the_release_group() {
+    for (name, expected_group) in [
+        (
+            "[霜灯工坊&Lumenscribe] Lantern Verge - 26 [WebRip 1080p HEVC-10bit AAC][ABCD1234]",
+            "霜灯工坊 and Lumenscribe",
+        ),
+        (
+            "[霜灯工坊] Lantern Verge - 26 [WebRip 1080p HEVC-10bit AAC]",
+            "霜灯工坊",
+        ),
+        (
+            "[Звёздный Свиток] Lantern Verge - 26 [1080p]",
+            "Звёздный Свиток",
+        ),
+    ] {
+        let analysis =
+            analyze_release_for_target(name, &context(ContextFacetHint::Anime, "Umbra Vector"));
+        let candidate = analysis.best_candidate().expect("best candidate");
+
+        assert_eq!(
+            candidate.projected.release_group.as_deref(),
+            Some(expected_group),
+            "{name}"
+        );
+        assert_eq!(
+            candidate.projected.normalized_title, "LANTERN VERGE",
+            "{name}"
+        );
+        assert_eq!(
+            candidate
+                .projected
+                .episode
+                .as_ref()
+                .and_then(|episode| episode.absolute_episode),
+            Some(26),
+            "{name}"
+        );
+    }
+}
+
+/// Accepting any script in the leading tag must not turn number-only brackets
+/// (batch ranges, years, full-width digits) or stereoscopy tags into groups,
+/// and the trailing `-GROUP` suffix stays Latin-only.
+#[test]
+fn leading_brackets_that_are_not_groups_stay_rejected() {
+    for name in [
+        "[01-12] Lantern Verge [1080p]",
+        "[2024] Lantern Verge - 26 [1080p]",
+        "[3D] Lantern Verge - 26 [1080p]",
+        "[\u{ff12}\u{ff10}\u{ff12}\u{ff14}] Lantern Verge - 26 [1080p]",
+        "[\u{ff10}\u{ff11}-\u{ff11}\u{ff12}] Lantern Verge [1080p]",
+    ] {
+        let analysis =
+            analyze_release_for_target(name, &context(ContextFacetHint::Anime, "Umbra Vector"));
+        let candidate = analysis.best_candidate().expect("best candidate");
+
+        assert_eq!(candidate.projected.release_group, None, "{name}");
+    }
+
+    let analysis = analyze_release_for_target(
+        "Lantern.Verge.S01E02.1080p.WEB-DL.H264-霜灯工坊",
+        &context(ContextFacetHint::Series, "Lantern Verge"),
+    );
+    let candidate = analysis.best_candidate().expect("best candidate");
+    assert_eq!(candidate.projected.release_group, None);
+}
+
 /// A four-digit year alone in parentheses right after the title is a name
 /// qualifier — `Shin Chan (1992) - S06E28 - 241 - Episode 241` premiered in
 /// 1992 and holds episode 241. Reading that year as an anime absolute episode

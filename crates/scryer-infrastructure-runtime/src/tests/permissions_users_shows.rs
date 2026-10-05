@@ -641,15 +641,15 @@ async fn sqlite_show_queries_roundtrip() {
             episode_type: Some(scryer_domain::EpisodeType::Special),
             episode_number: Some("E1".into()),
             season_number: Some("2".into()),
-            episode_label: Some("Special".into()),
-            title: Some("Pilot Special".into()),
-            air_date: Some("2026-01-01".into()),
+            episode_label: Some(Some("Special".into())),
+            title: Some(Some("Pilot Special".into())),
+            air_date: Some(Some("2026-01-01".into())),
             duration_seconds: Some(2_400),
             has_multi_audio: Some(true),
             has_subtitle: Some(false),
             collection_id: Some(collection.id.clone()),
-            overview: Some("Updated overview".into()),
-            tvdb_id: Some("349232".into()),
+            overview: Some(Some("Updated overview".into())),
+            tvdb_id: Some(Some("349232".into())),
             image_url: Some("https://cdn.example.test/episode-updated.jpg".into()),
             ..Default::default()
         },
@@ -684,6 +684,62 @@ async fn sqlite_show_queries_roundtrip() {
     .await
     .expect("clear episode image url");
     assert_eq!(cleared_episode.image_url, None);
+
+    let numbered_episode = ShowRepository::update_episode(
+        &shows,
+        &episode.id,
+        EpisodeUpdate {
+            tmdb_id: Some(Some("990101".into())),
+            absolute_number: Some(Some("7".into())),
+            is_filler: Some(true),
+            is_recap: Some(true),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("set episode numbering and flags");
+    assert_eq!(numbered_episode.absolute_number, Some("7".into()));
+    assert!(numbered_episode.is_filler);
+    assert!(numbered_episode.is_recap);
+
+    ShowRepository::update_episode(
+        &shows,
+        &episode.id,
+        EpisodeUpdate {
+            episode_label: Some(None),
+            title: Some(None),
+            air_date: Some(None),
+            overview: Some(None),
+            tvdb_id: Some(None),
+            tmdb_id: Some(None),
+            absolute_number: Some(None),
+            is_filler: Some(false),
+            is_recap: Some(false),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("clear episode metadata");
+    let reloaded = ShowRepository::get_episode_by_id(&shows, &episode.id)
+        .await
+        .expect("reload cleared episode")
+        .expect("cleared episode exists");
+    assert_eq!(reloaded.episode_label, None);
+    assert_eq!(reloaded.title, None);
+    assert_eq!(reloaded.air_date, None);
+    assert_eq!(reloaded.overview, None);
+    assert_eq!(reloaded.tvdb_id, None);
+    assert_eq!(reloaded.tmdb_id, None);
+    assert_eq!(reloaded.absolute_number, None);
+    assert!(!reloaded.is_filler);
+    assert!(!reloaded.is_recap);
+    assert_eq!(reloaded.season_number, Some("2".into()));
+
+    let empty_update =
+        ShowRepository::update_episode(&shows, &episode.id, EpisodeUpdate::default())
+            .await
+            .expect_err("an update without fields is rejected");
+    assert!(matches!(empty_update, AppError::Validation(_)));
 
     ShowRepository::delete_episode(&shows, &episode.id)
         .await

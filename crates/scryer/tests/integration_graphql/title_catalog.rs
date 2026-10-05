@@ -2308,7 +2308,7 @@ async fn graphql_titles_expose_episode_progress_excluding_specials() {
         .update_episode(
             &regular_episode_2.id,
             EpisodeUpdate {
-                air_date: Some("2024-01-08".to_string()),
+                air_date: Some(Some("2024-01-08".to_string())),
                 monitored: Some(false),
                 ..Default::default()
             },
@@ -2321,7 +2321,7 @@ async fn graphql_titles_expose_episode_progress_excluding_specials() {
         .update_episode(
             &regular_episode_1.id,
             EpisodeUpdate {
-                air_date: Some("2024-01-01".to_string()),
+                air_date: Some(Some("2024-01-01".to_string())),
                 ..Default::default()
             },
         )
@@ -2332,7 +2332,7 @@ async fn graphql_titles_expose_episode_progress_excluding_specials() {
         .update_episode(
             &regular_episode_3.id,
             EpisodeUpdate {
-                air_date: Some("2024-01-15".to_string()),
+                air_date: Some(Some("2024-01-15".to_string())),
                 ..Default::default()
             },
         )

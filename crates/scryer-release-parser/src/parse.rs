@@ -3049,22 +3049,48 @@ fn release_group_token_range(unit: &ParseUnit, tokens: &[Token]) -> TokenRange {
 }
 
 fn release_group_part_is_valid(token: &Token, continuation: bool) -> bool {
+    release_group_part_is_valid_in_script(token, continuation, false)
+}
+
+/// A leading `[...]` tag is the group in any script (`[<CJK>&Latin] Title - 26`);
+/// trailing `-GROUP` suffixes stay Latin-only, where non-Latin text is far more
+/// often a title or a subtitle note than a group.
+fn leading_release_group_part_is_valid(token: &Token, continuation: bool) -> bool {
+    release_group_part_is_valid_in_script(token, continuation, true)
+}
+
+fn release_group_part_is_valid_in_script(
+    token: &Token,
+    continuation: bool,
+    any_script: bool,
+) -> bool {
     let normalized = token.normalized.as_str();
-    if normalized.is_empty() || token.raw.len() > 24 {
+    let length = if any_script {
+        token.raw.chars().count()
+    } else {
+        token.raw.len()
+    };
+    if normalized.is_empty() || length > 24 {
         return false;
     }
-    if !continuation
-        && !normalized
-            .chars()
-            .any(|character| character.is_ascii_alphabetic())
-    {
+    let is_letter = |character: char| {
+        if any_script {
+            character.is_alphabetic()
+        } else {
+            character.is_ascii_alphabetic()
+        }
+    };
+    let is_letter_or_digit = |character: char| {
+        if any_script {
+            character.is_alphanumeric()
+        } else {
+            character.is_ascii_alphanumeric()
+        }
+    };
+    if !continuation && !normalized.chars().any(is_letter) {
         return false;
     }
-    if continuation
-        && !normalized
-            .chars()
-            .any(|character| character.is_ascii_alphanumeric())
-    {
+    if continuation && !normalized.chars().any(is_letter_or_digit) {
         return false;
     }
     if parse_year(normalized).is_some() && !continuation {
@@ -3239,9 +3265,9 @@ pub(crate) fn leading_release_group_token_range(tokens: &[Token]) -> Option<Toke
             .is_some_and(numeric_release_group_suffix))
         || (group_indices.len() <= 3
             && (start_token..end_token).all(|index| {
-                tokens
-                    .get(index)
-                    .is_some_and(|token| release_group_part_is_valid(token, index > start_token))
+                tokens.get(index).is_some_and(|token| {
+                    leading_release_group_part_is_valid(token, index > start_token)
+                })
             }));
     let compound_group = leading_compound_release_group(tokens, start_token, end_token);
     if !standard_group && !compound_group {
@@ -3273,7 +3299,7 @@ fn leading_compound_release_group(tokens: &[Token], start_token: usize, end_toke
             previous_was_connector = true;
             continue;
         }
-        if !release_group_part_is_valid(token, parts > 0) {
+        if !leading_release_group_part_is_valid(token, parts > 0) {
             return false;
         }
         parts += 1;

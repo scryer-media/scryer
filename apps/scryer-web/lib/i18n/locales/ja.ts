@@ -1411,6 +1411,7 @@ const ja: LocaleDictionary = {
   "episode.untitledRelease": "無題のリリース",
   "episode.filler": "フィラー",
   "episode.recap": "総集編",
+  "episode.titleTba": "未定",
   "episode.special": "特別編",
   "episode.ova": "OVA",
   "episode.ona": "ONA",

@@ -2134,6 +2134,7 @@ const zh_HK: LocaleDictionary = {
   "episode.untitledRelease": "未命名發佈",
   "episode.filler": "填充集",
   "episode.recap": "回顧集",
+  "episode.titleTba": "待定",
   "episode.special": "特別篇",
   "episode.ova": "OVA",
   "episode.ona": "ONA",
