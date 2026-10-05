@@ -621,7 +621,13 @@ async fn standby_delay_parks_the_best_row_stops_the_walk_and_promotion_grabs_whe
 
     assert_eq!(
         crate::acquisition_workflow::try_saved_candidates(
-            &app, &wanted, None, None, &snapshot, &now,
+            &app,
+            &wanted,
+            None,
+            None,
+            &snapshot,
+            &now,
+            &crate::domain_events::DomainEventActor::system(),
         )
         .await,
         crate::acquisition_workflow::StandbyRecoveryOutcome::Parked {
@@ -664,6 +670,7 @@ async fn standby_delay_parks_the_best_row_stops_the_walk_and_promotion_grabs_whe
             None,
             &snapshot,
             &(now + chrono::Duration::minutes(1)),
+            &crate::domain_events::DomainEventActor::system(),
         )
         .await,
         crate::acquisition_workflow::StandbyRecoveryOutcome::Parked { scope: None },
@@ -676,6 +683,7 @@ async fn standby_delay_parks_the_best_row_stops_the_walk_and_promotion_grabs_whe
                 &parked,
                 &(now + chrono::Duration::minutes(11)),
                 crate::acquisition::pending::PendingGrabTrigger::Automatic,
+                &crate::domain_events::DomainEventActor::system(),
             )
             .await
             .expect("promotion should resolve"),
@@ -763,6 +771,7 @@ async fn walk_saved_movie_result(
         None,
         &snapshot,
         &Utc::now(),
+        &crate::domain_events::DomainEventActor::system(),
     )
     .await
 }
@@ -950,6 +959,7 @@ async fn waiting_promotion_reparks_when_the_delay_profile_grows() {
             &waiting,
             &promotion_time,
             crate::acquisition::pending::PendingGrabTrigger::Automatic,
+            &crate::domain_events::DomainEventActor::system(),
         )
         .await
         .expect("promotion should resolve"),
@@ -1029,6 +1039,7 @@ async fn operator_pending_grab_ignores_the_delay_profile() {
             &pending,
             &Utc::now(),
             crate::acquisition::pending::PendingGrabTrigger::Operator,
+            &crate::domain_events::DomainEventActor::system(),
         )
         .await
         .expect("operator grab should resolve"),
@@ -5494,6 +5505,7 @@ async fn a_waiting_season_pack_parks_a_covered_sibling_episode_walk() {
                 None,
                 &snapshot,
                 &Utc::now(),
+                &crate::domain_events::DomainEventActor::system(),
             )
             .await,
             crate::acquisition_workflow::StandbyRecoveryOutcome::Parked { scope: Some(_) }
@@ -12720,6 +12732,7 @@ async fn a_parked_release_the_profile_now_blocks_is_not_grabbed() {
             &allowed,
             &now,
             crate::acquisition::pending::PendingGrabTrigger::Automatic,
+            &crate::domain_events::DomainEventActor::system(),
         )
         .await
         .expect("pending grab should resolve"),
@@ -12748,6 +12761,7 @@ async fn a_parked_release_the_profile_now_blocks_is_not_grabbed() {
             &blocked,
             &now,
             crate::acquisition::pending::PendingGrabTrigger::Automatic,
+            &crate::domain_events::DomainEventActor::system(),
         )
         .await
         .expect("pending grab should resolve"),
@@ -12936,6 +12950,7 @@ async fn an_active_standby_row_survives_replay_instead_of_expiring() {
         None,
         &snapshot,
         &Utc::now(),
+        &crate::domain_events::DomainEventActor::system(),
     )
     .await;
 
@@ -13635,6 +13650,7 @@ async fn automatic_search_of_unmonitored_title_reaches_the_walk_without_changing
             None,
             Some(&keys),
             false,
+            crate::domain_events::DomainEventActor::system(),
             tokio_util::sync::CancellationToken::new(),
             |_| {},
         )
@@ -13832,6 +13848,7 @@ async fn automatic_search_rechecks_pauses_after_waiting_for_the_title() {
             None,
             Some(&task_keys),
             false,
+            crate::domain_events::DomainEventActor::system(),
             tokio_util::sync::CancellationToken::new(),
             move |progress| {
                 let _ = tx.send(progress.stage_label);
@@ -14322,6 +14339,208 @@ async fn a_title_walk_whose_only_download_client_is_disabled_fails_the_job() {
     );
 }
 
+/// The season-pack fixture with an indexer that offers a season pack, so a walk
+/// over the title grabs.
+async fn seed_grabbing_season_pack_fixture() -> (AppUseCase, Title, Arc<StubDownloadClient>) {
+    let (app, title, _, download_client) =
+        seed_recent_failed_season_pack_fixture_with_indexer(Arc::new(
+            TrackingIndexerClient::default()
+                .with_season_pack_titles([
+                    "Recent.Failed.Season.Pack.S07.1080p.WEB-DL-ATTRIBUTION".to_string()
+                ])
+                .stamping_indexer_ids(),
+        ))
+        .await;
+    let job_runs = Arc::new(RecordingJobRunRepo::default());
+    let app = app.with_test_overrides(|services| services.with_job_runs(job_runs.clone()));
+    attach_default_library_to_scope_states(&app, MediaFacet::Anime).await;
+    (app, title, download_client)
+}
+
+/// Who each of the title's grab events is recorded against.
+async fn release_grabbed_actors(
+    app: &AppUseCase,
+    title_id: &str,
+) -> Vec<(scryer_domain::DomainEventActorKind, Option<String>)> {
+    app.services
+        .events
+        .domain_events
+        .list(&DomainEventFilter {
+            event_types: Some(vec![DomainEventType::ReleaseGrabbed]),
+            title_id: Some(title_id.to_string()),
+            facet: None,
+            stream_id: None,
+            after_sequence: Some(0),
+            before_sequence: None,
+            limit: 100,
+        })
+        .await
+        .expect("load the grab events")
+        .into_iter()
+        .filter(|event| matches!(event.payload, DomainEventPayload::ReleaseGrabbed(_)))
+        .map(|event| (event.actor_kind, event.actor_user_id))
+        .collect()
+}
+
+#[tokio::test]
+async fn an_operator_automatic_title_search_records_the_operator_on_its_grabs() {
+    let (app, title, download_client) = seed_grabbing_season_pack_fixture().await;
+    let operator = test_admin_user();
+
+    let run = app
+        .start_acquisition_search_job(
+            &operator,
+            AcquisitionSearchRequest {
+                automatic: true,
+                title_id: Some(title.id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("start the operator's automatic title search");
+    let view = await_acquisition_search_job(&app, &operator, &run.id).await;
+
+    assert_eq!(view.state, "completed", "{view:?}");
+    assert!(view.grabbed_count > 0, "the walk grabbed: {view:?}");
+    assert!(
+        !download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty()
+    );
+    let actors = release_grabbed_actors(&app, &title.id).await;
+    assert!(!actors.is_empty(), "the grab was recorded");
+    assert!(
+        actors.iter().all(|actor| *actor
+            == (
+                scryer_domain::DomainEventActorKind::User,
+                Some(operator.id.clone())
+            )),
+        "every grab names the operator who started the search: {actors:?}"
+    );
+}
+
+/// Media-request approval and maintenance sequences dispatch their search as
+/// the system execution actor, which holds no persisted grants of its own. The
+/// search must still be authorized, run, and grab, and its grabs stay recorded
+/// against the system.
+#[tokio::test]
+async fn a_search_run_as_the_system_execution_actor_still_grabs_and_records_the_system() {
+    let (app, title, download_client) = seed_grabbing_season_pack_fixture().await;
+    let system = User::system_execution_actor();
+
+    let run = app
+        .start_acquisition_search_job(
+            &system,
+            AcquisitionSearchRequest {
+                automatic: true,
+                title_id: Some(title.id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("the system execution actor is authorized to search");
+    let view = await_acquisition_search_job(&app, &test_admin_user(), &run.id).await;
+
+    assert_eq!(view.state, "completed", "{view:?}");
+    assert!(view.grabbed_count > 0, "the walk grabbed: {view:?}");
+    assert!(
+        !download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty()
+    );
+    let actors = release_grabbed_actors(&app, &title.id).await;
+    assert!(!actors.is_empty(), "the grab was recorded");
+    assert!(
+        actors
+            .iter()
+            .all(|actor| *actor == (scryer_domain::DomainEventActorKind::System, None)),
+        "a system-run search records the system: {actors:?}"
+    );
+}
+
+/// An approved request's search is queued without checking the requester's
+/// permissions, because request policy already authorized it. A requester who
+/// could not search themselves still gets the grab, recorded against the
+/// system that made it.
+#[tokio::test]
+async fn an_approved_request_from_a_user_without_search_permission_still_grabs() {
+    let (app, title, download_client) = seed_grabbing_season_pack_fixture().await;
+    let requester = library_permission_user(
+        "attribution-requester",
+        &title.library_id,
+        &[
+            scryer_domain::LibraryPermission::Request,
+            scryer_domain::LibraryPermission::AutoApproveRequests,
+        ],
+    );
+    assert!(
+        app.start_acquisition_search_job(
+            &requester,
+            AcquisitionSearchRequest {
+                automatic: true,
+                title_id: Some(title.id.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .is_err(),
+        "the requester must not be able to search for this to prove anything"
+    );
+
+    app.trigger_title_wanted_search_unchecked(
+        &title.id,
+        SubmissionConflictPolicy::from_replace_flag(false),
+    )
+    .await
+    .expect("the approval's search is queued without the requester's permissions");
+    app.run_background_acquisition_cycle_once().await;
+
+    assert!(
+        !download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty(),
+        "the approved title was searched and grabbed"
+    );
+    let actors = release_grabbed_actors(&app, &title.id).await;
+    assert!(!actors.is_empty(), "the grab was recorded");
+    assert!(
+        actors
+            .iter()
+            .all(|actor| *actor == (scryer_domain::DomainEventActorKind::System, None)),
+        "the approved request's grab records the system: {actors:?}"
+    );
+}
+
+#[tokio::test]
+async fn background_cycle_grabs_stay_recorded_against_the_system() {
+    let (app, title, download_client) = seed_grabbing_season_pack_fixture().await;
+
+    app.run_background_acquisition_cycle_once().await;
+
+    assert!(
+        !download_client
+            .submitted_release_titles
+            .lock()
+            .await
+            .is_empty(),
+        "the background cycle grabbed"
+    );
+    let actors = release_grabbed_actors(&app, &title.id).await;
+    assert!(!actors.is_empty(), "the grab was recorded");
+    assert!(
+        actors
+            .iter()
+            .all(|actor| *actor == (scryer_domain::DomainEventActorKind::System, None)),
+        "background grabs record the system: {actors:?}"
+    );
+}
+
 /// A search job's progress write must never strand the walk it is reporting on.
 ///
 /// On sqlite every write takes one process-wide writer gate and holds it for the
@@ -14802,7 +15021,13 @@ async fn a_pinned_route_grabs_the_standby_release_when_the_queue_cannot_be_read(
 
     assert_eq!(
         crate::acquisition_workflow::try_saved_candidates(
-            &app, &wanted, None, None, &snapshot, &now,
+            &app,
+            &wanted,
+            None,
+            None,
+            &snapshot,
+            &now,
+            &crate::domain_events::DomainEventActor::system(),
         )
         .await,
         crate::acquisition_workflow::StandbyRecoveryOutcome::Recovered {
@@ -14862,7 +15087,13 @@ async fn an_unpinned_route_keeps_the_standby_release_pending_when_the_queue_cann
 
     assert_eq!(
         crate::acquisition_workflow::try_saved_candidates(
-            &app, &wanted, None, None, &snapshot, &now,
+            &app,
+            &wanted,
+            None,
+            None,
+            &snapshot,
+            &now,
+            &crate::domain_events::DomainEventActor::system(),
         )
         .await,
         crate::acquisition_workflow::StandbyRecoveryOutcome::Deferred {
@@ -15593,6 +15824,7 @@ async fn walk_season_saved_results(
                 None,
                 &snapshot,
                 &Utc::now(),
+                &crate::domain_events::DomainEventActor::system(),
             )
             .await,
         );
@@ -16263,6 +16495,7 @@ async fn a_queue_covered_walk_still_reports_a_source_gone_row() {
         None,
         &snapshot,
         &Utc::now(),
+        &crate::domain_events::DomainEventActor::system(),
     )
     .await;
 
