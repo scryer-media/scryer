@@ -3,6 +3,14 @@ use std::sync::Arc;
 
 use crate::{AppError, AppResult, ArchiveExtractorPluginProvider};
 
+#[derive(Default)]
+pub(crate) struct ArchiveWorkspaceReference;
+
+impl ArchiveWorkspaceReference {
+    pub(crate) fn track(&mut self, _root: Option<&Path>) {}
+    pub(crate) fn retain(&mut self) {}
+}
+
 #[derive(Debug, Clone)]
 pub struct ArchiveExtractionDestination {
     _staging_parent: PathBuf,
@@ -52,6 +60,7 @@ pub fn is_timeout_error(error: &AppError) -> bool {
 }
 
 pub async fn cleanup_extracted_dir(_dir: &Path) {}
+pub(crate) async fn abandon_extracted_dir(_dir: &Path) {}
 
 pub fn replaced_archive_sources(
     _workspace: &Path,

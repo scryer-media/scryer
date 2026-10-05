@@ -78,6 +78,7 @@ pub(super) struct SceneSubtitlePlan {
     staging_root: Option<PathBuf>,
     context: Option<DeliveryContext>,
     total_bytes: u64,
+    unmapped_files: usize,
 }
 
 impl SceneSubtitlePlan {
@@ -198,10 +199,12 @@ impl SceneSubtitlePlan {
                     .or_default()
                     .push((path, suffix.clone())),
                 [] => {
-                    tracing::warn!(subtitle = %path.display(), "subtitle skipped because no imported video matches")
+                    plan.unmapped_files += 1;
+                    tracing::warn!("subtitle skipped because no imported video matches")
                 }
                 _ => {
-                    tracing::warn!(subtitle = %path.display(), "subtitle skipped because multiple imported videos match")
+                    plan.unmapped_files += 1;
+                    tracing::warn!("subtitle skipped because multiple imported videos match")
                 }
             }
         }
@@ -328,7 +331,14 @@ impl SceneSubtitlePlan {
 
     pub(super) fn retain_sources(&mut self, sources: &[PathBuf]) {
         let sources = sources.iter().collect::<BTreeSet<_>>();
-        self.files.retain(|source, _| sources.contains(source));
+        self.files.retain(|source, files| {
+            if sources.contains(source) {
+                true
+            } else {
+                self.unmapped_files += files.len();
+                false
+            }
+        });
     }
 
     pub(super) fn has_pending_sources<'a>(
@@ -347,7 +357,7 @@ impl SceneSubtitlePlan {
                 "scene subtitles have no completed current import destination; workspace preserved"
             );
         }
-        !pending.is_empty()
+        !pending.is_empty() || self.unmapped_files > 0
     }
 }
 

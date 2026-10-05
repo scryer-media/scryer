@@ -33,8 +33,8 @@ const MAX_PLUGIN_OUTPUT_FILES: usize = 20_000;
 const MAX_PLUGIN_OUTPUT_DIRECTORIES: usize = 20_000;
 const MAX_PLUGIN_OUTPUT_ENTRIES: usize = MAX_PLUGIN_OUTPUT_FILES + MAX_PLUGIN_OUTPUT_DIRECTORIES;
 const MAX_PLUGIN_OUTPUT_BYTES: u64 = 2 * 1024 * 1024 * 1024 * 1024;
-const MAX_ARCHIVE_DISCOVERY_DEPTH: usize = 3;
-const MAX_ARCHIVE_DISCOVERY_DIRECTORIES: usize = 256;
+const MAX_ARCHIVE_DISCOVERY_DEPTH: usize = 16;
+const MAX_ARCHIVE_DISCOVERY_DIRECTORIES: usize = MAX_PLUGIN_OUTPUT_DIRECTORIES;
 /// Archive sets one download may hold. More than this is refused rather than
 /// extracted in part.
 const MAX_ARCHIVE_SETS: usize = 256;
@@ -52,6 +52,8 @@ struct PluginOutputTotals {
     directories: usize,
     files: usize,
     bytes: u64,
+    execution_time: Duration,
+    execution_budget: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -115,21 +117,15 @@ static ARCHIVE_WORKSPACE_KEY: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLoc
 /// Initialize ownership authority from the service's private state directory.
 /// Media and download directories never supply ownership credentials.
 pub fn initialize_archive_workspace_ownership(state_dir: &Path) -> AppResult<()> {
-    let key = load_or_create_archive_workspace_key(state_dir).map_err(|error| {
-        AppError::Repository(format!(
-            "failed to initialize archive workspace authority: {error}"
-        ))
-    })?;
-    if let Some(existing) = ARCHIVE_WORKSPACE_KEY.get() {
-        if existing != &key {
-            return Err(AppError::Repository(
-                "archive workspace authority is already initialized".into(),
-            ));
-        }
-        return Ok(());
-    }
-    ARCHIVE_WORKSPACE_KEY.set(key).map_err(|_| {
-        AppError::Repository("archive workspace authority initialization raced".into())
+    ARCHIVE_WORKSPACE_KEY.get_or_init(|| archive_workspace_key_for_startup(state_dir));
+    Ok(())
+}
+
+fn archive_workspace_key_for_startup(state_dir: &Path) -> [u8; 32] {
+    load_or_create_archive_workspace_key(state_dir).unwrap_or_else(|error| {
+        tracing::warn!(kind = ?error.kind(),
+            "archive workspace authority is unavailable; using process-local ownership and preserving older workspaces");
+        new_archive_workspace_key()
     })
 }
 
@@ -370,6 +366,7 @@ impl Drop for ArchiveWorkspaceLease {
     fn drop(&mut self) {
         if !self.published
             && archive_workspace_owner(&self.root).is_some()
+            && !archive_workspace_has_pending_subtitles(&self.root)
             && let Err(error) = release_archive_workspace(&self.root)
         {
             tracing::warn!(error = %redact_archive_diagnostic(&error.to_string()), "unpublished archive workspace could not be released");
@@ -500,16 +497,8 @@ pub async fn extract_archives_if_needed(
         )));
     };
 
-    let extraction = tokio::time::timeout(
-        Duration::from_secs(60 * 60),
-        extract_into_workspace(&workspace, sets, is_sample, passwords, &provider),
-    )
-    .await
-    .unwrap_or_else(|_| {
-        Err(AppError::archive_extraction_timed_out(
-            "archive job exceeded its one-hour budget across all sets and password attempts",
-        ))
-    });
+    let extraction =
+        extract_into_workspace(&workspace, &dir, sets, is_sample, passwords, &provider).await;
 
     match extraction {
         Ok(true) => {
@@ -522,7 +511,7 @@ pub async fn extract_archives_if_needed(
             Ok(None)
         }
         Err(error) => {
-            cleanup_extracted_dir(&workspace_root).await;
+            abandon_extracted_dir(&workspace_root).await;
             Err(classify_archive_failure(error))
         }
     }
@@ -547,14 +536,31 @@ fn classify_archive_failure(error: AppError) -> AppError {
 /// failure even when another set produced valid video.
 async fn extract_into_workspace(
     workspace: &ArchiveExtractionWorkspace,
+    source: &Path,
     sets: Vec<(PathBuf, ArchiveType)>,
     is_sample: fn(&Path) -> bool,
     passwords: &ArchivePasswordCandidates,
     provider: &Arc<dyn ArchiveExtractorPluginProvider>,
 ) -> AppResult<bool> {
-    let mut totals = PluginOutputTotals::default();
+    let source = if source.is_file() {
+        source.parent().unwrap_or(Path::new("."))
+    } else {
+        source
+    };
+    let input_bytes = archive_inventory(source, MAX_ARCHIVE_DISCOVERY_DEPTH)?
+        .iter()
+        .filter_map(|path| std::fs::symlink_metadata(path).ok())
+        .filter(|metadata| metadata.is_file())
+        .fold(0u64, |sum, metadata| sum.saturating_add(metadata.len()));
+    // Give large scene releases proportionally more decoding time. Queue
+    // admission is excluded by the host; all candidate attempts share this cap.
+    let mut totals = PluginOutputTotals {
+        execution_budget: Duration::from_secs(
+            (input_bytes / (1024 * 1024)).clamp(60 * 60, 24 * 60 * 60),
+        ),
+        ..Default::default()
+    };
     let mut processed_recovery = std::collections::HashSet::new();
-    let mut first_failure = None;
     let mut pass_outputs = Vec::with_capacity(sets.len());
     for (index, (archive_path, archive_type)) in sets.into_iter().enumerate() {
         let output_dir = if index == 0 {
@@ -573,7 +579,7 @@ async fn extract_into_workspace(
             provider,
         };
         if set
-            .extract_or_skip(&mut totals, &mut first_failure, &mut processed_recovery)
+            .extract_or_skip(&mut totals, &mut processed_recovery)
             .await?
         {
             pass_outputs.push(output_dir);
@@ -623,7 +629,7 @@ async fn extract_into_workspace(
                 provider,
             };
             if set
-                .extract_or_skip(&mut totals, &mut first_failure, &mut processed_recovery)
+                .extract_or_skip(&mut totals, &mut processed_recovery)
                 .await?
             {
                 next_outputs.push(output_dir);
@@ -632,21 +638,18 @@ async fn extract_into_workspace(
         pass_outputs = next_outputs;
     }
 
-    match first_failure {
-        Some(error) => Err(error),
-        None => Ok(archive_inventory(&workspace.root, 64)?.iter().any(|path| {
-            (scryer_domain::is_video_file(path) && !is_sample(path))
-                || path
-                    .extension()
-                    .and_then(|ext| ext.to_str())
-                    .is_some_and(|ext| {
-                        matches!(
-                            ext.to_ascii_lowercase().as_str(),
-                            "srt" | "ass" | "ssa" | "vtt" | "sub" | "idx"
-                        )
-                    })
-        })),
-    }
+    Ok(archive_inventory(&workspace.root, 64)?.iter().any(|path| {
+        (scryer_domain::is_video_file(path) && !is_sample(path))
+            || path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    matches!(
+                        ext.to_ascii_lowercase().as_str(),
+                        "srt" | "ass" | "ssa" | "vtt" | "sub" | "idx"
+                    )
+                })
+    }))
 }
 
 fn nested_archive_sets(outputs: &[PathBuf]) -> AppResult<Vec<(PathBuf, ArchiveType)>> {
@@ -673,12 +676,11 @@ struct ArchiveSetExtraction<'a> {
 }
 
 impl ArchiveSetExtraction<'_> {
-    /// Extracts the set, or on a failure other than a timeout discards its
-    /// output, keeps the first such failure and reports the set as skipped.
+    /// Stops on a failed set; host errors must not receive a fresh execution
+    /// budget for each remaining set.
     async fn extract_or_skip(
         &self,
         totals: &mut PluginOutputTotals,
-        first_failure: &mut Option<AppError>,
         processed_recovery: &mut std::collections::HashSet<PathBuf>,
     ) -> AppResult<bool> {
         if matches!(self.archive_type, ArchiveType::Par2)
@@ -700,10 +702,9 @@ impl ArchiveSetExtraction<'_> {
                 tracing::warn!(
                     archive = %redact_archive_diagnostic(&self.archive_path.to_string_lossy()),
                     error = %redact_archive_diagnostic(&error.to_string()),
-                    "skipping an archive set that failed to extract"
+                    "archive set failed to extract"
                 );
-                first_failure.get_or_insert(error);
-                Ok(false)
+                Err(error)
             }
         }
     }
@@ -961,25 +962,65 @@ async fn extract_with_archive_plugin(
         max_directories: MAX_PLUGIN_OUTPUT_DIRECTORIES.saturating_sub(totals.directories) as u64,
         ..Default::default()
     };
-    // Reserve room for final placement and for recovery scratch. Dividing both
-    // allowances also stays safe when output and temporary storage share a disk.
-    const FREE_SPACE_RESERVE: u64 = 512 * 1024 * 1024;
-    if let Ok(space) = crate::filesystem_space_raw(&output_dir) {
+    // Staging output and final placement share the resolved destination volume.
+    // Scratch is separately capped on the host's actual scratch volume.
+    let scratch_dir = std::env::temp_dir();
+    let output_space = crate::filesystem_space_raw(&output_dir)
+        .ok()
+        .map(|space| usable_archive_space(space.available_bytes));
+    let scratch_space = crate::filesystem_space_raw(&scratch_dir)
+        .ok()
+        .map(|space| usable_archive_space(space.available_bytes));
+    if let Some(space) = output_space {
+        limits.max_output_bytes = limits.max_output_bytes.min(space);
+    }
+    if let Some(space) = scratch_space {
+        limits.max_scratch_bytes = limits.max_scratch_bytes.min(space);
+    }
+    if archive_storage_is_shared(&output_dir, &scratch_dir) {
+        let source_files = archive_inventory(&source_dir, MAX_ARCHIVE_DISCOVERY_DEPTH)?;
+        let copies_sources = source_files.iter().any(|path| {
+            path.extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("par2"))
+        });
+        let staged_bytes = if copies_sources {
+            source_files
+                .iter()
+                .filter_map(|path| std::fs::symlink_metadata(path).ok())
+                .fold(0u64, |sum, metadata| sum.saturating_add(metadata.len()))
+        } else {
+            0
+        };
+        // Plain streaming decoders do not need another full release copy.
+        // Recovery reserves its source bytes once on a shared disk. Split
+        // archives are read as streams and do not require a staging copy.
+        let scratch_reserve = staged_bytes.saturating_add(64 * 1024 * 1024);
+        let available = output_space
+            .into_iter()
+            .chain(scratch_space)
+            .min()
+            .unwrap_or(limits.max_output_bytes);
+        limits.max_scratch_bytes = limits.max_scratch_bytes.min(scratch_reserve).min(available);
         limits.max_output_bytes = limits
             .max_output_bytes
-            .min(space.available_bytes.saturating_sub(FREE_SPACE_RESERVE) / 2);
-    }
-    if let Ok(space) = crate::filesystem_space_raw(&std::env::temp_dir()) {
-        limits.max_scratch_bytes = limits
-            .max_scratch_bytes
-            .min(space.available_bytes.saturating_sub(FREE_SPACE_RESERVE) / 2);
+            .min(available.saturating_sub(limits.max_scratch_bytes));
     }
     if limits.max_output_bytes == 0 || limits.max_scratch_bytes == 0 {
         return Err(AppError::Repository(
             "insufficient disk space for archive output and recovery scratch".into(),
         ));
     }
-    let response = client.process_with_limits(request, limits).await?;
+    let budget = totals
+        .execution_budget
+        .saturating_sub(totals.execution_time);
+    if budget.is_zero() {
+        return Err(AppError::archive_extraction_timed_out(
+            "archive attempt execution budget exhausted",
+        ));
+    }
+    let (response, elapsed) = client.process_with_budget(request, limits, budget).await?;
+    totals.execution_time = totals.execution_time.saturating_add(elapsed);
     let password_rejected = matches!(
         response.status,
         ArchivePluginStatus::PasswordRequired | ArchivePluginStatus::PasswordInvalid
@@ -1017,6 +1058,23 @@ async fn extract_with_archive_plugin(
         Err(error) if password_rejected => Ok(ArchiveAttempt::PasswordRejected(error)),
         Err(error) => Err(error),
     }
+}
+
+fn usable_archive_space(available: u64) -> u64 {
+    available.saturating_sub((512 * 1024 * 1024).min(available / 20))
+}
+
+fn archive_storage_is_shared(output: &Path, scratch: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if let (Ok(output), Ok(scratch)) = (std::fs::metadata(output), std::fs::metadata(scratch)) {
+            return output.dev() == scratch.dev();
+        }
+    }
+    // Unknown storage identity must not count the same free space twice.
+    let _ = (output, scratch);
+    true
 }
 
 fn validate_reported_sources(source_dir: &Path, paths: &[String]) -> AppResult<Vec<PathBuf>> {
@@ -1396,6 +1454,8 @@ fn validate_archive_plugin_output(
         directories: mut directory_count,
         files: mut file_count,
         bytes: mut expanded_bytes,
+        execution_time,
+        execution_budget,
     } = totals;
     let mut stack = vec![output_dir.to_path_buf()];
     while let Some(path) = stack.pop() {
@@ -1474,6 +1534,8 @@ fn validate_archive_plugin_output(
         directories: directory_count,
         files: file_count,
         bytes: expanded_bytes,
+        execution_time,
+        execution_budget,
     })
 }
 
@@ -1782,6 +1844,88 @@ fn rar_volume_info_from_name(file_name: &str) -> Option<(String, usize)> {
     Some((group.to_string(), family_offset * 100 + number + 1))
 }
 
+/// Release an abandoned automatic import without touching downloads. A
+/// pending subtitle or unreadable inventory keeps the workspace referenced.
+#[derive(Default)]
+pub(crate) struct ArchiveWorkspaceReference(Option<PathBuf>);
+
+impl ArchiveWorkspaceReference {
+    pub(crate) fn track(&mut self, root: Option<&Path>) {
+        self.0 = root.map(Path::to_path_buf);
+    }
+
+    pub(crate) fn retain(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for ArchiveWorkspaceReference {
+    fn drop(&mut self) {
+        let Some(root) = &self.0 else {
+            return;
+        };
+        if archive_workspace_owner(root).is_none() {
+            return;
+        }
+        if archive_workspace_has_pending_subtitles(root) {
+            return;
+        }
+        if release_archive_workspace(root).is_err() {
+            tracing::warn!("abandoned archive workspace could not be released; output preserved");
+        }
+    }
+}
+
+fn archive_workspace_has_pending_subtitles(root: &Path) -> bool {
+    let mut stack = vec![(root.to_path_buf(), 0usize)];
+    let mut entries = 0usize;
+    while let Some((parent, depth)) = stack.pop() {
+        if depth > 64 || entries > MAX_PLUGIN_OUTPUT_ENTRIES {
+            return true;
+        }
+        let Ok(children) = std::fs::read_dir(parent) else {
+            return true;
+        };
+        for child in children {
+            let Ok(child) = child else {
+                return true;
+            };
+            entries += 1;
+            if entries > MAX_PLUGIN_OUTPUT_ENTRIES {
+                return true;
+            }
+            let Ok(kind) = child.file_type() else {
+                return true;
+            };
+            if kind.is_symlink() || (!kind.is_dir() && !kind.is_file()) {
+                return true;
+            }
+            let path = child.path();
+            if kind.is_dir() {
+                stack.push((path, depth + 1));
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| {
+                    matches!(
+                        ext.to_ascii_lowercase().as_str(),
+                        "srt" | "ass" | "ssa" | "vtt" | "sub" | "idx"
+                    )
+                })
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+pub(crate) async fn abandon_extracted_dir(dir: &Path) {
+    if !archive_workspace_has_pending_subtitles(dir) {
+        cleanup_extracted_dir(dir).await;
+    }
+}
+
 /// Clean up the extraction directory after import completes.
 pub async fn cleanup_extracted_dir(dir: &Path) {
     if archive_workspace_owner(dir).is_none() {
@@ -1857,6 +2001,94 @@ mod tests {
     use scryer_plugin_sdk::ArchivePluginExtractedFile;
     use std::fs;
     use std::sync::{Arc, Mutex};
+
+    #[tokio::test]
+    async fn abandoned_archive_releases_only_owned_output_without_pending_subtitles() {
+        let destination = tempfile::tempdir().unwrap();
+        let mut workspace = ArchiveExtractionWorkspace::create(&ArchiveExtractionDestination::new(
+            destination.path(),
+            "synthetic-import",
+        ))
+        .await
+        .unwrap();
+        workspace.lease.published = true;
+        let root = workspace.root.clone();
+        fs::write(workspace.output_dir.join("movie.mkv"), b"synthetic").unwrap();
+        let mut reference = ArchiveWorkspaceReference::default();
+        reference.track(Some(&root));
+        drop(reference);
+        assert!(archive_workspace_release(&root).is_some());
+        let unrelated = destination.path().join("keep.mkv");
+        fs::write(&unrelated, b"keep").unwrap();
+        cleanup_extracted_dir(&root).await;
+        assert!(!root.exists());
+        assert_eq!(fs::read(unrelated).unwrap(), b"keep");
+
+        let workspace = ArchiveExtractionWorkspace::create(&ArchiveExtractionDestination::new(
+            destination.path(),
+            "pending-import",
+        ))
+        .await
+        .unwrap();
+        let pending_path = workspace.output_dir.join(".hidden/Sample/movie.srt");
+        fs::create_dir_all(pending_path.parent().unwrap()).unwrap();
+        fs::write(&pending_path, b"pending").unwrap();
+        let pending_root = workspace.root.clone();
+        let mut reference = ArchiveWorkspaceReference::default();
+        reference.track(Some(&workspace.root));
+        drop(reference);
+        assert!(archive_workspace_release(&workspace.root).is_none());
+        drop(workspace);
+        abandon_extracted_dir(&pending_root).await;
+        cleanup_archive_artifacts_older_than(destination.path(), Duration::ZERO).await;
+        assert_eq!(fs::read(pending_path).unwrap(), b"pending");
+        assert!(archive_workspace_release(&pending_root).is_none());
+
+        let retained = create_test_archive_workspace(destination.path());
+        fs::write(retained.join("out/movie.mkv"), b"selected").unwrap();
+        let mut reference = ArchiveWorkspaceReference::default();
+        reference.track(Some(&retained));
+        reference.retain();
+        drop(reference);
+        cleanup_archive_artifacts_older_than(destination.path(), Duration::ZERO).await;
+        assert!(retained.join("out/movie.mkv").exists());
+    }
+
+    #[test]
+    fn unsafe_workspace_key_keeps_startup_usable_without_modifying_existing_key() {
+        let state = tempfile::tempdir().unwrap();
+        let path = state.path().join("archive-workspace-key");
+        fs::write(&path, b"invalid-key").unwrap();
+        let first = archive_workspace_key_for_startup(state.path());
+        let second = archive_workspace_key_for_startup(state.path());
+        assert_ne!(first, second);
+        assert_eq!(fs::read(path).unwrap(), b"invalid-key");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_workspace_key_permissions_use_ephemeral_authority() {
+        use std::os::unix::fs::PermissionsExt;
+        let state = tempfile::tempdir().unwrap();
+        let path = state.path().join("archive-workspace-key");
+        let persistent_key = [17u8; 32];
+        fs::write(&path, persistent_key).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_ne!(
+            archive_workspace_key_for_startup(state.path()),
+            persistent_key
+        );
+        assert_eq!(fs::read(&path).unwrap(), persistent_key);
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+        assert_eq!(
+            archive_workspace_key_for_startup(state.path()),
+            persistent_key
+        );
+    }
 
     #[derive(Clone, Default)]
     struct CapturedArchiveLogs(Arc<Mutex<String>>);
@@ -4138,7 +4370,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_failed_set_cannot_be_hidden_by_another_sets_video() {
+    async fn a_failed_set_stops_before_unrelated_sets() {
         let run = run_tree(
             &[
                 "quiet.harbor.s01e01.rar",
@@ -4164,7 +4396,7 @@ mod tests {
                 .to_string()
                 .contains("corrupt_archive")
         );
-        assert_eq!(run.calls.len(), 3);
+        assert_eq!(run.calls.len(), 1);
         assert!(run.staging_dirs().is_empty());
         run.assert_unrelated_files_preserved(&[
             "quiet.harbor.s01e01.rar",
@@ -4174,7 +4406,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_first_failure_is_returned_when_no_set_yields_video() {
+    async fn the_first_failure_is_returned_without_spending_remaining_budget() {
         let run = run_tree(
             &[
                 "quiet.harbor.s01e01.rar",
@@ -4195,7 +4427,7 @@ mod tests {
 
         let error = run.result.as_ref().unwrap_err();
         assert!(error.to_string().contains("corrupt_archive"), "{error}");
-        assert_eq!(run.calls.len(), 3);
+        assert_eq!(run.calls.len(), 1);
         assert!(run.staging_dirs().is_empty());
         run.assert_unrelated_files_preserved(&[
             "quiet.harbor.s01e01.rar",

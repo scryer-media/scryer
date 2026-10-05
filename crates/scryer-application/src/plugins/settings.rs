@@ -45,6 +45,14 @@ impl AppUseCase {
         self.require_app_permission(actor, AppPermission::ManageSystemSettings)
             .await?;
         let installation = self.plugin_settings_installation(plugin_id).await?;
+        // Older installations and builtins without configurable fields do not
+        // have a stored descriptor. An absent declaration is an empty panel.
+        if installation.descriptor_json.is_none() {
+            return Ok(serde_json::json!({
+                "pluginId": installation.plugin_id,
+                "fields": [],
+            }));
+        }
         let descriptor = settings_descriptor(&installation)?;
         let values = self.stored_plugin_settings(&installation).await?;
         Ok(settings_view(&descriptor, &values))
@@ -98,7 +106,6 @@ impl AppUseCase {
         .await;
         Ok(settings_view(&descriptor, &values))
     }
-
 }
 
 fn settings_descriptor(installation: &PluginInstallation) -> AppResult<PluginDescriptor> {

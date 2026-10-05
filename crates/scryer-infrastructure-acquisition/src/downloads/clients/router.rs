@@ -3754,10 +3754,13 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
         id: &str,
         password: &str,
     ) -> AppResult<scryer_application::DownloadClientRetryOutcome> {
-        let client = self
-            .resolve_client_for_id(client_id)
-            .await?
-            .ok_or_else(|| AppError::NotFound("download client".into()))?;
+        let client = match self.resolve_client_for_id(client_id).await {
+            Ok(Some(client)) => client,
+            // Configuration failures happen before any remote mutation.
+            Ok(None) | Err(_) => {
+                return Ok(scryer_application::DownloadClientRetryOutcome::Refused);
+            }
+        };
         client.retry_failed_job(id, password).await
     }
 

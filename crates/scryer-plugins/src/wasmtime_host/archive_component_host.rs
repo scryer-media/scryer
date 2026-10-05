@@ -20,7 +20,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use scryer_application::{AppError, AppResult};
-use scryer_plugin_sdk::{ArchivePluginProcessResponse, PluginDescriptor};
+use scryer_plugin_sdk::{ArchiveExtractionLimits, ArchivePluginProcessResponse, PluginDescriptor};
 use tracing::Instrument;
 use wasmtime::component::{Component, HasSelf, Linker, ResourceTable};
 use wasmtime::{Engine, Store, UpdateDeadline};
@@ -30,6 +30,9 @@ use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use crate::runtime_backing::PluginInstanceSpec;
 use crate::wasmtime_host::sandbox::{self, HostLimits, PreparedComponentSandbox};
 use crate::wasmtime_host::{crypto_host, engine, error, module_cache};
+
+#[path = "archive_filesystem_limits.rs"]
+mod filesystem_limits;
 
 mod contract_v1_0 {
     wasmtime::component::bindgen!({
@@ -76,6 +79,7 @@ pub(crate) struct ArchiveComponentCtx {
     table: ResourceTable,
     wasi: WasiCtx,
     limits: HostLimits,
+    filesystem_limits: filesystem_limits::FilesystemLimits,
 }
 
 impl WasiView for ArchiveComponentCtx {
@@ -222,6 +226,8 @@ impl ArchiveComponentRuntime {
         let mut linker = Linker::new(engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)
             .map_err(|error| format!("failed to register WASI Preview 2: {error:#}"))?;
+        filesystem_limits::add_to_linker(&mut linker)
+            .map_err(|error| format!("failed to register archive filesystem limits: {error:#}"))?;
         contract_v1_0::ArchiveExtractor::add_to_linker::<
             ArchiveComponentCtx,
             HasSelf<ArchiveComponentCtx>,
@@ -255,6 +261,7 @@ impl ArchiveComponentRuntime {
         wasi: WasiCtx,
         memory_max_bytes: Option<usize>,
         timeout: Duration,
+        filesystem_limits: ArchiveExtractionLimits,
     ) -> Result<(Store<ArchiveComponentCtx>, contract_v1_1::ArchiveExtractor), wasmtime::Error>
     {
         let mut store = Store::new(
@@ -263,6 +270,7 @@ impl ArchiveComponentRuntime {
                 table: ResourceTable::new(),
                 wasi,
                 limits: HostLimits::new(memory_max_bytes),
+                filesystem_limits: filesystem_limits::FilesystemLimits::new(filesystem_limits),
             },
         );
         store.limiter(|ctx: &mut ArchiveComponentCtx| &mut ctx.limits);
@@ -321,7 +329,12 @@ async fn describe_async(wasm: &[u8]) -> Result<PluginDescriptor, String> {
     let runtime = ArchiveComponentRuntime::new(engine::shared_async_engine(), wasm)?;
     let (wasi, stderr) = sandbox::build_component_describe_sandbox();
     let (mut store, plugin) = runtime
-        .instantiate(wasi, None, DESCRIBE_TIMEOUT)
+        .instantiate(
+            wasi,
+            None,
+            DESCRIBE_TIMEOUT,
+            ArchiveExtractionLimits::default(),
+        )
         .await
         .map_err(|error| {
             format!("failed to instantiate archive component for describe: {error:#}")
@@ -364,10 +377,26 @@ async fn prepare_archive_component(
 }
 
 /// Instantiate the archive component and run one request→response exchange.
+#[cfg(test)]
 pub(crate) async fn process_archive_component(
     spec: &PluginInstanceSpec,
     request_json: &str,
     invocation: ArchiveInvocation<'_>,
+) -> AppResult<ArchivePluginProcessResponse> {
+    process_archive_component_with_limits(
+        spec,
+        request_json,
+        invocation,
+        ArchiveExtractionLimits::default(),
+    )
+    .await
+}
+
+pub(crate) async fn process_archive_component_with_limits(
+    spec: &PluginInstanceSpec,
+    request_json: &str,
+    invocation: ArchiveInvocation<'_>,
+    filesystem_limits: ArchiveExtractionLimits,
 ) -> AppResult<ArchivePluginProcessResponse> {
     let span = tracing::info_span!(
         "archive_plugin_invoke",
@@ -379,7 +408,7 @@ pub(crate) async fn process_archive_component(
     // across the awaits below: a guard that straddles an await is left behind
     // on whichever worker entered it once tokio moves the task, and that
     // worker then panics on the next span it opens.
-    instrumented_archive_component(spec, request_json, invocation)
+    instrumented_archive_component(spec, request_json, invocation, filesystem_limits)
         .instrument(span)
         .await
 }
@@ -388,6 +417,7 @@ async fn instrumented_archive_component(
     spec: &PluginInstanceSpec,
     request_json: &str,
     invocation: ArchiveInvocation<'_>,
+    filesystem_limits: ArchiveExtractionLimits,
 ) -> AppResult<ArchivePluginProcessResponse> {
     let started = Instant::now();
     let request_bytes = request_json.as_bytes().to_vec();
@@ -410,7 +440,7 @@ async fn instrumented_archive_component(
     } = sandbox::build_component_sandbox(&spec.preopens)?;
 
     let (mut store, plugin) = match runtime
-        .instantiate(wasi, spec.memory_max_bytes, spec.timeout)
+        .instantiate(wasi, spec.memory_max_bytes, spec.timeout, filesystem_limits)
         .await
     {
         Ok(instantiated) => instantiated,
@@ -428,6 +458,22 @@ async fn instrumented_archive_component(
     };
 
     let call_result = plugin.call_process(&mut store, &request_bytes).await;
+    // A guest may return while retaining a nonblocking file stream. Finish
+    // admitted writes before output validation or publication observes it.
+    let remaining = spec.timeout.saturating_sub(started.elapsed());
+    tokio::time::timeout(remaining, filesystem_limits::settle_all(store.data_mut()))
+        .await
+        .map_err(|_| {
+            AppError::archive_extraction_timed_out(
+                "archive output writes exceeded the extraction execution budget",
+            )
+        })?
+        .map_err(|_| AppError::Repository("archive output write failed".into()))?;
+    if store.data().filesystem_limits.denied {
+        return Err(AppError::Repository(
+            "archive extraction filesystem limit exceeded".into(),
+        ));
+    }
     let denied = store.data().limits.memory_denied;
     let stderr_tail = tail_of(&stderr);
 
@@ -1053,6 +1099,55 @@ mod tests {
             descriptor.provider,
             scryer_plugin_sdk::ProviderDescriptor::ArchiveExtractor(_)
         ));
+    }
+
+    /// The end-to-end host path: the request crosses as JSON, both crypto
+    #[tokio::test(flavor = "multi_thread")]
+    async fn published_archive_contract_without_enforced_limits_remains_usable() {
+        use scryer_application::ArchiveExtractorClient;
+        let descriptor: PluginDescriptor =
+            serde_json::from_str(&archive_descriptor_json()).unwrap();
+        assert!(
+            !descriptor
+                .archive_extractor()
+                .unwrap()
+                .capabilities
+                .enforced_limits
+        );
+        let request = inspect_request_json();
+        // This guest rejects any extension of its original JSON request.
+        let wat = fixture_component_wat(
+            Contract::V1_0,
+            &archive_descriptor_json(),
+            r#"{"status":"ok","files":[]}"#,
+            r#"{"status":"failed","message":"unexpected request extension"}"#,
+        )
+        .replace(
+            ";; The request must have crossed the boundary as JSON.",
+            &format!(
+                "(if (i32.ne (local.get $len) (i32.const {})) (then (return (call $fail))))",
+                request.len()
+            ),
+        );
+        let client = crate::archive_adapter::WasmArchiveExtractorClient::new(
+            wat::parse_str(wat).unwrap(),
+            descriptor,
+        )
+        .unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let response = client
+            .process_with_limits(
+                ArchivePluginProcessRequest {
+                    operation: ArchivePluginOperation::Inspect {
+                        source_dir: source.path().to_string_lossy().into_owned(),
+                        archive_path: None,
+                    },
+                },
+                scryer_plugin_sdk::ArchiveExtractionLimits::default(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status, ArchivePluginStatus::Ok);
     }
 
     /// The end-to-end host path: the request crosses as JSON, both crypto

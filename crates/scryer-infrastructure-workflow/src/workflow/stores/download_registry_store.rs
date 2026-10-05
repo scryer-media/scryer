@@ -242,6 +242,12 @@ impl DownloadRegistryRepository for DownloadRegistryStore {
         SqlRuntime::run_in_transaction(&self.datastore, "end_download_client_binding", move |tx| {
             let id = id.clone();
             Box::pin(async move {
+                super::import_store::lock_retry_download(tx, &id).await?;
+                if SqlRuntime::fetch_optional(SqlExec::Tx(tx),
+                    "SELECT id FROM download_identity_states WHERE canonical_download_id = {} AND reason = {} LIMIT 1",
+                    &[SqlArg::Text(id.clone()), SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into())]).await?.is_some() {
+                    return Err(AppError::Validation("password retry is awaiting reconciliation; binding preserved".into()));
+                }
                 let ended_at = Utc::now();
                 SqlRuntime::execute(
                     SqlExec::Tx(tx),
@@ -1035,6 +1041,11 @@ mod tests {
                  source_title TEXT,
                  download_id TEXT
              );
+             CREATE TABLE download_identity_states (
+                 id TEXT,
+                 canonical_download_id TEXT,
+                 reason TEXT
+             );
              CREATE TABLE download_clients (
                  id TEXT PRIMARY KEY,
                  name TEXT NOT NULL,
@@ -1521,6 +1532,60 @@ mod tests {
                 .terminal_at
                 .is_some(),
             "every end_binding caller is a terminal event, so the download is finished with it"
+        );
+    }
+
+    #[tokio::test]
+    async fn password_retry_claim_prevents_binding_retirement_until_settled() {
+        let store = store().await;
+        let id = DownloadId::parse(FIRST_ID).unwrap();
+        insert_download(&store, FIRST_ID, "scryer_submission", None).await;
+        insert_binding(&store, FIRST_ID, Some("client-1"), Some("job-1"), None).await;
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "INSERT INTO download_identity_states (canonical_download_id, reason) VALUES ({}, {})",
+            &[
+                SqlArg::Text(FIRST_ID.into()),
+                SqlArg::Text(scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON.into()),
+            ],
+        )
+        .await
+        .unwrap();
+        assert!(store.end_binding(&id).await.is_err());
+        assert!(
+            store
+                .load_binding(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .ended_at
+                .is_none()
+        );
+        assert!(
+            store
+                .load_download(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .terminal_at
+                .is_none()
+        );
+        SqlRuntime::execute(
+            store.datastore.read_exec(),
+            "UPDATE download_identity_states SET reason = NULL WHERE canonical_download_id = {}",
+            &[SqlArg::Text(FIRST_ID.into())],
+        )
+        .await
+        .unwrap();
+        store.end_binding(&id).await.unwrap();
+        assert!(
+            store
+                .load_binding(&id)
+                .await
+                .unwrap()
+                .unwrap()
+                .ended_at
+                .is_some()
         );
     }
 

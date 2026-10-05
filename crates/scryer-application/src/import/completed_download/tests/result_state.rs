@@ -1110,6 +1110,23 @@ async fn apply_result_retries_failed_execution_with_capped_backoff_and_never_blo
 }
 
 #[tokio::test]
+async fn imported_video_with_pending_subtitles_stays_successful_but_blocks_download_cleanup() {
+    let app = build_app(Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let mut td = build_tracked_download("title-1", "series", "Show.S01E01.1080p.WEB-DL");
+    let mut result =
+        failed_execution_result(crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING);
+    result.decision = ImportDecision::Imported;
+    assert!(!apply_import_result(&app, &mut td, result, 1).await);
+    assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+    assert_eq!(td.status, TrackedDownloadStatus::Warning);
+    assert!(td.import_execution_retry.is_none());
+    assert_eq!(
+        td.status_messages,
+        vec![crate::import_workflow::SCENE_SUBTITLE_PENDING_WARNING]
+    );
+}
+
+#[tokio::test]
 async fn apply_result_blocks_password_required_failure_without_retry() {
     let app = build_app(Vec::new(), Vec::new(), Vec::new(), Vec::new());
     let mut td = build_tracked_download("title-1", "series", "Show.S01E01.1080p.WEB-DL");

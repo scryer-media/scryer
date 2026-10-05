@@ -10,7 +10,8 @@ use scryer_plugin_sdk::{
 };
 
 use crate::runtime_backing::{PluginInstanceSpec, PluginRuntimeBacking, PreopenSpec};
-use crate::wasmtime_host::{ArchiveInvocation, process_archive_component};
+use crate::wasmtime_host::ArchiveInvocation;
+use crate::wasmtime_host::archive_component_host::process_archive_component_with_limits;
 
 const GUEST_SOURCE_ROOT: &str = "/scryer/source";
 const GUEST_OUTPUT_ROOT: &str = "/scryer/output";
@@ -53,7 +54,13 @@ impl ArchiveExtractorClient for WasmArchiveExtractorClient {
         &self,
         request: ArchivePluginProcessRequest,
     ) -> AppResult<ArchivePluginProcessResponse> {
-        self.invoke(request, None).await
+        self.invoke(
+            request,
+            ArchiveExtractionLimits::default(),
+            Duration::from_secs(ARCHIVE_PROCESS_TIMEOUT_SECONDS),
+        )
+        .await
+        .map(|(response, _)| response)
     }
 
     async fn process_with_limits(
@@ -61,13 +68,22 @@ impl ArchiveExtractorClient for WasmArchiveExtractorClient {
         request: ArchivePluginProcessRequest,
         limits: ArchiveExtractionLimits,
     ) -> AppResult<ArchivePluginProcessResponse> {
-        if !self.enforced_limits {
-            return Err(AppError::ArchiveExtractionPluginRequired {
-                message: "Archive Extraction requires a plugin that enforces caller resource limits; update the plugin and retry".into(),
-                source_path: None,
-            });
-        }
-        self.invoke(request, Some(limits)).await
+        self.invoke(
+            request,
+            limits,
+            Duration::from_secs(ARCHIVE_PROCESS_TIMEOUT_SECONDS),
+        )
+        .await
+        .map(|(response, _)| response)
+    }
+
+    async fn process_with_budget(
+        &self,
+        request: ArchivePluginProcessRequest,
+        limits: ArchiveExtractionLimits,
+        budget: Duration,
+    ) -> AppResult<(ArchivePluginProcessResponse, Duration)> {
+        self.invoke(request, limits, budget).await
     }
 }
 
@@ -75,13 +91,14 @@ impl WasmArchiveExtractorClient {
     async fn invoke(
         &self,
         request: ArchivePluginProcessRequest,
-        limits: Option<ArchiveExtractionLimits>,
-    ) -> AppResult<ArchivePluginProcessResponse> {
+        limits: ArchiveExtractionLimits,
+        budget: Duration,
+    ) -> AppResult<(ArchivePluginProcessResponse, Duration)> {
         let prepared = PreparedArchiveRequest::new(request)?;
         let mut envelope = serde_json::to_value(&prepared.request).map_err(|error| {
             AppError::Repository(format!("failed to encode archive request: {error}"))
         })?;
-        if let Some(limits) = limits {
+        if self.enforced_limits {
             envelope["limits"] = serde_json::to_value(limits).map_err(|error| {
                 AppError::Repository(format!("failed to encode archive limits: {error}"))
             })?;
@@ -92,34 +109,43 @@ impl WasmArchiveExtractorClient {
             ))
         })?;
         let operation = operation_label(&prepared.request.operation);
-        let spec = prepared.instance_spec(Arc::clone(&self.wasm_bytes));
+        let mut spec = prepared.instance_spec(Arc::clone(&self.wasm_bytes));
+        spec.timeout = budget;
         let plugin_id = self.plugin_id.clone();
         let plugin_version = self.plugin_version.clone();
 
-        tokio::time::timeout(
-            Duration::from_secs(ARCHIVE_PROCESS_TIMEOUT_SECONDS),
-            async move {
-                let _permit = ARCHIVE_INVOCATIONS.acquire().await.map_err(|_| {
-                    AppError::Repository("archive execution coordinator is closed".into())
-                })?;
-                // Keep `prepared` alive for the invocation so the preopened paths
-                // remain owned for the full plugin call.
-                let _prepared = prepared;
-                let invocation = ArchiveInvocation {
-                    plugin_id: &plugin_id,
-                    plugin_version: &plugin_version,
-                    operation,
-                };
-                process_archive_component(&spec, &input, invocation).await
-            },
-        )
+        run_archive_execution(&ARCHIVE_INVOCATIONS, budget, async move {
+            // Keep `prepared` alive for the invocation so the preopened paths
+            // remain owned for the full plugin call.
+            let _prepared = prepared;
+            let invocation = ArchiveInvocation {
+                plugin_id: &plugin_id,
+                plugin_version: &plugin_version,
+                operation,
+            };
+            process_archive_component_with_limits(&spec, &input, invocation, limits).await
+        })
         .await
-        .map_err(|_| {
-            AppError::archive_extraction_timed_out(format!(
-                "archive plugin timed out after {ARCHIVE_PROCESS_TIMEOUT_SECONDS} seconds"
-            ))
-        })?
     }
+}
+
+async fn run_archive_execution<T>(
+    gate: &tokio::sync::Semaphore,
+    budget: Duration,
+    work: impl std::future::Future<Output = AppResult<T>>,
+) -> AppResult<(T, Duration)> {
+    let _permit = gate
+        .acquire()
+        .await
+        .map_err(|_| AppError::Repository("archive execution coordinator is closed".into()))?;
+    let started = tokio::time::Instant::now();
+    let response = tokio::time::timeout(budget, work).await.map_err(|_| {
+        AppError::archive_extraction_timed_out(format!(
+            "archive plugin execution budget of {} seconds exhausted",
+            budget.as_secs()
+        ))
+    })??;
+    Ok((response, started.elapsed()))
 }
 
 fn operation_label(operation: &ArchivePluginOperation) -> &'static str {
@@ -250,6 +276,24 @@ fn is_safe_relative_plugin_path(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn queued_archive_work_does_not_consume_execution_budget() {
+        use std::future::Future;
+        let gate = tokio::sync::Semaphore::new(0);
+        // An already exhausted budget must not expire while awaiting admission.
+        // The immediately ready work completes once admitted, without timing
+        // assumptions or a test-only runtime feature.
+        let work = run_archive_execution(&gate, Duration::ZERO, async { Ok(42) });
+        tokio::pin!(work);
+        std::future::poll_fn(|cx| {
+            assert!(work.as_mut().poll(cx).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        gate.add_permits(1);
+        assert_eq!(work.await.unwrap().0, 42);
+    }
 
     #[test]
     fn archive_adapter_path_failures_redact_names_but_guest_paths_remain_literal() {

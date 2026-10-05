@@ -273,6 +273,13 @@ pub async fn finalize_upgrade_source_cleanup(
     let Some(guard) = outcome.source_cleanup.as_deref().cloned() else {
         return Ok(());
     };
+    if crate::import::workflow::defer_import_source_cleanup(
+        &guard,
+        &stored_path_to_path_buf(&outcome.final_path_string),
+        completed,
+    ) {
+        return Ok(());
+    }
     let execution_context = crate::ImportFileExecutionContext::new(
         completed.map_or("", |item| item.client_id.as_str()),
         completed.map_or("", |item| item.client_type.as_str()),

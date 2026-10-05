@@ -2355,6 +2355,60 @@ fn move_import_source_cleanup_guard(
     })
 }
 
+pub(crate) struct DeferredImportSourceCleanup {
+    guard: scryer_domain::ImportSourceCleanupGuard,
+    destination: PathBuf,
+    completed: Option<CompletedDownload>,
+}
+
+tokio::task_local! {
+    static DEFERRED_IMPORT_SOURCE_CLEANUP: std::cell::RefCell<Vec<DeferredImportSourceCleanup>>;
+}
+
+async fn collect_deferred_import_source_cleanup<T>(
+    operation: impl std::future::Future<Output = T>,
+) -> (T, Vec<DeferredImportSourceCleanup>) {
+    DEFERRED_IMPORT_SOURCE_CLEANUP
+        .scope(std::cell::RefCell::new(Vec::new()), async {
+            let result = operation.await;
+            let cleanups = DEFERRED_IMPORT_SOURCE_CLEANUP.with(|pending| pending.take());
+            (result, cleanups)
+        })
+        .await
+}
+
+pub(crate) fn defer_import_source_cleanup(
+    guard: &scryer_domain::ImportSourceCleanupGuard,
+    destination: &Path,
+    completed: Option<&CompletedDownload>,
+) -> bool {
+    DEFERRED_IMPORT_SOURCE_CLEANUP
+        .try_with(|pending| {
+            pending.borrow_mut().push(DeferredImportSourceCleanup {
+                guard: guard.clone(),
+                destination: destination.to_path_buf(),
+                completed: completed.cloned(),
+            });
+        })
+        .is_ok()
+}
+
+async fn complete_deferred_import_source_cleanup(
+    app: &AppUseCase,
+    pending: Vec<DeferredImportSourceCleanup>,
+) -> AppResult<()> {
+    for cleanup in pending {
+        finalize_deferred_import_source_cleanup(
+            app,
+            Some(cleanup.guard),
+            &cleanup.destination,
+            cleanup.completed.as_ref(),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 async fn finalize_import_source_cleanup(
     app: &AppUseCase,
     import_mode: scryer_domain::ImportMode,
@@ -2369,6 +2423,9 @@ async fn finalize_import_source_cleanup(
     let Some(guard) = move_import_source_cleanup_guard(file_result)? else {
         return Ok(scryer_domain::ImportStrategy::Move);
     };
+    if defer_import_source_cleanup(&guard, final_dest_path, completed) {
+        return Ok(scryer_domain::ImportStrategy::Move);
+    }
 
     if let Some(verification) = file_result.verification.as_ref() {
         // FR-043: the applied depth is recorded wherever the import surface can
@@ -2408,6 +2465,9 @@ async fn finalize_deferred_import_source_cleanup(
     let Some(guard) = source_cleanup else {
         return Ok(());
     };
+    if defer_import_source_cleanup(&guard, final_dest_path, completed) {
+        return Ok(());
+    }
     let execution_context = crate::ImportFileExecutionContext::new(
         completed.map_or("", |item| item.client_id.as_str()),
         completed.map_or("", |item| item.client_type.as_str()),
@@ -2512,6 +2572,35 @@ mod move_import_source_cleanup_gate_tests {
             source_proof: proof(),
             dest_proof: proof(),
         }
+    }
+
+    #[tokio::test]
+    async fn source_removal_is_deferred_until_the_sidecar_workflow_releases_it() {
+        let cleanup = guard();
+        assert!(!super::defer_import_source_cleanup(
+            &cleanup,
+            &cleanup.dest_path,
+            None
+        ));
+        let (_, pending) = super::collect_deferred_import_source_cleanup(async {
+            assert!(super::defer_import_source_cleanup(
+                &cleanup,
+                &cleanup.dest_path,
+                None
+            ));
+        })
+        .await;
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].guard.source_path, cleanup.source_path);
+        assert_eq!(pending[0].destination, cleanup.dest_path);
+        // Abandoning this collection performs no removal; the workflow can
+        // retain sources when subtitle delivery fails or gets cancelled.
+        drop(pending);
+        assert!(!super::defer_import_source_cleanup(
+            &cleanup,
+            &cleanup.dest_path,
+            None
+        ));
     }
 
     fn result(
