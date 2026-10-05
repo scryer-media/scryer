@@ -1028,6 +1028,135 @@ async fn swapping_folders_gives_each_title_the_other_folder() {
     assert_eq!(snapshot_tree(fixture.root.path()), before);
 }
 
+/// A title recorded at the library root has no folder to trade. Swapping would
+/// hand the root to the other title, and its rescan would read every file in
+/// the library as its own.
+#[tokio::test]
+async fn reconciling_a_title_recorded_at_the_library_root_is_refused() {
+    let fixture = FolderMatchFixture::new().await;
+    let bystander_folder = fixture.folder("Bystander Title (2022)");
+    let bystander_file = fixture.write_media(&bystander_folder, "Bystander.Title.2022.1080p.mkv");
+    fixture.scanner.set_files(&[bystander_file.as_path()]).await;
+    let rooted = fixture
+        .create_title_with_folder("Rooted Title", fixture.root.path())
+        .await;
+    let bystander = create_movie_title_with_folder(
+        &fixture.app,
+        &fixture.user,
+        "Bystander Title",
+        bystander_folder.as_path(),
+    )
+    .await;
+    fixture.seed_media_row(&bystander.id, &bystander_file).await;
+
+    let error = fixture
+        .app
+        .reconcile_title_folder(&fixture.user, &rooted.id)
+        .await
+        .expect_err("a root record is refused");
+    assert!(
+        matches!(error, AppError::Validation(_)),
+        "unexpected error: {error}"
+    );
+    assert!(
+        fixture
+            .media_files
+            .list_media_files_for_title(&rooted.id)
+            .await
+            .unwrap()
+            .is_empty(),
+        "nothing is attached to the rooted title"
+    );
+    assert_eq!(
+        fixture
+            .media_files
+            .list_media_files_for_title(&bystander.id)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "the bystander keeps its file"
+    );
+}
+
+#[tokio::test]
+async fn a_title_recorded_at_the_library_root_cannot_swap_its_record_away() {
+    let fixture = FolderMatchFixture::new().await;
+    let owned_folder = fixture.folder("Holder Title (2021)");
+    let bystander_folder = fixture.folder("Bystander Title (2022)");
+    let owned_file = fixture.write_media(&owned_folder, "Holder.Title.2021.1080p.mkv");
+    let bystander_file = fixture.write_media(&bystander_folder, "Bystander.Title.2022.1080p.mkv");
+    fixture
+        .scanner
+        .set_files(&[owned_file.as_path(), bystander_file.as_path()])
+        .await;
+
+    let rooted = fixture
+        .create_title_with_folder("Rooted Title", fixture.root.path())
+        .await;
+    let holder = create_movie_title_with_folder(
+        &fixture.app,
+        &fixture.user,
+        "Holder Title",
+        owned_folder.as_path(),
+    )
+    .await;
+    let bystander = create_movie_title_with_folder(
+        &fixture.app,
+        &fixture.user,
+        "Bystander Title",
+        bystander_folder.as_path(),
+    )
+    .await;
+    fixture.seed_media_row(&holder.id, &owned_file).await;
+    fixture.seed_media_row(&bystander.id, &bystander_file).await;
+
+    let preview = fixture
+        .app
+        .change_title_folder_preview(
+            &fixture.user,
+            &rooted.id,
+            owned_folder.to_string_lossy().as_ref(),
+        )
+        .await
+        .expect("preview folder change");
+    assert_eq!(
+        preview.available_resolutions,
+        vec![FolderMatchResolution::TakeOver]
+    );
+
+    let error = fixture
+        .app
+        .apply_title_folder_change(
+            &fixture.user,
+            &rooted.id,
+            owned_folder.to_string_lossy().as_ref(),
+            FolderMatchResolution::Swap,
+        )
+        .await
+        .expect_err("a library root is not a folder to swap");
+    assert!(
+        matches!(error, AppError::Validation(_)),
+        "unexpected error: {error}"
+    );
+    assert_eq!(
+        fixture.folder_path_of(&rooted.id).await.as_deref(),
+        Some(fixture.root.path().to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        fixture.folder_path_of(&holder.id).await.as_deref(),
+        Some(owned_folder.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        fixture.media_paths(&holder.id).await,
+        vec![owned_file.to_string_lossy().to_string()]
+    );
+    assert_eq!(
+        fixture.media_paths(&bystander.id).await,
+        vec![bystander_file.to_string_lossy().to_string()]
+    );
+}
+
 /// FR-006 — the default resolution never takes an owned folder; it names the
 /// owner instead.
 #[tokio::test]

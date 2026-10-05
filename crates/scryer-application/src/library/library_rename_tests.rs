@@ -656,31 +656,157 @@ fn configured_title_folder_path_caps_long_component() {
     );
 }
 
+/// Every destination a rename plans for a title lies under the one folder the
+/// plan records for it, whatever the layout change: flattening, un-flattening,
+/// a renamed title folder, specials, and files with no season. Recording that
+/// folder once is only sound if no planned target escapes it.
+#[test]
+fn every_planned_rename_parent_lies_under_the_configured_title_folder() {
+    let mut title = test_movie_title("Planned Folder Fixture");
+    title.facet = MediaFacet::Series;
+    title.year = Some(2031);
+    let media_root = "/library/series";
+
+    let current_files = [
+        "/library/series/Old Fixture Name/Season 01/Episode 01.mkv",
+        "/library/series/Old Fixture Name/Season 02/Episode 02.mkv",
+        "/library/series/Old Fixture Name/Episode 03.mkv",
+        "/library/series/Old Fixture Name/Extras/Deep/Episode 04.mkv",
+        "/library/series/Unrelated Folder/Episode 05.mkv",
+    ];
+    for recorded_folder in [
+        Some("/library/series/Old Fixture Name"),
+        // A record damaged into the root itself, or an ancestor of it.
+        Some("/library/series"),
+        Some("/library"),
+        None,
+    ] {
+        title.folder_path = recorded_folder.map(str::to_string);
+        for folder_template in ["{title}", "{title} ({year})", ""] {
+            let planned =
+                configured_title_folder_path(media_root, &title, folder_template, title.year);
+            for use_season_folders in [true, false] {
+                for season in [Some(1), Some(0), None] {
+                    for current in current_files {
+                        let parent = episode_parent_path_for_renamed_file(
+                            &title,
+                            use_season_folders,
+                            std::path::Path::new(current),
+                            media_root,
+                            folder_template,
+                            season,
+                            "Season {season:2}",
+                            "Specials",
+                        );
+                        assert!(
+                            parent.starts_with(&planned),
+                            "{parent:?} escapes {planned:?} (recorded {recorded_folder:?}, \
+                             season folders {use_season_folders}, season {season:?})"
+                        );
+                    }
+                }
+            }
+            for current in current_files {
+                let parent = title_folder_path_for_renamed_file(
+                    &title,
+                    std::path::Path::new(current),
+                    media_root,
+                    folder_template,
+                );
+                assert!(
+                    parent.starts_with(&planned),
+                    "{parent:?} escapes {planned:?}"
+                );
+            }
+        }
+    }
+}
+
+/// A record damaged into the library root must not carry the old title
+/// folder's name into the new one: the movie lands directly in the planned
+/// folder rather than in `<planned>/<old name>`.
+#[test]
+fn a_recorded_root_does_not_nest_the_old_title_folder() {
+    let mut title = test_movie_title("Nesting Fixture");
+    title.folder_path = Some("/library/movies".to_string());
+    let parent = title_folder_path_for_renamed_file(
+        &title,
+        std::path::Path::new("/library/movies/Old Nesting Name/Nesting Fixture.mkv"),
+        "/library/movies",
+        "{title}",
+    );
+    assert_eq!(parent, PathBuf::from("/library/movies/Nesting Fixture"));
+
+    title.folder_path = Some("/library/movies/Old Nesting Name".to_string());
+    let parent = title_folder_path_for_renamed_file(
+        &title,
+        std::path::Path::new("/library/movies/Old Nesting Name/Featurettes/Clip.mkv"),
+        "/library/movies",
+        "{title}",
+    );
+    assert_eq!(
+        parent,
+        PathBuf::from("/library/movies/Nesting Fixture/Featurettes")
+    );
+}
+
 #[cfg(unix)]
 #[test]
-fn infer_title_folder_path_after_rename_decodes_stored_paths() {
+fn renamed_file_parent_decodes_an_escaped_recorded_folder() {
     use std::os::unix::ffi::OsStringExt;
 
     let existing_root = PathBuf::from(std::ffi::OsString::from_vec(
-        b"/library/old-\xFF-root".to_vec(),
+        b"/library/movies/old-\xFF-root".to_vec(),
     ));
-    let current_path = existing_root.join("Season 01").join("Episode.mkv");
-    let final_path = PathBuf::from("/library/new-root/Season 01/Episode.mkv");
+    let current_path = existing_root.join("Featurettes").join("Clip.mkv");
     let mut title = test_movie_title("Encoded Root");
     title.folder_path = Some(path_to_stored_string(&existing_root));
 
-    let inferred = infer_title_folder_path_after_rename(
-        &title,
-        true,
-        &path_to_stored_string(&current_path),
-        &path_to_stored_string(&final_path),
-    )
-    .expect("infer folder path");
+    let parent =
+        title_folder_path_for_renamed_file(&title, &current_path, "/library/movies", "{title}");
 
     assert_eq!(
-        stored_path_to_path_buf(&inferred),
-        PathBuf::from("/library/new-root")
+        parent,
+        PathBuf::from("/library/movies/Encoded Root/Featurettes")
     );
+}
+
+#[test]
+fn planned_rename_title_folder_is_looked_up_by_title() {
+    let mut plan = build_rename_plan_from_items(
+        MediaFacet::Series,
+        None,
+        String::new(),
+        RenameCollisionPolicy::Skip,
+        RenameMissingMetadataPolicy::FallbackTitle,
+        Vec::new(),
+    );
+    assert_eq!(planned_rename_title_folder(&plan, "title-a"), None);
+    plan.title_folders = vec![
+        RenamePlanTitleFolder {
+            title_id: "title-a".to_string(),
+            folder_path: "/library/series/Show A".to_string(),
+        },
+        RenamePlanTitleFolder {
+            title_id: "title-b".to_string(),
+            folder_path: "  ".to_string(),
+        },
+    ];
+    assert_eq!(
+        planned_rename_title_folder(&plan, "title-a"),
+        Some("/library/series/Show A")
+    );
+    assert_eq!(planned_rename_title_folder(&plan, "title-b"), None);
+
+    // A plan serialized before the field existed still reads, and records
+    // no folder.
+    let mut value = serde_json::to_value(&plan).expect("serialize plan");
+    value
+        .as_object_mut()
+        .expect("plan object")
+        .remove("title_folders");
+    let restored: RenamePlan = serde_json::from_value(value).expect("deserialize plan");
+    assert!(restored.title_folders.is_empty());
 }
 
 #[test]

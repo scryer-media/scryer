@@ -1,14 +1,17 @@
 # Scryer 0.21.14 release notes
 
-These notes cover what's changed since **0.21.12**.
+These notes cover what's changed since **0.21.13**.
 
 ## Highlights
 
-- **The Indexers page search is now a plain query to your indexers, like Prowlarr's manual search.** The query is sent to every enabled indexer exactly as typed, with only the categories you pick; no hidden movie category, no quality profile, no indexer routing or priority, and no title filter decide what you see. That fixes TV, anime and general torrent trackers behind Prowlarr returning nothing, and results no longer disappear because their parsed title differed from what you typed. Indexers that could not be asked (no text search, disabled, or in backoff) are marked as skipped with the reason shown on hover instead of appearing as "0 results". The limit is now a per-indexer page size (default 100, up to 500) rather than a cap on the merged list, exact duplicates (same GUID or download URL) are removed, and results are listed newest first. Release-name parsing and the result filters are unchanged.
-- **Grab logging is quiet again at the default level.** The per-stage lines that 0.21.12 added to trace a stalled grab submission are now logged at debug rather than info, so ordinary operation no longer writes a dozen lines for every grab. They remain available by raising the log filter for the `scryer_application::acquisition::submission`, `scryer_application::catalog::workflow` and `scryer_infrastructure_acquisition::downloads::clients` modules.
+- **Library moves and renames protect the library root.** A title can no longer claim a library root, a folder containing one, or a folder outside its library as its own. Moves, imports and title scans refuse an unsafe recorded folder instead of traversing other titles' media.
+- **Incorrect title folders are repaired on upgrade.** When a title was recorded at or above a library root, Scryer uses its tracked media files to identify the correct title folder where that can be done unambiguously. The repair changes database records only; it does not move or delete media files.
 
 ## Included fixes
 
-- **Imports on sshfs, FUSE, CIFS and mergerfs path-hash volumes:** an import no longer fails with "import destination is not linked to the expected source" on filesystems that report a different inode for each path. When a hard link succeeds but its identity cannot be verified, Scryer removes the link and copies the file instead, logs one warning naming the volume, and skips the link attempt for later imports to that volume until restart. Files the archive extractor wrote into its own workspace are now renamed into place in every import mode, so they need no link and no copy at all. The strict check itself is unchanged: a verified mismatch of the source is still an error.
-- **Dashboard:** free space below 1 TB is shown in gigabytes instead of a fraction of a terabyte.
-- **Release validation:** a test fixture for outbound HTTP cooldown handling closed its connections without saying so, which could make a later request in the same test land on a stale pooled connection and fail intermittently. The fixture now marks each response `Connection: close`.
+- **Partial renames:** the recorded title folder follows files that moved successfully, so a later scan does not detach those files because the record still points to the old folder. Files left behind remain visible for follow-up.
+- **Library scans and pending imports:** scans can correct a root-recorded title to a folder already containing its tracked media, while imports and title scans refuse to use a library root as a title folder.
+
+## Upgrading
+
+Scryer applies a title-folder repair migration automatically on startup for SQLite and PostgreSQL. If the tracked files do not identify one safe folder, the migration leaves that title's folder record unchanged rather than guessing. Operations that would use an unsafe title folder remain blocked until the record can be corrected.

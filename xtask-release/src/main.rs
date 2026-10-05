@@ -2031,6 +2031,57 @@ fn restore_builtin_artifacts_from_cache(
     Ok(())
 }
 
+/// Whether every changed path is one the cached validation never read.
+///
+/// The release tool's own sources are deliberately excluded: they hold the
+/// validation the cache stands in for, so a change there can add or tighten a
+/// release-blocking check that the cached run never executed.
+fn release_dry_run_tooling_paths_only<'a>(paths: impl IntoIterator<Item = &'a Path>) -> bool {
+    paths
+        .into_iter()
+        .all(|path| path.starts_with(".github/workflows"))
+}
+
+fn release_dry_run_product_inputs_match(
+    ctx: &TaskContext,
+    validated_commit: &str,
+    current_commit: &str,
+) -> Result<bool> {
+    let ancestor = ctx
+        .command_in("git", &ctx.repo_root)
+        .args([
+            "merge-base",
+            "--is-ancestor",
+            validated_commit,
+            current_commit,
+        ])
+        .output()?;
+    match ancestor.status.code() {
+        Some(0) => {}
+        Some(1) => return Ok(false),
+        _ => bail!("could not verify dry-run commit ancestry"),
+    }
+    // Include both sides of renames so moving an application input into a
+    // tooling directory cannot hide its removal from the validated tree.
+    let paths = git_path_output(
+        ctx,
+        &[
+            "diff",
+            "--name-only",
+            "--no-renames",
+            "-z",
+            validated_commit,
+            current_commit,
+            "--",
+        ],
+    )?;
+    let relative_paths = paths
+        .iter()
+        .map(|path| path.strip_prefix(&ctx.repo_root))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(release_dry_run_tooling_paths_only(relative_paths))
+}
+
 fn release_dry_run_cache_rejection_reason(
     cache: &ReleaseDryRunCache,
     expected: &ReleaseDryRunExpectations<'_>,
@@ -2188,7 +2239,42 @@ fn refresh_release_cargo_lockfile(ctx: &TaskContext) -> Result<()> {
     metadata.stdout(Stdio::null());
     run_checked(&mut metadata)?;
     ok("Cargo.lock refreshed and locked metadata passed");
+
+    // Independently rooted projects pin the bumped crates by path, so their
+    // lockfiles go stale with the manifests and `--locked` then fails there.
+    for cargo_lock in independent_cargo_lockfiles(ctx)? {
+        let cargo_dir = cargo_lock
+            .parent()
+            .context("tracked Cargo.lock did not have a parent directory")?;
+        let display_path = cargo_lock
+            .strip_prefix(&ctx.repo_root)
+            .unwrap_or(&cargo_lock)
+            .display();
+        step(format!("Refreshing {display_path} after version bump"));
+        // `--workspace` re-locks only the path packages whose version moved
+        // and leaves every registry dependency where it was.
+        let mut update = ctx.release_command_in("cargo", cargo_dir);
+        update.args(["update", "--workspace"]);
+        run_checked(&mut update)?;
+
+        let mut metadata = ctx.release_command_in("cargo", cargo_dir);
+        metadata.args(["metadata", "--locked", "--format-version", "1"]);
+        metadata.stdout(Stdio::null());
+        run_checked(&mut metadata)?;
+        ok(format!(
+            "{display_path} refreshed and locked metadata passed"
+        ));
+    }
     Ok(())
+}
+
+/// Tracked lockfiles other than the release workspace's own.
+fn independent_cargo_lockfiles(ctx: &TaskContext) -> Result<Vec<PathBuf>> {
+    let workspace_lock = ctx.path("Cargo.lock");
+    Ok(git_tracked_cargo_lockfiles(ctx)?
+        .into_iter()
+        .filter(|path| *path != workspace_lock)
+        .collect())
 }
 
 fn package_version(path: &Path) -> Result<Version> {
@@ -3599,8 +3685,14 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
                         &cache.catalog_builtin_wasm_blake3,
                     ) && validate_cached_sigstore_trust_root(dir).is_ok()
                 });
+                let tooling_only_changes = cache.git_commit != git_commit
+                    && release_dry_run_product_inputs_match(ctx, &cache.git_commit, &git_commit)?;
                 let expected = ReleaseDryRunExpectations {
-                    git_commit: &git_commit,
+                    git_commit: if tooling_only_changes {
+                        &cache.git_commit
+                    } else {
+                        &git_commit
+                    },
                     validation_scope,
                     release_args: &release_args,
                     latest_tag_seen: latest_tag.as_deref(),
@@ -3614,6 +3706,21 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
                 {
                     println!("   {YELLOW}Skipping dry-run cache reuse: {reason}{RESET}");
                 } else {
+                    if tooling_only_changes {
+                        step("Validating CI workflow changes since dry run");
+                        let mut tests = ctx.command("cargo");
+                        tests.args([
+                            "nextest",
+                            "run",
+                            "-p",
+                            "xtask-release",
+                            "--locked",
+                            "--no-fail-fast",
+                        ]);
+                        run_checked(&mut tests)?;
+                        run_scryer_release_hygiene_validation(ctx, "[hygiene] ")?;
+                        ok("Application inputs unchanged since dry run");
+                    }
                     let cached_builtins_dir = cached_builtins_dir.ok_or_else(|| {
                         anyhow!("dry-run cache did not record builtin artifact directory")
                     })?;
@@ -3853,6 +3960,11 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
     let npm_lock = ctx.path("apps/scryer-web/package-lock.json");
     if cargo_lock.exists() && changed_file(ctx, &cargo_lock)? {
         changed.push(cargo_lock.clone());
+    }
+    for independent_lock in independent_cargo_lockfiles(ctx)? {
+        if changed_file(ctx, &independent_lock)? {
+            changed.push(independent_lock);
+        }
     }
     if npm_lock.exists() && changed_file(ctx, &npm_lock)? {
         changed.push(npm_lock.clone());
@@ -5625,6 +5737,38 @@ merge :2
             true,
         );
         assert_eq!(reason.as_deref(), Some("HEAD commit changed since dry run"));
+    }
+
+    #[test]
+    fn release_dry_run_cache_accepts_only_ci_workflow_changes() {
+        assert!(release_dry_run_tooling_paths_only([Path::new(
+            ".github/workflows/scryer.yml"
+        )]));
+        assert!(release_dry_run_tooling_paths_only([]));
+        for path in [
+            "xtask-release/src/main.rs",
+            "Cargo.lock",
+            "xtask-release/Cargo.toml",
+            "crates/scryer/src/main.rs",
+            "apps/scryer-web/package-lock.json",
+            "docker/Dockerfile",
+            "release-notes/scryer-v0.21.13.md",
+            ".github/scripts/check_graphql_schema.py",
+            ".cargo/config.toml",
+            "xtask/src/main.rs",
+        ] {
+            assert!(
+                !release_dry_run_tooling_paths_only([
+                    Path::new(".github/workflows/scryer.yml"),
+                    Path::new(path),
+                ]),
+                "application validation must be invalidated by {path}"
+            );
+        }
+        assert!(!release_dry_run_tooling_paths_only([
+            Path::new("crates/scryer/src/main.rs"),
+            Path::new("xtask-release/src/moved.rs"),
+        ]));
     }
 
     #[test]

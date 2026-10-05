@@ -86,6 +86,7 @@ use crate::location::model::{LocationExecutionMode, LocationOperation, LocationO
 use crate::location::operations::{
     LOCATION_OPERATION_VERIFICATION_DEPTH, LOCATION_PREVIEW_TITLE_CONCURRENCY,
     LocationOperationAccepted, LocationOperationAdmission, TitleMoveFacts, confirmation_error,
+    source_folder_refusal,
 };
 use crate::location::ownership_guard::OwnedEntity;
 use crate::location::preview::{
@@ -415,15 +416,36 @@ impl AppUseCase {
         // The folder walks and stats behind each title's facts are the
         // preview's cost; a bounded fan-out overlaps them, and `buffered` hands
         // the drafts back in title order.
-        let (merge_summaries, resolved_by_title, identities) =
-            (&merge_summaries, &resolved_by_title, &identities);
+        let all_root_paths = self
+            .all_library_root_folders()
+            .await?
+            .into_iter()
+            .map(|root| root.path)
+            .collect::<Vec<_>>();
+        let (merge_summaries, resolved_by_title, identities, scope_library, all_root_paths) = (
+            &merge_summaries,
+            &resolved_by_title,
+            &identities,
+            &library,
+            &all_root_paths,
+        );
         let pending: Vec<_> = titles
             .iter()
             .map(|title| async move {
                 let source_folder_path = folder_path_of(title);
-                let (blocked_reason, blocked_reason_code) = self
-                    .root_scope_title_blockers(title, merge_summaries.get(&title.id))
-                    .await?;
+                // A recorded folder that is a root, holds one, or is outside
+                // the library would attribute other titles' files to this one.
+                let (blocked_reason, blocked_reason_code) =
+                    match source_folder_refusal(title, Some(scope_library), all_root_paths) {
+                        Some(reason) => (
+                            Some(reason),
+                            Some(reason_codes::SOURCE_FOLDER_NOT_A_TITLE_FOLDER.to_string()),
+                        ),
+                        None => {
+                            self.root_scope_title_blockers(title, merge_summaries.get(&title.id))
+                                .await?
+                        }
+                    };
 
                 let resolved = resolved_by_title
                     .get(title.id.as_str())

@@ -13,9 +13,9 @@
 use sqlx::SqlitePool;
 
 const SQLITE: &str =
-    include_str!("../../../scryer/src/db/migrations/0268_delete_imdb_user_list_follows.sql");
+    include_str!("../../../scryer/src/db/migrations/0274_delete_imdb_user_list_follows.sql");
 const POSTGRES: &str = include_str!(
-    "../../../scryer/src/db/postgres/migrations/0268_delete_imdb_user_list_follows.sql"
+    "../../../scryer/src/db/postgres/migrations/0274_delete_imdb_user_list_follows.sql"
 );
 
 /// Version the catalog is replayed to before 0268 is applied.

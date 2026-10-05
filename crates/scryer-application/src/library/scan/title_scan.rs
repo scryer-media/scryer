@@ -69,7 +69,10 @@ async fn discover_episodic_title_files_for_progress(
         &import_paths.folder_template,
         None,
     );
-    if !episodic_title_directory_present(&title_dir).await? {
+    // A recorded folder that is a library root holds other titles' files.
+    if crate::folder_ownership::title_folder_spans_a_library_root(app, title).await?
+        || !episodic_title_directory_present(&title_dir).await?
+    {
         return Ok(Vec::new());
     }
     let scan_result = scan_episodic_title_directory_for_progress_metrics(
@@ -2162,6 +2165,10 @@ impl AppUseCase {
             .as_deref()
             .filter(|folder| !folder.trim().is_empty())
             .ok_or_else(|| AppError::Validation("title has no owned folder".into()))?;
+        // The scoped walk below attaches whatever the folder holds, so a
+        // record that is a library root would hand the title every file in
+        // the library.
+        crate::folder_ownership::ensure_title_folder_is_not_a_library_root(self, &title).await?;
         if !episodic_title_directory_present(&stored_path_to_path_buf(folder)).await? {
             return Err(AppError::Validation("owned folder is unavailable".into()));
         }
@@ -2481,8 +2488,25 @@ impl AppUseCase {
         // directory itself is irrelevant there. A full-folder scan must know
         // whether the tree is reachable: when it is not, the scan neither
         // recreates it nor treats it as empty (see #208).
-        let title_dir_present =
-            scoped_discovered_files || episodic_title_directory_present(&title_dir).await?;
+        // A recorded folder that is a library root is not this title's to
+        // walk: everything under it would be read as this title's files. A
+        // scan the operator asked for says so; a library scan walks nothing
+        // for the title and carries on.
+        let title_dir_is_a_library_root = !scoped_discovered_files
+            && crate::folder_ownership::title_folder_spans_a_library_root(self, &title).await?;
+        if title_dir_is_a_library_root && matches!(mode, LibraryScanTitleWalkMode::OneOff) {
+            crate::folder_ownership::ensure_title_folder_is_not_a_library_root(self, &title)
+                .await?;
+        }
+        if title_dir_is_a_library_root {
+            warn!(
+                title_id = %title.id,
+                title_dir = %title_dir_str,
+                "title scan skipped: the recorded folder is a library root, not a title folder"
+            );
+        }
+        let title_dir_present = !title_dir_is_a_library_root
+            && (scoped_discovered_files || episodic_title_directory_present(&title_dir).await?);
         if !title_dir_present {
             debug!(
                 title_id = %title.id,

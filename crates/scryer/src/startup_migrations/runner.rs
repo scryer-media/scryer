@@ -25,6 +25,7 @@ use super::{
     _0012_legacy_newznab_wrappers_01822 as migration_0012,
     _0013_indexer_request_accounting as migration_0013,
     _0016_maintenance_show_fact_rearm as migration_0016,
+    _0017_empty_duplicate_title_folders as migration_0017,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -135,6 +136,12 @@ const MIGRATIONS: &[MigrationSpec] = &[
         phase: MigrationPhase::Early,
         legacy_state_key: None,
     },
+    MigrationSpec {
+        id: migration_0017::ID,
+        description: "remove the empty title folders an old rename left behind",
+        phase: MigrationPhase::ApplicationReady,
+        legacy_state_key: None,
+    },
 ];
 
 #[derive(Clone)]
@@ -157,6 +164,16 @@ impl MigrationLedger {
     }
 
     async fn record(&self, spec: MigrationSpec, elapsed_ms: i64) -> Result<(), String> {
+        self.insert(spec, elapsed_ms).await.map(|_| ())
+    }
+
+    /// Record `spec` and report whether this call is the one that recorded
+    /// it. `false` means the row was already there.
+    async fn claim(&self, spec: MigrationSpec) -> Result<bool, String> {
+        self.insert(spec, 0).await.map(|inserted| inserted == 1)
+    }
+
+    async fn insert(&self, spec: MigrationSpec, elapsed_ms: i64) -> Result<u64, String> {
         SqlRuntime::execute_write(
             &self.datastore,
             "record_application_migration",
@@ -172,7 +189,6 @@ impl MigrationLedger {
             ],
         )
         .await
-        .map(|_| ())
         .map_err(|error| error.to_string())
     }
 }
@@ -433,10 +449,65 @@ impl ApplicationMigrator {
                     self.run_retryable(spec, migration_0011::migrate(self.settings.clone()))
                         .await;
                 }
+                // Starts from `spawn_empty_duplicate_title_folder_cleanup`, once
+                // the library roots are reconciled.
+                migration_0017::ID => {}
                 _ => unreachable!("application-ready migration registry and dispatcher must agree"),
             }
         }
         Ok(())
+    }
+
+    /// The one-time removal of empty title folders an old rename left behind.
+    ///
+    /// It gets one attempt, ever: the ledger row is written first, and the
+    /// cleanup starts only if this process is the one that wrote it and this
+    /// start is an upgrade from an affected release. A failure, a skipped
+    /// start, and an interrupted run are all final. The cleanup itself runs in
+    /// the background so a large or unresponsive library cannot hold up
+    /// startup.
+    pub(crate) async fn spawn_empty_duplicate_title_folder_cleanup(
+        &mut self,
+        app: &AppUseCase,
+        previous_version: Option<&str>,
+    ) {
+        if !self
+            .claim_empty_duplicate_title_folder_cleanup(previous_version)
+            .await
+        {
+            return;
+        }
+        let app = app.clone();
+        std::mem::drop(tokio::spawn(async move {
+            migration_0017::run(&app).await;
+        }));
+    }
+
+    async fn claim_empty_duplicate_title_folder_cleanup(
+        &mut self,
+        previous_version: Option<&str>,
+    ) -> bool {
+        let spec = *MIGRATIONS
+            .iter()
+            .find(|spec| spec.id == migration_0017::ID)
+            .unwrap();
+        if self.applied.contains(spec.id) {
+            return false;
+        }
+        match self.ledger.claim(spec).await {
+            Ok(true) => {
+                self.applied.insert(spec.id.to_string());
+            }
+            Ok(false) => {
+                self.applied.insert(spec.id.to_string());
+                return false;
+            }
+            Err(error) => {
+                tracing::warn!(migration_id = spec.id, error = %error, "application migration skipped because it could not be recorded first");
+                return false;
+            }
+        }
+        migration_0017::applies_to_upgrade_from(previous_version)
     }
 
     async fn run_retryable<F>(&mut self, spec: MigrationSpec, migration: F)
@@ -580,6 +651,80 @@ mod tests {
             .await
             .expect("reload application migrator");
         assert!(restarted.applied.contains(spec.id));
+    }
+
+    #[tokio::test]
+    async fn the_title_folder_cleanup_is_claimed_once_and_only_for_an_affected_upgrade() {
+        let (_temp, settings, mut migrator) = test_migrator().await;
+        let datastore = migrator.ledger.datastore.clone();
+
+        // A second process that loaded the ledger before the first claimed it.
+        let mut racing = ApplicationMigrator::load(datastore.clone(), settings.clone())
+            .await
+            .expect("load racing migrator");
+
+        assert!(
+            migrator
+                .claim_empty_duplicate_title_folder_cleanup(Some("0.21.13"))
+                .await
+        );
+        assert!(
+            migrator
+                .ledger
+                .applied_ids()
+                .await
+                .unwrap()
+                .contains(migration_0017::ID),
+            "recorded before the cleanup runs"
+        );
+        assert!(
+            !migrator
+                .claim_empty_duplicate_title_folder_cleanup(Some("0.21.13"))
+                .await
+        );
+        assert!(
+            !racing
+                .claim_empty_duplicate_title_folder_cleanup(Some("0.21.13"))
+                .await,
+            "the row already existed"
+        );
+
+        let mut restarted = ApplicationMigrator::load(datastore, settings)
+            .await
+            .expect("reload application migrator");
+        assert!(
+            !restarted
+                .claim_empty_duplicate_title_folder_cleanup(Some("0.21.13"))
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn the_title_folder_cleanup_is_spent_without_running_on_other_starts() {
+        for previous in [None, Some("0.21.14"), Some("0.22.0"), Some("unreadable")] {
+            let (_temp, _, mut migrator) = test_migrator().await;
+            assert!(
+                !migrator
+                    .claim_empty_duplicate_title_folder_cleanup(previous)
+                    .await,
+                "{previous:?}"
+            );
+            assert!(
+                migrator
+                    .ledger
+                    .applied_ids()
+                    .await
+                    .unwrap()
+                    .contains(migration_0017::ID),
+                "{previous:?}"
+            );
+            assert!(
+                !migrator
+                    .claim_empty_duplicate_title_folder_cleanup(Some("0.21.13"))
+                    .await,
+                "{previous:?}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -157,6 +157,10 @@ pub mod reason_codes {
     /// The destination root the title was classified onto has no configured
     /// path, so no destination folder can be calculated.
     pub const DESTINATION_ROOT_UNCONFIGURED: &str = "destination_root_unconfigured";
+    /// The title's recorded folder is a library root, contains one, or lies
+    /// outside every root of its library, so selecting files by that folder
+    /// would sweep up far more than the title.
+    pub const SOURCE_FOLDER_NOT_A_TITLE_FOLDER: &str = "source_folder_not_a_title_folder";
 }
 
 /// The destination a selection was previewed against.

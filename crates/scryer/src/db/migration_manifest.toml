@@ -902,6 +902,7 @@ scope = "all"
 # 0157 is quarantined (see storage/migrations/known_bad.rs): it is recorded as
 # applied but never executed. 0160 is its non-destructive replacement and runs on
 # every database, including those that already ran 0157.
+
 [[migration]]
 version = 160
 description = "single title folder ownership (non-destructive replacement for 0157)"
@@ -2768,19 +2769,13 @@ scope = "all"
 
 [[migration]]
 version = 268
-description = "delete imdb user list follows"
+description = "repair title folders recorded at or above a library root"
 checksum_algo = "blake3"
 
 [[migration.steps]]
-kind = "sql"
-file = "migrations/0268_delete_imdb_user_list_follows.sql"
-engine = "sqlite"
-scope = "all"
-
-[[migration.steps]]
-kind = "sql"
-file = "postgres/migrations/0268_delete_imdb_user_list_follows.sql"
-engine = "postgres"
+kind = "rust"
+hook_id = "repair_root_title_folders"
+engine = "all"
 scope = "all"
 
 [[migration]]
@@ -2865,6 +2860,23 @@ scope = "all"
 [[migration.steps]]
 kind = "sql"
 file = "postgres/migrations/0273_ui_catalog_view_device_classes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 274
+description = "delete imdb user list follows"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0274_delete_imdb_user_list_follows.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0274_delete_imdb_user_list_follows.sql"
 engine = "postgres"
 scope = "all"
 

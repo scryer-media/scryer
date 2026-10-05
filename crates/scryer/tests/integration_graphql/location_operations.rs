@@ -316,7 +316,11 @@ fn group<'a>(preview: &'a Value, class: &str) -> &'a Value {
 
 /// Seeds one queued operation directly, so cancel and resume can be asserted
 /// without racing the background runner a real start spawns.
-async fn seed_queued_operation(ctx: &TestContext, library_id: &str, root_id: &str) -> String {
+pub(super) async fn seed_queued_operation(
+    ctx: &TestContext,
+    library_id: &str,
+    root_id: &str,
+) -> String {
     let store = LocationOperationStore::new(ctx.db.datastore());
     let now = chrono::Utc::now();
     let operation = LocationOperation {
