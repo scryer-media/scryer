@@ -1,6 +1,6 @@
 use super::*;
 use crate::acquisition_decision_helpers::is_download_submit_unavailable_error;
-use crate::domain_events::{new_title_domain_event, title_context_snapshot};
+use crate::domain_events::{DomainEventActor, new_title_domain_event, title_context_snapshot};
 use chrono::{Duration, Utc};
 use scryer_domain::{DomainEventPayload, ReleaseGrabbedEventData};
 use tracing::{info, warn};
@@ -479,7 +479,13 @@ impl AppUseCase {
             let mut grabbed = false;
             for pr in &releases {
                 match self
-                    .try_grab_pending_release(&wanted, pr, &now, PendingGrabTrigger::Automatic)
+                    .try_grab_pending_release(
+                        &wanted,
+                        pr,
+                        &now,
+                        PendingGrabTrigger::Automatic,
+                        &DomainEventActor::system(),
+                    )
                     .await
                 {
                     Ok(PendingGrabOutcome::Grabbed { .. }) => {
@@ -775,8 +781,14 @@ impl AppUseCase {
                 AppError::Repository(format!("wanted item {} not found", pr.wanted_item_id))
             })?;
         Ok(matches!(
-            self.try_grab_pending_release(&wanted, &pr, &now, PendingGrabTrigger::Operator)
-                .await?,
+            self.try_grab_pending_release(
+                &wanted,
+                &pr,
+                &now,
+                PendingGrabTrigger::Operator,
+                &DomainEventActor::system(),
+            )
+            .await?,
             PendingGrabOutcome::Grabbed { .. }
         ))
     }
@@ -886,19 +898,28 @@ impl AppUseCase {
             .is_some_and(|client_id| !client_id.trim().is_empty())
     }
 
-    /// Attempt to grab a single pending release.
+    /// Attempt to grab a single pending release. `initiated_by` is who the
+    /// grab event is recorded against; it plays no part in the judgement.
     pub(crate) async fn try_grab_pending_release(
         &self,
         wanted: &AcquisitionScopeState,
         pr: &PendingRelease,
         now: &chrono::DateTime<Utc>,
         trigger: PendingGrabTrigger,
+        initiated_by: &DomainEventActor,
     ) -> AppResult<PendingGrabOutcome> {
         match self.judge_pending_release(wanted, pr, now, trigger).await? {
             PendingJudgement::Decided(outcome) => Ok(outcome),
             PendingJudgement::Admitted(admitted) => {
-                self.grab_admitted_pending_release(wanted, pr, now, trigger, *admitted)
-                    .await
+                self.grab_admitted_pending_release(
+                    wanted,
+                    pr,
+                    now,
+                    trigger,
+                    *admitted,
+                    initiated_by,
+                )
+                .await
             }
         }
     }
@@ -1410,6 +1431,7 @@ impl AppUseCase {
         now: &chrono::DateTime<Utc>,
         trigger: PendingGrabTrigger,
         admitted: AdmittedPendingRelease,
+        initiated_by: &DomainEventActor,
     ) -> AppResult<PendingGrabOutcome> {
         let AdmittedPendingRelease {
             title,
@@ -1670,7 +1692,7 @@ impl AppUseCase {
                     .await;
                 let _ = self
                     .append_domain_event(new_title_domain_event(
-                        None,
+                        initiated_by.clone(),
                         &title,
                         DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
                             title: title_context_snapshot(&title),

@@ -17,6 +17,55 @@ async fn migration_catalog_installs_download_password_storage() {
     assert_eq!(columns, ["password_candidates", "password_retry_state"]);
 }
 
+/// Deleting a title, collection, episode or media file makes SQLite look up
+/// every referencing child row. Each of those child foreign keys must have an
+/// index the planner can search, or the delete scans the child table once per
+/// deleted parent row.
+#[tokio::test]
+async fn migration_catalog_indexes_every_child_foreign_key_of_catalog_parents() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let services = SqliteServices::new(directory.path().join("fk-index.db").to_string_lossy())
+        .await
+        .expect("registered migrations should initialize");
+    let foreign_keys: Vec<(String, String, String)> = sqlx::query_as(
+        "SELECT m.name, fk.\"from\", fk.\"table\"
+         FROM sqlite_master m, pragma_foreign_key_list(m.name) fk
+         WHERE m.type = 'table'
+           AND fk.\"table\" IN ('titles', 'collections', 'episodes', 'media_files')
+         ORDER BY m.name, fk.\"from\"",
+    )
+    .fetch_all(&services.pool)
+    .await
+    .expect("foreign key list should be readable");
+    assert!(
+        foreign_keys
+            .iter()
+            .any(|(table, column, _)| table == "workflow_operations" && column == "title_id"),
+        "the catalog should expose the workflow operation foreign keys"
+    );
+
+    let mut unindexed = Vec::new();
+    for (table, column, parent) in &foreign_keys {
+        let plan: Vec<(i64, i64, i64, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "EXPLAIN QUERY PLAN SELECT 1 FROM \"{table}\" WHERE \"{column}\" = ?1"
+        )))
+        .bind("synthetic-parent-id")
+        .fetch_all(&services.pool)
+        .await
+        .expect("query plan should be readable");
+        if !plan
+            .iter()
+            .any(|(_, _, _, detail)| detail.starts_with("SEARCH"))
+        {
+            unindexed.push(format!("{table}.{column} -> {parent}"));
+        }
+    }
+    assert!(
+        unindexed.is_empty(),
+        "child foreign keys without a usable index: {unindexed:?}"
+    );
+}
+
 #[tokio::test]
 async fn migration_validate_mode_rejects_pending_schema() {
     let db = std::env::temp_dir().join(format!(

@@ -2875,6 +2875,7 @@ const ru: LocaleDictionary = {
     "episode.filler": "Филлер",
     "episode.recap": "Рекап",
     "episode.absoluteNumber": "Абс. №{{number}}",
+    "episode.titleTba": "Будет объявлено",
     "episode.special": "Спецвыпуск",
     "episode.ova": "OVA",
     "episode.ona": "ONA",
@@ -3507,6 +3508,10 @@ const ru: LocaleDictionary = {
     "requests.approvedQualityProfile": "Одобренный профиль качества",
     "requests.approvedMonitorType": "Одобренный режим отслеживания",
     "requests.dismiss": "Отклонить",
+    "requests.reopen": "Открыть снова",
+    "requests.requesterFilter.label": "Автор запроса",
+    "requests.requesterFilter.all": "Все авторы запросов",
+    "status.requestReopened": "Запрос на {{name}} снова открыт.",
     "requests.modify": "Изменить",
     "requests.modifyTitle": "Изменить запрос",
     "requests.saveChanges": "Сохранить изменения",
@@ -4437,6 +4442,7 @@ const ru: LocaleDictionary = {
     "history.importFailed": "Ошибка импорта",
 
     "history.importSkipped": "Импорт пропущен",
+    "history.importRejectedByRule": "Отклонено правилом",
 
     "history.downloadCompleted": "Загружено",
 

@@ -1623,6 +1623,7 @@ pub(crate) async fn try_saved_candidates(
     excluded_episode_ids: Option<&HashSet<String>>,
     dl_snapshot: &DownloadClientSnapshot,
     now: &DateTime<Utc>,
+    initiated_by: &DomainEventActor,
 ) -> StandbyRecoveryOutcome {
     // A waiting row is already the chosen best candidate. Never claim a
     // lower-ranked standby release while the delay-promotion lane owns it.
@@ -1996,6 +1997,7 @@ pub(crate) async fn try_saved_candidates(
                     now,
                     super::pending::PendingGrabTrigger::Automatic,
                     *admitted,
+                    initiated_by,
                 )
                 .await
             }
@@ -2006,6 +2008,7 @@ pub(crate) async fn try_saved_candidates(
                     &standby,
                     now,
                     super::pending::PendingGrabTrigger::Automatic,
+                    initiated_by,
                 )
                 .await
             }
@@ -2047,7 +2050,7 @@ pub(crate) async fn try_saved_candidates(
                         .await;
                     let _ = app
                         .append_domain_event(new_title_domain_event(
-                            None,
+                            initiated_by.clone(),
                             &title,
                             DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
                                 title: title_context_snapshot(&title),

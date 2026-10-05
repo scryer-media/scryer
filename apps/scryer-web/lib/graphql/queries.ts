@@ -2861,12 +2861,19 @@ export const myUiSettingsQuery = `query MyUiSettings {
     density
     sidebarMode
     defaultLandingView
+    language
     tableColumns {
+      deviceClass
       facet
       tableViewMode
       columnId
       columnOrder
       visible
+    }
+    catalogViews {
+      deviceClass
+      facet
+      viewMode
     }
   }
 }`;
@@ -4536,8 +4543,8 @@ export const titleHistoryQuery = `query TitleHistory($filter: TitleHistoryFilter
   }
 }`;
 
-export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue) {
-  mediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status) {
+export const mediaRequestsQuery = `query MediaRequests($facet: MediaFacetValue, $libraryIds: [ID!], $status: MediaRequestStatusValue, $requesterUserId: ID) {
+  mediaRequests(facet: $facet, libraryIds: $libraryIds, status: $status, requesterUserId: $requesterUserId) {
     id
     libraryId
     facet

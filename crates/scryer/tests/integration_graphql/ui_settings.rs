@@ -347,3 +347,272 @@ async fn graphql_ui_settings_reject_invalid_table_column() {
         "expected unsupported table column validation error: {body}"
     );
 }
+
+const CATALOG_VIEW_SELECTION: &str = r#"
+    language
+    catalogViews { deviceClass facet viewMode }
+    tableColumns { deviceClass facet tableViewMode columnId columnOrder visible }
+"#;
+
+#[tokio::test]
+async fn graphql_catalog_views_and_language_are_saved_per_user_and_device_class() {
+    let ctx = TestContext::new().await;
+    let user_a = create_ui_settings_test_user(&ctx, "catalog_user_a").await;
+    let user_b = create_ui_settings_test_user(&ctx, "catalog_user_b").await;
+
+    for (device_class, view_mode, column_id) in [
+        ("DESKTOP", "POSTER_TABLE", "year"),
+        ("MOBILE", "POSTER", "size"),
+    ] {
+        let saved = schema_exec(
+            &ctx,
+            &format!(
+                r#"
+                mutation {{
+                  setMyCatalogView(input: {{
+                    deviceClass: {device_class}
+                    facet: MOVIES
+                    viewMode: {view_mode}
+                    columns: [
+                      {{ tableViewMode: COMPACT, columnId: "{column_id}", columnOrder: 0, visible: true }}
+                    ]
+                  }}) {{ {CATALOG_VIEW_SELECTION} }}
+                }}
+                "#
+            ),
+            Some(user_a.clone()),
+        )
+        .await;
+        assert_no_errors(&saved);
+    }
+
+    // A whole-settings save that omits the language and columns keeps both.
+    let language = schema_exec(
+        &ctx,
+        r#"
+        mutation {
+          setMyUiSettings(input: {
+            theme: DARK
+            highContrastMode: false
+            reduceMotion: false
+            hideSponsorButton: false
+            density: COMFORTABLE
+            sidebarMode: EXPANDED
+            defaultLandingView: MOVIES
+            language: "fra"
+          }) { language }
+        }
+        "#,
+        Some(user_a.clone()),
+    )
+    .await;
+    assert_no_errors(&language);
+    let theme_only = schema_exec(
+        &ctx,
+        r#"
+        mutation {
+          setMyUiSettings(input: {
+            theme: LIGHT
+            highContrastMode: false
+            reduceMotion: false
+            hideSponsorButton: false
+            density: COMFORTABLE
+            sidebarMode: EXPANDED
+            defaultLandingView: MOVIES
+          }) { theme }
+        }
+        "#,
+        Some(user_a.clone()),
+    )
+    .await;
+    assert_no_errors(&theme_only);
+
+    let read_a = schema_exec(
+        &ctx,
+        &format!("query {{ myUiSettings {{ {CATALOG_VIEW_SELECTION} }} }}"),
+        Some(user_a.clone()),
+    )
+    .await;
+    assert_no_errors(&read_a);
+    let settings = &read_a["data"]["myUiSettings"];
+    assert_eq!(settings["language"], json!("fra"));
+    assert_eq!(
+        settings["catalogViews"],
+        json!([
+            { "deviceClass": "DESKTOP", "facet": "MOVIES", "viewMode": "POSTER_TABLE" },
+            { "deviceClass": "MOBILE", "facet": "MOVIES", "viewMode": "POSTER" }
+        ])
+    );
+    assert_eq!(
+        settings["tableColumns"],
+        json!([
+            {
+                "deviceClass": "DESKTOP",
+                "facet": "MOVIES",
+                "tableViewMode": "COMPACT",
+                "columnId": "year",
+                "columnOrder": 0,
+                "visible": true
+            },
+            {
+                "deviceClass": "MOBILE",
+                "facet": "MOVIES",
+                "tableViewMode": "COMPACT",
+                "columnId": "size",
+                "columnOrder": 0,
+                "visible": true
+            }
+        ])
+    );
+
+    // The API only ever reads the caller's own preferences.
+    let read_b = schema_exec(
+        &ctx,
+        &format!("query {{ myUiSettings {{ {CATALOG_VIEW_SELECTION} }} }}"),
+        Some(user_b),
+    )
+    .await;
+    assert_no_errors(&read_b);
+    assert_eq!(read_b["data"]["myUiSettings"]["language"], json!(null));
+    assert_eq!(read_b["data"]["myUiSettings"]["catalogViews"], json!([]));
+    assert_eq!(read_b["data"]["myUiSettings"]["tableColumns"], json!([]));
+
+    // An empty language clears it back to the browser default.
+    let cleared = schema_exec(
+        &ctx,
+        r#"
+        mutation {
+          setMyUiSettings(input: {
+            theme: LIGHT
+            highContrastMode: false
+            reduceMotion: false
+            hideSponsorButton: false
+            density: COMFORTABLE
+            sidebarMode: EXPANDED
+            defaultLandingView: MOVIES
+            language: ""
+          }) { language }
+        }
+        "#,
+        Some(user_a),
+    )
+    .await;
+    assert_no_errors(&cleared);
+    assert_eq!(cleared["data"]["setMyUiSettings"]["language"], json!(null));
+}
+
+#[tokio::test]
+async fn graphql_ui_settings_ignore_column_ids_this_version_no_longer_offers() {
+    let ctx = TestContext::new().await;
+    let user = create_ui_settings_test_user(&ctx, "catalog_retired_column_user").await;
+
+    let saved = schema_exec(
+        &ctx,
+        &format!(
+            r#"
+            mutation {{
+              setMyCatalogView(input: {{
+                deviceClass: DESKTOP
+                facet: SERIES
+                columns: [
+                  {{ tableViewMode: COMPACT, columnId: "runtime", columnOrder: 0, visible: true }}
+                ]
+              }}) {{ {CATALOG_VIEW_SELECTION} }}
+            }}
+            "#
+        ),
+        Some(user.clone()),
+    )
+    .await;
+    assert_no_errors(&saved);
+
+    // A column written by an earlier version that this one has since removed.
+    sqlx::query(
+        "INSERT INTO user_ui_table_columns
+         (user_id, device_class, facet, table_view_mode, column_id, column_order, visible)
+         VALUES (?, 'desktop', 'series', 'compact', 'retiredColumn', 1, 1)",
+    )
+    .bind(&user.id)
+    .execute(ctx.db.pool())
+    .await
+    .expect("seed retired column");
+
+    let read = schema_exec(
+        &ctx,
+        &format!("query {{ myUiSettings {{ {CATALOG_VIEW_SELECTION} }} }}"),
+        Some(user),
+    )
+    .await;
+    assert_no_errors(&read);
+    let columns = read["data"]["myUiSettings"]["tableColumns"]
+        .as_array()
+        .expect("table columns");
+    assert_eq!(columns.len(), 1);
+    assert_eq!(columns[0]["columnId"], json!("runtime"));
+}
+
+#[tokio::test]
+async fn graphql_ui_settings_reject_oversized_language_and_unknown_catalog_column() {
+    let ctx = TestContext::new().await;
+    let user = create_ui_settings_test_user(&ctx, "catalog_validation_user").await;
+
+    let language = schema_exec(
+        &ctx,
+        &format!(
+            r#"
+            mutation {{
+              setMyUiSettings(input: {{
+                theme: DARK
+                highContrastMode: false
+                reduceMotion: false
+                hideSponsorButton: false
+                density: COMFORTABLE
+                sidebarMode: EXPANDED
+                defaultLandingView: MOVIES
+                language: "{}"
+              }}) {{ language }}
+            }}
+            "#,
+            "x".repeat(64)
+        ),
+        Some(user.clone()),
+    )
+    .await;
+    let message = language["errors"][0]["message"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(message.contains("language must be"), "{language}");
+
+    let column = schema_exec(
+        &ctx,
+        r#"
+        mutation {
+          setMyCatalogView(input: {
+            deviceClass: MOBILE
+            facet: ANIME
+            columns: [
+              { tableViewMode: POSTER_TABLE, columnId: "notAColumn", columnOrder: 0, visible: true }
+            ]
+          }) { language }
+        }
+        "#,
+        Some(user.clone()),
+    )
+    .await;
+    let message = column["errors"][0]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("unsupported poster-table table column"),
+        "{column}"
+    );
+
+    // Neither rejected save left anything behind.
+    let read = schema_exec(
+        &ctx,
+        &format!("query {{ myUiSettings {{ {CATALOG_VIEW_SELECTION} }} }}"),
+        Some(user),
+    )
+    .await;
+    assert_no_errors(&read);
+    assert_eq!(read["data"]["myUiSettings"]["language"], json!(null));
+    assert_eq!(read["data"]["myUiSettings"]["tableColumns"], json!([]));
+}

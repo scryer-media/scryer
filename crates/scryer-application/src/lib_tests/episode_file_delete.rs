@@ -1864,3 +1864,378 @@ async fn delete_title_from_disk_omits_tracked_files_outside_the_title_folder() {
     assert!(Path::new(&stray).exists(), "file outside the folder stays");
     assert!(bystander.exists(), "unrelated file must be preserved");
 }
+
+impl EpisodeDeleteFixture {
+    /// Create a file on disk with `contents` and catalog it with `role`, linked
+    /// to every episode in `episode_ids` (none for a movie file).
+    async fn add_file_with_role(
+        &self,
+        relative_path: &str,
+        episode_ids: &[&str],
+        role: MediaFileRole,
+        contents: &[u8],
+    ) -> String {
+        let path = self.root.join(relative_path);
+        std::fs::create_dir_all(path.parent().expect("file parent")).expect("create parent");
+        std::fs::write(&path, contents).expect("write media file");
+        let file_id = self
+            .insert_media_file_row(&path.to_string_lossy(), episode_ids.first().copied())
+            .await;
+        for episode_id in episode_ids.iter().skip(1) {
+            self.media_files
+                .link_additional_episode(&file_id, episode_id)
+                .await;
+        }
+        for row in self
+            .media_files
+            .store
+            .lock()
+            .await
+            .iter_mut()
+            .filter(|row| row.id == file_id)
+        {
+            row.role = role;
+        }
+        file_id
+    }
+
+    /// Delete one file from disk through the operator's single-file path.
+    async fn delete_single_file_from_disk(&self, file_id: &str) -> AppResult<()> {
+        let preview = self
+            .app
+            .preview_delete_media_file(&self.admin, file_id)
+            .await
+            .expect("preview single file delete");
+        self.app
+            .delete_media_file(
+                &self.admin,
+                file_id,
+                true,
+                Some(DeleteExecutionConfirmation {
+                    preview_fingerprint: preview.fingerprint,
+                    typed_confirmation: None,
+                }),
+            )
+            .await
+    }
+
+    /// Each remaining row's role, keyed by file id and episode id.
+    async fn roles(&self) -> Vec<(String, Option<String>, MediaFileRole)> {
+        let mut roles = self
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&self.title_id)
+            .await
+            .expect("list media files")
+            .into_iter()
+            .map(|file| (file.id, file.episode_id, file.role))
+            .collect::<Vec<_>>();
+        roles.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+        roles
+    }
+
+    async fn role_of(&self, file_id: &str) -> Vec<MediaFileRole> {
+        self.roles()
+            .await
+            .into_iter()
+            .filter(|(id, _, _)| id == file_id)
+            .map(|(_, _, role)| role)
+            .collect()
+    }
+}
+
+#[tokio::test]
+async fn deleting_a_primary_promotes_the_sole_additional_file_of_its_episode() {
+    let fixture = seed_episode_delete_fixture().await;
+    let primary = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01 - first cut.mkv",
+            &["episode-1"],
+            MediaFileRole::Primary,
+            b"first cut",
+        )
+        .await;
+    let additional = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01 - second cut.mkv",
+            &["episode-1"],
+            MediaFileRole::Additional,
+            b"second cut bytes",
+        )
+        .await;
+    let other_episode = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E02.mkv",
+            &["episode-2"],
+            MediaFileRole::Additional,
+            b"other episode bytes",
+        )
+        .await;
+    let bystander = fixture.root.join("Emberfall/Season 01/notes.txt");
+    std::fs::write(&bystander, b"bystander").expect("write bystander");
+
+    fixture
+        .delete_single_file_from_disk(&primary)
+        .await
+        .expect("delete primary");
+
+    assert!(
+        !fixture
+            .root
+            .join("Emberfall/Season 01/Emberfall - S01E01 - first cut.mkv")
+            .exists()
+    );
+    assert_eq!(
+        fixture.role_of(&additional).await,
+        vec![MediaFileRole::Primary]
+    );
+    assert_eq!(
+        fixture.role_of(&other_episode).await,
+        vec![MediaFileRole::Additional],
+        "a file of another episode keeps its role"
+    );
+    assert_eq!(
+        std::fs::read(
+            fixture
+                .root
+                .join("Emberfall/Season 01/Emberfall - S01E01 - second cut.mkv")
+        )
+        .expect("promoted file stays on disk"),
+        b"second cut bytes"
+    );
+    assert_eq!(
+        std::fs::read(
+            fixture
+                .root
+                .join("Emberfall/Season 01/Emberfall - S01E02.mkv")
+        )
+        .expect("other episode file stays on disk"),
+        b"other episode bytes"
+    );
+    assert_eq!(
+        std::fs::read(&bystander).expect("bystander stays on disk"),
+        b"bystander"
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_primary_leaves_two_remaining_additional_files_untouched() {
+    let fixture = seed_episode_delete_fixture().await;
+    let primary = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01 - first cut.mkv",
+            &["episode-1"],
+            MediaFileRole::Primary,
+            b"first cut",
+        )
+        .await;
+    let second = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01 - second cut.mkv",
+            &["episode-1"],
+            MediaFileRole::Additional,
+            b"second cut",
+        )
+        .await;
+    let third = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01 - third cut.mkv",
+            &["episode-1"],
+            MediaFileRole::Additional,
+            b"third cut",
+        )
+        .await;
+
+    fixture
+        .delete_single_file_from_disk(&primary)
+        .await
+        .expect("delete primary");
+
+    assert_eq!(
+        fixture.role_of(&second).await,
+        vec![MediaFileRole::Additional]
+    );
+    assert_eq!(
+        fixture.role_of(&third).await,
+        vec![MediaFileRole::Additional]
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_primary_leaves_another_episodes_additional_file_untouched() {
+    let fixture = seed_episode_delete_fixture().await;
+    let primary = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01.mkv",
+            &["episode-1"],
+            MediaFileRole::Primary,
+            b"episode one",
+        )
+        .await;
+    let other_episode = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E02.mkv",
+            &["episode-2"],
+            MediaFileRole::Additional,
+            b"episode two",
+        )
+        .await;
+
+    fixture
+        .delete_single_file_from_disk(&primary)
+        .await
+        .expect("delete primary");
+
+    assert_eq!(
+        fixture.role_of(&other_episode).await,
+        vec![MediaFileRole::Additional]
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_primary_leaves_an_additional_file_spanning_other_episodes_untouched() {
+    let fixture = seed_episode_delete_fixture().await;
+    let primary = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01.mkv",
+            &["episode-1"],
+            MediaFileRole::Primary,
+            b"episode one",
+        )
+        .await;
+    let double = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01-E02.mkv",
+            &["episode-1", "episode-2"],
+            MediaFileRole::Additional,
+            b"double episode",
+        )
+        .await;
+
+    fixture
+        .delete_single_file_from_disk(&primary)
+        .await
+        .expect("delete primary");
+
+    assert_eq!(
+        fixture.role_of(&double).await,
+        vec![MediaFileRole::Additional, MediaFileRole::Additional]
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_multi_episode_primary_promotes_an_additional_file_with_the_same_episodes() {
+    let fixture = seed_episode_delete_fixture().await;
+    let primary = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01-E02 - first cut.mkv",
+            &["episode-1", "episode-2"],
+            MediaFileRole::Primary,
+            b"first cut",
+        )
+        .await;
+    let additional = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01-E02 - second cut.mkv",
+            &["episode-1", "episode-2"],
+            MediaFileRole::Additional,
+            b"second cut",
+        )
+        .await;
+
+    fixture
+        .delete_single_file_from_disk(&primary)
+        .await
+        .expect("delete primary");
+
+    assert_eq!(
+        fixture.role_of(&additional).await,
+        vec![MediaFileRole::Primary, MediaFileRole::Primary]
+    );
+}
+
+#[tokio::test]
+async fn failed_primary_delete_promotes_nothing() {
+    let fixture = seed_episode_delete_fixture().await;
+    let primary = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01 - first cut.mkv",
+            &["episode-1"],
+            MediaFileRole::Primary,
+            b"first cut",
+        )
+        .await;
+    let additional = fixture
+        .add_file_with_role(
+            "Emberfall/Season 01/Emberfall - S01E01 - second cut.mkv",
+            &["episode-1"],
+            MediaFileRole::Additional,
+            b"second cut",
+        )
+        .await;
+    fixture
+        .media_files
+        .fail_delete_media_file("injected catalog delete failure")
+        .await;
+
+    fixture
+        .delete_single_file_from_disk(&primary)
+        .await
+        .expect_err("the catalog delete fails");
+
+    assert_eq!(
+        fixture.role_of(&primary).await,
+        vec![MediaFileRole::Primary]
+    );
+    assert_eq!(
+        fixture.role_of(&additional).await,
+        vec![MediaFileRole::Additional]
+    );
+    assert_eq!(
+        std::fs::read(
+            fixture
+                .root
+                .join("Emberfall/Season 01/Emberfall - S01E01 - second cut.mkv")
+        )
+        .expect("additional file stays on disk"),
+        b"second cut"
+    );
+}
+
+#[tokio::test]
+async fn deleting_a_movie_primary_promotes_the_sole_additional_file() {
+    let fixture = seed_episode_delete_fixture_for(MediaFacet::Movie).await;
+    let primary = fixture
+        .add_file_with_role(
+            "Emberfall (2026)/Emberfall 1080p.mkv",
+            &[],
+            MediaFileRole::Primary,
+            b"movie 1080p",
+        )
+        .await;
+    let additional = fixture
+        .add_file_with_role(
+            "Emberfall (2026)/Emberfall 2160p.mkv",
+            &[],
+            MediaFileRole::Additional,
+            b"movie 2160p",
+        )
+        .await;
+
+    fixture
+        .delete_single_file_from_disk(&primary)
+        .await
+        .expect("delete movie primary");
+
+    assert_eq!(
+        fixture.role_of(&additional).await,
+        vec![MediaFileRole::Primary]
+    );
+    assert_eq!(
+        std::fs::read(fixture.root.join("Emberfall (2026)/Emberfall 2160p.mkv"))
+            .expect("promoted movie file stays on disk"),
+        b"movie 2160p"
+    );
+}

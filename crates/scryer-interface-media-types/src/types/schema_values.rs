@@ -642,6 +642,8 @@ pub enum DomainEventTypeValue {
     MediaRequestSubmitted,
     /// A media request changed.
     MediaRequestUpdated,
+    /// A dismissed media request was reopened.
+    MediaRequestReopened,
     /// A media request was approved.
     MediaRequestApproved,
     /// A media request was rejected.
@@ -753,6 +755,7 @@ impl DomainEventTypeValue {
             DomainEventType::ImportSpaceRestored => Self::ImportSpaceRestored,
             DomainEventType::MediaRequestSubmitted => Self::MediaRequestSubmitted,
             DomainEventType::MediaRequestUpdated => Self::MediaRequestUpdated,
+            DomainEventType::MediaRequestReopened => Self::MediaRequestReopened,
             DomainEventType::MediaRequestApproved => Self::MediaRequestApproved,
             DomainEventType::MediaRequestRejected => Self::MediaRequestRejected,
             DomainEventType::MediaRequestCanceled => Self::MediaRequestCanceled,
@@ -813,6 +816,7 @@ impl DomainEventTypeValue {
             Self::ImportSpaceRestored => DomainEventType::ImportSpaceRestored,
             Self::MediaRequestSubmitted => DomainEventType::MediaRequestSubmitted,
             Self::MediaRequestUpdated => DomainEventType::MediaRequestUpdated,
+            Self::MediaRequestReopened => DomainEventType::MediaRequestReopened,
             Self::MediaRequestApproved => DomainEventType::MediaRequestApproved,
             Self::MediaRequestRejected => DomainEventType::MediaRequestRejected,
             Self::MediaRequestCanceled => DomainEventType::MediaRequestCanceled,

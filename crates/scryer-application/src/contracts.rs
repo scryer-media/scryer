@@ -935,48 +935,36 @@ impl CollectionUpdate {
     }
 }
 
+/// Every `Option<Option<_>>` field shares one convention: `None` leaves the
+/// stored value alone, `Some(value)` rewrites it, and `Some(None)` clears it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct EpisodeUpdate {
     pub episode_type: Option<scryer_domain::EpisodeType>,
     pub episode_number: Option<String>,
     pub season_number: Option<String>,
-    pub episode_label: Option<String>,
-    pub title: Option<String>,
-    pub air_date: Option<String>,
+    pub episode_label: Option<Option<String>>,
+    pub title: Option<Option<String>>,
+    pub air_date: Option<Option<String>>,
     pub duration_seconds: Option<i64>,
     pub has_multi_audio: Option<bool>,
     pub has_subtitle: Option<bool>,
+    pub is_filler: Option<bool>,
+    pub is_recap: Option<bool>,
     pub monitored: Option<bool>,
     pub collection_id: Option<String>,
-    pub overview: Option<String>,
-    pub tvdb_id: Option<String>,
-    pub tmdb_id: Option<String>,
+    pub overview: Option<Option<String>>,
+    pub tvdb_id: Option<Option<String>>,
+    pub tmdb_id: Option<Option<String>>,
     pub image_url: Option<String>,
     pub clear_image_url: bool,
-    /// `Some(value)` rewrites the stored contiguous absolute number, including
-    /// clearing it with `Some(None)`; `None` leaves it alone.
+    /// The raw upstream absolute number.
+    pub absolute_number: Option<Option<String>>,
     pub contiguous_absolute_number: Option<Option<i32>>,
 }
 
 impl EpisodeUpdate {
     pub fn has_changes(&self) -> bool {
-        self.episode_type.is_some()
-            || self.episode_number.is_some()
-            || self.season_number.is_some()
-            || self.episode_label.is_some()
-            || self.title.is_some()
-            || self.air_date.is_some()
-            || self.duration_seconds.is_some()
-            || self.has_multi_audio.is_some()
-            || self.has_subtitle.is_some()
-            || self.monitored.is_some()
-            || self.collection_id.is_some()
-            || self.overview.is_some()
-            || self.tvdb_id.is_some()
-            || self.tmdb_id.is_some()
-            || self.image_url.is_some()
-            || self.clear_image_url
-            || self.contiguous_absolute_number.is_some()
+        self.monitored.is_some() || self.has_non_monitor_changes()
     }
 
     pub fn has_non_monitor_changes(&self) -> bool {
@@ -989,12 +977,15 @@ impl EpisodeUpdate {
             || self.duration_seconds.is_some()
             || self.has_multi_audio.is_some()
             || self.has_subtitle.is_some()
+            || self.is_filler.is_some()
+            || self.is_recap.is_some()
             || self.collection_id.is_some()
             || self.overview.is_some()
             || self.tvdb_id.is_some()
             || self.tmdb_id.is_some()
             || self.image_url.is_some()
             || self.clear_image_url
+            || self.absolute_number.is_some()
             || self.contiguous_absolute_number.is_some()
     }
 }

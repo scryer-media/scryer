@@ -41,6 +41,7 @@ import type { EpisodePanelTab } from "./episode-panel-reducer";
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import type { DownloadQueueItem } from "@/lib/types/download-queue";
 import {
+  episodeDisplayTitle,
   formatDate,
   formatFileSize,
   formatRuntimeFromSeconds,
@@ -329,7 +330,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
   const qualityCell = renderEpisodeQualityCell(episode, queueItem, t);
 
   const episodeSelectLabel = t("seriesOverview.selectEpisodeForDelete", {
-    name: episode.title || episode.episodeLabel || String(episode.episodeNumber ?? ""),
+    name: episodeDisplayTitle(episode, t),
   });
   const selectionCheckbox = onToggleSelected ? (
     <Checkbox
@@ -394,7 +395,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
                   ) : null}
                 </div>
                 <p className="mt-1 text-sm font-medium text-card-foreground">
-                  {episode.title || episode.episodeLabel || "—"}
+                  {episodeDisplayTitle(episode, t)}
                 </p>
               </button>
               <div className="flex shrink-0 items-center gap-1">
@@ -521,7 +522,7 @@ export const EpisodeRow = React.memo(function EpisodeRow({
         >
           <div className="flex min-w-0 items-center gap-1.5">
             <span className="min-w-0 break-words">
-              {episode.title || episode.episodeLabel || "—"}
+              {episodeDisplayTitle(episode, t)}
             </span>
             {downloadActive ? <TitleDownloadActivityPill /> : null}
             {episodeTypeBadges}

@@ -320,7 +320,7 @@ mod tests {
     const POSTGRES_AGE_MIGRATION: &str = include_str!(
         "../../../../scryer/src/db/postgres/migrations/0257_import_space_attempts_and_member_age.sql"
     );
-    const EVENT_COLUMNS: &str = "event_id TEXT NOT NULL UNIQUE, occurred_at TEXT NOT NULL, actor_kind TEXT NOT NULL, actor_user_id TEXT, actor_display_name TEXT NOT NULL, title_id TEXT, facet TEXT, correlation_id TEXT, causation_id TEXT, schema_version INTEGER NOT NULL, stream_kind TEXT NOT NULL, stream_id TEXT, event_type TEXT NOT NULL, payload_json BLOB NOT NULL, import_status TEXT, media_file_delete_reason TEXT, download_id TEXT";
+    const EVENT_COLUMNS: &str = "event_id TEXT NOT NULL UNIQUE, occurred_at TEXT NOT NULL, actor_kind TEXT NOT NULL, actor_user_id TEXT, actor_display_name TEXT NOT NULL, title_id TEXT, facet TEXT, correlation_id TEXT, causation_id TEXT, schema_version INTEGER NOT NULL, stream_kind TEXT NOT NULL, stream_id TEXT, event_type TEXT NOT NULL, payload_json BLOB NOT NULL, import_status TEXT, media_file_delete_reason TEXT, download_id TEXT, import_skip_reason TEXT";
 
     async fn sqlite() -> StoreDatastore {
         let pool = sqlx::sqlite::SqlitePoolOptions::new()

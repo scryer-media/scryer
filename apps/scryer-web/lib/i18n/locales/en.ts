@@ -2655,6 +2655,7 @@ const en: LocaleDictionary = {
   "episode.untitledRelease": "Untitled release",
   "episode.filler": "Filler",
   "episode.recap": "Recap",
+  "episode.titleTba": "TBA",
   "episode.special": "Special",
   "episode.ova": "OVA",
   "episode.ona": "ONA",
@@ -2913,6 +2914,10 @@ const en: LocaleDictionary = {
     "You do not have permission to rename titles in every selected library.",
   "status.titleMatchUpdated": "Updated match for {{name}}.",
   "status.languageChanged": "Interface language set to {{language}}.",
+  "status.languageSaveFailed":
+    "Could not save the language to your profile; other browsers keep their current language.",
+  "status.catalogViewSaveFailed":
+    "Could not save this layout to your profile; it applies in this browser only.",
 
   "status.editingIndexer": "Editing indexer {{name}}",
   "status.editingDownloadClient": "Editing download client {{name}}",
@@ -3131,6 +3136,10 @@ const en: LocaleDictionary = {
   "requests.approvedQualityProfile": "Approved quality profile",
   "requests.approvedMonitorType": "Approved monitoring",
   "requests.dismiss": "Dismiss",
+  "requests.reopen": "Reopen",
+  "requests.requesterFilter.label": "Requester",
+  "requests.requesterFilter.all": "All requesters",
+  "status.requestReopened": "Reopened request for {{name}}.",
   "requests.modify": "Modify",
   "requests.modifyTitle": "Modify request",
   "requests.saveChanges": "Save changes",
@@ -3708,6 +3717,7 @@ const en: LocaleDictionary = {
   "history.imported": "Imported",
   "history.importFailed": "Import Failed",
   "history.importSkipped": "Import Skipped",
+  "history.importRejectedByRule": "Rejected by Rule",
   "history.downloadCompleted": "Downloaded",
   "history.fileUpgraded": "Upgraded",
   "history.fileRecycled": "Recycled",

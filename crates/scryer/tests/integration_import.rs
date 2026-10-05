@@ -2367,6 +2367,119 @@ score_entry["too_few_chapters"] := scryer.block_score() if {
     );
 }
 
+#[tokio::test]
+async fn import_upgrade_event_carries_the_import_identity_of_its_import_completed_event() {
+    let ctx = TestContext::new().await;
+    let app = app_with_real_imports(&ctx).await;
+    let user = ctx.app.find_or_create_default_user().await.unwrap();
+    let dest_root = tempfile::tempdir().expect("dest tempdir");
+    let title = add_movie_title(
+        &ctx,
+        "title-upgrade-identity",
+        "Upgrade Identity Movie",
+        dest_root.path().to_str().unwrap(),
+    )
+    .await;
+    let _wanted = seed_movie_wanted_item(
+        &ctx,
+        &title.id,
+        scryer_application::AcquisitionScopeStatus::Grabbed,
+    )
+    .await;
+
+    let old_path = dest_root
+        .path()
+        .join("Upgrade Identity Movie (2024)")
+        .join("Upgrade.Identity.Movie.2024.720p.WEB-DL.H264.mkv");
+    std::fs::create_dir_all(old_path.parent().expect("old path parent")).expect("create old dir");
+    std::fs::copy(mediainfo_fixture("h264_aac.mkv"), &old_path).expect("seed old movie file");
+    ctx.media_files
+        .insert_media_file(&scryer_application::InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: old_path.to_string_lossy().to_string(),
+            size_bytes: std::fs::metadata(&old_path).expect("old metadata").len() as i64,
+            quality_label: Some("720P".to_string()),
+            acquisition_score: Some(0),
+            ..Default::default()
+        })
+        .await
+        .expect("insert old media file");
+
+    let source_dir = tempfile::tempdir().expect("source tempdir");
+    copy_fixture(
+        source_dir.path(),
+        "h264_aac.mkv",
+        "Upgrade.Identity.Movie.2024.1080p.WEB-DL.H264.mkv",
+    );
+    let completed = scryer_completed(
+        "dl-upgrade-identity",
+        source_dir.path().to_str().unwrap(),
+        &title.id,
+        "movie",
+    );
+    record_movie_grab_submission(
+        &ctx,
+        &completed,
+        &title,
+        "Upgrade.Identity.Movie.2024.1080p.WEB-DL.H264-GRP",
+    )
+    .await;
+
+    let result = import_completed_download(&app, &user, &completed)
+        .await
+        .expect("import completed download");
+    assert_eq!(
+        result.decision,
+        ImportDecision::Imported,
+        "the import should replace the 720p file: {result:?}"
+    );
+    assert!(result.upgrade, "the import should replace the 720p file");
+
+    let events = app
+        .list_domain_events(
+            &user,
+            &scryer_domain::DomainEventFilter {
+                event_types: Some(vec![
+                    scryer_domain::DomainEventType::ImportCompleted,
+                    scryer_domain::DomainEventType::MediaFileUpgraded,
+                ]),
+                title_id: Some(title.id.clone()),
+                after_sequence: Some(0),
+                limit: 10,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("list import events");
+    let completed_identity = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            scryer_domain::DomainEventPayload::ImportCompleted(data) => {
+                Some((data.import_id.clone(), data.source_ref.clone()))
+            }
+            _ => None,
+        })
+        .expect("import completed event");
+    let upgraded_identity = events
+        .iter()
+        .find_map(|event| match &event.payload {
+            scryer_domain::DomainEventPayload::MediaFileUpgraded(data) => {
+                Some((data.import_id.clone(), data.source_ref.clone()))
+            }
+            _ => None,
+        })
+        .expect("media file upgraded event");
+
+    assert_eq!(
+        completed_identity,
+        (
+            Some(result.import_id.clone()),
+            Some("dl-upgrade-identity".to_string())
+        )
+    );
+    assert_eq!(upgraded_identity, completed_identity);
+}
+
 // ---------------------------------------------------------------------------
 // Manual movie import: primary-only semantics
 // ---------------------------------------------------------------------------

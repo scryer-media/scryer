@@ -14,7 +14,7 @@ use crate::acquisition_release_search::{
 };
 use crate::contracts::{SubmissionConflictPolicy, SubmissionScopeConflict, WantedSearchOutcome};
 use crate::domain_events::{
-    new_global_domain_event, new_title_domain_event, title_context_snapshot,
+    DomainEventActor, new_global_domain_event, new_title_domain_event, title_context_snapshot,
 };
 use crate::quality::release_listing::ReleaseListingSnapshot;
 use crate::types::{

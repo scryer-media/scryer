@@ -541,6 +541,8 @@ mod tests {
             old_score: Some(10),
             new_score: Some(20),
             size_bytes,
+            import_id: None,
+            source_ref: None,
         }
     }
 

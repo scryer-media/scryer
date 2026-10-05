@@ -389,7 +389,9 @@ function canRetryEvent(event: TitleHistoryEvent, onRetry?: (importId: string, pa
   return Boolean(
     onRetry &&
       event.importId &&
-      (event.eventType === "import_failed" || event.eventType === "import_skipped"),
+      (event.eventType === "import_failed" ||
+        event.eventType === "import_skipped" ||
+        event.eventType === "import_rejected_by_rule"),
   );
 }
 

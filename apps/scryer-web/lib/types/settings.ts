@@ -80,7 +80,12 @@ export type UiDateTimeFormat = "LOCALE" | "ISO24H";
  */
 export type VerificationDepth = "FULL" | "QUICK";
 
+export type UiDeviceClass = "DESKTOP" | "MOBILE";
+
+export type UiCatalogViewMode = "COMPACT" | "POSTER_TABLE" | "POSTER";
+
 export type UiTableColumnSetting = {
+  deviceClass: UiDeviceClass;
   facet: string;
   tableViewMode: string;
   columnId: string;
@@ -108,7 +113,40 @@ export type UiSettings = {
     | "HISTORY"
     | "SETTINGS"
     | "SYSTEM";
+  /** Interface language saved on the profile; null follows the browser. */
+  language: string | null;
   tableColumns: UiTableColumnSetting[];
+  catalogViews: UiCatalogViewSetting[];
+};
+
+export type UiCatalogViewSetting = {
+  deviceClass: UiDeviceClass;
+  facet: string;
+  viewMode: UiCatalogViewMode;
+};
+
+/**
+ * The whole-settings save. Language and table columns are omitted unless a
+ * caller changes them, so a save from one tab or device cannot overwrite what
+ * another saved meanwhile.
+ */
+export type SetMyUiSettingsInput = Omit<
+  UiSettings,
+  "language" | "tableColumns" | "catalogViews"
+> & {
+  language?: string;
+};
+
+export type SetMyCatalogViewInput = {
+  deviceClass: UiDeviceClass;
+  facet: string;
+  viewMode?: UiCatalogViewMode;
+  columns?: {
+    tableViewMode: string;
+    columnId: string;
+    columnOrder: number;
+    visible: boolean;
+  }[];
 };
 
 export type TrustedCertificateEntry = {

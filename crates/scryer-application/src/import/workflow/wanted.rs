@@ -314,10 +314,6 @@ async fn execute_resolved_episode_import(
         .iter()
         .map(|incumbent| incumbent.media_file.clone())
         .collect::<Vec<_>>();
-    let existing_score = existing_files
-        .iter()
-        .max_by_key(|file| file.acquisition_score.unwrap_or(0))
-        .and_then(|file| file.acquisition_score);
     let expected_runtime_seconds =
         expected_runtime_seconds_for_episode_import(title, target_episodes);
     let runtime_sample_validation = match runtime_sample_mode {
@@ -393,6 +389,33 @@ async fn execute_resolved_episode_import(
         });
     }
 
+    // **One runtime basis per scope** (D4): the episodes this file actually
+    // holds, not the series average. Size scoring is runtime-derived, so scoring
+    // a double-length premiere or a 7-minute special against the average puts it
+    // in a different size band than the grab decision used — the same file,
+    // scored two ways. The grab lane has always used the covered episodes'
+    // runtime (`coverage_size_basis`); this is the same derivation, and it
+    // carries the member count and per-member runtime a pack is judged by.
+    let scope_size_basis = crate::acquisition_coverage::episode_span_size_basis(
+        target_episodes,
+        &target_episode_ids,
+        title.runtime_minutes,
+    )
+    .or_runtime(title.runtime_minutes);
+    let scoring_context = app
+        .resolve_canonical_scoring_context(title, quality_profile)
+        .await;
+    let episode_scope = crate::SubmissionScope::EpisodeSet {
+        episode_ids: target_episode_ids.clone(),
+    };
+    let existing_score = app
+        .current_incumbent_score_for_import_scope(
+            title,
+            &episode_scope,
+            &scoring_context,
+            scope_size_basis.total_runtime_minutes,
+        )
+        .await;
     let prepared = match crate::post_download_gate::prepare_import_candidate_with_disc_selection(
         app,
         title,
@@ -550,29 +573,9 @@ async fn execute_resolved_episode_import(
         crate::post_download_gate::RuntimeSampleValidationMode::BypassRuntimeSampleCheck
     );
 
-    // **One runtime basis per scope** (D4): the episodes this file actually
-    // holds, not the series average. Size scoring is runtime-derived, so scoring
-    // a double-length premiere or a 7-minute special against the average puts it
-    // in a different size band than the grab decision used — the same file,
-    // scored two ways. The grab lane has always used the covered episodes'
-    // runtime (`coverage_size_basis`); this is the same derivation, and it
-    // carries the member count and per-member runtime a pack is judged by.
-    let scope_size_basis = crate::acquisition_coverage::episode_span_size_basis(
-        target_episodes,
-        &target_episode_ids,
-        title.runtime_minutes,
-    )
-    .or_runtime(title.runtime_minutes);
-
     // **The one import decision** (design §3). Subject, landed score, truth
     // verdict and admission all live in `decide_import`; what is left here is
     // carrying out its plan.
-    let scoring_context = app
-        .resolve_canonical_scoring_context(title, quality_profile)
-        .await;
-    let episode_scope = crate::SubmissionScope::EpisodeSet {
-        episode_ids: target_episode_ids.clone(),
-    };
     let decision_input = crate::import_decide::ImportDecisionInput {
         title,
         scoring_context: &scoring_context,

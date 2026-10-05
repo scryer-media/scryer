@@ -1015,6 +1015,7 @@ async fn arbitrate_and_commit_title_grabs(
     now: &DateTime<Utc>,
     stats: &mut TitleWalkStats,
     cancellation: &tokio_util::sync::CancellationToken,
+    initiated_by: &DomainEventActor,
 ) -> (usize, usize) {
     if proposals.is_empty() {
         return (0, 0);
@@ -1053,9 +1054,17 @@ async fn arbitrate_and_commit_title_grabs(
         }
 
         let mut failures = GrabFailureTally::default();
-        let grabbed =
-            commit_grab_proposal(app, title, proposal, cycle, dl_snapshot, now, &mut failures)
-                .await;
+        let grabbed = commit_grab_proposal(
+            app,
+            title,
+            proposal,
+            cycle,
+            dl_snapshot,
+            now,
+            &mut failures,
+            initiated_by,
+        )
+        .await;
         stats.record_grab_failures(failures);
         if !grabbed.is_empty() {
             committed += 1;
@@ -1069,6 +1078,10 @@ async fn arbitrate_and_commit_title_grabs(
 /// Run one proposal's submission walk. Returns the episodes it actually claimed,
 /// and records into `failures` whether its submissions ended in a failure-class
 /// error — the proposal is one work item however many candidates it burned.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "a proposal commit carries the cycle inputs plus its failure tally and initiator"
+)]
 async fn commit_grab_proposal(
     app: &AppUseCase,
     title: &Title,
@@ -1077,6 +1090,7 @@ async fn commit_grab_proposal(
     dl_snapshot: &DownloadClientSnapshot,
     now: &DateTime<Utc>,
     failures: &mut GrabFailureTally,
+    initiated_by: &DomainEventActor,
 ) -> Vec<String> {
     let GrabProposal {
         stage,
@@ -1095,6 +1109,7 @@ async fn commit_grab_proposal(
                 cycle,
                 dl_snapshot,
                 now,
+                initiated_by,
             )
             .await
             {
@@ -1120,6 +1135,7 @@ async fn commit_grab_proposal(
                 cycle,
                 now,
                 failures,
+                initiated_by,
             )
             .await
             {
@@ -1152,6 +1168,7 @@ async fn commit_grab_proposal(
                 cycle,
                 now,
                 failures,
+                initiated_by,
             )
             .await
             {
@@ -1248,6 +1265,11 @@ pub(crate) struct TitleWalkOptions {
     /// operator's walk that wants this title (see `AcquisitionTitleWalkLocks`),
     /// so the two paths use one code path.
     cancellation: tokio_util::sync::CancellationToken,
+    /// Who the walk's grabs are recorded against on their grab events. This is
+    /// attribution only: the walk authorizes nothing, and whoever asked for it
+    /// was authorized before it started. The background cycle and searches run
+    /// as the system execution actor record the system.
+    initiated_by: DomainEventActor,
 }
 
 impl TitleWalkOptions {
@@ -1256,6 +1278,7 @@ impl TitleWalkOptions {
             intent: AcquisitionWalkIntent::Background,
             season_filter: None,
             cancellation: yield_token,
+            initiated_by: DomainEventActor::system(),
         }
     }
 
@@ -1651,6 +1674,7 @@ async fn try_series_pack_for_title(
         cycle,
         dl_snapshot,
         now,
+        &session.options.initiated_by,
     )
     .await?;
     Ok((!episode_ids.is_empty()).then_some(episode_ids))
@@ -1895,6 +1919,10 @@ async fn plan_series_pack_for_title(
 
 /// Submit the winning series-pack proposal, walking its ranked list exactly as
 /// the inline lookup used to. Returns the episodes the grab covers.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the series-pack submission carries the cycle inputs plus its initiator"
+)]
 async fn commit_series_pack_proposal(
     app: &AppUseCase,
     title: &Title,
@@ -1903,6 +1931,7 @@ async fn commit_series_pack_proposal(
     cycle: &BackgroundAcquisitionCycleCoordinator,
     dl_snapshot: &DownloadClientSnapshot,
     now: &DateTime<Utc>,
+    initiated_by: &DomainEventActor,
 ) -> AppResult<Vec<String>> {
     let SeriesPackCommit {
         anchors,
@@ -1977,6 +2006,7 @@ async fn commit_series_pack_proposal(
             Some(claimed_episode_ids),
             dl_snapshot,
             now,
+            initiated_by,
         )
         .await;
         let (scope, standby_start, recovered) = match outcome {
@@ -2041,6 +2071,7 @@ async fn commit_season_pack_proposal(
     cycle: &BackgroundAcquisitionCycleCoordinator,
     now: &DateTime<Utc>,
     failures: &mut GrabFailureTally,
+    initiated_by: &DomainEventActor,
 ) -> AppResult<Vec<String>> {
     let season_num = commit.season;
     let season_key = commit.season_key.clone();
@@ -2275,7 +2306,7 @@ async fn commit_season_pack_proposal(
                         .await;
                     let _ = app
                         .append_domain_event(new_title_domain_event(
-                            None,
+                            initiated_by.clone(),
                             title,
                             DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
                                 title: title_context_snapshot(title),
@@ -2889,6 +2920,7 @@ where
         now,
         &mut stats,
         &session.options.cancellation,
+        &session.options.initiated_by,
     )
     .await;
     session.stats = stats;
@@ -3019,6 +3051,7 @@ where
         season_filter,
         scope_keys,
         true,
+        DomainEventActor::system(),
         cancellation,
         on_progress,
     )
@@ -3032,6 +3065,7 @@ pub(crate) async fn run_interactive_title_acquisition_walk_with_monitoring<F>(
     season_filter: Option<u32>,
     scope_keys: Option<&HashSet<String>>,
     respect_title_monitoring: bool,
+    initiated_by: DomainEventActor,
     cancellation: tokio_util::sync::CancellationToken,
     mut on_progress: F,
 ) -> AppResult<TitleWalkStats>
@@ -3179,6 +3213,7 @@ where
             intent: AcquisitionWalkIntent::Interactive,
             season_filter,
             cancellation,
+            initiated_by,
         },
         |kind, target| {
             processed += 1;
@@ -3422,6 +3457,7 @@ async fn process_single_target(
             Some(&claimed_episode_ids),
             dl_snapshot,
             now,
+            &session.options.initiated_by,
         )
         .await
         {
@@ -4467,6 +4503,7 @@ async fn process_single_target(
         cycle,
         now,
         &mut grab_failures,
+        &session.options.initiated_by,
     )
     .await;
     // Counted before the `?`: a scope whose submissions failed is a failed work
@@ -4772,6 +4809,7 @@ async fn commit_scope_grab(
     cycle: &BackgroundAcquisitionCycleCoordinator,
     now: &DateTime<Utc>,
     failures: &mut GrabFailureTally,
+    initiated_by: &DomainEventActor,
 ) -> AppResult<ScopeGrabOutcome> {
     // A proposal built from in-hand evidence never reached the inline
     // `ensure_acquisition_scope_state`, and a grab needs its anchor row.
@@ -5078,7 +5116,7 @@ async fn commit_scope_grab(
                     .await;
                 let _ = app
                     .append_domain_event(new_title_domain_event(
-                        None,
+                        initiated_by.clone(),
                         title,
                         DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
                             title: title_context_snapshot(title),

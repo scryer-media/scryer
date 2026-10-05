@@ -1668,10 +1668,20 @@ async fn import_movie_download(
         .filter(|file| file.role.is_primary())
         .collect::<Vec<_>>();
     let quality_profile = resolve_import_quality_profile(app, title).await?;
-    let existing_score = existing_files
-        .iter()
-        .max_by_key(|file| file.acquisition_score.unwrap_or(0))
-        .and_then(|file| file.acquisition_score);
+    let scoring_context = app
+        .resolve_canonical_scoring_context(title, &quality_profile)
+        .await;
+    let title_scope = crate::SubmissionScope::Title;
+    // A movie is one member: its own runtime, and nothing to reinterpret.
+    let scope_size_basis = crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes);
+    let existing_score = app
+        .current_incumbent_score_for_import_scope(
+            title,
+            &title_scope,
+            &scoring_context,
+            scope_size_basis.total_runtime_minutes,
+        )
+        .await;
     let runtime_sample_validation = manual_aware_runtime_sample_validation(
         title
             .runtime_minutes
@@ -1911,16 +1921,11 @@ async fn import_movie_download(
     // `decide_import` made it unrepresentable — a *refused* admission here fell
     // straight through to the first-import insert below, writing a second
     // primary file for the movie it had just refused.
-    let scoring_context = app
-        .resolve_canonical_scoring_context(title, &quality_profile)
-        .await;
-    let title_scope = crate::SubmissionScope::Title;
     let decision_input = crate::import_decide::ImportDecisionInput {
         title,
         scoring_context: &scoring_context,
         scope: &title_scope,
-        // A movie is one member: its own runtime, and nothing to reinterpret.
-        scope_size_basis: crate::quality_profile::CoverageSizeBasis::single(title.runtime_minutes),
+        scope_size_basis,
         // The announced half of the evidence: the parse as it came off the
         // release name. `prepared.parsed` already carries the probe's findings,
         // so passing it would make both scoring passes identical.
@@ -2550,10 +2555,22 @@ async fn import_series_movie_download(
     }
     let manual_replacement = operator_initiated_import(runtime_sample_mode);
     let quality_profile = resolve_import_quality_profile(app, title).await?;
-    let existing_score = series_movie_link_files
-        .iter()
-        .max_by_key(|file| file.acquisition_score.unwrap_or(0))
-        .and_then(|file| file.acquisition_score);
+    let scoring_context = app
+        .resolve_canonical_scoring_context(title, &quality_profile)
+        .await;
+    let link_scope = crate::SubmissionScope::SeriesMovie {
+        series_movie_link_id: series_movie_link_id.to_string(),
+    };
+    // The linked movie is one member; see the title path above.
+    let scope_size_basis = crate::quality_profile::CoverageSizeBasis::single(movie.runtime_minutes);
+    let existing_score = app
+        .current_incumbent_score_for_import_scope(
+            title,
+            &link_scope,
+            &scoring_context,
+            scope_size_basis.total_runtime_minutes,
+        )
+        .await;
     // No fallback to the owning series runtime: a 24-minute parent episode
     // expectation would put every normal-length linked film outside the band.
     // An unknown movie runtime means the band cannot run (permissive); the
@@ -2716,18 +2733,11 @@ async fn import_series_movie_download(
     // **The one import decision** (design §3). A linked movie is a scope like
     // any other; hand-rolling its comparison is what let it disagree with the
     // grab that fetched the file.
-    let scoring_context = app
-        .resolve_canonical_scoring_context(title, &quality_profile)
-        .await;
-    let link_scope = crate::SubmissionScope::SeriesMovie {
-        series_movie_link_id: series_movie_link_id.to_string(),
-    };
     let decision_input = crate::import_decide::ImportDecisionInput {
         title,
         scoring_context: &scoring_context,
         scope: &link_scope,
-        // The linked movie is one member; see the title path above.
-        scope_size_basis: crate::quality_profile::CoverageSizeBasis::single(movie.runtime_minutes),
+        scope_size_basis,
         // The announced half of the evidence; see the title path above.
         parsed: &parsed,
         accepted: prepared.accepted.as_ref(),

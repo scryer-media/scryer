@@ -3597,6 +3597,9 @@ pub enum TitleHistoryEventType {
     Imported,
     ImportFailed,
     ImportSkipped,
+    /// A post-download rule refused the import. A decision the operator's
+    /// rules made, kept apart from failures and plain skips.
+    ImportRejectedByRule,
     FileUpgraded,
     FileRecycled,
     FileDeleted,
@@ -3626,6 +3629,7 @@ impl TitleHistoryEventType {
             Self::Imported => "imported",
             Self::ImportFailed => "import_failed",
             Self::ImportSkipped => "import_skipped",
+            Self::ImportRejectedByRule => "import_rejected_by_rule",
             Self::FileUpgraded => "file_upgraded",
             Self::FileRecycled => "file_recycled",
             Self::FileDeleted => "file_deleted",
@@ -3650,6 +3654,7 @@ impl TitleHistoryEventType {
             "imported" => Some(Self::Imported),
             "import_failed" => Some(Self::ImportFailed),
             "import_skipped" => Some(Self::ImportSkipped),
+            "import_rejected_by_rule" => Some(Self::ImportRejectedByRule),
             "file_upgraded" => Some(Self::FileUpgraded),
             "file_recycled" => Some(Self::FileRecycled),
             "file_deleted" => Some(Self::FileDeleted),
@@ -3674,6 +3679,7 @@ impl TitleHistoryEventType {
         Self::Imported,
         Self::ImportFailed,
         Self::ImportSkipped,
+        Self::ImportRejectedByRule,
         Self::FileUpgraded,
         Self::FileRecycled,
         Self::FileDeleted,
@@ -3896,6 +3902,7 @@ pub enum DomainEventType {
     ImportSpaceRestored,
     MediaRequestSubmitted,
     MediaRequestUpdated,
+    MediaRequestReopened,
     MediaRequestApproved,
     MediaRequestRejected,
     MediaRequestCanceled,
@@ -3956,6 +3963,7 @@ impl DomainEventType {
             Self::ImportSpaceRestored => "import_space_restored",
             Self::MediaRequestSubmitted => "media_request_submitted",
             Self::MediaRequestUpdated => "media_request_updated",
+            Self::MediaRequestReopened => "media_request_reopened",
             Self::MediaRequestApproved => "media_request_approved",
             Self::MediaRequestRejected => "media_request_rejected",
             Self::MediaRequestCanceled => "media_request_canceled",
@@ -4016,6 +4024,7 @@ impl DomainEventType {
             "import_space_restored" => Some(Self::ImportSpaceRestored),
             "media_request_submitted" => Some(Self::MediaRequestSubmitted),
             "media_request_updated" => Some(Self::MediaRequestUpdated),
+            "media_request_reopened" => Some(Self::MediaRequestReopened),
             "media_request_approved" => Some(Self::MediaRequestApproved),
             "media_request_rejected" => Some(Self::MediaRequestRejected),
             "media_request_canceled" => Some(Self::MediaRequestCanceled),
@@ -4513,6 +4522,15 @@ pub struct MediaFileUpgradedEventData {
     /// `None`.
     #[serde(default)]
     pub size_bytes: Option<i64>,
+    /// The import that produced the upgrade, matching the `import_id` of the
+    /// `ImportCompleted` event it raised. Events persisted before this field
+    /// existed read back as `None`.
+    #[serde(default)]
+    pub import_id: Option<String>,
+    /// The download client's item id for that import, matching the
+    /// `source_ref` of its `ImportCompleted` event.
+    #[serde(default)]
+    pub source_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -4837,6 +4855,9 @@ pub enum DomainEventPayload {
     ImportSpaceRestored(import_space::SpaceIncidentEvent),
     MediaRequestSubmitted(MediaRequestSubmittedEventData),
     MediaRequestUpdated(MediaRequestSubmittedEventData),
+    /// A dismissed request was put back into the queue. The event's actor is
+    /// who reopened it and its timestamp is when.
+    MediaRequestReopened(MediaRequestSubmittedEventData),
     MediaRequestApproved(MediaRequestResolvedEventData),
     MediaRequestRejected(MediaRequestResolvedEventData),
     MediaRequestCanceled(MediaRequestResolvedEventData),
@@ -4899,6 +4920,7 @@ impl DomainEventPayload {
             Self::ImportSpaceRestored(_) => DomainEventType::ImportSpaceRestored,
             Self::MediaRequestSubmitted(_) => DomainEventType::MediaRequestSubmitted,
             Self::MediaRequestUpdated(_) => DomainEventType::MediaRequestUpdated,
+            Self::MediaRequestReopened(_) => DomainEventType::MediaRequestReopened,
             Self::MediaRequestApproved(_) => DomainEventType::MediaRequestApproved,
             Self::MediaRequestRejected(_) => DomainEventType::MediaRequestRejected,
             Self::MediaRequestCanceled(_) => DomainEventType::MediaRequestCanceled,

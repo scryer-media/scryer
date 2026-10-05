@@ -267,6 +267,9 @@ async fn event_allowed(
         DomainEventPayload::MediaRequestUpdated(data) => {
             Ok(allowed_library_ids.contains(&data.library_id))
         }
+        DomainEventPayload::MediaRequestReopened(data) => {
+            Ok(allowed_library_ids.contains(&data.library_id))
+        }
         DomainEventPayload::MediaRequestApproved(data) => {
             Ok(allowed_library_ids.contains(&data.library_id))
         }
@@ -302,6 +305,7 @@ pub const SUPPORTED_TITLE_HISTORY_EVENT_TYPES: &[TitleHistoryEventType] = &[
     TitleHistoryEventType::Imported,
     TitleHistoryEventType::ImportFailed,
     TitleHistoryEventType::ImportSkipped,
+    TitleHistoryEventType::ImportRejectedByRule,
     TitleHistoryEventType::FileUpgraded,
     TitleHistoryEventType::FileRecycled,
     TitleHistoryEventType::FileDeleted,

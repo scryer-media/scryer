@@ -2800,6 +2800,74 @@ file = "postgres/migrations/0269_download_password_candidates.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 270
+description = "foreign key child indexes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0270_foreign_key_child_indexes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0270_foreign_key_child_indexes.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration]]
+version = 271
+description = "scrub stored release url credentials"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "scrub_stored_release_url_credentials"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 272
+description = "import rejection skip reason projection"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0272_import_rejection_skip_reason.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0272_import_rejection_skip_reason.sql"
+engine = "postgres"
+scope = "all"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "backfill_import_skip_reason_projection"
+engine = "all"
+scope = "all"
+
+[[migration]]
+version = 273
+description = "ui catalog view device classes"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0273_ui_catalog_view_device_classes.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0273_ui_catalog_view_device_classes.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

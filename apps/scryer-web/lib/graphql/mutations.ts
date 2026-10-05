@@ -652,6 +652,12 @@ export const dismissMediaRequestMutation = `mutation DismissMediaRequest($reques
 }
 }`;
 
+export const reopenMediaRequestMutation = `mutation ReopenMediaRequest($requestId: ID!) {
+  reopenMediaRequest(requestId: $requestId) {
+    requestId
+  }
+}`;
+
 export const updateMyMediaRequestMutation = `mutation UpdateMyMediaRequest($input: UpdateMediaRequestInput!) {
   updateMyMediaRequest(input: $input) {
     id
@@ -891,12 +897,48 @@ export const setMyUiSettingsMutation = `mutation SetMyUiSettings($input: SetMyUi
     density
     sidebarMode
     defaultLandingView
+    language
     tableColumns {
+      deviceClass
       facet
       tableViewMode
       columnId
       columnOrder
       visible
+    }
+    catalogViews {
+      deviceClass
+      facet
+      viewMode
+    }
+  }
+}`;
+
+export const setMyCatalogViewMutation = `mutation SetMyCatalogView($input: SetMyCatalogViewInput!) {
+  setMyCatalogView(input: $input) {
+    theme
+    dateTimeFormat
+    highlightColor
+    secondaryColor
+    highContrastMode
+    reduceMotion
+    hideSponsorButton
+    density
+    sidebarMode
+    defaultLandingView
+    language
+    tableColumns {
+      deviceClass
+      facet
+      tableViewMode
+      columnId
+      columnOrder
+      visible
+    }
+    catalogViews {
+      deviceClass
+      facet
+      viewMode
     }
   }
 }`;

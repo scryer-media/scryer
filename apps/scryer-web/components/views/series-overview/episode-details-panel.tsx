@@ -12,6 +12,7 @@ import { WatchInMediaServerMenu } from "@/components/common/watch-in-media-serve
 import type { ExternalSubtitleRecord } from "@/lib/types/subtitles";
 import { selectorId } from "@/lib/utils/dom-ids";
 import { selectMediaImageVariantUrl } from "@/lib/utils/poster-images";
+import { episodeDisplayTitle } from "./helpers";
 
 export function EpisodeDetailsPanel({
   episode,
@@ -40,7 +41,7 @@ export function EpisodeDetailsPanel({
     episode.imageUrl,
     "w300",
   );
-  const episodeImageAlt = episode.title ?? episode.episodeLabel ?? "";
+  const episodeImageAlt = episodeDisplayTitle(episode, t);
   const [imageFailed, setImageFailed] = React.useState(false);
   React.useEffect(() => {
     setImageFailed(false);
@@ -64,7 +65,7 @@ export function EpisodeDetailsPanel({
               className="aspect-video w-full rounded border border-border/70"
               ariaLabel={episodeImageAlt}
               emptyLabel={t("label.noArt")}
-              title={episode.title ?? episode.episodeLabel ?? episode.id}
+              title={episodeImageAlt}
               tone={fallbackTone}
               showText={false}
             />

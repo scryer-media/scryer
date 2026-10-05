@@ -1,6 +1,7 @@
 use scryer_application::{AppError, AppResult};
 use scryer_infrastructure_sql::domain_event_payload::{
-    compact_legacy_domain_event_json, derive_domain_event_projections, encode_domain_event_payload,
+    compact_legacy_domain_event_json, decode_domain_event_payload, derive_domain_event_projections,
+    encode_domain_event_payload,
 };
 use serde_json::Value;
 use sqlx::Row;
@@ -251,6 +252,109 @@ pub async fn compact_event_storage_postgres(
     Ok(())
 }
 
+/// Fill `import_skip_reason` on import rejections stored before the column
+/// existed. Only rows whose payload carries a skip reason are written, and a
+/// row that already has one is never selected, so a rerun changes nothing.
+pub async fn backfill_import_skip_reason_projection_sqlite(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+) -> AppResult<()> {
+    let mut last_sequence = i64::MIN;
+    loop {
+        let rows = sqlx::query(
+            "SELECT sequence, event_id, payload_json
+               FROM domain_events
+              WHERE event_type = 'import_rejected'
+                AND import_skip_reason IS NULL
+                AND sequence > ?1
+              ORDER BY sequence
+              LIMIT ?2",
+        )
+        .bind(last_sequence)
+        .bind(BATCH_SIZE)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(repo_error)?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            let sequence: i64 = row.try_get("sequence").map_err(repo_error)?;
+            let event_id: String = row.try_get("event_id").map_err(repo_error)?;
+            let payload: Vec<u8> = row.try_get("payload_json").map_err(repo_error)?;
+            last_sequence = sequence;
+            let Some(skip_reason) = import_rejection_skip_reason(&event_id, &payload) else {
+                continue;
+            };
+            sqlx::query("UPDATE domain_events SET import_skip_reason = ?1 WHERE sequence = ?2")
+                .bind(skip_reason)
+                .bind(sequence)
+                .execute(&mut **tx)
+                .await
+                .map_err(repo_error)?;
+        }
+    }
+    Ok(())
+}
+
+/// [`backfill_import_skip_reason_projection_sqlite`] for Postgres.
+pub async fn backfill_import_skip_reason_projection_postgres(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+) -> AppResult<()> {
+    let mut last_sequence = i64::MIN;
+    loop {
+        let rows = sqlx::query(
+            "SELECT sequence, event_id, payload_json
+               FROM domain_events
+              WHERE event_type = 'import_rejected'
+                AND import_skip_reason IS NULL
+                AND sequence > $1
+              ORDER BY sequence
+              LIMIT $2",
+        )
+        .bind(last_sequence)
+        .bind(BATCH_SIZE)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(repo_error)?;
+        if rows.is_empty() {
+            break;
+        }
+        for row in rows {
+            let sequence: i64 = row.try_get("sequence").map_err(repo_error)?;
+            let event_id: String = row.try_get("event_id").map_err(repo_error)?;
+            let payload: Vec<u8> = row.try_get("payload_json").map_err(repo_error)?;
+            last_sequence = sequence;
+            let Some(skip_reason) = import_rejection_skip_reason(&event_id, &payload) else {
+                continue;
+            };
+            sqlx::query("UPDATE domain_events SET import_skip_reason = $1 WHERE sequence = $2")
+                .bind(skip_reason)
+                .bind(sequence)
+                .execute(&mut **tx)
+                .await
+                .map_err(repo_error)?;
+        }
+    }
+    Ok(())
+}
+
+/// The stored import rejection's skip reason, the same value the append path
+/// projects. A payload that cannot be decoded is left unprojected: it reads
+/// back exactly as it did before, under its status.
+fn import_rejection_skip_reason(event_id: &str, payload: &[u8]) -> Option<String> {
+    match decode_domain_event_payload(payload) {
+        Ok(value) => derive_domain_event_projections("import_rejected", &value).import_skip_reason,
+        Err(error) => {
+            tracing::warn!(
+                event_id,
+                error = %error,
+                "leaving an undecodable import rejection without a skip-reason projection"
+            );
+            None
+        }
+    }
+}
+
 fn encode_release_explanation(legacy: &[u8]) -> Result<Vec<u8>, String> {
     let value: Value = serde_json::from_slice(legacy)
         .map_err(|error| format!("invalid legacy explanation JSON: {error}"))?;
@@ -380,6 +484,114 @@ mod tests {
                     .unwrap(),
                 None
             );
+        }
+    }
+
+    #[tokio::test]
+    async fn sqlite_skip_reason_backfill_projects_only_import_rejections_and_is_idempotent() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::raw_sql(
+            "CREATE TABLE domain_events (
+                sequence INTEGER PRIMARY KEY, event_id TEXT NOT NULL, event_type TEXT NOT NULL,
+                payload_json BLOB NOT NULL, import_status TEXT, import_skip_reason TEXT
+             );",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let rows = [
+            (
+                "rule-rejection",
+                "import_rejected",
+                serde_json::json!({"type": "import_rejected", "data": {
+                    "status": "failed", "skip_reason": "post_download_rule_blocked"
+                }}),
+                None,
+            ),
+            (
+                "plain-failure",
+                "import_rejected",
+                serde_json::json!({"type": "import_rejected", "data": {"status": "failed"}}),
+                None,
+            ),
+            (
+                "already-projected",
+                "import_rejected",
+                serde_json::json!({"type": "import_rejected", "data": {
+                    "status": "skipped", "skip_reason": "duplicate_file"
+                }}),
+                Some("duplicate_file"),
+            ),
+            (
+                "other-event",
+                "import_completed",
+                serde_json::json!({"type": "import_completed", "data": {
+                    "skip_reason": "post_download_rule_blocked"
+                }}),
+                None,
+            ),
+        ];
+        for (sequence, (event_id, event_type, payload, projected)) in rows.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO domain_events
+                    (sequence, event_id, event_type, payload_json, import_skip_reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .bind(sequence as i64 + 1)
+            .bind(event_id)
+            .bind(event_type)
+            .bind(encode_domain_event_payload(payload).unwrap())
+            .bind(projected)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        sqlx::query(
+            "INSERT INTO domain_events (sequence, event_id, event_type, payload_json)
+             VALUES (5, 'undecodable', 'import_rejected', X'FF00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let projected = |pool: sqlx::SqlitePool| async move {
+            sqlx::query("SELECT event_id, import_skip_reason FROM domain_events ORDER BY sequence")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|row| {
+                    (
+                        row.get::<String, _>("event_id"),
+                        row.get::<Option<String>, _>("import_skip_reason"),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let expected = vec![
+            (
+                "rule-rejection".to_string(),
+                Some("post_download_rule_blocked".to_string()),
+            ),
+            ("plain-failure".to_string(), None),
+            (
+                "already-projected".to_string(),
+                Some("duplicate_file".to_string()),
+            ),
+            ("other-event".to_string(), None),
+            ("undecodable".to_string(), None),
+        ];
+        for _ in 0..2 {
+            let mut tx = pool.begin().await.unwrap();
+            backfill_import_skip_reason_projection_sqlite(&mut tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            assert_eq!(projected(pool.clone()).await, expected);
         }
     }
 }

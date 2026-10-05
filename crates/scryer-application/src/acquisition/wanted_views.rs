@@ -2071,6 +2071,7 @@ impl AppUseCase {
                         &title_id,
                         season_number,
                         &scope_keys,
+                        &actor_event,
                         &cancellation,
                     )
                     .await;
@@ -2184,6 +2185,7 @@ impl AppUseCase {
         title_id: &str,
         season_number: Option<u32>,
         scope_keys: &HashSet<String>,
+        initiated_by: &DomainEventActor,
         cancellation: &tokio_util::sync::CancellationToken,
     ) -> AcquisitionSearchWalkOutcome {
         let (progress_tx, mut progress_rx) = tokio::sync::mpsc::unbounded_channel::<
@@ -2231,6 +2233,7 @@ impl AppUseCase {
                 season_number,
                 Some(scope_keys),
                 !automatic,
+                initiated_by.clone(),
                 cancellation.clone(),
                 move |progress| {
                     // A closed receiver only means the job stopped reading progress;

@@ -835,16 +835,26 @@ fn build_import_rejected_notification(data: &ImportRejectedEventData) -> BuiltNo
 }
 
 fn build_media_file_upgraded_notification(data: &MediaFileUpgradedEventData) -> BuiltNotification {
-    BuiltNotification {
-        payload: base_notification_payload(
-            NotificationEventType::Upgrade,
-            format!("Upgraded: {}", data.title.title_name),
-            format!("Upgraded file for '{}'.", data.title.title_name),
-            Some(&data.title),
-            &data.episode_ids,
-            &data.media_updates,
-        ),
+    let mut payload = base_notification_payload(
+        NotificationEventType::Upgrade,
+        format!("Upgraded: {}", data.title.title_name),
+        format!("Upgraded file for '{}'.", data.title.title_name),
+        Some(&data.title),
+        &data.episode_ids,
+        &data.media_updates,
+    );
+    // Carry the same import identity as the import-complete notification so a
+    // receiver can correlate the two. Upgrades recorded before the event held
+    // these ids keep their previous payload shape.
+    if data.import_id.is_some() || data.source_ref.is_some() {
+        payload.import = Some(NotificationImportPayload {
+            import_id: data.import_id.clone(),
+            source_ref: data.source_ref.clone(),
+            upgrade: true,
+            ..Default::default()
+        });
     }
+    BuiltNotification { payload }
 }
 
 fn build_media_file_renamed_notification(data: &MediaFileRenamedEventData) -> BuiltNotification {
@@ -2522,6 +2532,8 @@ mod tests {
                     old_score: Some(10),
                     new_score: Some(15),
                     size_bytes: Some(8_589_934_592),
+                    import_id: None,
+                    source_ref: None,
                 }),
             },
             DomainEvent {
@@ -3236,6 +3248,48 @@ mod tests {
             payload.episode.expect("episode payload").episode_ids,
             vec!["episode-2".to_string()]
         );
+    }
+
+    #[test]
+    fn media_file_upgraded_carries_the_import_identity_of_its_import() {
+        let mut event = sample_event("evt-media-upgraded");
+        let DomainEventPayload::MediaFileUpgraded(data) = &mut event.payload else {
+            panic!("sample should be a media file upgraded event");
+        };
+        data.import_id = Some("import-upgrade-1".to_string());
+        data.source_ref = Some("client-item-1".to_string());
+
+        let payload = build_notification(&event)
+            .expect("upgrade should build a notification")
+            .payload;
+        let import = payload.import.expect("import payload");
+        assert_eq!(import.import_id.as_deref(), Some("import-upgrade-1"));
+        assert_eq!(import.source_ref.as_deref(), Some("client-item-1"));
+        assert!(import.upgrade);
+    }
+
+    #[test]
+    fn media_file_upgraded_recorded_without_import_identity_keeps_its_payload_shape() {
+        let stored = serde_json::json!({
+            "title": serde_json::to_value(title_context("Upgraded Movie", MediaFacet::Movie))
+                .expect("title snapshot"),
+            "media_updates": [],
+            "previous_file_id": "file-old",
+            "current_file_id": "file-new",
+            "old_score": 10,
+            "new_score": 15,
+        });
+        let data: MediaFileUpgradedEventData =
+            serde_json::from_value(stored).expect("older upgrade event should deserialize");
+        assert_eq!(data.import_id, None);
+        assert_eq!(data.source_ref, None);
+
+        let mut event = sample_event("evt-media-upgraded");
+        event.payload = DomainEventPayload::MediaFileUpgraded(data);
+        let payload = build_notification(&event)
+            .expect("upgrade should build a notification")
+            .payload;
+        assert!(payload.import.is_none());
     }
 
     #[test]
