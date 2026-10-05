@@ -38,6 +38,43 @@ fn scanned_movie_file_role(parsed: &crate::ParsedReleaseMetadata) -> crate::Medi
     }
 }
 
+/// Whether a scan that found `file_id` for a series movie's linked episode may
+/// mark the episode's wanted row completed: the file is a Primary candidate,
+/// or the episode already has a Primary. An alternate cut alone leaves the
+/// episode missing, and a completed row would hold back a release parked for
+/// it. A failed read keeps the old behaviour and completes the row.
+async fn series_movie_episode_is_covered(
+    app: &AppUseCase,
+    title_id: &str,
+    episode_id: &str,
+    file_id: &str,
+) -> bool {
+    match app
+        .services
+        .library
+        .media_files
+        .list_live_media_files_for_episode_ids(title_id, &[episode_id.to_string()])
+        .await
+    {
+        Ok(files) => files.iter().any(|file| {
+            (file.media_file.id == file_id && file.title_role == crate::MediaFileRole::Primary)
+                || file.primary_episode_ids.iter().any(|id| id == episode_id)
+        }),
+        Err(_) => true,
+    }
+}
+
+/// Whether a movie scan that found a file with `file_role` may mark the
+/// movie's wanted row completed: the file is Primary, or the movie already has
+/// a Primary. An alternate cut alone leaves the movie missing, and a completed
+/// row would hold back a release parked for it.
+fn movie_is_covered(file_role: crate::MediaFileRole, existing_files: &[TitleMediaFile]) -> bool {
+    file_role == crate::MediaFileRole::Primary
+        || existing_files
+            .iter()
+            .any(|file| file.role == crate::MediaFileRole::Primary)
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "media-file persistence combines source metadata, cache state, and summary accounting"
@@ -559,8 +596,13 @@ pub(crate) async fn finalize_title_scan_file(
                 );
             }
         }
-        crate::import_workflow::mark_wanted_completed(app, &title.id, Some(&episode.id), false)
-            .await;
+        if series_movie_link_id.is_none()
+            || series_movie_episode_is_covered(app, &title.id, &episode.id, &persisted_file.file_id)
+                .await
+        {
+            crate::import_workflow::mark_wanted_completed(app, &title.id, Some(&episode.id), false)
+                .await;
+        }
     }
 
     if let Some(series_movie_link_id) = series_movie_link_id.as_deref() {
@@ -790,6 +832,14 @@ pub(super) async fn finalize_movie_scan_file(
                 existing, &snapshot,
             ),
         });
+    let file_role = existing_files
+        .iter()
+        .find(|item| item.file_path == file.path)
+        .map_or_else(
+            || scanned_movie_file_role(&parsed),
+            |existing| existing.role,
+        );
+    let movie_covered = movie_is_covered(file_role, &existing_files);
 
     let destination_permit = app
         .runtime
@@ -936,7 +986,9 @@ pub(super) async fn finalize_movie_scan_file(
                 error = %err,
                 "failed to list collections during movie scan"
             );
-            crate::import_workflow::mark_wanted_completed(app, &title.id, None, false).await;
+            if movie_covered {
+                crate::import_workflow::mark_wanted_completed(app, &title.id, None, false).await;
+            }
             if persisted_file.title_updated {
                 app.emit_title_updated_activity(None, title).await;
             }
@@ -956,7 +1008,9 @@ pub(super) async fn finalize_movie_scan_file(
         return;
     }
 
-    crate::import_workflow::mark_wanted_completed(app, &title.id, None, false).await;
+    if movie_covered {
+        crate::import_workflow::mark_wanted_completed(app, &title.id, None, false).await;
+    }
     if persisted_file.title_updated {
         app.emit_title_updated_activity(None, title).await;
     }

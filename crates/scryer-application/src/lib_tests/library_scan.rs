@@ -1765,6 +1765,103 @@ async fn movie_title_scan_elects_theatrical_and_framing_editions_normally() {
     }
 }
 
+/// Scans a new "Harbor Echo" folder holding `names` while the movie has a
+/// wanted row, and returns that row's status afterwards.
+async fn movie_wanted_status_after_scanning(names: &[&str]) -> AcquisitionScopeStatus {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let title_dir = tempdir.path().join("Harbor Echo (2026)");
+    std::fs::create_dir(&title_dir).expect("create movie folder");
+    let paths = names
+        .iter()
+        .map(|name| {
+            let path = title_dir.join(name);
+            std::fs::write(&path, vec![0_u8; 256]).expect("write movie file");
+            path
+        })
+        .collect::<Vec<_>>();
+    let (mut app, user, _) = bootstrap_movie_scan_app(
+        tempdir.path(),
+        build_test_library_files(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>()),
+        Arc::new(EmptySearchMetadataGateway),
+    )
+    .await;
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    app.services.workflow.acquisition_scope_states = wanted_items.clone();
+    let title =
+        create_movie_title_with_folder(&app, &user, "Harbor Echo", title_dir.as_path()).await;
+    let now = chrono::Utc::now().to_rfc3339();
+    wanted_items
+        .upsert_acquisition_scope_state(&AcquisitionScopeState {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            title_name: Some(title.name.clone()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: None,
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "movie".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Wanted,
+            grabbed_release: None,
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: now.clone(),
+            updated_at: now,
+        })
+        .await
+        .expect("seed wanted row");
+
+    app.scan_title_library(&user, &title.id)
+        .await
+        .expect("scan movie title");
+
+    wanted_items
+        .get_acquisition_scope_state_for_title(&title.id, None)
+        .await
+        .expect("read wanted row")
+        .expect("wanted row kept")
+        .status
+}
+
+/// A movie whose only file is an alternate cut is still missing its Primary,
+/// so the scan leaves its wanted row open for the release parked for it.
+#[tokio::test]
+async fn movie_scan_leaves_the_wanted_row_open_when_only_an_alternate_cut_is_found() {
+    assert_eq!(
+        movie_wanted_status_after_scanning(&["Harbor.Echo.2026.Extended.Cut.1080p.BluRay.mkv"])
+            .await,
+        AcquisitionScopeStatus::Wanted
+    );
+}
+
+#[tokio::test]
+async fn movie_scan_completes_the_wanted_row_when_a_primary_is_found() {
+    for names in [
+        &["Harbor.Echo.2026.1080p.WEB-DL.mkv"][..],
+        &[
+            "Harbor.Echo.2026.Extended.Cut.1080p.BluRay.mkv",
+            "Harbor.Echo.2026.1080p.WEB-DL.mkv",
+        ][..],
+        &[
+            "Harbor.Echo.2026.1080p.WEB-DL.mkv",
+            "Harbor.Echo.2026.Extended.Cut.1080p.BluRay.mkv",
+        ][..],
+    ] {
+        assert_eq!(
+            movie_wanted_status_after_scanning(names).await,
+            AcquisitionScopeStatus::Completed,
+            "{names:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn movie_title_scan_reads_an_edition_word_in_the_title_as_title() {
     assert_eq!(
@@ -2640,6 +2737,73 @@ async fn series_title_scan_roles_for_new_files(names: &[(&str, usize)]) -> Vec<M
         .await
         .expect("scan series title");
     series.roles().await
+}
+
+/// Scans `name` into the Lantern Vale series while the series movie's linked
+/// episode has a wanted row, and returns that row's status afterwards.
+async fn series_movie_episode_wanted_status_after_scanning(name: &str) -> AcquisitionScopeStatus {
+    let mut series = lantern_vale_series(&[(name, 256)]).await;
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    series.app.services.workflow.acquisition_scope_states = wanted_items.clone();
+    let episode_id = series.episode_ids[0].clone();
+    let now = chrono::Utc::now().to_rfc3339();
+    wanted_items
+        .upsert_acquisition_scope_state(&AcquisitionScopeState {
+            id: Id::new().0,
+            title_id: series.title.id.clone(),
+            title_name: Some(series.title.name.clone()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: Some(episode_id.clone()),
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: Some("0".to_string()),
+            episode_number: Some("1".to_string()),
+            media_type: "episode".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Wanted,
+            grabbed_release: None,
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: now.clone(),
+            updated_at: now,
+        })
+        .await
+        .expect("seed wanted row");
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
+        .await
+        .expect("scan series title");
+    wanted_items
+        .get_acquisition_scope_state_for_title(&series.title.id, Some(&episode_id))
+        .await
+        .expect("read wanted row")
+        .expect("wanted row kept")
+        .status
+}
+
+#[tokio::test]
+async fn series_title_scan_leaves_a_series_movie_episode_wanted_when_only_an_alternate_cut_is_found()
+ {
+    assert_eq!(
+        series_movie_episode_wanted_status_after_scanning(
+            "Lantern Vale Feature (2026) Extended Cut Bluray-1080p.mkv"
+        )
+        .await,
+        AcquisitionScopeStatus::Wanted
+    );
+    assert_eq!(
+        series_movie_episode_wanted_status_after_scanning(
+            "Lantern Vale Feature (2026) Bluray-1080p.mkv"
+        )
+        .await,
+        AcquisitionScopeStatus::Completed
+    );
 }
 
 /// Two files for one episode: the scan elects the larger, which then goes
