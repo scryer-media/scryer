@@ -27,6 +27,10 @@ const MAX_REFRESH_BACKOFFS: usize = 4096;
 /// provider said so. With the backoff above this takes about 40 hours.
 const REFRESH_FAILURE_LIMIT: u32 = 12;
 const REFRESH_FAILURE_MIN_SPAN_HOURS: i64 = 36;
+/// Fixed pause after a renewal that failed on Scryer's side of the wire.
+const LOCAL_FAILURE_PAUSE_SECONDS: i64 = 60;
+/// Saves of a renewed credential tried before the account is given up.
+const RENEWED_SAVE_ATTEMPTS: usize = 3;
 /// How long an interactive read waits for the account lock, and then for a
 /// renewal, before answering that the account is still refreshing.
 const INTERACTIVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -133,6 +137,26 @@ impl ListAccountRuntime {
             rate_limited,
         };
         backoffs.insert(id.to_owned(), backoff);
+        backoff
+    }
+    /// A short fixed pause that leaves the failure count where it was.
+    fn pause_refresh(&self, id: &str, now: DateTime<Utc>) -> RefreshBackoff {
+        let mut backoffs = self
+            .refresh_backoffs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if backoffs.len() >= MAX_REFRESH_BACKOFFS && !backoffs.contains_key(id) {
+            backoffs.retain(|_, backoff| backoff.next_attempt_at > now);
+        }
+        let failures = backoffs.get(id).map_or(0, |backoff| backoff.failures);
+        let backoff = RefreshBackoff {
+            failures,
+            next_attempt_at: now + Duration::seconds(LOCAL_FAILURE_PAUSE_SECONDS),
+            rate_limited: false,
+        };
+        if backoffs.len() < MAX_REFRESH_BACKOFFS || backoffs.contains_key(id) {
+            backoffs.insert(id.to_owned(), backoff);
+        }
         backoff
     }
     pub(crate) fn clear_refresh_backoff(&self, id: &str) {
@@ -891,15 +915,8 @@ impl AppUseCase {
         // rotating refresh credential twice. Only an answer that the grant is
         // gone requires reconnect; any other failure leaves the account linked
         // and retries it after a growing pause, until the safety net below.
-        if account
-            .credential
-            .refresh_expires_at
-            .is_some_and(|deadline| deadline <= now)
-        {
-            self.mark_list_account_reconnect_required(account, now)
-                .await?;
-            return Err(reconnect_this_account());
-        }
+        // The stored refresh deadline is not checked locally: a fast host clock
+        // would expire good accounts, and the provider answers for itself.
         if let Some(backoff) = runtime.refresh_backoff(&account.id, now) {
             return Err(refresh_pending(Some(backoff), now));
         }
@@ -929,17 +946,19 @@ impl AppUseCase {
                 account.error_message = None;
                 account.last_refresh_at = Some(now);
                 account.updated_at = now;
-                return match self.services.lists.accounts.update(account).await {
-                    Ok(account) => Ok(account),
-                    Err(_) => {
-                        // The provider has already spent the stored refresh
-                        // credential; replaying it can never succeed.
-                        let _ = self
-                            .mark_list_account_reconnect_required(previous, now)
-                            .await;
-                        Err(reconnect_this_account())
+                // The provider has already spent the stored refresh credential,
+                // so the renewed one in hand is the only usable grant: retry its
+                // save before giving up, and never fall back to the old one.
+                for _ in 0..RENEWED_SAVE_ATTEMPTS {
+                    match self.services.lists.accounts.update(account.clone()).await {
+                        Ok(account) => return Ok(account),
+                        Err(_) => tokio::task::yield_now().await,
                     }
-                };
+                }
+                let _ = self
+                    .mark_list_account_reconnect_required(previous, now)
+                    .await;
+                return Err(reconnect_this_account());
             }
             Err(error) => error,
         };
@@ -948,6 +967,23 @@ impl AppUseCase {
             self.mark_list_account_reconnect_required(previous, now)
                 .await?;
             return Err(reconnect_this_account());
+        }
+        // Trouble on Scryer's side of the wire, with no answer about the grant:
+        // the local request slots, a connection that never got an HTTP answer,
+        // or this instance's own enrollment with the relay. Reconnecting the
+        // account cannot fix any of these, so they neither count towards the
+        // safety net nor grow the backoff.
+        if code.is_none_or(|code| {
+            matches!(
+                code,
+                "busy"
+                    | "transport_unavailable"
+                    | "instance_auth_unavailable"
+                    | "instance_auth_required"
+            )
+        }) {
+            let backoff = runtime.pause_refresh(&account.id, now);
+            return Err(refresh_pending(Some(backoff), now));
         }
         let rate_limited = code == Some(RATE_LIMITED);
         let retry_after = match &error {
