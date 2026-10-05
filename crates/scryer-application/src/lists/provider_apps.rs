@@ -85,7 +85,8 @@ impl AppUseCase {
                 || app.client_id.len() > 512
                 || app.client_secret.len() > 4096
                 || app.redirect_uri.len() > 2048
-                || (provider != "mal" && app.client_secret.is_empty())
+                // Trakt signs members in with PKCE; only its legacy apps carry a secret.
+                || (provider == "anilist" && app.client_secret.is_empty())
                 || !matches!(redirect.scheme(), "http" | "https")
                 || redirect.host_str().is_none()
                 || !redirect.username().is_empty()
@@ -95,7 +96,7 @@ impl AppUseCase {
                 || !redirect.path().ends_with("/lists/oauth/callback")
             {
                 return Err(AppError::Validation(
-                    "a provider app needs a client ID, secret and valid account callback URI"
+                    "a provider app needs a client ID, a secret where the provider requires one, and a valid account callback URI"
                         .into(),
                 ));
             }

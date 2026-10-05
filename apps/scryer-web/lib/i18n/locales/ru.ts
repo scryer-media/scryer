@@ -6529,6 +6529,7 @@ const ru: LocaleDictionary = {
   "lists.providerApps.useOwn": "Использовать своё приложение",
   "lists.providerApps.clientId": "ID клиента",
   "lists.providerApps.clientSecret": "Секрет клиента",
+  "lists.providerApps.traktSecretHint": "Для Trakt необязательно. Trakt выполняет вход участников через PKCE; секрет нужен только старым приложениям Trakt.",
   "lists.providerApps.redirectUri": "URI перенаправления",
   "lists.providerApps.redirectHelp": "Зарегистрируйте URL /lists/oauth/callback этого экземпляра у провайдера. Оставьте секрет пустым, чтобы сохранить прежнее значение.",
 };

@@ -3159,6 +3159,7 @@ const it: LocaleDictionary = {
   "lists.providerApps.useOwn": "Usa la tua app del provider",
   "lists.providerApps.clientId": "ID client",
   "lists.providerApps.clientSecret": "Segreto client",
+  "lists.providerApps.traktSecretHint": "Facoltativo per Trakt. Trakt fa accedere i membri con PKCE; solo le vecchie app Trakt richiedono un segreto.",
   "lists.providerApps.redirectUri": "URI di reindirizzamento",
   "lists.providerApps.redirectHelp": "Registra l’URL /lists/oauth/callback di questa istanza presso il provider. Lascia il segreto vuoto per mantenere il valore salvato.",
 };

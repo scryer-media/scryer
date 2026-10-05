@@ -3876,6 +3876,7 @@ const nl: LocaleDictionary = {
   "lists.providerApps.useOwn": "Eigen app gebruiken",
   "lists.providerApps.clientId": "Client-ID",
   "lists.providerApps.clientSecret": "Clientgeheim",
+  "lists.providerApps.traktSecretHint": "Optioneel voor Trakt. Trakt meldt leden aan met PKCE; alleen oudere Trakt-apps hebben een geheim nodig.",
   "lists.providerApps.redirectUri": "Omleidings-URI",
   "lists.providerApps.redirectHelp": "Registreer de URL /lists/oauth/callback van deze instantie bij de aanbieder. Laat het geheim leeg om de opgeslagen waarde te behouden.",
 };

@@ -87,7 +87,7 @@ async fn relay_start_signs_exact_path_raw_body_and_fresh_nonce() {
     let transport = transport(&server).await;
     Mock::given(method("POST")).and(path("/auth/v1/trakt/start"))
         .and(body_json(json!({"origin":"http://instance.example","state":"fixture-state","code_challenge":"c".repeat(43)})))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"authorize_url":"https://trakt.tv/oauth/authorize?client_id=fixture-client", "expires_in":600})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"authorize_url":"https://auth.trakt.tv/oauth/authorize?client_id=fixture-client", "expires_in":600})))
         .expect(2).mount(&server).await;
     transport.start(start_request("trakt")).await.unwrap();
     transport.start(start_request("trakt")).await.unwrap();
@@ -321,13 +321,206 @@ async fn byo_trakt_and_anilist_exchange_json_at_fixed_endpoints() {
         if provider == "trakt" {
             reply["refresh_token"] = json!("fixture-refresh");
         }
-        Mock::given(method("POST")).and(path(format!("/{provider}/token")))
-            .and(body_json(json!({"grant_type":"authorization_code","code":"fixture-exchange", "client_id":"fixture-client","client_secret":"fixture-secret","redirect_uri":"http://instance.example/lists/oauth/callback"})))
-            .respond_with(ResponseTemplate::new(200).set_body_json(reply)).expect(1).mount(&server).await;
+        let mut body = json!({"grant_type":"authorization_code","code":"fixture-exchange", "client_id":"fixture-client","client_secret":"fixture-secret","redirect_uri":"http://instance.example/lists/oauth/callback"});
+        if provider == "trakt" {
+            // A stored legacy secret never joins a PKCE code exchange.
+            body["code_verifier"] = json!("v".repeat(43));
+            body.as_object_mut().unwrap().remove("client_secret");
+        }
+        Mock::given(method("POST"))
+            .and(path(format!("/{provider}/token")))
+            .and(body_json(body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(reply))
+            .expect(1)
+            .mount(&server)
+            .await;
         let mut request = complete_request(provider);
         request.app = Some(app());
         assert!(transport.complete(request).await.unwrap().direct);
     }
+}
+
+fn pkce_trakt_app() -> ListProviderAppConfig {
+    ListProviderAppConfig {
+        client_secret: String::new(),
+        ..app()
+    }
+}
+
+fn direct_trakt_reply() -> Value {
+    let mut reply = token_reply("anilist");
+    reply["refresh_token"] = json!("fixture-refresh");
+    reply
+}
+
+#[test]
+fn byo_trakt_authorizes_on_the_auth_host_with_an_s256_challenge() {
+    for app in [pkce_trakt_app(), app()] {
+        let mut request = start_request("trakt");
+        request.app = Some(app.clone());
+        let url = Url::parse(&direct_authorize_url("trakt", &app, &request).unwrap()).unwrap();
+        assert_eq!(url.origin().ascii_serialization(), "https://auth.trakt.tv");
+        assert_eq!(url.path(), "/oauth/authorize");
+        let query: std::collections::BTreeMap<_, _> = url.query_pairs().into_owned().collect();
+        assert_eq!(query.get("code_challenge").unwrap(), &"c".repeat(43));
+        assert_eq!(query.get("code_challenge_method").unwrap(), "S256");
+        assert_eq!(query.get("client_id").unwrap(), "fixture-client");
+        assert_eq!(query.get("state").unwrap(), "fixture-state");
+        assert!(!url.as_str().contains("fixture-secret"));
+    }
+    // AniList still needs its secret and gets no challenge.
+    let mut request = start_request("anilist");
+    request.app = Some(pkce_trakt_app());
+    assert!(direct_authorize_url("anilist", &pkce_trakt_app(), &request).is_err());
+    request.app = Some(app());
+    let url = direct_authorize_url("anilist", &app(), &request).unwrap();
+    assert!(!url.contains("code_challenge"));
+    // The relay is held to the same auth host.
+    assert_eq!(
+        validate_authorize_url(
+            "trakt",
+            "https://auth.trakt.tv/oauth/authorize?client_id=fixture-client"
+        )
+        .unwrap(),
+        "fixture-client"
+    );
+    assert!(
+        validate_authorize_url(
+            "trakt",
+            "https://trakt.tv/oauth/authorize?client_id=fixture-client"
+        )
+        .is_err()
+    );
+}
+
+#[tokio::test]
+async fn byo_trakt_exchange_sends_the_verifier_and_no_secret_when_the_app_has_none() {
+    let server = MockServer::start().await;
+    let transport = transport(&server).await;
+    Mock::given(method("POST"))
+        .and(path("/trakt/token"))
+        .and(header("trakt-api-key", "fixture-client"))
+        .and(body_json(json!({
+            "grant_type": "authorization_code",
+            "code": "fixture-exchange",
+            "code_verifier": "v".repeat(43),
+            "client_id": "fixture-client",
+            "redirect_uri": "http://instance.example/lists/oauth/callback",
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(direct_trakt_reply()))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut request = complete_request("trakt");
+    request.app = Some(pkce_trakt_app());
+    let credential = transport.complete(request).await.unwrap();
+    assert!(credential.direct);
+    assert_eq!(credential.refresh_token.as_deref(), Some("fixture-refresh"));
+    assert_eq!(credential.client_id.as_deref(), Some("fixture-client"));
+}
+
+#[tokio::test]
+async fn byo_trakt_renew_sends_the_secret_only_when_the_app_has_one() {
+    for app in [pkce_trakt_app(), app()] {
+        let server = MockServer::start().await;
+        let transport = transport(&server).await;
+        let mut body = json!({
+            "grant_type": "refresh_token",
+            "refresh_token": "fixture-refresh",
+            "client_id": "fixture-client",
+            "redirect_uri": "http://instance.example/lists/oauth/callback",
+        });
+        if !app.client_secret.is_empty() {
+            body["client_secret"] = json!("fixture-secret");
+        }
+        Mock::given(method("POST"))
+            .and(path("/trakt/token"))
+            .and(body_json(body))
+            .respond_with(ResponseTemplate::new(200).set_body_json(direct_trakt_reply()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let credential = ListAccountCredential {
+            access_token: "fixture-access".into(),
+            refresh_token: Some("fixture-refresh".into()),
+            client_id: Some("fixture-client".into()),
+            direct: true,
+            ..Default::default()
+        };
+        let renewed = transport
+            .renew("trakt", &credential, Some(&app))
+            .await
+            .unwrap();
+        assert_eq!(renewed.refresh_token.as_deref(), Some("fixture-refresh"));
+    }
+}
+
+/// Collects every field and message Scryer records so a test can prove what
+/// the transport logged.
+#[derive(Clone, Default)]
+struct CapturedLogs(Arc<std::sync::Mutex<String>>);
+impl tracing::field::Visit for CapturedLogs {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        let mut logs = self.0.lock().unwrap();
+        logs.push_str(&format!("{}={value:?}\n", field.name()));
+    }
+}
+impl tracing::Subscriber for CapturedLogs {
+    fn enabled(&self, metadata: &tracing::Metadata<'_>) -> bool {
+        metadata.target().starts_with("scryer")
+    }
+    fn max_level_hint(&self) -> Option<tracing::level_filters::LevelFilter> {
+        Some(tracing::level_filters::LevelFilter::TRACE)
+    }
+    fn new_span(&self, span: &tracing::span::Attributes<'_>) -> tracing::span::Id {
+        span.record(&mut self.clone());
+        tracing::span::Id::from_u64(1)
+    }
+    fn record(&self, _: &tracing::span::Id, values: &tracing::span::Record<'_>) {
+        values.record(&mut self.clone());
+    }
+    fn record_follows_from(&self, _: &tracing::span::Id, _: &tracing::span::Id) {}
+    fn event(&self, event: &tracing::Event<'_>) {
+        event.record(&mut self.clone());
+    }
+    fn enter(&self, _: &tracing::span::Id) {}
+    fn exit(&self, _: &tracing::span::Id) {}
+}
+
+#[tokio::test]
+async fn byo_trakt_failed_exchange_never_reports_the_verifier_or_secret() {
+    let logs = CapturedLogs::default();
+    let _logging = tracing::dispatcher::set_default(&tracing::Dispatch::new(logs.clone()));
+    let verifier = "fixture-private-verifier-".repeat(2);
+    for (status, expected) in [(400, "reconnect_required"), (503, "provider_unavailable")] {
+        let server = MockServer::start().await;
+        let transport = transport(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/trakt/token"))
+            .respond_with(ResponseTemplate::new(status).set_body_json(json!({
+                "error": if status == 400 { "invalid_grant" } else { "fixture-secret" },
+                "error_description": format!("{verifier} fixture-secret"),
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut request = complete_request("trakt");
+        request.code_verifier = verifier.clone();
+        request.app = Some(app());
+        let error = transport.complete(request).await.unwrap_err().to_string();
+        assert!(error.ends_with(expected), "{error}");
+        assert!(!error.contains(&verifier));
+        assert!(!error.contains("fixture-secret"));
+        // The verifier did reach the provider, so its absence from the
+        // report is the redaction, not a missing field.
+        let sent = &server.received_requests().await.unwrap()[0].body;
+        assert!(String::from_utf8_lossy(sent).contains(&verifier));
+    }
+    let logs = logs.0.lock().unwrap();
+    assert!(logs.contains("list OAuth response"), "{logs}");
+    assert!(!logs.contains(&verifier));
+    assert!(!logs.contains("fixture-secret"));
+    assert!(!logs.contains("fixture-exchange"));
 }
 
 #[tokio::test]

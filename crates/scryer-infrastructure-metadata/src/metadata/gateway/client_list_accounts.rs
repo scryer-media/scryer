@@ -199,7 +199,7 @@ impl HttpListAccountAuthGateway {
         mut fields: Vec<(&str, String)>,
     ) -> AppResult<RequestBuilder> {
         require_value(&app.client_id, 512)?;
-        if matches!(provider, "trakt" | "anilist") {
+        if provider == "anilist" {
             require_value(&app.client_secret, 8192)?;
         }
         fields.push(("client_id", app.client_id.clone()));
@@ -454,12 +454,23 @@ impl ListAccountAuthGateway for HttpListAccountAuthGateway {
             ("code", request.code),
             ("redirect_uri", app.redirect_uri.clone()),
         ];
-        if provider == "mal" {
+        if matches!(provider, "trakt" | "mal") {
             fields.push(("code_verifier", request.code_verifier));
         }
+        // Trakt proves a PKCE code exchange with the verifier alone and asks
+        // that no client secret accompany it; a configured secret is still
+        // sent on renewal.
+        let exchange_app = if provider == "trakt" {
+            ListProviderAppConfig {
+                client_secret: String::new(),
+                ..app.clone()
+            }
+        } else {
+            app.clone()
+        };
         let tokens: Tokens = self
             .json(
-                self.token_request(provider, &app, fields)?,
+                self.token_request(provider, &exchange_app, fields)?,
                 provider,
                 "exchange",
             )
@@ -748,7 +759,7 @@ fn tmdb_app_token(app: Option<&ListProviderAppConfig>) -> AppResult<&str> {
 }
 fn authorize_endpoint(provider: &str) -> AppResult<&'static str> {
     match provider {
-        "trakt" => Ok("https://trakt.tv/oauth/authorize"),
+        "trakt" => Ok("https://auth.trakt.tv/oauth/authorize"),
         "anilist" => Ok("https://anilist.co/api/v2/oauth/authorize"),
         "mal" => Ok("https://myanimelist.net/v1/oauth2/authorize"),
         "simkl" => Ok("https://simkl.com/oauth2/authorize"),
@@ -803,7 +814,7 @@ fn direct_authorize_url(
     require_value(&app.client_id, 512)?;
     require_value(&request.state, 512)?;
     validate_redirect(&app.redirect_uri, &request.origin)?;
-    if matches!(provider, "trakt" | "anilist") {
+    if provider == "anilist" {
         require_value(&app.client_secret, 8192)?;
     }
     let mut url = Url::parse(authorize_endpoint(provider)?).expect("constant URL");
@@ -812,10 +823,17 @@ fn direct_authorize_url(
         .append_pair("response_type", "code")
         .append_pair("redirect_uri", &app.redirect_uri)
         .append_pair("state", &request.state);
-    if provider == "mal" {
+    // MyAnimeList accepts only the plain method; Trakt accepts only S256.
+    let method = match provider {
+        "mal" => Some("plain"),
+        "trakt" => Some("S256"),
+        _ => None,
+    };
+    if let Some(method) = method {
+        require_value(&request.code_challenge, 128)?;
         url.query_pairs_mut()
             .append_pair("code_challenge", &request.code_challenge)
-            .append_pair("code_challenge_method", "plain");
+            .append_pair("code_challenge_method", method);
     }
     Ok(url.to_string())
 }
