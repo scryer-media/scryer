@@ -547,6 +547,8 @@ mod title_history_filter_tests {
                     old_score: None,
                     new_score: None,
                     size_bytes: None,
+                    import_id: None,
+                    source_ref: None,
                 })
             } else {
                 DomainEventPayload::ImportCompleted(scryer_domain::ImportCompletedEventData {

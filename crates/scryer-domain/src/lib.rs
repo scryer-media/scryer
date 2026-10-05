@@ -4513,6 +4513,15 @@ pub struct MediaFileUpgradedEventData {
     /// `None`.
     #[serde(default)]
     pub size_bytes: Option<i64>,
+    /// The import that produced the upgrade, matching the `import_id` of the
+    /// `ImportCompleted` event it raised. Events persisted before this field
+    /// existed read back as `None`.
+    #[serde(default)]
+    pub import_id: Option<String>,
+    /// The download client's item id for that import, matching the
+    /// `source_ref` of its `ImportCompleted` event.
+    #[serde(default)]
+    pub source_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
