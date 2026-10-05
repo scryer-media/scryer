@@ -27,7 +27,8 @@ const MAX_REFRESH_BACKOFFS: usize = 4096;
 /// provider said so. With the backoff above this takes about 40 hours.
 const REFRESH_FAILURE_LIMIT: u32 = 12;
 const REFRESH_FAILURE_MIN_SPAN_HOURS: i64 = 36;
-/// Fixed pause after a renewal that failed on Scryer's side of the wire.
+/// Fixed pause after a renewal that failed short of the provider: on Scryer's
+/// side of the wire or at the relay.
 const LOCAL_FAILURE_PAUSE_SECONDS: i64 = 60;
 /// Saves of a renewed credential tried before the account is given up.
 const RENEWED_SAVE_ATTEMPTS: usize = 3;
@@ -968,11 +969,11 @@ impl AppUseCase {
                 .await?;
             return Err(reconnect_this_account());
         }
-        // Trouble on Scryer's side of the wire, with no answer about the grant:
+        // Trouble short of the provider, with no answer about the grant:
         // the local request slots, a connection that never got an HTTP answer,
-        // or this instance's own enrollment with the relay. Reconnecting the
-        // account cannot fix any of these, so they neither count towards the
-        // safety net nor grow the backoff.
+        // this instance's own enrollment with the relay, or the relay itself
+        // being busy or down. Reconnecting the account cannot fix any of these,
+        // so they neither count towards the safety net nor grow the backoff.
         if code.is_none_or(|code| {
             matches!(
                 code,
@@ -980,6 +981,7 @@ impl AppUseCase {
                     | "transport_unavailable"
                     | "instance_auth_unavailable"
                     | "instance_auth_required"
+                    | "relay_unavailable"
             )
         }) {
             let backoff = runtime.pause_refresh(&account.id, now);

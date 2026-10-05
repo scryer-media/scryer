@@ -33,6 +33,7 @@ pub const AUTH_FAILURE_CODES: &[&str] = &[
     "provider_unavailable",
     "rate_limited",
     "reconnect_required",
+    "relay_unavailable",
     "transport_unavailable",
     "unsupported_exchange",
     "unsupported_poll",
@@ -76,7 +77,9 @@ pub fn auth_failure_code(error: &AppError) -> Option<&str> {
 /// The class of an account authentication failure code.
 pub fn auth_failure_class(code: &str) -> AuthFailureClass {
     match code {
-        "provider_unavailable" | "busy" | "transport_unavailable" => AuthFailureClass::Transient,
+        "provider_unavailable" | "relay_unavailable" | "busy" | "transport_unavailable" => {
+            AuthFailureClass::Transient
+        }
         RATE_LIMITED => AuthFailureClass::RateLimited,
         _ => AuthFailureClass::Final,
     }

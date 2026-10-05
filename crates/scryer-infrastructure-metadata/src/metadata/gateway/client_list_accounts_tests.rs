@@ -240,7 +240,7 @@ async fn ambiguous_token_post_is_not_retried_and_error_body_is_redacted() {
         .unwrap_err()
         .to_string();
     assert!(!error.contains("fixture-secret"));
-    assert!(error.contains("provider_unavailable"));
+    assert!(error.contains("relay_unavailable"));
 }
 
 #[tokio::test]
@@ -668,13 +668,13 @@ async fn relay_unavailable_answers_on_renew_and_revoke_are_transient_not_reconne
         let renew_error = transport.renew("simkl", &stored, None).await.unwrap_err();
         let revoke_error = transport.revoke("simkl", &stored, None).await.unwrap_err();
 
-        // `provider_unavailable` is a transient failure: the account keeps its
-        // link and the next sync retries (see the application's
-        // transient-refresh tests). It must never read as reconnect_required.
+        // `relay_unavailable` is a transient failure of the relay itself: the
+        // account keeps its link, the next sync retries, and it never counts
+        // against the grant. It must never read as reconnect_required.
         for (operation, error) in [("renew", renew_error), ("revoke", revoke_error)] {
             assert_eq!(
                 scryer_application::lists::account_transport::auth_failure_code(&error),
-                Some("provider_unavailable"),
+                Some("relay_unavailable"),
                 "{relay_error} on {operation}"
             );
         }
@@ -856,10 +856,12 @@ async fn relay_renew_answers_map_to_reconnect_only_for_explicit_grant_codes() {
         ),
         (404, Code("not_found"), "unsupported_provider"),
         (405, Code("method_not_allowed"), "unsupported_provider"),
-        (503, Code("relay_busy"), "provider_unavailable"),
-        (503, Code("relay_key_unavailable"), "provider_unavailable"),
-        (400, Code("relay_busy"), "provider_unavailable"),
-        (500, Code("relay_unavailable"), "provider_unavailable"),
+        (503, Code("relay_busy"), "relay_unavailable"),
+        (503, Code("relay_key_unavailable"), "relay_unavailable"),
+        (400, Code("relay_busy"), "relay_unavailable"),
+        (500, Code("relay_unavailable"), "relay_unavailable"),
+        (500, Empty, "relay_unavailable"),
+        (503, Html, "relay_unavailable"),
         (503, Code("relay_not_configured"), "provider_not_configured"),
         (
             503,
@@ -877,7 +879,7 @@ async fn relay_renew_answers_map_to_reconnect_only_for_explicit_grant_codes() {
             Code("invalid_provider_response"),
             "provider_unavailable",
         ),
-        (408, Empty, "provider_unavailable"),
+        (408, Empty, "relay_unavailable"),
         // SMG's instance authentication answers in free text. None of it says
         // anything about the provider grant.
         (
@@ -898,12 +900,13 @@ async fn relay_renew_answers_map_to_reconnect_only_for_explicit_grant_codes() {
             "instance_auth_required",
         ),
         (403, Code("access denied"), "instance_auth_required"),
-        (404, Code("not found"), "provider_unavailable"),
+        (404, Code("not found"), "relay_unavailable"),
         (403, Empty, "instance_auth_required"),
         (401, Html, "instance_auth_required"),
-        (404, Empty, "provider_unavailable"),
-        (400, Html, "provider_unavailable"),
-        (400, Code("fixture_unknown_code"), "provider_unavailable"),
+        (404, Empty, "relay_unavailable"),
+        (400, Html, "relay_unavailable"),
+        (400, Code("fixture_unknown_code"), "relay_unavailable"),
+        (500, Code("fixture_unknown_code"), "relay_unavailable"),
     ];
     for &(status, body, expected) in cases {
         let server = MockServer::start().await;

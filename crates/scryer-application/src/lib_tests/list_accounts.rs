@@ -616,7 +616,9 @@ async fn private_account_transient_refresh_failures_keep_the_account_linked_and_
         "rate_limited",
         "busy",
         "transport_unavailable",
+        "relay_unavailable",
     ] {
+        assert_ne!(auth_failure_class(code), AuthFailureClass::Final, "{code}");
         let auth = Arc::new(Auth {
             renew_failures: std::sync::Mutex::new(vec![code]),
             ..Default::default()
@@ -651,8 +653,9 @@ async fn private_account_transient_refresh_failures_keep_the_account_linked_and_
             code == RATE_LIMITED,
             "{code}: only a rate limit pauses the subscription"
         );
-        // Only an HTTP answer counts towards the safety net; the local request
-        // slots and a connection with no answer do not.
+        // Only the provider's own answer counts towards the safety net; the
+        // local request slots, a connection with no answer and the relay's
+        // own trouble do not.
         let counted = matches!(code, "provider_unavailable" | RATE_LIMITED);
         assert_eq!(
             stored
@@ -708,6 +711,22 @@ async fn private_account_transient_refresh_failures_keep_the_account_linked_and_
         assert_eq!(view.account.credential.refresh_failures, None, "{code}");
         assert_eq!(auth.renewals.load(Ordering::SeqCst), 2, "{code}");
     }
+}
+
+#[test]
+fn every_auth_failure_code_has_a_pinned_class() {
+    for &code in AUTH_FAILURE_CODES {
+        let expected = match code {
+            "provider_unavailable" | "relay_unavailable" | "busy" | "transport_unavailable" => {
+                AuthFailureClass::Transient
+            }
+            RATE_LIMITED => AuthFailureClass::RateLimited,
+            _ => AuthFailureClass::Final,
+        };
+        assert_eq!(auth_failure_class(code), expected, "{code}");
+    }
+    assert!(AUTH_FAILURE_CODES.contains(&"relay_unavailable"));
+    assert!(!renew_requires_reconnect("relay_unavailable"));
 }
 
 #[tokio::test]
@@ -807,6 +826,13 @@ async fn private_account_safety_net_expires_a_credential_that_keeps_failing_for_
             11,
             chrono::Duration::hours(37),
             "instance_auth_required",
+            UserListAccountStatus::Active,
+            11,
+        ),
+        (
+            11,
+            chrono::Duration::hours(37),
+            "relay_unavailable",
             UserListAccountStatus::Active,
             11,
         ),

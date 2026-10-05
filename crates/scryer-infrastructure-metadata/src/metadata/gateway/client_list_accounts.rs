@@ -792,7 +792,13 @@ fn ensure_success(reply: &Reply, source: Source) -> AppResult<()> {
             Some(RECONNECT_REQUIRED)
         }
         Some("access_denied") => Some("access_denied"),
-        // The relay's documented transient answers, whatever status carries them.
+        // The relay's documented transient answers about itself, whatever
+        // status carries them. They say nothing about the provider or the grant.
+        Some("relay_busy" | "relay_key_unavailable" | "relay_unavailable")
+            if source == Source::Relay =>
+        {
+            Some("relay_unavailable")
+        }
         Some("relay_busy" | "relay_key_unavailable" | "relay_unavailable") => {
             Some("provider_unavailable")
         }
@@ -811,6 +817,10 @@ fn ensure_success(reply: &Reply, source: Source) -> AppResult<()> {
             "invalid_request" | "request_too_large" => Some("invalid_request"),
             "not_found" | "method_not_allowed" => Some("unsupported_provider"),
             "invalid_exchange" => Some("authorization_failed"),
+            // The provider's own trouble, relayed: it counts against the grant.
+            "provider_unavailable" | "invalid_provider_response" | "invalid_scope" => {
+                Some("provider_unavailable")
+            }
             _ => None,
         },
         _ => None,
@@ -822,11 +832,12 @@ fn ensure_success(reply: &Reply, source: Source) -> AppResult<()> {
     let code = match source {
         // Only an explicit grant code above ends a relayed grant. SMG's instance
         // authentication answers 401 and 403 in free text (clock skew, unknown
-        // key, replayed nonce); any other unrecognised 4xx is relay trouble.
+        // key, replayed nonce); any other unrecognised answer, 4xx or 5xx, is
+        // relay trouble that says nothing about the provider grant.
         Source::Relay if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) => {
             "instance_auth_required"
         }
-        Source::Relay => "provider_unavailable",
+        Source::Relay => "relay_unavailable",
         Source::DirectRenew if refused && error.is_some() => PROVIDER_REJECTED,
         Source::DirectRenew => "provider_unavailable",
         Source::Provider if refused => PROVIDER_REJECTED,
