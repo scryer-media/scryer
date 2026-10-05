@@ -2028,42 +2028,8 @@ pub(crate) async fn try_saved_candidates(
                     .await;
 
                 // The remaining saved results stay `Standby`: if this grab fails
-                // too, the next walk continues down the same list.
-
-                if let Ok(Some(title)) = app.services.catalog.titles.get_by_id(&item.title_id).await
-                {
-                    let indexer = app
-                        .grab_indexer_name(
-                            standby.indexer_id.as_deref(),
-                            standby.indexer_source.as_deref(),
-                        )
-                        .await;
-                    let release_facts = app
-                        .grabbed_release_facts(
-                            &standby.release_title,
-                            None,
-                            standby.release_size_bytes,
-                            standby.source_kind,
-                            indexer,
-                            None,
-                        )
-                        .await;
-                    let _ = app
-                        .append_domain_event(new_title_domain_event(
-                            initiated_by.clone(),
-                            &title,
-                            DomainEventPayload::ReleaseGrabbed(ReleaseGrabbedEventData {
-                                title: title_context_snapshot(&title),
-                                source_title: Some(standby.release_title.clone()),
-                                source_hint: None,
-                                source_provider: None,
-                                download_id: None,
-                                episode_ids: item.episode_id.iter().cloned().collect(),
-                                release_facts: Some(release_facts),
-                            }),
-                        ))
-                        .await;
-                }
+                // too, the next walk continues down the same list. The grab
+                // itself recorded `ReleaseGrabbed`.
 
                 return StandbyRecoveryOutcome::Recovered { scope };
             }
