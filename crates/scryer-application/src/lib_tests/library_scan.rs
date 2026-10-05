@@ -2886,6 +2886,116 @@ async fn scans_never_promote_a_series_movie_episodes_losing_file() {
     }
 }
 
+/// The operator keeps the smaller file as the series movie's Primary, so the
+/// larger one is title-Primary but Additional for the episode. The catalog then
+/// moves the series movie to another special, and a scan links both stored
+/// files to it afresh. A fresh link starts Additional and is no proof the file
+/// never lost: the larger file must not be elected and reverse the pick.
+#[tokio::test]
+async fn scans_never_elect_a_relinked_losing_file_of_a_series_movie() {
+    for full_scan in [true, false] {
+        let series =
+            lantern_vale_series(&[(SERIES_MOVIE_FILES[0], 1024), (SERIES_MOVIE_FILES[1], 256)])
+                .await;
+        series
+            .app
+            .scan_title_library(&series.user, &series.title.id)
+            .await
+            .expect("first scan");
+        let file_id_for = |files: &[TitleMediaFile], name: &str| {
+            files
+                .iter()
+                .find(|file| file.file_path.ends_with(name))
+                .expect("scanned file")
+                .id
+                .clone()
+        };
+        let files = series
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&series.title.id)
+            .await
+            .expect("list media files");
+        let larger = file_id_for(&files, SERIES_MOVIE_FILES[0]);
+        let smaller = file_id_for(&files, SERIES_MOVIE_FILES[1]);
+        series
+            .app
+            .services
+            .library
+            .media_files
+            .set_media_file_roles_for_episode(
+                &series.title.id,
+                &series.episode_ids[0],
+                &smaller,
+                std::slice::from_ref(&larger),
+            )
+            .await
+            .expect("operator picks the smaller file");
+
+        let shows = &series.app.services.catalog.shows;
+        let special = shows
+            .get_episode_by_id(&series.episode_ids[0])
+            .await
+            .expect("read special")
+            .expect("special exists");
+        let renumbered = shows
+            .create_episode(Episode {
+                id: Id::new().0,
+                episode_number: Some("2".to_string()),
+                episode_label: Some("S00E02".to_string()),
+                ..special
+            })
+            .await
+            .expect("create renumbered special");
+        let mut link = shows
+            .list_series_movie_links_for_title(&series.title.id)
+            .await
+            .expect("list series movie links")
+            .remove(0);
+        link.linked_episode_id = Some(renumbered.id.clone());
+        shows
+            .upsert_series_movie_link(link)
+            .await
+            .expect("move the series movie link");
+
+        if full_scan {
+            series
+                .app
+                .scan_library(&series.user, MediaFacet::Series)
+                .await
+                .expect("library scan");
+        } else {
+            series
+                .app
+                .scan_title_library(&series.user, &series.title.id)
+                .await
+                .expect("title scan");
+        }
+
+        let scoped = series
+            .app
+            .services
+            .library
+            .media_files
+            .list_live_media_files_for_episode_ids(
+                &series.title.id,
+                std::slice::from_ref(&renumbered.id),
+            )
+            .await
+            .expect("list renumbered special files");
+        let larger_row = scoped
+            .iter()
+            .find(|file| file.media_file.id == larger)
+            .expect("the larger file is linked to the renumbered special");
+        assert!(
+            !larger_row.primary_episode_ids.contains(&renumbered.id),
+            "full scan: {full_scan}: the relinked losing file was elected"
+        );
+    }
+}
+
 /// A regular episode's losing file is still promoted by a later scan.
 #[tokio::test]
 async fn scans_promote_a_regular_episodes_losing_file() {
@@ -11791,6 +11901,7 @@ async fn series_library_scan_roles_after_primary_vanishes_for(
     let media_files = &app.services.library.media_files;
     let seed = |path: PathBuf, role: MediaFileRole, episode_id: String| {
         let title_id = title.id.clone();
+        let title_id_for_roles = title.id.clone();
         async move {
             let file_id = media_files
                 .insert_media_file(&InsertMediaFileInput {
@@ -11807,6 +11918,18 @@ async fn series_library_scan_roles_after_primary_vanishes_for(
                 .link_file_to_episode(&file_id, &episode_id)
                 .await
                 .expect("link episode file");
+            // A new link starts Additional, as in the store.
+            if role.is_primary() {
+                media_files
+                    .set_media_file_roles_for_episode(
+                        &title_id_for_roles,
+                        &episode_id,
+                        &file_id,
+                        &[],
+                    )
+                    .await
+                    .expect("make the file the episode's primary");
+            }
         }
     };
     seed(

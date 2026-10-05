@@ -454,6 +454,12 @@ async fn a_page_of_series_scopes_reads_episodes_once_and_a_changed_span_misses()
             .link_file_to_episode(&file_id, &episode_ids[0])
             .await
             .expect("link episode");
+        // A new link starts Additional, as in the store.
+        fixture
+            .media_files
+            .set_media_file_roles_for_episode(&title.id, &episode_ids[0], &file_id, &[])
+            .await
+            .expect("make the file the episode's primary");
         scopes.push(LandedBarScope {
             title_id: title.id.clone(),
             episode_id: Some(episode_ids[0].clone()),

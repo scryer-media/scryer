@@ -4907,6 +4907,13 @@ async fn one_missing_episode_does_not_trigger_the_series_pack_title_lane() {
             .link_file_to_episode(&file_id, episode_id)
             .await
             .expect("link owned episode file");
+        // A new link starts Additional, as in the store.
+        app.services
+            .library
+            .media_files
+            .set_media_file_roles_for_episode(&title.id, episode_id, &file_id, &[])
+            .await
+            .expect("make the file the episode's primary");
     }
 
     app.run_background_acquisition_cycle_once().await;

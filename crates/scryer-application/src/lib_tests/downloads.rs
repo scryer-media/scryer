@@ -10361,6 +10361,13 @@ async fn completed_import_retry_reuses_existing_additional_episode_file() {
         .link_file_to_episode(&primary_file_id, &episode.id)
         .await
         .expect("link primary file to episode");
+    // A new link starts Additional, as in the store.
+    app.services
+        .library
+        .media_files
+        .set_media_file_roles_for_episode(&title.id, &episode.id, &primary_file_id, &[])
+        .await
+        .expect("make the file the episode's primary");
 
     let release = "Fail.Closed.Pack.S01E01.PROPER.720p.WEB-DL.AV1.AAC2.0-GRP";
     let item_id = "additional-episode-retry-1";

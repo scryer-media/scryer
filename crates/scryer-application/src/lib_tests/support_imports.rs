@@ -463,13 +463,34 @@ impl MediaFileRepository for MockMediaFileRepo {
         })
     }
 
+    /// Like the store, a new link row starts Additional (the column default);
+    /// it never inherits the file's title role. An existing link is left alone.
     async fn link_file_to_episode(&self, file_id: &str, episode_id: &str) -> AppResult<()> {
         let mut list = self.store.lock().await;
-        let entry = list
+        if list
+            .iter()
+            .any(|entry| entry.id == file_id && entry.episode_id.as_deref() == Some(episode_id))
+        {
+            return Ok(());
+        }
+        if let Some(entry) = list
             .iter_mut()
+            .find(|entry| entry.id == file_id && entry.episode_id.is_none())
+        {
+            entry.episode_id = Some(episode_id.to_string());
+            entry.role = crate::MediaFileRole::Additional;
+            return Ok(());
+        }
+        let template = list
+            .iter()
             .find(|entry| entry.id == file_id)
+            .cloned()
             .ok_or_else(|| AppError::NotFound(format!("media file {}", file_id)))?;
-        entry.episode_id = Some(episode_id.to_string());
+        list.push(TitleMediaFile {
+            episode_id: Some(episode_id.to_string()),
+            role: crate::MediaFileRole::Additional,
+            ..template
+        });
         Ok(())
     }
 
@@ -520,9 +541,11 @@ impl MediaFileRepository for MockMediaFileRepo {
                     .as_ref()
                     .is_some_and(|episode_id| wanted.contains(episode_id))
         });
+        // New link rows start Additional, as the store's column default does.
         for episode_id in wanted.iter().filter(|id| !current.contains(id)) {
             list.push(TitleMediaFile {
                 episode_id: Some(episode_id.clone()),
+                role: crate::MediaFileRole::Additional,
                 ..template.clone()
             });
         }
@@ -686,7 +709,10 @@ impl MediaFileRepository for MockMediaFileRepo {
         // as one row per link here would let a test pass against a span the
         // product never sees.
         let title_roles = self.title_roles.lock().await.clone();
-        let mut spans: Vec<(TitleMediaFile, Vec<String>)> = Vec::new();
+        // Each link row carries its own episode role, as the real
+        // file-episode table does, so the Primary episodes are collected per
+        // link rather than copied from the file's first row.
+        let mut spans: Vec<(TitleMediaFile, Vec<String>, Vec<String>)> = Vec::new();
         for entry in self.store.lock().await.iter() {
             if entry.title_id != title_id {
                 continue;
@@ -694,32 +720,35 @@ impl MediaFileRepository for MockMediaFileRepo {
             let Some(episode_id) = entry.episode_id.clone() else {
                 continue;
             };
-            match spans.iter_mut().find(|(file, _)| file.id == entry.id) {
-                Some((_, episode_ids)) => {
-                    if !episode_ids.contains(&episode_id) {
-                        episode_ids.push(episode_id);
-                    }
+            let span = match spans
+                .iter_mut()
+                .position(|(file, _, _)| file.id == entry.id)
+            {
+                Some(index) => &mut spans[index],
+                None => {
+                    spans.push((entry.clone(), Vec::new(), Vec::new()));
+                    spans.last_mut().expect("span just pushed")
                 }
-                None => spans.push((entry.clone(), vec![episode_id])),
+            };
+            if !span.1.contains(&episode_id) {
+                span.1.push(episode_id.clone());
+            }
+            if entry.role.is_primary() && !span.2.contains(&episode_id) {
+                span.2.push(episode_id);
             }
         }
         Ok(spans
             .into_iter()
-            .filter(|(_, episode_ids)| {
+            .filter(|(_, episode_ids, _)| {
                 episode_ids
                     .iter()
                     .any(|episode_id| requested.contains(episode_id.as_str()))
             })
-            .map(|(media_file, episode_ids)| {
+            .map(|(media_file, episode_ids, primary_episode_ids)| {
                 let title_role = title_roles
                     .get(&media_file.id)
                     .copied()
                     .unwrap_or(media_file.role);
-                let primary_episode_ids = if media_file.role.is_primary() {
-                    episode_ids.clone()
-                } else {
-                    Vec::new()
-                };
                 EpisodeScopedMediaFile {
                     media_file,
                     title_role,
