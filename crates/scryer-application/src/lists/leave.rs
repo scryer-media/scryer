@@ -44,8 +44,10 @@ pub struct LeaveReport {
     /// Rows whose title was no longer in the library; marked handled with
     /// nothing to act on.
     pub gone: u64,
-    /// Rows of a personal list whose owner may not change the title; marked
-    /// handled with the title left as it is.
+    /// Rows of a personal list whose owner may not change the title; recorded
+    /// as a logged departure and marked handled with the title left as it is.
+    /// Like `failed`, `guarded` and `gone`, this is internal bookkeeping: only
+    /// `acted` reaches the sync job summary.
     pub not_permitted: u64,
 }
 
@@ -90,16 +92,42 @@ pub async fn handle_departures(
         if subscription.is_personal()
             && matches!(on_leave, ListOnLeave::Unmonitor | ListOnLeave::Tag)
         {
-            let permitted = match subscription.route_for(row.kind.clone()) {
-                Some(route) => actions.owner_manages_titles(subscription, route).await,
-                None => Ok(false),
+            let Some(route) = subscription.route_for(row.kind.clone()) else {
+                // No library route for this kind is a configuration fault, not
+                // an answer about the owner; the departure stays owed until the
+                // list routes the kind again.
+                tracing::warn!(
+                    subscription_id = %subscription.id,
+                    title_id = %title_id,
+                    "a personal list departure has no library route; it stays owed"
+                );
+                report.failed += 1;
+                continue;
             };
-            match permitted {
+            match actions.owner_manages_titles(subscription, route).await {
                 Ok(true) => {}
                 // The owner may not change this title. The answer will not
                 // improve by asking again every sync, so the departure is
-                // settled without touching the title.
+                // settled without touching the title, and recorded on the
+                // owner's own stream as a logged departure so the reason the
+                // title was left alone stays visible to them.
                 Ok(false) => {
+                    tracing::info!(
+                        subscription_id = %subscription.id,
+                        title_id = %title_id,
+                        "personal list owner may not change a departed title; recorded without acting"
+                    );
+                    if let Err(error) = actions
+                        .record_departure(subscription, &title_id, ListOnLeave::Log)
+                        .await
+                    {
+                        tracing::warn!(
+                            subscription_id = %subscription.id,
+                            title_id = %title_id,
+                            error = %error,
+                            "could not record a list departure"
+                        );
+                    }
                     report.not_permitted += 1;
                     handled.push(row.item_key);
                     continue;
