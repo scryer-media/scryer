@@ -483,8 +483,10 @@ pub struct ImportArtifact {
     pub import_id: Option<String>,
     /// The source path relative to the download folder, when it lies there.
     pub relative_path: Option<String>,
-    /// The source path relative to the root of the owned archive workspace it
-    /// was imported from, when it came out of one.
+    /// Where the source sat in the owned archive workspace it was imported
+    /// from, when it came out of one: the workspace directory name, then the
+    /// path inside it (`<workspace>/out/...`), so it identifies the workspace
+    /// as well as the file.
     pub workspace_relative_path: Option<String>,
     pub normalized_file_name: String,
     pub media_kind: String,

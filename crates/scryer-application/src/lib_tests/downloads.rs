@@ -18647,10 +18647,14 @@ mod held_sources {
                 .unwrap()
         }
 
-        /// The path of `file` relative to `workspace`, as an import artifact
-        /// records a file it imported from that workspace.
+        /// The key an import artifact records for `file` imported from
+        /// `workspace`: the workspace directory name, then the path inside it.
         fn relative_to_workspace(workspace: &Path, file: &Path) -> String {
-            crate::stored_paths::path_to_stored_string(file.strip_prefix(workspace).unwrap())
+            format!(
+                "{}/{}",
+                workspace.file_name().unwrap().to_str().unwrap(),
+                crate::stored_paths::path_to_stored_string(file.strip_prefix(workspace).unwrap())
+            )
         }
 
         fn write_video(path: &Path) {
@@ -18927,6 +18931,38 @@ mod held_sources {
         }
 
         #[tokio::test]
+        async fn release_keeps_the_workspace_whose_same_named_video_was_imported_from_another() {
+            let held = held_import().await;
+            // A retried extraction stages a fresh workspace for the same import.
+            let first = held_workspace(&held);
+            let second = held_workspace(&held);
+            let imported_video = first.join("out/Synthetic.Feature.mkv");
+            let other_video = second.join("out/Synthetic.Feature.mkv");
+            write_video(&imported_video);
+            write_video(&other_video);
+            let app = with_artifacts(
+                &held,
+                vec![video_artifact(
+                    &held,
+                    &held.import_id,
+                    Some(relative_to_workspace(&first, &imported_video)),
+                    None,
+                )],
+            )
+            .await;
+
+            let released = release_settled(&held, &app, imported()).await;
+
+            assert_eq!(released.workspaces_removed, 1, "{released:?}");
+            assert_eq!(
+                released.preserved_workspaces,
+                vec![crate::HeldWorkspacePreserved::HoldsUnimportedVideo]
+            );
+            assert!(!first.exists(), "the workspace it was imported from goes");
+            assert!(other_video.exists(), "the other workspace stays");
+        }
+
+        #[tokio::test]
         async fn release_keeps_a_workspace_whose_video_only_another_released_import_imported() {
             let held = held_import().await;
             held.push_co_held_import(
@@ -19062,6 +19098,140 @@ mod held_sources {
                 );
                 assert!(held.video_source().exists(), "{label}");
             }
+        }
+
+        /// Stands in for the archive plugin: writes one feature-length video
+        /// into the output directory it is handed, and records that directory.
+        struct ExtractingArchiveClient {
+            video_name: String,
+            output_dirs: Arc<std::sync::Mutex<Vec<PathBuf>>>,
+        }
+
+        #[async_trait::async_trait]
+        impl crate::ArchiveExtractorClient for ExtractingArchiveClient {
+            async fn process(
+                &self,
+                request: scryer_plugin_sdk::ArchivePluginProcessRequest,
+            ) -> AppResult<scryer_plugin_sdk::ArchivePluginProcessResponse> {
+                use scryer_plugin_sdk::{
+                    ArchivePluginExtractedFile, ArchivePluginOperation,
+                    ArchivePluginProcessResponse, ArchivePluginStatus,
+                };
+                let ArchivePluginOperation::ExtractArchive { output_dir, .. } = &request.operation
+                else {
+                    return Ok(ArchivePluginProcessResponse {
+                        status: ArchivePluginStatus::Failed,
+                        files: Vec::new(),
+                        replaced_source_paths: Vec::new(),
+                        processed_recovery_paths: Vec::new(),
+                        expanded_bytes: None,
+                        copied_bytes: None,
+                        staged_bytes: None,
+                        error_code: Some("unsupported_operation".to_string()),
+                        message: None,
+                    });
+                };
+                let output_dir = PathBuf::from(output_dir);
+                self.output_dirs.lock().unwrap().push(output_dir.clone());
+                std::fs::create_dir_all(&output_dir).unwrap();
+                const SIZE: u64 = 300 * 1024 * 1024;
+                std::fs::File::create(output_dir.join(&self.video_name))
+                    .and_then(|file| file.set_len(SIZE))
+                    .unwrap();
+                Ok(ArchivePluginProcessResponse {
+                    status: ArchivePluginStatus::Ok,
+                    files: vec![ArchivePluginExtractedFile {
+                        relative_path: self.video_name.clone(),
+                        size: Some(SIZE),
+                        checksum: None,
+                    }],
+                    replaced_source_paths: Vec::new(),
+                    processed_recovery_paths: Vec::new(),
+                    expanded_bytes: Some(SIZE),
+                    copied_bytes: None,
+                    staged_bytes: None,
+                    error_code: None,
+                    message: None,
+                })
+            }
+        }
+
+        struct ExtractingArchiveProvider {
+            client: Arc<dyn crate::ArchiveExtractorClient>,
+        }
+
+        impl crate::ArchiveExtractorPluginProvider for ExtractingArchiveProvider {
+            fn client_for_format(
+                &self,
+                format: scryer_plugin_sdk::ArchivePluginFormat,
+            ) -> Option<Arc<dyn crate::ArchiveExtractorClient>> {
+                (format == scryer_plugin_sdk::ArchivePluginFormat::Rar)
+                    .then(|| Arc::clone(&self.client))
+            }
+
+            fn available_provider_types(&self) -> Vec<String> {
+                vec!["synthetic-archives".to_string()]
+            }
+        }
+
+        #[tokio::test]
+        async fn an_archive_import_records_the_workspace_path_of_each_imported_file() {
+            let release_title = "Archived Feature Movie.2026.1080p.WEB-DL.x264-GRP";
+            let fixture = disposition_fixture("Archived Feature Movie", release_title).await;
+            let download = PathBuf::from(&fixture.completed.dest_dir);
+            // Only the archive was delivered.
+            std::fs::remove_file(download.join(format!("{release_title}.mkv"))).unwrap();
+            std::fs::write(download.join(format!("{release_title}.rar")), b"rar").unwrap();
+            let video_name = format!("{release_title}.mkv");
+            let output_dirs = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let provider: Arc<dyn crate::ArchiveExtractorPluginProvider> =
+                Arc::new(ExtractingArchiveProvider {
+                    client: Arc::new(ExtractingArchiveClient {
+                        video_name: video_name.clone(),
+                        output_dirs: output_dirs.clone(),
+                    }),
+                });
+            let artifacts = Arc::new(RecordingImportArtifactRepo::default());
+            let app = fixture.app.with_test_overrides(|services| {
+                services
+                    .with_archive_extractor_plugin_provider(provider)
+                    .with_import_artifacts(artifacts.clone())
+            });
+
+            let mut tracked = fixture.tracked_import_pending();
+            let _probe = probe_agrees_with_the_name(1920, 1080);
+            crate::completed_download_handler::import(&app, &fixture.user, &mut tracked).await;
+
+            let output_dir = output_dirs
+                .lock()
+                .unwrap()
+                .first()
+                .cloned()
+                .expect("the archive was extracted");
+            let workspace = output_dir
+                .parent()
+                .expect("the output sits in its workspace");
+            assert!(
+                workspace.starts_with(&fixture.title_folder),
+                "the workspace is staged under the title folder: {}",
+                workspace.display()
+            );
+            let expected = relative_to_workspace(workspace, &output_dir.join(&video_name));
+            let recorded = artifacts.artifacts_for_file(&video_name).await;
+            let imported: Vec<_> = recorded
+                .iter()
+                .filter(|artifact| artifact.result == "imported")
+                .collect();
+            assert_eq!(imported.len(), 1, "{recorded:?}");
+            assert_eq!(
+                imported[0].workspace_relative_path.as_deref(),
+                Some(expected.as_str())
+            );
+            assert_eq!(
+                imported[0].relative_path, None,
+                "an extracted file did not come from the download folder"
+            );
+            assert!(download.join(format!("{release_title}.rar")).exists());
         }
 
         #[tokio::test]

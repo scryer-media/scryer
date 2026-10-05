@@ -1283,6 +1283,14 @@ mod released_hold {
     /// The app for a batch grabbed by submission scope (`grabbed`), with an
     /// imported artifact recorded for each of `imported`.
     async fn batch_app(grabbed: Option<&[&str]>, imported: &[&str]) -> AppUseCase {
+        batch_app_and_submissions(grabbed, imported).await.0
+    }
+
+    /// `batch_app`, with the submission store that records durable markers.
+    async fn batch_app_and_submissions(
+        grabbed: Option<&[&str]>,
+        imported: &[&str],
+    ) -> (AppUseCase, Arc<TestDownloadSubmissionRepo>) {
         let submissions = Arc::new(TestDownloadSubmissionRepo::default());
         if let Some(grabbed) = grabbed {
             submissions.rows.lock().await.push((
@@ -1299,7 +1307,7 @@ mod released_hold {
                 artifact
             })
             .collect();
-        build_app_with_download_client_configs_and_submissions(
+        let app = build_app_with_download_client_configs_and_submissions(
             vec![build_title(
                 "title-1",
                 "Quiet Harbor Signal",
@@ -1310,8 +1318,9 @@ mod released_hold {
             artifacts,
             Arc::new(NullDownloadClient),
             Arc::new(NullDownloadClientConfigRepository),
-            submissions,
-        )
+            submissions.clone(),
+        );
+        (app, submissions)
     }
 
     fn source_file_name(episode_id: &str) -> String {
@@ -1389,6 +1398,75 @@ mod released_hold {
         );
         assert_eq!(td.state, TrackedDownloadState::ImportPending);
         assert!(!td.state.counts_as_imported());
+        // A hold that needs no proof, such as pending subtitles, goes back to
+        // the ordinary retry.
+        assert!(td.import_execution_retry.is_some(), "a retry is scheduled");
+    }
+
+    #[tokio::test]
+    async fn an_unproven_release_is_recorded_durably_with_its_reason() {
+        let download = held_download_dir();
+        let (app, submissions) =
+            batch_app_and_submissions(Some(&["ep-301", "ep-302", "ep-303"]), &["ep-301"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unproven
+        );
+        let download_id = td.download_id.to_string();
+        let key = format!("canonical:{download_id}");
+        assert!(
+            submissions
+                .identity_tracked_states
+                .lock()
+                .await
+                .contains(&(key, "import_blocked".to_string())),
+            "the blocked state is persisted"
+        );
+        assert_eq!(
+            submissions
+                .canonical_identity_tracked_state_details
+                .lock()
+                .await
+                .iter()
+                .find(|(stored, _)| stored == &download_id)
+                .map(|(_, detail)| detail.clone()),
+            Some(crate::completed_download_handler::RELEASED_HOLD_UNPROVEN_WARNING.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_extraction_hold_that_is_not_proven_stays_blocked_without_a_retry() {
+        let download = held_download_dir();
+        let app = batch_app(Some(&["ep-301", "ep-302", "ep-303"]), &["ep-301"]).await;
+
+        let (settlement, td) = release(
+            &app,
+            held_download(download.path()),
+            AUTOMATIC_PROOF_REQUIRED,
+        )
+        .await;
+
+        assert_eq!(
+            settlement.expect("release settles"),
+            HeldImportReleaseSettlement::Unproven
+        );
+        assert_eq!(td.state, TrackedDownloadState::ImportBlocked);
+        assert_eq!(
+            td.status_messages,
+            vec![crate::completed_download_handler::RELEASED_HOLD_UNPROVEN_WARNING.to_string()]
+        );
+        assert!(td.import_execution_retry.is_none(), "no retry is scheduled");
+        for episode_id in ["ep-301", "ep-302", "ep-303"] {
+            assert!(download.path().join(source_file_name(episode_id)).exists());
+        }
     }
 
     #[tokio::test]
@@ -1596,11 +1674,12 @@ mod released_hold {
         )
         .await;
 
-        assert_ne!(
+        assert_eq!(
             settlement.expect("release settles"),
-            HeldImportReleaseSettlement::Imported
+            HeldImportReleaseSettlement::Unproven
         );
         assert!(!td.state.counts_as_imported());
+        assert!(td.import_execution_retry.is_none(), "no retry is scheduled");
     }
 
     #[tokio::test]

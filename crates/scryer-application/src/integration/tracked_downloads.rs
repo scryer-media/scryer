@@ -1970,9 +1970,10 @@ pub enum HeldImportReleaseSettlement {
     /// The download was not blocked on the pending-subtitle warning, so it
     /// was left exactly as it was.
     Unchanged,
-    /// Verification accepted the download only on its fallback while a held
-    /// import's reason says it may hold content never extracted or imported.
-    /// It stays blocked for the operator and nothing was cleaned up.
+    /// A held import's reason says the download may hold content never
+    /// extracted or imported, and nothing proved every expected unit
+    /// imported. It stays blocked for the operator, with no retry scheduled
+    /// and nothing cleaned up.
     Unproven,
 }
 

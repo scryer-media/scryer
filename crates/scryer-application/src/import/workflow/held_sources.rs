@@ -78,9 +78,10 @@ pub enum HeldSourcesSettlement {
     /// The holds were released but the tracked download could not be reached.
     /// Releasing again resumes from here.
     NotSettled,
-    /// Verification accepted the download only on its fallback while a held
-    /// import's reason means it may hold content that was never extracted or
-    /// imported. It was not marked imported and nothing was cleaned up.
+    /// A held import's reason means the download may hold content that was
+    /// never extracted or imported, and nothing proved every expected unit
+    /// imported. It was not marked imported, no retry was scheduled and
+    /// nothing was cleaned up.
     Unproven,
 }
 
@@ -507,9 +508,10 @@ async fn settle_tracked_download(
 
 /// Remove the released imports' own workspaces, keeping any that are not
 /// proven safe to remove. Nothing is removed unless the download settled as
-/// imported. A workspace is checked only against the paths, relative to the
-/// workspace, that the import owning it recorded as imported from it, never
-/// against another import's files.
+/// imported. A workspace is checked only against the paths the import owning
+/// it recorded as imported from that very workspace (the recorded path names
+/// the workspace directory), never against another import's files or another
+/// workspace of the same import.
 async fn remove_released_workspaces(
     app: &AppUseCase,
     source: &ClientJobLocator,

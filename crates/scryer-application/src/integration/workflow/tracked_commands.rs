@@ -2328,6 +2328,17 @@ async fn handle_tracked_download_command(
                     TrackedDownloadState::Imported,
                 )
                 .await;
+            } else if verdict == ReleasedHoldVerdict::Unproven {
+                // Still an operator decision point, now for a different
+                // reason: record it durably so a restart shows why the
+                // download stays blocked rather than the released hold.
+                crate::tracked_downloads::persist_import_blocked_state_marker(
+                    app,
+                    td,
+                    crate::tracked_downloads::ImportBlockedReason::AfterImport,
+                    td.status_messages.first().map(String::as_str),
+                )
+                .await;
             }
             publish_runtime_tracked_download_and_activity_item(app, tracker, activity_item).await;
             let _ = reply.send(Ok(match verdict {

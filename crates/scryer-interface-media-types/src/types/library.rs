@@ -261,7 +261,7 @@ pub enum HeldImportSourcesSettlementValue {
     Untracked,
     /// The holds were released but the tracked download could not be reached; releasing again resumes.
     NotSettled,
-    /// Accepted only without proof that every expected file was imported, while a held import may hold content never extracted or imported; not marked imported and nothing was cleaned up.
+    /// A held import may hold content never extracted or imported, and nothing proved every expected file imported; not marked imported, no retry scheduled and nothing cleaned up.
     Unproven,
 }
 

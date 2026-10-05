@@ -1346,7 +1346,7 @@ mod tests {
         .await
         .expect("import artifacts table should be created");
         sqlx::query(include_str!(
-            "../../../../scryer/src/db/migrations/0274_import_artifact_workspace_relative_path.sql"
+            "../../../../scryer/src/db/migrations/0275_import_artifact_workspace_relative_path.sql"
         ))
         .execute(&pool)
         .await
