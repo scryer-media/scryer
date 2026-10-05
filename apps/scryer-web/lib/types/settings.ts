@@ -426,6 +426,7 @@ export type ServiceSettings = {
   publicUrlSource: ConfigValueSource;
   publicUrlSaved: string | null;
   publicUrlError: string | null;
+  publicUrlErrorCode: PublicUrlErrorCode | null;
   publicUrlEditable: boolean;
   basePath: string;
   basePathSource: ConfigValueSource;
@@ -434,7 +435,33 @@ export type ServiceSettings = {
   passkeyRpId: string | null;
   passkeyRpOrigin: string | null;
   passkeyRpSource: "environment" | "public_url" | "none";
-  passkeysRegistered: boolean;
+  passkeyUserCount: number | null;
+  passkeyOnlyUserCount: number | null;
 };
 
 export type ConfigValueSource = "environment" | "settings" | "default";
+
+export type PublicUrlErrorCode =
+  | "invalid_url"
+  | "wildcard_host"
+  | "credentials"
+  | "query_or_fragment"
+  | "path_not_allowed"
+  | "path_mismatch"
+  | "environment_locked"
+  | "save_and_reset"
+  | "passkey_acknowledgement_required";
+
+export type PasskeyImpact = "unaffected" | "unchanged" | "changed" | "disabled";
+
+export type PublicUrlChangePreview = {
+  normalizedPublicUrl: string | null;
+  error: string | null;
+  errorCode: PublicUrlErrorCode | null;
+  passkeyImpact: PasskeyImpact;
+  currentPasskeyRpId: string | null;
+  nextPasskeyRpId: string | null;
+  passkeyUserCount: number | null;
+  passkeyOnlyUserCount: number | null;
+  acknowledgementRequired: boolean;
+};

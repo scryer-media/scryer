@@ -3,8 +3,8 @@ use chrono::{DateTime, Utc};
 use async_trait::async_trait;
 use scryer_application::{
     AppError, AppResult, LoginVerificationChallengeRecord, LoginVerificationMethod,
-    WebauthnChallengePurpose, WebauthnChallengeRecord, WebauthnChallengeType,
-    WebauthnCredentialRecord, WebauthnRepository,
+    PasskeyEnrollmentCounts, WebauthnChallengePurpose, WebauthnChallengeRecord,
+    WebauthnChallengeType, WebauthnCredentialRecord, WebauthnRepository,
 };
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, SqlTx, StoreDatastore};
@@ -37,6 +37,26 @@ impl WebauthnRepository for WebauthnStore {
         )
         .await?;
         rows.iter().map(row_to_credential_record).collect()
+    }
+
+    async fn passkey_enrollment_counts(&self) -> AppResult<PasskeyEnrollmentCounts> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT COUNT(DISTINCT w.user_id) AS users_with_passkeys,
+                    COUNT(DISTINCT CASE WHEN t.user_id IS NULL THEN w.user_id END)
+                        AS passkey_only_users
+             FROM webauthn_credentials w
+             LEFT JOIN totp_credentials t ON t.user_id = w.user_id",
+            &[],
+        )
+        .await?;
+        let Some(row) = row else {
+            return Ok(PasskeyEnrollmentCounts::default());
+        };
+        Ok(PasskeyEnrollmentCounts {
+            users_with_passkeys: row.i64("users_with_passkeys")?,
+            passkey_only_users: row.i64("passkey_only_users")?,
+        })
     }
 
     async fn get_credential_by_id_for_user(
@@ -696,4 +716,69 @@ fn opt_timestamp_arg(value: Option<&str>) -> AppResult<SqlArg> {
         })
         .transpose()?;
     Ok(SqlArg::OptTimestamp(parsed))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn passkey_enrollment_counts_users_and_those_without_totp_in_one_query() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .expect("sqlite pool");
+        for statement in [
+            "CREATE TABLE webauthn_credentials (id TEXT PRIMARY KEY, user_id TEXT NOT NULL)",
+            "CREATE TABLE totp_credentials (id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE)",
+        ] {
+            sqlx::query(statement).execute(&pool).await.expect("schema");
+        }
+        let store = WebauthnStore::new(StoreDatastore::Sqlite {
+            pool: pool.clone(),
+            writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+        });
+        assert_eq!(
+            store
+                .passkey_enrollment_counts()
+                .await
+                .expect("empty counts"),
+            PasskeyEnrollmentCounts::default()
+        );
+
+        // Two passkeys for a passkey-only user, one for a user with TOTP, and
+        // a TOTP-only user who must not be counted.
+        for (id, user) in [
+            ("credential-a1", "user-a"),
+            ("credential-a2", "user-a"),
+            ("credential-b1", "user-b"),
+        ] {
+            sqlx::query("INSERT INTO webauthn_credentials (id, user_id) VALUES (?, ?)")
+                .bind(id)
+                .bind(user)
+                .execute(&pool)
+                .await
+                .expect("passkey row");
+        }
+        for (id, user) in [("totp-b", "user-b"), ("totp-c", "user-c")] {
+            sqlx::query("INSERT INTO totp_credentials (id, user_id) VALUES (?, ?)")
+                .bind(id)
+                .bind(user)
+                .execute(&pool)
+                .await
+                .expect("totp row");
+        }
+        assert_eq!(
+            store.passkey_enrollment_counts().await.expect("counts"),
+            PasskeyEnrollmentCounts {
+                users_with_passkeys: 2,
+                passkey_only_users: 1,
+            }
+        );
+    }
 }

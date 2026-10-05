@@ -30,10 +30,17 @@ pub struct ImageProxyStore {
 }
 
 impl ImageProxyStore {
+    /// A store whose routes use the base path the server installed at startup.
     pub fn new(datastore: StoreDatastore) -> Self {
+        Self::with_base_path(datastore, &normalized_base_path())
+    }
+
+    /// A store whose routes live under `base_path` (normalized, empty at the
+    /// root).
+    pub fn with_base_path(datastore: StoreDatastore, base_path: &str) -> Self {
         Self {
             datastore,
-            base_path: normalized_base_path(),
+            base_path: base_path.trim_end_matches('/').to_string(),
             memory: Arc::new(Mutex::new(MemorySources::default())),
             pending: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -600,17 +607,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn proxy_routes_use_the_base_path_installed_at_startup() {
-        crate::media::images::install_base_path("/media");
+    async fn proxy_routes_live_under_the_configured_base_path() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .expect("sqlite image proxy test pool");
-        let store = ImageProxyStore::new(StoreDatastore::Sqlite {
-            pool,
-            writer_gate: Arc::new(tokio::sync::Mutex::new(())),
-        });
+        let store = ImageProxyStore::with_base_path(
+            StoreDatastore::Sqlite {
+                pool,
+                writer_gate: Arc::new(tokio::sync::Mutex::new(())),
+            },
+            "/media/",
+        );
         let route = store.register_image_source(ImageProxyRegistration {
             upstream_url: Some("https://image.tmdb.org/t/p/w500/poster.jpg".to_string()),
             owner_type: Some("title".to_string()),

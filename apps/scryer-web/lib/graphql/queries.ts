@@ -2610,6 +2610,7 @@ const serviceSettingsFieldSelection = `
     publicUrlSource
     publicUrlSaved
     publicUrlError
+    publicUrlErrorCode
     publicUrlEditable
     basePath
     basePathSource
@@ -2618,7 +2619,8 @@ const serviceSettingsFieldSelection = `
     passkeyRpId
     passkeyRpOrigin
     passkeyRpSource
-    passkeysRegistered`;
+    passkeyUserCount
+    passkeyOnlyUserCount`;
 
 // Batched query for quality profiles page: 5 requests → 1
 export const qualityProfilesInitQuery = `query QualityProfilesInit {
@@ -2827,6 +2829,21 @@ export const routingPageInitQuery = `query RoutingPageInit($scopeId: ContentScop
 // TLS settings query
 export const tlsSettingsQuery = `query TlsSettings {
   serviceSettings {${serviceSettingsFieldSelection}
+  }
+}`;
+
+// What saving a public URL would do, computed by the server without saving.
+export const publicUrlChangePreviewQuery = `query PublicUrlChangePreview($publicUrl: String, $reset: Boolean) {
+  publicUrlChangePreview(publicUrl: $publicUrl, reset: $reset) {
+    normalizedPublicUrl
+    error
+    errorCode
+    passkeyImpact
+    currentPasskeyRpId
+    nextPasskeyRpId
+    passkeyUserCount
+    passkeyOnlyUserCount
+    acknowledgementRequired
   }
 }`;
 

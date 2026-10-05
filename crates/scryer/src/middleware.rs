@@ -3019,7 +3019,8 @@ pub(crate) fn map_app_error(error: AppError) -> Response {
         // The refusal code is a GraphQL-side contract; over REST this stays the
         // validation failure it is.
         AppError::LocationPlanRefused { message, .. }
-        | AppError::LocationRootRefused { message, .. } => {
+        | AppError::LocationRootRefused { message, .. }
+        | AppError::PublicUrlRejected { message, .. } => {
             (StatusCode::BAD_REQUEST, Json(ErrorResponse::new(message))).into_response()
         }
         // The retired direct root write is a GraphQL-side contract too; over
@@ -3704,7 +3705,7 @@ mod tests {
                 false,
                 crate::list_account_origin::InterfaceAddresses::fixed(Vec::new()),
             );
-            assert!(!origin_policy.request_context().0.contains(&"https://media.home".to_string()));
+            assert!(!origin_policy.request_context().approved_origins().await.contains(&"https://media.home".to_string()));
 
             // A saved public URL applies to the next request without a restart.
             let settings = context.app.update_service_settings(&admin, scryer_application::UpdateServiceSettings {
@@ -3714,9 +3715,10 @@ mod tests {
                 reset_trusted_proxy_ips: false,
                 public_url: Some("https://media.home/scryer/".into()),
                 reset_public_url: false,
+                acknowledge_passkey_impact: false,
             }).await.expect("save public URL");
             assert_eq!(settings.public_url.effective.as_deref(), Some("https://media.home/scryer"));
-            let approved = origin_policy.request_context().0.to_vec();
+            let approved = origin_policy.request_context().approved_origins().await.to_vec();
             assert!(approved.contains(&"https://media.home".to_string()));
             assert!(approved.contains(&"http://127.0.0.1:8080".to_string()));
             assert!(!approved.contains(&"https://attacker.invalid".to_string()));

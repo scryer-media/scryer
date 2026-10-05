@@ -39,7 +39,7 @@ impl ListMutations {
     ) -> GqlResult<ListAccountLinkPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let origin = crate::context::list_account_link_origin_from_ctx(ctx, &origin)?;
+        let origin = crate::context::list_account_link_origin_from_ctx(ctx, &origin).await?;
         Ok(app
             .start_list_account_link(&actor, &provider, &origin)
             .await

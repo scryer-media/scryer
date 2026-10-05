@@ -449,12 +449,13 @@ pub use settings::settings::{
     ExternalImportLibrarySettingsAutoApplyResult, ExternalImportSettingsAutoApplySkip,
     FacetScoringPersonaSelection, GeneralSettings, IndexerRoutingSettingsEntry, InstanceFeatures,
     LibraryPathsSettings, LibrarySettings, LibrarySettingsOverrideDraft, MediaSettings,
-    PluginAutoUpdateSettings, PublicUrlSettings, QualityProfileSelection, QualityProfileSettings,
-    RequestQualityProfileSettings, SaveQualityProfileSettings, SecuritySettings, ServiceSettings,
-    SubtitleSettings, UpdateAutoBackupSettings, UpdateBackupSettings,
-    UpdateFacetScoringPersonaSelection, UpdateGeneralSettings, UpdateLibraryPaths,
-    UpdateMediaSettings, UpdatePluginAutoUpdateSettings, UpdateQualityProfileSelection,
-    UpdateSecuritySettings, UpdateServiceSettings, UpdateSubtitleSettings,
+    PluginAutoUpdateSettings, PublicUrlChangePreview, PublicUrlSettings, QualityProfileSelection,
+    QualityProfileSettings, RequestQualityProfileSettings, SaveQualityProfileSettings,
+    SecuritySettings, ServiceSettings, SubtitleSettings, UpdateAutoBackupSettings,
+    UpdateBackupSettings, UpdateFacetScoringPersonaSelection, UpdateGeneralSettings,
+    UpdateLibraryPaths, UpdateMediaSettings, UpdatePluginAutoUpdateSettings,
+    UpdateQualityProfileSelection, UpdateSecuritySettings, UpdateServiceSettings,
+    UpdateSubtitleSettings,
 };
 pub use subtitles::orchestration::{
     DownloadSubtitleForMediaFileRequest, SubtitleSearchOutcome, SubtitleSearchStatus,
@@ -719,6 +720,7 @@ pub use settings::keys::{
 pub use settings::runtime::is_bootstrap_default_library_root_set;
 pub(crate) use types::JwtClaims;
 pub use types::MetadataFieldUpdate;
+pub use types::PasskeyEnrollmentCounts;
 #[cfg(test)]
 pub(crate) use types::ReleaseCandidateTokenClaims;
 pub use types::{
@@ -843,6 +845,11 @@ pub enum AppError {
     /// cross-route FR-020's two halves on it.
     #[error("validation: {message}")]
     LocationRootRefused { message: String, code: &'static str },
+
+    /// A public URL change was refused. The code comes from
+    /// `public_url::error_codes` so clients can explain it in their language.
+    #[error("validation: {message}")]
+    PublicUrlRejected { message: String, code: &'static str },
 
     /// A direct `rootFolderId` write on a title that already has tracked files.
     /// Retired by FR-077: relocating a title with content on disk is the move

@@ -99,7 +99,7 @@ impl PublicUrlPolicy {
 
     /// `Ok(None)` when nothing is configured; `Err` when the winning value is
     /// invalid.
-    pub fn resolve(&self) -> Result<Option<Url>, String> {
+    pub fn resolve(&self) -> Result<Option<Url>, PublicUrlError> {
         self.configured_value().map(parse_public_url).transpose()
     }
 
@@ -111,45 +111,160 @@ impl PublicUrlPolicy {
         self.url().map(|url| url.origin().ascii_serialization())
     }
 
-    pub fn error(&self) -> Option<String> {
+    pub fn error(&self) -> Option<PublicUrlError> {
         self.resolve().err()
+    }
+}
+
+/// Stable codes for rejected public URLs. Clients localize these; the
+/// message is English for logs and API callers.
+pub mod error_codes {
+    pub const INVALID_URL: &str = "invalid_url";
+    pub const WILDCARD_HOST: &str = "wildcard_host";
+    pub const CREDENTIALS: &str = "credentials";
+    pub const QUERY_OR_FRAGMENT: &str = "query_or_fragment";
+    pub const PATH_NOT_ALLOWED: &str = "path_not_allowed";
+    pub const PATH_MISMATCH: &str = "path_mismatch";
+    pub const ENVIRONMENT_LOCKED: &str = "environment_locked";
+    pub const SAVE_AND_RESET: &str = "save_and_reset";
+    pub const PASSKEY_ACKNOWLEDGEMENT_REQUIRED: &str = "passkey_acknowledgement_required";
+}
+
+/// Why a public URL was rejected.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
+pub struct PublicUrlError {
+    pub code: &'static str,
+    pub message: String,
+}
+
+impl PublicUrlError {
+    pub fn new(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+        }
     }
 }
 
 /// Validate a public URL: absolute http or https, a host, no credentials, no
 /// query or fragment, and no wildcard host. Any path is accepted here.
-pub fn parse_public_url(value: &str) -> Result<Url, String> {
-    let url = Url::parse(value.trim())
-        .map_err(|_| "the public URL must be an absolute http or https URL".to_string())?;
+pub fn parse_public_url(value: &str) -> Result<Url, PublicUrlError> {
+    use error_codes::*;
+    let invalid = || {
+        PublicUrlError::new(
+            INVALID_URL,
+            "the public URL must be an absolute http or https URL",
+        )
+    };
+    let url = Url::parse(value.trim()).map_err(|_| invalid())?;
     if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none() {
-        return Err("the public URL must be an absolute http or https URL".into());
+        return Err(invalid());
     }
     if url.host_str().is_some_and(|host| host.contains('*')) {
-        return Err("the public URL must name a single host".into());
+        return Err(PublicUrlError::new(
+            WILDCARD_HOST,
+            "the public URL must name a single host",
+        ));
     }
     if !url.username().is_empty() || url.password().is_some() {
-        return Err("the public URL must not include a username or password".into());
+        return Err(PublicUrlError::new(
+            CREDENTIALS,
+            "the public URL must not include a username or password",
+        ));
     }
     if url.query().is_some() || url.fragment().is_some() {
-        return Err("the public URL must not include a query or fragment".into());
+        return Err(PublicUrlError::new(
+            QUERY_OR_FRAGMENT,
+            "the public URL must not include a query or fragment",
+        ));
     }
     Ok(url)
 }
 
 /// Validate a value an administrator saves and return the stored form. The
 /// path must be empty or equal to the base path the instance serves under.
-pub fn normalize_saved_public_url(value: &str, base_path: &str) -> Result<String, String> {
+pub fn normalize_saved_public_url(value: &str, base_path: &str) -> Result<String, PublicUrlError> {
     let url = parse_public_url(value)?;
     let path = url.path().trim_end_matches('/');
     let base_path = base_path.trim_end_matches('/');
     if !path.is_empty() && path != base_path {
         return Err(if base_path.is_empty() {
-            "the public URL must not include a path because Scryer is served at the root".into()
+            PublicUrlError::new(
+                error_codes::PATH_NOT_ALLOWED,
+                "the public URL must not include a path because Scryer is served at the root",
+            )
         } else {
-            format!("the public URL path must be empty or {base_path}")
+            PublicUrlError::new(
+                error_codes::PATH_MISMATCH,
+                format!("the public URL path must be empty or {base_path}"),
+            )
         });
     }
     Ok(format!("{}{path}", url.origin().ascii_serialization()))
+}
+
+/// What saving a public URL would do to the running passkeys after the next
+/// restart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PasskeyImpact {
+    /// Passkeys do not come from the public URL (explicit WebAuthn variables,
+    /// or passkeys are off), so the change cannot affect them.
+    Unaffected,
+    /// The relying party stays the same.
+    Unchanged,
+    /// Passkeys move to a different domain; existing passkeys stop working.
+    Changed,
+    /// The new value cannot carry passkeys; passkeys turn off.
+    Disabled,
+}
+
+impl PasskeyImpact {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unaffected => "unaffected",
+            Self::Unchanged => "unchanged",
+            Self::Changed => "changed",
+            Self::Disabled => "disabled",
+        }
+    }
+
+    /// Whether existing passkeys would stop working.
+    pub fn breaks_existing_passkeys(self) -> bool {
+        matches!(self, Self::Changed | Self::Disabled)
+    }
+}
+
+/// Compare the running relying party with the one a saved value would give
+/// at the next start, using the same derivation startup uses. Returns the
+/// impact and the next relying-party ID.
+pub fn passkey_impact_of_saved_value(
+    addressing: &InstanceAddressing,
+    next_saved: Option<&str>,
+) -> (PasskeyImpact, Option<String>) {
+    if addressing.passkey_rp_source != PasskeyRelyingPartySource::PublicUrl {
+        return (PasskeyImpact::Unaffected, None);
+    }
+    let next = next_saved
+        .and_then(|value| parse_public_url(value).ok())
+        .and_then(|url| passkey_relying_party_from_public_url(&url))
+        .map(|(rp_id, _)| rp_id);
+    match next {
+        None => (PasskeyImpact::Disabled, None),
+        Some(rp_id) if addressing.passkey_rp_id.as_deref() == Some(rp_id.as_str()) => {
+            (PasskeyImpact::Unchanged, Some(rp_id))
+        }
+        Some(rp_id) => (PasskeyImpact::Changed, Some(rp_id)),
+    }
+}
+
+/// A change that breaks passkeys needs explicit acknowledgement while anyone
+/// has one, and also when the count could not be read.
+pub fn passkey_acknowledgement_required(
+    impact: PasskeyImpact,
+    counts: Option<crate::PasskeyEnrollmentCounts>,
+) -> bool {
+    impact.breaks_existing_passkeys() && counts.is_none_or(|counts| counts.users_with_passkeys > 0)
 }
 
 /// The passkey relying party a public URL implies, when browsers would accept
@@ -304,6 +419,97 @@ mod tests {
         assert_eq!(rp("http://media.home"), None);
         assert_eq!(rp("https://192.168.1.20"), None);
         assert_eq!(rp("https://[fd00::20]"), None);
+    }
+
+    #[test]
+    fn rejections_carry_stable_codes() {
+        let code = |value: &str| parse_public_url(value).unwrap_err().code;
+        assert_eq!(code("not a URL"), error_codes::INVALID_URL);
+        assert_eq!(code("ftp://media.home"), error_codes::INVALID_URL);
+        assert_eq!(code("https://*.home"), error_codes::WILDCARD_HOST);
+        assert_eq!(
+            code("https://user:secret@media.home"),
+            error_codes::CREDENTIALS
+        );
+        assert_eq!(
+            code("https://media.home?a=b"),
+            error_codes::QUERY_OR_FRAGMENT
+        );
+        assert_eq!(
+            normalize_saved_public_url("https://media.home/scryer", "")
+                .unwrap_err()
+                .code,
+            error_codes::PATH_NOT_ALLOWED
+        );
+        assert_eq!(
+            normalize_saved_public_url("https://media.home/other", "/scryer")
+                .unwrap_err()
+                .code,
+            error_codes::PATH_MISMATCH
+        );
+    }
+
+    fn addressing(source: PasskeyRelyingPartySource, rp_id: Option<&str>) -> InstanceAddressing {
+        InstanceAddressing {
+            passkey_rp_id: rp_id.map(str::to_string),
+            passkey_rp_source: source,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn passkey_impact_matrix() {
+        use PasskeyImpact::*;
+        let derived = addressing(PasskeyRelyingPartySource::PublicUrl, Some("media.home"));
+        let impact = |addressing: &InstanceAddressing, next: Option<&str>| {
+            passkey_impact_of_saved_value(addressing, next).0
+        };
+        // Same domain, even with a different port, path or letter case.
+        assert_eq!(
+            impact(&derived, Some("https://Media.Home:8443/scryer")),
+            Unchanged
+        );
+        // A different domain moves the relying party.
+        assert_eq!(impact(&derived, Some("https://other.home")), Changed);
+        // Plain http on the same non-localhost domain, an IP literal, or
+        // clearing the value leaves no relying party at all.
+        assert_eq!(impact(&derived, Some("http://media.home")), Disabled);
+        assert_eq!(impact(&derived, Some("https://192.168.1.20")), Disabled);
+        assert_eq!(impact(&derived, None), Disabled);
+        // Explicit WebAuthn variables, or passkeys already off, are unaffected.
+        for unaffected in [
+            addressing(PasskeyRelyingPartySource::Environment, Some("media.home")),
+            addressing(PasskeyRelyingPartySource::None, None),
+        ] {
+            assert_eq!(impact(&unaffected, None), Unaffected);
+            assert_eq!(impact(&unaffected, Some("https://other.home")), Unaffected);
+        }
+        assert_eq!(
+            passkey_impact_of_saved_value(&derived, Some("https://other.home"))
+                .1
+                .as_deref(),
+            Some("other.home")
+        );
+    }
+
+    #[test]
+    fn acknowledgement_is_required_only_when_registered_passkeys_would_break() {
+        use crate::PasskeyEnrollmentCounts as Counts;
+        let some = Some(Counts {
+            users_with_passkeys: 2,
+            passkey_only_users: 1,
+        });
+        let none_registered = Some(Counts::default());
+        for impact in [PasskeyImpact::Changed, PasskeyImpact::Disabled] {
+            assert!(passkey_acknowledgement_required(impact, some));
+            // An unreadable count fails safe.
+            assert!(passkey_acknowledgement_required(impact, None));
+            assert!(!passkey_acknowledgement_required(impact, none_registered));
+        }
+        for impact in [PasskeyImpact::Unchanged, PasskeyImpact::Unaffected] {
+            assert!(!passkey_acknowledgement_required(impact, some));
+            assert!(!passkey_acknowledgement_required(impact, None));
+        }
     }
 
     #[test]

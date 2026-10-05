@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use scryer_application::public_url::{PublicUrlPolicy, PublicUrlRuntime};
-use scryer_interface::context::RequestListAccountLinkOrigins;
+use scryer_interface::context::{ListAccountLinkOriginSource, RequestListAccountLinkOrigins};
 use url::Url;
 
 /// Callback destinations approved by server configuration: the public URL's
@@ -11,7 +11,10 @@ use url::Url;
 /// port Scryer serves. Request headers cannot enlarge this set, including when
 /// the request arrives through a proxy.
 #[derive(Clone, Default)]
-pub(crate) struct ListAccountOriginPolicy {
+pub(crate) struct ListAccountOriginPolicy(Arc<PolicyInner>);
+
+#[derive(Default)]
+struct PolicyInner {
     public_url: PublicUrlRuntime,
     listener: Option<Listener>,
     interfaces: InterfaceAddresses,
@@ -40,32 +43,52 @@ impl ListAccountOriginPolicy {
         tls_enabled: bool,
         interfaces: InterfaceAddresses,
     ) -> Self {
-        Self {
+        Self(Arc::new(PolicyInner {
             public_url,
             listener: Some(Listener {
                 bind,
                 scheme: if tls_enabled { "https" } else { "http" },
             }),
             interfaces,
-        }
+        }))
     }
 
-    /// Origins approved for this request, read from the live public URL so a
-    /// saved-setting change applies to the next request.
+    /// The per-request handle. It computes nothing until a resolver links an
+    /// account, so ordinary GraphQL requests do not read interfaces or build
+    /// origin lists.
     pub(crate) fn request_context(&self) -> RequestListAccountLinkOrigins {
+        RequestListAccountLinkOrigins::new(self.0.clone())
+    }
+}
+
+impl PolicyInner {
+    /// Origins approved right now, read from the live public URL so a
+    /// saved-setting change applies to the next link attempt.
+    async fn approved_origins_now(&self) -> Arc<[String]> {
         let Some(listener) = self.listener else {
-            return RequestListAccountLinkOrigins::default();
+            return Arc::from([]);
         };
-        RequestListAccountLinkOrigins(
-            approved_origins(&self.public_url.snapshot(), listener, &self.interfaces).into(),
-        )
+        let interfaces = if listener.bind.ip().is_unspecified() && listener.bind.port() != 0 {
+            self.interfaces.addresses().await
+        } else {
+            Arc::from([])
+        };
+        approved_origins(&self.public_url.snapshot(), listener, &interfaces).into()
+    }
+}
+
+impl ListAccountLinkOriginSource for PolicyInner {
+    fn approved_origins(
+        &self,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Arc<[String]>> + Send + '_>> {
+        Box::pin(self.approved_origins_now())
     }
 }
 
 fn approved_origins(
     public_url: &PublicUrlPolicy,
     listener: Listener,
-    interfaces: &InterfaceAddresses,
+    interfaces: &[IpAddr],
 ) -> Vec<String> {
     let mut origins = Vec::new();
     // An invalid public URL falls back to the local origins below; the
@@ -75,8 +98,9 @@ fn approved_origins(
     }
 
     // A wildcard listener approves the addresses of this machine's own
-    // interfaces, never arbitrary hostnames that resolve to it. DNS names and
-    // reverse-proxy addresses require the public URL.
+    // interfaces, never arbitrary hostnames that resolve to it. DNS names,
+    // published container ports and reverse-proxy addresses require the
+    // public URL.
     let Listener { bind, scheme } = listener;
     if bind.port() == 0 {
         return origins;
@@ -84,7 +108,7 @@ fn approved_origins(
     if !bind.ip().is_unspecified() {
         push_origin(&mut origins, &format!("{scheme}://{bind}"));
     } else {
-        for address in interfaces.addresses().iter() {
+        for address in interfaces {
             if !address_reachable_through(*address, bind.ip()) {
                 continue;
             }
@@ -105,7 +129,12 @@ fn address_reachable_through(address: IpAddr, bind: IpAddr) -> bool {
         return false;
     }
     match (address, bind) {
-        (IpAddr::V4(_), _) => true,
+        (IpAddr::V4(_), IpAddr::V4(_)) => true,
+        // Whether an IPv6 wildcard also accepts IPv4 depends on the
+        // platform's dual-stack default, which this policy cannot observe:
+        // the listener is bound separately at startup. Approve IPv4 interface
+        // addresses only for an IPv4 wildcard.
+        (IpAddr::V4(_), IpAddr::V6(_)) => false,
         // A browser origin cannot carry an IPv6 zone, so link-local addresses
         // are unusable; an IPv4 wildcard does not accept IPv6 connections.
         (IpAddr::V6(address), IpAddr::V6(_)) => !address.is_unicast_link_local(),
@@ -166,19 +195,28 @@ impl InterfaceAddresses {
         Self(InterfaceSource::Fixed(addresses.into()))
     }
 
-    fn addresses(&self) -> Arc<[IpAddr]> {
+    /// The cache lock is held only to read or swap the cached list; the
+    /// enumeration itself runs on the blocking pool, off the async workers.
+    async fn addresses(&self) -> Arc<[IpAddr]> {
         match &self.0 {
             #[cfg(test)]
             InterfaceSource::Fixed(addresses) => addresses.clone(),
             InterfaceSource::System(cache) => {
-                let mut cache = cache.lock().unwrap_or_else(|error| error.into_inner());
-                if let Some((read_at, addresses)) = cache.as_ref()
-                    && read_at.elapsed() < INTERFACE_REFRESH
                 {
-                    return addresses.clone();
+                    let cached = cache.lock().unwrap_or_else(|error| error.into_inner());
+                    if let Some((read_at, addresses)) = cached.as_ref()
+                        && read_at.elapsed() < INTERFACE_REFRESH
+                    {
+                        return addresses.clone();
+                    }
                 }
-                let addresses: Arc<[IpAddr]> = system_interface_addresses().into();
-                *cache = Some((Instant::now(), addresses.clone()));
+                let Ok(addresses) = tokio::task::spawn_blocking(system_interface_addresses).await
+                else {
+                    return Arc::from([]);
+                };
+                let addresses: Arc<[IpAddr]> = addresses.into();
+                *cache.lock().unwrap_or_else(|error| error.into_inner()) =
+                    Some((Instant::now(), addresses.clone()));
                 addresses
             }
         }
@@ -254,15 +292,17 @@ mod tests {
         tls_enabled: bool,
         interfaces: Vec<IpAddr>,
     ) -> Vec<String> {
-        ListAccountOriginPolicy::new(
+        let policy = ListAccountOriginPolicy::new(
             runtime(public_url),
             bind.parse().expect("bind address"),
             tls_enabled,
             InterfaceAddresses::fixed(interfaces),
-        )
-        .request_context()
-        .0
-        .to_vec()
+        );
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("runtime")
+            .block_on(policy.request_context().approved_origins())
+            .to_vec()
     }
 
     fn origins(public_url: Option<&str>, bind: &str, tls_enabled: bool) -> Vec<String> {
@@ -313,12 +353,20 @@ mod tests {
     }
 
     #[test]
-    fn account_link_origin_wildcard_bind_does_not_approve_lan_or_dns_addresses() {
-        for bind in ["0.0.0.0:8080", "[::]:8080"] {
-            let approved = origins(None, bind, false);
-            assert_eq!(approved.len(), 3);
-            assert!(!approved.contains(&"http://192.168.1.20:8080".into()));
+    fn account_link_origin_wildcard_bind_approves_machine_addresses_but_not_dns_or_foreign_ones() {
+        let interfaces = vec!["192.168.1.20".parse().unwrap(), "fd00::20".parse().unwrap()];
+        let v4 = origins_with(None, "0.0.0.0:8080", false, interfaces.clone());
+        assert!(v4.contains(&"http://192.168.1.20:8080".into()));
+        let v6 = origins_with(None, "[::]:8080", false, interfaces);
+        assert!(v6.contains(&"http://[fd00::20]:8080".into()));
+        for approved in [&v4, &v6] {
+            // Names that resolve to this machine and addresses it does not own
+            // need the public URL.
             assert!(!approved.contains(&"http://media.home:8080".into()));
+            assert!(!approved.contains(&"http://192.168.1.21:8080".into()));
+            assert!(!approved.contains(&"http://172.17.0.1:8080".into()));
+            assert!(!approved.contains(&"http://[fd00::21]:8080".into()));
+            assert!(approved.contains(&"http://localhost:8080".into()));
         }
         assert!(origins(None, "127.0.0.1:0", false).is_empty());
     }
@@ -345,8 +393,11 @@ mod tests {
             1
         );
 
+        // An IPv6 wildcard may or may not accept IPv4 on this platform, so
+        // IPv4 interface addresses are not approved for it; loopback stays.
         let v6 = origins_with(None, "[::]:8080", false, interfaces);
-        assert!(v6.contains(&"http://192.168.1.20:8080".into()));
+        assert!(!v6.contains(&"http://192.168.1.20:8080".into()));
+        assert!(v6.contains(&"http://127.0.0.1:8080".into()));
         assert!(v6.contains(&"http://[fd00::20]:8080".into()));
         assert!(!v6.iter().any(|origin| origin.contains("fe80")));
     }

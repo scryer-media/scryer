@@ -10,8 +10,9 @@ use scryer_interface_media::mappers::{
     from_download_client_config_with_fields, from_download_client_routing_entry,
     from_indexer_config_with_fields, from_indexer_routing_entry, from_jellyfin_server_user,
     from_library_paths_settings, from_media_server_connection, from_media_server_user_group,
-    from_media_settings, from_proxy_config, from_quality_profile_settings, from_seeding_profile,
-    from_service_settings, from_subtitle_provider_config, from_user_with_auth_factor_status,
+    from_media_settings, from_proxy_config, from_public_url_change_preview,
+    from_quality_profile_settings, from_seeding_profile, from_service_settings,
+    from_subtitle_provider_config, from_user_with_auth_factor_status,
 };
 use scryer_interface_media::types::*;
 
@@ -1143,6 +1144,24 @@ impl SettingsQueries {
         app.get_service_settings(&actor)
             .await
             .map(from_service_settings)
+            .map_err(to_gql_error)
+    }
+
+    /// Previews saving a public URL, or clearing it, without saving: the
+    /// stored form, any refusal, and the effect on passkeys after the next
+    /// restart.
+    async fn public_url_change_preview(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Proposed public URL; omit it and set reset to preview clearing.")]
+        public_url: Option<String>,
+        #[graphql(desc = "Preview clearing the saved public URL.")] reset: Option<bool>,
+    ) -> GqlResult<PublicUrlChangePreviewPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        app.preview_public_url_change(&actor, public_url.as_deref(), reset.unwrap_or(false))
+            .await
+            .map(from_public_url_change_preview)
             .map_err(to_gql_error)
     }
 

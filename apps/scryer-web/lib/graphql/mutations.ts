@@ -1338,6 +1338,7 @@ const serviceSettingsFieldSelection = `
     publicUrlSource
     publicUrlSaved
     publicUrlError
+    publicUrlErrorCode
     publicUrlEditable
     basePath
     basePathSource
@@ -1346,7 +1347,8 @@ const serviceSettingsFieldSelection = `
     passkeyRpId
     passkeyRpOrigin
     passkeyRpSource
-    passkeysRegistered`;
+    passkeyUserCount
+    passkeyOnlyUserCount`;
 
 export const saveQualityProfileSettingsMutation = `mutation SaveQualityProfileSettings($input: SaveQualityProfileSettingsInput!) {
   saveQualityProfileSettings(input: $input) {${qualityProfileSettingsFieldSelection}

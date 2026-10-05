@@ -5,10 +5,15 @@ import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useAuth } from "@/lib/hooks/use-auth";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
-import { tlsSettingsQuery } from "@/lib/graphql/queries";
+import { publicUrlChangePreviewQuery, tlsSettingsQuery } from "@/lib/graphql/queries";
 import { updateServiceSettingsMutation } from "@/lib/graphql/mutations";
-import { userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
-import type { ConfigValueSource, ServiceSettings } from "@/lib/types/settings";
+import { graphQlErrorExtension, userFacingGraphQlErrorMessage } from "@/lib/graphql/error-message";
+import type {
+  ConfigValueSource,
+  PublicUrlChangePreview,
+  PublicUrlErrorCode,
+  ServiceSettings,
+} from "@/lib/types/settings";
 
 const SOURCE_KEYS: Record<ConfigValueSource, string> = {
   environment: "settings.publicUrlSourceEnvironment",
@@ -22,21 +27,23 @@ const PASSKEY_SOURCE_KEYS: Record<ServiceSettings["passkeyRpSource"], string> = 
   none: "settings.publicUrlSourceDefault",
 };
 
-function hostnameOf(value: string): string | null {
-  try {
-    return new URL(value).hostname.toLowerCase();
-  } catch {
-    return null;
-  }
+const ERROR_KEYS: Record<PublicUrlErrorCode, string> = {
+  invalid_url: "settings.publicUrlError.invalid_url",
+  wildcard_host: "settings.publicUrlError.wildcard_host",
+  credentials: "settings.publicUrlError.credentials",
+  query_or_fragment: "settings.publicUrlError.query_or_fragment",
+  path_not_allowed: "settings.publicUrlError.path_not_allowed",
+  path_mismatch: "settings.publicUrlError.path_mismatch",
+  environment_locked: "settings.publicUrlError.environment_locked",
+  save_and_reset: "settings.publicUrlError.save_and_reset",
+  passkey_acknowledgement_required: "settings.publicUrlError.passkey_acknowledgement_required",
+};
+
+function isPublicUrlErrorCode(value: string | null): value is PublicUrlErrorCode {
+  return value != null && Object.hasOwn(ERROR_KEYS, value);
 }
 
-// Whether saving `next` (null clears) would change the passkey relying party
-// that existing passkeys are bound to.
-function changesPasskeyRelyingParty(settings: ServiceSettings, next: string | null): boolean {
-  if (!settings.passkeysRegistered || settings.passkeyRpSource !== "public_url") return false;
-  if (next == null) return true;
-  return hostnameOf(next) !== settings.passkeyRpId;
-}
+type PendingSave = { reset: boolean; preview: PublicUrlChangePreview };
 
 export function PublicUrlPanel() {
   const client = useClient();
@@ -48,7 +55,7 @@ export function PublicUrlPanel() {
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [saved, setSaved] = React.useState(false);
-  const [pendingReset, setPendingReset] = React.useState<boolean | null>(null);
+  const [pending, setPending] = React.useState<PendingSave | null>(null);
   const inputId = React.useId();
 
   React.useEffect(() => {
@@ -70,25 +77,55 @@ export function PublicUrlPanel() {
     return () => { cancelled = true; };
   }, [allowed, client, t]);
 
-  function requestSave(reset: boolean) {
-    if (busy || !settings) return;
-    const next = reset || draft.trim() === "" ? null : draft.trim();
-    if (changesPasskeyRelyingParty(settings, next)) {
-      setPendingReset(reset);
-      return;
-    }
-    void save(reset);
+  function errorText(code: string | null, fallback: string): string {
+    return isPublicUrlErrorCode(code) ? t(ERROR_KEYS[code]) : fallback;
   }
 
-  async function save(reset: boolean) {
+  // The server decides what the change does to passkeys, using the same rules
+  // as the save and the next start; the save then enforces the same answer.
+  async function requestSave(reset: boolean) {
+    if (busy || !settings) return;
+    const clearing = reset || draft.trim() === "";
+    setBusy(true);
+    setError(null);
+    setSaved(false);
+    let preview: PublicUrlChangePreview;
+    try {
+      const result = await client.query<{ publicUrlChangePreview: PublicUrlChangePreview }>(
+        publicUrlChangePreviewQuery,
+        clearing ? { reset: true } : { publicUrl: draft.trim() },
+        { requestPolicy: "network-only" },
+      ).toPromise();
+      if (result.error) throw result.error;
+      if (!result.data) throw new Error(t("settings.publicUrlSaveError"));
+      preview = result.data.publicUrlChangePreview;
+    } catch (cause) {
+      setError(userFacingGraphQlErrorMessage(cause, t("settings.publicUrlSaveError")));
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    if (preview.errorCode != null || preview.error != null) {
+      setError(errorText(preview.errorCode, preview.error ?? t("settings.publicUrlSaveError")));
+      return;
+    }
+    if (preview.acknowledgementRequired) {
+      setPending({ reset: clearing, preview });
+      return;
+    }
+    void save(clearing, false);
+  }
+
+  async function save(clearing: boolean, acknowledgePasskeyImpact: boolean) {
     if (busy || !settings) return;
     setBusy(true);
     setError(null);
     setSaved(false);
-    const clearing = reset || draft.trim() === "";
+    const input: Record<string, unknown> = clearing ? { resetPublicUrl: true } : { publicUrl: draft.trim() };
+    if (acknowledgePasskeyImpact) input.acknowledgePasskeyImpact = true;
     try {
       const result = await client.mutation<{ updateServiceSettings: ServiceSettings }>(updateServiceSettingsMutation, {
-        input: clearing ? { resetPublicUrl: true } : { publicUrl: draft.trim() },
+        input,
       }).toPromise();
       if (result.error) throw result.error;
       if (!result.data) throw new Error(t("settings.publicUrlSaveError"));
@@ -96,10 +133,33 @@ export function PublicUrlPanel() {
       setDraft(result.data.updateServiceSettings.publicUrlSaved ?? "");
       setSaved(true);
     } catch (cause) {
-      setError(userFacingGraphQlErrorMessage(cause, t("settings.publicUrlSaveError")));
+      setError(errorText(
+        graphQlErrorExtension(cause, "PUBLIC_URL_REJECTED", "reason"),
+        userFacingGraphQlErrorMessage(cause, t("settings.publicUrlSaveError")),
+      ));
     } finally {
       setBusy(false);
     }
+  }
+
+  function passkeyWarning(preview: PublicUrlChangePreview): string {
+    const rpId = preview.currentPasskeyRpId ?? "";
+    const parts = [
+      preview.passkeyImpact === "disabled"
+        ? t("settings.publicUrlPasskeyWarningDisabled", { rpId })
+        : t("settings.publicUrlPasskeyWarningChanged", { rpId, nextRpId: preview.nextPasskeyRpId ?? "" }),
+      preview.passkeyUserCount == null || preview.passkeyOnlyUserCount == null
+        ? t("settings.publicUrlPasskeyWarningCountsUnknown")
+        : t("settings.publicUrlPasskeyWarningCounts", {
+          users: String(preview.passkeyUserCount),
+          passkeyOnly: String(preview.passkeyOnlyUserCount),
+        }),
+      t("settings.publicUrlPasskeyWarningRecovery", {
+        users: t("settings.users"),
+        reset: t("settings.resetMfa"),
+      }),
+    ];
+    return parts.join(" ");
   }
 
   if (!allowed) return null;
@@ -123,15 +183,15 @@ export function PublicUrlPanel() {
       <label className="block text-sm" htmlFor={inputId}>{t("settings.publicUrlLabel")}</label>
       <input id={inputId} type="url" inputMode="url" autoComplete="off" spellCheck={false}
         placeholder="https://scryer.example.com"
-        value={editable ? draft : settings?.publicUrlSaved ?? ""} disabled={busy || !settings || !editable}
+        value={editable ? draft : settings?.publicUrl ?? ""} disabled={busy || !settings || !editable}
         onChange={(event) => { setDraft(event.target.value); setSaved(false); }}
         className="w-full rounded-md border border-[var(--scry-border)] bg-[var(--scry-bg)] p-3 font-mono text-sm disabled:opacity-50" />
       {settings && !editable ? <p className="text-sm text-[var(--scry-muted)]">{t("settings.publicUrlEnvironmentLocked")}</p> : null}
-      {settings?.publicUrlError ? <p role="alert" className="text-sm text-red-400">{t("settings.publicUrlInvalid", { error: settings.publicUrlError })}</p> : null}
+      {settings?.publicUrlError ? <p role="alert" className="text-sm text-red-400">{t("settings.publicUrlInvalid", { error: errorText(settings.publicUrlErrorCode, settings.publicUrlError) })}</p> : null}
       <p className="text-sm text-[var(--scry-muted)]">{t("settings.publicUrlPasskeyRestart")}</p>
       <div className="flex flex-wrap gap-3">
-        <Button disabled={busy || !settings || !editable} onClick={() => requestSave(false)}>{t(busy ? "label.saving" : "label.save")}</Button>
-        <Button variant="outline" disabled={busy || !settings || !editable || settings.publicUrlSaved == null} onClick={() => requestSave(true)}>{t("settings.publicUrlClear")}</Button>
+        <Button disabled={busy || !settings || !editable} onClick={() => void requestSave(false)}>{t(busy ? "label.saving" : "label.save")}</Button>
+        <Button variant="outline" disabled={busy || !settings || !editable || settings.publicUrlSaved == null} onClick={() => void requestSave(true)}>{t("settings.publicUrlClear")}</Button>
       </div>
       {error ? <p role="alert" className="text-sm text-red-400">{error}</p> : null}
       {saved ? <p role="status" className="text-sm text-green-400">{t("settings.publicUrlSaved")}</p> : null}
@@ -159,18 +219,18 @@ export function PublicUrlPanel() {
         </div>
       ) : null}
       <ConfirmDialog
-        open={pendingReset != null}
+        open={pending != null}
         title={t("settings.publicUrlPasskeyWarningTitle")}
-        description={t("settings.publicUrlPasskeyWarning", { rpId: settings?.passkeyRpId ?? "" })}
+        description={pending ? passkeyWarning(pending.preview) : ""}
         confirmLabel={t("settings.publicUrlPasskeyWarningConfirm")}
         cancelLabel={t("label.cancel")}
         isBusy={busy}
         onConfirm={() => {
-          const reset = pendingReset ?? false;
-          setPendingReset(null);
-          void save(reset);
+          const clearing = pending?.reset ?? false;
+          setPending(null);
+          void save(clearing, true);
         }}
-        onCancel={() => setPendingReset(null)}
+        onCancel={() => setPending(null)}
       />
     </section>
   );
