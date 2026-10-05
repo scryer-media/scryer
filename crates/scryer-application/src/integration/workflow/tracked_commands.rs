@@ -2296,7 +2296,16 @@ async fn handle_tracked_download_command(
                 Ok(verdict) => verdict,
                 Err(error) => {
                     // Not settled: the download stays blocked on the hold's
-                    // warning and nothing is cleaned up.
+                    // warning and nothing is cleaned up. The download is
+                    // tracked, so a missing record met while settling must
+                    // not read as an untracked download: the release stays
+                    // resumable.
+                    let error = match error {
+                        AppError::NotFound(message) => AppError::Validation(format!(
+                            "held sources could not be settled: {message}"
+                        )),
+                        other => other,
+                    };
                     let _ = reply.send(Err(error));
                     return;
                 }
