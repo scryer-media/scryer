@@ -112,7 +112,16 @@ impl ListActions for AppListActions<'_> {
         let mut account = self.app.refresh_list_account_locked(account).await?;
         account.last_used_at = Some(Utc::now());
         account.updated_at = Utc::now();
-        self.app.services.lists.accounts.update(account).await
+        // Recording the use is best effort: a renewal that could not be saved
+        // is kept by the account runtime, and this sync still uses it.
+        Ok(self
+            .app
+            .services
+            .lists
+            .accounts
+            .update(account.clone())
+            .await
+            .unwrap_or(account))
     }
     async fn add_title(
         &self,

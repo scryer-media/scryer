@@ -25,6 +25,9 @@ struct Auth {
     renew_client: Mutex<Option<String>>,
     /// Failure codes answered by successive renewals before they succeed.
     renew_failures: std::sync::Mutex<Vec<&'static str>>,
+    /// The refresh handle each renewal and revoke was given, in order.
+    renewed_handles: std::sync::Mutex<Vec<Option<String>>>,
+    revoked_handles: std::sync::Mutex<Vec<Option<String>>>,
     identity: Option<String>,
 }
 /// The pause a rate-limited fixture renewal asks for: longer than the
@@ -70,10 +73,14 @@ impl ListAccountAuthGateway for Auth {
     async fn renew(
         &self,
         _: &str,
-        _: &ListAccountCredential,
+        credential: &ListAccountCredential,
         app: Option<&ListProviderAppConfig>,
     ) -> AppResult<ListAccountCredential> {
         self.renewals.fetch_add(1, Ordering::SeqCst);
+        self.renewed_handles
+            .lock()
+            .unwrap()
+            .push(credential.refresh_handle.clone());
         *self.renew_client.lock().await = app.map(|app| app.client_id.clone());
         self.entered.notify_one();
         if self.block_renew {
@@ -94,10 +101,14 @@ impl ListAccountAuthGateway for Auth {
     async fn revoke(
         &self,
         _: &str,
-        _: &ListAccountCredential,
+        credential: &ListAccountCredential,
         _: Option<&ListProviderAppConfig>,
     ) -> AppResult<()> {
         self.revocations.fetch_add(1, Ordering::SeqCst);
+        self.revoked_handles
+            .lock()
+            .unwrap()
+            .push(credential.refresh_handle.clone());
         self.revoke_entered.notify_one();
         if self.block_revoke {
             timeout(Duration::from_secs(30), self.revoke_release.notified())
@@ -435,12 +446,81 @@ impl UserListAccountRepository for FailRotatedWrite {
     async fn list_by_user_id(&self, id: &str) -> AppResult<Vec<UserListAccount>> {
         self.store.list_by_user_id(id).await
     }
+    async fn unlink(&self, id: &str, user_id: &str) -> AppResult<()> {
+        UserListAccountRepository::unlink(self.store.as_ref(), id, user_id).await
+    }
     async fn delete(&self, id: &str) -> AppResult<()> {
         UserListAccountRepository::delete(self.store.as_ref(), id).await
     }
 }
 #[tokio::test]
-async fn private_account_failed_rotated_write_never_replays_old_handle() {
+async fn private_account_renewed_credential_outlives_a_store_that_keeps_failing() {
+    let auth = Arc::new(Auth::default());
+    let mut harness = harness(auth.clone()).await;
+    let account = seed_expired(&harness).await;
+    let accounts = Arc::new(FailRotatedWrite {
+        store: harness.lists.clone(),
+        failing_active_writes: AtomicUsize::new(usize::MAX),
+    });
+    harness.app.services.lists.accounts = accounts.clone();
+    let stored = || async {
+        UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+
+    // Every save fails, more often than they are retried. The renewed
+    // credential still serves this request and the account stays linked.
+    let view = harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert_eq!(view.account.status, UserListAccountStatus::Active);
+    assert_eq!(
+        view.account.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+    let unsaved = stored().await;
+    assert_eq!(unsaved.status, UserListAccountStatus::Active);
+    assert_eq!(
+        unsaved.credential.refresh_handle.as_deref(),
+        Some("fixture-old-handle")
+    );
+
+    // While the store is still failing, the account is reported as still
+    // refreshing; the spent grant is never offered to the provider again.
+    match harness.app.list_account(&harness.user, &account.id).await {
+        Err(AppError::TemporaryUnavailable { .. }) => {}
+        Err(other) => panic!("expected a temporary answer, got {other:?}"),
+        Ok(_) => panic!("expected a temporary answer while the save keeps failing"),
+    }
+    assert_eq!(stored().await.status, UserListAccountStatus::Active);
+
+    // Once the store recovers, the next use saves the renewed credential
+    // before anything else, without renewing again.
+    accounts.failing_active_writes.store(0, Ordering::SeqCst);
+    let view = harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        view.account.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+    let saved = stored().await;
+    assert_eq!(saved.status, UserListAccountStatus::Active);
+    assert_eq!(
+        saved.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn private_account_unlink_revokes_the_renewal_that_could_not_be_saved() {
     let auth = Arc::new(Auth::default());
     let mut harness = harness(auth.clone()).await;
     let account = seed_expired(&harness).await;
@@ -448,28 +528,21 @@ async fn private_account_failed_rotated_write_never_replays_old_handle() {
         store: harness.lists.clone(),
         failing_active_writes: AtomicUsize::new(usize::MAX),
     });
-    // The caller learns the account needs reconnecting, not that storage failed.
-    match harness.app.list_account(&harness.user, &account.id).await {
-        Err(AppError::Validation(message)) => assert_eq!(message, "reconnect this list account"),
-        Err(other) => panic!("expected the reconnect outcome, got {other:?}"),
-        Ok(_) => panic!("expected the reconnect outcome"),
-    }
+    harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    harness
+        .app
+        .unlink_list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert_eq!(auth.revocations.load(Ordering::SeqCst), 1);
     assert_eq!(
-        UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        UserListAccountStatus::Expired
+        auth.revoked_handles.lock().unwrap().as_slice(),
+        [Some("fixture-rotated-handle".to_string())]
     );
-    assert!(
-        harness
-            .app
-            .list_account(&harness.user, &account.id)
-            .await
-            .is_err()
-    );
-    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
 async fn private_account_renewed_credential_survives_a_failed_save() {
