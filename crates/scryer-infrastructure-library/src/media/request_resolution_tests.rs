@@ -390,3 +390,111 @@ async fn orphan_claim_reconciliation_is_bounded_retryable_and_preserves_existing
         originals
     );
 }
+
+fn reopened_event(request: &MediaRequest) -> NewDomainEvent {
+    NewDomainEvent {
+        event_id: scryer_domain::Id::new().0,
+        occurred_at: Utc::now(),
+        actor_kind: DomainEventActorKind::User,
+        actor_user_id: Some("requester-under-test".into()),
+        actor_display_name: "Reviewer".into(),
+        title_id: None,
+        facet: Some(MediaFacet::Movie),
+        correlation_id: None,
+        causation_id: None,
+        schema_version: 1,
+        stream: DomainEventStream::Global,
+        payload: DomainEventPayload::MediaRequestReopened(
+            scryer_domain::MediaRequestSubmittedEventData {
+                request_id: request.id.clone(),
+                library_id: request.library_id.clone(),
+                facet: request.facet.clone(),
+                title_name: request.title.clone(),
+                external_ids: request.external_ids.clone(),
+                poster_url: None,
+                year: None,
+                requested_quality_profile_id: None,
+                requested_quality_profile_name: None,
+                requested_monitor_type: None,
+                requested_lease_days: None,
+            },
+        ),
+    }
+}
+
+/// Who each recorded reopen names as its actor; the test store holds one
+/// request, so every reopen row belongs to it.
+async fn reopen_event_actors(store: &MediaRequestStore) -> Vec<Option<String>> {
+    SqlRuntime::fetch_all(
+        store.datastore.read_exec(),
+        "SELECT actor_user_id FROM domain_events WHERE event_type = {}",
+        &[SqlArg::Text("media_request_reopened".into())],
+    )
+    .await
+    .unwrap()
+    .iter()
+    .map(|row| row.opt_text("actor_user_id").unwrap())
+    .collect()
+}
+
+#[tokio::test]
+async fn reopening_a_rejected_request_clears_only_its_resolution() {
+    let store = test_store().await;
+    seed_owners(&store).await;
+    seed_request(&store, "dismissed", "pending", &["kept-tag"]).await;
+    let original = store.get("dismissed").await.unwrap().unwrap();
+    let mut rejection = approval(&original);
+    rejection.status = MediaRequestStatus::Rejected;
+    rejection.resolved_by_user_id = Some("requester-under-test".into());
+    rejection.created_title_id = None;
+    rejection.approved_lease_days = None;
+    rejection.policy_tags = vec!["kept-tag".into()];
+    rejection.event.payload = match rejection.event.payload {
+        DomainEventPayload::MediaRequestApproved(data) => {
+            DomainEventPayload::MediaRequestRejected(data)
+        }
+        other => other,
+    };
+    store
+        .resolve_pending(&original.id, rejection)
+        .await
+        .expect("reject the request");
+
+    let reopened = store
+        .reopen_rejected(&original.id, reopened_event(&original))
+        .await
+        .expect("reopen the rejected request");
+
+    assert_eq!(reopened.request.status, MediaRequestStatus::Pending);
+    assert_eq!(reopened.request.resolved_by_user_id, None);
+    assert_eq!(reopened.request.resolved_at, None);
+    assert_eq!(reopened.request.created_title_id, None);
+    assert_eq!(
+        reopened.request.created_by_user_id,
+        original.created_by_user_id
+    );
+    assert_eq!(
+        reopened.request.created_at.timestamp_millis(),
+        original.created_at.timestamp_millis()
+    );
+    assert_eq!(reopened.request.policy_tags, vec!["kept-tag".to_string()]);
+    assert_eq!(
+        reopened.request.requesters, original.requesters,
+        "requesters are kept"
+    );
+    assert_eq!(
+        reopen_event_actors(&store).await,
+        vec![Some("requester-under-test".to_string())]
+    );
+
+    let error = store
+        .reopen_rejected(&original.id, reopened_event(&original))
+        .await
+        .expect_err("a pending request cannot be reopened");
+    assert!(matches!(error, AppError::Validation(_)), "{error:?}");
+    assert_eq!(
+        reopen_event_actors(&store).await.len(),
+        1,
+        "a refused reopen records nothing"
+    );
+}

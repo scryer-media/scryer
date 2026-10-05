@@ -4582,6 +4582,10 @@ enum DomainEventTypeValue {
 	"""
 	MEDIA_REQUEST_UPDATED
 	"""
+	A dismissed media request was reopened.
+	"""
+	MEDIA_REQUEST_REOPENED
+	"""
 	A media request was approved.
 	"""
 	MEDIA_REQUEST_APPROVED
@@ -19048,6 +19052,15 @@ type MutationRoot {
 		requestId: ID!
 	): MediaRequestActionPayload!
 	"""
+	Put a dismissed media request back into the queue as pending, keeping its requester and creation date.
+	"""
+	reopenMediaRequest(
+		"""
+		Request identity to reopen.
+		"""
+		requestId: ID!
+	): MediaRequestActionPayload!
+	"""
 	Update the caller's pending request preferences and return the current request.
 	"""
 	updateMyMediaRequest(
@@ -22428,7 +22441,11 @@ type QueryRoot {
 		"""
 		Restrict requests to one status; omitted includes all statuses.
 		"""
-		status: MediaRequestStatusValue
+		status: MediaRequestStatusValue,
+		"""
+		Restrict requests to those this user is a requester on; omitted includes every requester.
+		"""
+		requesterUserId: ID
 	): [MediaRequestPayload!]!
 	"""
 	List only the caller's media requests, optionally filtered by facet, libraries, and status.

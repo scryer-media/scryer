@@ -652,6 +652,12 @@ export const dismissMediaRequestMutation = `mutation DismissMediaRequest($reques
 }
 }`;
 
+export const reopenMediaRequestMutation = `mutation ReopenMediaRequest($requestId: ID!) {
+  reopenMediaRequest(requestId: $requestId) {
+    requestId
+  }
+}`;
+
 export const updateMyMediaRequestMutation = `mutation UpdateMyMediaRequest($input: UpdateMediaRequestInput!) {
   updateMyMediaRequest(input: $input) {
     id

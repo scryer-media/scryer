@@ -764,6 +764,39 @@ impl MediaRequestRepository for MockMediaRequestRepo {
         })
     }
 
+    async fn reopen_rejected(
+        &self,
+        request_id: &str,
+        reopened_event: NewDomainEvent,
+    ) -> AppResult<MediaRequestUpdateResult> {
+        let mut requests = self.requests.lock().await;
+        let Some(request) = requests.iter_mut().find(|request| {
+            request.id == request_id && request.status == MediaRequestStatus::Rejected
+        }) else {
+            return Err(AppError::Validation(
+                "only a dismissed media request can be reopened".into(),
+            ));
+        };
+        request.status = MediaRequestStatus::Pending;
+        request.resolved_by_user_id = None;
+        request.resolved_at = None;
+        request.created_title_id = None;
+        request.approved_quality_profile_id = None;
+        request.approved_quality_profile_name = None;
+        request.approved_lease_days = None;
+        request.updated_at = Utc::now();
+        let reopened = request.clone();
+        drop(requests);
+
+        let event =
+            append_mock_media_request_event(self.domain_events.as_ref(), reopened_event).await?;
+
+        Ok(MediaRequestUpdateResult {
+            request: reopened,
+            event,
+        })
+    }
+
     async fn count_pending_by_facet(
         &self,
         library_ids: &[String],

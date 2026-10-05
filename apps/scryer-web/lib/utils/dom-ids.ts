@@ -245,6 +245,10 @@ export function mediaRequestDismissId(requestId: string): string {
   return selectorId("media-request-dismiss", requestId);
 }
 
+export function mediaRequestReopenId(requestId: string): string {
+  return selectorId("media-request-reopen", requestId);
+}
+
 export function mediaRequestEditId(requestId: string): string {
   return selectorId("media-request-edit", requestId);
 }

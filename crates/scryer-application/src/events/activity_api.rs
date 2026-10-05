@@ -267,6 +267,9 @@ async fn event_allowed(
         DomainEventPayload::MediaRequestUpdated(data) => {
             Ok(allowed_library_ids.contains(&data.library_id))
         }
+        DomainEventPayload::MediaRequestReopened(data) => {
+            Ok(allowed_library_ids.contains(&data.library_id))
+        }
         DomainEventPayload::MediaRequestApproved(data) => {
             Ok(allowed_library_ids.contains(&data.library_id))
         }

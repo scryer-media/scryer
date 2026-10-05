@@ -249,6 +249,11 @@ pub(crate) fn activity_event_from_domain_event(event: &DomainEvent) -> Option<Ac
             ActivitySeverity::Info,
             format!("Updated request for '{}'.", data.title_name),
         ),
+        DomainEventPayload::MediaRequestReopened(data) => (
+            ActivityKind::SystemNotice,
+            ActivitySeverity::Info,
+            format!("Reopened request for '{}'.", data.title_name),
+        ),
         DomainEventPayload::MediaRequestCanceled(data) => (
             ActivityKind::SystemNotice,
             ActivitySeverity::Info,

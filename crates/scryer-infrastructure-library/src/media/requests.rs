@@ -338,6 +338,55 @@ impl MediaRequestRepository for MediaRequestStore {
         .await
     }
 
+    async fn reopen_rejected(
+        &self,
+        request_id: &str,
+        reopened_event: NewDomainEvent,
+    ) -> AppResult<MediaRequestUpdateResult> {
+        let request_id = request_id.to_string();
+        SqlRuntime::run_in_transaction(
+            &self.datastore,
+            "reopen_rejected_media_request",
+            move |tx| {
+                let request_id = request_id.clone();
+                let reopened_event = reopened_event.clone();
+                Box::pin(async move {
+                    let rows = tx
+                        .execute(
+                            "UPDATE media_requests
+                            SET status = {},
+                                resolved_by_user_id = NULL,
+                                resolved_at = NULL,
+                                created_title_id = NULL,
+                                approved_quality_profile_id = NULL,
+                                approved_quality_profile_name = NULL,
+                                approved_lease_days = NULL,
+                                updated_at = {}
+                          WHERE id = {} AND status = {}",
+                            &[
+                                SqlArg::Text(MediaRequestStatus::Pending.as_str().to_string()),
+                                SqlArg::Timestamp(Utc::now()),
+                                SqlArg::Text(request_id.clone()),
+                                SqlArg::Text(MediaRequestStatus::Rejected.as_str().to_string()),
+                            ],
+                        )
+                        .await?;
+                    if rows == 0 {
+                        return Err(AppError::Validation(
+                            "only a dismissed media request can be reopened".into(),
+                        ));
+                    }
+                    let event = append_domain_event_tx(tx, reopened_event).await?;
+                    let request = load_media_request_tx(tx, &request_id)
+                        .await?
+                        .ok_or_else(|| AppError::NotFound(format!("media request {request_id}")))?;
+                    Ok(MediaRequestUpdateResult { request, event })
+                })
+            },
+        )
+        .await
+    }
+
     async fn count_pending_by_facet(
         &self,
         library_ids: &[String],

@@ -1534,7 +1534,11 @@ async fn graphql_introspection_media_request_actions_use_direct_request_id() {
             .unwrap_or_else(|| panic!("{field_name}.requestId should exist"))
             .clone()
     };
-    for field_name in ["dismissMediaRequest", "cancelMyMediaRequest"] {
+    for field_name in [
+        "dismissMediaRequest",
+        "reopenMediaRequest",
+        "cancelMyMediaRequest",
+    ] {
         let arg = request_id_arg(field_name);
         assert_eq!(arg["type"]["kind"], "NON_NULL", "{field_name}");
         assert_eq!(arg["type"]["ofType"]["name"], "ID", "{field_name}");

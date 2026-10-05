@@ -1390,6 +1390,10 @@ impl CatalogQueries {
         library_ids: Option<Vec<ID>>,
         #[graphql(desc = "Restrict requests to one status; omitted includes all statuses.")]
         status: Option<MediaRequestStatusValue>,
+        #[graphql(
+            desc = "Restrict requests to those this user is a requester on; omitted includes every requester."
+        )]
+        requester_user_id: Option<ID>,
     ) -> GqlResult<Vec<MediaRequestPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -1400,6 +1404,7 @@ impl CatalogQueries {
                     facet: facet.map(MediaFacetValue::into_domain),
                     library_ids: optional_ids_to_strings(library_ids),
                     status: status.map(MediaRequestStatusValue::into_domain),
+                    requester_user_id: requester_user_id.map(String::from),
                 },
             )
             .await
@@ -1429,6 +1434,7 @@ impl CatalogQueries {
                     facet: facet.map(MediaFacetValue::into_domain),
                     library_ids: optional_ids_to_strings(library_ids),
                     status: status.map(MediaRequestStatusValue::into_domain),
+                    requester_user_id: None,
                 },
             )
             .await

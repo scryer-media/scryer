@@ -124,7 +124,8 @@ fn media_request_changed_payload(event: DomainEvent) -> Option<MediaRequestChang
 
     match event.payload {
         DomainEventPayload::MediaRequestSubmitted(data)
-        | DomainEventPayload::MediaRequestUpdated(data) => Some(MediaRequestChangedPayload {
+        | DomainEventPayload::MediaRequestUpdated(data)
+        | DomainEventPayload::MediaRequestReopened(data) => Some(MediaRequestChangedPayload {
             event_id: event_id.into(),
             event_type: crate::types::DomainEventTypeValue::from_domain(event_type),
             request_id: data.request_id.into(),

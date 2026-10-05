@@ -2660,6 +2660,16 @@ pub trait MediaRequestRepository: Send + Sync {
         updated_event: NewDomainEvent,
     ) -> AppResult<MediaRequestUpdateResult>;
 
+    /// Put one rejected request back to pending and record `reopened_event`
+    /// in the same transaction. The submitter, requesters, creation time,
+    /// preferences and policy provenance are kept; only the resolution is
+    /// cleared. Fails with a validation error when the row is not rejected.
+    async fn reopen_rejected(
+        &self,
+        request_id: &str,
+        reopened_event: NewDomainEvent,
+    ) -> AppResult<MediaRequestUpdateResult>;
+
     async fn count_pending_by_facet(&self, library_ids: &[String])
     -> AppResult<MediaRequestCounts>;
 

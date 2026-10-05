@@ -139,6 +139,9 @@ pub struct ListMediaRequestsInput {
     pub facet: Option<MediaFacet>,
     pub library_ids: Option<Vec<String>>,
     pub status: Option<MediaRequestStatus>,
+    /// Restrict the queue to requests this user is a requester on. Only the
+    /// manager queue reads it; the caller's own list is always their own.
+    pub requester_user_id: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -506,7 +509,10 @@ impl AppUseCase {
                 facet: input.facet,
                 library_ids: Some(library_ids),
                 status: input.status,
-                requester_user_id: None,
+                requester_user_id: input
+                    .requester_user_id
+                    .map(|user_id| user_id.trim().to_string())
+                    .filter(|user_id| !user_id.is_empty()),
             })
             .await
     }
@@ -768,6 +774,70 @@ impl AppUseCase {
             self.remember_rejected_list_request(actor, &request).await;
         }
         Ok(resolution.updated)
+    }
+
+    /// Put a dismissed (rejected) request back into the queue as pending.
+    ///
+    /// Only someone who could have resolved it may reopen it. The request keeps
+    /// its submitter, requesters, creation date, preferences and policy
+    /// provenance; the reopen itself is recorded as its own lifecycle event
+    /// naming who reopened it and when. Request rules are not run again: the
+    /// row is not a new submission, so it neither counts as one nor gets
+    /// approved or denied automatically. It simply waits for a person, and the
+    /// usual edit and approve paths apply from there.
+    pub async fn reopen_media_request(
+        &self,
+        actor: &User,
+        request_id: &str,
+    ) -> AppResult<MediaRequest> {
+        let request_id = request_id.trim();
+        if request_id.is_empty() {
+            return Err(AppError::Validation("media request id is required".into()));
+        }
+        let request = self
+            .services
+            .catalog
+            .media_requests
+            .get(request_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound("media request not found".into()))?;
+        self.require_library_permission(
+            actor,
+            &request.library_id,
+            LibraryPermission::ManageTitles,
+        )
+        .await?;
+        if request.status != MediaRequestStatus::Rejected {
+            return Err(AppError::Validation(
+                "only a dismissed media request can be reopened".into(),
+            ));
+        }
+        // A pending request for something the library already holds is
+        // refused at submission; a reopened one is held to the same bar.
+        self.ensure_request_subject_is_not_in_library(
+            &request.library_id,
+            request.facet.clone(),
+            &request.external_ids,
+        )
+        .await?;
+
+        let reopened_event = new_global_domain_event(
+            actor,
+            DomainEventPayload::MediaRequestReopened(media_request_submitted_event_data(
+                &request,
+                request.requested_quality_profile_id.clone(),
+                request.requested_quality_profile_name.clone(),
+                request.requested_monitor_type.clone(),
+            )),
+        );
+        let reopened = self
+            .services
+            .catalog
+            .media_requests
+            .reopen_rejected(&request.id, reopened_event)
+            .await?;
+        self.publish_stored_domain_event(&reopened.event).await;
+        Ok(reopened.request)
     }
 
     pub async fn update_my_media_request(
@@ -1867,6 +1937,7 @@ fn media_request_lifecycle_event_types() -> Vec<DomainEventType> {
     vec![
         DomainEventType::MediaRequestSubmitted,
         DomainEventType::MediaRequestUpdated,
+        DomainEventType::MediaRequestReopened,
         DomainEventType::MediaRequestApproved,
         DomainEventType::MediaRequestRejected,
         DomainEventType::MediaRequestCanceled,
@@ -1876,7 +1947,8 @@ fn media_request_lifecycle_event_types() -> Vec<DomainEventType> {
 fn media_request_lifecycle_event_request_id(event: &DomainEvent) -> Option<&str> {
     match &event.payload {
         DomainEventPayload::MediaRequestSubmitted(data)
-        | DomainEventPayload::MediaRequestUpdated(data) => Some(data.request_id.as_str()),
+        | DomainEventPayload::MediaRequestUpdated(data)
+        | DomainEventPayload::MediaRequestReopened(data) => Some(data.request_id.as_str()),
         DomainEventPayload::MediaRequestApproved(data)
         | DomainEventPayload::MediaRequestRejected(data)
         | DomainEventPayload::MediaRequestCanceled(data) => Some(data.request_id.as_str()),
@@ -1887,7 +1959,8 @@ fn media_request_lifecycle_event_request_id(event: &DomainEvent) -> Option<&str>
 fn media_request_lifecycle_event_library_id(event: &DomainEvent) -> Option<&str> {
     match &event.payload {
         DomainEventPayload::MediaRequestSubmitted(data)
-        | DomainEventPayload::MediaRequestUpdated(data) => Some(data.library_id.as_str()),
+        | DomainEventPayload::MediaRequestUpdated(data)
+        | DomainEventPayload::MediaRequestReopened(data) => Some(data.library_id.as_str()),
         DomainEventPayload::MediaRequestApproved(data)
         | DomainEventPayload::MediaRequestRejected(data)
         | DomainEventPayload::MediaRequestCanceled(data) => Some(data.library_id.as_str()),
