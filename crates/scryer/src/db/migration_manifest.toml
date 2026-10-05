@@ -2818,6 +2818,17 @@ engine = "postgres"
 scope = "all"
 
 [[migration]]
+version = 272
+description = "scrub stored release url credentials"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "rust"
+hook_id = "scrub_stored_release_url_credentials"
+engine = "all"
+scope = "all"
+
+[[migration]]
 version = 273
 description = "import rejection skip reason projection"
 checksum_algo = "blake3"

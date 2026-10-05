@@ -23,6 +23,7 @@ mod migration_progress_tests;
 pub mod notification_targets;
 pub mod post_0_16_6_prerelease;
 pub mod post_processing_output;
+pub mod release_url_scrub;
 pub mod rule_set_runtime_wrapper;
 pub mod synthetic_root_ids;
 #[cfg(test)]
@@ -873,6 +874,9 @@ async fn run_rust_hook(
         }
         "backfill_import_skip_reason_projection" => {
             event_storage::backfill_import_skip_reason_projection_sqlite(tx).await
+        }
+        "scrub_stored_release_url_credentials" => {
+            release_url_scrub::scrub_stored_release_url_credentials_sqlite(tx).await
         }
         #[cfg(test)]
         "test_insert_hook_marker" => {
