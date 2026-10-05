@@ -120,9 +120,14 @@ fn redact_plain_query_params(raw: &str) -> String {
 /// Remove credentials from a domain event before it is stored, so the event
 /// log never holds a live indexer or tracker key.
 pub(crate) fn redact_new_domain_event(event: &mut scryer_domain::NewDomainEvent) {
-    if let scryer_domain::DomainEventPayload::ReleaseGrabbed(data) = &mut event.payload {
-        data.source_hint = redact_optional_url_credentials(data.source_hint.take());
-    }
+    use scryer_domain::DomainEventPayload as Payload;
+    let source_hint = match &mut event.payload {
+        Payload::ReleaseGrabbed(data) => &mut data.source_hint,
+        Payload::DownloadFailed(data) => &mut data.source_hint,
+        Payload::ReleaseBlocklisted(data) => &mut data.source_hint,
+        _ => return,
+    };
+    *source_hint = redact_optional_url_credentials(source_hint.take());
 }
 
 /// [`redact_url_credentials`] over an optional value.
@@ -348,6 +353,44 @@ mod tests {
             data.source_hint.as_deref(),
             Some("https://indexer.invalid/api?t=get&id=9&apiaccess=[redacted]")
         );
+    }
+
+    #[test]
+    fn failed_and_blocklisted_events_scrub_their_source_hint() {
+        use scryer_domain::*;
+        let hint = "https://indexer.invalid/api?t=get&id=9&apikey=s3cret";
+        let data = serde_json::json!({ "source_hint": hint });
+        for payload in [
+            DomainEventPayload::DownloadFailed(serde_json::from_value(data.clone()).unwrap()),
+            DomainEventPayload::ReleaseBlocklisted(serde_json::from_value(data.clone()).unwrap()),
+        ] {
+            let mut event = NewDomainEvent {
+                event_id: "event-1".to_string(),
+                occurred_at: chrono::Utc::now(),
+                actor_kind: DomainEventActorKind::System,
+                actor_user_id: None,
+                actor_display_name: "system".to_string(),
+                title_id: None,
+                facet: None,
+                correlation_id: None,
+                causation_id: None,
+                schema_version: 1,
+                stream: DomainEventStream::Title {
+                    title_id: "title-1".to_string(),
+                },
+                payload,
+            };
+            redact_new_domain_event(&mut event);
+            let source_hint = match event.payload {
+                DomainEventPayload::DownloadFailed(data) => data.source_hint,
+                DomainEventPayload::ReleaseBlocklisted(data) => data.source_hint,
+                _ => panic!("payload kind should not change"),
+            };
+            assert_eq!(
+                source_hint.as_deref(),
+                Some("https://indexer.invalid/api?t=get&id=9&apikey=[redacted]")
+            );
+        }
     }
 
     #[test]
