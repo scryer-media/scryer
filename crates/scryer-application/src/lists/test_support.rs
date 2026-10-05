@@ -607,6 +607,8 @@ pub(crate) struct RecordingActions {
     /// How many times a title's existence was looked up.
     pub title_lookups: Mutex<u32>,
     pub owner_manages_titles: bool,
+    /// Makes the owner's permission lookup fail instead of answering.
+    pub owner_permission_unreadable: bool,
 }
 
 impl RecordingActions {
@@ -662,6 +664,9 @@ impl ListActions for RecordingActions {
         _subscription: &ListSubscription,
         _route: &ListRoute,
     ) -> AppResult<bool> {
+        if self.owner_permission_unreadable {
+            return Err(AppError::Repository("fixture failure".into()));
+        }
         Ok(self.owner_manages_titles)
     }
 

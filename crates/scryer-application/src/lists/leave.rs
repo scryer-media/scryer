@@ -44,6 +44,9 @@ pub struct LeaveReport {
     /// Rows whose title was no longer in the library; marked handled with
     /// nothing to act on.
     pub gone: u64,
+    /// Rows of a personal list whose owner may not change the title; marked
+    /// handled with the title left as it is.
+    pub not_permitted: u64,
 }
 
 /// Run the on-leave action for every departed, not-yet-handled row of the
@@ -87,17 +90,25 @@ pub async fn handle_departures(
         if subscription.is_personal()
             && matches!(on_leave, ListOnLeave::Unmonitor | ListOnLeave::Tag)
         {
-            let permitted = if let Some(route) = subscription.route_for(row.kind.clone()) {
-                actions
-                    .owner_manages_titles(subscription, route)
-                    .await
-                    .unwrap_or(false)
-            } else {
-                false
+            let permitted = match subscription.route_for(row.kind.clone()) {
+                Some(route) => actions.owner_manages_titles(subscription, route).await,
+                None => Ok(false),
             };
-            if !permitted {
-                report.failed += 1;
-                continue;
+            match permitted {
+                Ok(true) => {}
+                // The owner may not change this title. The answer will not
+                // improve by asking again every sync, so the departure is
+                // settled without touching the title.
+                Ok(false) => {
+                    report.not_permitted += 1;
+                    handled.push(row.item_key);
+                    continue;
+                }
+                // The permission could not be read; the departure stays owed.
+                Err(_) => {
+                    report.failed += 1;
+                    continue;
+                }
             }
         }
         let result = match on_leave {

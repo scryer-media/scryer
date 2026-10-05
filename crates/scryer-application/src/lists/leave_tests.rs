@@ -31,10 +31,45 @@ async fn personal_departure_preserves_monitoring_and_tags_after_owner_grants_are
             .await
             .unwrap();
         assert_eq!(report.acted, 0);
-        assert_eq!(report.failed, 1);
+        assert_eq!(report.failed, 0);
+        assert_eq!(report.not_permitted, 1);
         assert!(actions.calls().is_empty());
-        assert!(!store.row(&list.id, "alpha").left_handled);
+        // Settled once: the next sync neither counts it nor touches the title.
+        assert!(store.row(&list.id, "alpha").left_handled);
+        let again = handle_departures(&list, &store, &store, &actions)
+            .await
+            .unwrap();
+        assert_eq!(again, LeaveReport::default());
+        assert!(actions.calls().is_empty());
     }
+}
+
+#[tokio::test]
+async fn personal_departure_stays_owed_when_the_owner_permission_cannot_be_read() {
+    let mut list = subscription("private-follow");
+    list.scope = scryer_domain::ListScope::Personal;
+    list.on_leave = ListOnLeave::Unmonitor;
+    let store = MemoryListStore::with_subscriptions(vec![list.clone()]);
+    store.insert_rows(vec![departed_added(&list.id, "alpha")]);
+    let mut actions = RecordingActions {
+        owner_manages_titles: true,
+        owner_permission_unreadable: true,
+        ..Default::default()
+    };
+    let report = handle_departures(&list, &store, &store, &actions)
+        .await
+        .unwrap();
+    assert_eq!(report.failed, 1);
+    assert_eq!(report.not_permitted, 0);
+    assert!(actions.calls().is_empty());
+    assert!(!store.row(&list.id, "alpha").left_handled);
+
+    actions.owner_permission_unreadable = false;
+    let retried = handle_departures(&list, &store, &store, &actions)
+        .await
+        .unwrap();
+    assert_eq!(retried.acted, 1);
+    assert!(store.row(&list.id, "alpha").left_handled);
 }
 
 #[tokio::test]
