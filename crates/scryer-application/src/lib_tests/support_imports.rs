@@ -1072,6 +1072,40 @@ impl MediaFileRepository for MockMediaFileRepo {
         Ok(())
     }
 
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        file_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<bool> {
+        let mut list = self.store.lock().await;
+        let eligible = episode_ids.iter().all(|episode_id| {
+            let linked = list
+                .iter()
+                .filter(|entry| entry.episode_id.as_deref() == Some(episode_id.as_str()))
+                .collect::<Vec<_>>();
+            matches!(
+                linked.as_slice(),
+                [entry] if entry.id == file_id
+                    && entry.title_id == title_id
+                    && !entry.role.is_primary()
+            )
+        });
+        if !eligible || episode_ids.is_empty() {
+            return Ok(false);
+        }
+        for entry in list.iter_mut().filter(|entry| {
+            entry.id == file_id
+                && entry
+                    .episode_id
+                    .as_ref()
+                    .is_some_and(|episode_id| episode_ids.contains(episode_id))
+        }) {
+            entry.role = crate::MediaFileRole::Primary;
+        }
+        Ok(true)
+    }
+
     async fn mark_scan_failed(&self, file_id: &str, _error: &str) -> AppResult<()> {
         let mut list = self.store.lock().await;
         let entry = list

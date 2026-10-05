@@ -646,6 +646,17 @@ impl MediaFileRepository for FailingMediaFileRepo {
             .await
     }
 
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        file_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<bool> {
+        self.inner
+            .promote_sole_additional_media_file_for_episodes(title_id, file_id, episode_ids)
+            .await
+    }
+
     async fn mark_scan_failed(&self, file_id: &str, error: &str) -> AppResult<()> {
         self.inner.mark_scan_failed(file_id, error).await
     }
@@ -957,6 +968,17 @@ impl MediaFileRepository for CountingMediaFileRepo {
                 primary_file_id,
                 additional_file_ids,
             )
+            .await
+    }
+
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        file_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<bool> {
+        self.inner
+            .promote_sole_additional_media_file_for_episodes(title_id, file_id, episode_ids)
             .await
     }
 
