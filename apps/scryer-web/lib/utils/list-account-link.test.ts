@@ -7,6 +7,7 @@ import {
   LIST_ACCOUNT_LINK_TYPE,
   LIST_ACCOUNT_RELAY_ORIGIN,
   listAccountCompletionInput,
+  listAccountPollFailureIsFinal,
   listAccountReturnMatches,
   parseListAccountPayload,
   parsePendingListAccountLink,
@@ -94,6 +95,19 @@ test("BYO callbacks require a pending provider and reject repeated and token par
   assert.equal(consumeListAccountReturn(location, history, null), null);
   assert.equal(consumeListAccountReturn({ ...location, search: `${location.search}&state=other` }, history, pending), null);
   assert.equal(consumeListAccountReturn({ ...location, search: `${location.search}&access_token=secret` }, history, pending), null);
+});
+
+test("only a gone session or a lost permission ends polling; transient failures keep the link alive", () => {
+  const graphQl = (code: unknown) => ({ graphQLErrors: [{ message: "failed", extensions: { code } }] });
+  assert.equal(listAccountPollFailureIsFinal(graphQl("NOT_FOUND")), true);
+  assert.equal(listAccountPollFailureIsFinal(graphQl("UNAUTHORIZED")), true);
+  assert.equal(listAccountPollFailureIsFinal({ graphQLErrors: [{ extensions: {} }, { extensions: { code: "NOT_FOUND" } }] }), true);
+  assert.equal(listAccountPollFailureIsFinal(graphQl("VALIDATION_ERROR")), false);
+  assert.equal(listAccountPollFailureIsFinal(graphQl("INTERNAL_SERVER_ERROR")), false);
+  assert.equal(listAccountPollFailureIsFinal(graphQl(42)), false);
+  assert.equal(listAccountPollFailureIsFinal({ networkError: new Error("offline"), graphQLErrors: [] }), false);
+  assert.equal(listAccountPollFailureIsFinal(new Error("offline")), false);
+  assert.equal(listAccountPollFailureIsFinal(null), false);
 });
 
 test("cancelled account refreshes cannot finish or fail a replacement link", { timeout: 10000 }, async () => {

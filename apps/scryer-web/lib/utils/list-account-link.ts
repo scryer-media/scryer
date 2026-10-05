@@ -128,6 +128,24 @@ export function listAccountCompletionInput(pending: PendingListAccountLink, payl
   };
 }
 
+/** Poll answers that end a link: the session is gone or expired, or the member may no longer link. */
+const FINAL_POLL_ERROR_CODES = new Set(["NOT_FOUND", "UNAUTHORIZED"]);
+
+/**
+ * Whether a failed poll ends the link. Network failures and provider hiccups
+ * are retried at the normal interval until the session expires; only an
+ * authoritative answer from the instance stops polling.
+ */
+export function listAccountPollFailureIsFinal(reason: unknown): boolean {
+  if (!reason || typeof reason !== "object") return false;
+  const errors = (reason as { graphQLErrors?: unknown }).graphQLErrors;
+  if (!Array.isArray(errors)) return false;
+  return errors.some((error) => {
+    const code = (error as { extensions?: { code?: unknown } } | null)?.extensions?.code;
+    return typeof code === "string" && FINAL_POLL_ERROR_CODES.has(code);
+  });
+}
+
 export async function finishCurrentListAccountLink(
   isCurrent: () => boolean,
   refresh: (isCurrent: () => boolean) => Promise<void>,

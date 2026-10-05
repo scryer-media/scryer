@@ -529,13 +529,27 @@ impl AppUseCase {
             .poll_token
             .as_deref()
             .ok_or_else(|| AppError::Validation("this account link does not use polling".into()))?;
-        match self
+        let polled = self
             .services
             .lists
             .auth
             .poll(&session.provider, token, session.app.as_ref())
-            .await?
-        {
+            .await;
+        let polled = match polled {
+            Ok(polled) => polled,
+            Err(error) => {
+                // A failed provider check is not an answer: keep the session so
+                // the client can poll again until it expires.
+                if session.expires_at > Utc::now() {
+                    let mut sessions = self.services.lists.account_runtime.sessions.lock().await;
+                    if sessions.len() < MAX_LINK_SESSIONS {
+                        sessions.insert(id.into(), session);
+                    }
+                }
+                return Err(error);
+            }
+        };
+        match polled {
             Some(credential) => {
                 if session.expires_at <= Utc::now() {
                     return Err(missing());

@@ -9,6 +9,7 @@ import {
   LIST_ACCOUNT_LINK_STORAGE_KEY,
   finishCurrentListAccountLink,
   listAccountCompletionInput,
+  listAccountPollFailureIsFinal,
   parsePendingListAccountLink,
   validateListAccountMessage,
   type PendingListAccountLink,
@@ -125,12 +126,22 @@ export function useListAccountLink(onLinked: (isCurrent: () => boolean) => Promi
               );
               return;
             }
-            if (["FAILED", "EXPIRED"].includes(polled.data?.pollListAccountLink?.status)) throw new Error(t("lists.accounts.linkFailed"));
+            if (["FAILED", "EXPIRED"].includes(polled.data?.pollListAccountLink?.status)) {
+              setError(t("lists.accounts.linkFailed"));
+              cancel();
+              return;
+            }
+            setError(null);
           } catch (reason) {
             if (request !== generation.current) return;
-            setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
-            cancel();
-            return;
+            if (listAccountPollFailureIsFinal(reason)) {
+              setError(userFacingGraphQlErrorMessage(reason, t("lists.accounts.linkFailed")));
+              cancel();
+              return;
+            }
+            // A dropped request or a provider hiccup does not end the session;
+            // keep checking at the normal pace until it expires or is cancelled.
+            setError(t("lists.accounts.pollRetrying"));
           }
         } else if (popup.closed) {
           cancel();

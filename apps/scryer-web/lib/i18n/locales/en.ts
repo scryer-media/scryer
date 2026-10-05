@@ -5720,6 +5720,7 @@ const en: LocaleDictionary = {
   "lists.accounts.private": "These lists and account details are visible only to you.",
   "lists.accounts.waiting": "Finish authorization in the provider window. Approval is checked automatically.",
   "lists.accounts.linkFailed": "Account linking failed. Start again to reconnect.",
+  "lists.accounts.pollRetrying": "Couldn’t check approval just now. Still trying until the session expires.",
   "lists.accounts.originNotAllowed": "Account linking is unavailable from this address. Ask an administrator to configure Scryer’s public URL, or open an approved local address.",
   "lists.accounts.linkExpired": "This account-link session has expired. Start a new connection from Lists.",
   "lists.accounts.popupBlocked": "Allow popups to approve this account, then connect again.",

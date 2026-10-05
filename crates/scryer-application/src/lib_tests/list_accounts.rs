@@ -24,6 +24,7 @@ struct Auth {
     release: Notify,
     renew_client: Mutex<Option<String>>,
     identity: Option<String>,
+    failing_polls: AtomicUsize,
 }
 fn token() -> ListAccountCredential {
     ListAccountCredential {
@@ -49,6 +50,17 @@ impl ListAccountAuthGateway for Auth {
         _: &str,
         _: Option<&ListProviderAppConfig>,
     ) -> AppResult<Option<ListAccountCredential>> {
+        if self
+            .failing_polls
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(AppError::Validation(
+                "list account authentication failed: provider_unavailable".into(),
+            ));
+        }
         self.exchanges.fetch_add(1, Ordering::SeqCst);
         Ok(Some(token()))
     }
@@ -282,6 +294,53 @@ async fn private_account_start_complete_and_poll_store_verified_owner_accounts()
             .unwrap()
             .is_empty()
     );
+}
+#[tokio::test]
+async fn private_account_poll_keeps_the_session_after_a_failed_provider_check() {
+    let auth = Arc::new(Auth {
+        failing_polls: AtomicUsize::new(2),
+        ..Default::default()
+    });
+    let harness = harness(auth.clone()).await;
+    let start = harness
+        .app
+        .start_list_account_link(&harness.user, "plex", "https://instance.invalid")
+        .await
+        .unwrap();
+    assert!(start.poll_required);
+    for _ in 0..2 {
+        assert!(matches!(
+            harness
+                .app
+                .poll_list_account_link(&harness.user, &start.session_id)
+                .await,
+            Err(AppError::Validation(_))
+        ));
+    }
+    // Another member still cannot reach the retained session.
+    assert!(matches!(
+        harness
+            .app
+            .poll_list_account_link(&harness.manager, &start.session_id)
+            .await,
+        Err(AppError::NotFound(_))
+    ));
+    let view = harness
+        .app
+        .poll_list_account_link(&harness.user, &start.session_id)
+        .await
+        .unwrap()
+        .account
+        .expect("the retained session links once the provider answers");
+    assert_eq!(view.account.user_id, harness.user.id);
+    assert_eq!(auth.exchanges.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        harness
+            .app
+            .poll_list_account_link(&harness.user, &start.session_id)
+            .await,
+        Err(AppError::NotFound(_))
+    ));
 }
 #[tokio::test]
 async fn private_account_completion_is_single_use_and_gate_rechecked() {
