@@ -36,7 +36,7 @@ const fr: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "Par défaut",
   "settings.publicUrlSourcePublicUrl": "URL publique",
   "settings.publicUrlPasskeyWarningTitle": "Les clés d’accès existantes cesseront de fonctionner",
-  "settings.publicUrlPasskeyWarningChanged": "Des passkeys sont enregistrées pour {{rpId}}. Après le prochain redémarrage, les passkeys passent à {{nextRpId}} et aucune passkey existante ne permettra plus de se connecter. Les utilisateurs pourront ensuite enregistrer de nouvelles passkeys.",
+  "settings.publicUrlPasskeyWarningChanged": "Des passkeys sont enregistrées pour {{rpId}}. Après le prochain redémarrage, les passkeys passent à {{nextRpId}} et aucune passkey existante ne permettra plus de se connecter.",
   "settings.publicUrlPasskeyWarningDisabled": "Des passkeys sont enregistrées pour {{rpId}}. Cette URL publique ne peut pas porter de passkeys (il faut un nom de domaine https, ou localhost) : après le prochain redémarrage, les passkeys sont désactivées et aucune passkey existante ne permettra plus de se connecter.",
   "settings.publicUrlPasskeyWarningCounts": "{{users}} utilisateurs ont des passkeys. {{passkeyOnly}} d’entre eux n’ont pas d’application d’authentification comme second facteur et seront bloqués : ils ne pourront plus se connecter tant que leurs facteurs ne seront pas réinitialisés.",
   "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer n’a pas pu compter les passkeys enregistrées ; partez du principe que certains utilisateurs seront bloqués.",

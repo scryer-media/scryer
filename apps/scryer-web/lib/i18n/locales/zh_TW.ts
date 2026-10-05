@@ -36,7 +36,7 @@ const zh_TW: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "預設",
   "settings.publicUrlSourcePublicUrl": "公開 URL",
   "settings.publicUrlPasskeyWarningTitle": "現有通行金鑰將無法使用",
-  "settings.publicUrlPasskeyWarningChanged": "已為 {{rpId}} 註冊通行金鑰。下次重新啟動後，通行金鑰會改用 {{nextRpId}}，所有現有通行金鑰都無法再登入。之後使用者可以註冊新的通行金鑰。",
+  "settings.publicUrlPasskeyWarningChanged": "已為 {{rpId}} 註冊通行金鑰。下次重新啟動後，通行金鑰會改用 {{nextRpId}}，所有現有通行金鑰都無法再登入。",
   "settings.publicUrlPasskeyWarningDisabled": "已為 {{rpId}} 註冊通行金鑰。此公開 URL 無法使用通行金鑰（需要 https 網域名稱或 localhost），因此下次重新啟動後通行金鑰會被關閉，所有現有通行金鑰都無法再登入。",
   "settings.publicUrlPasskeyWarningCounts": "{{users}} 位使用者擁有通行金鑰。其中 {{passkeyOnly}} 位沒有驗證器應用程式作為第二因素，將會被鎖定：在其驗證因素被重設前完全無法登入。",
   "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer 無法統計已註冊的通行金鑰；請假設部分使用者會被鎖定。",

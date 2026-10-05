@@ -36,7 +36,7 @@ const de: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "Standard",
   "settings.publicUrlSourcePublicUrl": "Öffentliche URL",
   "settings.publicUrlPasskeyWarningTitle": "Vorhandene Passkeys funktionieren nicht mehr",
-  "settings.publicUrlPasskeyWarningChanged": "Passkeys sind für {{rpId}} registriert. Nach dem nächsten Neustart wechseln Passkeys zu {{nextRpId}}, und kein vorhandener Passkey kann sich mehr anmelden. Benutzer können danach neue Passkeys registrieren.",
+  "settings.publicUrlPasskeyWarningChanged": "Passkeys sind für {{rpId}} registriert. Nach dem nächsten Neustart wechseln Passkeys zu {{nextRpId}}, und kein vorhandener Passkey kann sich mehr anmelden.",
   "settings.publicUrlPasskeyWarningDisabled": "Passkeys sind für {{rpId}} registriert. Diese öffentliche URL kann keine Passkeys tragen (sie benötigen einen https-Domainnamen oder localhost). Nach dem nächsten Neustart werden Passkeys deaktiviert, und kein vorhandener Passkey kann sich mehr anmelden.",
   "settings.publicUrlPasskeyWarningCounts": "{{users}} Benutzer haben Passkeys. {{passkeyOnly}} davon haben keine Authenticator-App als zweiten Faktor und werden ausgesperrt: Sie können sich erst wieder anmelden, wenn ihre Faktoren zurückgesetzt werden.",
   "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer konnte die registrierten Passkeys nicht zählen; gehe davon aus, dass einige Benutzer ausgesperrt werden.",

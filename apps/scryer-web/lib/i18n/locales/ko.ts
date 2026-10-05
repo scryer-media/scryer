@@ -36,7 +36,7 @@ const ko: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "기본값",
   "settings.publicUrlSourcePublicUrl": "공개 URL",
   "settings.publicUrlPasskeyWarningTitle": "기존 패스키가 더 이상 작동하지 않습니다",
-  "settings.publicUrlPasskeyWarningChanged": "{{rpId}}용 패스키가 등록되어 있습니다. 다음 재시작 후 패스키가 {{nextRpId}}(으)로 바뀌며 기존 패스키로는 더 이상 로그인할 수 없습니다. 이후 사용자는 새 패스키를 등록할 수 있습니다.",
+  "settings.publicUrlPasskeyWarningChanged": "{{rpId}}용 패스키가 등록되어 있습니다. 다음 재시작 후 패스키가 {{nextRpId}}(으)로 바뀌며 기존 패스키로는 더 이상 로그인할 수 없습니다.",
   "settings.publicUrlPasskeyWarningDisabled": "{{rpId}}용 패스키가 등록되어 있습니다. 이 공개 URL로는 패스키를 사용할 수 없으므로(https 도메인 이름 또는 localhost 필요) 다음 재시작 후 패스키가 꺼지고 기존 패스키로는 더 이상 로그인할 수 없습니다.",
   "settings.publicUrlPasskeyWarningCounts": "{{users}}명의 사용자가 패스키를 보유하고 있습니다. 그중 {{passkeyOnly}}명은 두 번째 인증 수단으로 인증 앱이 없어 잠기게 되며, 인증 수단이 재설정될 때까지 전혀 로그인할 수 없습니다.",
   "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer가 등록된 패스키 수를 확인하지 못했습니다. 일부 사용자가 잠길 수 있다고 가정하세요.",

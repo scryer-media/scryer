@@ -36,7 +36,7 @@ const zh_CN: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "默认",
   "settings.publicUrlSourcePublicUrl": "公共 URL",
   "settings.publicUrlPasskeyWarningTitle": "现有通行密钥将无法使用",
-  "settings.publicUrlPasskeyWarningChanged": "已为 {{rpId}} 注册通行密钥。下次重启后，通行密钥将改用 {{nextRpId}}，所有现有通行密钥都将无法登录。之后用户可以注册新的通行密钥。",
+  "settings.publicUrlPasskeyWarningChanged": "已为 {{rpId}} 注册通行密钥。下次重启后，通行密钥将改用 {{nextRpId}}，所有现有通行密钥都将无法登录。",
   "settings.publicUrlPasskeyWarningDisabled": "已为 {{rpId}} 注册通行密钥。此公共 URL 无法使用通行密钥（需要 https 域名或 localhost），因此下次重启后通行密钥将被关闭，所有现有通行密钥都将无法登录。",
   "settings.publicUrlPasskeyWarningCounts": "{{users}} 位用户拥有通行密钥。其中 {{passkeyOnly}} 位没有身份验证器应用作为第二因素，将被锁定：在其验证因素被重置之前完全无法登录。",
   "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer 无法统计已注册的通行密钥；请假定部分用户会被锁定。",

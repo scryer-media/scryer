@@ -36,7 +36,7 @@ const nl: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "Standaard",
   "settings.publicUrlSourcePublicUrl": "Openbare URL",
   "settings.publicUrlPasskeyWarningTitle": "Bestaande passkeys werken niet meer",
-  "settings.publicUrlPasskeyWarningChanged": "Er zijn passkeys geregistreerd voor {{rpId}}. Na de volgende herstart gaan passkeys naar {{nextRpId}} en kan geen bestaande passkey meer inloggen. Gebruikers kunnen daarna nieuwe passkeys registreren.",
+  "settings.publicUrlPasskeyWarningChanged": "Er zijn passkeys geregistreerd voor {{rpId}}. Na de volgende herstart gaan passkeys naar {{nextRpId}} en kan geen bestaande passkey meer inloggen.",
   "settings.publicUrlPasskeyWarningDisabled": "Er zijn passkeys geregistreerd voor {{rpId}}. Deze openbare URL ondersteunt geen passkeys (daarvoor is een https-domeinnaam of localhost nodig), dus na de volgende herstart worden passkeys uitgeschakeld en kan geen bestaande passkey meer inloggen.",
   "settings.publicUrlPasskeyWarningCounts": "{{users}} gebruikers hebben passkeys. {{passkeyOnly}} van hen hebben geen authenticator-app als tweede factor en worden buitengesloten: ze kunnen pas weer inloggen als hun factoren zijn gereset.",
   "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer kon de geregistreerde passkeys niet tellen; ga ervan uit dat sommige gebruikers worden buitengesloten.",

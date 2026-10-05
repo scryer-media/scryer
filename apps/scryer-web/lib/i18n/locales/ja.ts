@@ -36,7 +36,7 @@ const ja: LocaleDictionary = {
   "settings.publicUrlSourceDefault": "既定",
   "settings.publicUrlSourcePublicUrl": "公開 URL",
   "settings.publicUrlPasskeyWarningTitle": "既存のパスキーは使えなくなります",
-  "settings.publicUrlPasskeyWarningChanged": "{{rpId}} 用のパスキーが登録されています。次回の再起動後、パスキーは {{nextRpId}} に移り、既存のパスキーではいずれもサインインできなくなります。ユーザーはその後、新しいパスキーを登録できます。",
+  "settings.publicUrlPasskeyWarningChanged": "{{rpId}} 用のパスキーが登録されています。次回の再起動後、パスキーは {{nextRpId}} に移り、既存のパスキーではいずれもサインインできなくなります。",
   "settings.publicUrlPasskeyWarningDisabled": "{{rpId}} 用のパスキーが登録されています。この公開 URL ではパスキーを使用できません（https のドメイン名または localhost が必要です）。次回の再起動後にパスキーは無効になり、既存のパスキーではいずれもサインインできなくなります。",
   "settings.publicUrlPasskeyWarningCounts": "{{users}} 人のユーザーがパスキーを持っています。そのうち {{passkeyOnly}} 人は二要素目として認証アプリを持っていないため締め出されます。要素がリセットされるまでサインインできません。",
   "settings.publicUrlPasskeyWarningCountsUnknown": "Scryer は登録済みのパスキーを数えられませんでした。一部のユーザーが締め出されるものと考えてください。",
