@@ -8,6 +8,7 @@ use axum::routing::{get, post};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use scryer_application::public_url::{ConfigValueSource, PUBLIC_URL_ENV, PublicUrlPolicy};
 use scryer_application::{
     AppError, AppUseCase, JwtSessionScope, OAUTH_JELLYFIN_LINK_SCOPE, OAUTH_LIBRARY_SCOPE,
     OAuthAuthorizationSource,
@@ -385,7 +386,7 @@ async fn oauth_revoke(
 }
 
 async fn oauth_metadata(State(state): State<OAuthRouteState>, headers: HeaderMap) -> Response {
-    let issuer = match oauth_issuer_origin(&headers) {
+    let issuer = match oauth_issuer_origin(&state.app.public_url_runtime().snapshot(), &headers) {
         Ok(origin) => origin,
         Err(response) => return *response,
     };
@@ -524,13 +525,25 @@ fn oauth_error(
         .into_response()
 }
 
-const SCRYER_PUBLIC_URL_ENV: &str = "SCRYER_PUBLIC_URL";
-
-fn oauth_issuer_origin(headers: &HeaderMap) -> Result<String, Box<Response>> {
-    if let Ok(public_url) = std::env::var(SCRYER_PUBLIC_URL_ENV)
-        && !public_url.trim().is_empty()
-    {
-        return parse_oauth_origin(public_url.trim(), SCRYER_PUBLIC_URL_ENV);
+/// The issuer comes from the shared public URL: `SCRYER_PUBLIC_URL` when set
+/// (an invalid value is an error, as it always was), then the saved setting,
+/// and otherwise the request's own origin.
+fn oauth_issuer_origin(
+    public_url: &PublicUrlPolicy,
+    headers: &HeaderMap,
+) -> Result<String, Box<Response>> {
+    match public_url.source() {
+        ConfigValueSource::Environment => {
+            if let Some(value) = public_url.environment_value() {
+                return parse_oauth_origin(value, PUBLIC_URL_ENV);
+            }
+        }
+        ConfigValueSource::Settings => {
+            if let Some(origin) = public_url.origin() {
+                return Ok(origin);
+            }
+        }
+        ConfigValueSource::Default => {}
     }
 
     let proto = headers
@@ -663,15 +676,42 @@ mod tests {
         headers.insert("x-forwarded-proto", HeaderValue::from_static("https,http"));
         headers.insert(header::HOST, HeaderValue::from_static("scryer.example"));
 
-        assert!(oauth_issuer_origin(&headers).is_err());
+        assert!(oauth_issuer_origin(&PublicUrlPolicy::default(), &headers).is_err());
 
         let mut headers = HeaderMap::new();
         headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
         headers.insert(header::HOST, HeaderValue::from_static("scryer.example"));
 
         assert_eq!(
-            oauth_issuer_origin(&headers).expect("safe origin"),
+            oauth_issuer_origin(&PublicUrlPolicy::default(), &headers).expect("safe origin"),
             "https://scryer.example"
         );
+    }
+
+    #[test]
+    fn issuer_origin_prefers_environment_then_saved_public_url_over_request_headers() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-proto", HeaderValue::from_static("https"));
+        headers.insert(header::HOST, HeaderValue::from_static("request.example"));
+
+        let saved = PublicUrlPolicy::new(None, Some("https://saved.example/scryer"));
+        assert_eq!(
+            oauth_issuer_origin(&saved, &headers).expect("saved origin"),
+            "https://saved.example"
+        );
+
+        let environment = PublicUrlPolicy::new(
+            Some("https://env.example"),
+            Some("https://saved.example/scryer"),
+        );
+        assert_eq!(
+            oauth_issuer_origin(&environment, &headers).expect("environment origin"),
+            "https://env.example"
+        );
+
+        // An invalid environment value stays an error rather than silently
+        // trusting request headers or the saved setting.
+        let invalid = PublicUrlPolicy::new(Some("not a URL"), Some("https://saved.example"));
+        assert!(oauth_issuer_origin(&invalid, &headers).is_err());
     }
 }

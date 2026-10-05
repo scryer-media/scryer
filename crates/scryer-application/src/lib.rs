@@ -9,6 +9,7 @@ mod discovery;
 mod download_client_config;
 mod download_client_path_mappings;
 mod download_identity;
+pub mod public_url;
 pub mod rate_limit_proxy_policy;
 
 /// Completed-history rows the poller considers each cycle.
@@ -448,7 +449,7 @@ pub use settings::settings::{
     ExternalImportLibrarySettingsAutoApplyResult, ExternalImportSettingsAutoApplySkip,
     FacetScoringPersonaSelection, GeneralSettings, IndexerRoutingSettingsEntry, InstanceFeatures,
     LibraryPathsSettings, LibrarySettings, LibrarySettingsOverrideDraft, MediaSettings,
-    PluginAutoUpdateSettings, QualityProfileSelection, QualityProfileSettings,
+    PluginAutoUpdateSettings, PublicUrlSettings, QualityProfileSelection, QualityProfileSettings,
     RequestQualityProfileSettings, SaveQualityProfileSettings, SecuritySettings, ServiceSettings,
     SubtitleSettings, UpdateAutoBackupSettings, UpdateBackupSettings,
     UpdateFacetScoringPersonaSelection, UpdateGeneralSettings, UpdateLibraryPaths,

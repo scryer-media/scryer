@@ -2605,7 +2605,20 @@ const serviceSettingsFieldSelection = `
     tlsKeyPath
     trustedProxyIps
     trustedProxyOverride
-    trustedProxySource`;
+    trustedProxySource
+    publicUrl
+    publicUrlSource
+    publicUrlSaved
+    publicUrlError
+    publicUrlEditable
+    basePath
+    basePathSource
+    bindAddress
+    bindSource
+    passkeyRpId
+    passkeyRpOrigin
+    passkeyRpSource
+    passkeysRegistered`;
 
 // Batched query for quality profiles page: 5 requests → 1
 export const qualityProfilesInitQuery = `query QualityProfilesInit {

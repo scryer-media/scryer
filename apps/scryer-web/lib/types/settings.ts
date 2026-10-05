@@ -422,4 +422,19 @@ export type ServiceSettings = {
   trustedProxyIps: string[];
   trustedProxyOverride: string[] | null;
   trustedProxySource: "settings" | "environment";
+  publicUrl: string | null;
+  publicUrlSource: ConfigValueSource;
+  publicUrlSaved: string | null;
+  publicUrlError: string | null;
+  publicUrlEditable: boolean;
+  basePath: string;
+  basePathSource: ConfigValueSource;
+  bindAddress: string;
+  bindSource: ConfigValueSource;
+  passkeyRpId: string | null;
+  passkeyRpOrigin: string | null;
+  passkeyRpSource: "environment" | "public_url" | "none";
+  passkeysRegistered: boolean;
 };
+
+export type ConfigValueSource = "environment" | "settings" | "default";

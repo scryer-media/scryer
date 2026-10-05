@@ -290,7 +290,7 @@ pub fn list_account_link_origin_from_ctx(ctx: &Context<'_>, requested: &str) -> 
         .cloned()
         .ok_or_else(|| {
             coded_gql_error(
-                "Account linking is unavailable from this address; configure SCRYER_PUBLIC_URL or use an approved local address",
+                "Account linking is unavailable from this address; set the public URL in settings or SCRYER_PUBLIC_URL, or use an approved local address",
                 "LIST_ACCOUNT_ORIGIN_NOT_ALLOWED",
             )
         })

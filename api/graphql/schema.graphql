@@ -26682,6 +26682,58 @@ type ServiceSettingsPayload {
 	Whether the effective policy comes from settings or environment.
 	"""
 	trustedProxySource: String!
+	"""
+	Effective public URL; null when unset or invalid.
+	"""
+	publicUrl: String
+	"""
+	Where the public URL comes from: environment, settings, or default.
+	"""
+	publicUrlSource: String!
+	"""
+	Saved public URL, shown even while the environment overrides it.
+	"""
+	publicUrlSaved: String
+	"""
+	Why the configured public URL is not in effect, when it is invalid.
+	"""
+	publicUrlError: String
+	"""
+	False while SCRYER_PUBLIC_URL is set, because the environment wins.
+	"""
+	publicUrlEditable: Boolean!
+	"""
+	Base path the instance serves under; empty at the root.
+	"""
+	basePath: String!
+	"""
+	Where the base path comes from: environment or default.
+	"""
+	basePathSource: String!
+	"""
+	Listening address and port.
+	"""
+	bindAddress: String!
+	"""
+	Where the listening address comes from: environment or default.
+	"""
+	bindSource: String!
+	"""
+	Passkey relying-party ID in effect since startup.
+	"""
+	passkeyRpId: String
+	"""
+	Passkey relying-party origin in effect since startup.
+	"""
+	passkeyRpOrigin: String
+	"""
+	Where the passkey relying party comes from: environment, public_url, or none.
+	"""
+	passkeyRpSource: String!
+	"""
+	Whether any user has registered a passkey.
+	"""
+	passkeysRegistered: Boolean!
 }
 
 """
@@ -31589,6 +31641,14 @@ input UpdateServiceSettingsInput {
 	Clear the saved override and use environment configuration.
 	"""
 	resetTrustedProxyIps: Boolean
+	"""
+	Save the instance public URL. Omission preserves the saved value.
+	"""
+	publicUrl: String
+	"""
+	Clear the saved public URL.
+	"""
+	resetPublicUrl: Boolean
 }
 
 """

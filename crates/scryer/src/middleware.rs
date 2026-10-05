@@ -3688,17 +3688,46 @@ mod tests {
                 label: "origin boundary".into(),
                 expiry: scryer_application::ApiKeyExpiryPreset::Never,
             }).await.expect("API key");
+            crate::settings_bootstrap::seed_service_setting_definitions(context.settings_store.clone())
+                .await
+                .expect("seed setting definitions");
+            context.app.install_public_url(
+                scryer_application::public_url::PublicUrlPolicy::new(None, None),
+                scryer_application::public_url::InstanceAddressing {
+                    base_path: "/scryer".into(),
+                    ..Default::default()
+                },
+            );
+            let origin_policy = crate::list_account_origin::ListAccountOriginPolicy::new(
+                context.app.public_url_runtime(),
+                "127.0.0.1:8080".parse().expect("bind"),
+                false,
+                crate::list_account_origin::InterfaceAddresses::fixed(Vec::new()),
+            );
+            assert!(!origin_policy.request_context().0.contains(&"https://media.home".to_string()));
+
+            // A saved public URL applies to the next request without a restart.
+            let settings = context.app.update_service_settings(&admin, scryer_application::UpdateServiceSettings {
+                tls_cert_path: None,
+                tls_key_path: None,
+                trusted_proxy_ips: None,
+                reset_trusted_proxy_ips: false,
+                public_url: Some("https://media.home/scryer/".into()),
+                reset_public_url: false,
+            }).await.expect("save public URL");
+            assert_eq!(settings.public_url.effective.as_deref(), Some("https://media.home/scryer"));
+            let approved = origin_policy.request_context().0.to_vec();
+            assert!(approved.contains(&"https://media.home".to_string()));
+            assert!(approved.contains(&"http://127.0.0.1:8080".to_string()));
+            assert!(!approved.contains(&"https://attacker.invalid".to_string()));
+
             let state = AuthState {
                 app: context.app.clone(),
                 schema: context.schema.clone(),
                 auth_runtime: context.auth_runtime.clone(),
                 rate_limiter: ScryerRateLimiter::from_env(Default::default()),
                 ws_origin_policy: WebSocketOriginPolicy::default(),
-                list_account_origin_policy: crate::list_account_origin::ListAccountOriginPolicy::from_config(
-                    Some("https://media.home/scryer"),
-                    "127.0.0.1:8080".parse().expect("bind"),
-                    false,
-                ),
+                list_account_origin_policy: origin_policy.clone(),
                 authless_web_client_proof: AuthlessWebClientProofState::new(),
             };
             let router = Router::new().route("/graphql", post(graphql_handler)).with_state(state);

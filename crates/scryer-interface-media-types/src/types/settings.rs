@@ -907,6 +907,32 @@ pub struct ServiceSettingsPayload {
     pub trusted_proxy_override: Option<Vec<String>>,
     /// Whether the effective policy comes from settings or environment.
     pub trusted_proxy_source: String,
+    /// Effective public URL; null when unset or invalid.
+    pub public_url: Option<String>,
+    /// Where the public URL comes from: environment, settings, or default.
+    pub public_url_source: String,
+    /// Saved public URL, shown even while the environment overrides it.
+    pub public_url_saved: Option<String>,
+    /// Why the configured public URL is not in effect, when it is invalid.
+    pub public_url_error: Option<String>,
+    /// False while SCRYER_PUBLIC_URL is set, because the environment wins.
+    pub public_url_editable: bool,
+    /// Base path the instance serves under; empty at the root.
+    pub base_path: String,
+    /// Where the base path comes from: environment or default.
+    pub base_path_source: String,
+    /// Listening address and port.
+    pub bind_address: String,
+    /// Where the listening address comes from: environment or default.
+    pub bind_source: String,
+    /// Passkey relying-party ID in effect since startup.
+    pub passkey_rp_id: Option<String>,
+    /// Passkey relying-party origin in effect since startup.
+    pub passkey_rp_origin: Option<String>,
+    /// Where the passkey relying party comes from: environment, public_url, or none.
+    pub passkey_rp_source: String,
+    /// Whether any user has registered a passkey.
+    pub passkeys_registered: bool,
 }
 
 #[derive(InputObject, Clone)]
@@ -1037,6 +1063,10 @@ pub struct UpdateServiceSettingsInput {
     pub trusted_proxy_ips: Option<Vec<String>>,
     /// Clear the saved override and use environment configuration.
     pub reset_trusted_proxy_ips: Option<bool>,
+    /// Save the instance public URL. Omission preserves the saved value.
+    pub public_url: Option<String>,
+    /// Clear the saved public URL.
+    pub reset_public_url: Option<bool>,
 }
 
 #[derive(InputObject, Clone)]

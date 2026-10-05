@@ -5,6 +5,23 @@ pub struct ServiceSettings {
     pub trusted_proxy_ips: Vec<String>,
     pub trusted_proxy_override: Option<Vec<String>>,
     pub trusted_proxy_source: String,
+    pub public_url: PublicUrlSettings,
+}
+/// The effective public URL and the read-only addressing facts beside it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PublicUrlSettings {
+    /// Effective, valid public URL; absent when unset or invalid.
+    pub effective: Option<String>,
+    pub source: crate::public_url::ConfigValueSource,
+    /// Saved value, shown even when the environment overrides it.
+    pub saved: Option<String>,
+    /// Validation error for the winning value.
+    pub error: Option<String>,
+    /// False while `SCRYER_PUBLIC_URL` is set.
+    pub editable: bool,
+    pub addressing: crate::public_url::InstanceAddressing,
+    /// Whether any user has a registered passkey.
+    pub passkeys_registered: bool,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SecuritySettings {
@@ -38,10 +55,100 @@ pub struct UpdateServiceSettings {
     pub tls_key_path: Option<String>,
     pub trusted_proxy_ips: Option<Vec<String>>,
     pub reset_trusted_proxy_ips: bool,
+    /// Save a public URL. Omission preserves the saved value.
+    pub public_url: Option<String>,
+    /// Clear the saved public URL.
+    pub reset_public_url: bool,
 }
 impl AppUseCase {
     pub fn trusted_proxy_runtime(&self) -> crate::rate_limit_proxy_policy::TrustedProxyRuntime {
         self.runtime.security.trusted_proxies.clone()
+    }
+
+    /// The shared public URL that transport adapters read per request.
+    pub fn public_url_runtime(&self) -> crate::public_url::PublicUrlRuntime {
+        self.runtime.security.public_url.clone()
+    }
+
+    /// Install the startup public URL policy and addressing facts. The saved
+    /// value is read by the composition root before passkeys are built.
+    pub fn install_public_url(
+        &self,
+        policy: crate::public_url::PublicUrlPolicy,
+        addressing: crate::public_url::InstanceAddressing,
+    ) {
+        self.runtime.security.public_url.install(policy, addressing);
+    }
+
+    async fn any_passkey_registered(&self) -> AppResult<bool> {
+        for user in self.services.identity.users.list_all().await? {
+            if !self
+                .services
+                .identity
+                .webauthn
+                .list_credentials_for_user(&user.id)
+                .await?
+                .is_empty()
+            {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    async fn public_url_settings(&self) -> AppResult<PublicUrlSettings> {
+        let policy = self.runtime.security.public_url.snapshot();
+        Ok(PublicUrlSettings {
+            effective: policy.url().map(|_| {
+                policy
+                    .configured_value()
+                    .unwrap_or_default()
+                    .trim_end_matches('/')
+                    .to_string()
+            }),
+            source: policy.source(),
+            saved: policy.saved_value().map(str::to_string),
+            error: policy.error(),
+            editable: policy.environment_value().is_none(),
+            addressing: (*self.runtime.security.public_url.addressing()).clone(),
+            passkeys_registered: self.any_passkey_registered().await?,
+        })
+    }
+
+    /// `Some(Some(url))` saves, `Some(None)` clears, `None` leaves it alone.
+    fn validated_public_url_change(
+        &self,
+        value: Option<&str>,
+        reset: bool,
+    ) -> AppResult<Option<Option<String>>> {
+        if value.is_none() && !reset {
+            return Ok(None);
+        }
+        if value.is_some() && reset {
+            return Err(AppError::Validation(
+                "cannot save and reset the public URL together".into(),
+            ));
+        }
+        if self
+            .runtime
+            .security
+            .public_url
+            .snapshot()
+            .environment_value()
+            .is_some()
+        {
+            return Err(AppError::Validation(format!(
+                "the public URL is set by {} and cannot be changed here",
+                crate::public_url::PUBLIC_URL_ENV
+            )));
+        }
+        let Some(value) = value else {
+            return Ok(Some(None));
+        };
+        let base_path = self.runtime.security.public_url.addressing().base_path.clone();
+        crate::public_url::normalize_saved_public_url(value, &base_path)
+            .map(|saved| Some(Some(saved)))
+            .map_err(AppError::Validation)
     }
 
     pub async fn initialize_trusted_proxy_policy(&self, environment: &str) -> AppResult<()> {
@@ -202,6 +309,7 @@ impl AppUseCase {
                 .read_setting_string_value(TLS_KEY_PATH_KEY, None)
                 .await?
                 .unwrap_or_default(),
+            public_url: self.public_url_settings().await?,
         })
     }
 }
@@ -421,6 +529,10 @@ impl AppUseCase {
         } else {
             None
         };
+        let public_url = self.validated_public_url_change(
+            input.public_url.as_deref(),
+            input.reset_public_url,
+        )?;
         let mut saved_keys = Vec::new();
         for (key, value) in [
             (TLS_CERT_PATH_KEY, input.tls_cert_path),
@@ -441,6 +553,17 @@ impl AppUseCase {
             .await?;
             self.runtime.security.trusted_proxies.replace(policy);
             saved_keys.push(TRUSTED_PROXIES_KEY.to_string());
+        }
+        if let Some(saved) = public_url {
+            use crate::public_url::{PUBLIC_URL_KEY, PublicUrlPolicy};
+            self.upsert_system_setting_json(PUBLIC_URL_KEY, &saved, Some(actor.id.clone()))
+                .await?;
+            let current = self.runtime.security.public_url.snapshot();
+            self.runtime.security.public_url.replace(PublicUrlPolicy::new(
+                current.environment_value(),
+                saved.as_deref(),
+            ));
+            saved_keys.push(PUBLIC_URL_KEY.to_string());
         }
         self.emit_settings_saved(actor, "service_settings", None, saved_keys)
             .await;

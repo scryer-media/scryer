@@ -13,6 +13,16 @@ impl BasePath {
         Self::from_raw(std::env::var("SCRYER_BASE_PATH").ok().as_deref())
     }
 
+    /// Whether `SCRYER_BASE_PATH` is present, for source reporting only.
+    pub(crate) fn env_configured() -> bool {
+        std::env::var_os("SCRYER_BASE_PATH").is_some()
+    }
+
+    /// The normalized prefix, empty at the root.
+    pub(crate) fn prefix(&self) -> &str {
+        &self.prefix
+    }
+
     pub(crate) fn from_raw(raw: Option<&str>) -> Self {
         let Some(raw) = raw else {
             return Self {

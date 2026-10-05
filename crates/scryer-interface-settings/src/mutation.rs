@@ -1678,6 +1678,8 @@ impl SettingsMutations {
                 tls_key_path: input.tls_key_path,
                 trusted_proxy_ips: input.trusted_proxy_ips,
                 reset_trusted_proxy_ips: input.reset_trusted_proxy_ips.unwrap_or(false),
+                public_url: input.public_url,
+                reset_public_url: input.reset_public_url.unwrap_or(false),
             },
         )
         .await

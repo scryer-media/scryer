@@ -274,7 +274,22 @@ pub fn from_library_paths_settings(settings: LibraryPathsSettings) -> LibraryPat
 }
 
 pub fn from_service_settings(settings: ServiceSettings) -> ServiceSettingsPayload {
+    let public_url = settings.public_url;
+    let addressing = public_url.addressing;
     ServiceSettingsPayload {
+        public_url: public_url.effective,
+        public_url_source: public_url.source.as_str().to_string(),
+        public_url_saved: public_url.saved,
+        public_url_error: public_url.error,
+        public_url_editable: public_url.editable,
+        base_path: addressing.base_path,
+        base_path_source: addressing.base_path_source.as_str().to_string(),
+        bind_address: addressing.bind_address,
+        bind_source: addressing.bind_source.as_str().to_string(),
+        passkey_rp_id: addressing.passkey_rp_id,
+        passkey_rp_origin: addressing.passkey_rp_origin,
+        passkey_rp_source: addressing.passkey_rp_source.as_str().to_string(),
+        passkeys_registered: public_url.passkeys_registered,
         trusted_proxy_ips: settings.trusted_proxy_ips,
         trusted_proxy_override: settings.trusted_proxy_override,
         trusted_proxy_source: settings.trusted_proxy_source,
