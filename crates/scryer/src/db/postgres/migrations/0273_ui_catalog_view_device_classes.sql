@@ -4,9 +4,9 @@
 --
 -- The old table is renamed aside (with its index-backed primary key, whose
 -- name is schema-wide) so the rebuilt table can keep the canonical names.
-ALTER TABLE user_ui_table_columns RENAME TO user_ui_table_columns_0274;
-ALTER TABLE user_ui_table_columns_0274
-    RENAME CONSTRAINT user_ui_table_columns_pkey TO user_ui_table_columns_0274_pkey;
+ALTER TABLE user_ui_table_columns RENAME TO user_ui_table_columns_0273;
+ALTER TABLE user_ui_table_columns_0273
+    RENAME CONSTRAINT user_ui_table_columns_pkey TO user_ui_table_columns_0273_pkey;
 DROP INDEX IF EXISTS idx_user_ui_table_columns_user_view;
 
 CREATE TABLE user_ui_table_columns (
@@ -29,9 +29,9 @@ INSERT INTO user_ui_table_columns (
 )
 SELECT user_id, 'desktop', facet, table_view_mode, column_id, column_order, visible,
        created_at, updated_at
-  FROM user_ui_table_columns_0274;
+  FROM user_ui_table_columns_0273;
 
-DROP TABLE user_ui_table_columns_0274;
+DROP TABLE user_ui_table_columns_0273;
 
 CREATE INDEX idx_user_ui_table_columns_user_view
     ON user_ui_table_columns USING btree (user_id, device_class, facet, table_view_mode, column_order);

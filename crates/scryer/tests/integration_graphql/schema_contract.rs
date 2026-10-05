@@ -786,8 +786,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // all, unfollow, add and remove an exclusion, and set a member's list
     // policy. 250->259. Changing a list provider's server-wide settings adds
     // one more: 259->260.
+    // Reopening a dismissed request and saving one catalog layout add
+    // `reopenMediaRequest` and `setMyCatalogView`: 265->267.
     assert_eq!(
-        mutation_field_count, 265,
+        mutation_field_count, 267,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1054,10 +1056,15 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     assert!(public_type_names.contains(&"RecycleBinRelocationPayload"));
     assert!(public_type_names.contains(&"RecycleBinRelocationFailurePayload"));
     // Private account management adds six credential-free output objects.
-    assert_eq!(public_types.len(), 925);
-    assert_eq!(kind_count("OBJECT"), 505);
-    assert_eq!(kind_count("INPUT_OBJECT"), 232);
-    assert_eq!(kind_count("ENUM"), 176);
+    // Per-device catalog layouts add one payload, two inputs and two enums:
+    // public types 925->930, OBJECT 505->506, INPUT_OBJECT 232->234,
+    // ENUM 176->178.
+    assert!(public_type_names.contains(&"UiCatalogViewSettingPayload"));
+    assert!(public_type_names.contains(&"SetMyCatalogViewInput"));
+    assert_eq!(public_types.len(), 930);
+    assert_eq!(kind_count("OBJECT"), 506);
+    assert_eq!(kind_count("INPUT_OBJECT"), 234);
+    assert_eq!(kind_count("ENUM"), 178);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

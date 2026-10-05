@@ -4,7 +4,7 @@
 --
 -- Nothing references user_ui_table_columns, so the rebuild can drop the old
 -- table directly.
-CREATE TABLE user_ui_table_columns_0274 (
+CREATE TABLE user_ui_table_columns_0273 (
     user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     device_class TEXT NOT NULL DEFAULT 'desktop',
     facet TEXT NOT NULL,
@@ -17,7 +17,7 @@ CREATE TABLE user_ui_table_columns_0274 (
     PRIMARY KEY (user_id, device_class, facet, table_view_mode, column_id)
 );
 
-INSERT INTO user_ui_table_columns_0274 (
+INSERT INTO user_ui_table_columns_0273 (
     user_id, device_class, facet, table_view_mode, column_id, column_order, visible,
     created_at, updated_at
 )
@@ -27,7 +27,7 @@ SELECT user_id, 'desktop', facet, table_view_mode, column_id, column_order, visi
 
 DROP TABLE user_ui_table_columns;
 
-ALTER TABLE user_ui_table_columns_0274 RENAME TO user_ui_table_columns;
+ALTER TABLE user_ui_table_columns_0273 RENAME TO user_ui_table_columns;
 
 CREATE INDEX idx_user_ui_table_columns_user_view
     ON user_ui_table_columns(user_id, device_class, facet, table_view_mode, column_order);
