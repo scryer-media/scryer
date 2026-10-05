@@ -23,6 +23,7 @@ mod diacritic_release_matching;
 mod discovery_sync;
 mod downloads;
 mod episode_file_delete;
+mod episode_metadata_refresh;
 mod folder_match;
 mod full_hash_backfill;
 mod golden_resolution_corpus;

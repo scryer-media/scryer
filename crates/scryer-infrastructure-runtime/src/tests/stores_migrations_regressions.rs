@@ -1427,7 +1427,7 @@ async fn episode_tmdb_id_round_trips_and_legacy_rows_read_back_as_none() {
         &shows,
         &episode.id,
         EpisodeUpdate {
-            title: Some("Winter Is Coming".to_string()),
+            title: Some(Some("Winter Is Coming".to_string())),
             ..EpisodeUpdate::default()
         },
     )
@@ -1439,7 +1439,7 @@ async fn episode_tmdb_id_round_trips_and_legacy_rows_read_back_as_none() {
         &shows,
         &episode.id,
         EpisodeUpdate {
-            tmdb_id: Some("63057".to_string()),
+            tmdb_id: Some(Some("63057".to_string())),
             ..EpisodeUpdate::default()
         },
     )

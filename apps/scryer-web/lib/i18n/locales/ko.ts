@@ -1379,6 +1379,7 @@ const ko: LocaleDictionary = {
   "episode.untitledRelease": "제목 없는 릴리스",
   "episode.filler": "필러",
   "episode.recap": "총집편",
+  "episode.titleTba": "미정",
   "episode.special": "특별편",
   "episode.ova": "OVA",
   "episode.ona": "ONA",

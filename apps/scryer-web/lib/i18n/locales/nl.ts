@@ -2281,6 +2281,7 @@ const nl: LocaleDictionary = {
   "episode.untitledRelease": "Naamloze release",
   "episode.filler": "Filler",
   "episode.recap": "Recap",
+  "episode.titleTba": "Nog niet bekend",
   "episode.special": "Special",
   "episode.ova": "OVA",
   "episode.ona": "ONA",

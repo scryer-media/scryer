@@ -1328,6 +1328,7 @@ const zh_CN: LocaleDictionary = {
   "episode.untitledRelease": "未命名发布",
   "episode.filler": "填充集",
   "episode.recap": "回顾集",
+  "episode.titleTba": "待定",
   "episode.special": "特别篇",
   "episode.ova": "OVA",
   "episode.ona": "ONA",

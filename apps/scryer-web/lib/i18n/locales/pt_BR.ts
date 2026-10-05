@@ -1427,6 +1427,7 @@ const pt_BR: LocaleDictionary = {
   "episode.untitledRelease": "Lançamento sem título",
   "episode.filler": "Filler",
   "episode.recap": "Recap",
+  "episode.titleTba": "A anunciar",
   "episode.special": "Especial",
   "episode.ova": "OVA",
   "episode.ona": "ONA",

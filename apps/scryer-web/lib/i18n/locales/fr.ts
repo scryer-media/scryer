@@ -1443,6 +1443,7 @@ const fr: LocaleDictionary = {
   "episode.untitledRelease": "Publication sans titre",
   "episode.filler": "Filler",
   "episode.recap": "Récapitulatif",
+  "episode.titleTba": "À annoncer",
   "episode.special": "Spécial",
   "episode.ova": "OVA",
   "episode.ona": "ONA",

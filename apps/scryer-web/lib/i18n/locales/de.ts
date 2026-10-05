@@ -1438,6 +1438,7 @@ const de: LocaleDictionary = {
   "episode.untitledRelease": "Unbenanntes Release",
   "episode.filler": "Filler",
   "episode.recap": "Rückblick",
+  "episode.titleTba": "Noch offen",
   "episode.special": "Special",
   "episode.ova": "OVA",
   "episode.ona": "ONA",

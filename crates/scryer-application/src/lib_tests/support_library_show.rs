@@ -278,6 +278,8 @@ impl LibraryRepository for MockLibraryRepo {
 
 #[derive(Default)]
 pub(super) struct MockShowRepo {
+    /// Every episode update a caller sent, in order.
+    pub(super) episode_updates: Mutex<Vec<EpisodeUpdate>>,
     pub(super) fail_monitoring: Mutex<bool>,
     pub(super) fail_episode_monitoring_for: Mutex<HashSet<String>>,
     pub(super) series_movie_read_gate:
@@ -751,6 +753,7 @@ impl ShowRepository for MockShowRepo {
     }
 
     async fn update_episode(&self, episode_id: &str, update: EpisodeUpdate) -> AppResult<Episode> {
+        self.episode_updates.lock().await.push(update.clone());
         if update.monitored.is_some() && *self.fail_monitoring.lock().await {
             return Err(AppError::Repository("fixture monitoring failure".into()));
         }
@@ -770,13 +773,13 @@ impl ShowRepository for MockShowRepo {
             item.season_number = Some(value);
         }
         if let Some(value) = update.episode_label {
-            item.episode_label = Some(value);
+            item.episode_label = value;
         }
         if let Some(value) = update.title {
-            item.title = Some(value);
+            item.title = value;
         }
         if let Some(value) = update.air_date {
-            item.air_date = Some(value);
+            item.air_date = value;
         }
         if let Some(value) = update.duration_seconds {
             item.duration_seconds = Some(value);
@@ -787,6 +790,12 @@ impl ShowRepository for MockShowRepo {
         if let Some(value) = update.has_subtitle {
             item.has_subtitle = value;
         }
+        if let Some(value) = update.is_filler {
+            item.is_filler = value;
+        }
+        if let Some(value) = update.is_recap {
+            item.is_recap = value;
+        }
         if let Some(value) = update.monitored {
             item.monitored = value;
         }
@@ -794,13 +803,13 @@ impl ShowRepository for MockShowRepo {
             item.collection_id = Some(value);
         }
         if let Some(value) = update.overview {
-            item.overview = Some(value);
+            item.overview = value;
         }
         if let Some(value) = update.tvdb_id {
-            item.tvdb_id = Some(value);
+            item.tvdb_id = value;
         }
         if let Some(value) = update.tmdb_id {
-            item.tmdb_id = Some(value);
+            item.tmdb_id = value;
         }
         if update.clear_image_url {
             item.image_url = None;
@@ -808,6 +817,9 @@ impl ShowRepository for MockShowRepo {
             item.image_url = Some(value);
         }
         // `Some(None)` clears the column, as the SQL store does.
+        if let Some(value) = update.absolute_number {
+            item.absolute_number = value;
+        }
         if let Some(value) = update.contiguous_absolute_number {
             item.contiguous_absolute_number = value;
         }

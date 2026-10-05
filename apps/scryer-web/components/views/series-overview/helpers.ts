@@ -126,6 +126,17 @@ export function episodeSortValue(episode: CollectionEpisode) {
   return Number.parseInt(match[0], 10);
 }
 
+/**
+ * The name an episode row shows. Upstream metadata can drop an episode's
+ * title, which then reads as a translated "TBA" rather than a blank.
+ */
+export function episodeDisplayTitle(
+  episode: Pick<CollectionEpisode, "title" | "episodeLabel">,
+  t: (key: string) => string,
+) {
+  return episode.title?.trim() || episode.episodeLabel?.trim() || t("episode.titleTba");
+}
+
 export function isEpisodeCountableForProgress(episode: CollectionEpisode) {
   const title = episode.title?.trim();
   const airDate = episode.airDate?.trim();
