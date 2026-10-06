@@ -2758,6 +2758,19 @@ async fn series_title_scan_roles_for_new_files(names: &[(&str, usize)]) -> Vec<M
 /// episode has a wanted row, and returns that row's status afterwards.
 async fn series_movie_episode_wanted_status_after_scanning(name: &str) -> AcquisitionScopeStatus {
     let mut series = lantern_vale_series(&[(name, 256)]).await;
+    let wanted_items = track_series_movie_episode_wanted_row(&mut series).await;
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
+        .await
+        .expect("scan series title");
+    series_movie_episode_wanted_status(&series, &wanted_items).await
+}
+
+/// Gives the series movie's linked episode a Wanted row that scans update.
+async fn track_series_movie_episode_wanted_row(
+    series: &mut LanternValeSeries,
+) -> Arc<TrackingAcquisitionScopeStateRepo> {
     let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
     series.app.services.workflow.acquisition_scope_states = wanted_items.clone();
     let episode_id = series.episode_ids[0].clone();
@@ -2789,17 +2802,56 @@ async fn series_movie_episode_wanted_status_after_scanning(name: &str) -> Acquis
         })
         .await
         .expect("seed wanted row");
-    series
-        .app
-        .scan_title_library(&series.user, &series.title.id)
-        .await
-        .expect("scan series title");
     wanted_items
-        .get_acquisition_scope_state_for_title(&series.title.id, Some(&episode_id))
+}
+
+async fn series_movie_episode_wanted_status(
+    series: &LanternValeSeries,
+    wanted_items: &TrackingAcquisitionScopeStateRepo,
+) -> AcquisitionScopeStatus {
+    wanted_items
+        .get_acquisition_scope_state_for_title(&series.title.id, Some(&series.episode_ids[0]))
         .await
         .expect("read wanted row")
         .expect("wanted row kept")
         .status
+}
+
+/// The series movie's elected file is deleted and the losing file stays. A
+/// later scan finds only the loser, which keeps its title role Primary but is
+/// not promoted, so the episode has no Primary and must stay wanted for the
+/// release parked for it.
+#[tokio::test]
+async fn series_title_scan_keeps_a_series_movie_episode_wanted_when_only_its_losing_file_remains() {
+    let mut series =
+        lantern_vale_series(&[(SERIES_MOVIE_FILES[0], 1024), (SERIES_MOVIE_FILES[1], 256)]).await;
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
+        .await
+        .expect("first scan");
+    assert_eq!(
+        series.roles().await,
+        vec![MediaFileRole::Primary, MediaFileRole::Additional],
+        "the first scan elects the larger file"
+    );
+    series.remove_file(0).await;
+    let wanted_items = track_series_movie_episode_wanted_row(&mut series).await;
+
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
+        .await
+        .expect("rescan");
+
+    assert!(
+        !series.episode_has_primary(&series.episode_ids[0]).await,
+        "the losing file is not promoted"
+    );
+    assert_eq!(
+        series_movie_episode_wanted_status(&series, &wanted_items).await,
+        AcquisitionScopeStatus::Wanted
+    );
 }
 
 #[tokio::test]

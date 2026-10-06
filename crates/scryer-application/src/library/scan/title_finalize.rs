@@ -38,17 +38,24 @@ fn scanned_movie_file_role(parsed: &crate::ParsedReleaseMetadata) -> crate::Medi
     }
 }
 
-/// Whether a scan that found `file_id` for a series movie's linked episode may
-/// mark the episode's wanted row completed: the file is a Primary candidate,
-/// or the episode already has a Primary. An alternate cut alone leaves the
-/// episode missing, and a completed row would hold back a release parked for
-/// it. A failed read keeps the old behaviour and completes the row.
+/// Whether a scan that found a file for a series movie's linked episode may
+/// mark the episode's wanted row completed: the episode already has a
+/// Primary, or this scan inserted the file as a Primary candidate (the role
+/// pass elects such a file when the episode has none). A stored file keeps
+/// its title role Primary after losing an election, so its title role is no
+/// evidence: once the winner is gone, a re-found loser leaves the episode
+/// missing until the operator picks. An alternate cut alone also leaves it
+/// missing, and a completed row would hold back a release parked for it. A
+/// failed read keeps the old behaviour and completes the row.
 async fn series_movie_episode_is_covered(
     app: &AppUseCase,
     title_id: &str,
     episode_id: &str,
-    file_id: &str,
+    inserted_primary_candidate: bool,
 ) -> bool {
+    if inserted_primary_candidate {
+        return true;
+    }
     match app
         .services
         .library
@@ -56,10 +63,9 @@ async fn series_movie_episode_is_covered(
         .list_live_media_files_for_episode_ids(title_id, &[episode_id.to_string()])
         .await
     {
-        Ok(files) => files.iter().any(|file| {
-            (file.media_file.id == file_id && file.title_role == crate::MediaFileRole::Primary)
-                || file.primary_episode_ids.iter().any(|id| id == episode_id)
-        }),
+        Ok(files) => files
+            .iter()
+            .any(|file| file.primary_episode_ids.iter().any(|id| id == episode_id)),
         Err(_) => true,
     }
 }
@@ -443,6 +449,7 @@ pub(crate) async fn finalize_title_scan_file(
         }),
         PlannedTitleScanRecord::New => None,
     };
+    let inserted_by_scan = existing.is_none();
 
     let destination_path = stored_path_to_path_buf(&file.path);
     let destination_permit = app
@@ -597,8 +604,13 @@ pub(crate) async fn finalize_title_scan_file(
             }
         }
         if series_movie_link_id.is_none()
-            || series_movie_episode_is_covered(app, &title.id, &episode.id, &persisted_file.file_id)
-                .await
+            || series_movie_episode_is_covered(
+                app,
+                &title.id,
+                &episode.id,
+                inserted_by_scan && new_file_role.is_primary(),
+            )
+            .await
         {
             crate::import_workflow::mark_wanted_completed(app, &title.id, Some(&episode.id), false)
                 .await;
