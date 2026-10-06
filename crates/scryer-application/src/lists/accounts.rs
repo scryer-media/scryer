@@ -640,6 +640,7 @@ impl ListAccountRuntime {
 }
 impl AppUseCase {
     pub(crate) async fn require_personal_lists_allowed(&self, actor: &User) -> AppResult<()> {
+        self.require_lists_enabled().await?;
         if !actor.authorization.login_status.is_enabled() {
             return Err(AppError::Unauthorized("account is disabled".into()));
         }

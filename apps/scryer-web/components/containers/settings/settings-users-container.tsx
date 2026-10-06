@@ -26,6 +26,7 @@ import { useClient } from "urql";
 import type { LibraryRecord, UserRecord } from "@/lib/types";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
+import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import {
   APP_PERMISSIONS,
   LIBRARY_PERMISSIONS,
@@ -55,7 +56,9 @@ export function SettingsUsersContainer() {
   const t = useTranslate();
   const client = useClient();
   const { user: currentUser } = useAuth();
-  const canManageLists = hasAppPermission(currentUser, APP_PERMISSIONS.manageLists);
+  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
+  const canManageLists =
+    experimentalFeaturesEnabled && hasAppPermission(currentUser, APP_PERMISSIONS.manageLists);
   const [settingsUsers, setSettingsUsers] = useState<UserRecord[]>([]);
   const [libraries, setLibraries] = useState<LibraryRecord[]>([]);
   const [newUsername, setNewUsername] = useState("");
@@ -469,8 +472,11 @@ export function SettingsUsersContainer() {
           pendingDeleteUser
             ? [
                 t("status.deletingUser", { name: pendingDeleteUser.username }),
-                // Lists go with the member who followed them.
-                t("status.deletingUserListsWarning"),
+                // Lists go with the member who followed them; say so only
+                // while lists exist on this instance.
+                ...(experimentalFeaturesEnabled
+                  ? [t("status.deletingUserListsWarning")]
+                  : []),
               ].join(" ")
             : ""
         }

@@ -8,7 +8,8 @@
 //! Changing any of it needs the `manage_lists` app permission, and a route may
 //! target only a library the actor may manage titles in. Personal
 //! subscriptions never pass through here; a personal id answers "not found",
-//! the same as a missing one.
+//! the same as a missing one. Every read and write here is refused while the
+//! experimental-features switch is off.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -453,6 +454,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<Vec<ListProviderManifest>> {
+        self.require_lists_enabled().await?;
         let plugins = self.services.lists.plugins.descriptors();
         let charts = self.list_chart_catalog().await;
         let mut manifests = merge_provider_catalog(&plugins, &charts);
@@ -561,6 +563,7 @@ impl AppUseCase {
         &self,
         actor: &User,
     ) -> AppResult<Vec<ListSubscription>> {
+        self.require_lists_enabled().await?;
         let can_manage = self.can_manage_lists(actor).await?;
         let viewable = self.viewable_library_ids(actor).await?;
         let mut subscriptions = self
@@ -588,6 +591,7 @@ impl AppUseCase {
         actor: &User,
         id: &str,
     ) -> AppResult<Option<ListSubscription>> {
+        self.require_lists_enabled().await?;
         let can_manage = self.can_manage_lists(actor).await?;
         let viewable = self.viewable_library_ids(actor).await?;
         match self.public_subscription(id).await {
@@ -609,6 +613,7 @@ impl AppUseCase {
         limit: usize,
         offset: usize,
     ) -> AppResult<ListMembershipPage> {
+        self.require_lists_enabled().await?;
         let subscription = self.public_subscription(id).await?;
         let rows = self
             .services
@@ -648,6 +653,7 @@ impl AppUseCase {
         id: &str,
         limit: usize,
     ) -> AppResult<Vec<ListSyncRun>> {
+        self.require_lists_enabled().await?;
         let subscription = self.public_subscription(id).await?;
         let can_manage = self.can_manage_lists(actor).await?;
         let runs = self
@@ -772,6 +778,7 @@ impl AppUseCase {
     pub async fn preview_public_list(&self, actor: &User, id: &str) -> AppResult<ListPreview> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let subscription = self.public_subscription(id).await?;
         let existing = self
             .services
@@ -794,6 +801,7 @@ impl AppUseCase {
     ) -> AppResult<ListPreview> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let Some((classified, _)) = self
             .classify_source(
                 draft.provider.as_deref(),
@@ -830,6 +838,7 @@ impl AppUseCase {
     ) -> AppResult<ListSubscription> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let (classified, _) = self
             .classify_source(
                 input.provider.as_deref(),
@@ -892,6 +901,7 @@ impl AppUseCase {
     ) -> AppResult<ListSubscription> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let mut subscription = self.public_subscription(id).await?;
         // The kinds a source declares are the ceiling; a follow may narrow
         // them and widen them back.
@@ -952,6 +962,7 @@ impl AppUseCase {
     ) -> AppResult<ListSubscription> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let mut subscription = self.public_subscription(id).await?;
         let now = Utc::now();
         subscription.enabled = enabled;
@@ -984,6 +995,7 @@ impl AppUseCase {
     pub async fn unsubscribe_public_list(&self, actor: &User, id: &str) -> AppResult<String> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let subscription = self.public_subscription(id).await?;
         self.services
             .lists
@@ -1045,6 +1057,7 @@ impl AppUseCase {
     pub async fn sync_public_list_now(&self, actor: &User, id: &str) -> AppResult<Vec<String>> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let subscription = self.public_subscription(id).await?;
         if !subscription.enabled {
             return Err(AppError::Validation("this list is turned off".into()));
@@ -1055,6 +1068,7 @@ impl AppUseCase {
     pub async fn sync_all_public_lists(&self, actor: &User) -> AppResult<Vec<String>> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let subscriptions = self
             .services
             .lists
@@ -1068,6 +1082,7 @@ impl AppUseCase {
     pub async fn list_exclusions(&self, actor: &User) -> AppResult<Vec<ListExclusionView>> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let lists = &self.services.lists;
         let names = lists
             .subscriptions
@@ -1098,6 +1113,7 @@ impl AppUseCase {
     ) -> AppResult<ListExclusionView> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let external_ids = input
             .external_ids
             .into_iter()
@@ -1149,6 +1165,7 @@ impl AppUseCase {
     pub async fn remove_list_exclusion(&self, actor: &User, id: &str) -> AppResult<String> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let exclusions = &self.services.lists.exclusions;
         let exclusion = exclusions
             .get_by_id(id)
@@ -1195,6 +1212,7 @@ impl AppUseCase {
     pub async fn member_list_policies(&self, actor: &User) -> AppResult<Vec<MemberListPolicy>> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let users = self.services.identity.users.list_all().await?;
         let policies = self
             .services
@@ -1239,6 +1257,7 @@ impl AppUseCase {
     ) -> AppResult<MemberListPolicy> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let user = self
             .services
             .identity

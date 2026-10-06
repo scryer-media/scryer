@@ -51,6 +51,7 @@ type ListsViewProps = {
   section: ListsSection;
   onSectionChange: (section: ListsSection) => void;
   canManageLists: boolean;
+  experimentalFeaturesEnabled: boolean;
   canManageProviderApps: boolean;
   accounts: ListAccount[];
   managedAccount: ListAccount | null;
@@ -107,7 +108,7 @@ export function ListsView(props: ListsViewProps) {
   } = props;
   const t = useTranslate();
   const [followTarget, setFollowTarget] = React.useState<FollowListTarget | null>(null);
-  const canManageSubscriptions = canManageLists || section === "personal";
+  const canManageSubscriptions = canManageLists || (section === "personal" && props.experimentalFeaturesEnabled);
   const providerByType = React.useMemo(
     () => new Map(providers.map((provider) => [provider.providerType, provider])),
     [providers],
@@ -181,8 +182,10 @@ export function ListsView(props: ListsViewProps) {
               count={section === "public" ? subscriptions.length : undefined}
               onClick={() => onSectionChange("public")}
             />
-            <UnderlineFilterButton id="lists-tab-personal" role="tab" aria-selected={section === "personal"} selected={section === "personal"} label={t("lists.tab.personal")} count={section === "personal" ? subscriptions.length : undefined} onClick={() => onSectionChange("personal")} />
-            {props.canManageProviderApps ? (
+            {props.experimentalFeaturesEnabled ? (
+              <UnderlineFilterButton id="lists-tab-personal" role="tab" aria-selected={section === "personal"} selected={section === "personal"} label={t("lists.tab.personal")} count={section === "personal" ? subscriptions.length : undefined} onClick={() => onSectionChange("personal")} />
+            ) : null}
+            {props.experimentalFeaturesEnabled && props.canManageProviderApps ? (
               <UnderlineFilterButton id="lists-tab-provider-apps" role="tab" aria-selected={section === "providerApps"} selected={section === "providerApps"} label={t("lists.providerApps.heading")} onClick={() => onSectionChange("providerApps")} />
             ) : null}
             {canManageLists ? (
@@ -198,9 +201,9 @@ export function ListsView(props: ListsViewProps) {
           </div>
         </div>
 
-        {section === "providerApps" && props.canManageProviderApps ? (
+        {section === "providerApps" && props.canManageProviderApps && props.experimentalFeaturesEnabled ? (
           <ProviderAppsPanel />
-        ) : section === "providerApps" ? (
+        ) : (section === "providerApps" || (section === "personal" && !props.experimentalFeaturesEnabled)) ? (
           <p role="status" className="py-6 text-sm">{t("status.permissionDenied")}</p>
         ) : loading ? (
           <div className="flex items-center gap-2 py-8 text-sm text-[var(--scry-muted)]">

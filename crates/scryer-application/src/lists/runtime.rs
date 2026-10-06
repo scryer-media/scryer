@@ -605,6 +605,20 @@ impl AppUseCase {
         }
     }
 
+    /// Lists ship behind the instance-wide experimental switch for now:
+    /// following and syncing are refused, and the sync job idles, until the
+    /// operator opts in.
+    pub(crate) async fn require_lists_enabled(&self) -> AppResult<()> {
+        if self.experimental_features_enabled().await? {
+            Ok(())
+        } else {
+            Err(AppError::Validation(
+                "lists are an experimental feature; turn on experimental features in Settings first"
+                    .into(),
+            ))
+        }
+    }
+
     /// Job body for [`crate::jobs::JobKey::ListSync`].
     pub(crate) async fn run_list_sync_job(
         &self,
@@ -616,6 +630,9 @@ impl AppUseCase {
             .lists
             .account_runtime
             .prune_expired_links(Utc::now());
+        if !self.experimental_features_enabled().await? {
+            return Ok(ListSyncReport::default());
+        }
         let lists = &self.services.lists;
         let actions = AppListActions::new(self);
         let gateway = self.services.library.metadata_gateway.clone();

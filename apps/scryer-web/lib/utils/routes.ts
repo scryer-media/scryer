@@ -125,18 +125,22 @@ export function canAccessDashboard(canManageSystemSettings: boolean): boolean {
  * editing and excluding need Manage Lists. A list manager without a catalog
  * grant still reaches the page, because the lists they manage are theirs to
  * run whether or not they browse the libraries those lists fill.
+ *
+ * Lists are still being finished, so the page exists only once the instance
+ * has opted into experimental features.
  */
 export function canAccessListsPage(
   canViewCatalog: boolean,
   canManageLists: boolean,
+  experimentalFeaturesEnabled: boolean,
 ): boolean {
-  return canViewCatalog || canManageLists;
+  return experimentalFeaturesEnabled && (canViewCatalog || canManageLists);
 }
 
 /**
  * Whether to send the reader away from the Lists page. The instance switches
- * load after first paint, so a reload or bookmark of the page waits for them
- * instead of bouncing to the default.
+ * load after first paint with experimental features assumed off, so a reload
+ * or bookmark of the page waits for them instead of bouncing to the default.
  */
 export function shouldLeaveListsPage(
   canAccessLists: boolean,
@@ -146,8 +150,11 @@ export function shouldLeaveListsPage(
 }
 
 /** The instance-wide exclusions pane is a list-management surface only. */
-export function canAccessListExclusions(canManageLists: boolean): boolean {
-  return canManageLists;
+export function canAccessListExclusions(
+  canManageLists: boolean,
+  experimentalFeaturesEnabled: boolean,
+): boolean {
+  return experimentalFeaturesEnabled && canManageLists;
 }
 
 export function canAccessApiExplorer(
