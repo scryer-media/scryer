@@ -698,8 +698,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
   // Library and root moves are still being finished, so the bulk dialog only
   // becomes a move entry point when the instance has opted in.
   const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
-  const canManageLists =
-    experimentalFeaturesEnabled && hasAppPermission(auth.user, APP_PERMISSIONS.manageLists);
+  const canManageLists = hasAppPermission(auth.user, APP_PERMISSIONS.manageLists);
   const [alsoExcludeFromLists, setAlsoExcludeFromLists] = React.useState(false);
   const { registerInteractiveJobRun } = useJobRunToasts();
   const { confirmReplaceConflict, replaceConflictDialog } =
@@ -2682,6 +2681,8 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     setBulkDeleteDialogOpen,
     bulkDeleteFilesOnDisk,
     setBulkDeleteFilesOnDisk,
+    bulkDeleteExcludeFromLists,
+    setBulkDeleteExcludeFromLists,
     bulkDeleteTypedConfirmation,
     setBulkDeleteTypedConfirmation,
     bulkDeletePreviewLoading,
@@ -2699,6 +2700,7 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
     selectedTitleLibraryIds,
     bulkActionBusy,
     setBulkActionBusy,
+    canExcludeFromLists: canManageLists,
     client,
     t,
     setGlobalStatus,
@@ -5414,6 +5416,21 @@ export const MediaContentContainer = React.memo(function MediaContentContainer({
               {t("title.deleteFilesOnDisk")}
             </span>
           </label>
+          {canManageLists ? (
+            <label className="flex items-center gap-2">
+              <Checkbox
+                id="bulk-delete-exclude-from-lists"
+                checked={bulkDeleteExcludeFromLists}
+                onCheckedChange={(checked) =>
+                  setBulkDeleteExcludeFromLists(checked === true)
+                }
+                disabled={bulkActionBusy}
+              />
+              <span className="text-xs text-card-foreground">
+                {t("lists.exclusions.deleteCheckbox")}
+              </span>
+            </label>
+          ) : null}
           {bulkDeleteFilesOnDisk ? (
             <DeletePreviewSummary
               preview={bulkDeletePreview}

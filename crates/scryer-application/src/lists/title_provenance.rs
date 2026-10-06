@@ -70,14 +70,13 @@ pub(crate) fn public_memberships_by_title(
 impl AppUseCase {
     /// The public lists each title is on or has left, for titles the actor
     /// may view. One read of the memberships and one of the public
-    /// subscriptions for the whole batch. While lists are switched off this
-    /// is empty rather than an error, so a title page never fails over it.
+    /// subscriptions for the whole batch.
     pub async fn public_list_memberships_for_titles(
         &self,
         actor: &User,
         title_ids: &[String],
     ) -> AppResult<HashMap<String, Vec<TitleListMembership>>> {
-        if title_ids.is_empty() || !self.experimental_features_enabled().await? {
+        if title_ids.is_empty() {
             return Ok(HashMap::new());
         }
         let title_ids = self

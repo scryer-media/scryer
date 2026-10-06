@@ -10,7 +10,6 @@ import {
 } from "@/components/views/lists/lists-view";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useSessionUser } from "@/lib/hooks/use-auth";
 import { useListAccountLink } from "@/lib/hooks/use-list-account-link";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
@@ -84,7 +83,6 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
   const navigate = useNavigate();
   const requestedSection = listsSectionFromPath(location.pathname);
   const section: ListsSection = requestedSection;
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const user = useSessionUser();
   const canManageProviderApps = hasAppPermission(user, APP_PERMISSIONS.manageSystemSettings);
   const personal = section === "personal";
@@ -173,7 +171,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       const [providersResult] = await Promise.all([
         client.query(listProvidersQuery, {}).toPromise(),
         loadSubscriptions(),
-        ...(personal && experimentalFeaturesEnabled ? [loadAccounts()] : []),
+        ...(personal ? [loadAccounts()] : []),
       ]);
       if (providersResult.error) throw providersResult.error;
       setProviders((providersResult.data?.listProviders ?? []) as ListProviderManifest[]);
@@ -203,7 +201,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
     } finally {
       setLoading(false);
     }
-  }, [canManageLists, client, experimentalFeaturesEnabled, loadAccounts, loadSubscriptions, personal, setGlobalStatus, t]);
+  }, [canManageLists, client, loadAccounts, loadSubscriptions, personal, setGlobalStatus, t]);
 
   const loadExclusions = React.useCallback(async () => {
     if (!canManageLists) return;
@@ -671,7 +669,6 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       section={section}
       onSectionChange={changeSection}
       canManageLists={canManageLists}
-      experimentalFeaturesEnabled={experimentalFeaturesEnabled}
       canManageProviderApps={canManageProviderApps}
       accounts={accounts}
       managedAccount={managedAccount}

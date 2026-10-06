@@ -1,10 +1,11 @@
 import * as React from "react";
 import type { Client } from "urql";
-import { deleteTitlesMutation } from "@/lib/graphql/mutations";
-import { deleteTitlesPreviewQuery } from "@/lib/graphql/queries";
+import { addListExclusionMutation, deleteTitlesMutation } from "@/lib/graphql/mutations";
+import { deleteTitlesPreviewQuery, listExclusionTitleQuery } from "@/lib/graphql/queries";
 import type { JobRun, TitleRecord } from "@/lib/types";
 import type { DeletePreview, DeleteTitlesPreview } from "@/lib/types/delete-preview";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
+import { exclusionInputFromTitle, type AddListExclusionInput } from "@/lib/utils/lists";
 import { selectedTitleIdsKey } from "@/lib/utils/title-selection";
 import type { Translate } from "@/components/root/types";
 import type { SetGlobalStatus } from "@/lib/context/global-status-context";
@@ -14,6 +15,8 @@ type UseBulkDeleteArgs = {
   selectedTitleLibraryIds: string[];
   bulkActionBusy: boolean;
   setBulkActionBusy: React.Dispatch<React.SetStateAction<boolean>>;
+  /** Whether the dialog offers to exclude the removed titles from lists. */
+  canExcludeFromLists: boolean;
   client: Client;
   t: Translate;
   setGlobalStatus: SetGlobalStatus;
@@ -33,6 +36,7 @@ export function useBulkDelete({
   selectedTitleLibraryIds,
   bulkActionBusy,
   setBulkActionBusy,
+  canExcludeFromLists,
   client,
   t,
   setGlobalStatus,
@@ -49,6 +53,8 @@ export function useBulkDelete({
   const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = React.useState(false);
   const [bulkDeleteFilesOnDisk, setBulkDeleteFilesOnDisk] =
     React.useState(false);
+  const [bulkDeleteExcludeFromLists, setBulkDeleteExcludeFromLists] =
+    React.useState(false);
   const [bulkDeleteTypedConfirmation, setBulkDeleteTypedConfirmation] =
     React.useState("");
   const [bulkDeletePreviewLoading, setBulkDeletePreviewLoading] =
@@ -62,6 +68,7 @@ export function useBulkDelete({
   const closeBulkDeleteDialog = React.useCallback(() => {
     setBulkDeleteDialogOpen(false);
     setBulkDeleteFilesOnDisk(false);
+    setBulkDeleteExcludeFromLists(false);
     setBulkDeleteTypedConfirmation("");
     setBulkDeletePreviewLoading(false);
     setBulkDeletePreviewError(null);
@@ -209,8 +216,26 @@ export function useBulkDelete({
       return;
     }
 
+    const excludeFromLists = canExcludeFromLists && bulkDeleteExcludeFromLists;
     setBulkActionBusy(true);
     try {
+      // Catalog rows may not carry external ids, so read them while the titles
+      // still exist. The exclusions themselves are only sent after the delete.
+      const exclusionsByTitleId = new Map<string, AddListExclusionInput | null>();
+      if (excludeFromLists) {
+        for (const title of targets) {
+          let exclusion = exclusionInputFromTitle(title);
+          if (!exclusion) {
+            const lookup = await client
+              .query(listExclusionTitleQuery, { id: title.id }, { requestPolicy: "network-only" })
+              .toPromise()
+              .catch(() => null);
+            const found = lookup?.data?.title as TitleRecord | null | undefined;
+            exclusion = found ? exclusionInputFromTitle(found) : null;
+          }
+          exclusionsByTitleId.set(title.id, exclusion);
+        }
+      }
       const items = targets.map((title) => {
         const preview = bulkDeletePreviewsByTitleId[title.id];
         if (bulkDeleteFilesOnDisk && !preview) {
@@ -264,6 +289,32 @@ export function useBulkDelete({
       setGlobalStatus(
         `Queued deletion for ${acceptedIds.length} title${acceptedIds.length === 1 ? "" : "s"}.`,
       );
+
+      // Separate requests made only after the delete was accepted, so they can
+      // never change what the delete removes.
+      if (excludeFromLists) {
+        let withoutIds = 0;
+        let failed = 0;
+        for (const titleId of acceptedIds) {
+          const exclusion = exclusionsByTitleId.get(titleId);
+          if (!exclusion) {
+            withoutIds += 1;
+            continue;
+          }
+          const exclusionFailed = await client
+            .mutation(addListExclusionMutation, { input: exclusion })
+            .toPromise()
+            .then((exclusionResult) => Boolean(exclusionResult.error))
+            .catch(() => true);
+          if (exclusionFailed) failed += 1;
+        }
+        if (withoutIds > 0) {
+          setGlobalStatus(t("lists.exclusions.bulkDeleteNoIds", { count: withoutIds }));
+        }
+        if (failed > 0) {
+          setGlobalStatus(t("lists.exclusions.bulkDeleteFailed", { count: failed }));
+        }
+      }
     } catch (error) {
       setGlobalStatus(
         withFailureDetail(
@@ -277,9 +328,11 @@ export function useBulkDelete({
   }, [
     batchFailureDetail,
     bulkActionBusy,
+    bulkDeleteExcludeFromLists,
     bulkDeleteFilesOnDisk,
     bulkDeletePreviewsByTitleId,
     bulkDeleteTypedConfirmation,
+    canExcludeFromLists,
     client,
     closeBulkDeleteDialog,
     deletionJobIdsRef,
@@ -304,6 +357,7 @@ export function useBulkDelete({
       return;
     }
     setBulkDeleteFilesOnDisk(false);
+    setBulkDeleteExcludeFromLists(false);
     setBulkDeleteTypedConfirmation("");
     setBulkDeletePreviewLoading(false);
     setBulkDeletePreviewError(null);
@@ -316,6 +370,8 @@ export function useBulkDelete({
     setBulkDeleteDialogOpen,
     bulkDeleteFilesOnDisk,
     setBulkDeleteFilesOnDisk,
+    bulkDeleteExcludeFromLists,
+    setBulkDeleteExcludeFromLists,
     bulkDeleteTypedConfirmation,
     setBulkDeleteTypedConfirmation,
     bulkDeletePreviewLoading,

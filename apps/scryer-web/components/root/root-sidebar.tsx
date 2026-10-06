@@ -799,7 +799,7 @@ function RootSidebarContent({
           // Maintenance and request rules are still being finished, so their
           // shortcuts are offered only when the instance has opted in. The
           // permission each already required still applies on top.
-          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules" && entry.id !== "listProviderApps") ||
+          ((entry.id !== "maintenanceRules" && entry.id !== "requestRules") ||
             experimentalFeaturesEnabled) &&
           (!entry.requiredAnyAppPermission ||
             hasAnyAppPermission(user, entry.requiredAnyAppPermission) ||
@@ -835,7 +835,7 @@ function RootSidebarContent({
           (!MEDIA_NAV_VIEW_IDS.includes(item.id) || canAccessMediaTopNav) &&
           (item.id !== "calendar" || canViewCatalog) &&
           (item.id !== "lists" ||
-            canAccessListsPage(canViewCatalog || hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) || canManageTitle, canManageLists || canManageSystemSettings, experimentalFeaturesEnabled)) &&
+            canAccessListsPage(canViewCatalog || hasAnyLibraryPermission(user, LIBRARY_PERMISSIONS.request) || canManageTitle, canManageLists || canManageSystemSettings)) &&
           (item.id !== "wanted" || canViewCatalog) &&
           (item.id !== "dashboard" || canAccessDashboard(canManageSystemSettings)) &&
           (item.id !== "system" || canManageSystemSettings) &&
@@ -844,7 +844,6 @@ function RootSidebarContent({
     [
       canAccessMediaTopNav,
       canManageLists,
-      experimentalFeaturesEnabled,
       canManageSystemSettings,
       canManageTitle,
       canResolveImports,
