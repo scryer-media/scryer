@@ -569,12 +569,15 @@ struct EpisodeElectionGate<'a> {
     /// files. Empty when the title's rows or series movie links could not be
     /// read, which promotes nothing.
     ordinary_file_ids: &'a HashSet<String>,
-    /// Every file stored for the title before this scan. A file this scan
-    /// inserted has never been through an election, so electing among such
-    /// files is the scan's first election, not a promotion. A stored file
-    /// that this scan relinks to an episode is not new: a new link row starts
-    /// Additional, which says nothing about whether the file lost before.
-    stored_file_ids: &'a HashSet<String>,
+    /// Files that had at least one stored episode link before this scan. A
+    /// file without one has never been through an episode election: either
+    /// this scan inserted it, or an earlier scan stored it before it could be
+    /// linked (a series movie with no linked episode yet, or a failed link
+    /// write). Electing among such files is a first election, not a
+    /// promotion. A file that lost an election always has a stored link, and
+    /// relinking it is no evidence either way: a new link row starts
+    /// Additional.
+    previously_linked_file_ids: &'a HashSet<String>,
     /// Whether a file with no Primary role at all may be promoted (one-off
     /// title scans only).
     allow_additional_promotion: bool,
@@ -582,9 +585,11 @@ struct EpisodeElectionGate<'a> {
 
 impl EpisodeElectionGate<'_> {
     /// Whether the scan may make `file_id` Primary for an episode that has no
-    /// Primary: an ordinary episode file, or a file this scan inserted.
+    /// Primary: an ordinary episode file, or a file never linked to an
+    /// episode before this scan.
     fn may_elect(&self, file_id: &str) -> bool {
-        self.ordinary_file_ids.contains(file_id) || !self.stored_file_ids.contains(file_id)
+        self.ordinary_file_ids.contains(file_id)
+            || !self.previously_linked_file_ids.contains(file_id)
     }
 }
 
@@ -691,7 +696,7 @@ async fn normalize_episodic_file_roles_after_scan(
     app: &AppUseCase,
     title: &Title,
     episode_ids: &HashSet<String>,
-    stored_file_ids: &HashSet<String>,
+    previously_linked_file_ids: &HashSet<String>,
     allow_existing_additional_role_promotion: bool,
 ) -> bool {
     if episode_ids.is_empty() {
@@ -723,7 +728,8 @@ async fn normalize_episodic_file_roles_after_scan(
     }
 
     // The automatic-promotion allow-list, read once and only when an episode
-    // without a Primary has a file that was stored before this scan.
+    // without a Primary has a file that was linked to an episode before this
+    // scan.
     let mut ordinary_file_ids: Option<HashSet<String>> = None;
 
     let mut title_updated = false;
@@ -741,16 +747,16 @@ async fn normalize_episodic_file_roles_after_scan(
                 .iter()
                 .any(|primary_episode_id| primary_episode_id == &episode_id)
         });
-        let has_stored_file = candidates
+        let has_previously_linked_file = candidates
             .iter()
-            .any(|file| stored_file_ids.contains(&file.media_file.id));
-        if !has_episode_primary && has_stored_file && ordinary_file_ids.is_none() {
+            .any(|file| previously_linked_file_ids.contains(&file.media_file.id));
+        if !has_episode_primary && has_previously_linked_file && ordinary_file_ids.is_none() {
             ordinary_file_ids = Some(promotable_episode_file_ids(app, title).await);
         }
         let no_ordinary_files = HashSet::new();
         let gate = EpisodeElectionGate {
             ordinary_file_ids: ordinary_file_ids.as_ref().unwrap_or(&no_ordinary_files),
-            stored_file_ids,
+            previously_linked_file_ids,
             allow_additional_promotion: allow_existing_additional_role_promotion,
         };
 
@@ -2746,10 +2752,10 @@ impl AppUseCase {
                     .insert(episode_id.clone());
             }
         }
-        // The files stored before this scan; anything else this scan inserted.
-        let stored_file_ids = existing_files
-            .iter()
-            .map(|file| file.id.clone())
+        // The files linked to an episode before this scan.
+        let previously_linked_file_ids = stored_episode_ids_by_file
+            .keys()
+            .cloned()
             .collect::<HashSet<_>>();
         let mut remaining_existing_paths = existing_records_by_path
             .keys()
@@ -3355,7 +3361,7 @@ impl AppUseCase {
                 self,
                 &title,
                 &role_normalization_episode_ids,
-                &stored_file_ids,
+                &previously_linked_file_ids,
                 mode.allows_existing_additional_role_promotion(),
             )
             .await

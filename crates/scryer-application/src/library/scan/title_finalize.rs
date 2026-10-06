@@ -40,22 +40,21 @@ fn scanned_movie_file_role(parsed: &crate::ParsedReleaseMetadata) -> crate::Medi
 
 /// Whether a scan that found a file for a series movie's linked episode may
 /// mark the episode's wanted row completed: the episode already has a
-/// Primary, or this scan inserted the file as a Primary candidate (the role
-/// pass elects such a file when the episode has none). A stored file keeps
-/// its title role Primary after losing an election, so its title role is no
-/// evidence: once the winner is gone, a re-found loser leaves the episode
-/// missing until the operator picks. An alternate cut alone also leaves it
-/// missing, and a completed row would hold back a release parked for it. A
-/// failed read keeps the old behaviour and completes the row.
+/// Primary, or the role pass will elect one. It elects among title-Primary
+/// files that had no episode link before this scan, so `unlinked_file_id`
+/// (the scanned file, when it had none) counts while its title role is
+/// Primary. A stored file keeps its title role Primary after losing an
+/// election, so a linked file's title role is no evidence: once the winner is
+/// gone, a re-found loser leaves the episode missing until the operator
+/// picks. An alternate cut alone also leaves it missing, and a completed row
+/// would hold back a release parked for it. A failed read keeps the old
+/// behaviour and completes the row.
 async fn series_movie_episode_is_covered(
     app: &AppUseCase,
     title_id: &str,
     episode_id: &str,
-    inserted_primary_candidate: bool,
+    unlinked_file_id: Option<&str>,
 ) -> bool {
-    if inserted_primary_candidate {
-        return true;
-    }
     match app
         .services
         .library
@@ -63,9 +62,10 @@ async fn series_movie_episode_is_covered(
         .list_live_media_files_for_episode_ids(title_id, &[episode_id.to_string()])
         .await
     {
-        Ok(files) => files
-            .iter()
-            .any(|file| file.primary_episode_ids.iter().any(|id| id == episode_id)),
+        Ok(files) => files.iter().any(|file| {
+            (Some(file.media_file.id.as_str()) == unlinked_file_id && file.title_role.is_primary())
+                || file.primary_episode_ids.iter().any(|id| id == episode_id)
+        }),
         Err(_) => true,
     }
 }
@@ -449,7 +449,6 @@ pub(crate) async fn finalize_title_scan_file(
         }),
         PlannedTitleScanRecord::New => None,
     };
-    let inserted_by_scan = existing.is_none();
 
     let destination_path = stored_path_to_path_buf(&file.path);
     let destination_permit = app
@@ -501,6 +500,13 @@ pub(crate) async fn finalize_title_scan_file(
     } else {
         series_movie_link_id
     };
+    // Whether the series movie file had no episode link before this scan, read
+    // before this file's links change. Until here `episode_links` holds only
+    // stored links for this file.
+    let series_movie_file_was_unlinked = series_movie_link_id.is_some()
+        && !episode_links
+            .iter()
+            .any(|(file_id, _)| file_id == &persisted_file.file_id);
     let replaced_episode_ids = match record {
         PlannedTitleScanRecord::Existing {
             replaced_episode_ids,
@@ -608,7 +614,7 @@ pub(crate) async fn finalize_title_scan_file(
                 app,
                 &title.id,
                 &episode.id,
-                inserted_by_scan && new_file_role.is_primary(),
+                series_movie_file_was_unlinked.then_some(persisted_file.file_id.as_str()),
             )
             .await
         {

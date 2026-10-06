@@ -3048,6 +3048,69 @@ async fn scans_never_elect_a_relinked_losing_file_of_a_series_movie() {
     }
 }
 
+/// The first scan stores the series movie's only file while the series movie
+/// has no linked episode, so the file gets no episode link. Once the series
+/// movie is linked to a special, the next scan links the file afresh. It was
+/// never through an election, so it becomes the special's Primary and the
+/// special's wanted row completes; otherwise auto-search would grab a second
+/// copy of a movie already on disk.
+#[tokio::test]
+async fn scans_elect_a_series_movie_file_stored_before_its_episode_was_linked() {
+    for full_scan in [true, false] {
+        let mut series = lantern_vale_series(&[(SERIES_MOVIE_FILES[0], 1024)]).await;
+        let shows = series.app.services.catalog.shows.clone();
+        let mut link = shows
+            .list_series_movie_links_for_title(&series.title.id)
+            .await
+            .expect("list series movie links")
+            .remove(0);
+        link.linked_episode_id = None;
+        shows
+            .upsert_series_movie_link(link.clone())
+            .await
+            .expect("unlink the series movie");
+        series
+            .app
+            .scan_title_library(&series.user, &series.title.id)
+            .await
+            .expect("first scan");
+        assert!(
+            !series.episode_has_primary(&series.episode_ids[0]).await,
+            "the first scan has no episode to link the file to"
+        );
+
+        link.linked_episode_id = Some(series.episode_ids[0].clone());
+        shows
+            .upsert_series_movie_link(link)
+            .await
+            .expect("link the series movie to the special");
+        let wanted_items = track_series_movie_episode_wanted_row(&mut series).await;
+        if full_scan {
+            series
+                .app
+                .scan_library(&series.user, MediaFacet::Series)
+                .await
+                .expect("library scan");
+        } else {
+            series
+                .app
+                .scan_title_library(&series.user, &series.title.id)
+                .await
+                .expect("title scan");
+        }
+
+        assert!(
+            series.episode_has_primary(&series.episode_ids[0]).await,
+            "full scan: {full_scan}: the file is the special's Primary"
+        );
+        assert_eq!(
+            series_movie_episode_wanted_status(&series, &wanted_items).await,
+            AcquisitionScopeStatus::Completed,
+            "full scan: {full_scan}"
+        );
+    }
+}
+
 /// A regular episode's losing file is still promoted by a later scan.
 #[tokio::test]
 async fn scans_promote_a_regular_episodes_losing_file() {
