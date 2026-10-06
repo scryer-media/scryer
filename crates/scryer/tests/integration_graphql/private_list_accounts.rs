@@ -46,6 +46,17 @@ async fn fixture() -> MatrixFixture {
     for actor in [&owner, &member, &admin] {
         ctx.users.create(actor.clone()).await.unwrap();
     }
+    ctx.settings_store
+        .upsert_setting_json(
+            "system",
+            "ui.experimental_features_enabled",
+            None,
+            "true".into(),
+            "test",
+            None,
+        )
+        .await
+        .unwrap();
     let store = Arc::new(ListStore::new(
         ctx.db.datastore(),
         ctx.db.encryption_key_state(),

@@ -205,8 +205,27 @@ impl AppUseCase {
             }
         };
 
+        // A list's name is list data: while lists are switched off the
+        // origin keeps its kind and loses the name.
+        let names_a_public_list = requests.iter().any(|request| {
+            matches!(
+                request.origin,
+                scryer_domain::MediaRequestOrigin::PublicList { .. }
+            )
+        });
+        let lists_enabled = names_a_public_list
+            && match self.experimental_features_enabled().await {
+                Ok(enabled) => enabled,
+                Err(error) => {
+                    tracing::warn!(
+                        error = %error,
+                        "could not read the experimental switch for a media request projection"
+                    );
+                    false
+                }
+            };
         let mut public_list_names: HashMap<String, Option<String>> = HashMap::new();
-        for request in requests {
+        for request in requests.iter().filter(|_| lists_enabled) {
             if let scryer_domain::MediaRequestOrigin::PublicList { subscription_id } =
                 &request.origin
                 && !public_list_names.contains_key(subscription_id)

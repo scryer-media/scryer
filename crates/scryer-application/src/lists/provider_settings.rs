@@ -270,6 +270,7 @@ impl AppUseCase {
     ) -> AppResult<Vec<ListProviderSettings>> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let mut settings = Vec::new();
         for descriptor in self.services.lists.plugins.descriptors() {
             let Some(provider_type) = provider_type_of(&descriptor) else {
@@ -295,6 +296,7 @@ impl AppUseCase {
     ) -> AppResult<ListProviderSettings> {
         self.require_app_permission(actor, AppPermission::ManageLists)
             .await?;
+        self.require_lists_enabled().await?;
         let descriptor = list_descriptor_for(self.services.lists.plugins.as_ref(), provider)
             .ok_or_else(|| AppError::NotFound(format!("list provider '{provider}'")))?;
         let provider_type = provider_type_of(&descriptor)

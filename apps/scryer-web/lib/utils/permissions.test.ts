@@ -12,6 +12,7 @@ import {
   libraryPermissionsWithRequestShadowing,
   normalizeJwtPermissionClaims,
   normalizeLibraryPermissionsForStorage,
+  withHiddenPermissionsKept,
 } from "./permissions.ts";
 
 test("normalizeJwtPermissionClaims restores camelCase JWT permissions", () => {
@@ -349,4 +350,28 @@ test("the catalog-settings override reaches subtitles in every library", () => {
     ),
     false,
   );
+});
+
+test("editing visible app permissions keeps a grant the picker hides", () => {
+  const hidden = [APP_PERMISSIONS.manageLists];
+  const current = [APP_PERMISSIONS.manageUsers, APP_PERMISSIONS.manageLists];
+
+  // Adding a visible permission keeps the hidden one.
+  assert.deepEqual(
+    withHiddenPermissionsKept(
+      [APP_PERMISSIONS.manageUsers, APP_PERMISSIONS.managePermissions],
+      current,
+      hidden,
+    ),
+    [APP_PERMISSIONS.manageUsers, APP_PERMISSIONS.managePermissions, APP_PERMISSIONS.manageLists],
+  );
+  // Clearing every visible permission keeps it too.
+  assert.deepEqual(withHiddenPermissionsKept([], current, hidden), [APP_PERMISSIONS.manageLists]);
+  // Nothing hidden is granted that was not granted before.
+  assert.deepEqual(
+    withHiddenPermissionsKept([APP_PERMISSIONS.manageUsers], [APP_PERMISSIONS.manageUsers], hidden),
+    [APP_PERMISSIONS.manageUsers],
+  );
+  // With nothing hidden, the edit is taken as made.
+  assert.deepEqual(withHiddenPermissionsKept([], current, []), []);
 });
