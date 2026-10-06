@@ -140,6 +140,18 @@ type AcquisitionSettingsPayload {
 	Number of days before long-tail scopes are reconverged.
 	"""
 	longTailReconvergeDays: Int!
+	"""
+	Default threshold applied to newly added movies only.
+	"""
+	defaultMovieAvailability: String!
+	"""
+	ISO-3166-1 alpha-2 market used for movie release dates.
+	"""
+	movieReleaseMarket: String!
+	"""
+	Signed offset in days from the applicable movie release date.
+	"""
+	movieAvailabilityDelayDays: Int!
 }
 
 """
@@ -17277,6 +17289,36 @@ enum MonitorTypeValue {
 }
 
 """
+Effective movie release-date availability under this instance's policy.
+"""
+type MovieAvailabilityPayload {
+	"""
+	`available`, `waiting`, or `unknown`.
+	"""
+	status: String!
+	"""
+	Effective calendar date after applying the configured offset.
+	"""
+	effectiveDate: String
+	"""
+	Whether the effective date uses the theatrical-plus-90-day estimate.
+	"""
+	estimated: Boolean!
+	"""
+	Stable reason code for waiting or unknown state.
+	"""
+	reason: String!
+	"""
+	ISO-3166-1 alpha-2 market used for the dates.
+	"""
+	market: String!
+	"""
+	Effective minimum-availability threshold.
+	"""
+	minimumAvailability: String!
+}
+
+"""
 Persisted movie metadata.
 """
 type MovieEntityPayload {
@@ -23912,6 +23954,10 @@ input QueueDownloadInput {
 	Submission purpose; omission uses the normal download purpose.
 	"""
 	purpose: QueueDownloadPurposeValue
+	"""
+	Explicit confirmation to queue a movie before its configured availability date.
+	"""
+	overrideMovieAvailability: Boolean
 }
 
 """
@@ -28875,6 +28921,10 @@ Optional title settings used when creating or updating a title.
 """
 input TitleOptionsInput {
 	"""
+	Movie minimum availability override; omission preserves it, null clears it to legacy Announced behavior, and a value replaces it. Other facets reject this field.
+	"""
+	minAvailability: String
+	"""
 	Quality profile identity; omission preserves the current value, null clears it, and a value replaces it.
 	"""
 	qualityProfileId: ID
@@ -29041,6 +29091,10 @@ type TitlePayload {
 	"""
 	metadataFetchedAt: DateTime
 	"""
+	Explicit minimum availability override, or null for legacy Announced behavior.
+	"""
+	minAvailability: String
+	"""
 	Identifier of the selected quality profile, or null when the title uses no profile.
 	"""
 	qualityProfileId: ID
@@ -29077,6 +29131,10 @@ type TitlePayload {
 	the title follows the default (`AUTO`).
 	"""
 	releaseNumbering: ReleaseNumberingValue
+	"""
+	Effective movie availability for the instance's configured market and delay.
+	"""
+	movieAvailability: MovieAvailabilityPayload
 	"""
 	Provider-native playback links for this title, when an exact catalog mapping exists.
 	"""
@@ -30086,6 +30144,18 @@ input UpdateAcquisitionSettingsInput {
 	Days between long-tail reconvergence passes.
 	"""
 	longTailReconvergeDays: Int!
+	"""
+	Default threshold for newly added movies. Omitted by older clients.
+	"""
+	defaultMovieAvailability: String
+	"""
+	ISO-3166-1 alpha-2 market for movie release dates. Omitted by older clients.
+	"""
+	movieReleaseMarket: String
+	"""
+	Signed offset in days from the applicable release date. Omitted by older clients.
+	"""
+	movieAvailabilityDelayDays: Int
 }
 
 """
