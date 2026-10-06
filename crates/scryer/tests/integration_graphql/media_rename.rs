@@ -327,7 +327,7 @@ async fn partly_applied_rename_counts_a_multi_episode_file_once() {
             .await,
         );
     }
-    let mut seed_file = async |file_name: &str, linked: &[&Episode]| {
+    let seed_file = async |file_name: &str, linked: &[&Episode]| {
         let source = season.join(file_name);
         std::fs::write(&source, file_name.as_bytes()).unwrap();
         let file_id = ctx
@@ -2660,6 +2660,355 @@ async fn rename_preview_plans_inside_the_root_holding_the_files_not_the_recorded
     assert_eq!(updated.root_folder_id, root_ids[1]);
 }
 
+/// Two titles whose names render to the same folder must not both be renamed
+/// into it: each would then read the other's file as its own.
+#[tokio::test]
+async fn apply_media_rename_refuses_two_titles_planned_into_one_folder() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_folder_template(&ctx, "MOVIE", "{title} ({year})").await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+
+    let roots = tempfile::tempdir().expect("roots tempdir");
+    let movie_root = roots.path().join("movies");
+    std::fs::create_dir_all(&movie_root).expect("create movie root");
+    configure_library_roots(&ctx, MediaFacet::Movie, &[&movie_root]).await;
+
+    let mut seeded = Vec::new();
+    for (folder_name, tvdb_id) in [("Twin Harbor A", "94111"), ("Twin Harbor B", "94112")] {
+        let title = create_catalog_title(
+            &ctx,
+            "Twin Harbor",
+            MediaFacet::Movie,
+            vec![ExternalId::new("tvdb".to_string(), tvdb_id.to_string())],
+            vec![],
+            true,
+        )
+        .await;
+        let folder = movie_root.join(folder_name);
+        std::fs::create_dir_all(&folder).expect("create movie dir");
+        set_title_folder_path(&ctx, &title.id, &folder).await;
+        let source = folder.join(format!("Twin.Harbor.{tvdb_id}.1080p.WEB-DL.mkv"));
+        std::fs::write(&source, tvdb_id.as_bytes()).expect("write movie file");
+        seed_movie_file(&ctx, &title, &source).await;
+        seeded.push((title, folder, source));
+    }
+
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    let preview = ctx
+        .app
+        .preview_rename_for_facet(&actor, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    let error = ctx
+        .app
+        .apply_rename_for_facet(&actor, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect_err("a plan sharing one folder between titles is refused");
+    assert!(
+        matches!(error, scryer_application::AppError::Validation(_)),
+        "unexpected error: {error}"
+    );
+
+    for (title, folder, source) in &seeded {
+        assert!(source.exists(), "{} was not moved", source.display());
+        let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+        assert_eq!(stored.folder_path.as_deref(), folder.to_str());
+    }
+    assert!(!movie_root.join("Twin Harbor (2024)").exists());
+}
+
+/// A movie seeded in a folder of its own under `movie_root`, then renamed into
+/// its planned folder so a later plan has nothing to move for it. Returns the
+/// title, its planned folder and its file there.
+async fn seed_movie_renamed_into_place(
+    ctx: &TestContext,
+    actor: &scryer_domain::User,
+    movie_root: &std::path::Path,
+    name: &str,
+    tvdb_id: &str,
+) -> (Title, std::path::PathBuf, std::path::PathBuf) {
+    let (title, source) = seed_movie_in_folder(ctx, movie_root, name, tvdb_id).await;
+    let preview = ctx
+        .app
+        .preview_rename_for_title(actor, &title.id, MediaFacet::Movie)
+        .await
+        .expect("preview first rename");
+    let result = ctx
+        .app
+        .apply_rename_for_title(actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply first rename");
+    assert_eq!((result.applied, result.failed), (1, 0));
+    let planned = movie_root.join(format!("{name} (2024)"));
+    let mut files = std::fs::read_dir(&planned)
+        .expect("read planned folder")
+        .map(|entry| entry.expect("dir entry").path())
+        .collect::<Vec<_>>();
+    assert_eq!(files.len(), 1, "{source:?} moved into {planned:?}");
+    let title = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+    assert_eq!(title.folder_path.as_deref(), planned.to_str());
+    (title, planned, files.remove(0))
+}
+
+/// A movie with one file in `movie_root/<name> source`, which a rename moves.
+async fn seed_movie_in_folder(
+    ctx: &TestContext,
+    movie_root: &std::path::Path,
+    name: &str,
+    tvdb_id: &str,
+) -> (Title, std::path::PathBuf) {
+    let title = create_catalog_title(
+        ctx,
+        name,
+        MediaFacet::Movie,
+        vec![ExternalId::new("tvdb".to_string(), tvdb_id.to_string())],
+        vec![],
+        true,
+    )
+    .await;
+    let folder = movie_root.join(format!("{name} source"));
+    std::fs::create_dir_all(&folder).expect("create movie dir");
+    set_title_folder_path(ctx, &title.id, &folder).await;
+    let source = folder.join(format!(
+        "{}.{tvdb_id}.1080p.WEB-DL.mkv",
+        name.replace(' ', ".")
+    ));
+    std::fs::write(&source, tvdb_id.as_bytes()).expect("write movie file");
+    seed_movie_file(ctx, &title, &source).await;
+    (title, source)
+}
+
+/// A rename may not put a title's files in the folder another title is
+/// recorded at, even when that other title has nothing to move.
+#[tokio::test]
+async fn apply_media_rename_refuses_a_move_into_another_titles_recorded_folder() {
+    assert_move_beside_an_untouched_titles_record_is_refused("").await;
+}
+
+/// Nor may it make a folder around the one another title is recorded at.
+#[tokio::test]
+async fn apply_media_rename_refuses_a_move_around_another_titles_recorded_folder() {
+    assert_move_beside_an_untouched_titles_record_is_refused("Inner Cut").await;
+}
+
+/// An untouched title recorded at `Birch Quay (2024)/<inside>` (that folder
+/// itself when `inside` is empty), and a second title planned into
+/// `Birch Quay (2024)`: the rename is refused and nothing moves.
+async fn assert_move_beside_an_untouched_titles_record_is_refused(inside: &str) {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_folder_template(&ctx, "MOVIE", "{title} ({year})").await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+    let roots = tempfile::tempdir().expect("roots tempdir");
+    let movie_root = roots.path().join("movies");
+    std::fs::create_dir_all(&movie_root).expect("create movie root");
+    configure_library_roots(&ctx, MediaFacet::Movie, &[&movie_root]).await;
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+
+    let (idle, idle_folder, idle_file) =
+        seed_movie_renamed_into_place(&ctx, &actor, &movie_root, "Amber Quay", "94113").await;
+    // The untouched title is recorded at the folder the other one is planned
+    // into, while its own file already sits where its plan wants it.
+    let planned = movie_root.join("Birch Quay (2024)");
+    let taken = if inside.is_empty() {
+        planned.clone()
+    } else {
+        planned.join(inside)
+    };
+    set_title_folder_path(&ctx, &idle.id, &taken).await;
+    let (moving, source) = seed_movie_in_folder(&ctx, &movie_root, "Birch Quay", "94114").await;
+
+    let preview = ctx
+        .app
+        .preview_rename_for_facet(&actor, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(
+        preview.renamable, 1,
+        "only one title moves: {:?}",
+        preview.items
+    );
+    let error = ctx
+        .app
+        .apply_rename_for_facet(&actor, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect_err("a move into another title's folder is refused");
+    assert!(
+        matches!(error, scryer_application::AppError::Validation(_)),
+        "unexpected error: {error}"
+    );
+
+    assert!(source.exists(), "the moving title's file stays put");
+    let stored = ctx.titles.get_by_id(&moving.id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.folder_path.as_deref(),
+        source.parent().unwrap().to_str()
+    );
+    let stored_idle = ctx.titles.get_by_id(&idle.id).await.unwrap().unwrap();
+    assert_eq!(stored_idle.folder_path.as_deref(), taken.to_str());
+    assert!(idle_file.starts_with(&idle_folder) && idle_file.exists());
+    assert!(!planned.exists());
+}
+
+/// Two titles that already share a folder, neither with anything to move, do
+/// not hold back a rename of a third title elsewhere.
+#[tokio::test]
+async fn a_folder_two_untouched_titles_already_share_does_not_block_another_rename() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_folder_template(&ctx, "MOVIE", "{title} ({year})").await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+    let roots = tempfile::tempdir().expect("roots tempdir");
+    let movie_root = roots.path().join("movies");
+    std::fs::create_dir_all(&movie_root).expect("create movie root");
+    configure_library_roots(&ctx, MediaFacet::Movie, &[&movie_root]).await;
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+
+    let (first, shared, first_file) =
+        seed_movie_renamed_into_place(&ctx, &actor, &movie_root, "Twin Harbor", "94115").await;
+    // A second title of the same name and year already lives in that folder,
+    // its file (a different quality) already under its planned name.
+    let second = create_catalog_title(
+        &ctx,
+        "Twin Harbor",
+        MediaFacet::Movie,
+        vec![ExternalId::new("tvdb".to_string(), "94116".to_string())],
+        vec![],
+        true,
+    )
+    .await;
+    set_title_folder_path(&ctx, &second.id, &shared).await;
+    let second_file = shared.join("Twin Harbor (2024) - 720p.mkv");
+    std::fs::write(&second_file, b"94116").expect("write second file");
+    let second_path = second_file.to_string_lossy().to_string();
+    ctx.shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: second.id.clone(),
+            collection_type: scryer_domain::CollectionType::Movie,
+            collection_index: "1".to_string(),
+            label: Some("720p".to_string()),
+            ordered_path: Some(second_path.clone()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create second collection");
+    ctx.media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: second.id.clone(),
+            file_path: second_path,
+            size_bytes: 4096,
+            quality_label: Some("720p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert second media file");
+    let (moving, source) = seed_movie_in_folder(&ctx, &movie_root, "Cedar Quay", "94117").await;
+
+    let preview = ctx
+        .app
+        .preview_rename_for_facet(&actor, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(
+        preview.renamable, 1,
+        "only one title moves: {:?}",
+        preview.items
+    );
+    let result = ctx
+        .app
+        .apply_rename_for_facet(&actor, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("an unrelated rename is not held back");
+    assert_eq!((result.applied, result.failed), (1, 0));
+
+    let moved_folder = movie_root.join("Cedar Quay (2024)");
+    let stored = ctx.titles.get_by_id(&moving.id).await.unwrap().unwrap();
+    assert_eq!(stored.folder_path.as_deref(), moved_folder.to_str());
+    assert!(!source.exists());
+    assert_eq!(std::fs::read_dir(&moved_folder).unwrap().count(), 1);
+    for title in [&first, &second] {
+        let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+        assert_eq!(stored.folder_path.as_deref(), shared.to_str());
+    }
+    assert_eq!(std::fs::read(&second_file).unwrap(), b"94116");
+    assert!(first_file.exists());
+}
+
+/// An untouched title recorded at the library root has no title folder to
+/// collide with; every title folder sits under the root, so counting it would
+/// refuse every rename in the library.
+#[tokio::test]
+async fn an_untouched_title_recorded_at_the_library_root_does_not_block_a_rename() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_folder_template(&ctx, "MOVIE", "{title} ({year})").await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+    let roots = tempfile::tempdir().expect("roots tempdir");
+    let movie_root = roots.path().join("movies");
+    std::fs::create_dir_all(&movie_root).expect("create movie root");
+    configure_library_roots(&ctx, MediaFacet::Movie, &[&movie_root]).await;
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+
+    let (idle, _, idle_file) =
+        seed_movie_renamed_into_place(&ctx, &actor, &movie_root, "Amber Quay", "94118").await;
+    set_title_folder_path(&ctx, &idle.id, &movie_root).await;
+    let (moving, source) = seed_movie_in_folder(&ctx, &movie_root, "Birch Quay", "94119").await;
+
+    let preview = ctx
+        .app
+        .preview_rename_for_facet(&actor, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(
+        preview.renamable, 1,
+        "only one title moves: {:?}",
+        preview.items
+    );
+    let result = ctx
+        .app
+        .apply_rename_for_facet(&actor, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("the rename is not held back");
+    assert_eq!((result.applied, result.failed), (1, 0));
+    let stored = ctx.titles.get_by_id(&moving.id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.folder_path.as_deref(),
+        movie_root.join("Birch Quay (2024)").to_str()
+    );
+    assert!(!source.exists());
+    assert!(idle_file.exists());
+}
+
 /// Files under no configured root are a Change Folder / root move, not a
 /// rename into the library default root.
 #[tokio::test]
@@ -2871,6 +3220,189 @@ async fn apply_media_rename_moves_companions_and_removes_the_emptied_folder() {
             "movie.nfo".to_string(),
         ]
     );
+}
+
+/// Make every write of `title_id`'s recorded folder fail.
+async fn fail_title_folder_record(ctx: &TestContext, title_id: &str) {
+    // DDL takes no bind parameters; the id is one this test generated.
+    assert!(
+        title_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '-'),
+        "unexpected title id {title_id}"
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "CREATE TRIGGER reject_folder_record_{} BEFORE UPDATE OF folder_path ON titles WHEN OLD.id = '{title_id}' BEGIN SELECT RAISE(ABORT, 'fixture folder record failure'); END",
+        title_id.replace('-', "_")
+    )))
+    .execute(ctx.db.pool())
+    .await
+    .unwrap();
+}
+
+/// A movie title in its own folder under `media_root`, with a media file, an
+/// external subtitle and a folder `.nfo`. Returns the title, its folder and
+/// each file's bytes keyed by name.
+async fn seed_movie_with_companions(
+    ctx: &TestContext,
+    media_root: &std::path::Path,
+    name: &str,
+    tvdb_id: &str,
+) -> (Title, std::path::PathBuf, Vec<(String, Vec<u8>)>) {
+    let title = create_catalog_title(
+        ctx,
+        name,
+        MediaFacet::Movie,
+        vec![ExternalId::new("tvdb".to_string(), tvdb_id.to_string())],
+        vec![],
+        true,
+    )
+    .await;
+    let folder = media_root.join(name);
+    std::fs::create_dir_all(&folder).expect("create movie dir");
+    set_title_folder_path(ctx, &title.id, &folder).await;
+    let stem = format!("{}.2024.1080p.WEB-DL", name.replace(' ', "."));
+    let files = vec![
+        (format!("{stem}.mkv"), format!("{name} video").into_bytes()),
+        (
+            format!("{stem}.en.srt"),
+            format!("{name} subs").into_bytes(),
+        ),
+        ("movie.nfo".to_string(), format!("{name} nfo").into_bytes()),
+    ];
+    for (file_name, bytes) in &files {
+        std::fs::write(folder.join(file_name), bytes).expect("write movie fixture file");
+    }
+    seed_movie_file(ctx, &title, &folder.join(&files[0].0)).await;
+    (title, folder, files)
+}
+
+fn sorted_file_bytes(folder: &std::path::Path) -> Vec<Vec<u8>> {
+    let mut bytes = std::fs::read_dir(folder)
+        .expect("read folder")
+        .map(|entry| std::fs::read(entry.expect("dir entry").path()).expect("read file"))
+        .collect::<Vec<_>>();
+    bytes.sort();
+    bytes
+}
+
+/// When the new folder cannot be recorded, the title still records its old
+/// folder. Reporting the move as applied, or removing that folder because the
+/// files left it, would leave the record pointing at nothing.
+#[tokio::test]
+async fn a_rename_whose_folder_cannot_be_recorded_fails_and_keeps_both_folders() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_folder_template(&ctx, "MOVIE", "{title} ({year})").await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    configure_default_library_root(&ctx, MediaFacet::Movie, media_root.path()).await;
+    let (title, old_dir, files) =
+        seed_movie_with_companions(&ctx, media_root.path(), "Ledger Finch", "94121").await;
+    fail_title_folder_record(&ctx, &title.id).await;
+
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(preview.renamable, 3);
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+
+    assert_eq!((result.applied, result.failed), (0, 3));
+    assert!(
+        result
+            .items
+            .iter()
+            .all(|item| item.reason_code == "folder_record_failed"),
+        "every item of the title is reported failed: {:?}",
+        result.items
+    );
+    let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+    assert_eq!(stored.folder_path.as_deref(), old_dir.to_str());
+    assert!(old_dir.is_dir(), "the recorded folder is kept");
+    let new_dir = media_root.path().join("Ledger Finch (2024)");
+    let mut expected = files
+        .into_iter()
+        .map(|(_, bytes)| bytes)
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(
+        sorted_file_bytes(&new_dir),
+        expected,
+        "every file is intact in the new folder"
+    );
+}
+
+/// One title's failed folder record keeps only that title's folders; another
+/// title in the same rename is recorded and cleaned up as usual.
+#[tokio::test]
+async fn a_failed_folder_record_does_not_hold_back_another_titles_cleanup() {
+    let mut ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    set_folder_template(&ctx, "MOVIE", "{title} ({year})").await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    configure_default_library_root(&ctx, MediaFacet::Movie, media_root.path()).await;
+    let (failing, failing_old, failing_files) =
+        seed_movie_with_companions(&ctx, media_root.path(), "Ledger Finch", "94122").await;
+    let (sibling, sibling_old, sibling_files) =
+        seed_movie_with_companions(&ctx, media_root.path(), "Copper Wren", "94123").await;
+    fail_title_folder_record(&ctx, &failing.id).await;
+
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    let preview = ctx
+        .app
+        .preview_rename_for_facet(&actor, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(preview.renamable, 6);
+    let result = ctx
+        .app
+        .apply_rename_for_facet(&actor, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+    assert_eq!((result.applied, result.failed), (3, 3));
+
+    let failing_new = media_root.path().join("Ledger Finch (2024)");
+    let sibling_new = media_root.path().join("Copper Wren (2024)");
+    let stored_failing = ctx.titles.get_by_id(&failing.id).await.unwrap().unwrap();
+    assert_eq!(stored_failing.folder_path.as_deref(), failing_old.to_str());
+    assert!(
+        failing_old.is_dir(),
+        "the failing title's recorded folder is kept"
+    );
+    let stored_sibling = ctx.titles.get_by_id(&sibling.id).await.unwrap().unwrap();
+    assert_eq!(stored_sibling.folder_path.as_deref(), sibling_new.to_str());
+    assert!(
+        !sibling_old.exists(),
+        "the sibling's emptied folder is removed as usual"
+    );
+    for (folder, files) in [(failing_new, failing_files), (sibling_new, sibling_files)] {
+        let mut expected = files
+            .into_iter()
+            .map(|(_, bytes)| bytes)
+            .collect::<Vec<_>>();
+        expected.sort();
+        assert_eq!(sorted_file_bytes(&folder), expected);
+    }
 }
 
 /// A rename that moves a sidecar has to move its row with it. The companion
