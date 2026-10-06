@@ -3351,17 +3351,20 @@ pub struct ImportFileResult {
 
 /// How thoroughly a copied file is proven before its source may be touched.
 ///
-/// FR-042: **full** (default) reads the destination back and compares it against
-/// the CRC streamed during the copy; **quick** uses the sampled head+tail proof
+/// FR-042: **full** reads the destination back and compares it against the CRC
+/// streamed during the copy; **quick** (default) uses the sampled head+tail proof
 /// plus size and is the universal floor — full falls back to it, and verification
 /// never drops below it.
+///
+/// The default is the import-copy preference an operator gets until they opt up
+/// to full. Location operations never read it: they always plan full.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum VerificationDepth {
     /// Full destination read-back compared against the streamed CRC.
-    #[default]
     Full,
     /// Sampled head+tail content proof plus size.
+    #[default]
     Quick,
 }
 
@@ -3374,7 +3377,8 @@ impl VerificationDepth {
     }
 
     /// Parse a persisted setting value. Unknown values are an error rather than a
-    /// silent downgrade so a corrupt setting cannot quietly weaken verification.
+    /// silent match so a corrupt setting is reported instead of quietly read as
+    /// some depth.
     pub fn from_setting(value: &str) -> Result<Self, String> {
         match value.trim() {
             "full" => Ok(Self::Full),

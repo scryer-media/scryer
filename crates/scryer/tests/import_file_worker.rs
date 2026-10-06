@@ -87,7 +87,8 @@ fn hidden_import_file_worker_reuses_prepared_state_for_copy() {
             "file_chmod": null,
             "folder_chmod": null,
             "chown_group": null
-        }
+        },
+        "verification_depth": "full"
     }));
     let prepared = prepared_events
         .iter()

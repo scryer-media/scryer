@@ -1040,9 +1040,9 @@ const ru: LocaleDictionary = {
     "settings.verificationDepthHelp": "Насколько тщательно Scryer проверяет скопированный файл, прежде чем трогать оригинал.",
     "settings.verificationDepthScope": "Относится только к копиям, создаваемым при импорте из клиентов загрузки. Перемещения библиотек и корней всегда проверяются полностью, независимо от этой настройки.",
     "settings.verificationDepthLabel": "Глубина проверки",
-    "settings.verificationDepthFull": "Полное перечитывание (по умолчанию)",
+    "settings.verificationDepthFull": "Полное перечитывание",
     "settings.verificationDepthFullHelp": "Полностью перечитывает копию и сравнивает её с контрольной суммой, вычисленной во время копирования.",
-    "settings.verificationDepthQuick": "Быстрая проверка",
+    "settings.verificationDepthQuick": "Быстрая проверка (по умолчанию)",
     "settings.verificationDepthQuickHelp": "Сравнивает размер файла и выборку начала и конца. Быстрее, но гарантия слабее.",
     "settings.verificationDepthSaved": "Глубина проверки сохранена.",
     "settings.generalPlaceholder":

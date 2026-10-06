@@ -82,7 +82,7 @@ export function SettingsOverviewContainer({
   const [imageCacheClearing, setImageCacheClearing] = React.useState(false);
   // FR-040–FR-047: the import-copy verification depth. Its own query and
   // mutation, so it loads and saves independently of the general settings blob.
-  const [verificationDepth, setVerificationDepth] = React.useState<VerificationDepth>("FULL");
+  const [verificationDepth, setVerificationDepth] = React.useState<VerificationDepth>("QUICK");
   const [verificationLoading, setVerificationLoading] = React.useState(true);
   const [verificationSaving, setVerificationSaving] = React.useState(false);
 
@@ -123,11 +123,11 @@ export function SettingsOverviewContainer({
           .toPromise();
         if (error) throw error;
         if (cancelled) return;
-        setVerificationDepth(data?.verificationSettings.depth ?? "FULL");
+        setVerificationDepth(data?.verificationSettings.depth ?? "QUICK");
       } catch {
-        // The default is the safe one: a failed read must never make the
-        // control claim the weaker guarantee is in force.
-        if (!cancelled) setVerificationDepth("FULL");
+        // A failed read shows the server's default for an unset preference;
+        // nothing is saved unless the operator picks a depth.
+        if (!cancelled) setVerificationDepth("QUICK");
       } finally {
         if (!cancelled) setVerificationLoading(false);
       }
