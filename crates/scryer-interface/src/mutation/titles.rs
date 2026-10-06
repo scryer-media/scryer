@@ -71,6 +71,7 @@ fn resolved_title_options(
     root_folder_id: Option<Option<String>>,
 ) -> GqlResult<ResolvedTitleOptionsInput> {
     let TitleOptionsInput {
+        min_availability,
         quality_profile_id,
         root_folder_id: _,
         monitor_type,
@@ -83,6 +84,25 @@ fn resolved_title_options(
         release_numbering,
         monitor_selection,
     } = options;
+
+    let min_availability = match min_availability {
+        MaybeUndefined::Undefined => None,
+        MaybeUndefined::Null => Some(None),
+        MaybeUndefined::Value(value) => {
+            let value = value.trim().to_ascii_lowercase();
+            if !matches!(value.as_str(), "announced" | "in_cinemas" | "released") {
+                return Err(validation_error(
+                    "minimum availability must be announced, in_cinemas, or released",
+                ));
+            }
+            Some(Some(value))
+        }
+    };
+    if facet != &MediaFacet::Movie && min_availability.is_some() {
+        return Err(validation_error(
+            "minAvailability is only valid for movie titles",
+        ));
+    }
 
     let use_season_folders = match use_season_folders {
         MaybeUndefined::Undefined => None,
@@ -145,6 +165,7 @@ fn resolved_title_options(
     }
 
     Ok(ResolvedTitleOptionsInput {
+        min_availability,
         quality_profile_id: match quality_profile_id {
             MaybeUndefined::Undefined => None,
             MaybeUndefined::Null => Some(None),
@@ -445,6 +466,7 @@ impl TitleMutations {
         let mut root_folder_id = None;
         let mut metadata_language_override = None;
         let mut monitor_selection_update = None;
+        let mut min_availability_override = None;
 
         if let Some(options) = options {
             let title = app
@@ -461,6 +483,7 @@ impl TitleMutations {
                 resolve_update_title_options(&app, &actor, &title, target_facet, options).await?;
             root_folder_id = resolved_options.root_folder_id.clone();
             metadata_language_override = resolved_options.metadata_language.clone();
+            min_availability_override = resolved_options.min_availability.clone();
             // Applied after the tags land: whether the selection is kept or
             // cleared is decided by the monitor type the update just stored.
             monitor_selection_update = Some(resolved_options.monitor_selection.clone());
@@ -485,6 +508,11 @@ impl TitleMutations {
         }
         if let Some(language) = metadata_language_override {
             app.set_title_metadata_language_override(&actor, &title.id, language)
+                .await
+                .map_err(to_gql_error)?;
+        }
+        if let Some(min_availability) = min_availability_override {
+            app.update_title_min_availability(&actor, &title.id, min_availability)
                 .await
                 .map_err(to_gql_error)?;
         }

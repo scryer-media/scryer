@@ -732,6 +732,8 @@ impl ExternalIdInput {
 #[derive(InputObject, Clone)]
 /// Optional title settings used when creating or updating a title.
 pub struct TitleOptionsInput {
+    /// Movie minimum availability override; omission preserves it, null clears it to legacy Announced behavior, and a value replaces it. Other facets reject this field.
+    pub min_availability: MaybeUndefined<String>,
     /// Quality profile identity; omission preserves the current value, null clears it, and a value replaces it.
     pub quality_profile_id: MaybeUndefined<ID>,
     /// Root-folder identity used when a title is created; omission preserves the current value, null clears it, and a value replaces it. Changing the root of an existing title that has tracked files is refused: preview the change with locationOperationPreview and run it with startLocationOperation.

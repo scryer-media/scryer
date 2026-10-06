@@ -598,6 +598,8 @@ async fn title_writes_generate_and_refresh_catalog_sort_key_sqlite() {
             metadata_language: Some("jpn".to_string()),
             metadata_fetched_at: Some(Utc::now().to_rfc3339()),
             digital_release_date: None,
+            min_availability: None,
+            movie_release_dates: None,
             ratings: None,
             credits: None,
             extra_external_ids: vec![],

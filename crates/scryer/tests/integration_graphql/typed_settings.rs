@@ -759,6 +759,9 @@ async fn graphql_typed_acquisition_settings_round_trip() {
             walkIntervalSeconds
             longTailBackfillMaxScopesPerCycle
             longTailReconvergeDays
+            defaultMovieAvailability
+            movieReleaseMarket
+            movieAvailabilityDelayDays
           }
         }
         "#,
@@ -769,7 +772,10 @@ async fn graphql_typed_acquisition_settings_round_trip() {
             "pollIntervalSeconds": 45,
             "walkIntervalSeconds": 240,
             "longTailBackfillMaxScopesPerCycle": 750,
-            "longTailReconvergeDays": 30
+            "longTailReconvergeDays": 30,
+            "defaultMovieAvailability": "released",
+            "movieReleaseMarket": "US",
+            "movieAvailabilityDelayDays": -2
           }
         }),
     )
@@ -787,6 +793,9 @@ async fn graphql_typed_acquisition_settings_round_trip() {
             walkIntervalSeconds
             longTailBackfillMaxScopesPerCycle
             longTailReconvergeDays
+            defaultMovieAvailability
+            movieReleaseMarket
+            movieAvailabilityDelayDays
           }
         }
         "#,
@@ -802,6 +811,9 @@ async fn graphql_typed_acquisition_settings_round_trip() {
     assert_eq!(settings["walkIntervalSeconds"], 240);
     assert_eq!(settings["longTailBackfillMaxScopesPerCycle"], 750);
     assert_eq!(settings["longTailReconvergeDays"], 30);
+    assert_eq!(settings["defaultMovieAvailability"], "released");
+    assert_eq!(settings["movieReleaseMarket"], "US");
+    assert_eq!(settings["movieAvailabilityDelayDays"], -2);
 }
 
 /// The walk interval defaults to five minutes, and a client that predates it
@@ -815,6 +827,9 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
           acquisitionSettings {
             pollIntervalSeconds
             walkIntervalSeconds
+            defaultMovieAvailability
+            movieReleaseMarket
+            movieAvailabilityDelayDays
           }
         }
         "#;
@@ -828,11 +843,26 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
         defaults["data"]["acquisitionSettings"]["walkIntervalSeconds"],
         300
     );
+    assert_eq!(
+        defaults["data"]["acquisitionSettings"]["defaultMovieAvailability"],
+        "announced"
+    );
+    assert_eq!(
+        defaults["data"]["acquisitionSettings"]["movieReleaseMarket"],
+        "US"
+    );
+    assert_eq!(
+        defaults["data"]["acquisitionSettings"]["movieAvailabilityDelayDays"],
+        0
+    );
 
     let mutation = r#"
         mutation UpdateAcquisitionSettings($input: UpdateAcquisitionSettingsInput!) {
           updateAcquisitionSettings(input: $input) {
             walkIntervalSeconds
+            defaultMovieAvailability
+            movieReleaseMarket
+            movieAvailabilityDelayDays
           }
         }
         "#;
@@ -846,7 +876,10 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
             "pollIntervalSeconds": 30,
             "walkIntervalSeconds": 90,
             "longTailBackfillMaxScopesPerCycle": 500,
-            "longTailReconvergeDays": 0
+            "longTailReconvergeDays": 0,
+            "defaultMovieAvailability": "in_cinemas",
+            "movieReleaseMarket": "US",
+            "movieAvailabilityDelayDays": 3
           }
         }),
     )
@@ -855,6 +888,18 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
     assert_eq!(
         set["data"]["updateAcquisitionSettings"]["walkIntervalSeconds"],
         90
+    );
+    assert_eq!(
+        set["data"]["updateAcquisitionSettings"]["defaultMovieAvailability"],
+        "in_cinemas"
+    );
+    assert_eq!(
+        set["data"]["updateAcquisitionSettings"]["movieReleaseMarket"],
+        "US"
+    );
+    assert_eq!(
+        set["data"]["updateAcquisitionSettings"]["movieAvailabilityDelayDays"],
+        3
     );
 
     let older_client = gql(
@@ -875,6 +920,18 @@ async fn graphql_acquisition_walk_interval_defaults_and_survives_older_clients()
     assert_eq!(
         older_client["data"]["updateAcquisitionSettings"]["walkIntervalSeconds"],
         90
+    );
+    assert_eq!(
+        older_client["data"]["updateAcquisitionSettings"]["defaultMovieAvailability"],
+        "in_cinemas"
+    );
+    assert_eq!(
+        older_client["data"]["updateAcquisitionSettings"]["movieReleaseMarket"],
+        "US"
+    );
+    assert_eq!(
+        older_client["data"]["updateAcquisitionSettings"]["movieAvailabilityDelayDays"],
+        3
     );
 
     let rejected = gql(

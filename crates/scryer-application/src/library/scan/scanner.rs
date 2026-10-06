@@ -660,6 +660,7 @@ pub struct MovieMetadata {
     pub canonical_tags: Vec<CanonicalMediaTag>,
     pub studio: String,
     pub tmdb_release_date: Option<String>,
+    pub movie_release_dates: Option<scryer_domain::MovieReleaseDates>,
     pub ratings: crate::TitleRatingSummary,
     pub credits: Vec<crate::TitleCredit>,
     pub genres: Vec<String>,
@@ -909,6 +910,16 @@ pub trait MetadataGateway: Send + Sync {
         Err(AppError::Repository(
             "metadata gateway titles is not implemented".into(),
         ))
+    }
+
+    async fn get_movie_titles_for_release_market(
+        &self,
+        refs: &[MovieTitleRef],
+        language: &str,
+        release_market: &str,
+    ) -> AppResult<MovieTitleBulkResult> {
+        let _ = release_market;
+        self.get_movie_titles(refs, language).await
     }
 
     /// Fetch series by SMG title id through the `titles` operation. Refs

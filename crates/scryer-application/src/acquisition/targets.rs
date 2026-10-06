@@ -9,13 +9,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use chrono::{DateTime, Duration, Utc};
-use scryer_domain::MediaFacet;
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use scryer_domain::{MediaFacet, MovieReleaseDates};
 
 use super::*;
 use crate::acquisition::convergence::convergence_scope_key;
 use crate::acquisition_policy::{episode_search_window_is_open, parse_schedule_baseline_date};
 use crate::contracts::SubmissionScope;
+use crate::types::{MovieAvailabilityDecision, MovieAvailabilityStatus};
 
 /// An aired episode stays **hot** (converges promptly, high candidate value to
 /// the plan-112 scheduler) this long after air; beyond it the scope drains via
@@ -87,28 +88,233 @@ pub(crate) fn movie_is_available_for_acquisition(
     availability: &str,
     now: &DateTime<Utc>,
 ) -> bool {
-    match availability {
-        "in_cinemas" => first_aired
-            .and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok())
-            .map(|date| date <= now.date_naive())
-            .unwrap_or(false),
-        "released" => {
-            if let Some(digital) = digital_release_date {
-                chrono::NaiveDate::parse_from_str(digital, "%Y-%m-%d")
-                    .map(|d| d <= now.date_naive())
-                    .unwrap_or(false)
-            } else if let Some(first_aired) = first_aired {
-                // Fallback: theatrical + 90 days ≈ digital availability.
-                chrono::NaiveDate::parse_from_str(first_aired, "%Y-%m-%d")
-                    .map(|d| d + Duration::days(90) <= now.date_naive())
-                    .unwrap_or(false)
-            } else {
-                false
-            }
-        }
-        // "announced" or anything else: available as soon as it is monitored.
-        _ => true,
+    let legacy_dates = MovieReleaseDates {
+        market: "US".to_string(),
+        fetched: true,
+        theatrical_dates: first_aired.into_iter().map(str::to_string).collect(),
+        digital_dates: digital_release_date
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        physical_dates: Vec::new(),
+    };
+    movie_availability_decision(
+        Some(&legacy_dates),
+        true,
+        first_aired,
+        digital_release_date,
+        Some(availability),
+        "US",
+        0,
+        now,
+    )
+    .status
+        == MovieAvailabilityStatus::Available
+}
+
+pub(crate) fn movie_availability_decision(
+    release_dates: Option<&MovieReleaseDates>,
+    legacy_metadata_fetched: bool,
+    legacy_theatrical_date: Option<&str>,
+    legacy_digital_date: Option<&str>,
+    minimum_availability: Option<&str>,
+    release_market: &str,
+    delay_days: i32,
+    now: &DateTime<Utc>,
+) -> MovieAvailabilityDecision {
+    let availability = minimum_availability.unwrap_or("announced");
+    if !matches!(availability, "in_cinemas" | "released") {
+        return movie_availability_result(
+            MovieAvailabilityStatus::Available,
+            None,
+            false,
+            "announced",
+        );
     }
+
+    let (base_date, estimated) = if let Some(release_dates) = release_dates {
+        if !release_dates.fetched {
+            return movie_availability_result(
+                MovieAvailabilityStatus::Unknown,
+                None,
+                false,
+                "release_dates_unknown",
+            );
+        }
+        if !release_dates.market.eq_ignore_ascii_case(release_market) {
+            return movie_availability_result(
+                MovieAvailabilityStatus::Unknown,
+                None,
+                false,
+                "release_market_refresh_pending",
+            );
+        }
+
+        match availability {
+            "in_cinemas" => {
+                let Some(date) = earliest_movie_release_date(&release_dates.theatrical_dates)
+                else {
+                    return movie_availability_result(
+                        MovieAvailabilityStatus::Unknown,
+                        None,
+                        false,
+                        "theatrical_release_date_unknown",
+                    );
+                };
+                (date, false)
+            }
+            "released" => {
+                let home_dates_present = !release_dates.digital_dates.is_empty()
+                    || !release_dates.physical_dates.is_empty();
+                let earliest_home_date = earliest_movie_release_date(&release_dates.digital_dates)
+                    .into_iter()
+                    .chain(earliest_movie_release_date(&release_dates.physical_dates))
+                    .min();
+                if let Some(date) = earliest_home_date {
+                    (date, false)
+                } else if home_dates_present {
+                    return movie_availability_result(
+                        MovieAvailabilityStatus::Unknown,
+                        None,
+                        false,
+                        "home_release_date_unusable",
+                    );
+                } else if let Some(theatrical) =
+                    earliest_movie_release_date(&release_dates.theatrical_dates)
+                {
+                    (theatrical + Duration::days(90), true)
+                } else {
+                    return movie_availability_result(
+                        MovieAvailabilityStatus::Unknown,
+                        None,
+                        false,
+                        "home_release_date_unknown",
+                    );
+                }
+            }
+            _ => unreachable!("availability was checked above"),
+        }
+    } else {
+        // Before release-date metadata existed, Scryer treated the legacy
+        // first-aired/digital pair as the US market. Preserve that behavior for
+        // hydrated titles; never infer dates for newly added, unhydrated titles.
+        if !legacy_metadata_fetched || !release_market.eq_ignore_ascii_case("US") {
+            return movie_availability_result(
+                MovieAvailabilityStatus::Unknown,
+                None,
+                false,
+                "release_dates_unknown",
+            );
+        }
+        match availability {
+            "in_cinemas" => {
+                let Some(date) = legacy_theatrical_date.and_then(parse_movie_release_date) else {
+                    return movie_availability_result(
+                        MovieAvailabilityStatus::Unknown,
+                        None,
+                        false,
+                        "theatrical_release_date_unknown",
+                    );
+                };
+                (date, false)
+            }
+            "released" => {
+                if let Some(digital) = legacy_digital_date {
+                    let Some(date) = parse_movie_release_date(digital) else {
+                        return movie_availability_result(
+                            MovieAvailabilityStatus::Unknown,
+                            None,
+                            false,
+                            "home_release_date_unusable",
+                        );
+                    };
+                    (date, false)
+                } else if let Some(theatrical) =
+                    legacy_theatrical_date.and_then(parse_movie_release_date)
+                {
+                    (theatrical + Duration::days(90), true)
+                } else {
+                    return movie_availability_result(
+                        MovieAvailabilityStatus::Unknown,
+                        None,
+                        false,
+                        "home_release_date_unknown",
+                    );
+                }
+            }
+            _ => unreachable!("availability was checked above"),
+        }
+    };
+
+    let Some(effective_date) = base_date.checked_add_signed(Duration::days(i64::from(delay_days)))
+    else {
+        return movie_availability_result(
+            MovieAvailabilityStatus::Unknown,
+            None,
+            estimated,
+            "effective_release_date_out_of_range",
+        );
+    };
+    let status = if effective_date <= now.date_naive() {
+        MovieAvailabilityStatus::Available
+    } else {
+        MovieAvailabilityStatus::Waiting
+    };
+    let reason = if status == MovieAvailabilityStatus::Waiting {
+        "waiting_for_release_date"
+    } else {
+        "available"
+    };
+    movie_availability_result(status, Some(effective_date), estimated, reason)
+}
+
+fn earliest_movie_release_date(dates: &[String]) -> Option<NaiveDate> {
+    dates
+        .iter()
+        .filter_map(|date| parse_movie_release_date(date))
+        .min()
+}
+
+fn parse_movie_release_date(value: &str) -> Option<NaiveDate> {
+    let value = value.trim();
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .ok()
+                .map(|date| date.with_timezone(&Utc).date_naive())
+        })
+}
+
+fn movie_availability_result(
+    status: MovieAvailabilityStatus,
+    effective_date: Option<NaiveDate>,
+    estimated: bool,
+    reason: &str,
+) -> MovieAvailabilityDecision {
+    MovieAvailabilityDecision {
+        status,
+        effective_date: effective_date.map(|date| date.format("%Y-%m-%d").to_string()),
+        estimated,
+        reason: reason.to_string(),
+    }
+}
+
+pub(crate) fn movie_availability_decision_for_title(
+    title: &scryer_domain::Title,
+    settings: &crate::AcquisitionSettings,
+    now: &DateTime<Utc>,
+) -> MovieAvailabilityDecision {
+    movie_availability_decision(
+        title.movie_release_dates.as_ref(),
+        title.metadata_fetched_at.is_some(),
+        title.first_aired.as_deref(),
+        title.digital_release_date.as_deref(),
+        title.min_availability.as_deref(),
+        &settings.movie_release_market,
+        settings.movie_availability_delay_days,
+        now,
+    )
 }
 
 /// The batch to evaluate this cycle plus the new per-lane resume positions.
@@ -333,6 +539,7 @@ impl AppUseCase {
         title_id: Option<&str>,
         respect_title_monitoring: bool,
     ) -> AppResult<Vec<AcquisitionTarget>> {
+        let acquisition_settings = self.acquisition_settings().await?;
         let candidates = self
             .services
             .library
@@ -404,22 +611,27 @@ impl AppUseCase {
             {
                 continue;
             }
-            let availability = title.min_availability.as_deref().unwrap_or("announced");
-            if !movie_is_available_for_acquisition(
+            let availability = movie_availability_decision(
+                title.movie_release_dates.as_ref(),
+                title.metadata_fetched,
                 title.first_aired.as_deref(),
                 title.digital_release_date.as_deref(),
-                availability,
+                title.min_availability.as_deref(),
+                &acquisition_settings.movie_release_market,
+                acquisition_settings.movie_availability_delay_days,
                 now,
-            ) {
+            );
+            if availability.status != MovieAvailabilityStatus::Available {
                 continue;
             }
             let Some(scope_key) = convergence_scope_key(&SubmissionScope::Title, &title.title_id)
             else {
                 continue;
             };
-            let release_date = title
-                .digital_release_date
+            let release_date = availability
+                .effective_date
                 .as_deref()
+                .or(title.digital_release_date.as_deref())
                 .or(title.first_aired.as_deref());
             let hot_by_air_date = date_is_recent(release_date, now, HOT_MOVIE_RELEASE_WINDOW_DAYS);
             let is_hot = hot_by_air_date
@@ -515,15 +727,33 @@ impl AppUseCase {
     /// file already plays, so upgrades drain at scheduler leisure.
     async fn derive_cutoff_targets_for_search(
         &self,
+        now: &DateTime<Utc>,
         title_id: Option<&str>,
         respect_title_monitoring: bool,
     ) -> AppResult<Vec<AcquisitionTarget>> {
+        let acquisition_settings = self.acquisition_settings().await?;
         let items = self
             .compute_cutoff_unmet_items_for_search(None, None, title_id, respect_title_monitoring)
             .await?;
         let mut targets: Vec<AcquisitionTarget> = items
             .into_iter()
             .filter_map(|item| {
+                if item.episode_id.is_none()
+                    && movie_availability_decision(
+                        item.movie_release_dates.as_ref(),
+                        item.metadata_fetched,
+                        item.first_aired.as_deref(),
+                        item.digital_release_date.as_deref(),
+                        item.min_availability.as_deref(),
+                        &acquisition_settings.movie_release_market,
+                        acquisition_settings.movie_availability_delay_days,
+                        now,
+                    )
+                    .status
+                        != MovieAvailabilityStatus::Available
+                {
+                    return None;
+                }
                 let scope = SubmissionScope::from_persisted(
                     &item.title_id,
                     item.episode_id.clone(),
@@ -571,7 +801,13 @@ impl AppUseCase {
             .map(|target| target.scope_key.clone())
             .collect();
         for target in self
-            .derive_format_cutoff_targets(title_id, respect_title_monitoring, &seen)
+            .derive_format_cutoff_targets(
+                now,
+                title_id,
+                respect_title_monitoring,
+                &seen,
+                &acquisition_settings,
+            )
             .await?
         {
             if seen.insert(target.scope_key.clone()) {
@@ -597,9 +833,11 @@ impl AppUseCase {
     /// scoring, so the pass never pays for a number nobody reads.
     async fn derive_format_cutoff_targets(
         &self,
+        now: &DateTime<Utc>,
         title_id: Option<&str>,
         respect_title_monitoring: bool,
         already_targeted: &HashSet<String>,
+        acquisition_settings: &crate::AcquisitionSettings,
     ) -> AppResult<Vec<AcquisitionTarget>> {
         /// How many scopes are re-scored per batch. Each page is one media-file
         /// query plus one scoring context per distinct title on it.
@@ -661,6 +899,13 @@ impl AppUseCase {
             .filter_map(|summary| {
                 let title = title_by_id.get(summary.title_id.as_str())?;
                 if summary.episode_id.is_none() && title.facet != MediaFacet::Movie {
+                    return None;
+                }
+                if summary.episode_id.is_none()
+                    && movie_availability_decision_for_title(title, acquisition_settings, now)
+                        .status
+                        != MovieAvailabilityStatus::Available
+                {
                     return None;
                 }
                 let scope = SubmissionScope::from_persisted(
@@ -766,7 +1011,7 @@ impl AppUseCase {
             .derive_missing_targets_for_search(now, title_id, respect_title_monitoring)
             .await?;
         targets.extend(
-            self.derive_cutoff_targets_for_search(title_id, respect_title_monitoring)
+            self.derive_cutoff_targets_for_search(now, title_id, respect_title_monitoring)
                 .await?,
         );
         let mut seen = HashSet::new();

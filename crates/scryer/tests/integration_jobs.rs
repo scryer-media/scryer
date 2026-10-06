@@ -154,6 +154,7 @@ async fn background_series_refresh_skips_non_relinked_titles_and_completes_job_r
             metadata_fetched_at: None,
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         },
     )

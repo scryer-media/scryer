@@ -1077,7 +1077,8 @@ impl MediaFileRepository for MediaFileStore {
         // titles — the application layer keeps only movie-shaped facets.
         let title_sql = format!(
             "SELECT t.id AS title_id, t.library_id, t.facet, t.min_availability,
-                    t.first_aired, t.digital_release_date, t.created_at
+                t.first_aired, t.digital_release_date, t.metadata_fetched_at,
+                t.movie_release_dates_json, t.created_at
                FROM titles t
               WHERE {}
                 {title_filter}
@@ -1102,6 +1103,11 @@ impl MediaFileRepository for MediaFileStore {
                     min_availability: row.opt_text("min_availability")?,
                     first_aired: row.opt_text("first_aired")?,
                     digital_release_date: row.opt_text("digital_release_date")?,
+                    metadata_fetched: row.opt_timestamp("metadata_fetched_at")?.is_some(),
+                    movie_release_dates: row
+                        .opt_text("movie_release_dates_json")?
+                        .map(|value| serde_json::from_str(&value).map_err(repo_err))
+                        .transpose()?,
                     created_at: timestamp_text(row, "created_at")?,
                 })
             })
@@ -2899,6 +2905,7 @@ mod tests {
             metadata_fetched_at: None,
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         }
     }

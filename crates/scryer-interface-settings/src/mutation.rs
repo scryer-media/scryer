@@ -103,6 +103,9 @@ fn from_acquisition_settings(
         walk_interval_seconds: settings.walk_interval_seconds,
         long_tail_backfill_max_scopes_per_cycle: settings.long_tail_backfill_max_scopes_per_cycle,
         long_tail_reconverge_days: settings.long_tail_reconverge_days,
+        default_movie_availability: settings.default_movie_availability,
+        movie_release_market: settings.movie_release_market,
+        movie_availability_delay_days: settings.movie_availability_delay_days,
     }
 }
 
@@ -850,17 +853,14 @@ impl SettingsMutations {
             require_config_app_permission(ctx, scryer_domain::AppPermission::ManageCatalogSettings)
                 .await?;
 
-        // A client that predates the walk interval does not send it; keep
-        // what is stored rather than resetting it.
-        let walk_interval_seconds = match input.walk_interval_seconds {
-            Some(walk_interval_seconds) => walk_interval_seconds,
-            None => {
-                app.get_acquisition_settings(&actor)
-                    .await
-                    .map_err(to_gql_error)?
-                    .walk_interval_seconds
-            }
-        };
+        // Clients that predate any optional acquisition field keep its stored value.
+        let current = app
+            .get_acquisition_settings(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        let walk_interval_seconds = input
+            .walk_interval_seconds
+            .unwrap_or(current.walk_interval_seconds);
         let settings = app
             .update_acquisition_settings(
                 &actor,
@@ -872,6 +872,15 @@ impl SettingsMutations {
                     long_tail_backfill_max_scopes_per_cycle: input
                         .long_tail_backfill_max_scopes_per_cycle,
                     long_tail_reconverge_days: input.long_tail_reconverge_days,
+                    default_movie_availability: input
+                        .default_movie_availability
+                        .unwrap_or(current.default_movie_availability),
+                    movie_release_market: input
+                        .movie_release_market
+                        .unwrap_or(current.movie_release_market),
+                    movie_availability_delay_days: input
+                        .movie_availability_delay_days
+                        .unwrap_or(current.movie_availability_delay_days),
                 },
             )
             .await

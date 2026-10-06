@@ -7103,6 +7103,69 @@ async fn persisted_listing(fixture: &ListingTokenFixture) -> Option<String> {
 }
 
 #[tokio::test]
+async fn unknown_movie_availability_requires_explicit_candidate_queue_override() {
+    let blocked = listing_token_fixture().await;
+    let offered = offer_listing_with_token(&blocked, fixed_instant("2026-05-01T10:00:00Z")).await;
+    let updated = blocked
+        .app
+        .update_title_min_availability(
+            &blocked.operator,
+            &blocked.title.id,
+            Some("released".to_string()),
+        )
+        .await
+        .expect("set movie availability");
+    assert_eq!(updated.min_availability.as_deref(), Some("released"));
+    let error = blocked
+        .app
+        .queue_existing_title_download_from_candidate_token(
+            &blocked.operator,
+            &blocked.title.id,
+            offered.candidate_token.as_deref().expect("candidate token"),
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+        )
+        .await
+        .expect_err("unknown release dates must block a standard manual queue");
+    assert!(
+        matches!(error, AppError::Validation(ref message) if message.contains("movie availability gate: home_release_date_unknown")),
+        "unexpected queue error: {error:?}"
+    );
+    assert!(
+        blocked.submissions.store.lock().await.is_empty(),
+        "blocked candidate must not reach the download client"
+    );
+
+    let overridden = listing_token_fixture().await;
+    let offered =
+        offer_listing_with_token(&overridden, fixed_instant("2026-05-01T10:00:00Z")).await;
+    overridden
+        .app
+        .update_title_min_availability(
+            &overridden.operator,
+            &overridden.title.id,
+            Some("released".to_string()),
+        )
+        .await
+        .expect("set movie availability");
+    let outcome = overridden
+        .app
+        .queue_existing_title_download_from_candidate_token_with_availability_override(
+            &overridden.operator,
+            &overridden.title.id,
+            offered.candidate_token.as_deref().expect("candidate token"),
+            SubmissionScope::Title,
+            SubmissionConflictPolicy::Abort,
+            DownloadSubmissionPurpose::Standard,
+            None,
+            true,
+        )
+        .await
+        .expect("explicit override should queue the candidate");
+    assert!(matches!(outcome, QueueDownloadOutcome::Queued(_)));
+}
+
+#[tokio::test]
 async fn a_token_grab_persists_the_offered_listing_anchored_at_the_grab() {
     let offered_at = fixed_instant("2026-05-01T10:00:00Z");
     let grabbed_at = fixed_instant("2026-05-01T10:07:30Z");

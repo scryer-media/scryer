@@ -402,6 +402,7 @@ mod tests {
             metadata_fetched_at: Some(DateTime::from_timestamp(0, 0).expect("valid timestamp")),
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         }
     }

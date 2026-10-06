@@ -856,6 +856,9 @@ export const updateAcquisitionSettingsMutation = `mutation UpdateAcquisitionSett
     walkIntervalSeconds
     longTailBackfillMaxScopesPerCycle
     longTailReconvergeDays
+    defaultMovieAvailability
+    movieReleaseMarket
+    movieAvailabilityDelayDays
   }
 }`;
 
@@ -1696,6 +1699,7 @@ export const updateTitleMutation = `mutation UpdateTitle($input: UpdateTitleInpu
     facet
     tags
     monitored
+    minAvailability
     qualityProfileId
     rootFolderId
     rootFolderPath

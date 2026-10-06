@@ -243,6 +243,7 @@ pub fn movie_to_hydration_result(movie: MovieMetadata, language: &str) -> Hydrat
         metadata_language: Some(language.to_string()),
         metadata_fetched_at: Some(Utc::now().to_rfc3339()),
         digital_release_date: movie.tmdb_release_date,
+        movie_release_dates: movie.movie_release_dates,
         ratings: Some(movie.ratings),
         credits: Some(movie.credits),
         extra_external_ids,

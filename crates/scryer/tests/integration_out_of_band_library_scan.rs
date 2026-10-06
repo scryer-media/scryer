@@ -210,6 +210,7 @@ async fn seed_series_title(
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: folder_path.map(|path| path.to_string_lossy().to_string()),
     };
     ctx.titles.create(title.clone()).await.expect("seed title");

@@ -4663,6 +4663,10 @@ async fn graphql_introspection_title_acquisition_inputs_use_id_fields() {
         );
     };
 
+    let movie_availability_override = input_field("queueDownload", "overrideMovieAvailability");
+    assert_eq!(movie_availability_override["type"]["kind"], "SCALAR");
+    assert_eq!(movie_availability_override["type"]["name"], "Boolean");
+
     for (input_alias, field_name) in [
         ("queueDownload", "titleId"),
         ("queueBestRelease", "titleId"),

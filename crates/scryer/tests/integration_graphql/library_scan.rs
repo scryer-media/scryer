@@ -1530,6 +1530,7 @@ async fn library_series_scan_existing_unhydrated_title_without_episodes_complete
             metadata_fetched_at: None,
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         })
         .await

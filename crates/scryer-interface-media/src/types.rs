@@ -66,6 +66,8 @@ pub struct TitlePayload {
     pub metadata_language: Option<String>,
     /// Time of the latest metadata fetch in UTC, or null before a fetch completes.
     pub metadata_fetched_at: Option<DateTime<Utc>>,
+    /// Explicit minimum availability override, or null for legacy Announced behavior.
+    pub min_availability: Option<String>,
     /// Identifier of the selected quality profile, or null when the title uses no profile.
     pub quality_profile_id: Option<ID>,
     /// Identifier of the root folder that stores this title's files.
@@ -85,6 +87,23 @@ pub struct TitlePayload {
     /// Which episode numbering this title's releases are read in, or null when
     /// the title follows the default (`AUTO`).
     pub release_numbering: Option<ReleaseNumberingValue>,
+}
+
+#[derive(SimpleObject, Clone)]
+/// Effective movie release-date availability under this instance's policy.
+pub struct MovieAvailabilityPayload {
+    /// `available`, `waiting`, or `unknown`.
+    pub status: String,
+    /// Effective calendar date after applying the configured offset.
+    pub effective_date: Option<String>,
+    /// Whether the effective date uses the theatrical-plus-90-day estimate.
+    pub estimated: bool,
+    /// Stable reason code for waiting or unknown state.
+    pub reason: String,
+    /// ISO-3166-1 alpha-2 market used for the dates.
+    pub market: String,
+    /// Effective minimum-availability threshold.
+    pub minimum_availability: String,
 }
 
 #[derive(SimpleObject, Clone)]

@@ -5412,6 +5412,11 @@ pub async fn start_background_acquisition_poller(
                     crate::acquisition::convergence::DEFAULT_LONG_TAIL_BACKFILL_MAX_SCOPES_PER_CYCLE
                         as i32,
                 long_tail_reconverge_days: 0,
+                default_movie_availability: crate::settings::runtime::DEFAULT_MOVIE_AVAILABILITY
+                    .to_string(),
+                movie_release_market: crate::settings::runtime::DEFAULT_MOVIE_RELEASE_MARKET
+                    .to_string(),
+                movie_availability_delay_days: 0,
             }
         }
     };

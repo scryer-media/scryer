@@ -437,6 +437,7 @@ async fn seed_title(ctx: &TestContext, id: &str) -> Title {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         root_folder_id: scryer_domain::root_folder_id_for_path("/data/movies"),
         folder_path: None,
     };
@@ -500,6 +501,7 @@ async fn seed_title_for_library(
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         root_folder_id,
         folder_path: None,
     };
@@ -1683,6 +1685,7 @@ async fn housekeeping_reconciles_same_path_guard_before_db_swap() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         // Root ids are allocated, not derived from the path, so take the library's own.
         root_folder_id: library
             .roots
@@ -1831,6 +1834,7 @@ async fn housekeeping_old_moved_recovery_removes_staged_replacement_file() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         // Root ids are allocated, not derived from the path, so take the library's own.
         root_folder_id: library
             .roots
@@ -1986,6 +1990,7 @@ async fn housekeeping_skips_recent_same_path_guard() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         // Root ids are allocated, not derived from the path, so take the library's own.
         root_folder_id: library
             .roots
@@ -2127,6 +2132,7 @@ async fn housekeeping_disposes_db_swapped_guard_with_encoded_media_root() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         // Root ids are allocated, not derived from the path, so take the library's own.
         root_folder_id: library
             .roots

@@ -271,6 +271,7 @@ async fn seed_title_with_folder_path(
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         // Root ids are allocated, not derived from a path, so take the library's own.
         root_folder_id: library
             .roots

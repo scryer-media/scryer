@@ -1217,6 +1217,12 @@ impl TitleRepository for MockTitleRepo {
         title.tagged_aliases = metadata.tagged_aliases;
         title.metadata_language = metadata.metadata_language;
         title.metadata_fetched_at = Some(chrono::Utc::now());
+        if let Some(min_availability) = metadata.min_availability {
+            title.min_availability = min_availability;
+        }
+        if let Some(movie_release_dates) = metadata.movie_release_dates {
+            title.movie_release_dates = Some(movie_release_dates);
+        }
         for external_id in metadata.extra_external_ids {
             title
                 .external_ids

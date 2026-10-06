@@ -230,10 +230,7 @@ impl AppUseCase {
                 .map(|(_, movie_ref)| movie_ref.clone())
                 .collect::<Vec<_>>();
             let movie_result = self
-                .services
-                .library
-                .metadata_gateway
-                .get_movie_titles(&refs, language)
+                .get_movie_titles_for_current_release_market(&refs, language)
                 .await?;
             for (ref_index, (title, _)) in movie_targets.iter().enumerate() {
                 let title = *title;
@@ -512,6 +509,7 @@ mod title_image_cache_refresh_tests {
             metadata_fetched_at: None,
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         }
     }

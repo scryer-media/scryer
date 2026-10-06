@@ -633,6 +633,7 @@ pub(super) fn make_due_hydration_title(id: &str, facet: MediaFacet, tvdb_id: i64
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: None,
     }
 }

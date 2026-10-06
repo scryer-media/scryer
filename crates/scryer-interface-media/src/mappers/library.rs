@@ -185,6 +185,7 @@ pub fn from_title(app: &AppUseCase, title: Title) -> TitlePayload {
         aliases: title.aliases,
         metadata_language: title.metadata_language,
         metadata_fetched_at: title.metadata_fetched_at,
+        min_availability: title.min_availability,
         quality_profile_id: quality_profile_id.map(Into::into),
         root_folder_id: title.root_folder_id.into(),
         monitor_type,

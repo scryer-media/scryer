@@ -247,6 +247,7 @@ pub(crate) enum ReleaseAutoDecisionCode {
     DownloadClientUnavailable,
     RepackGroupMismatch,
     MinimumSeeders,
+    MovieAvailabilityBlocked,
     PackBelowMissingThreshold,
     SubtitlesOnly,
     /// The release's numbering has more than one equally-good reading under the
@@ -285,6 +286,7 @@ impl ReleaseAutoDecisionCode {
             "download_client_unavailable" => Some(Self::DownloadClientUnavailable),
             "repack_group_mismatch" => Some(Self::RepackGroupMismatch),
             "minimum_seeders" => Some(Self::MinimumSeeders),
+            "movie_availability_blocked" => Some(Self::MovieAvailabilityBlocked),
             "pack_below_missing_threshold" => Some(Self::PackBelowMissingThreshold),
             "subtitles_only" => Some(Self::SubtitlesOnly),
             "anime_numbering_ambiguous" => Some(Self::AnimeNumberingAmbiguous),
@@ -319,6 +321,7 @@ impl ReleaseAutoDecisionCode {
             Self::DownloadClientUnavailable => "download_client_unavailable",
             Self::RepackGroupMismatch => "repack_group_mismatch",
             Self::MinimumSeeders => "minimum_seeders",
+            Self::MovieAvailabilityBlocked => "movie_availability_blocked",
             Self::PackBelowMissingThreshold => "pack_below_missing_threshold",
             Self::SubtitlesOnly => "subtitles_only",
             Self::AnimeNumberingAmbiguous => "anime_numbering_ambiguous",
@@ -368,6 +371,7 @@ impl ReleaseAutoDecisionCode {
             Self::DownloadClientUnavailable => "matching download clients are unavailable",
             Self::RepackGroupMismatch => "repack group does not match the existing file",
             Self::MinimumSeeders => "too few seeders for this indexer's seeding profile",
+            Self::MovieAvailabilityBlocked => "movie has not reached its configured availability",
             Self::PackBelowMissingThreshold => {
                 "series pack does not meet the missing-episode threshold"
             }
@@ -2334,6 +2338,16 @@ impl AppUseCase {
             .collect::<Vec<_>>();
         let delay_profiles = self.load_delay_profiles().await;
         let now = Utc::now();
+        let movie_availability = if title.facet == MediaFacet::Movie {
+            let settings = self.acquisition_settings().await?;
+            Some(
+                crate::acquisition::targets::movie_availability_decision_for_title(
+                    title, &settings, &now,
+                ),
+            )
+        } else {
+            None
+        };
         let cutoff_scope = self.cutoff_scope_for(&subject.submission_scope).await;
         let analyzed_cutoff_quality =
             crate::acquisition::decision_helpers::analyzed_cutoff_quality_for_scope(
@@ -2555,19 +2569,36 @@ impl AppUseCase {
                 annotate_auto_decision(candidate, ReleaseAutoDecisionCode::AcquisitionPaused);
                 continue;
             }
-            if candidate.auto_decision_code.as_deref().is_some_and(|code| {
-                code == ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str()
-                    || code == ReleaseAutoDecisionCode::AnimeNumberingAmbiguous.as_str()
-            }) {
+            if !user_invoked
+                && candidate.auto_decision_code.as_deref().is_some_and(|code| {
+                    code == ReleaseAutoDecisionCode::PackBelowMissingThreshold.as_str()
+                        || code == ReleaseAutoDecisionCode::AnimeNumberingAmbiguous.as_str()
+                })
+            {
                 continue;
             }
-            let code = active_pending_release_delay_code(
+            let evaluated_code = active_pending_release_delay_code(
                 evaluate_auto_candidate(candidate, &evaluation_context),
                 user_invoked,
                 has_active_pending_overlap,
             );
+            let code = if movie_availability.as_ref().is_some_and(|decision| {
+                decision.status != crate::types::MovieAvailabilityStatus::Available
+            }) {
+                ReleaseAutoDecisionCode::MovieAvailabilityBlocked
+            } else {
+                evaluated_code
+            };
             annotate_external_id_diagnostics(candidate, evaluation_context.subject);
             annotate_auto_decision(candidate, code);
+            if code == ReleaseAutoDecisionCode::MovieAvailabilityBlocked
+                && let Some(decision) = &movie_availability
+            {
+                candidate.auto_decision_summary = Some(match &decision.effective_date {
+                    Some(date) => format!("{}: {} ({date})", code.summary(), decision.reason),
+                    None => format!("{}: {}", code.summary(), decision.reason),
+                });
+            }
         }
 
         Ok(results)
@@ -3312,6 +3343,14 @@ mod tests {
     use scryer_domain::{MediaFacet, TaggedAlias, Title};
 
     #[test]
+    fn movie_availability_decision_code_round_trips_and_has_summary() {
+        let code = ReleaseAutoDecisionCode::MovieAvailabilityBlocked;
+        assert_eq!(code.as_str(), "movie_availability_blocked");
+        assert_eq!(ReleaseAutoDecisionCode::parse(code.as_str()), Some(code));
+        assert!(code.summary().contains("configured availability"));
+    }
+
+    #[test]
     fn a_whole_season_search_accepts_only_a_plain_season_number() {
         assert_eq!(whole_season_number("2").ok(), Some(2));
         assert_eq!(whole_season_number(" 02 ").ok(), Some(2));
@@ -3930,6 +3969,7 @@ mod tests {
             metadata_fetched_at: None,
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         }
     }

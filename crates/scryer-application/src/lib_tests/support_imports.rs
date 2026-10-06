@@ -619,6 +619,8 @@ impl MediaFileRepository for MockMediaFileRepo {
                     min_availability: None,
                     first_aired: None,
                     digital_release_date: None,
+                    metadata_fetched: false,
+                    movie_release_dates: None,
                     created_at: created.clone(),
                 });
             }

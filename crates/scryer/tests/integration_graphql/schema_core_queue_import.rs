@@ -1443,6 +1443,7 @@ async fn graphql_traverses_core_graph_relationships() {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: None,
     };
     let title = ctx.titles.create(title).await.expect("create title");

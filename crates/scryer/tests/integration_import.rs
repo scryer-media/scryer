@@ -261,6 +261,7 @@ async fn add_movie_title(ctx: &TestContext, id: &str, name: &str, media_root: &s
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: None,
     };
     ctx.titles.create(title).await.expect("add movie title")
@@ -323,6 +324,7 @@ async fn add_series_title_with_runtime(
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: None,
     };
     ctx.titles.create(title).await.expect("add series title")

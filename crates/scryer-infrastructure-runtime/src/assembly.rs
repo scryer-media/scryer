@@ -3678,6 +3678,7 @@ mod tests {
             metadata_fetched_at: Some(chrono::Utc::now()),
             min_availability: None,
             digital_release_date: Some("2026-01-02".to_string()),
+            movie_release_dates: None,
             folder_path: Some("/data/movies/Backup Lattice Movie (2026)".to_string()),
         }
     }
