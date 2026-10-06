@@ -644,8 +644,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn verification_depth_defaults_to_full_and_round_trips() {
-        assert_eq!(VerificationDepth::default(), VerificationDepth::Full);
+    fn verification_depth_defaults_to_quick_and_round_trips() {
+        assert_eq!(VerificationDepth::default(), VerificationDepth::Quick);
+        // The import-copy default never reaches location operations, which
+        // relocate the only copy and always plan full.
+        assert_eq!(
+            crate::location::operations::LOCATION_OPERATION_VERIFICATION_DEPTH,
+            VerificationDepth::Full
+        );
         for depth in [VerificationDepth::Full, VerificationDepth::Quick] {
             assert_eq!(VerificationDepth::from_setting(depth.as_str()), Ok(depth));
         }

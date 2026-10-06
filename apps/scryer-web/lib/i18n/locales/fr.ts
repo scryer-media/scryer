@@ -726,9 +726,9 @@ const fr: LocaleDictionary = {
   "settings.verificationDepthHelp": "Avec quelle rigueur Scryer contrôle un fichier copié avant de toucher à la source.",
   "settings.verificationDepthScope": "Ne s'applique qu'aux copies d'import des clients de téléchargement. Les déplacements de bibliothèque et de racine sont toujours vérifiés intégralement, quel que soit ce choix.",
   "settings.verificationDepthLabel": "Profondeur de vérification",
-  "settings.verificationDepthFull": "Relecture complète (par défaut)",
+  "settings.verificationDepthFull": "Relecture complète",
   "settings.verificationDepthFullHelp": "Relit la copie en entier et la compare à la somme de contrôle calculée pendant la copie.",
-  "settings.verificationDepthQuick": "Contrôle rapide",
+  "settings.verificationDepthQuick": "Contrôle rapide (par défaut)",
   "settings.verificationDepthQuickHelp": "Compare la taille du fichier ainsi qu'un échantillon du début et de la fin. Plus rapide, garantie plus faible.",
   "settings.verificationDepthSaved": "Profondeur de vérification enregistrée.",
   "settings.generalPlaceholder":

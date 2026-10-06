@@ -1831,9 +1831,9 @@ struct PreparedImportPlacement {
     options: ImportFileOptions,
     /// The operator's verification depth for this import (FR-042/045).
     /// Serialized, unlike `options`: the worker process performs the copy, so
-    /// the depth has to survive the handoff. Defaults to `Full` for a request
-    /// written by an older peer — never to the weaker setting.
-    #[serde(default)]
+    /// the depth has to survive the handoff. Required on the wire: every peer
+    /// that speaks this protocol version writes it, and a missing depth is a
+    /// malformed request rather than an invitation to guess one.
     verification_depth: VerificationDepth,
     source_cleanup_required: bool,
     #[serde(skip)]
@@ -2477,7 +2477,8 @@ fn import_hardlink_or_copy_blocking(
     })
 }
 
-/// Single-process placement at the default depth, for callers that name none.
+/// Single-process placement for callers that name no depth. They get full
+/// verification: only the operator's preference may choose the quick floor.
 fn import_file_blocking(
     source: PathBuf,
     dest: PathBuf,
@@ -2492,7 +2493,7 @@ fn import_file_blocking(
         dest,
         mode,
         options,
-        VerificationDepth::default(),
+        VerificationDepth::Full,
         expected_source,
         progress,
         permissions,
@@ -2556,9 +2557,9 @@ enum ImportFileWorkerRequest {
         mode: ImportMode,
         expected_source: Option<ImportSourceSnapshot>,
         permissions: ImportFilePermissions,
-        /// FR-042/045. Defaulted rather than required so a request from an
-        /// older peer verifies at full depth, never at the weaker one.
-        #[serde(default)]
+        /// FR-042/045. Required: the parent always sends the resolved depth,
+        /// and a request without one is rejected instead of being verified at
+        /// whatever the type's default happens to be.
         verification_depth: VerificationDepth,
     },
     FastPlacement {
@@ -3336,8 +3337,9 @@ impl FileImporter for FsFileImporter {
         permissions: &ImportFilePermissions,
         context: &ImportFileExecutionContext,
     ) -> AppResult<ImportFileResult> {
-        // No depth was named, so the copy path proves at the default rather
-        // than at the weaker setting (FR-042: never a silent downgrade).
+        // No depth was named, so the copy path proves at full depth: only the
+        // operator's preference may choose the quick floor (FR-042: never a
+        // silent downgrade).
         self.place_import_file(
             source,
             dest,
@@ -3346,7 +3348,7 @@ impl FileImporter for FsFileImporter {
             progress,
             permissions,
             context,
-            VerificationDepth::default(),
+            VerificationDepth::Full,
         )
         .await
     }
@@ -3781,6 +3783,42 @@ mod tests {
         let json = serde_json::to_value(&error).expect("serialises");
         assert_eq!(json["kind"], "manual_reconciliation_required");
         assert_eq!(json["message"], "x");
+    }
+
+    #[test]
+    fn worker_prepare_request_requires_a_verification_depth() {
+        let request = |depth: Option<&str>| {
+            let mut value = serde_json::json!({
+                "command": "prepare",
+                "version": IMPORT_FILE_WORKER_PROTOCOL_VERSION,
+                "nonce": 7,
+                "source": "/synthetic/source.mkv",
+                "dest": "/synthetic/library/destination.mkv",
+                "mode": "hardlink_or_copy",
+                "expected_source": null,
+                "permissions": ImportFilePermissions::default(),
+            });
+            if let Some(depth) = depth {
+                value["verification_depth"] = serde_json::json!(depth);
+            }
+            serde_json::from_value::<ImportFileWorkerRequest>(value)
+        };
+
+        assert!(
+            request(None).is_err(),
+            "a prepare request without a depth must not fall back to a default"
+        );
+        for (wire, expected) in [
+            ("full", VerificationDepth::Full),
+            ("quick", VerificationDepth::Quick),
+        ] {
+            match request(Some(wire)).expect("prepare request with depth parses") {
+                ImportFileWorkerRequest::Prepare {
+                    verification_depth, ..
+                } => assert_eq!(verification_depth, expected),
+                other => panic!("unexpected request: {other:?}"),
+            }
+        }
     }
     #[cfg(unix)]
     use std::io::{self, Write};

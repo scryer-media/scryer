@@ -1,6 +1,7 @@
 impl AppUseCase {
-    /// Effective verification depth (FR-042). Absent or unparseable settings fall
-    /// back to the `full` default rather than silently weakening verification.
+    /// Effective import-copy verification depth (FR-042). An absent setting
+    /// reads as [`VerificationDepth::default`]; an unparseable or unreadable one
+    /// falls back to that same default and says so in the log.
     pub(crate) async fn resolve_verification_depth(&self) -> VerificationDepth {
         match self
             .read_setting_string_value_for_scope(SETTINGS_SCOPE_MEDIA, VERIFICATION_DEPTH_KEY, None)
@@ -9,21 +10,25 @@ impl AppUseCase {
             Ok(Some(raw)) => match VerificationDepth::from_setting(&raw) {
                 Ok(depth) => depth,
                 Err(message) => {
+                    let fallback = VerificationDepth::default();
                     warn!(
                         setting = VERIFICATION_DEPTH_KEY,
                         value = raw.as_str(),
-                        "{message}; falling back to full verification"
+                        "{message}; falling back to {} verification",
+                        fallback.as_str()
                     );
-                    VerificationDepth::default()
+                    fallback
                 }
             },
             Ok(None) => VerificationDepth::default(),
             Err(error) => {
+                let fallback = VerificationDepth::default();
                 warn!(
                     setting = VERIFICATION_DEPTH_KEY,
-                    "failed to read verification depth setting: {error}; falling back to full verification"
+                    "failed to read verification depth setting: {error}; falling back to {} verification",
+                    fallback.as_str()
                 );
-                VerificationDepth::default()
+                fallback
             }
         }
     }

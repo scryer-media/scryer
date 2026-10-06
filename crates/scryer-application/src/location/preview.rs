@@ -28,6 +28,7 @@ use crate::helpers::{HashDomain, blake3_identity_hex};
 use crate::location::classify::ClassificationCounts;
 use crate::location::merge::summary::MergePreviewSummary;
 use crate::location::model::{LocationExecutionMode, LocationOperationType, VerificationDepth};
+use crate::location::operations::LOCATION_OPERATION_VERIFICATION_DEPTH;
 
 /// How many items of each section a preview returns alongside the complete
 /// count. Mirrors the rename-plan/delete-preview sampling contract (FR-081).
@@ -585,7 +586,9 @@ pub struct LocationPlanBuilder {
 
 impl LocationPlanBuilder {
     pub fn new(header: LocationPlanHeader) -> Self {
-        let depth = VerificationDepth::default();
+        // A plan relocates library content, so it starts at the location
+        // floor, never at the import-copy preference's default.
+        let depth = LOCATION_OPERATION_VERIFICATION_DEPTH;
         Self {
             header,
             items: Vec::new(),
@@ -626,12 +629,11 @@ impl LocationPlanBuilder {
 
     /// Sets the depth statement (FR-042/043).
     ///
-    /// The depth itself comes from the user preference, which only the use-case
-    /// layer can read: a workflow planner resolves it with
-    /// `AppUseCase::resolve_verification_depth` and passes it here, so this
-    /// module stays free of settings access. The file and byte totals are
-    /// derived from the plan's copied content, which is the only content a
-    /// verification pass applies to.
+    /// The depth comes from the planning workflow: location workflows pass
+    /// `LOCATION_OPERATION_VERIFICATION_DEPTH` and never read the import-copy
+    /// preference, so this module stays free of settings access. The file and
+    /// byte totals are derived from the plan's copied content, which is the
+    /// only content a verification pass applies to.
     pub fn verification_depth(&mut self, depth: VerificationDepth) -> &mut Self {
         self.verification = VerificationStatement::none(depth);
         self

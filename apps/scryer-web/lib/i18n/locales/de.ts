@@ -717,9 +717,9 @@ const de: LocaleDictionary = {
   "settings.verificationDepthHelp": "Wie gründlich Scryer eine kopierte Datei prüft, bevor die Quelle angetastet wird.",
   "settings.verificationDepthScope": "Gilt nur für Importkopien von Download-Clients. Bibliotheks- und Stammordnerverschiebungen werden unabhängig davon immer vollständig überprüft.",
   "settings.verificationDepthLabel": "Prüftiefe",
-  "settings.verificationDepthFull": "Vollständiges Zurücklesen (Standard)",
+  "settings.verificationDepthFull": "Vollständiges Zurücklesen",
   "settings.verificationDepthFullHelp": "Liest die Kopie vollständig zurück und vergleicht sie mit der während des Kopierens erzeugten Prüfsumme.",
-  "settings.verificationDepthQuick": "Schnelle Prüfung",
+  "settings.verificationDepthQuick": "Schnelle Prüfung (Standard)",
   "settings.verificationDepthQuickHelp": "Vergleicht die Dateigröße sowie stichprobenartig Anfang und Ende der Datei. Schneller, aber eine schwächere Garantie.",
   "settings.verificationDepthSaved": "Prüftiefe gespeichert.",
   "settings.generalPlaceholder":

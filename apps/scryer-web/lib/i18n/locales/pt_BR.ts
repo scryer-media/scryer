@@ -720,9 +720,9 @@ const pt_BR: LocaleDictionary = {
   "settings.verificationDepthHelp": "Com que rigor o Scryer confere um arquivo copiado antes de mexer na origem.",
   "settings.verificationDepthScope": "Vale apenas para as cópias de importação dos clientes de download. Movimentações de biblioteca e de raiz sempre verificam por completo, independentemente do que for escolhido aqui.",
   "settings.verificationDepthLabel": "Profundidade da verificação",
-  "settings.verificationDepthFull": "Releitura completa (padrão)",
+  "settings.verificationDepthFull": "Releitura completa",
   "settings.verificationDepthFullHelp": "Relê a cópia por inteiro e compara com a soma de verificação calculada durante a cópia.",
-  "settings.verificationDepthQuick": "Verificação rápida",
+  "settings.verificationDepthQuick": "Verificação rápida (padrão)",
   "settings.verificationDepthQuickHelp": "Compara o tamanho do arquivo e amostras do início e do fim. Mais rápido, com garantia mais fraca.",
   "settings.verificationDepthSaved": "Profundidade da verificação salva.",
   "settings.generalPlaceholder":

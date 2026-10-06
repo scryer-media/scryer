@@ -184,15 +184,17 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             is_sensitive: false,
         },
         // Import-copy verification depth (FR-042). Without a definition the
-        // Settings > General control cannot save at all. Seeded `full`, the
-        // default `resolve_verification_depth` already falls back to, so a
-        // fresh install reads exactly what an unseeded one did.
+        // Settings > General control cannot save at all. Seeded `quick`, the
+        // same default `resolve_verification_depth` falls back to, so a fresh
+        // install reads exactly what an unseeded one does. Reseeding refreshes
+        // only the definition's default: an operator who saved `full` keeps it,
+        // because the effective value prefers a saved value over the default.
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_MEDIA,
             key_name: VERIFICATION_DEPTH_KEY,
             data_type: "string",
-            default_value_json: "\"full\"",
+            default_value_json: "\"quick\"",
             is_sensitive: false,
         },
         ServiceSettingSeed {
@@ -2667,7 +2669,7 @@ mod tests {
             .expect("verification depth definition must be registered");
         assert_eq!(seed.category, SETTINGS_CATEGORY_MEDIA);
         assert_eq!(seed.data_type, "string");
-        assert_eq!(seed.default_value_json, "\"full\"");
+        assert_eq!(seed.default_value_json, "\"quick\"");
         assert!(!seed.is_sensitive);
 
         let (_temp, store) = bootstrap_settings_store().await;
@@ -2678,10 +2680,10 @@ mod tests {
             .expect("verification depth default");
         assert_eq!(
             serde_json::from_str::<Value>(&initial).unwrap(),
-            json!("full")
+            json!("quick")
         );
 
-        for depth in ["quick", "full"] {
+        for depth in ["full", "quick", "full"] {
             store
                 .upsert_setting_json(
                     SETTINGS_SCOPE_MEDIA,
