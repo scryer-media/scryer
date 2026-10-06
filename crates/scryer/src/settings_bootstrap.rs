@@ -929,6 +929,30 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_ACQUISITION,
             scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "acquisition.default_movie_availability",
+            data_type: "string",
+            default_value_json: "\"announced\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "acquisition.movie_release_market",
+            data_type: "string",
+            default_value_json: "\"US\"",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "acquisition.movie_availability_delay_days",
+            data_type: "number",
+            default_value_json: "0",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: "acquisition.enabled",
             data_type: "boolean",
             default_value_json: "true",
@@ -2851,6 +2875,31 @@ mod tests {
                         && !seed.is_sensitive
                 }),
                 "{key_name} must be registered and default to false"
+            );
+        }
+    }
+
+    #[test]
+    fn service_setting_seeds_include_movie_availability_defaults() {
+        for (key, data_type, default_value) in [
+            (
+                "acquisition.default_movie_availability",
+                "string",
+                "\"announced\"",
+            ),
+            ("acquisition.movie_release_market", "string", "\"US\""),
+            ("acquisition.movie_availability_delay_days", "number", "0"),
+        ] {
+            assert!(
+                service_setting_seeds().iter().any(|seed| {
+                    seed.category == SETTINGS_CATEGORY_ACQUISITION
+                        && seed.scope == SETTINGS_SCOPE_SYSTEM
+                        && seed.key_name == key
+                        && seed.data_type == data_type
+                        && seed.default_value_json == default_value
+                        && !seed.is_sensitive
+                }),
+                "missing movie availability definition: {key}"
             );
         }
     }
