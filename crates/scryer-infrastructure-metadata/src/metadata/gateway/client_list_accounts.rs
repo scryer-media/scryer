@@ -818,9 +818,11 @@ fn ensure_success(reply: &Reply, source: Source) -> AppResult<()> {
             "not_found" | "method_not_allowed" => Some("unsupported_provider"),
             "invalid_exchange" => Some("authorization_failed"),
             // The provider's own trouble, relayed: it counts against the grant.
-            "provider_unavailable" | "invalid_provider_response" | "invalid_scope" => {
-                Some("provider_unavailable")
-            }
+            // That includes a renewed token whose scope the relay refuses.
+            "provider_unavailable"
+            | "invalid_provider_response"
+            | "invalid_scope"
+            | "invalid_provider_scope" => Some("provider_unavailable"),
             _ => None,
         },
         _ => None,

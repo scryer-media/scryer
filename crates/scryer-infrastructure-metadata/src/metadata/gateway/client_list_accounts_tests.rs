@@ -879,6 +879,7 @@ async fn relay_renew_answers_map_to_reconnect_only_for_explicit_grant_codes() {
             Code("invalid_provider_response"),
             "provider_unavailable",
         ),
+        (502, Code("invalid_provider_scope"), "provider_unavailable"),
         (408, Empty, "relay_unavailable"),
         // SMG's instance authentication answers in free text. None of it says
         // anything about the provider grant.
