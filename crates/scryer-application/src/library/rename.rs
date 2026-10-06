@@ -8,6 +8,7 @@ use scryer_domain::{
 };
 use serde::{Deserialize, Serialize};
 use tracing::warn;
+use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
 use futures_util::stream::{StreamExt, TryStreamExt};
 
@@ -2021,6 +2022,14 @@ fn parse_rename_template_optional_group(
 }
 
 fn render_rename_template_tokens(template: &str, tokens: &BTreeMap<String, String>) -> String {
+    render_rename_template_tokens_with_folder_path(template, tokens, false)
+}
+
+fn render_rename_template_tokens_with_folder_path(
+    template: &str,
+    tokens: &BTreeMap<String, String>,
+    folder_path: bool,
+) -> String {
     let mut out = String::new();
     let chars: Vec<char> = template.chars().collect();
     let mut cursor = 0usize;
@@ -2043,7 +2052,11 @@ fn render_rename_template_tokens(template: &str, tokens: &BTreeMap<String, Strin
                     .get(&group.guard)
                     .is_some_and(|value| !value.trim().is_empty())
                 {
-                    out.push_str(&render_rename_template_tokens(&group.body, tokens));
+                    out.push_str(&render_rename_template_tokens_with_folder_path(
+                        &group.body,
+                        tokens,
+                        folder_path,
+                    ));
                 }
                 cursor = group.end_index + 1;
                 continue;
@@ -2052,7 +2065,16 @@ fn render_rename_template_tokens(template: &str, tokens: &BTreeMap<String, Strin
             if let Some(end) = chars[cursor + 1..].iter().position(|c| *c == '}') {
                 let end_index = cursor + 1 + end;
                 let token_spec: String = chars[cursor + 1..end_index].iter().collect();
-                out.push_str(&resolve_template_token(tokens, token_spec.trim()));
+                let resolved = resolve_template_token(tokens, token_spec.trim());
+                if folder_path {
+                    if resolved == "_" {
+                        out.push('_');
+                    } else {
+                        out.push_str(&sanitize_filesystem_component(&resolved));
+                    }
+                } else {
+                    out.push_str(&resolved);
+                }
                 cursor = end_index + 1;
                 continue;
             }
@@ -2113,17 +2135,52 @@ fn finalize_generated_filename_component(value: &str) -> String {
 }
 
 pub fn render_title_folder_template(template: &str, tokens: &BTreeMap<String, String>) -> String {
-    let raw = restore_rename_literal_sentinels(&render_rename_template_tokens(template, tokens));
+    let raw = restore_rename_literal_sentinels(&render_rename_template_tokens_with_folder_path(
+        template, tokens, true,
+    ));
     let cleaned = strip_empty_folder_template_groups(&raw);
-    truncate_generated_folder_component(&sanitize_filesystem_component(cleaned.trim()))
+    cleaned
+        .trim()
+        .split('/')
+        .map(|component| {
+            let component = component.trim();
+            let sanitized = if component == "_" {
+                "_".to_string()
+            } else {
+                sanitize_filesystem_component(component)
+            };
+            let sanitized = truncate_generated_folder_component(&sanitized);
+            if matches!(sanitized.as_str(), "." | "..") {
+                "_".to_string()
+            } else {
+                sanitized
+            }
+        })
+        .filter(|component| !component.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 pub(crate) fn validate_title_folder_template(template: &str) -> AppResult<()> {
+    let trimmed = template.trim();
+    if trimmed.starts_with('/')
+        || trimmed.ends_with('/')
+        || trimmed
+            .split('/')
+            .any(|component| matches!(component, "." | ".."))
+    {
+        return Err(AppError::Validation(
+            "folder template must contain only relative, non-empty path components".to_string(),
+        ));
+    }
+
     validate_folder_component_template(
-        template,
+        trimmed,
         "folder",
         is_supported_title_folder_token,
         None,
+        true,
+        is_illegal_title_folder_template_literal,
         true,
     )
 }
@@ -2135,6 +2192,8 @@ pub(crate) fn validate_season_folder_template(template: &str) -> AppResult<()> {
         is_supported_season_folder_token,
         Some("season"),
         false,
+        is_illegal_folder_template_literal,
+        false,
     )
 }
 
@@ -2145,11 +2204,17 @@ pub(crate) fn validate_specials_folder_template(template: &str) -> AppResult<()>
         is_supported_season_folder_token,
         None,
         false,
+        is_illegal_folder_template_literal,
+        false,
     )
 }
 
 fn is_illegal_folder_template_literal(ch: char) -> bool {
     matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') || ch.is_control()
+}
+
+fn is_illegal_title_folder_template_literal(ch: char) -> bool {
+    matches!(ch, '<' | '>' | ':' | '"' | '\\' | '|' | '?' | '*') || ch.is_control()
 }
 
 #[derive(Default)]
@@ -2291,6 +2356,8 @@ fn validate_folder_component_template(
     is_supported_token: impl Fn(&str) -> bool,
     required_token: Option<&str>,
     require_any_token: bool,
+    is_illegal_literal: fn(char) -> bool,
+    allow_path: bool,
 ) -> AppResult<()> {
     let trimmed = template.trim();
     if trimmed.is_empty() {
@@ -2303,14 +2370,27 @@ fn validate_folder_component_template(
         saw_token: false,
         saw_required_token: required_token.is_none(),
     };
-    validate_rename_template_fragment(
-        trimmed,
-        template_label,
-        &is_supported_token,
-        Some(is_illegal_folder_template_literal),
-        required_token,
-        &mut state,
-    )?;
+    let components = if allow_path {
+        trimmed.split('/').collect::<Vec<_>>()
+    } else {
+        vec![trimmed]
+    };
+    for component in components {
+        let component = component.trim();
+        if component.is_empty() {
+            return Err(AppError::Validation(format!(
+                "{template_label} template must contain only relative, non-empty path components"
+            )));
+        }
+        validate_rename_template_fragment(
+            component,
+            template_label,
+            &is_supported_token,
+            Some(is_illegal_literal),
+            required_token,
+            &mut state,
+        )?;
+    }
 
     if require_any_token && !state.saw_token {
         return Err(AppError::Validation(format!(
@@ -2457,13 +2537,71 @@ pub(crate) fn build_title_folder_tokens(
     let resolved_year = title_year_hint
         .or_else(|| title.year.map(|value| value.to_string()))
         .unwrap_or_default();
+    let title_order_source = title_token.clone();
     let mut tokens = BTreeMap::from([
         ("title".to_string(), title_token),
         ("year".to_string(), resolved_year),
     ]);
     insert_title_year_variant_tokens(&mut tokens, title);
+    insert_movie_title_order_tokens(&mut tokens, &title_order_source);
     insert_title_external_id_tokens(&mut tokens, title);
     tokens
+}
+
+fn insert_movie_title_order_tokens(tokens: &mut BTreeMap<String, String>, title: &str) {
+    let trimmed = title.trim();
+    let title_with_article = move_leading_article_to_end(trimmed);
+    let mut characters = title_with_article.chars();
+    let first = characters.next();
+    let second = characters.next();
+    let first_character = first
+        .filter(|character| character.is_alphanumeric())
+        .or_else(|| second.filter(|character| character.is_alphanumeric()))
+        .map(|character| {
+            character
+                .to_string()
+                .nfd()
+                .filter(|value| !is_combining_mark(*value))
+                .flat_map(char::to_uppercase)
+                .next()
+                .unwrap_or('_')
+                .to_string()
+        })
+        .unwrap_or_else(|| "_".to_string());
+
+    tokens.insert("title_with_article".to_string(), title_with_article);
+    tokens.insert("title_first_character".to_string(), first_character);
+}
+
+fn move_leading_article_to_end(title: &str) -> String {
+    let Some((article, remainder)) = title.split_once(' ') else {
+        return title.to_string();
+    };
+    if !matches!(article.to_ascii_lowercase().as_str(), "the" | "an" | "a") || remainder.is_empty()
+    {
+        return title.to_string();
+    }
+
+    let mut suffix_start = remainder.len();
+    loop {
+        let prefix = remainder[..suffix_start].trim_end_matches(' ');
+        let Some(before_close) = prefix.strip_suffix(')') else {
+            break;
+        };
+        let Some(open_index) = before_close.rfind('(') else {
+            break;
+        };
+        if open_index + 1 == before_close.len() {
+            break;
+        }
+        suffix_start = open_index;
+    }
+
+    let title_part = remainder[..suffix_start].trim_end();
+    if title_part.is_empty() {
+        return title.to_string();
+    }
+    format!("{title_part}, {article}{}", &remainder[suffix_start..])
 }
 
 pub(crate) fn render_episode_folder_name(
@@ -2988,6 +3126,8 @@ fn is_supported_rename_template_token(token: &str) -> bool {
         "title"
             | "title_with_year"
             | "title_without_year"
+            | "title_with_article"
+            | "title_first_character"
             | "year"
             | "quality"
             | "edition"
@@ -3027,7 +3167,12 @@ fn is_supported_rename_template_token_for_facet(token: &str, facet: &MediaFacet)
 
     common
         || match facet {
-            MediaFacet::Movie => token == "edition",
+            MediaFacet::Movie => {
+                matches!(
+                    token,
+                    "edition" | "title_with_article" | "title_first_character"
+                )
+            }
             MediaFacet::Series | MediaFacet::Anime => matches!(
                 token,
                 "season" | "season_order" | "episode" | "episode_title" | "absolute_episode"
@@ -3038,7 +3183,12 @@ fn is_supported_rename_template_token_for_facet(token: &str, facet: &MediaFacet)
 fn is_supported_title_folder_token(token: &str) -> bool {
     matches!(
         token,
-        "title" | "title_with_year" | "title_without_year" | "year"
+        "title"
+            | "title_with_year"
+            | "title_without_year"
+            | "title_with_article"
+            | "title_first_character"
+            | "year"
     ) || TITLE_EXTERNAL_ID_TOKENS
         .iter()
         .any(|(token_name, _)| *token_name == token)
@@ -3261,6 +3411,10 @@ pub(crate) fn title_rename_tokens(
     let mut tokens = BTreeMap::new();
     insert_common_rename_tokens(&mut tokens, common.common);
     insert_title_year_variant_tokens(&mut tokens, title);
+    if title.facet == MediaFacet::Movie {
+        let title_token = tokens.get("title").cloned().unwrap_or_default();
+        insert_movie_title_order_tokens(&mut tokens, &title_token);
+    }
     insert_title_external_id_tokens(&mut tokens, title);
     (tokens, common.edition)
 }

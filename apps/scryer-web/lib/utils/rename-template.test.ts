@@ -10,8 +10,13 @@ import {
 
 const VALID_TOKENS = new Set(["title", "season_order", "edition", "ext"]);
 const VALID_FOLDER_TOKENS = new Set(["title", "season"]);
+const VALID_MOVIE_FOLDER_TOKENS = new Set([
+  "title", "year", "title_with_article", "title_first_character",
+]);
 const SAMPLE_VALUES = {
   title: "The Grey Harbor",
+  title_with_article: "Grey Harbor, The",
+  title_first_character: "G",
   edition: "IMAX",
   ext: "mkv",
 };
@@ -122,6 +127,28 @@ test("validateFolderTemplateSyntax rejects illegal literal characters", () => {
     assert.deepEqual(
       validateFolderTemplateSyntax(`Season${character} {season}`, VALID_FOLDER_TOKENS, "season"),
       { kind: "illegalCharacter", character },
+    );
+  }
+});
+
+test("validateFolderTemplateSyntax supports safe nested movie folder components", () => {
+  const template = "{title_first_character}/{title_with_article} ({year})";
+  assert.equal(
+    validateFolderTemplateSyntax(template, VALID_MOVIE_FOLDER_TOKENS, undefined, true),
+    null,
+  );
+  assert.equal(
+    applyRenameTemplatePreview(template, VALID_MOVIE_FOLDER_TOKENS, {
+      ...SAMPLE_VALUES,
+      year: "2008",
+    }),
+    "G/Grey Harbor, The (2008)",
+  );
+
+  for (const unsafeTemplate of ["/A/{title}", "A//{title}", "../{title}", "A/../{title}"]) {
+    assert.deepEqual(
+      validateFolderTemplateSyntax(unsafeTemplate, VALID_MOVIE_FOLDER_TOKENS, undefined, true),
+      { kind: "illegalCharacter", character: "/" },
     );
   }
 });

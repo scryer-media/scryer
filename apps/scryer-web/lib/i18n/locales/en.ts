@@ -1062,6 +1062,8 @@ const en: LocaleDictionary = {
   "settings.renameTokenYear": "Release year",
   "settings.renameTokenTitleWithYear": "Title name followed by the year, added only when the name does not already end with it",
   "settings.renameTokenTitleWithoutYear": "Title name with any year at the end removed",
+  "settings.renameTokenTitleWithArticle": "Title with a leading The, An, or A moved to the end",
+  "settings.renameTokenTitleFirstCharacter": "First letter or digit after moving a leading article; falls back to _",
   "settings.renameTokenQuality": "Quality (e.g. 1080p)",
   "settings.renameTokenEdition": "Edition (e.g. Director's Cut)",
   "settings.renameTokenImdbId": "IMDb ID",

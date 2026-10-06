@@ -296,6 +296,102 @@ fn title_folder_template_optional_group_omits_missing_values() {
 }
 
 #[test]
+fn movie_title_order_tokens_move_leading_articles_and_bucket_by_sorted_title() {
+    let mut title = test_movie_title("The Grey Harbor");
+    title.year = Some(2008);
+    let tokens = build_title_folder_tokens(&title, None);
+
+    assert_eq!(
+        tokens.get("title_with_article").map(String::as_str),
+        Some("Grey Harbor, The")
+    );
+    assert_eq!(
+        tokens.get("title_first_character").map(String::as_str),
+        Some("G")
+    );
+    assert_eq!(
+        render_title_folder_template(
+            "{title_first_character}/{title_with_article} ({year})",
+            &tokens
+        ),
+        "G/Grey Harbor, The (2008)"
+    );
+
+    let number_title = test_movie_title("An 8th Voyage");
+    let number_tokens = build_title_folder_tokens(&number_title, None);
+    assert_eq!(
+        number_tokens.get("title_with_article").map(String::as_str),
+        Some("8th Voyage, An")
+    );
+    assert_eq!(
+        number_tokens
+            .get("title_first_character")
+            .map(String::as_str),
+        Some("8")
+    );
+
+    let punctuation_title = test_movie_title("The !Grey Harbor");
+    let punctuation_tokens = build_title_folder_tokens(&punctuation_title, None);
+    assert_eq!(
+        punctuation_tokens
+            .get("title_first_character")
+            .map(String::as_str),
+        Some("G")
+    );
+
+    let accented_title = test_movie_title("The Élan");
+    let accented_tokens = build_title_folder_tokens(&accented_title, None);
+    assert_eq!(
+        accented_tokens
+            .get("title_first_character")
+            .map(String::as_str),
+        Some("E")
+    );
+
+    let symbol_title = test_movie_title("The !!");
+    let symbol_tokens = build_title_folder_tokens(&symbol_title, None);
+    assert_eq!(
+        symbol_tokens
+            .get("title_first_character")
+            .map(String::as_str),
+        Some("_")
+    );
+}
+
+#[test]
+fn movie_title_folder_templates_allow_safe_nested_paths_only() {
+    validate_title_folder_template("{title_first_character}/{title_with_article} ({year})")
+        .expect("relative nested title folders should be valid");
+
+    for template in ["/A/{title}", "A//{title}", "../{title}", "A/../{title}"] {
+        assert!(
+            validate_title_folder_template(template).is_err(),
+            "unsafe movie folder template should be rejected: {template}"
+        );
+    }
+
+    let title = test_movie_title("The ../Escape");
+    let path = configured_title_folder_path(
+        "/library",
+        &title,
+        "{title_first_character}/{title_with_article}",
+        None,
+    );
+    assert!(path.starts_with("/library"));
+    assert_eq!(path.components().count(), 4, "rendered path: {path:?}");
+}
+
+#[test]
+fn movie_title_order_tokens_are_not_valid_for_episode_file_templates() {
+    validate_rename_template_for_facet("{title_with_article}.{ext}", &MediaFacet::Movie)
+        .expect("movie file templates should accept article sorting");
+    assert!(
+        validate_rename_template_for_facet("{title_first_character}.{ext}", &MediaFacet::Series)
+            .is_err()
+    );
+}
+
+#[test]
 fn render_title_folder_template_literal_braces_around_resolved_token() {
     let t = tokens(&[("edition", "IMAX")]);
     let result = render_title_folder_template("{{edition-{edition}}}", &t);
