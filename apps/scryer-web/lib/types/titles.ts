@@ -193,6 +193,15 @@ export type TitleReleaseBlocklistEntry = {
   attemptedAt: string;
 };
 
+export type MovieAvailabilityRecord = {
+  status: "available" | "waiting" | "unknown";
+  effectiveDate: string | null;
+  estimated: boolean;
+  reason: string;
+  market: string;
+  minimumAvailability: string;
+};
+
 export type TitleRecord = {
   id: string;
   name: string;
@@ -243,6 +252,7 @@ export type TitleRecord = {
   inheritsRequiredAudioLanguages?: boolean;
   metadataFetchedAt?: string | null;
   minAvailability?: string | null;
+  movieAvailability?: MovieAvailabilityRecord | null;
   qualityProfileId?: string | null;
   rootFolderId?: string;
   rootFolderPath?: string;

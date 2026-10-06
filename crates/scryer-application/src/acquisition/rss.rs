@@ -1114,6 +1114,8 @@ impl AppUseCase {
 
         debug!("starting RSS sync cycle");
 
+        let availability_settings = self.acquisition_settings().await?;
+
         // The scopes that hold monitored titles, as one grouped read. This
         // used to be every title row in the catalog, kept for the whole cycle
         // so a bank could be indexed over it.
@@ -1420,12 +1422,14 @@ impl AppUseCase {
                 // For movies: the monitored title is a target while it has no
                 // primary file or sits below cutoff. Availability gates active
                 // grabs the same way the derived movie target set does (§D1).
-                if !super::targets::movie_is_available_for_acquisition(
-                    title.first_aired.as_deref(),
-                    title.digital_release_date.as_deref(),
-                    title.min_availability.as_deref().unwrap_or("announced"),
+                if super::targets::movie_availability_decision_for_title(
+                    &title,
+                    &availability_settings,
                     &now,
-                ) {
+                )
+                .status
+                    != crate::types::MovieAvailabilityStatus::Available
+                {
                     continue;
                 }
                 self.process_rss_title_releases(
@@ -3818,6 +3822,7 @@ mod tests {
             metadata_fetched_at: None,
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         }
     }

@@ -8918,7 +8918,7 @@ async fn acquisition_cycle_submits_paperman_media_request_candidate() {
                     ExternalId::new("imdb".to_string(), "tt2388725".to_string()),
                 ],
                 content_status: Some("Released".to_string()),
-                min_availability: Some("released".to_string()),
+                min_availability: Some("announced".to_string()),
                 ..Default::default()
             },
         )
@@ -15285,7 +15285,7 @@ async fn seed_monitored_movie_for_cycle(
                 monitored: true,
                 year: Some(year),
                 content_status: Some("Released".to_string()),
-                min_availability: Some("released".to_string()),
+                min_availability: Some("announced".to_string()),
                 ..Default::default()
             },
         )

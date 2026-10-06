@@ -82,7 +82,6 @@ function buildDefaultDraft(
     rootFolderId: defaultRootFolderId,
     seasonFolder: facet !== "MOVIE",
     monitorType: defaultMonitorTypeForFacet(facet),
-    ...(facet === "MOVIE" ? { minAvailability: "announced" } : {}),
     ...(facet === "ANIME"
       ? {
           monitorSpecials: false,

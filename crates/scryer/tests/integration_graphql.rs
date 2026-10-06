@@ -1351,6 +1351,33 @@ async fn seed_typed_settings_definitions(ctx: &TestContext) {
             SettingDefinitionSeed {
                 category: "acquisition".into(),
                 scope: "system".into(),
+                key_name: "acquisition.default_movie_availability".into(),
+                data_type: "string".into(),
+                default_value_json: "\"announced\"".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "acquisition".into(),
+                scope: "system".into(),
+                key_name: "acquisition.movie_release_market".into(),
+                data_type: "string".into(),
+                default_value_json: "\"US\"".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "acquisition".into(),
+                scope: "system".into(),
+                key_name: "acquisition.movie_availability_delay_days".into(),
+                data_type: "number".into(),
+                default_value_json: "0".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "acquisition".into(),
+                scope: "system".into(),
                 key_name: "acquisition.delay_profiles".into(),
                 data_type: "json".into(),
                 default_value_json: "[]".into(),
@@ -2210,6 +2237,7 @@ async fn create_series_scan_title(
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: Some(title_dir.to_string_lossy().to_string()),
     };
     let title = ctx.titles.create(title).await.expect("create series title");
@@ -2281,6 +2309,7 @@ async fn create_catalog_title(
         metadata_fetched_at: Some(Utc::now()),
         min_availability: None,
         digital_release_date: Some("2020-01-01".to_string()),
+        movie_release_dates: None,
         folder_path: None,
     };
 

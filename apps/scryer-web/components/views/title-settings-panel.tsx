@@ -1,4 +1,5 @@
 import * as React from "react";
+import { useClient } from "urql";
 
 import { ChangeTitleFolderCard } from "@/components/common/change-title-folder-card";
 import { FixTitleMatchSettingsCard } from "@/components/common/fix-title-match-settings-card";
@@ -8,8 +9,9 @@ import {
 } from "@/components/common/title-options-settings-grid";
 import { MoveTitlesDialog } from "@/components/dialogs/move-titles-dialog";
 import { useTitleSettingsOptions } from "@/lib/hooks/use-title-settings-options";
+import { movieAvailabilityQuery } from "@/lib/graphql/queries";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
-import type { LibraryRecord } from "@/lib/types/titles";
+import type { LibraryRecord, MovieAvailabilityRecord } from "@/lib/types/titles";
 
 export type TitleSettingsPanelTitle = InlineTitleSettingsTitle & {
   name: string;
@@ -60,6 +62,33 @@ export function TitleSettingsPanel({
    */
   experimentalFeaturesEnabled?: boolean;
 }) {
+  const client = useClient();
+  const [movieAvailability, setMovieAvailability] = React.useState<MovieAvailabilityRecord | null>(
+    title.movieAvailability ?? null,
+  );
+  React.useEffect(() => {
+    let current = true;
+    setMovieAvailability(title.movieAvailability ?? null);
+    if (title.facet !== "MOVIE") {
+      return () => {
+        current = false;
+      };
+    }
+    void client
+      .query<{ title?: { movieAvailability?: MovieAvailabilityRecord | null } | null }>(
+        movieAvailabilityQuery,
+        { id: title.id },
+        { requestPolicy: "network-only" },
+      )
+      .toPromise()
+      .then(({ data }) => {
+        if (current) setMovieAvailability(data?.title?.movieAvailability ?? null);
+      });
+    return () => {
+      current = false;
+    };
+  }, [client, title.facet, title.id, title.minAvailability, title.movieAvailability]);
+
   const { qualityProfiles, defaultRootFolder } = useTitleSettingsOptions(
     title.facet,
   );
@@ -116,7 +145,7 @@ export function TitleSettingsPanel({
   return (
     <div id={id} className="p-4">
       <TitleOptionsSettingsGrid
-        title={title}
+        title={{ ...title, movieAvailability }}
         qualityProfiles={qualityProfiles}
         defaultRootFolder={defaultRootFolder}
         rootFolders={rootFolders}

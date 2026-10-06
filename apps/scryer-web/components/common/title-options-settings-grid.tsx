@@ -28,13 +28,15 @@ import { useTranslate } from "@/lib/context/translate-context";
 import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
 import { METADATA_LANGUAGES, getLanguageLabel } from "@/lib/i18n";
 import type { TitleOptionUpdates } from "@/lib/types/title-options";
-import type { LibraryRootRecord } from "@/lib/types/titles";
+import type { LibraryRootRecord, MovieAvailabilityRecord } from "@/lib/types/titles";
 
 const INHERIT_VALUE = "__inherit__";
 
 export type InlineTitleSettingsTitle = {
   id: string;
   facet: string;
+  minAvailability?: string | null;
+  movieAvailability?: MovieAvailabilityRecord | null;
   /**
    * The title's raw tag bag: user labels plus reserved `scryer:` settings
    * entries. The picker shows only the user half and patches it by difference.
@@ -165,6 +167,15 @@ export function TitleOptionsSettingsGrid({
   const currentFillerPolicy = title.fillerPolicy?.trim() || INHERIT_VALUE;
   const currentRecapPolicy = title.recapPolicy?.trim() || INHERIT_VALUE;
   const currentReleaseNumbering = title.releaseNumbering?.trim() || "AUTO";
+  const currentMinAvailability = title.minAvailability?.trim() || "announced";
+  const movieAvailabilityStatus = title.movieAvailability?.status ?? "unknown";
+  const movieAvailabilityDate = title.movieAvailability?.effectiveDate;
+  const movieAvailabilityReason = t(
+    `settings.movieAvailability.reason.${title.movieAvailability?.reason ?? "release_dates_unknown"}`,
+  );
+  const movieAvailabilityDetails = movieAvailabilityDate
+    ? `${t(`settings.movieAvailabilityStatus.${movieAvailabilityStatus}`)} · ${movieAvailabilityDate} · ${t(title.movieAvailability?.estimated ? "settings.movieAvailability.estimated" : "settings.movieAvailability.known")} · ${movieAvailabilityReason}`
+    : movieAvailabilityReason;
   const sortedRootFolders = React.useMemo(
     () =>
       [...rootFolders].sort((left, right) => {
@@ -264,6 +275,37 @@ export function TitleOptionsSettingsGrid({
           <col className="w-[38%]" />
         </colgroup>
         <tbody>
+          {title.facet === "MOVIE" ? (
+            <SettingsRow
+              icon={Popcorn}
+              label={t("settings.minAvailabilityLabel")}
+              effective={
+                <div className="space-y-1">
+                  <div>{t(`settings.minAvailability.${currentMinAvailability}`)}</div>
+                  <div className="text-xs text-muted-foreground">
+                    {movieAvailabilityDetails}
+                  </div>
+                </div>
+              }
+            >
+              <Select
+                value={currentMinAvailability}
+                onValueChange={(minAvailability) =>
+                  void saveTitleOptions({ minAvailability })
+                }
+                disabled={saving}
+              >
+                <SelectTrigger id={`${idPrefix}-minimum-availability`} className="ml-auto h-9 w-[70%]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
+                  <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
+                  <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
+                </SelectContent>
+              </Select>
+            </SettingsRow>
+          ) : null}
           <SettingsRow
             icon={SlidersVertical}
             label={t("title.qualityProfile")}

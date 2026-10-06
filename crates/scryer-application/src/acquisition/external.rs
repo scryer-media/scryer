@@ -364,17 +364,19 @@ impl AppUseCase {
             });
         }
         let now = Utc::now();
+        let availability_settings = self.acquisition_settings().await?;
         let has_episodes = self
             .facet_registry
             .get(&title.facet)
             .is_some_and(|handler| handler.has_episodes());
         if !has_episodes
-            && !crate::acquisition::targets::movie_is_available_for_acquisition(
-                title.first_aired.as_deref(),
-                title.digital_release_date.as_deref(),
-                title.min_availability.as_deref().unwrap_or("announced"),
+            && crate::acquisition::targets::movie_availability_decision_for_title(
+                title,
+                &availability_settings,
                 &now,
             )
+            .status
+                != crate::types::MovieAvailabilityStatus::Available
         {
             return Ok(RssSyncReport {
                 external_outcome: Some(outcome),

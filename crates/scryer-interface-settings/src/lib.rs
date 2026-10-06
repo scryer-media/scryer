@@ -282,6 +282,9 @@ fn from_acquisition_settings(
         walk_interval_seconds: settings.walk_interval_seconds,
         long_tail_backfill_max_scopes_per_cycle: settings.long_tail_backfill_max_scopes_per_cycle,
         long_tail_reconverge_days: settings.long_tail_reconverge_days,
+        default_movie_availability: settings.default_movie_availability,
+        movie_release_market: settings.movie_release_market,
+        movie_availability_delay_days: settings.movie_availability_delay_days,
     }
 }
 

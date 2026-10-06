@@ -2330,6 +2330,7 @@ fn test_title(id: &str, name: &str, facet: MediaFacet, external_ids: Vec<(&str, 
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: None,
     }
 }

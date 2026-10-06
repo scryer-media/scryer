@@ -2101,6 +2101,7 @@ fn unlinked_grab_title(release_title: &str, facet: MediaFacet, now: DateTime<Utc
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: None,
     }
 }

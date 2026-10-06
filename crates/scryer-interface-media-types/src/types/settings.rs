@@ -136,6 +136,12 @@ pub struct AcquisitionSettingsPayload {
     pub long_tail_backfill_max_scopes_per_cycle: i32,
     /// Number of days before long-tail scopes are reconverged.
     pub long_tail_reconverge_days: i32,
+    /// Default threshold applied to newly added movies only.
+    pub default_movie_availability: String,
+    /// ISO-3166-1 alpha-2 market used for movie release dates.
+    pub movie_release_market: String,
+    /// Signed offset in days from the applicable movie release date.
+    pub movie_availability_delay_days: i32,
 }
 
 #[derive(SimpleObject, Clone)]
@@ -1154,6 +1160,12 @@ pub struct UpdateAcquisitionSettingsInput {
     pub long_tail_backfill_max_scopes_per_cycle: i32,
     /// Days between long-tail reconvergence passes.
     pub long_tail_reconverge_days: i32,
+    /// Default threshold for newly added movies. Omitted by older clients.
+    pub default_movie_availability: Option<String>,
+    /// ISO-3166-1 alpha-2 market for movie release dates. Omitted by older clients.
+    pub movie_release_market: Option<String>,
+    /// Signed offset in days from the applicable release date. Omitted by older clients.
+    pub movie_availability_delay_days: Option<i32>,
 }
 
 #[derive(InputObject, Clone)]

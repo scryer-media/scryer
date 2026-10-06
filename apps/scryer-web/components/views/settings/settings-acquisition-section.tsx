@@ -3,6 +3,7 @@ import { SettingsToggleSwitch } from "@/components/common/settings-toggle-switch
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { LoadingMark } from "@/components/common/loading-mark";
 
@@ -13,6 +14,9 @@ export type AcquisitionSettings = {
   walkIntervalSeconds: number;
   longTailBackfillMaxScopesPerCycle: number;
   longTailReconvergeDays: number;
+  defaultMovieAvailability: string;
+  movieReleaseMarket: string;
+  movieAvailabilityDelayDays: number;
 };
 
 type Props = {
@@ -119,6 +123,58 @@ export function SettingsAcquisitionSection({
           value={draft.sameTierMinDelta}
           disabled={disabled}
           onChange={(sameTierMinDelta) => update({ sameTierMinDelta })}
+        />
+      </div>
+
+      <div className="space-y-4 border-b border-border pb-4">
+        <h2 className="text-sm font-semibold text-foreground">
+          {t("settings.movieAvailability")}
+        </h2>
+        <div className="space-y-1.5">
+          <Label htmlFor="settings-movie-default-availability">
+            {t("settings.movieDefaultAvailability")}
+          </Label>
+          <Select
+            value={draft.defaultMovieAvailability}
+            disabled={disabled}
+            onValueChange={(defaultMovieAvailability) => update({ defaultMovieAvailability })}
+          >
+            <SelectTrigger id="settings-movie-default-availability" className="max-w-[280px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
+              <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
+              <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="max-w-[560px] text-xs text-muted-foreground">
+            {t("settings.movieDefaultAvailabilityHelp")}
+          </p>
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="settings-movie-release-market">
+            {t("settings.movieReleaseMarket")}
+          </Label>
+          <Input
+            id="settings-movie-release-market"
+            value={draft.movieReleaseMarket}
+            maxLength={2}
+            disabled={disabled}
+            onChange={(event) => update({ movieReleaseMarket: event.target.value.toUpperCase() })}
+            className="max-w-[120px]"
+          />
+          <p className="max-w-[560px] text-xs text-muted-foreground">
+            {t("settings.movieReleaseMarketHelp")}
+          </p>
+        </div>
+        <NumberField
+          id="settings-movie-availability-delay-days"
+          label={t("settings.movieAvailabilityDelay")}
+          help={t("settings.movieAvailabilityDelayHelp")}
+          value={draft.movieAvailabilityDelayDays}
+          disabled={disabled}
+          onChange={(movieAvailabilityDelayDays) => update({ movieAvailabilityDelayDays })}
         />
       </div>
 

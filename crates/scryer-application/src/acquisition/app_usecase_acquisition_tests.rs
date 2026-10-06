@@ -1,7 +1,10 @@
 use super::*;
-use crate::acquisition::targets::movie_is_available_for_acquisition;
+use crate::acquisition::targets::{
+    movie_availability_decision, movie_is_available_for_acquisition, MovieAvailabilityPolicy,
+};
 use chrono::{DateTime, Utc};
 use std::collections::HashMap;
+use scryer_domain::MovieReleaseDates;
 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
@@ -142,6 +145,181 @@ fn test_search_result_with_decision(
 }
 
 // ── announced ────────────────────────────────────────────────────────────────
+
+fn fixed_release_clock() -> DateTime<Utc> {
+    DateTime::parse_from_rfc3339("2025-04-01T00:00:00Z")
+        .expect("fixed test instant")
+        .with_timezone(&Utc)
+}
+
+fn release_dates(
+    theatrical_dates: &[&str],
+    digital_dates: &[&str],
+    physical_dates: &[&str],
+) -> MovieReleaseDates {
+    MovieReleaseDates {
+        market: "US".to_string(),
+        fetched: true,
+        theatrical_dates: theatrical_dates.iter().map(|date| date.to_string()).collect(),
+        digital_dates: digital_dates.iter().map(|date| date.to_string()).collect(),
+        physical_dates: physical_dates.iter().map(|date| date.to_string()).collect(),
+    }
+}
+
+fn availability_policy<'a>(
+    minimum_availability: Option<&'a str>,
+    release_market: &'a str,
+    delay_days: i32,
+) -> MovieAvailabilityPolicy<'a> {
+    MovieAvailabilityPolicy {
+        minimum_availability,
+        release_market,
+        delay_days,
+    }
+}
+
+#[test]
+fn released_uses_earliest_home_date_and_includes_the_date_boundary() {
+    let dates = release_dates(&[], &["2025-04-05"], &["2025-04-01"]);
+    let decision = movie_availability_decision(
+        Some(&dates),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "US", 0),
+        &fixed_release_clock(),
+    );
+    assert_eq!(decision.status, crate::MovieAvailabilityStatus::Available);
+    assert_eq!(decision.effective_date.as_deref(), Some("2025-04-01"));
+    assert!(!decision.estimated);
+}
+
+#[test]
+fn movie_availability_offsets_are_signed_calendar_days() {
+    let dates = release_dates(&[], &["2025-04-01"], &[]);
+    let now = fixed_release_clock();
+    let early = movie_availability_decision(
+        Some(&dates),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "US", -1),
+        &now,
+    );
+    assert_eq!(early.status, crate::MovieAvailabilityStatus::Available);
+    assert_eq!(early.effective_date.as_deref(), Some("2025-03-31"));
+
+    let delayed = movie_availability_decision(
+        Some(&dates),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "US", 1),
+        &now,
+    );
+    assert_eq!(delayed.status, crate::MovieAvailabilityStatus::Waiting);
+    assert_eq!(delayed.effective_date.as_deref(), Some("2025-04-02"));
+}
+
+#[test]
+fn revised_home_release_date_recomputes_movie_availability() {
+    let now = fixed_release_clock();
+    let original = release_dates(&[], &["2025-03-20"], &[]);
+    let before_revision = movie_availability_decision(
+        Some(&original),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "US", 0),
+        &now,
+    );
+    assert_eq!(before_revision.status, crate::MovieAvailabilityStatus::Available);
+
+    let revised = release_dates(&[], &["2025-04-20"], &[]);
+    let after_revision = movie_availability_decision(
+        Some(&revised),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "US", 0),
+        &now,
+    );
+    assert_eq!(after_revision.status, crate::MovieAvailabilityStatus::Waiting);
+    assert_eq!(after_revision.effective_date.as_deref(), Some("2025-04-20"));
+}
+
+#[test]
+fn released_estimates_theatrical_plus_ninety_only_when_home_dates_are_absent() {
+    let dates = release_dates(&["2025-01-01"], &[], &[]);
+    let decision = movie_availability_decision(
+        Some(&dates),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "US", 0),
+        &fixed_release_clock(),
+    );
+    assert_eq!(decision.status, crate::MovieAvailabilityStatus::Available);
+    assert_eq!(decision.effective_date.as_deref(), Some("2025-04-01"));
+    assert!(decision.estimated);
+
+    let future_home_date = release_dates(&["2025-01-01"], &["2025-05-01"], &[]);
+    let waiting = movie_availability_decision(
+        Some(&future_home_date),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "US", 0),
+        &fixed_release_clock(),
+    );
+    assert_eq!(waiting.status, crate::MovieAvailabilityStatus::Waiting);
+    assert_eq!(waiting.effective_date.as_deref(), Some("2025-05-01"));
+    assert!(!waiting.estimated);
+}
+
+#[test]
+fn unknown_or_wrong_market_release_dates_remain_blocked() {
+    let mut dates = release_dates(&["2025-01-01"], &[], &[]);
+    dates.fetched = false;
+    let unknown = movie_availability_decision(
+        Some(&dates),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "US", 0),
+        &fixed_release_clock(),
+    );
+    assert_eq!(unknown.status, crate::MovieAvailabilityStatus::Unknown);
+    assert_eq!(unknown.reason, "release_dates_unknown");
+
+    let wrong_market = release_dates(&["2025-01-01"], &[], &[]);
+    let mismatch = movie_availability_decision(
+        Some(&wrong_market),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "CA", 0),
+        &fixed_release_clock(),
+    );
+    assert_eq!(mismatch.status, crate::MovieAvailabilityStatus::Unknown);
+    assert_eq!(mismatch.reason, "release_market_refresh_pending");
+}
+
+#[test]
+fn malformed_home_date_does_not_trigger_theatrical_fallback() {
+    let dates = release_dates(&["2025-01-01"], &["not-a-date"], &[]);
+    let decision = movie_availability_decision(
+        Some(&dates),
+        true,
+        None,
+        None,
+        availability_policy(Some("released"), "US", 0),
+        &fixed_release_clock(),
+    );
+    assert_eq!(decision.status, crate::MovieAvailabilityStatus::Unknown);
+    assert_eq!(decision.reason, "home_release_date_unusable");
+    assert_eq!(decision.effective_date, None);
+}
 
 #[test]
 fn announced_always_available_no_dates() {

@@ -1812,6 +1812,7 @@ fn build_title(id: &str, name: &str, facet: MediaFacet) -> Title {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: None,
     }
 }

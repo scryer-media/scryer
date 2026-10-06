@@ -729,6 +729,11 @@ impl AppUseCase {
                 episode_number: summary.episode_number,
                 current_tier: normalized_current_tier,
                 target_tier: normalized_cutoff_tier.clone(),
+                min_availability: title.min_availability.clone(),
+                first_aired: title.first_aired.clone(),
+                digital_release_date: title.digital_release_date.clone(),
+                metadata_fetched: title.metadata_fetched_at.is_some(),
+                movie_release_dates: title.movie_release_dates.clone(),
             });
         }
 

@@ -30,6 +30,31 @@ pub enum MetadataFieldUpdate<T> {
     Clear,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MovieAvailabilityStatus {
+    Available,
+    Waiting,
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MovieAvailabilityDecision {
+    pub status: MovieAvailabilityStatus,
+    pub effective_date: Option<String>,
+    pub estimated: bool,
+    pub reason: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MovieAvailabilityProjection {
+    pub status: String,
+    pub effective_date: Option<String>,
+    pub estimated: bool,
+    pub reason: String,
+    pub release_market: String,
+    pub minimum_availability: String,
+}
+
 /// One certification published by a rating board for a country, e.g. `PG-13` from `tmdb`.
 ///
 /// Shared by discovery (`DiscoveryContentCertification` is an alias for this type) and by the
@@ -103,6 +128,8 @@ pub struct TitleMetadataUpdate {
     pub metadata_language: Option<String>,
     pub metadata_fetched_at: Option<String>,
     pub digital_release_date: Option<String>,
+    pub min_availability: Option<Option<String>>,
+    pub movie_release_dates: Option<scryer_domain::MovieReleaseDates>,
     /// Ratings returned by SMG/MDBList. `Some(default)` clears stale stored ratings.
     pub ratings: Option<TitleRatingSummary>,
     /// Complete credit set returned by SMG. `Some(vec![])` clears the stale cache;
@@ -167,6 +194,11 @@ pub struct CutoffUnmetItem {
     pub episode_number: Option<String>,
     pub current_tier: String,
     pub target_tier: String,
+    pub min_availability: Option<String>,
+    pub first_aired: Option<String>,
+    pub digital_release_date: Option<String>,
+    pub metadata_fetched: bool,
+    pub movie_release_dates: Option<scryer_domain::MovieReleaseDates>,
 }
 
 /// One bounded page of cutoff-unmet targets. `total` is
@@ -3617,6 +3649,8 @@ pub struct MissingTitleCandidate {
     pub min_availability: Option<String>,
     pub first_aired: Option<String>,
     pub digital_release_date: Option<String>,
+    pub metadata_fetched: bool,
+    pub movie_release_dates: Option<scryer_domain::MovieReleaseDates>,
     pub created_at: String,
 }
 

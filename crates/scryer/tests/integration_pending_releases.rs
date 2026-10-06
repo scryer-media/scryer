@@ -68,6 +68,7 @@ async fn seed_title_in_library(ctx: &TestContext, id: &str, library_id: &str) {
         metadata_fetched_at: None,
         min_availability: None,
         digital_release_date: None,
+        movie_release_dates: None,
         folder_path: None,
     };
     TitleRepository::create(&ctx.titles, title)

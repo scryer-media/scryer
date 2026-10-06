@@ -881,6 +881,8 @@ pub struct QueueDownloadInput {
     pub replace_in_progress: Option<bool>,
     /// Submission purpose; omission uses the normal download purpose.
     pub purpose: Option<QueueDownloadPurposeValue>,
+    /// Explicit confirmation to queue a movie before its configured availability date.
+    pub override_movie_availability: Option<bool>,
 }
 
 #[derive(InputObject)]

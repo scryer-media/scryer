@@ -340,7 +340,37 @@ impl AppUseCase {
         conflict_policy: SubmissionConflictPolicy,
         replacement: bool,
         purpose: DownloadSubmissionPurpose,
+        routing: crate::IndexerGrabSelection,
+    ) -> AppResult<QueueDownloadOutcome> {
+        self.queue_indexer_search_assignment_with_availability_override(
+            actor,
+            title_id,
+            candidate_token,
+            announced_size_bytes,
+            conflict_policy,
+            replacement,
+            purpose,
+            routing,
+            false,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "signed assignment, routing, and explicit availability confirmation are independently validated inputs"
+    )]
+    pub async fn queue_indexer_search_assignment_with_availability_override(
+        &self,
+        actor: &User,
+        title_id: &str,
+        candidate_token: &str,
+        announced_size_bytes: Option<i64>,
+        conflict_policy: SubmissionConflictPolicy,
+        replacement: bool,
+        purpose: DownloadSubmissionPurpose,
         mut routing: crate::IndexerGrabSelection,
+        override_movie_availability: bool,
     ) -> AppResult<QueueDownloadOutcome> {
         // A grab assigned to a title is gated like every other grab for that
         // title: `ManageTitles` on its library, checked below. Only the
@@ -374,6 +404,8 @@ impl AppUseCase {
             scryer_domain::LibraryPermission::ManageTitles,
         )
         .await?;
+        self.validate_movie_availability_for_queue(actor, title_id, override_movie_availability)
+            .await?;
         let source_kind = queued_release
             .source_kind
             .ok_or_else(|| AppError::Validation("release has no protocol".into()))?;
@@ -1027,8 +1059,30 @@ impl AppUseCase {
         conflict_policy: SubmissionConflictPolicy,
         announced_size_bytes: Option<i64>,
     ) -> AppResult<QueueDownloadOutcome> {
+        self.queue_replacement_release_from_candidate_token_with_availability_override(
+            actor,
+            title_id,
+            candidate_token,
+            conflict_policy,
+            announced_size_bytes,
+            false,
+        )
+        .await
+    }
+
+    pub async fn queue_replacement_release_from_candidate_token_with_availability_override(
+        &self,
+        actor: &User,
+        title_id: &str,
+        candidate_token: &str,
+        conflict_policy: SubmissionConflictPolicy,
+        announced_size_bytes: Option<i64>,
+        override_movie_availability: bool,
+    ) -> AppResult<QueueDownloadOutcome> {
         let verified = self
             .verify_release_candidate_token_with_listing(actor, title_id, candidate_token)
+            .await?;
+        self.validate_movie_availability_for_queue(actor, title_id, override_movie_availability)
             .await?;
         let release_listing_json = self.listing_json_at_grab(verified.listing);
         let (queued_release, signed_scope) = (verified.selection, verified.scope);
@@ -1039,8 +1093,7 @@ impl AppUseCase {
                 "release size does not match the signed candidate".into(),
             ));
         }
-        let outcome = self
-            .queue_replacement_release_with_listing(
+            let outcome = self.queue_replacement_release_with_listing(
                 actor,
                 title_id,
                 queued_release.clone(),
@@ -1134,6 +1187,47 @@ impl AppUseCase {
     }
 }
 impl AppUseCase {
+    pub async fn validate_movie_availability_for_queue(
+        &self,
+        actor: &User,
+        title_id: &str,
+        override_movie_availability: bool,
+    ) -> AppResult<()> {
+        if override_movie_availability {
+            return Ok(());
+        }
+        let title = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(title_id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("title {title_id}")))?;
+        self.require_library_permission(
+            actor,
+            &title.library_id,
+            scryer_domain::LibraryPermission::ManageTitles,
+        )
+        .await?;
+        if title.facet != scryer_domain::MediaFacet::Movie
+            || title.min_availability.as_deref().unwrap_or("announced") == "announced"
+        {
+            return Ok(());
+        }
+        let settings = self.acquisition_settings().await?;
+        let now = self.runtime.environment.now();
+        let decision = crate::acquisition::targets::movie_availability_decision_for_title(
+            &title, &settings, &now,
+        );
+        if decision.status != crate::types::MovieAvailabilityStatus::Available {
+            return Err(AppError::Validation(format!(
+                "movie availability gate: {}",
+                decision.reason
+            )));
+        }
+        Ok(())
+    }
+
     pub async fn queue_existing_title_download_from_candidate_token(
         &self,
         actor: &User,
@@ -1168,8 +1262,38 @@ impl AppUseCase {
         purpose: DownloadSubmissionPurpose,
         announced_size_bytes: Option<i64>,
     ) -> AppResult<QueueDownloadOutcome> {
+        self.queue_existing_title_download_from_candidate_token_with_availability_override(
+            actor,
+            title_id,
+            candidate_token,
+            scope,
+            conflict_policy,
+            purpose,
+            announced_size_bytes,
+            false,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "candidate identity, queue choices, and explicit availability confirmation are independently validated inputs"
+    )]
+    pub async fn queue_existing_title_download_from_candidate_token_with_availability_override(
+        &self,
+        actor: &User,
+        title_id: &str,
+        candidate_token: &str,
+        scope: SubmissionScope,
+        conflict_policy: SubmissionConflictPolicy,
+        purpose: DownloadSubmissionPurpose,
+        announced_size_bytes: Option<i64>,
+        override_movie_availability: bool,
+    ) -> AppResult<QueueDownloadOutcome> {
         let verified = self
             .verify_release_candidate_token_with_listing(actor, title_id, candidate_token)
+            .await?;
+        self.validate_movie_availability_for_queue(actor, title_id, override_movie_availability)
             .await?;
         let release_listing_json = self.listing_json_at_grab(verified.listing);
         let (queued_release, signed_scope) = (verified.selection, verified.scope);
@@ -1180,8 +1304,7 @@ impl AppUseCase {
                 "release size does not match the signed candidate".into(),
             ));
         }
-        let outcome = self
-            .queue_existing_title_download_with_listing(
+            let outcome = self.queue_existing_title_download_with_listing(
                 actor,
                 title_id,
                 queued_release.clone(),

@@ -124,10 +124,11 @@ impl DownloadMutations {
             scope: _,
             replace_in_progress,
             purpose,
+            override_movie_availability,
         } = input;
         let title_id = title_id.to_string();
         let outcome = app
-            .queue_indexer_search_assignment(
+            .queue_indexer_search_assignment_with_availability_override(
                 &actor,
                 &title_id,
                 &candidate_token,
@@ -146,6 +147,7 @@ impl DownloadMutations {
                     client_id: routing.client_id.to_string(),
                     category: routing.category,
                 },
+                override_movie_availability.unwrap_or(false),
             )
             .await
             .map_err(to_gql_error)?;
@@ -199,10 +201,11 @@ impl DownloadMutations {
             scope,
             replace_in_progress,
             purpose,
+            override_movie_availability,
         } = input;
         let title_id = title_id.to_string();
         let outcome = app
-            .queue_existing_title_download_from_candidate_token_with_purpose(
+            .queue_existing_title_download_from_candidate_token_with_availability_override(
                 &actor,
                 &title_id,
                 &candidate_token,
@@ -212,6 +215,7 @@ impl DownloadMutations {
                     .map(|value| value.into_application())
                     .unwrap_or_default(),
                 size_bytes.map(i64::from),
+                override_movie_availability.unwrap_or(false),
             )
             .await
             .map_err(to_gql_error)?;
@@ -266,15 +270,17 @@ impl DownloadMutations {
             scope: _,
             replace_in_progress,
             purpose: _,
+            override_movie_availability,
         } = input;
         let title_id = title_id.to_string();
         let outcome = app
-            .queue_replacement_release_from_candidate_token(
+            .queue_replacement_release_from_candidate_token_with_availability_override(
                 &actor,
                 &title_id,
                 &candidate_token,
                 SubmissionConflictPolicy::from_replace_flag(replace_in_progress.unwrap_or(true)),
                 size_bytes.map(i64::from),
+                override_movie_availability.unwrap_or(false),
             )
             .await
             .map_err(to_gql_error)?;

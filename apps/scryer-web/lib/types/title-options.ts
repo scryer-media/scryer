@@ -1,4 +1,5 @@
 export type TitleOptionUpdates = {
+  minAvailability?: string | null;
   metadataLanguage?: string | null;
   qualityProfileId?: string | null;
   rootFolderId?: string | null;

@@ -51,13 +51,13 @@ const TITLE_INSERT_SQL: &str = "INSERT INTO titles (
     year, overview, poster_url, background_url, sort_title, catalog_sort_key, slug, imdb_id,
     runtime_minutes, popularity, content_status, language, first_aired, network, studio,
     country, aliases, metadata_language, metadata_fetched_at, min_availability,
-    digital_release_date, folder_path, tagged_aliases_json,
+    digital_release_date, movie_release_dates_json, folder_path, tagged_aliases_json,
     metadata_hydration_next_attempt_at, metadata_hydration_attempt_count
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}, {},
+    {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}
 )";
 
@@ -66,13 +66,13 @@ const TITLE_UPSERT_SQL: &str = "INSERT INTO titles (
     year, overview, poster_url, background_url, sort_title, catalog_sort_key, slug, imdb_id,
     runtime_minutes, popularity, content_status, language, first_aired, network, studio,
     country, aliases, metadata_language, metadata_fetched_at, min_availability,
-    digital_release_date, folder_path, tagged_aliases_json,
+    digital_release_date, movie_release_dates_json, folder_path, tagged_aliases_json,
     metadata_hydration_next_attempt_at, metadata_hydration_attempt_count
 ) VALUES (
     {}, {}, {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}, {}, {}, {}, {},
-    {}, {}, {}, {}, {},
+    {}, {}, {}, {}, {}, {},
     {}, {}, {}, {}
 )
 ON CONFLICT (id) DO UPDATE SET
@@ -114,6 +114,7 @@ ON CONFLICT (id) DO UPDATE SET
     metadata_fetched_at = excluded.metadata_fetched_at,
     min_availability = excluded.min_availability,
     digital_release_date = excluded.digital_release_date,
+    movie_release_dates_json = excluded.movie_release_dates_json,
     folder_path = excluded.folder_path,
     tagged_aliases_json = excluded.tagged_aliases_json,
     metadata_hydration_next_attempt_at = CASE
@@ -3208,6 +3209,7 @@ where
         metadata_fetched_at: row.opt_timestamp("metadata_fetched_at")?,
         min_availability: row.opt_text("min_availability")?,
         digital_release_date: row.opt_text("digital_release_date")?,
+        movie_release_dates: decode_title_json_or_default(row, "movie_release_dates_json")?,
         folder_path: row.opt_text("folder_path")?,
     };
 
@@ -3273,6 +3275,12 @@ fn apply_title_metadata_update(title: &mut Title, metadata: TitleMetadataUpdate)
         &mut title.digital_release_date,
         metadata.digital_release_date,
     );
+    if let Some(min_availability) = metadata.min_availability {
+        title.min_availability = min_availability;
+    }
+    if let Some(movie_release_dates) = metadata.movie_release_dates {
+        title.movie_release_dates = Some(movie_release_dates);
+    }
     merge_title_external_ids(&mut title.external_ids, metadata.extra_external_ids);
     merge_title_tags(&mut title.tags, metadata.extra_tags);
     Ok(())
@@ -5406,6 +5414,9 @@ fn apply_reused_title_options_patch(
     patch: &TitleOptionsPatch,
     requested_root_folder_id: &str,
 ) {
+    if let Some(value) = &patch.min_availability {
+        title.min_availability = value.clone();
+    }
     if let Some(value) = &patch.quality_profile_id {
         set_reused_title_option_tag(&mut title.tags, "scryer:quality-profile:", value.clone());
     }
@@ -5573,6 +5584,12 @@ fn title_write_args(
         SqlArg::OptTimestamp(title.metadata_fetched_at),
         SqlArg::OptText(title.min_availability.clone()),
         SqlArg::OptText(title.digital_release_date.clone()),
+        SqlArg::OptText(
+            title
+                .movie_release_dates
+                .as_ref()
+                .and_then(|dates| serde_json::to_string(dates).ok()),
+        ),
         SqlArg::OptText(title.folder_path.clone()),
         SqlArg::Json(
             serde_json::to_value(&title.tagged_aliases).unwrap_or(JsonValue::Array(Vec::new())),
@@ -6470,6 +6487,7 @@ mod tests {
             metadata_fetched_at: None,
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         };
         TitleRepository::create(&store, title)
@@ -6608,6 +6626,7 @@ mod tests {
             metadata_fetched_at: None,
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         }
     }
@@ -6949,6 +6968,57 @@ mod tests {
                 "tvdb:series:700001".to_string(),
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn movie_release_dates_round_trip_and_revised_metadata_persists() {
+        let (store, pool) = migrated_test_store().await;
+        let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Movie);
+        let root_folder_id = default_root_folder_id(&pool, &library_id).await;
+        let release_dates = scryer_domain::MovieReleaseDates {
+            market: "CA".to_string(),
+            fetched: true,
+            theatrical_dates: vec!["2025-01-10".to_string()],
+            digital_dates: vec!["2025-03-15".to_string()],
+            physical_dates: vec!["2025-04-02".to_string()],
+        };
+        let mut title = conflict_test_title(
+            "release-dates-round-trip",
+            "Release Dates",
+            &library_id,
+            &root_folder_id,
+            vec![],
+        );
+        title.facet = MediaFacet::Movie;
+        title.movie_release_dates = Some(release_dates.clone());
+        TitleRepository::create(&store, title)
+            .await
+            .expect("movie title should create");
+
+        let revised_dates = scryer_domain::MovieReleaseDates {
+            market: "CA".to_string(),
+            fetched: true,
+            theatrical_dates: vec!["2025-01-10".to_string()],
+            digital_dates: vec!["2025-04-15".to_string()],
+            physical_dates: vec!["2025-04-02".to_string()],
+        };
+        TitleRepository::update_title_hydrated_metadata(
+            &store,
+            "release-dates-round-trip",
+            TitleMetadataUpdate {
+                movie_release_dates: Some(revised_dates.clone()),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("revised movie release dates should persist");
+
+        let loaded = TitleRepository::get_by_id(&store, "release-dates-round-trip")
+            .await
+            .expect("movie title should load")
+            .expect("movie title should exist");
+        assert_ne!(loaded.movie_release_dates, Some(release_dates));
+        assert_eq!(loaded.movie_release_dates, Some(revised_dates));
     }
 
     #[tokio::test]

@@ -111,6 +111,27 @@ impl LibraryPayload {
 
 #[ComplexObject]
 impl TitlePayload {
+    /// Effective movie availability for the instance's configured market and delay.
+    async fn movie_availability(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<Option<MovieAvailabilityPayload>> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let projection = app
+            .get_movie_availability_for_title(&actor, self.id.as_ref())
+            .await
+            .map_err(to_gql_error)?;
+        Ok(projection.map(|projection| MovieAvailabilityPayload {
+            status: projection.status,
+            effective_date: projection.effective_date,
+            estimated: projection.estimated,
+            reason: projection.reason,
+            market: projection.release_market,
+            minimum_availability: projection.minimum_availability,
+        }))
+    }
+
     /// Provider-native playback links for this title, when an exact catalog mapping exists.
     async fn playback_links(
         &self,

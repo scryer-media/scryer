@@ -158,6 +158,10 @@ Installation Steps:
 ### Support
 If you're facing any issues with installation or issues, feel free to use any of our social platforms (Discord, Reddit, Github) for support!
 
+## Feature Guides
+
+- [Movie availability](docs/movie-availability.md)
+
 ## Development
 
 - [Contributing guide](CONTRIBUTING.md)
@@ -165,6 +169,9 @@ If you're facing any issues with installation or issues, feel free to use any of
 - [Issues](https://github.com/scryer-media/scryer/issues)
 
 For installation, upgrade guidance, and end-user documentation, use the website links at the top of this file.
+
+The existing-movie migration policy and movie availability thresholds are
+documented in the [Movie Availability guide](docs/movie-availability.md).
 
 <p align="center">
   <a href="https://www.scryer.media/scryer/donate/"><img src="docs/img/scryer-donate.webp" alt="Donate to Scryer" /></a>

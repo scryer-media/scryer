@@ -123,6 +123,7 @@ impl Drop for IndexerDispatchAdmission {
 /// clears an override, and `Some(Some(_))` applies an explicit override.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TitleOptionsPatch {
+    pub min_availability: Option<Option<String>>,
     pub quality_profile_id: Option<Option<String>>,
     pub root_folder_id: Option<Option<String>>,
     pub monitor_type: Option<Option<String>>,

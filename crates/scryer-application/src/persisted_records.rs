@@ -237,6 +237,7 @@ mod tests {
             metadata_fetched_at: Some(parse_time("2026-01-02T00:00:00Z")),
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         }
     }

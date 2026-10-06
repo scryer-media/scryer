@@ -916,10 +916,7 @@ impl AppUseCase {
         }
 
         let result = self
-            .services
-            .library
-            .metadata_gateway
-            .get_movie_titles(std::slice::from_ref(movie_ref), language)
+            .get_movie_titles_for_current_release_market(std::slice::from_ref(movie_ref), language)
             .await?;
         result
             .by_ref_index

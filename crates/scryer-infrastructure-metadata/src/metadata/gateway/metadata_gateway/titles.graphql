@@ -1,5 +1,5 @@
-query Titles($ids: [Int!]!, $language: String!, $includeEpisodes: Boolean! = false, $includeEpisodeOrders: Boolean! = false) {
-  titles(ids: $ids, language: $language, includeEpisodes: $includeEpisodes, includeEpisodeOrders: $includeEpisodeOrders, clientCapabilities: [TMDB_PRIMARY_SERIES]) {
+query Titles($ids: [Int!]!, $language: String!, $includeEpisodes: Boolean! = false, $includeEpisodeOrders: Boolean! = false, $releaseDateRegion: String! = "US") {
+  titles(ids: $ids, language: $language, includeEpisodes: $includeEpisodes, includeEpisodeOrders: $includeEpisodeOrders, releaseDateRegion: $releaseDateRegion, clientCapabilities: [TMDB_PRIMARY_SERIES]) {
     movies {
       id
       kind
@@ -49,6 +49,12 @@ query Titles($ids: [Int!]!, $language: String!, $includeEpisodes: Boolean! = fal
       external_ids { source kind id key }
       studio
       tmdb_release_date
+      release_dates {
+        fetched
+        theatrical_dates
+        digital_dates
+        physical_dates
+      }
       rating
       rating_sources
       external_ratings { source value score normalized votes url }

@@ -295,6 +295,8 @@ mod tests {
                         metadata_language: Some("eng".to_string()),
                         metadata_fetched_at: Some(chrono::Utc::now().to_rfc3339()),
                         digital_release_date: Some("2024-01-15".to_string()),
+                        min_availability: None,
+                        movie_release_dates: None,
                         ratings: None,
                         credits: None,
                         extra_external_ids: Vec::new(),
@@ -1469,6 +1471,7 @@ mod tests {
             metadata_fetched_at: None,
             min_availability: None,
             digital_release_date: None,
+            movie_release_dates: None,
             folder_path: None,
         }
     }

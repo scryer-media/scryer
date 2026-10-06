@@ -590,6 +590,15 @@ const MOVIE_SIDE_PANEL_TITLE_FIELDS = `
     effectiveMetadataLanguage
     inheritsMetadataLanguage
     metadataFetchedAt
+    minAvailability
+    movieAvailability {
+      status
+      effectiveDate
+      estimated
+      reason
+      market
+      minimumAvailability
+    }
     qualityProfileId
     requiredAudioLanguagesOverride
     effectiveRequiredAudioLanguages
@@ -972,6 +981,19 @@ export const titleReleaseBlocklistQuery = `query TitleReleaseBlocklist($titleId:
 
 export const movieSidePanelTitleQuery = `query MovieSidePanelTitle($id: ID!) {
   title(id: $id) {${MOVIE_SIDE_PANEL_TITLE_FIELDS}
+  }
+}`;
+
+export const movieAvailabilityQuery = `query MovieAvailability($id: ID!) {
+  title(id: $id) {
+    movieAvailability {
+      status
+      effectiveDate
+      estimated
+      reason
+      market
+      minimumAvailability
+    }
   }
 }`;
 
@@ -2822,6 +2844,9 @@ export const acquisitionSettingsQuery = `query AcquisitionSettings {
     walkIntervalSeconds
     longTailBackfillMaxScopesPerCycle
     longTailReconvergeDays
+    defaultMovieAvailability
+    movieReleaseMarket
+    movieAvailabilityDelayDays
   }
 }`;
 

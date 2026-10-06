@@ -139,6 +139,7 @@ export function AddTitleForm({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="default">{t("settings.minAvailability.default")}</SelectItem>
                     <SelectItem value="announced">{t("settings.minAvailability.announced")}</SelectItem>
                     <SelectItem value="in_cinemas">{t("settings.minAvailability.in_cinemas")}</SelectItem>
                     <SelectItem value="released">{t("settings.minAvailability.released")}</SelectItem>
