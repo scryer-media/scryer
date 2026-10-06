@@ -103,13 +103,22 @@ pub(crate) fn movie_is_available_for_acquisition(
         true,
         first_aired,
         digital_release_date,
-        Some(availability),
-        "US",
-        0,
+        MovieAvailabilityPolicy {
+            minimum_availability: Some(availability),
+            release_market: "US",
+            delay_days: 0,
+        },
         now,
     )
     .status
         == MovieAvailabilityStatus::Available
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct MovieAvailabilityPolicy<'a> {
+    pub minimum_availability: Option<&'a str>,
+    pub release_market: &'a str,
+    pub delay_days: i32,
 }
 
 pub(crate) fn movie_availability_decision(
@@ -117,12 +126,10 @@ pub(crate) fn movie_availability_decision(
     legacy_metadata_fetched: bool,
     legacy_theatrical_date: Option<&str>,
     legacy_digital_date: Option<&str>,
-    minimum_availability: Option<&str>,
-    release_market: &str,
-    delay_days: i32,
+    policy: MovieAvailabilityPolicy<'_>,
     now: &DateTime<Utc>,
 ) -> MovieAvailabilityDecision {
-    let availability = minimum_availability.unwrap_or("announced");
+    let availability = policy.minimum_availability.unwrap_or("announced");
     if !matches!(availability, "in_cinemas" | "released") {
         return movie_availability_result(
             MovieAvailabilityStatus::Available,
@@ -141,7 +148,10 @@ pub(crate) fn movie_availability_decision(
                 "release_dates_unknown",
             );
         }
-        if !release_dates.market.eq_ignore_ascii_case(release_market) {
+        if !release_dates
+            .market
+            .eq_ignore_ascii_case(policy.release_market)
+        {
             return movie_availability_result(
                 MovieAvailabilityStatus::Unknown,
                 None,
@@ -198,7 +208,7 @@ pub(crate) fn movie_availability_decision(
         // Before release-date metadata existed, Scryer treated the legacy
         // first-aired/digital pair as the US market. Preserve that behavior for
         // hydrated titles; never infer dates for newly added, unhydrated titles.
-        if !legacy_metadata_fetched || !release_market.eq_ignore_ascii_case("US") {
+        if !legacy_metadata_fetched || !policy.release_market.eq_ignore_ascii_case("US") {
             return movie_availability_result(
                 MovieAvailabilityStatus::Unknown,
                 None,
@@ -246,7 +256,8 @@ pub(crate) fn movie_availability_decision(
         }
     };
 
-    let Some(effective_date) = base_date.checked_add_signed(Duration::days(i64::from(delay_days)))
+    let Some(effective_date) =
+        base_date.checked_add_signed(Duration::days(i64::from(policy.delay_days)))
     else {
         return movie_availability_result(
             MovieAvailabilityStatus::Unknown,
@@ -310,9 +321,11 @@ pub(crate) fn movie_availability_decision_for_title(
         title.metadata_fetched_at.is_some(),
         title.first_aired.as_deref(),
         title.digital_release_date.as_deref(),
-        title.min_availability.as_deref(),
-        &settings.movie_release_market,
-        settings.movie_availability_delay_days,
+        MovieAvailabilityPolicy {
+            minimum_availability: title.min_availability.as_deref(),
+            release_market: &settings.movie_release_market,
+            delay_days: settings.movie_availability_delay_days,
+        },
         now,
     )
 }
@@ -616,9 +629,11 @@ impl AppUseCase {
                 title.metadata_fetched,
                 title.first_aired.as_deref(),
                 title.digital_release_date.as_deref(),
-                title.min_availability.as_deref(),
-                &acquisition_settings.movie_release_market,
-                acquisition_settings.movie_availability_delay_days,
+                MovieAvailabilityPolicy {
+                    minimum_availability: title.min_availability.as_deref(),
+                    release_market: &acquisition_settings.movie_release_market,
+                    delay_days: acquisition_settings.movie_availability_delay_days,
+                },
                 now,
             );
             if availability.status != MovieAvailabilityStatus::Available {
@@ -744,9 +759,11 @@ impl AppUseCase {
                         item.metadata_fetched,
                         item.first_aired.as_deref(),
                         item.digital_release_date.as_deref(),
-                        item.min_availability.as_deref(),
-                        &acquisition_settings.movie_release_market,
-                        acquisition_settings.movie_availability_delay_days,
+                        MovieAvailabilityPolicy {
+                            minimum_availability: item.min_availability.as_deref(),
+                            release_market: &acquisition_settings.movie_release_market,
+                            delay_days: acquisition_settings.movie_availability_delay_days,
+                        },
                         now,
                     )
                     .status

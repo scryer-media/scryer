@@ -1012,8 +1012,10 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // its failures in two payloads: public types 917->919, OBJECT 497->499.
     assert!(public_type_names.contains(&"RecycleBinRelocationPayload"));
     assert!(public_type_names.contains(&"RecycleBinRelocationFailurePayload"));
-    assert_eq!(public_types.len(), 919);
-    assert_eq!(kind_count("OBJECT"), 499);
+    // Movie availability adds one projection payload: public types 919->920, OBJECT 499->500.
+    assert!(public_type_names.contains(&"MovieAvailabilityPayload"));
+    assert_eq!(public_types.len(), 920);
+    assert_eq!(kind_count("OBJECT"), 500);
     assert_eq!(kind_count("INPUT_OBJECT"), 232);
     assert_eq!(kind_count("ENUM"), 176);
     assert_eq!(kind_count("SCALAR"), 10);
