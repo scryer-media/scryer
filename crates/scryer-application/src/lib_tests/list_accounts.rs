@@ -23,6 +23,11 @@ struct Auth {
     entered: Notify,
     release: Notify,
     renew_client: Mutex<Option<String>>,
+    /// Failure codes answered by successive renewals before they succeed.
+    renew_failures: std::sync::Mutex<Vec<&'static str>>,
+    /// The refresh handle each renewal and revoke was given, in order.
+    renewed_handles: std::sync::Mutex<Vec<Option<String>>>,
+    revoked_handles: std::sync::Mutex<Vec<Option<String>>>,
     identity: Option<String>,
     /// Failure codes the provider poll answers with, in order, before it approves.
     poll_failures: std::sync::Mutex<std::collections::VecDeque<&'static str>>,
@@ -43,6 +48,9 @@ impl Auth {
         }
     }
 }
+/// The pause a rate-limited fixture renewal asks for: longer than the
+/// subscription interval, so a sync pause is observable.
+const RATE_LIMIT_PAUSE: Duration = Duration::from_secs(12 * 3600);
 fn token() -> ListAccountCredential {
     ListAccountCredential {
         access_token: "fixture-access".into(),
@@ -104,10 +112,14 @@ impl ListAccountAuthGateway for Auth {
     async fn renew(
         &self,
         _: &str,
-        _: &ListAccountCredential,
+        credential: &ListAccountCredential,
         app: Option<&ListProviderAppConfig>,
     ) -> AppResult<ListAccountCredential> {
         self.renewals.fetch_add(1, Ordering::SeqCst);
+        self.renewed_handles
+            .lock()
+            .unwrap()
+            .push(credential.refresh_handle.clone());
         *self.renew_client.lock().await = app.map(|app| app.client_id.clone());
         self.entered.notify_one();
         if self.block_renew {
@@ -115,15 +127,27 @@ impl ListAccountAuthGateway for Auth {
                 .await
                 .expect("renew released");
         }
-        Ok(token())
+        let failure = {
+            let mut failures = self.renew_failures.lock().unwrap();
+            (!failures.is_empty()).then(|| failures.remove(0))
+        };
+        match failure {
+            Some(RATE_LIMITED) => Err(rate_limited_failure(Some(RATE_LIMIT_PAUSE))),
+            Some(code) => Err(auth_failure(code)),
+            None => Ok(token()),
+        }
     }
     async fn revoke(
         &self,
         _: &str,
-        _: &ListAccountCredential,
+        credential: &ListAccountCredential,
         _: Option<&ListProviderAppConfig>,
     ) -> AppResult<()> {
         self.revocations.fetch_add(1, Ordering::SeqCst);
+        self.revoked_handles
+            .lock()
+            .unwrap()
+            .push(credential.refresh_handle.clone());
         self.revoke_entered.notify_one();
         if self.block_revoke {
             timeout(Duration::from_secs(30), self.revoke_release.notified())
@@ -764,6 +788,8 @@ async fn private_account_concurrent_ui_and_sync_refresh_once_and_keep_issuing_ap
 }
 struct FailRotatedWrite {
     store: Arc<MemoryListStore>,
+    /// Writes of an Active account that fail before writes succeed again.
+    failing_active_writes: AtomicUsize,
 }
 #[async_trait]
 impl UserListAccountRepository for FailRotatedWrite {
@@ -771,7 +797,14 @@ impl UserListAccountRepository for FailRotatedWrite {
         UserListAccountRepository::create(self.store.as_ref(), account).await
     }
     async fn update(&self, account: UserListAccount) -> AppResult<UserListAccount> {
-        if account.status == UserListAccountStatus::Active {
+        if account.status == UserListAccountStatus::Active
+            && self
+                .failing_active_writes
+                .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                    left.checked_sub(1)
+                })
+                .is_ok()
+        {
             Err(AppError::Repository(
                 "injected rotated write failure".into(),
             ))
@@ -785,44 +818,293 @@ impl UserListAccountRepository for FailRotatedWrite {
     async fn list_by_user_id(&self, id: &str) -> AppResult<Vec<UserListAccount>> {
         self.store.list_by_user_id(id).await
     }
+    async fn unlink(&self, id: &str, user_id: &str) -> AppResult<()> {
+        UserListAccountRepository::unlink(self.store.as_ref(), id, user_id).await
+    }
     async fn delete(&self, id: &str) -> AppResult<()> {
         UserListAccountRepository::delete(self.store.as_ref(), id).await
     }
 }
 #[tokio::test]
-async fn private_account_failed_rotated_write_never_replays_old_handle() {
+async fn private_account_renewed_credential_outlives_a_store_that_keeps_failing() {
+    let auth = Arc::new(Auth::default());
+    let mut harness = harness(auth.clone()).await;
+    let account = seed_expired(&harness).await;
+    let accounts = Arc::new(FailRotatedWrite {
+        store: harness.lists.clone(),
+        failing_active_writes: AtomicUsize::new(usize::MAX),
+    });
+    harness.app.services.lists.accounts = accounts.clone();
+    let stored = || async {
+        UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+            .await
+            .unwrap()
+            .unwrap()
+    };
+
+    // Every save fails, more often than they are retried. The renewed
+    // credential still serves this request and the account stays linked.
+    let view = harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert_eq!(view.account.status, UserListAccountStatus::Active);
+    assert_eq!(
+        view.account.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+    let unsaved = stored().await;
+    assert_eq!(unsaved.status, UserListAccountStatus::Active);
+    assert_eq!(
+        unsaved.credential.refresh_handle.as_deref(),
+        Some("fixture-old-handle")
+    );
+
+    // While the store is still failing, the account is reported as still
+    // refreshing; the spent grant is never offered to the provider again.
+    match harness.app.list_account(&harness.user, &account.id).await {
+        Err(AppError::TemporaryUnavailable { .. }) => {}
+        Err(other) => panic!("expected a temporary answer, got {other:?}"),
+        Ok(_) => panic!("expected a temporary answer while the save keeps failing"),
+    }
+    assert_eq!(stored().await.status, UserListAccountStatus::Active);
+
+    // Once the store recovers, the next use saves the renewed credential
+    // before anything else, without renewing again.
+    accounts.failing_active_writes.store(0, Ordering::SeqCst);
+    let view = harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        view.account.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+    let saved = stored().await;
+    assert_eq!(saved.status, UserListAccountStatus::Active);
+    assert_eq!(
+        saved.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn private_account_unlink_revokes_the_renewal_that_could_not_be_saved() {
     let auth = Arc::new(Auth::default());
     let mut harness = harness(auth.clone()).await;
     let account = seed_expired(&harness).await;
     harness.app.services.lists.accounts = Arc::new(FailRotatedWrite {
         store: harness.lists.clone(),
+        failing_active_writes: AtomicUsize::new(usize::MAX),
     });
-    assert!(
-        harness
-            .app
-            .list_account(&harness.user, &account.id)
-            .await
-            .is_err()
-    );
+    harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    harness
+        .app
+        .unlink_list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert_eq!(auth.revocations.load(Ordering::SeqCst), 1);
     assert_eq!(
-        UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
-            .await
-            .unwrap()
-            .unwrap()
-            .status,
-        UserListAccountStatus::Expired
+        auth.revoked_handles.lock().unwrap().as_slice(),
+        [Some("fixture-rotated-handle".to_string())]
     );
+}
+#[tokio::test]
+async fn private_account_renewed_credential_survives_a_failed_save() {
+    let auth = Arc::new(Auth::default());
+    let mut harness = harness(auth.clone()).await;
+    let account = seed_expired(&harness).await;
+    harness.app.services.lists.accounts = Arc::new(FailRotatedWrite {
+        store: harness.lists.clone(),
+        failing_active_writes: AtomicUsize::new(2),
+    });
+    let view = harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert_eq!(view.account.status, UserListAccountStatus::Active);
+    let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, UserListAccountStatus::Active);
+    assert_eq!(
+        stored.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+}
+/// Holds the first save of a renewed credential until released.
+struct GatedRotatedWrite {
+    store: Arc<MemoryListStore>,
+    gated: std::sync::atomic::AtomicBool,
+    entered: Notify,
+    release: Notify,
+}
+#[async_trait]
+impl UserListAccountRepository for GatedRotatedWrite {
+    async fn create(&self, account: UserListAccount) -> AppResult<UserListAccount> {
+        UserListAccountRepository::create(self.store.as_ref(), account).await
+    }
+    async fn update(&self, account: UserListAccount) -> AppResult<UserListAccount> {
+        if account.credential.refresh_handle.as_deref() == Some("fixture-rotated-handle")
+            && self.gated.swap(false, Ordering::SeqCst)
+        {
+            self.entered.notify_one();
+            timeout(Duration::from_secs(30), self.release.notified())
+                .await
+                .expect("renewed save released");
+        }
+        UserListAccountRepository::update(self.store.as_ref(), account).await
+    }
+    async fn get_by_id(&self, id: &str) -> AppResult<Option<UserListAccount>> {
+        UserListAccountRepository::get_by_id(self.store.as_ref(), id).await
+    }
+    async fn list_by_user_id(&self, id: &str) -> AppResult<Vec<UserListAccount>> {
+        self.store.list_by_user_id(id).await
+    }
+    async fn delete(&self, id: &str) -> AppResult<()> {
+        UserListAccountRepository::delete(self.store.as_ref(), id).await
+    }
+}
+#[tokio::test]
+async fn private_account_sync_cancelled_after_the_provider_answered_still_saves_the_renewal() {
+    let auth = Arc::new(Auth::default());
+    let mut harness = harness(auth.clone()).await;
+    let account = seed_expired(&harness).await;
+    follow_private_list(&harness, &account).await;
+    let accounts = Arc::new(GatedRotatedWrite {
+        store: harness.lists.clone(),
+        gated: std::sync::atomic::AtomicBool::new(true),
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    harness.app.services.lists.accounts = accounts.clone();
+    let app = harness.app.clone();
+    let sync = tokio::spawn(async move { app.run_list_sync_job(None).await });
+    timeout(Duration::from_secs(30), accounts.entered.notified())
+        .await
+        .expect("renewed save entered");
+    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+    sync.abort();
     assert!(
-        harness
-            .app
-            .list_account(&harness.user, &account.id)
+        timeout(Duration::from_secs(30), sync)
             .await
-            .is_err()
+            .expect("cancelled sync finished")
+            .unwrap_err()
+            .is_cancelled()
+    );
+    // The renewal outlives the cancelled sync and keeps the lock until saved.
+    accounts.release.notify_one();
+    drop(
+        timeout(
+            Duration::from_secs(30),
+            harness
+                .app
+                .services
+                .lists
+                .account_runtime
+                .lock_account(&account.id),
+        )
+        .await
+        .expect("renewal released the lock"),
+    );
+    let mut stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, UserListAccountStatus::Active);
+    assert_eq!(
+        stored.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+
+    // The next renewal starts from the saved handle, never the spent one.
+    stored.credential.expires_at = Some(chrono::Utc::now() - chrono::Duration::seconds(1));
+    UserListAccountRepository::update(harness.lists.as_ref(), stored)
+        .await
+        .unwrap();
+    harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert_eq!(
+        auth.renewed_handles.lock().unwrap().as_slice(),
+        [
+            Some("fixture-old-handle".to_string()),
+            Some("fixture-rotated-handle".to_string())
+        ]
+    );
+}
+#[tokio::test]
+async fn private_account_cancelled_sync_renewal_never_replays_the_old_handle() {
+    let auth = Arc::new(Auth {
+        block_renew: true,
+        ..Default::default()
+    });
+    let harness = harness(auth.clone()).await;
+    let account = seed_expired(&harness).await;
+    follow_private_list(&harness, &account).await;
+    let app = harness.app.clone();
+    let sync = tokio::spawn(async move { app.run_list_sync_job(None).await });
+    timeout(Duration::from_secs(30), auth.entered.notified())
+        .await
+        .expect("sync renewal entered");
+    sync.abort();
+    assert!(
+        timeout(Duration::from_secs(30), sync)
+            .await
+            .expect("cancelled sync finished")
+            .unwrap_err()
+            .is_cancelled()
+    );
+    // Cancelling the sync does not abandon its renewal mid-flight: until the
+    // provider answers, the account keeps its stored grant.
+    let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stored.credential.refresh_handle.as_deref(),
+        Some("fixture-old-handle")
+    );
+    auth.release.notify_one();
+    drop(
+        timeout(
+            Duration::from_secs(30),
+            harness
+                .app
+                .services
+                .lists
+                .account_runtime
+                .lock_account(&account.id),
+        )
+        .await
+        .expect("the renewal released the lock"),
+    );
+    // Once it answers, the renewed handle is saved, not lost with the sync.
+    let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, UserListAccountStatus::Active);
+    assert_eq!(
+        stored.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
     );
     assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
 }
 #[tokio::test]
-async fn private_account_cancelled_renewal_requires_reconnect_without_replay() {
+async fn private_account_cancelled_view_finishes_its_renewal_then_releases_the_lock() {
     let auth = Arc::new(Auth {
         block_renew: true,
         ..Default::default()
@@ -833,14 +1115,450 @@ async fn private_account_cancelled_renewal_requires_reconnect_without_replay() {
         let mut pending = Box::pin(harness.app.list_account(&harness.user, &account.id));
         timeout(Duration::from_secs(30),async {tokio::select! {result=&mut pending=>panic!("renewal completed before cancellation: {}",result.is_ok()),_=auth.entered.notified()=>{}}}).await.expect("renewal entered");
     }
+    // Dropping the caller does not abandon the renewal mid-flight.
+    let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, UserListAccountStatus::Active);
     assert_eq!(
-        UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        stored.credential.refresh_handle.as_deref(),
+        Some("fixture-old-handle")
+    );
+    auth.release.notify_one();
+    drop(
+        timeout(
+            Duration::from_secs(30),
+            harness
+                .app
+                .services
+                .lists
+                .account_runtime
+                .lock_account(&account.id),
+        )
+        .await
+        .expect("background renewal released the lock"),
+    );
+    let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, UserListAccountStatus::Active);
+    assert_eq!(
+        stored.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+}
+
+async fn follow_private_list(
+    harness: &MediaRequestTestHarness,
+    account: &UserListAccount,
+) -> String {
+    let mut list = subscription("private-follow");
+    list.scope = ListScope::Personal;
+    list.owner_user_id = harness.user.id.clone();
+    list.credential_id = Some(account.id.clone());
+    list.source.provider = "trakt".into();
+    list.sync.next_at = Some(chrono::Utc::now());
+    crate::lists::ListSubscriptionRepository::create(harness.lists.as_ref(), list)
+        .await
+        .unwrap()
+        .id
+}
+
+#[tokio::test]
+async fn private_account_transient_refresh_failures_keep_the_account_linked_and_retry() {
+    for code in [
+        "provider_unavailable",
+        "rate_limited",
+        "busy",
+        "transport_unavailable",
+        "relay_unavailable",
+    ] {
+        assert_ne!(auth_failure_class(code), AuthFailureClass::Final, "{code}");
+        let auth = Arc::new(Auth {
+            renew_failures: std::sync::Mutex::new(vec![code]),
+            ..Default::default()
+        });
+        let harness = harness(auth.clone()).await;
+        let account = seed_expired(&harness).await;
+        let follow = follow_private_list(&harness, &account).await;
+
+        let report = harness.app.run_list_sync_job(None).await.unwrap();
+        assert_eq!(report.failed, 1, "{code}");
+        let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
             .await
             .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, UserListAccountStatus::Active, "{code}");
+        assert_eq!(stored.error_message, None, "{code}");
+        assert_eq!(
+            stored.credential.refresh_handle.as_deref(),
+            Some("fixture-old-handle"),
+            "{code}"
+        );
+        let sync =
+            crate::lists::ListSubscriptionRepository::get_by_id(harness.lists.as_ref(), &follow)
+                .await
+                .unwrap()
+                .unwrap()
+                .sync;
+        assert_eq!(sync.state, scryer_domain::ListSyncState::Fail, "{code}");
+        assert!(sync.next_at.is_some(), "{code}");
+        assert_eq!(
+            sync.paused_until.is_some(),
+            code == RATE_LIMITED,
+            "{code}: only a rate limit pauses the subscription"
+        );
+        // Only the provider's own answer counts towards the safety net; the
+        // local request slots, a connection with no answer and the relay's
+        // own trouble do not.
+        let counted = matches!(code, "provider_unavailable" | RATE_LIMITED);
+        assert_eq!(
+            stored
+                .credential
+                .refresh_failures
+                .map(|failures| failures.count),
+            counted.then_some(1),
+            "{code}"
+        );
+
+        // Within the backoff the account answers without renewing again.
+        let error = harness
+            .app
+            .list_account(&harness.user, &account.id)
+            .await
+            .err()
+            .expect("the backoff answers with an error");
+        assert_eq!(
+            auth_failure_code(&error) == Some(RATE_LIMITED),
+            code == RATE_LIMITED,
+            "{code}"
+        );
+        match error {
+            AppError::TemporaryUnavailable { retry_after, .. } => {
+                let retry_after = retry_after.expect("a retry hint");
+                assert!(retry_after > Duration::ZERO, "{code}");
+                if code == RATE_LIMITED {
+                    assert!(retry_after > Duration::from_secs(5 * 60), "{code}");
+                }
+            }
+            other => panic!("{code}: expected a temporary failure, got {other:?}"),
+        }
+        assert_eq!(auth.renewals.load(Ordering::SeqCst), 1, "{code}");
+
+        // Once the pause passes, the next attempt renews again and recovers.
+        harness
+            .app
+            .services
+            .lists
+            .account_runtime
+            .clear_refresh_backoff(&account.id);
+        let view = harness
+            .app
+            .list_account(&harness.user, &account.id)
+            .await
+            .unwrap();
+        assert_eq!(view.account.status, UserListAccountStatus::Active, "{code}");
+        assert_eq!(
+            view.account.credential.refresh_handle.as_deref(),
+            Some("fixture-rotated-handle"),
+            "{code}"
+        );
+        assert_eq!(view.account.credential.refresh_failures, None, "{code}");
+        assert_eq!(auth.renewals.load(Ordering::SeqCst), 2, "{code}");
+    }
+}
+
+#[test]
+fn every_auth_failure_code_has_a_pinned_class() {
+    for &code in AUTH_FAILURE_CODES {
+        let expected = match code {
+            "provider_unavailable" | "relay_unavailable" | "busy" | "transport_unavailable" => {
+                AuthFailureClass::Transient
+            }
+            RATE_LIMITED => AuthFailureClass::RateLimited,
+            _ => AuthFailureClass::Final,
+        };
+        assert_eq!(auth_failure_class(code), expected, "{code}");
+    }
+    assert!(AUTH_FAILURE_CODES.contains(&"relay_unavailable"));
+    assert!(!renew_requires_reconnect("relay_unavailable"));
+}
+
+#[tokio::test]
+async fn private_account_refusals_on_renew_require_reconnect() {
+    for code in [RECONNECT_REQUIRED, PROVIDER_REJECTED, ACCESS_DENIED] {
+        let auth = Arc::new(Auth {
+            renew_failures: std::sync::Mutex::new(vec![code]),
+            ..Default::default()
+        });
+        let harness = harness(auth.clone()).await;
+        let account = seed_expired(&harness).await;
+        assert!(
+            harness
+                .app
+                .list_account(&harness.user, &account.id)
+                .await
+                .is_err()
+        );
+        let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+            .await
             .unwrap()
-            .status,
-        UserListAccountStatus::Expired
+            .unwrap();
+        assert_eq!(stored.status, UserListAccountStatus::Expired, "{code}");
+    }
+    // Relay and configuration faults leave the account linked.
+    for code in [
+        "provider_not_configured",
+        "instance_auth_required",
+        "invalid_request",
+        "unsupported_provider",
+        "invalid_provider_response",
+    ] {
+        let auth = Arc::new(Auth {
+            renew_failures: std::sync::Mutex::new(vec![code]),
+            ..Default::default()
+        });
+        let harness = harness(auth.clone()).await;
+        let account = seed_expired(&harness).await;
+        assert!(
+            harness
+                .app
+                .list_account(&harness.user, &account.id)
+                .await
+                .is_err()
+        );
+        let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, UserListAccountStatus::Active, "{code}");
+    }
+}
+
+#[tokio::test]
+async fn private_account_safety_net_expires_a_credential_that_keeps_failing_for_long_enough() {
+    let now = chrono::Utc::now();
+    // (prior failures, first failure age, expected status)
+    // (prior failures, first failure age, renew answer, expected status, count after)
+    let cases = [
+        (
+            11,
+            chrono::Duration::hours(37),
+            "provider_unavailable",
+            UserListAccountStatus::Expired,
+            0,
+        ),
+        (
+            11,
+            chrono::Duration::hours(1),
+            "provider_unavailable",
+            UserListAccountStatus::Active,
+            12,
+        ),
+        (
+            3,
+            chrono::Duration::hours(72),
+            "provider_unavailable",
+            UserListAccountStatus::Active,
+            4,
+        ),
+        // Scryer-side trouble leaves the count alone, however long it lasts.
+        (
+            11,
+            chrono::Duration::hours(37),
+            "transport_unavailable",
+            UserListAccountStatus::Active,
+            11,
+        ),
+        (
+            11,
+            chrono::Duration::hours(37),
+            "busy",
+            UserListAccountStatus::Active,
+            11,
+        ),
+        (
+            11,
+            chrono::Duration::hours(37),
+            "instance_auth_required",
+            UserListAccountStatus::Active,
+            11,
+        ),
+        (
+            11,
+            chrono::Duration::hours(37),
+            "relay_unavailable",
+            UserListAccountStatus::Active,
+            11,
+        ),
+    ];
+    for (count, age, answer, expected, count_after) in cases {
+        let auth = Arc::new(Auth {
+            renew_failures: std::sync::Mutex::new(vec![answer]),
+            ..Default::default()
+        });
+        let harness = harness(auth.clone()).await;
+        let mut account = seed_expired(&harness).await;
+        account.credential.refresh_failures = Some(scryer_domain::ListAccountRefreshFailures {
+            count,
+            since: now - age,
+        });
+        UserListAccountRepository::update(harness.lists.as_ref(), account.clone())
+            .await
+            .unwrap();
+        assert!(
+            harness
+                .app
+                .list_account(&harness.user, &account.id)
+                .await
+                .is_err()
+        );
+        let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            stored.status, expected,
+            "{count} failures over {age}, {answer}"
+        );
+        if expected == UserListAccountStatus::Active {
+            assert_eq!(
+                stored
+                    .credential
+                    .refresh_failures
+                    .map(|failures| failures.count),
+                Some(count_after),
+                "{answer}"
+            );
+        }
+        assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[tokio::test]
+async fn private_account_past_local_refresh_deadline_still_asks_the_provider() {
+    let auth = Arc::new(Auth::default());
+    let harness = harness(auth.clone()).await;
+    let mut account = seed_expired(&harness).await;
+    account.credential.refresh_expires_at = Some(chrono::Utc::now() - chrono::Duration::minutes(1));
+    UserListAccountRepository::update(harness.lists.as_ref(), account.clone())
+        .await
+        .unwrap();
+    assert!(
+        harness
+            .app
+            .list_account(&harness.user, &account.id)
+            .await
+            .is_ok()
     );
+    let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    // A fast host clock must not expire a good grant: the provider decides.
+    assert_eq!(stored.status, UserListAccountStatus::Active);
+    assert_eq!(
+        stored.credential.refresh_handle.as_deref(),
+        Some("fixture-rotated-handle")
+    );
+    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn private_account_view_and_unlink_do_not_wait_out_a_slow_renewal() {
+    let auth = Arc::new(Auth {
+        block_renew: true,
+        ..Default::default()
+    });
+    let harness = harness(auth.clone()).await;
+    let account = seed_expired(&harness).await;
+
+    // The view answers that the account is still refreshing instead of
+    // waiting on the provider.
+    let error = harness
+        .app
+        .list_account(&harness.user, &account.id)
+        .await
+        .err()
+        .expect("the view does not wait out the renewal");
+    assert!(
+        matches!(
+            error,
+            AppError::TemporaryUnavailable {
+                retry_after: Some(_),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+    // An unlink gives up waiting for the lock the renewal holds, rather than
+    // revoking beside it; the account stays linked.
+    assert!(matches!(
+        harness
+            .app
+            .unlink_list_account(&harness.user, &account.id)
+            .await,
+        Err(AppError::TemporaryUnavailable { .. })
+    ));
+    assert_eq!(
+        harness
+            .app
+            .my_list_accounts(&harness.user)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+
+    // Once the renewal finishes and saves, unlink proceeds and revokes the
+    // credential it saved.
+    auth.release.notify_one();
+    harness
+        .app
+        .unlink_list_account(&harness.user, &account.id)
+        .await
+        .unwrap();
+    assert!(
+        harness
+            .app
+            .my_list_accounts(&harness.user)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(auth.renewals.load(Ordering::SeqCst), 1);
+    assert_eq!(auth.revocations.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn private_account_refused_grant_requires_reconnect_without_replay() {
+    let auth = Arc::new(Auth {
+        renew_failures: std::sync::Mutex::new(vec![RECONNECT_REQUIRED]),
+        ..Default::default()
+    });
+    let harness = harness(auth.clone()).await;
+    let account = seed_expired(&harness).await;
+    let follow = follow_private_list(&harness, &account).await;
+
+    let report = harness.app.run_list_sync_job(None).await.unwrap();
+    assert_eq!(report.failed, 1);
+    let stored = UserListAccountRepository::get_by_id(harness.lists.as_ref(), &account.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.status, UserListAccountStatus::Expired);
+    assert!(stored.error_message.is_some());
+    let sync = crate::lists::ListSubscriptionRepository::get_by_id(harness.lists.as_ref(), &follow)
+        .await
+        .unwrap()
+        .unwrap()
+        .sync;
+    assert_eq!(sync.state, scryer_domain::ListSyncState::Fail);
+
     assert!(
         harness
             .app

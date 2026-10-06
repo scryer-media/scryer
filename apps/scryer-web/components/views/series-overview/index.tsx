@@ -449,7 +449,10 @@ function SeriesOverviewViewImpl({
     setHistoryEpisodeScope({
       episodeId: episode.id,
       episodeLabel:
-        episode.title ?? episode.episodeLabel ?? episode.episodeNumber ?? episode.id,
+        episode.title?.trim()
+        || episode.episodeLabel?.trim()
+        || episode.episodeNumber
+        || episode.id,
     });
     setHistoryOpen(true);
   }, []);

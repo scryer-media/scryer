@@ -218,7 +218,7 @@ pub async fn sync_subscription(
     now: DateTime<Utc>,
     job_run_id: Option<String>,
 ) -> AppResult<SubscriptionSyncOutcome> {
-    let _account_guard = context.actions.lock_account(subscription).await;
+    let mut account_guard = context.actions.lock_account(subscription).await;
     // Due-job snapshots can wait behind owner edits or unlink. Read the
     // authoritative row under the same account guard before any effects.
     let current;
@@ -286,18 +286,37 @@ pub async fn sync_subscription(
                     if account.user_id == subscription.owner_user_id
                         && account.provider == subscription.source.provider =>
                 {
-                    match context.actions.prepare_account(account).await {
+                    match context
+                        .actions
+                        .prepare_account(account, &mut account_guard)
+                        .await
+                    {
                         Ok(account) => Some(account),
-                        Err(_) => {
+                        Err(error) => {
+                            // Only a refusal of the grant expires the account;
+                            // a transient refresh failure is retried next sync.
+                            let rate_limited =
+                                crate::lists::account_transport::auth_failure_code(&error)
+                                    == Some(crate::lists::account_transport::RATE_LIMITED);
+                            let class = match error {
+                                crate::AppError::TemporaryUnavailable { retry_after, .. }
+                                    if rate_limited =>
+                                {
+                                    ListFailureClass::RateLimited {
+                                        retry_after_seconds: retry_after
+                                            .map(|delay| delay.as_secs()),
+                                    }
+                                }
+                                crate::AppError::TemporaryUnavailable { .. }
+                                | crate::AppError::Repository(_) => ListFailureClass::Unavailable,
+                                _ => ListFailureClass::Unauthorized,
+                            };
                             return record_failure(
                                 context,
                                 subscription,
                                 run,
                                 now,
-                                ListFailure::new(
-                                    ListFailureClass::Unauthorized,
-                                    &subscription.source.provider,
-                                ),
+                                ListFailure::new(class, &subscription.source.provider),
                             )
                             .await;
                         }

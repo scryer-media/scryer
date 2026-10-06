@@ -36,9 +36,13 @@ pub trait ListActions: Send + Sync {
         None
     }
     /// Production refreshes and saves rotated token material before fetching.
+    /// `guard` is the account lock the caller holds. A renewal may carry it
+    /// into a task that outlives a cancelled caller, and puts it back when it
+    /// finishes.
     async fn prepare_account(
         &self,
         account: scryer_domain::UserListAccount,
+        _guard: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
     ) -> AppResult<scryer_domain::UserListAccount> {
         Ok(account)
     }

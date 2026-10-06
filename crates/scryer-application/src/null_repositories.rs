@@ -1158,6 +1158,17 @@ impl MediaFileRepository for NullMediaFileRepository {
         ))
     }
 
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        _title_id: &str,
+        _file_id: &str,
+        _episode_ids: &[String],
+    ) -> AppResult<bool> {
+        Err(AppError::Repository(
+            "media file repository is not configured".to_string(),
+        ))
+    }
+
     async fn mark_scan_failed(&self, _file_id: &str, _error: &str) -> AppResult<()> {
         Err(AppError::Repository(
             "media file repository is not configured".to_string(),

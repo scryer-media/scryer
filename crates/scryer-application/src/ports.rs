@@ -7586,6 +7586,18 @@ pub trait MediaFileRepository: Send + Sync {
         additional_file_ids: &[String],
     ) -> AppResult<()>;
 
+    /// Make `file_id` Primary for every episode in `episode_ids`, but only
+    /// while, at write time, no file is Primary for any of them and `file_id`
+    /// is the one file linked to each, as Additional. Returns whether it
+    /// promoted. Never demotes another file and never touches anything but
+    /// the role of `file_id`'s episode links.
+    async fn promote_sole_additional_media_file_for_episodes(
+        &self,
+        title_id: &str,
+        file_id: &str,
+        episode_ids: &[String],
+    ) -> AppResult<bool>;
+
     async fn replace_media_file_for_upgrade(
         &self,
         old_file_id: &str,

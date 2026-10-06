@@ -1918,11 +1918,16 @@ impl PendingReleaseRepository for TrackingPendingReleaseRepo {
 #[derive(Default, Clone)]
 pub(super) struct TrackingHousekeepingRepo {
     pub(super) operation_log: Arc<Mutex<Vec<String>>>,
+    /// The rows orphan media-file cleanup walks.
+    pub(super) media_file_roots: Arc<Mutex<Vec<crate::HousekeepingMediaFileRootRow>>>,
 }
 
 impl TrackingHousekeepingRepo {
     pub(super) fn with_operation_log(operation_log: Arc<Mutex<Vec<String>>>) -> Self {
-        Self { operation_log }
+        Self {
+            operation_log,
+            ..Self::default()
+        }
     }
 }
 
@@ -2013,7 +2018,7 @@ impl HousekeepingRepository for TrackingHousekeepingRepo {
     async fn list_media_files_with_roots(
         &self,
     ) -> AppResult<Vec<crate::HousekeepingMediaFileRootRow>> {
-        Ok(Vec::new())
+        Ok(self.media_file_roots.lock().await.clone())
     }
 
     async fn delete_media_files_by_ids(&self, _ids: &[String]) -> AppResult<u32> {

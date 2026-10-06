@@ -348,7 +348,7 @@ function HistoryEpisodes({
           const href = historyEpisodeHref(event, episodeId);
           const label = fetching
             ? t("label.loading")
-            : formatHistoryEpisodeLabel(episode, episodeId);
+            : formatHistoryEpisodeLabel(episode, episodeId, t);
           return (
             <HistoryTitleHoverLink
               key={episodeId}

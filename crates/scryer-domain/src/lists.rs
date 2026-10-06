@@ -615,6 +615,17 @@ pub struct ListAccountCredential {
     pub token_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    /// Consecutive failed renewals of this credential. A renewed credential
+    /// starts without one, so a success clears it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_failures: Option<ListAccountRefreshFailures>,
+}
+
+/// A run of failed renewals with no answer that the grant is gone.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ListAccountRefreshFailures {
+    pub count: u32,
+    pub since: DateTime<Utc>,
 }
 
 impl std::fmt::Debug for ListAccountCredential {

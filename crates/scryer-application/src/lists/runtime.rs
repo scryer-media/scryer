@@ -108,11 +108,38 @@ impl ListActions for AppListActions<'_> {
     async fn prepare_account(
         &self,
         account: scryer_domain::UserListAccount,
+        guard: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
     ) -> AppResult<scryer_domain::UserListAccount> {
-        let mut account = self.app.refresh_list_account_locked(account).await?;
-        account.last_used_at = Some(Utc::now());
-        account.updated_at = Utc::now();
-        self.app.services.lists.accounts.update(account).await
+        let app = self.app.clone();
+        let held = guard.take();
+        // A renewal is never abandoned mid-flight: the provider may already
+        // have spent the stored refresh credential. The task keeps the account
+        // lock until the renewed credential is saved, even if this sync is
+        // cancelled first, and hands the lock back when it finishes.
+        let renewal = tokio::spawn(async move {
+            let result = async {
+                let mut account = app.refresh_list_account_locked(account).await?;
+                account.last_used_at = Some(Utc::now());
+                account.updated_at = Utc::now();
+                // Recording the use is best effort: a renewal that could not
+                // be saved is kept by the account runtime, and this sync
+                // still uses it.
+                Ok(app
+                    .services
+                    .lists
+                    .accounts
+                    .update(account.clone())
+                    .await
+                    .unwrap_or(account))
+            }
+            .await;
+            (held, result)
+        });
+        let (held, result) = renewal
+            .await
+            .map_err(|_| AppError::Repository("list account refresh task failed".into()))?;
+        *guard = held;
+        result
     }
     async fn add_title(
         &self,

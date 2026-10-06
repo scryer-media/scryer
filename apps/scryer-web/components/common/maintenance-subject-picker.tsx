@@ -3,6 +3,7 @@ import { useClient } from "urql";
 import { TitleAutocompletePicker } from "@/components/common/title-autocomplete-picker";
 import { SingleSelectField } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
+import { episodeTitleOrTba } from "@/lib/utils/episode-title";
 import {
   ruleSetTestTitleCollectionsQuery,
   seriesCollectionEpisodesQuery,
@@ -157,7 +158,7 @@ export function MaintenanceSubjectPicker({
           disabled={loading}
           options={episodes.map((episode) => ({
             value: episode.id,
-            label: `${episode.episodeNumber ?? episode.absoluteNumber ?? "?"}${episode.title ? ` · ${episode.title}` : ""}`,
+            label: `${episode.episodeNumber ?? episode.absoluteNumber ?? "?"} · ${episodeTitleOrTba(episode.title, t)}`,
           }))}
           onValueChange={(id) => {
             setEpisodeId(id);

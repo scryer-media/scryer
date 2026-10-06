@@ -25,6 +25,7 @@ import {
 import type { RuleSetDraft } from "@/lib/types/rule-sets";
 import type { TitleRecord } from "@/lib/types/titles";
 import { titleIsEpisodic } from "@/lib/utils/grab-dialog";
+import { episodeTitleOrTba } from "@/lib/utils/episode-title";
 import {
   canTestRuleSet,
   buildRuleSetTestInput,
@@ -116,16 +117,12 @@ const PARSED_FIELDS = [
   ["audioLanguages", "Audio languages"],
 ] as const;
 
-function episodeLabel(episode: Episode): string {
+function episodeLabel(episode: Episode, t: (key: string) => string): string {
   const prefix = `S${String(episode.seasonNumber ?? 0).padStart(2, "0")}E${String(
     episode.episodeNumber ?? 0,
   ).padStart(2, "0")}`;
-  const title = episode.title || episode.episodeLabel;
-  return title?.startsWith(prefix)
-    ? title
-    : title
-      ? `${prefix} - ${title}`
-      : prefix;
+  const title = episode.title?.trim() || episode.episodeLabel?.trim();
+  return title?.startsWith(prefix) ? title : `${prefix} - ${episodeTitleOrTba(title, t)}`;
 }
 
 const LISTING_TEXT_FIELDS = [
@@ -545,7 +542,7 @@ export function RuleSetTestPanel({
                   onValueChange={setEpisodeId}
                   options={episodes.map((episode) => ({
                     value: episode.id,
-                    label: episodeLabel(episode),
+                    label: episodeLabel(episode, t),
                   }))}
                   placeholder={
                     loadingEpisodes ? "Loading episodes…" : "Select an episode"

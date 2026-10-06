@@ -21,6 +21,32 @@ const RATE_LIMITED_PAUSE_SECONDS: i64 = 30;
 /// Linked records kept per member only to replay an answer whose response was
 /// lost; the oldest goes first.
 const LINKED_RECORDS_PER_OWNER: usize = 4;
+/// First pause after a failed renewal; each further failure doubles it.
+const REFRESH_BACKOFF_FIRST_SECONDS: i64 = 5 * 60;
+/// Longest pause between renewal attempts.
+const REFRESH_BACKOFF_MAX_SECONDS: i64 = 6 * 60 * 60;
+/// Accounts whose renewal pause is remembered. Beyond this the entries whose
+/// pause has passed are dropped, then the oldest pauses.
+const MAX_REFRESH_BACKOFFS: usize = 4096;
+/// A credential that has failed to renew this many times in a row, over at
+/// least `REFRESH_FAILURE_MIN_SPAN_HOURS`, is treated as gone even though no
+/// provider said so. With the backoff above this takes about 40 hours.
+const REFRESH_FAILURE_LIMIT: u32 = 12;
+const REFRESH_FAILURE_MIN_SPAN_HOURS: i64 = 36;
+/// Fixed pause after a renewal that failed short of the provider: on Scryer's
+/// side of the wire or at the relay.
+const LOCAL_FAILURE_PAUSE_SECONDS: i64 = 60;
+/// Saves of a renewed credential tried before it is kept in memory instead.
+const RENEWED_SAVE_ATTEMPTS: usize = 3;
+/// How long an interactive read waits for the account lock, and then for a
+/// renewal, before answering that the account is still refreshing.
+const INTERACTIVE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+const INTERACTIVE_REFRESH_WAIT: std::time::Duration = std::time::Duration::from_secs(15);
+/// How long an unlink waits behind an in-flight renewal.
+const UNLINK_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
+/// The pause suggested to a caller told that the account is still refreshing.
+const REFRESHING_RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
+
 pub struct ListAccountRuntime {
     /// Held only for map edits, never across an await, so a dropped poll can
     /// release its claim synchronously.
@@ -31,6 +57,25 @@ pub struct ListAccountRuntime {
     operations: [std::sync::Arc<Mutex<()>>; 64],
     links: Mutex<()>,
     revocations: std::sync::Arc<tokio::sync::Semaphore>,
+    /// In-memory renewal pauses by account id, cleared on success. A restart
+    /// forgets them; the persisted failure count still bounds the retries.
+    refresh_backoffs: std::sync::Mutex<HashMap<String, RefreshBackoff>>,
+    /// Renewed credentials whose save failed, by account id. The provider has
+    /// already spent the stored grant, so each is saved before anything else
+    /// is done with its account. A restart forgets them.
+    unsaved_renewals: std::sync::Mutex<HashMap<String, UnsavedRenewal>>,
+}
+/// A renewed account that could not be saved, and the stored credential its
+/// renewal spent.
+struct UnsavedRenewal {
+    renewed: UserListAccount,
+    spent: ListAccountCredential,
+}
+#[derive(Clone, Copy)]
+struct RefreshBackoff {
+    failures: u32,
+    next_attempt_at: DateTime<Utc>,
+    rate_limited: bool,
 }
 impl Default for ListAccountRuntime {
     fn default() -> Self {
@@ -40,19 +85,143 @@ impl Default for ListAccountRuntime {
             operations: std::array::from_fn(|_| std::sync::Arc::new(Mutex::new(()))),
             links: Mutex::new(()),
             revocations: std::sync::Arc::new(tokio::sync::Semaphore::new(16)),
+            refresh_backoffs: std::sync::Mutex::new(HashMap::new()),
+            unsaved_renewals: std::sync::Mutex::new(HashMap::new()),
         }
     }
 }
 impl ListAccountRuntime {
-    pub(crate) async fn lock_account(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    fn stripe(&self, id: &str) -> std::sync::Arc<Mutex<()>> {
         use std::hash::{Hash, Hasher};
         let mut hash = std::collections::hash_map::DefaultHasher::new();
         id.hash(&mut hash);
-        self.operations[(hash.finish() as usize) % self.operations.len()]
-            .clone()
-            .lock_owned()
-            .await
+        self.operations[(hash.finish() as usize) % self.operations.len()].clone()
     }
+    pub(crate) async fn lock_account(&self, id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        self.stripe(id).lock_owned().await
+    }
+    /// The account lock, or `None` when it is still held after `wait`.
+    async fn lock_account_within(
+        &self,
+        id: &str,
+        wait: std::time::Duration,
+    ) -> Option<tokio::sync::OwnedMutexGuard<()>> {
+        tokio::time::timeout(wait, self.stripe(id).lock_owned())
+            .await
+            .ok()
+    }
+    /// The active renewal pause for `id`, if any.
+    fn refresh_backoff(&self, id: &str, now: DateTime<Utc>) -> Option<RefreshBackoff> {
+        let backoffs = self
+            .refresh_backoffs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        backoffs
+            .get(id)
+            .filter(|backoff| backoff.next_attempt_at > now)
+            .copied()
+    }
+    /// Record a failed renewal and return the pause before the next attempt.
+    fn record_refresh_failure(
+        &self,
+        id: &str,
+        now: DateTime<Utc>,
+        retry_after: Option<std::time::Duration>,
+        rate_limited: bool,
+    ) -> RefreshBackoff {
+        let mut backoffs = self
+            .refresh_backoffs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if backoffs.len() >= MAX_REFRESH_BACKOFFS && !backoffs.contains_key(id) {
+            backoffs.retain(|_, backoff| backoff.next_attempt_at > now);
+            if backoffs.len() >= MAX_REFRESH_BACKOFFS
+                && let Some(oldest) = backoffs
+                    .iter()
+                    .min_by_key(|(_, backoff)| backoff.next_attempt_at)
+                    .map(|(key, _)| key.clone())
+            {
+                backoffs.remove(&oldest);
+            }
+        }
+        let failures = backoffs
+            .get(id)
+            .map_or(1, |backoff| backoff.failures.saturating_add(1));
+        let exponent = failures.saturating_sub(1).min(16);
+        let pause = REFRESH_BACKOFF_FIRST_SECONDS
+            .saturating_mul(1_i64 << exponent)
+            .min(REFRESH_BACKOFF_MAX_SECONDS);
+        let requested = retry_after
+            .and_then(|delay| i64::try_from(delay.as_secs()).ok())
+            .unwrap_or(0);
+        let backoff = RefreshBackoff {
+            failures,
+            next_attempt_at: now + Duration::seconds(pause.max(requested)),
+            rate_limited,
+        };
+        backoffs.insert(id.to_owned(), backoff);
+        backoff
+    }
+    /// A short fixed pause that leaves the failure count where it was.
+    fn pause_refresh(&self, id: &str, now: DateTime<Utc>) -> RefreshBackoff {
+        let mut backoffs = self
+            .refresh_backoffs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if backoffs.len() >= MAX_REFRESH_BACKOFFS && !backoffs.contains_key(id) {
+            backoffs.retain(|_, backoff| backoff.next_attempt_at > now);
+        }
+        let failures = backoffs.get(id).map_or(0, |backoff| backoff.failures);
+        let backoff = RefreshBackoff {
+            failures,
+            next_attempt_at: now + Duration::seconds(LOCAL_FAILURE_PAUSE_SECONDS),
+            rate_limited: false,
+        };
+        if backoffs.len() < MAX_REFRESH_BACKOFFS || backoffs.contains_key(id) {
+            backoffs.insert(id.to_owned(), backoff);
+        }
+        backoff
+    }
+    pub(crate) fn clear_refresh_backoff(&self, id: &str) {
+        self.refresh_backoffs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id);
+    }
+    fn keep_unsaved_renewal(&self, unsaved: UnsavedRenewal) {
+        self.unsaved_renewals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(unsaved.renewed.id.clone(), unsaved);
+    }
+    fn take_unsaved_renewal(&self, id: &str) -> Option<UnsavedRenewal> {
+        self.unsaved_renewals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(id)
+    }
+}
+/// The answer for a renewal that is paused or still running elsewhere.
+fn refresh_pending(backoff: Option<RefreshBackoff>, now: DateTime<Utc>) -> AppError {
+    let retry_after = backoff.map_or(Some(REFRESHING_RETRY_AFTER), |backoff| {
+        (backoff.next_attempt_at - now).to_std().ok()
+    });
+    if backoff.is_some_and(|backoff| backoff.rate_limited) {
+        return rate_limited_failure(retry_after);
+    }
+    AppError::temporary_unavailable(
+        "list account refresh is temporarily unavailable",
+        retry_after,
+    )
+}
+fn reconnect_this_account() -> AppError {
+    AppError::Validation("reconnect this list account".into())
+}
+fn needs_refresh(account: &UserListAccount, now: DateTime<Utc>) -> bool {
+    account
+        .credential
+        .expires_at
+        .is_some_and(|expires| expires <= now + Duration::seconds(60))
 }
 #[cfg(test)]
 mod tests {
@@ -322,20 +491,23 @@ impl Drop for PollClaimGuard<'_> {
     }
 }
 /// Whether a provider poll failure is worth asking again, as the status to
-/// report. The metadata gateway reports every provider failure as a validation
-/// error carrying a fixed failure code; only transport, availability and
+/// report. The metadata gateway reports every provider failure with a fixed
+/// failure code; only transport, availability, relay-enrollment and
 /// rate-limit codes are transient. Denials, bad app credentials and malformed
 /// poll tokens end the link.
 fn transient_poll_status(error: &AppError) -> Option<&'static str> {
-    let AppError::Validation(message) = error else {
-        return None;
-    };
-    match message.strip_prefix("list account authentication failed: ")? {
-        "provider_unavailable" | "busy" | "transport_unavailable" => {
+    let code = auth_failure_code(error)?;
+    match auth_failure_class(code) {
+        AuthFailureClass::Transient => Some(LIST_ACCOUNT_POLL_UNAVAILABLE),
+        AuthFailureClass::RateLimited => Some(LIST_ACCOUNT_POLL_RATE_LIMITED),
+        // This instance's own enrollment with the relay is in flux; the
+        // provider has said nothing about the link.
+        AuthFailureClass::Final
+            if matches!(code, "instance_auth_unavailable" | "instance_auth_required") =>
+        {
             Some(LIST_ACCOUNT_POLL_UNAVAILABLE)
         }
-        "rate_limited" => Some(LIST_ACCOUNT_POLL_RATE_LIMITED),
-        _ => None,
+        AuthFailureClass::Final => None,
     }
 }
 /// Whether a failure while recording an approved link is worth retrying with
@@ -503,9 +675,10 @@ impl AppUseCase {
     }
     pub async fn list_account(&self, actor: &User, id: &str) -> AppResult<ListAccountView> {
         self.require_personal_lists_allowed(actor).await?;
-        let _guard = self.services.lists.account_runtime.lock_account(id).await;
-        let account = self.owned_list_account(actor, id).await?;
-        let account = self.refresh_list_account_locked(account).await?;
+        let (_guard, account) = self
+            .refresh_list_account_interactive(id, |account| ensure_account_owner(actor, account))
+            .await?;
+        let account = account.ok_or_else(|| AppError::NotFound("list account not found".into()))?;
         let sources = self
             .list_account_identity(&account.provider, &account.credential, Some(&account))
             .await?;
@@ -1000,20 +1173,66 @@ impl AppUseCase {
             )),
         }
     }
+    /// Refresh account `id` for a caller that is waiting on the answer. The
+    /// lock wait and the renewal are both bounded: a renewal still running
+    /// after `INTERACTIVE_REFRESH_WAIT` finishes in the background, under the
+    /// account lock, and the caller is told the account is still refreshing.
+    /// `check` vets the stored row before any renewal. The returned guard keeps
+    /// the account lock for the caller's remaining work.
+    pub(crate) async fn refresh_list_account_interactive(
+        &self,
+        id: &str,
+        check: impl FnOnce(&UserListAccount) -> AppResult<()>,
+    ) -> AppResult<(tokio::sync::OwnedMutexGuard<()>, Option<UserListAccount>)> {
+        let runtime = &self.services.lists.account_runtime;
+        let guard = runtime
+            .lock_account_within(id, INTERACTIVE_LOCK_WAIT)
+            .await
+            .ok_or_else(|| refresh_pending(None, Utc::now()))?;
+        let Some(account) = self.services.lists.accounts.get_by_id(id).await? else {
+            return Ok((guard, None));
+        };
+        check(&account)?;
+        if account.status != UserListAccountStatus::Active || !needs_refresh(&account, Utc::now()) {
+            let account = self.refresh_list_account_locked(account).await?;
+            return Ok((guard, Some(account)));
+        }
+        let app = self.clone();
+        // A renewal is never abandoned mid-flight: the provider may already
+        // have spent the stored refresh credential.
+        let renewal = tokio::spawn(async move {
+            let result = app.refresh_list_account_locked(account).await;
+            (guard, result)
+        });
+        match tokio::time::timeout(INTERACTIVE_REFRESH_WAIT, renewal).await {
+            Ok(Ok((guard, result))) => Ok((guard, Some(result?))),
+            Ok(Err(_)) => Err(AppError::Repository(
+                "list account refresh task failed".into(),
+            )),
+            Err(_) => Err(refresh_pending(None, Utc::now())),
+        }
+    }
     pub(crate) async fn refresh_list_account_locked(
         &self,
-        mut account: UserListAccount,
+        account: UserListAccount,
     ) -> AppResult<UserListAccount> {
+        let mut account = self.settle_unsaved_renewal(account).await?;
         if account.status != UserListAccountStatus::Active {
-            return Err(AppError::Validation("reconnect this list account".into()));
+            return Err(reconnect_this_account());
         }
         let now = Utc::now();
-        if account
-            .credential
-            .expires_at
-            .is_none_or(|expires| expires > now + Duration::seconds(60))
-        {
+        if !needs_refresh(&account, now) {
             return Ok(account);
+        }
+        let runtime = &self.services.lists.account_runtime;
+        // Callers hold the account lock, so concurrent refreshes cannot spend a
+        // rotating refresh credential twice. Only an answer that the grant is
+        // gone requires reconnect; any other failure leaves the account linked
+        // and retries it after a growing pause, until the safety net below.
+        // The stored refresh deadline is not checked locally: a fast host clock
+        // would expire good accounts, and the provider answers for itself.
+        if let Some(backoff) = runtime.refresh_backoff(&account.id, now) {
+            return Err(refresh_pending(Some(backoff), now));
         }
         let app = account
             .credential
@@ -1025,13 +1244,8 @@ impl AppUseCase {
                 redirect_uri: values.get("redirect_uri").cloned().unwrap_or_default(),
                 access_token: values.get("access_token").cloned(),
             });
-        // Claim the one-shot refresh durably first. A crash, cancellation or
-        // failed rotated-token write leaves this account requiring reconnect.
-        account.status = UserListAccountStatus::Expired;
-        account.error_message = Some("Reconnect this list account to resume syncing.".into());
-        account.updated_at = now;
-        self.services.lists.accounts.update(account.clone()).await?;
-        match self
+        let previous = account.clone();
+        let error = match self
             .services
             .lists
             .auth
@@ -1039,26 +1253,136 @@ impl AppUseCase {
             .await
         {
             Ok(mut token) => {
+                runtime.clear_refresh_backoff(&account.id);
                 token.app_config = account.credential.app_config;
                 account.credential = token;
                 account.status = UserListAccountStatus::Active;
                 account.error_message = None;
                 account.last_refresh_at = Some(now);
                 account.updated_at = now;
-                self.services.lists.accounts.update(account).await
+                // The provider has already spent the stored refresh credential,
+                // so the renewed one in hand is the only usable grant. When it
+                // cannot be saved it is kept in memory and used for this
+                // request, and the next use of the account saves it first.
+                if let Some(saved) = self.save_renewed_account(account.clone()).await {
+                    return Ok(saved);
+                }
+                runtime.keep_unsaved_renewal(UnsavedRenewal {
+                    renewed: account.clone(),
+                    spent: previous.credential,
+                });
+                return Ok(account);
             }
-            Err(_) => {
-                account.status = UserListAccountStatus::Expired;
-                account.error_message =
-                    Some("Reconnect this list account to resume syncing.".into());
-                account.updated_at = now;
-                self.services.lists.accounts.update(account).await?;
-                Err(AppError::Validation("reconnect this list account".into()))
+            Err(error) => error,
+        };
+        let code = auth_failure_code(&error);
+        if code.is_some_and(renew_requires_reconnect) {
+            self.mark_list_account_reconnect_required(previous, now)
+                .await?;
+            return Err(reconnect_this_account());
+        }
+        // Trouble short of the provider, with no answer about the grant:
+        // the local request slots, a connection that never got an HTTP answer,
+        // this instance's own enrollment with the relay, or the relay itself
+        // being busy or down. Reconnecting the account cannot fix any of these,
+        // so they neither count towards the safety net nor grow the backoff.
+        if code.is_none_or(|code| {
+            matches!(
+                code,
+                "busy"
+                    | "transport_unavailable"
+                    | "instance_auth_unavailable"
+                    | "instance_auth_required"
+                    | "relay_unavailable"
+            )
+        }) {
+            let backoff = runtime.pause_refresh(&account.id, now);
+            return Err(refresh_pending(Some(backoff), now));
+        }
+        let rate_limited = code == Some(RATE_LIMITED);
+        let retry_after = match &error {
+            AppError::TemporaryUnavailable { retry_after, .. } if rate_limited => *retry_after,
+            _ => None,
+        };
+        let backoff = runtime.record_refresh_failure(&account.id, now, retry_after, rate_limited);
+        let mut failures = account.credential.refresh_failures.unwrap_or(
+            scryer_domain::ListAccountRefreshFailures {
+                count: 0,
+                since: now,
+            },
+        );
+        failures.count = failures.count.saturating_add(1);
+        if failures.count >= REFRESH_FAILURE_LIMIT
+            && now - failures.since >= Duration::hours(REFRESH_FAILURE_MIN_SPAN_HOURS)
+        {
+            self.mark_list_account_reconnect_required(previous, now)
+                .await?;
+            return Err(reconnect_this_account());
+        }
+        account.credential.refresh_failures = Some(failures);
+        account.updated_at = now;
+        // Best effort: losing one count only delays the safety net.
+        let _ = self.services.lists.accounts.update(account).await;
+        if rate_limited {
+            return Err(rate_limited_failure(retry_after));
+        }
+        Err(refresh_pending(Some(backoff), now))
+    }
+    /// Save a renewed account, retrying a failed write a few times.
+    async fn save_renewed_account(&self, account: UserListAccount) -> Option<UserListAccount> {
+        for _ in 0..RENEWED_SAVE_ATTEMPTS {
+            match self.services.lists.accounts.update(account.clone()).await {
+                Ok(saved) => return Some(saved),
+                Err(_) => tokio::task::yield_now().await,
             }
         }
+        None
+    }
+    /// Save a renewed credential kept in memory after its save failed, before
+    /// the stored row is used for anything: the stored grant is already spent.
+    /// Until that save succeeds the account answers that it is still
+    /// refreshing, and nothing is asked of the provider. A stored row that has
+    /// changed since the renewal (saved, relinked or expired) supersedes it.
+    async fn settle_unsaved_renewal(&self, stored: UserListAccount) -> AppResult<UserListAccount> {
+        let runtime = &self.services.lists.account_runtime;
+        let Some(unsaved) = runtime.take_unsaved_renewal(&stored.id) else {
+            return Ok(stored);
+        };
+        if stored.status != UserListAccountStatus::Active || stored.credential != unsaved.spent {
+            return Ok(stored);
+        }
+        if let Some(saved) = self.save_renewed_account(unsaved.renewed.clone()).await {
+            return Ok(saved);
+        }
+        runtime.keep_unsaved_renewal(unsaved);
+        Err(refresh_pending(None, Utc::now()))
+    }
+    async fn mark_list_account_reconnect_required(
+        &self,
+        mut account: UserListAccount,
+        now: DateTime<Utc>,
+    ) -> AppResult<UserListAccount> {
+        account.status = UserListAccountStatus::Expired;
+        account.error_message = Some("Reconnect this list account to resume syncing.".into());
+        account.updated_at = now;
+        self.services.lists.accounts.update(account).await
     }
     pub async fn unlink_list_account(&self, actor: &User, id: &str) -> AppResult<String> {
-        let guard = self.services.lists.account_runtime.lock_account(id).await;
+        // A renewal in flight holds the lock for up to the relay deadline. Waiting
+        // for it, rather than unlinking beside it, means the revoke below reads
+        // the credential that renewal saved instead of one it already spent.
+        let guard = self
+            .services
+            .lists
+            .account_runtime
+            .lock_account_within(id, UNLINK_LOCK_WAIT)
+            .await
+            .ok_or_else(|| {
+                AppError::temporary_unavailable(
+                    "list account is refreshing; try unlinking again shortly",
+                    Some(REFRESHING_RETRY_AFTER),
+                )
+            })?;
         let account = self.owned_list_account(actor, id).await?;
         // Reserve bounded task capacity before removing the only durable handle.
         let permit = self
@@ -1090,10 +1414,18 @@ impl AppUseCase {
             let _guard = guard;
             let _permit = permit;
             app.services.lists.accounts.unlink(&id, &owner).await?;
+            // A renewal that could not be saved holds the only live grant.
+            let credential = app
+                .services
+                .lists
+                .account_runtime
+                .take_unsaved_renewal(&id)
+                .filter(|unsaved| unsaved.spent == account.credential)
+                .map_or(account.credential, |unsaved| unsaved.renewed.credential);
             // Never retry an ambiguous revoke or restore the erased local credential.
             let _ = tokio::time::timeout(
                 std::time::Duration::from_secs(25),
-                gateway.revoke(&account.provider, &account.credential, None),
+                gateway.revoke(&account.provider, &credential, None),
             )
             .await;
             app.append_domain_event(event).await?;

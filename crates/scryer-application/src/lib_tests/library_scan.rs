@@ -1567,13 +1567,27 @@ async fn movie_title_scan_backfills_missing_source_signature_without_media_info(
     );
 }
 
+/// Asserts the movie still has no Primary file: the missing search keys on a
+/// Primary file, so such a movie stays missing.
+fn assert_movie_has_no_primary(files: &[TitleMediaFile], context: &str) {
+    assert!(
+        files.iter().all(|file| file.role.is_additional()),
+        "{context}: an Additional-only movie stays Additional-only and missing"
+    );
+}
+
+/// Every scan mode keeps an Additional-only movie Additional, including the
+/// one-off title scan and the scoped one-off scan that a recycle-bin restore
+/// and a pending-import attach run over the files they bring in.
 #[tokio::test]
-async fn movie_library_scan_does_not_promote_additional_file_but_title_scan_does() {
+async fn movie_scans_never_promote_an_additional_only_movie() {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let title_dir = tempdir.path().join("Additional Only (2026)");
     std::fs::create_dir(&title_dir).expect("create movie folder");
     let additional_path = title_dir.join("Additional.Only.2026.1080p.WEB-DL.mkv");
     std::fs::write(&additional_path, vec![0_u8; 256]).expect("write additional movie file");
+    let restored_cut_path = title_dir.join("Additional.Only.2026.Directors.Cut.1080p.BluRay.mkv");
+    std::fs::write(&restored_cut_path, vec![0_u8; 512]).expect("write restored cut");
 
     let (app, user, _) = bootstrap_movie_scan_app(
         tempdir.path(),
@@ -1624,9 +1638,313 @@ async fn movie_library_scan_does_not_promote_additional_file_but_title_scan_does
         .list_media_files_for_title(&title.id)
         .await
         .expect("list media files after title scan");
+    assert_movie_has_no_primary(&files, "one-off title scan");
+
+    // A pending-import attach or restore that brings the stored file back in.
+    app.scan_title_library_with_discovered_files(
+        &user,
+        title.clone(),
+        build_test_library_files(&[additional_path.as_path()]),
+    )
+    .await
+    .expect("scoped scan of the stored file");
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files after scoped scan");
+    assert_movie_has_no_primary(&files, "scoped scan of the stored file");
+
+    // A restore of a different file, itself an alternate cut.
+    app.scan_title_library_with_discovered_files(
+        &user,
+        title.clone(),
+        build_test_library_files(&[restored_cut_path.as_path()]),
+    )
+    .await
+    .expect("scoped scan of a restored file");
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files after restore scan");
+    assert_eq!(files.len(), 2);
+    assert_movie_has_no_primary(&files, "scoped scan of a restored file");
+}
+
+/// Scans a new movie folder holding `names` (each file `size` bytes, in
+/// order) and returns each file's role, in the same order.
+async fn movie_title_scan_roles_for_new_folder(
+    title_name: &str,
+    names: &[(&str, usize)],
+) -> Vec<MediaFileRole> {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let title_dir = tempdir.path().join(format!("{title_name} (2026)"));
+    std::fs::create_dir(&title_dir).expect("create movie folder");
+    let paths = names
+        .iter()
+        .map(|(name, size)| {
+            let path = title_dir.join(name);
+            std::fs::write(&path, vec![0_u8; *size]).expect("write movie file");
+            path
+        })
+        .collect::<Vec<_>>();
+    let (app, user, _) = bootstrap_movie_scan_app(
+        tempdir.path(),
+        build_test_library_files(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>()),
+        Arc::new(EmptySearchMetadataGateway),
+    )
+    .await;
+    let title = create_movie_title_with_folder(&app, &user, title_name, title_dir.as_path()).await;
+
+    app.scan_title_library(&user, &title.id)
+        .await
+        .expect("scan movie title");
+
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(files.len(), paths.len());
+    paths
+        .iter()
+        .map(|path| media_file_role_for_path(&files, path))
+        .collect()
+}
+
+/// An alternate cut found on disk is never the folder's elected Primary, even
+/// when it outranks the plain file on quality and size.
+#[tokio::test]
+async fn movie_title_scan_records_an_alternate_cut_additional_whatever_its_quality() {
     assert_eq!(
-        media_file_role_for_path(&files, additional_path.as_path()),
+        movie_title_scan_roles_for_new_folder(
+            "Harbor Echo",
+            &[
+                ("Harbor.Echo.2026.720p.WEB-DL.mkv", 128),
+                ("Harbor.Echo.2026.Directors.Cut.1080p.BluRay.mkv", 1024),
+            ],
+        )
+        .await,
+        vec![MediaFileRole::Primary, MediaFileRole::Additional]
+    );
+}
+
+#[tokio::test]
+async fn movie_title_scan_records_an_alternate_ending_additional_beside_the_ordinary_file() {
+    assert_eq!(
+        movie_title_scan_roles_for_new_folder(
+            "Harbor Echo",
+            &[
+                ("Harbor.Echo.2026.Alternate.Ending.1080p.BluRay.mkv", 1024),
+                ("Harbor.Echo.2026.720p.WEB-DL.mkv", 128),
+            ],
+        )
+        .await,
+        vec![MediaFileRole::Additional, MediaFileRole::Primary]
+    );
+}
+
+#[tokio::test]
+async fn movie_title_scan_elects_nobody_when_every_file_is_an_alternate_cut() {
+    assert_eq!(
+        movie_title_scan_roles_for_new_folder(
+            "Harbor Echo",
+            &[("Harbor.Echo.2026.Extended.Cut.1080p.BluRay.mkv", 512)],
+        )
+        .await,
+        vec![MediaFileRole::Additional]
+    );
+}
+
+/// Theatrical, IMAX and open-matte releases are ordinary releases of the
+/// film, so the folder's election treats them like any other file.
+#[tokio::test]
+async fn movie_title_scan_elects_theatrical_and_framing_editions_normally() {
+    for name in [
+        "Harbor.Echo.2026.Theatrical.1080p.BluRay.mkv",
+        "Harbor.Echo.2026.IMAX.1080p.BluRay.mkv",
+        "Harbor.Echo.2026.Open.Matte.1080p.BluRay.mkv",
+    ] {
+        assert_eq!(
+            movie_title_scan_roles_for_new_folder("Harbor Echo", &[(name, 512)]).await,
+            vec![MediaFileRole::Primary],
+            "{name}"
+        );
+    }
+}
+
+/// Scans a new "Harbor Echo" folder holding `names` while the movie has a
+/// wanted row, and returns that row's status afterwards.
+async fn movie_wanted_status_after_scanning(names: &[&str]) -> AcquisitionScopeStatus {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let title_dir = tempdir.path().join("Harbor Echo (2026)");
+    std::fs::create_dir(&title_dir).expect("create movie folder");
+    let paths = names
+        .iter()
+        .map(|name| {
+            let path = title_dir.join(name);
+            std::fs::write(&path, vec![0_u8; 256]).expect("write movie file");
+            path
+        })
+        .collect::<Vec<_>>();
+    let (mut app, user, _) = bootstrap_movie_scan_app(
+        tempdir.path(),
+        build_test_library_files(&paths.iter().map(PathBuf::as_path).collect::<Vec<_>>()),
+        Arc::new(EmptySearchMetadataGateway),
+    )
+    .await;
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    app.services.workflow.acquisition_scope_states = wanted_items.clone();
+    let title =
+        create_movie_title_with_folder(&app, &user, "Harbor Echo", title_dir.as_path()).await;
+    let now = chrono::Utc::now().to_rfc3339();
+    wanted_items
+        .upsert_acquisition_scope_state(&AcquisitionScopeState {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            title_name: Some(title.name.clone()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: None,
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: None,
+            episode_number: None,
+            media_type: "movie".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Wanted,
+            grabbed_release: None,
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: now.clone(),
+            updated_at: now,
+        })
+        .await
+        .expect("seed wanted row");
+
+    app.scan_title_library(&user, &title.id)
+        .await
+        .expect("scan movie title");
+
+    wanted_items
+        .get_acquisition_scope_state_for_title(&title.id, None)
+        .await
+        .expect("read wanted row")
+        .expect("wanted row kept")
+        .status
+}
+
+/// A movie whose only file is an alternate cut is still missing its Primary,
+/// so the scan leaves its wanted row open for the release parked for it.
+#[tokio::test]
+async fn movie_scan_leaves_the_wanted_row_open_when_only_an_alternate_cut_is_found() {
+    assert_eq!(
+        movie_wanted_status_after_scanning(&["Harbor.Echo.2026.Extended.Cut.1080p.BluRay.mkv"])
+            .await,
+        AcquisitionScopeStatus::Wanted
+    );
+}
+
+#[tokio::test]
+async fn movie_scan_completes_the_wanted_row_when_a_primary_is_found() {
+    for names in [
+        &["Harbor.Echo.2026.1080p.WEB-DL.mkv"][..],
+        &[
+            "Harbor.Echo.2026.Extended.Cut.1080p.BluRay.mkv",
+            "Harbor.Echo.2026.1080p.WEB-DL.mkv",
+        ][..],
+        &[
+            "Harbor.Echo.2026.1080p.WEB-DL.mkv",
+            "Harbor.Echo.2026.Extended.Cut.1080p.BluRay.mkv",
+        ][..],
+    ] {
+        assert_eq!(
+            movie_wanted_status_after_scanning(names).await,
+            AcquisitionScopeStatus::Completed,
+            "{names:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn movie_title_scan_reads_an_edition_word_in_the_title_as_title() {
+    assert_eq!(
+        movie_title_scan_roles_for_new_folder(
+            "The Extended Redux",
+            &[("The.Extended.Redux.2026.1080p.WEB-DL.mkv", 256)],
+        )
+        .await,
+        vec![MediaFileRole::Primary]
+    );
+}
+
+/// Stored roles are the operator's: an alternate cut already recorded Primary
+/// stays Primary, and a plain file already recorded Additional stays so.
+#[tokio::test]
+async fn movie_title_scan_leaves_stored_roles_of_alternate_cuts_alone() {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let title_dir = tempdir.path().join("Stored Cut (2026)");
+    std::fs::create_dir(&title_dir).expect("create movie folder");
+    let cut_path = title_dir.join("Stored.Cut.2026.Directors.Cut.1080p.BluRay.mkv");
+    let plain_path = title_dir.join("Stored.Cut.2026.1080p.BluRay.mkv");
+    std::fs::write(&cut_path, vec![0_u8; 256]).expect("write cut");
+    std::fs::write(&plain_path, vec![0_u8; 256]).expect("write plain file");
+    let (app, user, _) = bootstrap_movie_scan_app(
+        tempdir.path(),
+        build_test_library_files(&[cut_path.as_path(), plain_path.as_path()]),
+        Arc::new(EmptySearchMetadataGateway),
+    )
+    .await;
+    let title =
+        create_movie_title_with_folder(&app, &user, "Stored Cut", title_dir.as_path()).await;
+    for (path, role) in [
+        (&cut_path, MediaFileRole::Primary),
+        (&plain_path, MediaFileRole::Additional),
+    ] {
+        app.services
+            .library
+            .media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.to_string_lossy().to_string(),
+                size_bytes: 256,
+                role,
+                quality_label: Some("1080p".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("seed stored file");
+    }
+
+    app.scan_title_library(&user, &title.id)
+        .await
+        .expect("scan movie title");
+
+    let files = app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(
+        media_file_role_for_path(&files, cut_path.as_path()),
         MediaFileRole::Primary
+    );
+    assert_eq!(
+        media_file_role_for_path(&files, plain_path.as_path()),
+        MediaFileRole::Additional
     );
 }
 
@@ -2201,6 +2519,657 @@ async fn series_library_scan_marks_duplicate_episode_files_as_additional() {
 
 #[tokio::test]
 async fn series_library_scan_does_not_promote_additional_file_but_title_scan_does() {
+    assert_eq!(
+        series_scan_roles_of_an_additional_only_episode(false).await,
+        (MediaFileRole::Additional, MediaFileRole::Primary)
+    );
+}
+
+/// The one-off title scan promotes only an ordinary episode file: the
+/// linked episode of a series movie keeps its Additional file.
+#[tokio::test]
+async fn series_title_scan_leaves_a_series_movie_episode_additional_only() {
+    assert_eq!(
+        series_scan_roles_of_an_additional_only_episode(true).await,
+        (MediaFileRole::Additional, MediaFileRole::Additional)
+    );
+}
+
+/// A series with one regular episode (1x01) and a series movie, "Lantern
+/// Vale Feature" (2026), linked to its special S00E01, whose folder holds
+/// the given files. Nothing has been scanned yet.
+struct LanternValeSeries {
+    _tempdir: tempfile::TempDir,
+    app: AppUseCase,
+    user: User,
+    title: Title,
+    library_scanner: Arc<MutableLibraryScanner>,
+    paths: Vec<PathBuf>,
+    /// The special the series movie is linked to, then the regular episode.
+    episode_ids: Vec<String>,
+}
+
+impl LanternValeSeries {
+    async fn roles(&self) -> Vec<MediaFileRole> {
+        let files = self
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&self.title.id)
+            .await
+            .expect("list media files");
+        self.paths
+            .iter()
+            .map(|path| media_file_role_for_path(&files, path))
+            .collect()
+    }
+
+    /// Whether any file is Primary for `episode_id`.
+    async fn episode_has_primary(&self, episode_id: &str) -> bool {
+        self.app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&self.title.id)
+            .await
+            .expect("list media files")
+            .iter()
+            .any(|file| file.episode_id.as_deref() == Some(episode_id) && file.role.is_primary())
+    }
+
+    /// Takes the file at `index` out of the folder and the catalog, as a
+    /// file that vanished or was deleted without any promotion running.
+    async fn remove_file(&mut self, index: usize) {
+        let path = self.paths.remove(index);
+        let file_id = self
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&self.title.id)
+            .await
+            .expect("list media files")
+            .into_iter()
+            .find(|file| file.file_path == path.to_string_lossy())
+            .expect("file to remove")
+            .id;
+        self.app
+            .services
+            .library
+            .media_files
+            .delete_media_file(&file_id)
+            .await
+            .expect("remove catalog row");
+        std::fs::remove_file(&path).expect("remove file from disk");
+        self.library_scanner
+            .set_library_files(build_test_library_files(
+                &self.paths.iter().map(PathBuf::as_path).collect::<Vec<_>>(),
+            ))
+            .await;
+    }
+}
+
+async fn lantern_vale_series(names: &[(&str, usize)]) -> LanternValeSeries {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let title_dir = tempdir.path().join("Lantern Vale (2026)");
+    std::fs::create_dir(&title_dir).expect("create series folder");
+    let paths = names
+        .iter()
+        .map(|(name, size)| {
+            let path = title_dir.join(name);
+            std::fs::write(&path, vec![0_u8; *size]).expect("write file");
+            path
+        })
+        .collect::<Vec<_>>();
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "series.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    library_scanner
+        .set_library_files(build_test_library_files(
+            &paths.iter().map(PathBuf::as_path).collect::<Vec<_>>(),
+        ))
+        .await;
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        settings,
+        library_scanner.clone(),
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+        Arc::new(EmptySearchMetadataGateway),
+    );
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile series root");
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Lantern Vale".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                year: Some(2026),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series title");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&title.id, title_dir.to_string_lossy().as_ref())
+        .await
+        .expect("set series folder path");
+    let mut episode_ids = Vec::new();
+    for (collection_type, season, name) in [
+        (CollectionType::Specials, "0", "Feature"),
+        (CollectionType::Season, "1", "Pilot"),
+    ] {
+        let collection = app
+            .services
+            .catalog
+            .shows
+            .create_collection(Collection {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_type,
+                collection_index: season.to_string(),
+                label: Some(format!("Season {season}")),
+                ordered_path: None,
+                narrative_order: Some(season.to_string()),
+                first_episode_number: Some("1".to_string()),
+                last_episode_number: Some("1".to_string()),
+                monitored: true,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create collection");
+        let episode = app
+            .services
+            .catalog
+            .shows
+            .create_episode(Episode {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_id: Some(collection.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some("1".to_string()),
+                season_number: Some(season.to_string()),
+                episode_label: Some(format!("S0{season}E01")),
+                title: Some(name.to_string()),
+                air_date: Some("2026-01-01".to_string()),
+                duration_seconds: Some(420),
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                contiguous_absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                tmdb_id: None,
+                image_url: None,
+                monitored: true,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create episode");
+        episode_ids.push(episode.id);
+    }
+    let mut link =
+        test_series_movie_link(&title.id, "Lantern Vale Feature", Some(2026), None, None);
+    link.linked_episode_id = Some(episode_ids[0].clone());
+    app.services
+        .catalog
+        .shows
+        .upsert_series_movie_link(link)
+        .await
+        .expect("record series movie link");
+
+    LanternValeSeries {
+        _tempdir: tempdir,
+        app,
+        user,
+        title,
+        library_scanner,
+        paths,
+        episode_ids,
+    }
+}
+
+/// Scans new files into the Lantern Vale series and returns each file's
+/// role, in the order given.
+async fn series_title_scan_roles_for_new_files(names: &[(&str, usize)]) -> Vec<MediaFileRole> {
+    let series = lantern_vale_series(names).await;
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
+        .await
+        .expect("scan series title");
+    series.roles().await
+}
+
+/// Scans `name` into the Lantern Vale series while the series movie's linked
+/// episode has a wanted row, and returns that row's status afterwards.
+async fn series_movie_episode_wanted_status_after_scanning(name: &str) -> AcquisitionScopeStatus {
+    let mut series = lantern_vale_series(&[(name, 256)]).await;
+    let wanted_items = track_series_movie_episode_wanted_row(&mut series).await;
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
+        .await
+        .expect("scan series title");
+    series_movie_episode_wanted_status(&series, &wanted_items).await
+}
+
+/// Gives the series movie's linked episode a Wanted row that scans update.
+async fn track_series_movie_episode_wanted_row(
+    series: &mut LanternValeSeries,
+) -> Arc<TrackingAcquisitionScopeStateRepo> {
+    let wanted_items = Arc::new(TrackingAcquisitionScopeStateRepo::default());
+    series.app.services.workflow.acquisition_scope_states = wanted_items.clone();
+    let episode_id = series.episode_ids[0].clone();
+    let now = chrono::Utc::now().to_rfc3339();
+    wanted_items
+        .upsert_acquisition_scope_state(&AcquisitionScopeState {
+            id: Id::new().0,
+            title_id: series.title.id.clone(),
+            title_name: Some(series.title.name.clone()),
+            title_slug: None,
+            title_facet: None,
+            library_id: None,
+            library_name: None,
+            library_slug: None,
+            episode_id: Some(episode_id.clone()),
+            collection_id: None,
+            series_movie_link_id: None,
+            season_number: Some("0".to_string()),
+            episode_number: Some("1".to_string()),
+            media_type: "episode".to_string(),
+            last_search_at: None,
+            status: AcquisitionScopeStatus::Wanted,
+            grabbed_release: None,
+            landed_bar: None,
+            latest_release_decision: None,
+            mismatch_recovery_eligible: false,
+            created_at: now.clone(),
+            updated_at: now,
+        })
+        .await
+        .expect("seed wanted row");
+    wanted_items
+}
+
+async fn series_movie_episode_wanted_status(
+    series: &LanternValeSeries,
+    wanted_items: &TrackingAcquisitionScopeStateRepo,
+) -> AcquisitionScopeStatus {
+    wanted_items
+        .get_acquisition_scope_state_for_title(&series.title.id, Some(&series.episode_ids[0]))
+        .await
+        .expect("read wanted row")
+        .expect("wanted row kept")
+        .status
+}
+
+/// The series movie's elected file is deleted and the losing file stays. A
+/// later scan finds only the loser, which keeps its title role Primary but is
+/// not promoted, so the episode has no Primary and must stay wanted for the
+/// release parked for it.
+#[tokio::test]
+async fn series_title_scan_keeps_a_series_movie_episode_wanted_when_only_its_losing_file_remains() {
+    let mut series =
+        lantern_vale_series(&[(SERIES_MOVIE_FILES[0], 1024), (SERIES_MOVIE_FILES[1], 256)]).await;
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
+        .await
+        .expect("first scan");
+    assert_eq!(
+        series.roles().await,
+        vec![MediaFileRole::Primary, MediaFileRole::Additional],
+        "the first scan elects the larger file"
+    );
+    series.remove_file(0).await;
+    let wanted_items = track_series_movie_episode_wanted_row(&mut series).await;
+
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
+        .await
+        .expect("rescan");
+
+    assert!(
+        !series.episode_has_primary(&series.episode_ids[0]).await,
+        "the losing file is not promoted"
+    );
+    assert_eq!(
+        series_movie_episode_wanted_status(&series, &wanted_items).await,
+        AcquisitionScopeStatus::Wanted
+    );
+}
+
+#[tokio::test]
+async fn series_title_scan_leaves_a_series_movie_episode_wanted_when_only_an_alternate_cut_is_found()
+ {
+    assert_eq!(
+        series_movie_episode_wanted_status_after_scanning(
+            "Lantern Vale Feature (2026) Extended Cut Bluray-1080p.mkv"
+        )
+        .await,
+        AcquisitionScopeStatus::Wanted
+    );
+    assert_eq!(
+        series_movie_episode_wanted_status_after_scanning(
+            "Lantern Vale Feature (2026) Bluray-1080p.mkv"
+        )
+        .await,
+        AcquisitionScopeStatus::Completed
+    );
+}
+
+/// Two files for one episode: the scan elects the larger, which then goes
+/// away without a promotion, and the episode is scanned again in a library
+/// scan (`full_scan`) or a one-off title scan. Returns the remaining file's
+/// role for the episode and whether the episode has a Primary afterwards.
+async fn episode_role_after_elected_file_goes(
+    names: [&str; 2],
+    episode_index: usize,
+    full_scan: bool,
+) -> (MediaFileRole, bool) {
+    let mut series = lantern_vale_series(&[(names[0], 1024), (names[1], 256)]).await;
+    series
+        .app
+        .scan_title_library(&series.user, &series.title.id)
+        .await
+        .expect("first scan");
+    assert_eq!(
+        series.roles().await,
+        vec![MediaFileRole::Primary, MediaFileRole::Additional],
+        "the first scan elects the larger file"
+    );
+
+    series.remove_file(0).await;
+    if full_scan {
+        series
+            .app
+            .scan_library(&series.user, MediaFacet::Series)
+            .await
+            .expect("library scan");
+    } else {
+        series
+            .app
+            .scan_title_library(&series.user, &series.title.id)
+            .await
+            .expect("title scan");
+    }
+
+    let episode_id = series.episode_ids[episode_index].clone();
+    (
+        series.roles().await[0],
+        series.episode_has_primary(&episode_id).await,
+    )
+}
+
+const SERIES_MOVIE_FILES: [&str; 2] = [
+    "Lantern Vale Feature (2026) Bluray-1080p.mkv",
+    "Lantern Vale Feature (2026) WEBDL-720p.mkv",
+];
+const REGULAR_EPISODE_FILES: [&str; 2] = [
+    "Lantern Vale - 1x01 - Pilot Bluray-1080p.mkv",
+    "Lantern Vale - 1x01 - Pilot WEBDL-720p.mkv",
+];
+
+/// The losing file of a series movie's election keeps its title role
+/// Primary, but no later scan of any mode makes it the episode's Primary.
+#[tokio::test]
+async fn scans_never_promote_a_series_movie_episodes_losing_file() {
+    for full_scan in [true, false] {
+        assert_eq!(
+            episode_role_after_elected_file_goes(SERIES_MOVIE_FILES, 0, full_scan).await,
+            (MediaFileRole::Additional, false),
+            "full scan: {full_scan}"
+        );
+    }
+}
+
+/// The operator keeps the smaller file as the series movie's Primary, so the
+/// larger one is title-Primary but Additional for the episode. The catalog then
+/// moves the series movie to another special, and a scan links both stored
+/// files to it afresh. A fresh link starts Additional and is no proof the file
+/// never lost: the larger file must not be elected and reverse the pick.
+#[tokio::test]
+async fn scans_never_elect_a_relinked_losing_file_of_a_series_movie() {
+    for full_scan in [true, false] {
+        let series =
+            lantern_vale_series(&[(SERIES_MOVIE_FILES[0], 1024), (SERIES_MOVIE_FILES[1], 256)])
+                .await;
+        series
+            .app
+            .scan_title_library(&series.user, &series.title.id)
+            .await
+            .expect("first scan");
+        let file_id_for = |files: &[TitleMediaFile], name: &str| {
+            files
+                .iter()
+                .find(|file| file.file_path.ends_with(name))
+                .expect("scanned file")
+                .id
+                .clone()
+        };
+        let files = series
+            .app
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&series.title.id)
+            .await
+            .expect("list media files");
+        let larger = file_id_for(&files, SERIES_MOVIE_FILES[0]);
+        let smaller = file_id_for(&files, SERIES_MOVIE_FILES[1]);
+        series
+            .app
+            .services
+            .library
+            .media_files
+            .set_media_file_roles_for_episode(
+                &series.title.id,
+                &series.episode_ids[0],
+                &smaller,
+                std::slice::from_ref(&larger),
+            )
+            .await
+            .expect("operator picks the smaller file");
+
+        let shows = &series.app.services.catalog.shows;
+        let special = shows
+            .get_episode_by_id(&series.episode_ids[0])
+            .await
+            .expect("read special")
+            .expect("special exists");
+        let renumbered = shows
+            .create_episode(Episode {
+                id: Id::new().0,
+                episode_number: Some("2".to_string()),
+                episode_label: Some("S00E02".to_string()),
+                ..special
+            })
+            .await
+            .expect("create renumbered special");
+        let mut link = shows
+            .list_series_movie_links_for_title(&series.title.id)
+            .await
+            .expect("list series movie links")
+            .remove(0);
+        link.linked_episode_id = Some(renumbered.id.clone());
+        shows
+            .upsert_series_movie_link(link)
+            .await
+            .expect("move the series movie link");
+
+        if full_scan {
+            series
+                .app
+                .scan_library(&series.user, MediaFacet::Series)
+                .await
+                .expect("library scan");
+        } else {
+            series
+                .app
+                .scan_title_library(&series.user, &series.title.id)
+                .await
+                .expect("title scan");
+        }
+
+        let scoped = series
+            .app
+            .services
+            .library
+            .media_files
+            .list_live_media_files_for_episode_ids(
+                &series.title.id,
+                std::slice::from_ref(&renumbered.id),
+            )
+            .await
+            .expect("list renumbered special files");
+        let larger_row = scoped
+            .iter()
+            .find(|file| file.media_file.id == larger)
+            .expect("the larger file is linked to the renumbered special");
+        assert!(
+            !larger_row.primary_episode_ids.contains(&renumbered.id),
+            "full scan: {full_scan}: the relinked losing file was elected"
+        );
+    }
+}
+
+/// The first scan stores the series movie's only file while the series movie
+/// has no linked episode, so the file gets no episode link. Once the series
+/// movie is linked to a special, the next scan links the file afresh. It was
+/// never through an election, so it becomes the special's Primary and the
+/// special's wanted row completes; otherwise auto-search would grab a second
+/// copy of a movie already on disk.
+#[tokio::test]
+async fn scans_elect_a_series_movie_file_stored_before_its_episode_was_linked() {
+    for full_scan in [true, false] {
+        let mut series = lantern_vale_series(&[(SERIES_MOVIE_FILES[0], 1024)]).await;
+        let shows = series.app.services.catalog.shows.clone();
+        let mut link = shows
+            .list_series_movie_links_for_title(&series.title.id)
+            .await
+            .expect("list series movie links")
+            .remove(0);
+        link.linked_episode_id = None;
+        shows
+            .upsert_series_movie_link(link.clone())
+            .await
+            .expect("unlink the series movie");
+        series
+            .app
+            .scan_title_library(&series.user, &series.title.id)
+            .await
+            .expect("first scan");
+        assert!(
+            !series.episode_has_primary(&series.episode_ids[0]).await,
+            "the first scan has no episode to link the file to"
+        );
+
+        link.linked_episode_id = Some(series.episode_ids[0].clone());
+        shows
+            .upsert_series_movie_link(link)
+            .await
+            .expect("link the series movie to the special");
+        let wanted_items = track_series_movie_episode_wanted_row(&mut series).await;
+        if full_scan {
+            series
+                .app
+                .scan_library(&series.user, MediaFacet::Series)
+                .await
+                .expect("library scan");
+        } else {
+            series
+                .app
+                .scan_title_library(&series.user, &series.title.id)
+                .await
+                .expect("title scan");
+        }
+
+        assert!(
+            series.episode_has_primary(&series.episode_ids[0]).await,
+            "full scan: {full_scan}: the file is the special's Primary"
+        );
+        assert_eq!(
+            series_movie_episode_wanted_status(&series, &wanted_items).await,
+            AcquisitionScopeStatus::Completed,
+            "full scan: {full_scan}"
+        );
+    }
+}
+
+/// A regular episode's losing file is still promoted by a later scan.
+#[tokio::test]
+async fn scans_promote_a_regular_episodes_losing_file() {
+    for full_scan in [true, false] {
+        assert_eq!(
+            episode_role_after_elected_file_goes(REGULAR_EPISODE_FILES, 1, full_scan).await,
+            (MediaFileRole::Primary, true),
+            "full scan: {full_scan}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn series_title_scan_records_a_series_movie_alternate_cut_additional() {
+    assert_eq!(
+        series_title_scan_roles_for_new_files(&[
+            ("Lantern Vale Feature (2026) WEBDL-720p.mkv", 128),
+            (
+                "Lantern Vale Feature (2026) Directors Cut Bluray-1080p.mkv",
+                1024
+            ),
+        ])
+        .await,
+        vec![MediaFileRole::Primary, MediaFileRole::Additional]
+    );
+}
+
+#[tokio::test]
+async fn series_title_scan_elects_nobody_for_a_series_movie_with_only_an_alternate_cut() {
+    assert_eq!(
+        series_title_scan_roles_for_new_files(&[(
+            "Lantern Vale Feature (2026) Extended Cut Bluray-1080p.mkv",
+            512
+        )])
+        .await,
+        vec![MediaFileRole::Additional]
+    );
+}
+
+/// Editions mean nothing for ordinary episodes: an episode file named as a
+/// director's cut is imported Primary like any other.
+#[tokio::test]
+async fn series_title_scan_ignores_editions_on_ordinary_episodes() {
+    assert_eq!(
+        series_title_scan_roles_for_new_files(&[(
+            "Lantern Vale - 1x01 - Pilot Directors Cut WEBDL-1080p.mkv",
+            256
+        )])
+        .await,
+        vec![MediaFileRole::Primary]
+    );
+}
+
+/// The role of an episode's only file, stored Additional, after a library
+/// scan and then after a one-off title scan. `series_movie_episode` links a
+/// series movie to that episode.
+async fn series_scan_roles_of_an_additional_only_episode(
+    series_movie_episode: bool,
+) -> (MediaFileRole, MediaFileRole) {
     let tempdir = tempfile::tempdir().expect("tempdir");
     let title_dir = tempdir.path().join("Additional Show (2026)");
     std::fs::create_dir(&title_dir).expect("create series folder");
@@ -2298,6 +3267,17 @@ async fn series_library_scan_does_not_promote_additional_file_but_title_scan_doe
         })
         .await
         .expect("create episode");
+    if series_movie_episode {
+        let mut link =
+            test_series_movie_link(&title.id, "Additional Show Feature", Some(2026), None, None);
+        link.linked_episode_id = Some(episode.id.clone());
+        app.services
+            .catalog
+            .shows
+            .upsert_series_movie_link(link)
+            .await
+            .expect("record series movie link");
+    }
     let file_id = app
         .services
         .library
@@ -2330,10 +3310,7 @@ async fn series_library_scan_does_not_promote_additional_file_but_title_scan_doe
         .list_media_files_for_title(&title.id)
         .await
         .expect("list media files after library scan");
-    assert_eq!(
-        media_file_role_for_path(&files, episode_path.as_path()),
-        MediaFileRole::Additional
-    );
+    let after_library_scan = media_file_role_for_path(&files, episode_path.as_path());
 
     app.scan_title_library(&user, &title.id)
         .await
@@ -2346,10 +3323,10 @@ async fn series_library_scan_does_not_promote_additional_file_but_title_scan_doe
         .list_media_files_for_title(&title.id)
         .await
         .expect("list media files after title scan");
-    assert_eq!(
+    (
+        after_library_scan,
         media_file_role_for_path(&files, episode_path.as_path()),
-        MediaFileRole::Primary
-    );
+    )
 }
 
 #[tokio::test]
@@ -10755,5 +11732,426 @@ async fn a_movie_candidate_known_only_by_tmdb_is_shown_as_owned_and_resolves_tha
         error
             .to_string()
             .contains("title already exists in this library")
+    );
+}
+
+/// What a movie library scan leaves after the tracked Primary leaves the
+/// title folder, either deleted externally or sitting outside the folder:
+/// the Additional files' roles, in seeding order.
+async fn movie_library_scan_roles_after_primary_leaves(
+    primary_outside_folder: bool,
+    additional_count: usize,
+) -> Vec<MediaFileRole> {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let title_dir = tempdir.path().join("Lantern Vale (2026)");
+    std::fs::create_dir(&title_dir).expect("create movie folder");
+    let primary_path = if primary_outside_folder {
+        let elsewhere = tempdir.path().join("Elsewhere");
+        std::fs::create_dir(&elsewhere).expect("create sibling folder");
+        let path = elsewhere.join("Lantern.Vale.2026.720p.WEB-DL.mkv");
+        std::fs::write(&path, b"outside primary").expect("write outside primary");
+        path
+    } else {
+        title_dir.join("Lantern.Vale.2026.720p.WEB-DL.mkv")
+    };
+    let additional_paths = (0..additional_count)
+        .map(|index| {
+            let path = title_dir.join(format!("Lantern.Vale.2026.1080p.WEB-DL.cut{index}.mkv"));
+            std::fs::write(&path, vec![index as u8; 256]).expect("write additional movie file");
+            path
+        })
+        .collect::<Vec<_>>();
+
+    let (app, user, _) = bootstrap_movie_scan_app(
+        tempdir.path(),
+        build_test_library_files(
+            &additional_paths
+                .iter()
+                .map(PathBuf::as_path)
+                .collect::<Vec<_>>(),
+        ),
+        Arc::new(EmptySearchMetadataGateway),
+    )
+    .await;
+    let title =
+        create_movie_title_with_folder(&app, &user, "Lantern Vale", title_dir.as_path()).await;
+    let media_files = &app.services.library.media_files;
+    media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: primary_path.to_string_lossy().to_string(),
+            size_bytes: 128,
+            role: MediaFileRole::Primary,
+            quality_label: Some("720p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("seed primary file");
+    for path in &additional_paths {
+        media_files
+            .insert_media_file(&InsertMediaFileInput {
+                title_id: title.id.clone(),
+                file_path: path.to_string_lossy().to_string(),
+                size_bytes: 256,
+                role: MediaFileRole::Additional,
+                quality_label: Some("1080p".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("seed additional file");
+    }
+
+    app.scan_library(&user, MediaFacet::Movie)
+        .await
+        .expect("scan movie library");
+
+    let files = media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files after library scan");
+    assert!(
+        !files
+            .iter()
+            .any(|file| file.file_path == primary_path.to_string_lossy()),
+        "the departed primary's row is retired"
+    );
+    if primary_outside_folder {
+        assert_eq!(
+            std::fs::read(&primary_path).expect("detaching leaves the outside file on disk"),
+            b"outside primary"
+        );
+    }
+    for (index, path) in additional_paths.iter().enumerate() {
+        assert_eq!(
+            std::fs::read(path).expect("additional file stays on disk"),
+            vec![index as u8; 256]
+        );
+    }
+    additional_paths
+        .iter()
+        .map(|path| media_file_role_for_path(&files, path))
+        .collect()
+}
+
+#[tokio::test]
+async fn movie_library_scan_leaves_the_sole_additional_file_when_the_primary_vanishes() {
+    assert_eq!(
+        movie_library_scan_roles_after_primary_leaves(false, 1).await,
+        vec![MediaFileRole::Additional]
+    );
+}
+
+#[tokio::test]
+async fn movie_library_scan_leaves_the_sole_additional_file_when_the_primary_is_detached() {
+    assert_eq!(
+        movie_library_scan_roles_after_primary_leaves(true, 1).await,
+        vec![MediaFileRole::Additional]
+    );
+}
+
+#[tokio::test]
+async fn movie_library_scan_leaves_two_additional_files_when_the_primary_vanishes() {
+    assert_eq!(
+        movie_library_scan_roles_after_primary_leaves(false, 2).await,
+        vec![MediaFileRole::Additional, MediaFileRole::Additional]
+    );
+}
+
+/// The Additional files' roles after a series library scan retires the
+/// episode's vanished Primary, plus the role of another episode's file.
+async fn series_library_scan_roles_after_primary_vanishes(
+    additional_count: usize,
+) -> (Vec<MediaFileRole>, MediaFileRole) {
+    let (roles, other_role, _) =
+        series_library_scan_roles_after_primary_vanishes_for(additional_count, false).await;
+    (roles, other_role)
+}
+
+/// As above; `series_movie_episode` links a series movie to the episode whose
+/// Primary vanishes. Also reports whether that episode's search coverage
+/// survived the scan.
+async fn series_library_scan_roles_after_primary_vanishes_for(
+    additional_count: usize,
+    series_movie_episode: bool,
+) -> (Vec<MediaFileRole>, MediaFileRole, bool) {
+    let tempdir = tempfile::tempdir().expect("tempdir");
+    let title_dir = tempdir.path().join("Lantern Vale (2026)");
+    std::fs::create_dir(&title_dir).expect("create series folder");
+    let primary_path = title_dir.join("Lantern Vale - 1x01 - Pilot WEBDL-720p.mkv");
+    let additional_paths = (0..additional_count)
+        .map(|index| {
+            let path = title_dir.join(format!(
+                "Lantern Vale - 1x01 - Pilot cut{index} WEBDL-1080p.mkv"
+            ));
+            std::fs::write(&path, vec![index as u8; 256]).expect("write additional episode");
+            path
+        })
+        .collect::<Vec<_>>();
+    let other_episode_path = title_dir.join("Lantern Vale - 1x02 - Second WEBDL-1080p.mkv");
+    std::fs::write(&other_episode_path, b"second episode").expect("write other episode");
+
+    let settings = Arc::new(StoredSettingsRepo::default());
+    settings
+        .set_value(
+            SETTINGS_SCOPE_MEDIA,
+            "series.path",
+            tempdir.path().to_string_lossy().as_ref(),
+        )
+        .await;
+    let library_scanner = Arc::new(MutableLibraryScanner::default());
+    let mut scanned = additional_paths
+        .iter()
+        .map(PathBuf::as_path)
+        .collect::<Vec<_>>();
+    scanned.push(other_episode_path.as_path());
+    library_scanner
+        .set_library_files(build_test_library_files(&scanned))
+        .await;
+    let (app, user) = bootstrap_with_scan_unmatched_and_metadata_tracking(
+        settings,
+        library_scanner,
+        Arc::new(TrackingLibraryScanUnmatchedItemRepo::default()),
+        Arc::new(EmptySearchMetadataGateway),
+    );
+    let coverage = Arc::new(RecordingScopeIndexerCoverageRepo::default());
+    let app = app
+        .with_test_overrides(|builder| builder.with_scope_indexer_coverage_store(coverage.clone()));
+    app.reconcile_default_library_roots()
+        .await
+        .expect("reconcile series root");
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Lantern Vale".into(),
+                facet: MediaFacet::Series,
+                monitored: true,
+                year: Some(2026),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("create series title");
+    app.services
+        .catalog
+        .titles
+        .set_folder_path(&title.id, title_dir.to_string_lossy().as_ref())
+        .await
+        .expect("set series folder path");
+    let season = app
+        .services
+        .catalog
+        .shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: CollectionType::Season,
+            collection_index: "1".to_string(),
+            label: Some("Season 1".to_string()),
+            ordered_path: None,
+            narrative_order: Some("1".to_string()),
+            first_episode_number: Some("1".to_string()),
+            last_episode_number: Some("2".to_string()),
+            monitored: true,
+            created_at: Utc::now(),
+        })
+        .await
+        .expect("create season");
+    let mut episode_ids = Vec::new();
+    for (number, name) in [("1", "Pilot"), ("2", "Second")] {
+        let episode = app
+            .services
+            .catalog
+            .shows
+            .create_episode(Episode {
+                id: Id::new().0,
+                title_id: title.id.clone(),
+                collection_id: Some(season.id.clone()),
+                episode_type: scryer_domain::EpisodeType::Standard,
+                episode_number: Some(number.to_string()),
+                season_number: Some("1".to_string()),
+                episode_label: Some(format!("S01E0{number}")),
+                title: Some(name.to_string()),
+                air_date: Some("2026-01-01".to_string()),
+                duration_seconds: Some(420),
+                has_multi_audio: false,
+                has_subtitle: false,
+                is_filler: false,
+                is_recap: false,
+                absolute_number: None,
+                contiguous_absolute_number: None,
+                overview: None,
+                tvdb_id: None,
+                tmdb_id: None,
+                image_url: None,
+                monitored: true,
+                created_at: Utc::now(),
+            })
+            .await
+            .expect("create episode");
+        episode_ids.push(episode.id);
+    }
+    let episode_scope_key = crate::acquisition::convergence::convergence_scope_key(
+        &SubmissionScope::Episode {
+            episode_id: episode_ids[0].clone(),
+        },
+        &title.id,
+    )
+    .expect("episode scope key");
+    coverage
+        .record_coverage(&episode_scope_key, "series", "indexer-1", "fingerprint")
+        .await
+        .expect("record coverage");
+    if series_movie_episode {
+        let mut link =
+            test_series_movie_link(&title.id, "Lantern Vale Movie", Some(2026), None, None);
+        link.linked_episode_id = Some(episode_ids[0].clone());
+        app.services
+            .catalog
+            .shows
+            .upsert_series_movie_link(link)
+            .await
+            .expect("record series movie link");
+    }
+    let media_files = &app.services.library.media_files;
+    let seed = |path: PathBuf, role: MediaFileRole, episode_id: String| {
+        let title_id = title.id.clone();
+        let title_id_for_roles = title.id.clone();
+        async move {
+            let file_id = media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id,
+                    file_path: path.to_string_lossy().to_string(),
+                    size_bytes: 256,
+                    role,
+                    quality_label: Some("1080p".to_string()),
+                    ..Default::default()
+                })
+                .await
+                .expect("seed episode file");
+            media_files
+                .link_file_to_episode(&file_id, &episode_id)
+                .await
+                .expect("link episode file");
+            // A new link starts Additional, as in the store.
+            if role.is_primary() {
+                media_files
+                    .set_media_file_roles_for_episode(
+                        &title_id_for_roles,
+                        &episode_id,
+                        &file_id,
+                        &[],
+                    )
+                    .await
+                    .expect("make the file the episode's primary");
+            }
+        }
+    };
+    seed(
+        primary_path.clone(),
+        MediaFileRole::Primary,
+        episode_ids[0].clone(),
+    )
+    .await;
+    for path in &additional_paths {
+        seed(
+            path.clone(),
+            MediaFileRole::Additional,
+            episode_ids[0].clone(),
+        )
+        .await;
+    }
+    seed(
+        other_episode_path.clone(),
+        MediaFileRole::Additional,
+        episode_ids[1].clone(),
+    )
+    .await;
+
+    app.scan_library(&user, MediaFacet::Series)
+        .await
+        .expect("scan series library");
+
+    let files = media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files after library scan");
+    assert!(
+        !files
+            .iter()
+            .any(|file| file.file_path == primary_path.to_string_lossy()),
+        "the vanished primary's row is retired"
+    );
+    for (index, path) in additional_paths.iter().enumerate() {
+        assert_eq!(
+            std::fs::read(path).expect("additional file stays on disk"),
+            vec![index as u8; 256]
+        );
+    }
+    assert_eq!(
+        std::fs::read(&other_episode_path).expect("other episode stays on disk"),
+        b"second episode"
+    );
+    (
+        additional_paths
+            .iter()
+            .map(|path| media_file_role_for_path(&files, path))
+            .collect(),
+        media_file_role_for_path(&files, other_episode_path.as_path()),
+        !coverage
+            .indexers_for_scope(&episode_scope_key)
+            .await
+            .is_empty(),
+    )
+}
+
+#[tokio::test]
+async fn series_library_scan_promotes_the_sole_additional_file_when_the_primary_vanishes() {
+    assert_eq!(
+        series_library_scan_roles_after_primary_vanishes(1).await,
+        (vec![MediaFileRole::Primary], MediaFileRole::Additional)
+    );
+}
+
+#[tokio::test]
+async fn series_library_scan_leaves_a_series_movie_additional_file_when_the_primary_vanishes() {
+    let (roles, other_role, _) =
+        series_library_scan_roles_after_primary_vanishes_for(1, true).await;
+    assert_eq!(
+        (roles, other_role),
+        (vec![MediaFileRole::Additional], MediaFileRole::Additional)
+    );
+}
+
+#[tokio::test]
+async fn series_library_scan_keeps_coverage_for_an_episode_whose_additional_file_was_promoted() {
+    let (roles, _, coverage_kept) =
+        series_library_scan_roles_after_primary_vanishes_for(1, false).await;
+    assert_eq!(roles, vec![MediaFileRole::Primary]);
+    assert!(
+        coverage_kept,
+        "an episode that still has a Primary file is not reopened for search"
+    );
+}
+
+#[tokio::test]
+async fn series_library_scan_reopens_coverage_when_no_additional_file_was_promoted() {
+    let (roles, _, coverage_kept) =
+        series_library_scan_roles_after_primary_vanishes_for(2, false).await;
+    assert_eq!(
+        roles,
+        vec![MediaFileRole::Additional, MediaFileRole::Additional]
+    );
+    assert!(!coverage_kept, "the lost Primary reopens the episode");
+}
+
+#[tokio::test]
+async fn series_library_scan_leaves_two_additional_files_when_the_primary_vanishes() {
+    assert_eq!(
+        series_library_scan_roles_after_primary_vanishes(2).await,
+        (
+            vec![MediaFileRole::Additional, MediaFileRole::Additional],
+            MediaFileRole::Additional
+        )
     );
 }

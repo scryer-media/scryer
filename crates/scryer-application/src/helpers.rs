@@ -104,20 +104,24 @@ pub fn background_worker_priority() -> std::io::Result<()> {
 pub(crate) fn normalize_release_attempt_hint(raw: Option<&str>) -> Option<String> {
     let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
     let Ok(mut url) = url::Url::parse(raw) else {
-        return Some(raw.to_string());
+        // Never hand an unparsed value on raw: it may still carry a key.
+        return Some(crate::url_redaction::redact_url_credentials(raw));
     };
     let _ = url.set_username("");
     let _ = url.set_password(None);
     url.set_fragment(None);
     let mut query = url
         .query_pairs()
-        .filter(|(key, _)| {
-            !matches!(
-                key.to_ascii_lowercase().replace(['_', '-'], "").as_str(),
-                "apikey" | "apiaccess" | "token" | "auth" | "password" | "passkey"
-            )
+        .filter(|(key, _)| !crate::url_redaction::is_credential_parameter_name(key))
+        .map(|(key, value)| {
+            // A magnet's announce URL carries the tracker's own credentials.
+            let value = if key.eq_ignore_ascii_case("tr") {
+                crate::url_redaction::redact_url_credentials(&value)
+            } else {
+                value.into_owned()
+            };
+            (key.into_owned(), value)
         })
-        .map(|(key, value)| (key.into_owned(), value.into_owned()))
         .collect::<Vec<_>>();
     query.sort();
     url.set_query(None);
@@ -650,6 +654,65 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn release_attempt_hint_drops_indexer_and_tracker_credentials() {
+        for name in [
+            "apikey",
+            "ApiKey",
+            "api_key",
+            "passkey",
+            "token",
+            "auth",
+            "jackett_apikey",
+            "Jackett_ApiKey",
+            "rss_key",
+            "RSSKEY",
+            "authkey",
+            "AuthKey",
+            "torrent_pass",
+            "Torrent-Pass",
+            "apiaccess",
+            "password",
+        ] {
+            let raw = format!("https://tracker.invalid/dl?id=42&{name}=s3cret&file=lantern");
+            assert_eq!(
+                normalize_release_attempt_hint(Some(&raw)).as_deref(),
+                Some("https://tracker.invalid/dl?file=lantern&id=42"),
+                "parameter {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn release_attempt_hint_redacts_a_value_that_does_not_parse() {
+        assert_eq!(
+            normalize_release_attempt_hint(Some("indexer.invalid/api?t=get&apikey=s3cret&id=4"))
+                .as_deref(),
+            Some("indexer.invalid/api?t=get&apikey=[redacted]&id=4")
+        );
+    }
+
+    #[test]
+    fn release_attempt_hint_redacts_a_magnet_announce_credential() {
+        let hint = normalize_release_attempt_hint(Some(
+            "magnet:?xt=urn:btih:abcdef&tr=https%3A%2F%2Ftracker.invalid%2Fannounce%3Fpasskey%3Ds3cret",
+        ))
+        .expect("magnet hint should normalize");
+        assert!(!hint.contains("s3cret"), "{hint}");
+        assert!(hint.contains("tracker.invalid"), "{hint}");
+    }
+
+    #[test]
+    fn release_attempt_hint_keeps_parameters_that_only_resemble_credentials() {
+        assert_eq!(
+            normalize_release_attempt_hint(Some(
+                "https://tracker.invalid/dl?torrent_passes=keep&x_authkey=keep&id=7"
+            ))
+            .as_deref(),
+            Some("https://tracker.invalid/dl?id=7&torrent_passes=keep&x_authkey=keep")
+        );
+    }
 
     #[test]
     fn user_title_tag_normalization_folds_case_and_whitespace() {

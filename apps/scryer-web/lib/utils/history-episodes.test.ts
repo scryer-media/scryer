@@ -22,10 +22,18 @@ function episode(
   };
 }
 
+const t = (key: string) => (key === "episode.titleTba" ? "TBA" : key);
+
 test("history episode labels use SxxEyy and show the title once", () => {
   const item = episode("episode-1", 2, 3, "The Substitute");
 
-  assert.equal(formatHistoryEpisodeLabel(item, item.id), "S02E03 · The Substitute");
+  assert.equal(formatHistoryEpisodeLabel(item, item.id, t), "S02E03 · The Substitute");
+});
+
+test("history episode labels show TBA for an episode without a title", () => {
+  const item = { ...episode("episode-1", 2, 3, ""), episodeLabel: null, title: null };
+
+  assert.equal(formatHistoryEpisodeLabel(item, item.id, t), "S02E03 · TBA");
 });
 
 test("history episodes sort numerically by season then episode", () => {

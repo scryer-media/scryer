@@ -171,7 +171,7 @@ async fn deferred_analysis_failures_preserve_successful_metadata_and_reject_stal
 }
 
 #[tokio::test]
-async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
+async fn disc_review_is_the_grab_incumbent_and_landed_score_but_not_an_import_incumbent() {
     let analyzer = Arc::new(SelectionAnalyzer {
         seen: Arc::new(Mutex::new(Vec::new())),
         started: Arc::new(tokio::sync::Notify::new()),
@@ -191,7 +191,8 @@ async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
     let context = app
         .resolve_canonical_scoring_context(&title, &profile)
         .await;
-    for (status, count) in [("scanned", 1), ("review_required", 0), ("scanned", 1)] {
+    let mut scanned_bar = None;
+    for (status, import_count) in [("scanned", 1), ("review_required", 0), ("scanned", 1)] {
         files
             .store
             .lock()
@@ -200,7 +201,7 @@ async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
             .find(|row| row.id == id)
             .unwrap()
             .scan_status = status.into();
-        let subject = app
+        let import = app
             .admission_subject_for_scope(
                 &title,
                 &crate::SubmissionScope::Title,
@@ -209,19 +210,96 @@ async fn disc_review_does_not_supply_an_incumbent_or_displayed_landed_score() {
                 crate::quality::canonical_context::SubjectIntent::Import,
             )
             .await;
-        assert_eq!(subject.incumbents().len(), count, "{status}");
-        if status == "review_required" {
-            let bars = app
-                .landed_bars_for_scopes(&[crate::acquisition_workflow::LandedBarScope {
-                    title_id: title.id.clone(),
-                    episode_id: None,
-                    collection_id: None,
-                    series_movie_link_id: None,
-                }])
-                .await;
-            assert_eq!(bars, vec![None]);
+        assert_eq!(import.incumbents().len(), import_count, "{status}");
+        let grab = app
+            .admission_subject_for_scope(
+                &title,
+                &crate::SubmissionScope::Title,
+                &context,
+                None,
+                crate::quality::canonical_context::SubjectIntent::Grab,
+            )
+            .await;
+        assert_eq!(grab.incumbents().len(), 1, "{status}");
+        let bars = app
+            .landed_bars_for_scopes(&[crate::acquisition_workflow::LandedBarScope {
+                title_id: title.id.clone(),
+                episode_id: None,
+                collection_id: None,
+                series_movie_link_id: None,
+            }])
+            .await;
+        assert!(bars[0].is_some(), "{status}");
+        let bar = grab.best_incumbent();
+        match scanned_bar {
+            None => scanned_bar = bar,
+            Some(scanned) => assert_eq!(bar, Some(scanned), "{status}"),
         }
     }
+}
+
+#[tokio::test]
+async fn grab_compares_an_incoming_release_against_a_file_awaiting_review() {
+    let analyzer = Arc::new(SelectionAnalyzer {
+        seen: Arc::new(Mutex::new(Vec::new())),
+        started: Arc::new(tokio::sync::Notify::new()),
+        resume: None,
+    });
+    let (app, _admin, files, id, _dir) = selection_fixture(analyzer).await;
+    files
+        .store
+        .lock()
+        .await
+        .iter_mut()
+        .find(|row| row.id == id)
+        .unwrap()
+        .scan_status = "review_required".into();
+    let file = files.get_media_file_by_id(&id).await.unwrap().unwrap();
+    let title = app
+        .services
+        .catalog
+        .titles
+        .get_by_id(&file.title_id)
+        .await
+        .unwrap()
+        .unwrap();
+    let profile = app.resolve_quality_profile_for_title(&title).await.unwrap();
+    let context = app
+        .resolve_canonical_scoring_context(&title, &profile)
+        .await;
+    let subject = app
+        .admission_subject_for_scope(
+            &title,
+            &crate::SubmissionScope::Title,
+            &context,
+            None,
+            crate::quality::canonical_context::SubjectIntent::Grab,
+        )
+        .await;
+    let (tier, score) = subject.best_incumbent().expect("the file awaiting review");
+    let policy = crate::admission::AdmissionPolicy {
+        allow_upgrades: true,
+        min_delta: 1,
+        cutoff_score: None,
+        manual_override: false,
+        applies_to_queue: false,
+    };
+
+    let better = crate::admission::evaluate_admission(
+        &subject,
+        crate::admission::CandidateFacts::new(tier, 0, score + 500),
+        &policy,
+    );
+    assert!(better.is_admitted());
+    assert_eq!(better.superseded(), [id.clone()]);
+
+    let worse = crate::admission::evaluate_admission(
+        &subject,
+        crate::admission::CandidateFacts::new(tier, 0, score - 500),
+        &policy,
+    );
+    assert!(!worse.is_admitted());
+    assert!(worse.rejection().is_some());
 }
 
 #[tokio::test]

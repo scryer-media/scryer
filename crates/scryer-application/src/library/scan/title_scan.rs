@@ -413,7 +413,6 @@ async fn normalize_movie_file_roles_after_scan(
     title: &Title,
     movie_scope: &MovieScanScope,
     newly_imported_file_count: usize,
-    allow_existing_additional_role_promotion: bool,
 ) -> bool {
     let mut media_files = match app
         .services
@@ -454,12 +453,16 @@ async fn normalize_movie_file_roles_after_scan(
     // WEB-DL that had been on disk a week longer, after which every gate read
     // the scope through the WEB-DL and admitted the same BluRay release
     // again on every sync.
-    let should_rank_primary = newly_imported_file_count == media_files.len()
-        || primary_files.len() > 1
-        || (primary_files.is_empty() && allow_existing_additional_role_promotion);
-    if primary_files.is_empty() && !should_rank_primary {
+    //
+    // A movie whose files are all Additional stays that way in every scan
+    // mode: an operator's Additional file is never made Primary by a scan,
+    // and a folder whose new files were all recorded Additional (alternate
+    // cuts) elects nobody, so the movie stays missing.
+    if primary_files.is_empty() {
         return false;
     }
+    let should_rank_primary =
+        newly_imported_file_count == media_files.len() || primary_files.len() > 1;
     let selected_primary_id = if should_rank_primary {
         let category = crate::post_download_gate::facet_to_category_hint(&title.facet);
         let profile_lookup = crate::catalog::release_search::QualityProfileLookup {
@@ -485,17 +488,13 @@ async fn normalize_movie_file_roles_after_scan(
         };
         let context = app.resolve_canonical_scoring_context(title, &profile).await;
 
-        // A scan that owns every file (or has no primary to keep) ranks the
-        // whole folder; a scan that merely found two primaries elects among
-        // them, so an operator's additional file stays additional.
-        let ranking_pool: Vec<&TitleMediaFile> =
-            if newly_imported_file_count == media_files.len() || primary_files.is_empty() {
-                media_files.iter().collect()
-            } else {
-                primary_files.clone()
-            };
-        let mut ranked = Vec::with_capacity(ranking_pool.len());
-        for file in ranking_pool {
+        // The election runs among the files recorded Primary. When the scan
+        // owns every file that is the whole folder except the alternate cuts
+        // it recorded Additional on insert; otherwise it is the primaries a
+        // scan found in conflict, so an operator's Additional file stays
+        // Additional.
+        let mut ranked = Vec::with_capacity(primary_files.len());
+        for file in primary_files.iter().copied() {
             let (tier_key, score) = rank_movie_media_file_for_primary(app, &context, file);
             ranked.push(RankedMovieFile {
                 tier_key,
@@ -509,8 +508,8 @@ async fn normalize_movie_file_roles_after_scan(
         ranked
             .first()
             .map(|ranked| ranked.file_id.clone())
-            // `media_files` is non-empty above, so this is unreachable; a
-            // rejection beats a panic on a bulk scan pass (D14).
+            // `primary_files` is non-empty above, so this is unreachable; a
+            // rejection beats a panic on a bulk scan pass.
             .unwrap_or_default()
     } else {
         // Exactly one primary: `should_rank_primary` covers the empty and the
@@ -567,10 +566,40 @@ async fn normalize_movie_file_roles_after_scan(
     }
 }
 
+/// What an episode's election may draw on when no file is Primary for it.
+struct EpisodeElectionGate<'a> {
+    /// Files the automatic-promotion allow-list accepts as ordinary episode
+    /// files. Empty when the title's rows or series movie links could not be
+    /// read, which promotes nothing.
+    ordinary_file_ids: &'a HashSet<String>,
+    /// Files that had at least one stored episode link before this scan. A
+    /// file without one has never been through an episode election: either
+    /// this scan inserted it, or an earlier scan stored it before it could be
+    /// linked (a series movie with no linked episode yet, or a failed link
+    /// write). Electing among such files is a first election, not a
+    /// promotion. A file that lost an election always has a stored link, and
+    /// relinking it is no evidence either way: a new link row starts
+    /// Additional.
+    previously_linked_file_ids: &'a HashSet<String>,
+    /// Whether a file with no Primary role at all may be promoted (one-off
+    /// title scans only).
+    allow_additional_promotion: bool,
+}
+
+impl EpisodeElectionGate<'_> {
+    /// Whether the scan may make `file_id` Primary for an episode that has no
+    /// Primary: an ordinary episode file, or a file never linked to an
+    /// episode before this scan.
+    fn may_elect(&self, file_id: &str) -> bool {
+        self.ordinary_file_ids.contains(file_id)
+            || !self.previously_linked_file_ids.contains(file_id)
+    }
+}
+
 fn select_primary_episodic_media_file(
     files: &[&crate::EpisodeScopedMediaFile],
     episode_id: &str,
-    allow_existing_additional_role_promotion: bool,
+    gate: &EpisodeElectionGate<'_>,
 ) -> Option<String> {
     let association_primary_files = files
         .iter()
@@ -586,16 +615,29 @@ fn select_primary_episodic_media_file(
     }
 
     let mut ranked = if association_primary_files.is_empty() {
+        // A file that lost an earlier election keeps its title role Primary
+        // and is only Additional for the episode, so the title role alone
+        // never qualifies it: a series movie's episode keeps that file
+        // Additional until the operator picks.
         let title_primary_files = files
             .iter()
             .copied()
-            .filter(|file| file.title_role.is_primary())
+            .filter(|file| file.title_role.is_primary() && gate.may_elect(&file.media_file.id))
             .collect::<Vec<_>>();
         if title_primary_files.is_empty() {
-            if !allow_existing_additional_role_promotion {
+            if !gate.allow_additional_promotion {
                 return None;
             }
-            files.to_vec()
+            // Only an ordinary episode file may be promoted out of Additional.
+            let promotable = files
+                .iter()
+                .copied()
+                .filter(|file| gate.ordinary_file_ids.contains(&file.media_file.id))
+                .collect::<Vec<_>>();
+            if promotable.is_empty() {
+                return None;
+            }
+            promotable
         } else {
             title_primary_files
         }
@@ -615,10 +657,49 @@ fn select_primary_episodic_media_file(
     Some(ranked[0].media_file.id.clone())
 }
 
+/// The title's files that automatic promotion may make Primary: ordinary
+/// episode files only. A failed read promotes nothing.
+async fn promotable_episode_file_ids(app: &AppUseCase, title: &Title) -> HashSet<String> {
+    let title_rows = match app
+        .services
+        .library
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            warn!(
+                error = %error,
+                title_id = %title.id,
+                "skipping scan promotion: could not read the title's media files"
+            );
+            return HashSet::new();
+        }
+    };
+    let series_movie_episode_ids = app.series_movie_linked_episode_ids(&title.id).await;
+    title_rows
+        .iter()
+        .map(|row| row.id.as_str())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .filter(|file_id| {
+            crate::catalog::workflow::ordinary_episode_file_rows(
+                &title_rows,
+                series_movie_episode_ids.as_ref(),
+                file_id,
+            )
+            .is_some()
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 async fn normalize_episodic_file_roles_after_scan(
     app: &AppUseCase,
     title: &Title,
     episode_ids: &HashSet<String>,
+    previously_linked_file_ids: &HashSet<String>,
     allow_existing_additional_role_promotion: bool,
 ) -> bool {
     if episode_ids.is_empty() {
@@ -649,6 +730,11 @@ async fn normalize_episodic_file_roles_after_scan(
         return false;
     }
 
+    // The automatic-promotion allow-list, read once and only when an episode
+    // without a Primary has a file that was linked to an episode before this
+    // scan.
+    let mut ordinary_file_ids: Option<HashSet<String>> = None;
+
     let mut title_updated = false;
     for episode_id in episode_ids {
         let candidates = scoped_files
@@ -659,11 +745,27 @@ async fn normalize_episodic_file_roles_after_scan(
             continue;
         }
 
-        let Some(selected_primary_id) = select_primary_episodic_media_file(
-            &candidates,
-            &episode_id,
-            allow_existing_additional_role_promotion,
-        ) else {
+        let has_episode_primary = candidates.iter().any(|file| {
+            file.primary_episode_ids
+                .iter()
+                .any(|primary_episode_id| primary_episode_id == &episode_id)
+        });
+        let has_previously_linked_file = candidates
+            .iter()
+            .any(|file| previously_linked_file_ids.contains(&file.media_file.id));
+        if !has_episode_primary && has_previously_linked_file && ordinary_file_ids.is_none() {
+            ordinary_file_ids = Some(promotable_episode_file_ids(app, title).await);
+        }
+        let no_ordinary_files = HashSet::new();
+        let gate = EpisodeElectionGate {
+            ordinary_file_ids: ordinary_file_ids.as_ref().unwrap_or(&no_ordinary_files),
+            previously_linked_file_ids,
+            allow_additional_promotion: allow_existing_additional_role_promotion,
+        };
+
+        let Some(selected_primary_id) =
+            select_primary_episodic_media_file(&candidates, &episode_id, &gate)
+        else {
             continue;
         };
         let additional_file_ids = candidates
@@ -790,6 +892,8 @@ async fn cleanup_missing_movie_title_records(
         }
     };
 
+    // A movie's remaining Additional file is never promoted automatically;
+    // the operator chooses its Primary.
     for media_file in media_files {
         if movie_scope.file_is_outside_canonical_folder(&media_file.file_path) {
             if let Err(error) = app
@@ -2400,14 +2504,9 @@ impl AppUseCase {
         if !library_scan_cancel_requested(cancel_token.as_ref()) {
             let cleanup_updated =
                 cleanup_missing_movie_title_records(self, &title, &cleanup, &movie_scope).await;
-            let roles_updated = normalize_movie_file_roles_after_scan(
-                self,
-                &title,
-                &movie_scope,
-                summary.imported,
-                mode.allows_existing_additional_role_promotion(),
-            )
-            .await;
+            let roles_updated =
+                normalize_movie_file_roles_after_scan(self, &title, &movie_scope, summary.imported)
+                    .await;
             if cleanup_updated || roles_updated {
                 self.emit_title_updated_activity(None, &title).await;
             }
@@ -2677,6 +2776,11 @@ impl AppUseCase {
                     .insert(episode_id.clone());
             }
         }
+        // The files linked to an episode before this scan.
+        let previously_linked_file_ids = stored_episode_ids_by_file
+            .keys()
+            .cloned()
+            .collect::<HashSet<_>>();
         let mut remaining_existing_paths = existing_records_by_path
             .keys()
             .cloned()
@@ -3190,6 +3294,7 @@ impl AppUseCase {
                 )
                 .await?;
                 let mut lost_scope_keys = Vec::new();
+                let mut promotions = crate::catalog::workflow::PrimaryPromotionBatch::default();
                 for stale_path in remaining_existing_paths {
                     let Some(record) = existing_records_by_path.get(&stale_path).cloned() else {
                         continue;
@@ -3202,6 +3307,8 @@ impl AppUseCase {
                         continue;
                     }
                     let db_started = Instant::now();
+                    self.record_primary_promotion_candidate(&mut promotions, &title.id, &record.id)
+                        .await;
                     let delete_result = self
                         .delete_media_file_record_with_dependents(&record.id)
                         .await;
@@ -3222,6 +3329,21 @@ impl AppUseCase {
                         ));
                     }
                 }
+                let promoted_episode_ids = self
+                    .finish_primary_promotion_batch(&actor_event, promotions)
+                    .await;
+                // An episode whose Additional file just became its Primary
+                // still has a file: its coverage stays as it is.
+                let promoted_scope_keys = promoted_episode_ids
+                    .into_iter()
+                    .filter_map(|episode_id| {
+                        crate::acquisition::convergence::convergence_scope_key(
+                            &SubmissionScope::Episode { episode_id },
+                            &title.id,
+                        )
+                    })
+                    .collect::<std::collections::HashSet<_>>();
+                lost_scope_keys.retain(|scope_key| !promoted_scope_keys.contains(scope_key));
                 lost_scope_keys.sort_unstable();
                 lost_scope_keys.dedup();
                 reopen_lost_file_coverage(self, &title.id, lost_scope_keys).await;
@@ -3263,6 +3385,7 @@ impl AppUseCase {
                 self,
                 &title,
                 &role_normalization_episode_ids,
+                &previously_linked_file_ids,
                 mode.allows_existing_additional_role_promotion(),
             )
             .await

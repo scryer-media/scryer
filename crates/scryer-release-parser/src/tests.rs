@@ -3605,6 +3605,214 @@ fn beam_editions_project_with_canonical_casing() {
     assert_eq!(projected.edition.as_deref(), Some("Uncut"));
 }
 
+fn movie_file_edition(raw: &str, title: &str) -> Option<String> {
+    let mut target = context(ContextFacetHint::Movie, title);
+    target.known_years.push(2024);
+    analyze_release_for_target(raw, &target)
+        .best_candidate()
+        .expect("best candidate")
+        .projected
+        .edition
+        .clone()
+}
+
+#[test]
+fn alternate_cut_editions_are_recognised_after_the_title_and_year() {
+    for (marker, expected) in [
+        ("Directors.Cut", "Director's Cut"),
+        ("DIRECTORS.CUT", "Director's Cut"),
+        ("Extended", "Extended"),
+        ("Extended.Cut", "Extended Cut"),
+        ("Extended.Edition", "Extended"),
+        ("Special.Edition", "Special Edition"),
+        ("Unrated", "Unrated"),
+        ("Uncut", "Uncut"),
+        ("Final.Cut", "Final Cut"),
+        ("Ultimate.Cut", "Ultimate Cut"),
+        ("Ultimate.Edition", "Ultimate Edition"),
+        ("Redux", "Redux"),
+    ] {
+        let raw = format!("Fixture.Picture.2024.{marker}.1080p.BluRay.x264-GRP");
+        let edition = movie_file_edition(&raw, "Fixture Picture");
+        assert_eq!(edition.as_deref(), Some(expected), "{raw}");
+        assert!(crate::is_alternate_cut_edition(expected), "{expected}");
+        assert!(
+            crate::is_alternate_cut_edition(&expected.to_ascii_lowercase()),
+            "{expected} is matched case-insensitively"
+        );
+    }
+}
+
+#[test]
+fn theatrical_framing_restorations_and_labels_are_editions_but_not_alternate_cuts() {
+    for (marker, expected) in [
+        ("Theatrical", "Theatrical"),
+        ("Theatrical.Cut", "Theatrical"),
+        ("IMAX", "IMAX"),
+        ("IMAX.Enhanced", "IMAX Enhanced"),
+        ("Open.Matte", "Open Matte"),
+        ("Remastered", "Remaster"),
+        ("Criterion", "Criterion"),
+    ] {
+        let raw = format!("Fixture.Picture.2024.{marker}.1080p.BluRay.x264-GRP");
+        let edition = movie_file_edition(&raw, "Fixture Picture");
+        assert_eq!(edition.as_deref(), Some(expected), "{raw}");
+        assert!(!crate::is_alternate_cut_edition(expected), "{expected}");
+    }
+}
+
+/// "DC" is a franchise and studio token far more often than an abbreviation
+/// of a director's cut, so it is never read as an edition.
+#[test]
+fn a_bare_dc_token_is_not_an_edition() {
+    assert_eq!(
+        movie_file_edition(
+            "Fixture.Picture.2024.DC.Universe.Animated.1080p.BluRay.x264-GRP",
+            "Fixture Picture",
+        ),
+        None
+    );
+    assert_eq!(
+        movie_file_edition(
+            "Fixture.Picture.2024.DC.1080p.BluRay.x264-GRP",
+            "Fixture Picture",
+        ),
+        None
+    );
+}
+
+#[test]
+fn alternate_endings_and_cuts_are_alternate_cut_editions() {
+    for (raw, expected) in [
+        (
+            "Fixture.Picture.2024.Alternate.Ending.1080p.BluRay.x264-GRP",
+            "Alternate Ending",
+        ),
+        (
+            "Fixture.Picture.2024.ALTERNATIVE.ENDING.1080p.BluRay.x264-GRP",
+            "Alternate Ending",
+        ),
+        (
+            "Fixture.Picture.2024.alt.ending.1080p.BluRay.x264-GRP",
+            "Alternate Ending",
+        ),
+        (
+            "Fixture Picture 2024 Alternate Ending 1080p BluRay x264-GRP",
+            "Alternate Ending",
+        ),
+        (
+            "Fixture_Picture_2024_Alternate_Ending_1080p_BluRay_x264-GRP",
+            "Alternate Ending",
+        ),
+        (
+            "Fixture Picture (2024) Alternate Ending Bluray-1080p",
+            "Alternate Ending",
+        ),
+        (
+            "Fixture.Picture.2024.Alternate.Cut.1080p.BluRay.x264-GRP",
+            "Alternate Cut",
+        ),
+        (
+            "Fixture.Picture.2024.Alternative.Cut.1080p.BluRay.x264-GRP",
+            "Alternate Cut",
+        ),
+        (
+            "Fixture.Picture.2024.Alternate.Theatrical.Version.1080p.BluRay.x264-GRP",
+            "Alternate Cut",
+        ),
+        (
+            "Fixture.Picture.2024.Alternate.Theatrical.Cut.1080p.BluRay.x264-GRP",
+            "Alternate Cut",
+        ),
+        // The REMUX single-token edition drop does not reach these phrases.
+        (
+            "Fixture.Picture.2024.Alternate.Ending.1080p.BluRay.REMUX.AVC.DTS-HD.MA.5.1-GRP",
+            "Alternate Ending",
+        ),
+        (
+            "Fixture.Picture.2024.Alternate.Cut.2160p.UHD.BluRay.REMUX.HEVC-GRP",
+            "Alternate Cut",
+        ),
+    ] {
+        assert_eq!(
+            movie_file_edition(raw, "Fixture Picture").as_deref(),
+            Some(expected),
+            "{raw}"
+        );
+        assert!(crate::is_alternate_cut_edition(expected), "{expected}");
+    }
+}
+
+/// When a name carries more than one edition the first is kept, unless a
+/// later one is an alternate cut and the first is not.
+#[test]
+fn an_alternate_ending_beside_another_edition_still_reads_as_an_alternate_cut() {
+    for (raw, expected) in [
+        (
+            "Fixture.Picture.2024.Alternate.Ending.Extended.1080p.BluRay.x264-GRP",
+            "Alternate Ending",
+        ),
+        (
+            "Fixture.Picture.2024.Theatrical.And.Alternate.Ending.1080p.BluRay.x264-GRP",
+            "Alternate Ending",
+        ),
+        (
+            "Fixture.Picture.2024.Remastered.Alternate.Cut.1080p.BluRay.x264-GRP",
+            "Alternate Cut",
+        ),
+        (
+            "Fixture.Picture.2024.Extended.Alternate.Ending.1080p.BluRay.x264-GRP",
+            "Extended",
+        ),
+    ] {
+        let edition = movie_file_edition(raw, "Fixture Picture");
+        assert_eq!(edition.as_deref(), Some(expected), "{raw}");
+        assert!(crate::is_alternate_cut_edition(expected), "{raw}");
+    }
+}
+
+#[test]
+fn a_bare_alternate_alt_or_ending_is_not_an_edition() {
+    for raw in [
+        "Fixture.Picture.2024.Alternate.1080p.BluRay.x264-GRP",
+        "Fixture.Picture.2024.ALT.1080p.BluRay.x264-GRP",
+        "Fixture.Picture.2024.Ending.1080p.BluRay.x264-GRP",
+        "Fixture.Picture.2024.Alternate.Theatrical.1080p.BluRay.x264-GRP",
+    ] {
+        let edition = movie_file_edition(raw, "Fixture Picture");
+        assert!(
+            edition
+                .as_deref()
+                .is_none_or(|edition| !edition.starts_with("Alternate")),
+            "{raw}: {edition:?}"
+        );
+    }
+}
+
+#[test]
+fn an_alternate_ending_inside_the_title_is_title() {
+    let edition = movie_file_edition(
+        "The.Alternate.Ending.2024.1080p.BluRay.x264-GRP",
+        "The Alternate Ending",
+    );
+    assert_eq!(edition, None);
+    let edition = movie_file_edition(
+        "Alternate.Cut.Picture.2024.1080p.BluRay.x264-GRP",
+        "Alternate Cut Picture",
+    );
+    assert_eq!(edition, None);
+}
+
+#[test]
+fn an_edition_word_inside_the_title_is_not_an_edition() {
+    let edition = movie_file_edition(
+        "The.Extended.Redux.Picture.2024.1080p.BluRay.x264-GRP",
+        "The Extended Redux Picture",
+    );
+
+    assert_eq!(edition, None);
+}
+
 #[test]
 fn fps_is_detected_in_dot_separated_names() {
     let mut target = context(ContextFacetHint::Movie, "Movie Title");

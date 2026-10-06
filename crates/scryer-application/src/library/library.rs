@@ -114,6 +114,8 @@ impl LibraryScanTitleWalkMode {
         }
     }
 
+    /// Whether the scan may promote an ordinary episode's Additional-only
+    /// file. Movies and series movies are never promoted by any scan.
     fn allows_existing_additional_role_promotion(self) -> bool {
         matches!(self, Self::OneOff)
     }

@@ -690,27 +690,25 @@ impl AppUseCase {
         let mut config = self
             .list_provider_config_for(&subscription.source.provider)
             .await;
-        let _account_guard = if subscription.is_personal() {
-            Some(
-                lists
-                    .account_runtime
-                    .lock_account(subscription.credential_id.as_deref().unwrap_or_default())
-                    .await,
-            )
-        } else {
-            None
-        };
+        // A preview is interactive: it never waits out a slow renewal, and
+        // answers that the account is still refreshing instead.
+        let mut _account_guard = None;
         let credential = if subscription.is_personal() {
-            let account = lists
-                .accounts
-                .get_by_id(subscription.credential_id.as_deref().unwrap_or_default())
+            let (guard, account) = self
+                .refresh_list_account_interactive(
+                    subscription.credential_id.as_deref().unwrap_or_default(),
+                    |account| {
+                        super::privacy::credential_for(&subscription, Some(account))
+                            .map(|_| ())
+                            .map_err(|failure| AppError::Validation(failure.message))
+                    },
+                )
                 .await?;
-            super::privacy::credential_for(&subscription, account.as_ref())
-                .map_err(|failure| AppError::Validation(failure.message))?;
-            let account = match account {
-                Some(account) => Some(self.refresh_list_account_locked(account).await?),
-                None => None,
-            };
+            _account_guard = Some(guard);
+            if account.is_none() {
+                super::privacy::credential_for(&subscription, None)
+                    .map_err(|failure| AppError::Validation(failure.message))?;
+            }
             if let Some(id) = account
                 .as_ref()
                 .and_then(|account| account.credential.client_id.as_ref())

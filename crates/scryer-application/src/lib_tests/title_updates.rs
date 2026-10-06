@@ -784,6 +784,13 @@ async fn set_primary_movie_file_scopes_episode_promotion_to_linked_files() {
         .link_file_to_episode(&old_primary_id, "episode-1")
         .await
         .expect("link old primary to episode");
+    // A new link starts Additional, as in the store.
+    app.services
+        .library
+        .media_files
+        .set_media_file_roles_for_episode(&title.id, "episode-1", &old_primary_id, &[])
+        .await
+        .expect("make the old primary the episode's primary");
     let new_primary_id = app
         .services
         .library
@@ -822,6 +829,12 @@ async fn set_primary_movie_file_scopes_episode_promotion_to_linked_files() {
         .link_file_to_episode(&unrelated_primary_id, "episode-2")
         .await
         .expect("link unrelated primary to episode");
+    app.services
+        .library
+        .media_files
+        .set_media_file_roles_for_episode(&title.id, "episode-2", &unrelated_primary_id, &[])
+        .await
+        .expect("make the unrelated file its episode's primary");
 
     app.set_primary_movie_file(&user, &title.id, &new_primary_id)
         .await
