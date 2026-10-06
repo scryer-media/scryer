@@ -46,6 +46,8 @@ const EPISODE_RENAME_TOKENS = [
 const VALID_MOVIE_RENAME_TOKENS = new Set([
   ...COMMON_RENAME_TOKENS,
   "edition",
+  "title_with_article",
+  "title_first_character",
   ...EXTERNAL_ID_RENAME_TOKENS,
 ]);
 const VALID_EPISODE_RENAME_TOKENS = new Set([
@@ -56,6 +58,14 @@ const VALID_EPISODE_RENAME_TOKENS = new Set([
 const VALID_FOLDER_TOKENS = new Set([
   "title", "title_with_year", "title_without_year", "year",
   "imdb_id", "tmdb_id", "tvdb_id", "anidb_id", "mal_id", "anilist_id",
+]);
+const MOVIE_TITLE_ORDER_TOKENS = [
+  { token: "title_with_article", labelKey: "settings.renameTokenTitleWithArticle" },
+  { token: "title_first_character", labelKey: "settings.renameTokenTitleFirstCharacter" },
+];
+const VALID_MOVIE_FOLDER_TOKENS = new Set([
+  ...VALID_FOLDER_TOKENS,
+  ...MOVIE_TITLE_ORDER_TOKENS.map(({ token }) => token),
 ]);
 const VALID_SEASON_FOLDER_TOKENS = new Set([
   ...VALID_FOLDER_TOKENS,
@@ -78,6 +88,10 @@ const FOLDER_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
   { token: "mal_id", labelKey: "settings.renameTokenMalId" },
   { token: "anilist_id", labelKey: "settings.renameTokenAnilistId" },
 ];
+const MOVIE_FOLDER_TOKEN_DESCRIPTIONS = [
+  ...FOLDER_TOKEN_DESCRIPTIONS,
+  ...MOVIE_TITLE_ORDER_TOKENS,
+];
 const SEASON_FOLDER_TOKEN_DESCRIPTIONS = [
   ...FOLDER_TOKEN_DESCRIPTIONS,
   { token: "season", labelKey: "settings.renameTokenSeason" },
@@ -98,6 +112,7 @@ const SHARED_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = 
 
 const MOVIE_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
   { token: "edition", labelKey: "settings.renameTokenEdition" },
+  ...MOVIE_TITLE_ORDER_TOKENS,
 ];
 
 const EXTERNAL_ID_RENAME_TOKEN_DESCRIPTIONS: { token: string; labelKey: string }[] = [
@@ -186,6 +201,10 @@ function getValidRenameTokens(scopeId: ViewCategoryId): ReadonlySet<string> {
     : VALID_EPISODE_RENAME_TOKENS;
 }
 
+function getFolderTokenDescriptions(scopeId: ViewCategoryId): TokenDescription[] {
+  return scopeId === "MOVIE" ? MOVIE_FOLDER_TOKEN_DESCRIPTIONS : FOLDER_TOKEN_DESCRIPTIONS;
+}
+
 function getRenameReferenceTokens(
   renameTokenDescriptions: TokenDescription[],
   scopeId: ViewCategoryId,
@@ -206,7 +225,7 @@ function getRenameReferenceTokens(
   };
 
   const folderTokens = scopeId === "MOVIE"
-    ? FOLDER_TOKEN_DESCRIPTIONS
+    ? MOVIE_FOLDER_TOKEN_DESCRIPTIONS
     : SEASON_FOLDER_TOKEN_DESCRIPTIONS;
   folderTokens.forEach((item) => addToken(item, "folders"));
   renameTokenDescriptions.forEach((item) => addToken(item, "files"));
@@ -262,11 +281,13 @@ function validateFolderTemplate(
   t: Translate,
   validTokens: ReadonlySet<string> = VALID_FOLDER_TOKENS,
   requiredToken?: string,
+  allowPathComponents = false,
 ): string | null {
   const issue: FolderTemplateValidationIssue | null = validateFolderTemplateSyntax(
     template,
     validTokens,
     requiredToken,
+    allowPathComponents,
   );
   if (!issue) return null;
 
@@ -305,6 +326,7 @@ function validateFolderTemplate(
 const RENAME_PREVIEW_MOVIE_SAMPLE: Record<string, string> = {
   title: "The Grey Harbor", title_with_year: "The Grey Harbor (2008)",
   title_without_year: "The Grey Harbor", year: "2008", quality: "2160p", edition: "IMAX",
+  title_with_article: "Grey Harbor, The", title_first_character: "G",
   source: "BluRay", video_codec: "x265", audio_codec: "DTS-HD MA",
   audio_channels: "5.1", group: "FraMeSToR", ext: "mkv",
   imdb_id: "tt0468569", tmdb_id: "155", tvdb_id: "123456",
@@ -1088,14 +1110,15 @@ export function RenameSettingsPanel({
   const t = useTranslate();
   const folderTemplateValue = categoryFolderTemplates[activeQualityScopeId];
   const episodicScope = activeQualityScopeId !== "MOVIE";
+  const folderTokens = activeQualityScopeId === "MOVIE" ? VALID_MOVIE_FOLDER_TOKENS : VALID_FOLDER_TOKENS;
   const useSeasonFolders = categoryUseSeasonFolders[activeQualityScopeId] !== false;
   const seasonFolderTemplateValue = categorySeasonFolderTemplates[activeQualityScopeId];
   const specialsFolderTemplateValue = categorySpecialsFolderTemplates[activeQualityScopeId];
   const renameEnabled = categoryRenameEnabled[activeQualityScopeId] !== "false";
   const templateValue = categoryRenameTemplates[activeQualityScopeId];
   const folderValidationError = React.useMemo(
-    () => validateFolderTemplate(folderTemplateValue, t),
-    [folderTemplateValue, t],
+    () => validateFolderTemplate(folderTemplateValue, t, folderTokens, undefined, !episodicScope),
+    [episodicScope, folderTemplateValue, folderTokens, t],
   );
   const renameValidationError = React.useMemo(
     () => (renameEnabled ? validateRenameTemplate(templateValue, activeQualityScopeId, t) : null),
@@ -1124,8 +1147,8 @@ export function RenameSettingsPanel({
   );
 
   const folderPreview = React.useMemo(
-    () => applyFolderTemplate(folderTemplateValue, activeQualityScopeId),
-    [activeQualityScopeId, folderTemplateValue],
+    () => applyFolderTemplate(folderTemplateValue, activeQualityScopeId, folderTokens),
+    [activeQualityScopeId, folderTemplateValue, folderTokens],
   );
   const seasonFolderPreview = React.useMemo(
     () => applyFolderTemplate(
@@ -1199,14 +1222,18 @@ export function RenameSettingsPanel({
         return;
       }
       const cursor = input.selectionStart ?? folderTemplateValue.length;
-      const context = resolveTemplateTokenContext(folderTemplateValue, cursor, FOLDER_TOKEN_DESCRIPTIONS);
+      const context = resolveTemplateTokenContext(
+        folderTemplateValue,
+        cursor,
+        getFolderTokenDescriptions(activeQualityScopeId),
+      );
       if (!context) {
         insertTemplateToken(input, folderTemplateValue, token);
         return;
       }
       applyAutocompleteToken(input, folderTemplateValue, context, token);
     },
-    [folderTemplateValue],
+    [activeQualityScopeId, folderTemplateValue],
   );
 
   const autocompleteSeasonFolderToken = React.useCallback(

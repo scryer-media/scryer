@@ -235,10 +235,20 @@ export function validateFolderTemplateSyntax(
   template: string,
   validTokens: ReadonlySet<string>,
   requiredToken?: string,
+  allowPathComponents = false,
 ): FolderTemplateValidationIssue | null {
   const trimmed = template.trim();
   if (!trimmed) {
     return { kind: "empty" };
+  }
+
+  if (
+    allowPathComponents
+    && (trimmed.startsWith("/")
+      || trimmed.endsWith("/")
+      || trimmed.split("/").some((component) => component === "" || component === "." || component === ".."))
+  ) {
+    return { kind: "illegalCharacter", character: "/" };
   }
 
   const state = { sawRequiredToken: requiredToken === undefined };
@@ -247,7 +257,9 @@ export function validateFolderTemplateSyntax(
     validTokens,
     state,
     requiredToken,
-    (character) => isIllegalFolderTemplateLiteral(character)
+    (character) => character === "/" && allowPathComponents
+      ? null
+      : isIllegalFolderTemplateLiteral(character)
       ? { kind: "illegalCharacter", character }
       : null,
   );
