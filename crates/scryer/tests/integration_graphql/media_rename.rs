@@ -3405,6 +3405,292 @@ async fn a_failed_folder_record_does_not_hold_back_another_titles_cleanup() {
     }
 }
 
+/// A movie whose files already sit at their planned names inside its planned
+/// folder, renamed there by a first apply. Returns the actor, the title, the
+/// planned folder and each file's bytes.
+async fn seed_movie_already_in_its_planned_folder(
+    ctx: &mut TestContext,
+    media_root: &std::path::Path,
+    name: &str,
+    tvdb_id: &str,
+) -> (scryer_domain::User, Title, std::path::PathBuf, Vec<Vec<u8>>) {
+    seed_typed_settings_definitions(ctx).await;
+    set_folder_template(ctx, "MOVIE", "{title} ({year})").await;
+    ctx.app = ctx.app.with_test_overrides(|builder| {
+        builder.with_library_renamer(std::sync::Arc::new(FileSystemLibraryRenamer::new()))
+    });
+    configure_default_library_root(ctx, MediaFacet::Movie, media_root).await;
+    let (title, _, files) = seed_movie_with_companions(ctx, media_root, name, tvdb_id).await;
+    let actor = ctx
+        .app
+        .find_or_create_default_user()
+        .await
+        .expect("default user");
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+        .await
+        .expect("preview first rename");
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply first rename");
+    assert_eq!((result.applied, result.failed), (3, 0));
+    let planned = media_root.join(format!("{name} (2024)"));
+    let mut bytes = files
+        .into_iter()
+        .map(|(_, bytes)| bytes)
+        .collect::<Vec<_>>();
+    bytes.sort();
+    assert_eq!(sorted_file_bytes(&planned), bytes);
+    let title = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+    (actor, title, planned, bytes)
+}
+
+/// A rename with nothing to move still repairs a record that names the library
+/// root when every one of the title's media files is inside the planned folder.
+#[tokio::test]
+async fn an_all_noop_rename_repairs_a_title_recorded_at_the_library_root() {
+    let mut ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (actor, title, planned, bytes) = seed_movie_already_in_its_planned_folder(
+        &mut ctx,
+        media_root.path(),
+        "Slate Heron",
+        "94131",
+    )
+    .await;
+    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(preview.renamable, 0, "nothing moves: {:?}", preview.items);
+    assert_eq!(preview.folder_repairs.len(), 1);
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+
+    assert_eq!((result.applied, result.failed), (0, 0));
+    let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+    assert_eq!(stored.folder_path.as_deref(), planned.to_str());
+    assert_eq!(sorted_file_bytes(&planned), bytes, "no file moved");
+}
+
+/// Half the title's media outside the planned folder means the planned folder
+/// is not where the title lives, so the record is left for a scan to settle.
+#[tokio::test]
+async fn an_all_noop_rename_leaves_a_root_record_when_the_media_is_split() {
+    let mut ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (actor, title, planned, bytes) = seed_movie_already_in_its_planned_folder(
+        &mut ctx,
+        media_root.path(),
+        "Slate Heron",
+        "94132",
+    )
+    .await;
+    let stray_dir = media_root.path().join("Stray Cut");
+    std::fs::create_dir_all(&stray_dir).expect("create stray dir");
+    let stray = stray_dir.join("Stray.Cut.2024.720p.mkv");
+    std::fs::write(&stray, b"stray video").expect("write stray file");
+    ctx.media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: stray.to_string_lossy().to_string(),
+            size_bytes: 4096,
+            quality_label: Some("720p".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("insert stray media file");
+    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(preview.renamable, 0, "nothing moves: {:?}", preview.items);
+    assert!(preview.folder_repairs.is_empty());
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+
+    assert_eq!((result.applied, result.failed), (0, 0));
+    let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+    assert_eq!(stored.folder_path.as_deref(), media_root.path().to_str());
+    assert_eq!(sorted_file_bytes(&planned), bytes);
+    assert_eq!(std::fs::read(&stray).unwrap(), b"stray video");
+}
+
+/// A record that already is the planned folder plans no repair and stays as
+/// it is.
+#[tokio::test]
+async fn an_all_noop_rename_leaves_a_healthy_record_alone() {
+    let mut ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (actor, title, planned, bytes) = seed_movie_already_in_its_planned_folder(
+        &mut ctx,
+        media_root.path(),
+        "Slate Heron",
+        "94133",
+    )
+    .await;
+    assert_eq!(title.folder_path.as_deref(), planned.to_str());
+
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert_eq!(preview.renamable, 0, "nothing moves: {:?}", preview.items);
+    assert!(preview.folder_repairs.is_empty());
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+
+    assert_eq!((result.applied, result.failed), (0, 0));
+    let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+    assert_eq!(stored.folder_path, title.folder_path);
+    assert_eq!(sorted_file_bytes(&planned), bytes);
+}
+
+/// A scan detaches every row outside the recorded folder, whatever its role.
+/// An extra copy in a sibling folder therefore rules the repair out: recording
+/// the planned folder would cost that copy its row on the next scan.
+#[tokio::test]
+async fn an_all_noop_rename_leaves_a_root_record_when_an_extra_copy_is_elsewhere() {
+    let mut ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (actor, title, planned, bytes) = seed_movie_already_in_its_planned_folder(
+        &mut ctx,
+        media_root.path(),
+        "Slate Heron",
+        "94134",
+    )
+    .await;
+    let extra_dir = media_root.path().join("Slate Heron extra");
+    std::fs::create_dir_all(&extra_dir).expect("create extra dir");
+    let extra = extra_dir.join("Slate.Heron.2024.2160p.mkv");
+    std::fs::write(&extra, b"extra copy").expect("write extra copy");
+    let extra_id = ctx
+        .media_files
+        .insert_media_file(&InsertMediaFileInput {
+            title_id: title.id.clone(),
+            file_path: extra.to_string_lossy().to_string(),
+            size_bytes: 4096,
+            quality_label: Some("2160p".to_string()),
+            role: MediaFileRole::Additional,
+            ..Default::default()
+        })
+        .await
+        .expect("insert extra copy");
+    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+    let rows_before = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files");
+    assert_eq!(rows_before.len(), 2);
+
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert!(preview.folder_repairs.is_empty());
+    let result = ctx
+        .app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+    assert_eq!((result.applied, result.failed), (0, 0));
+    let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+    assert_eq!(stored.folder_path.as_deref(), media_root.path().to_str());
+
+    // A scan of a title still recorded at the root is refused; either way it
+    // must leave both rows in place.
+    let _ = ctx.app.scan_title_library(&actor, &title.id).await;
+    let mut rows_after = ctx
+        .media_files
+        .list_media_files_for_title(&title.id)
+        .await
+        .expect("list media files")
+        .into_iter()
+        .map(|file| file.id)
+        .collect::<Vec<_>>();
+    rows_after.sort();
+    rows_after.dedup();
+    let mut expected = rows_before
+        .into_iter()
+        .map(|file| file.id)
+        .collect::<Vec<_>>();
+    expected.sort();
+    assert_eq!(rows_after, expected);
+    assert!(rows_after.contains(&extra_id));
+    assert_eq!(sorted_file_bytes(&planned), bytes);
+    assert_eq!(std::fs::read(&extra).unwrap(), b"extra copy");
+}
+
+/// A collection whose path is outside the planned folder would be deleted by
+/// the next scan just the same, so it rules the repair out too.
+#[tokio::test]
+async fn an_all_noop_rename_leaves_a_root_record_when_a_collection_is_elsewhere() {
+    let mut ctx = TestContext::new().await;
+    let media_root = tempfile::tempdir().expect("media root tempdir");
+    let (actor, title, _, _) = seed_movie_already_in_its_planned_folder(
+        &mut ctx,
+        media_root.path(),
+        "Slate Heron",
+        "94135",
+    )
+    .await;
+    let elsewhere = media_root
+        .path()
+        .join("Slate Heron extra")
+        .join("Slate.Heron.2024.2160p.mkv");
+    ctx.shows
+        .create_collection(Collection {
+            id: Id::new().0,
+            title_id: title.id.clone(),
+            collection_type: scryer_domain::CollectionType::Movie,
+            collection_index: "2".to_string(),
+            label: Some("2160p".to_string()),
+            ordered_path: Some(elsewhere.to_string_lossy().to_string()),
+            narrative_order: None,
+            first_episode_number: None,
+            last_episode_number: None,
+            monitored: true,
+            created_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("create collection elsewhere");
+    set_title_folder_path(&ctx, &title.id, media_root.path()).await;
+
+    let preview = ctx
+        .app
+        .preview_rename_for_title(&actor, &title.id, MediaFacet::Movie)
+        .await
+        .expect("preview rename plan");
+    assert!(preview.folder_repairs.is_empty());
+    ctx.app
+        .apply_rename_for_title(&actor, &title.id, MediaFacet::Movie, &preview.fingerprint)
+        .await
+        .expect("apply rename");
+    let stored = ctx.titles.get_by_id(&title.id).await.unwrap().unwrap();
+    assert_eq!(stored.folder_path.as_deref(), media_root.path().to_str());
+}
+
 /// A rename that moves a sidecar has to move its row with it. The companion
 /// item carries no database identity, so before #226 the file landed under
 /// its new name while `subtitle_downloads` kept the old path: the title listed

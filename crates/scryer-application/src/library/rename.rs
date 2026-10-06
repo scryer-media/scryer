@@ -153,6 +153,11 @@ pub struct RenamePlan {
     /// round-trips; such a plan leaves the recorded folders alone.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub title_folders: Vec<RenamePlanTitleFolder>,
+    /// Titles with nothing to move whose record is not a title folder (a
+    /// library root, say) while every one of their media files already sits
+    /// inside the planned folder. Applying records that folder for them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub folder_repairs: Vec<RenamePlanTitleFolder>,
 }
 
 /// The destination folder a rename plan places one title's files under.
@@ -1293,6 +1298,14 @@ impl AppUseCase {
             };
             moving.insert(title_id);
         }
+        // A folder repair records the planned folder, claiming it as surely as
+        // a move into it would.
+        moving.extend(
+            preview
+                .folder_repairs
+                .iter()
+                .map(|repair| repair.title_id.clone()),
+        );
         Ok(Some(moving))
     }
 
@@ -1394,7 +1407,64 @@ impl AppUseCase {
                 unrecorded.insert(planned.title_id.clone());
             }
         }
+        for planned in &preview.folder_repairs {
+            if moved_titles.contains(&planned.title_id) {
+                continue;
+            }
+            if let Err(error) = self.repair_rename_title_folder(planned).await {
+                warn!(
+                    title_id = %planned.title_id,
+                    folder_path = %planned.folder_path,
+                    error = %error,
+                    "failed to repair the title's folder record; the previous folder is kept"
+                );
+                unrecorded.insert(planned.title_id.clone());
+            }
+        }
         unrecorded
+    }
+
+    /// Record the planned folder for a title none of whose files moved, when
+    /// its current record is not a title folder and every one of its files
+    /// and collection paths is already inside the planned one, so a later scan
+    /// detaches nothing. Checked again here because the plan
+    /// may have been built a while ago.
+    async fn repair_rename_title_folder(&self, planned: &RenamePlanTitleFolder) -> AppResult<()> {
+        let Some(title) = self
+            .services
+            .catalog
+            .titles
+            .get_by_id(&planned.title_id)
+            .await?
+        else {
+            return Ok(());
+        };
+        if !self.rename_folder_repair_applies(&title, planned).await? {
+            return Ok(());
+        }
+        if let Some(owner) =
+            crate::folder_ownership::find_other_folder_owner(self, &title, &planned.folder_path)
+                .await?
+        {
+            warn!(
+                title_id = %title.id,
+                folder_path = %planned.folder_path,
+                owner_title_id = %owner.id,
+                "not repairing the title's folder record: another title owns the planned folder"
+            );
+            return Ok(());
+        }
+        tracing::info!(
+            title_id = %title.id,
+            previous_folder = %title.folder_path.as_deref().unwrap_or_default(),
+            folder_path = %planned.folder_path,
+            "repaired a title folder record that was not a title folder"
+        );
+        self.services
+            .catalog
+            .titles
+            .set_folder_path(&title.id, &planned.folder_path)
+            .await
     }
 
     async fn persist_rename_title_folder(&self, planned: &RenamePlanTitleFolder) -> AppResult<()> {
@@ -1805,6 +1875,7 @@ impl AppUseCase {
         let mut planning = RenamePlanningState::default();
         let mut items = Vec::new();
         let mut title_folders = Vec::new();
+        let mut folder_repairs = Vec::new();
         for title in titles {
             let effective_language = effective_languages
                 .get(&title.id)
@@ -1818,6 +1889,15 @@ impl AppUseCase {
                     &mut planning,
                 )
                 .await?;
+            if let Some(planned) = title_folder.as_ref()
+                && !title_items.is_empty()
+                && title_items
+                    .iter()
+                    .all(|item| item.write_action == RenameWriteAction::Noop)
+                && self.rename_folder_repair_applies(title, planned).await?
+            {
+                folder_repairs.push(planned.clone());
+            }
             items.append(&mut title_items);
             title_folders.extend(title_folder);
         }
@@ -1831,7 +1911,75 @@ impl AppUseCase {
             items,
         );
         plan.title_folders = title_folders;
+        plan.folder_repairs = folder_repairs;
         Ok(plan)
+    }
+
+    /// Whether a title's record should be replaced by its planned folder even
+    /// though none of its files move: the record is not a title folder, the
+    /// planned folder is, and every one of the title's media files, of any
+    /// role, and every collection path already sits strictly inside the
+    /// planned folder.
+    async fn rename_folder_repair_applies(
+        &self,
+        title: &Title,
+        planned: &RenamePlanTitleFolder,
+    ) -> AppResult<bool> {
+        let Some(recorded) = title
+            .folder_path
+            .as_deref()
+            .map(str::trim)
+            .filter(|recorded| !recorded.is_empty())
+        else {
+            return Ok(false);
+        };
+        // The common case, a record that already is the planned folder, needs
+        // no lookups.
+        if crate::stored_paths::folder_paths_match(recorded, &planned.folder_path) {
+            return Ok(false);
+        }
+        if self
+            .rename_title_folder_root_violation(title, recorded)
+            .await?
+            .is_none()
+        {
+            return Ok(false);
+        }
+        if self
+            .rename_title_folder_root_violation(title, &planned.folder_path)
+            .await?
+            .is_some()
+        {
+            return Ok(false);
+        }
+        // Once the record names the planned folder, a scan detaches every media
+        // row and collection whose path is outside it, whatever its role. The
+        // repair may only happen when that detaches nothing.
+        let inside = |path: &str| {
+            crate::title_folder_rules::path_is_strictly_within(path, &planned.folder_path)
+        };
+        let files = self
+            .services
+            .library
+            .media_files
+            .list_media_files_for_title(&title.id)
+            .await?;
+        if !files.iter().any(|file| file.role.is_primary())
+            || !files.iter().all(|file| inside(&file.file_path))
+        {
+            return Ok(false);
+        }
+        let collections = self
+            .services
+            .catalog
+            .shows
+            .list_collections_for_title(&title.id)
+            .await?;
+        Ok(collections
+            .iter()
+            .filter_map(|collection| collection.ordered_path.as_deref())
+            .filter(|path| !path.trim().is_empty())
+            .all(inside))
     }
 
     async fn build_rename_plan_items_for_title(
@@ -4494,6 +4642,7 @@ pub(crate) fn build_rename_plan_from_items(
         errors,
         items,
         title_folders: Vec::new(),
+        folder_repairs: Vec::new(),
     }
 }
 

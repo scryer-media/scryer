@@ -2004,6 +2004,7 @@ export const mediaRenamePreviewBulkQuery = `query MediaRenamePreviewBulk($input:
     noop
     conflicts
     errors
+    folderRepairs
     items {
       collectionId
       currentPath
@@ -2026,6 +2027,7 @@ export const mediaRenamePreviewQuery = `query MediaRenamePreview($input: MediaRe
     noop
     conflicts
     errors
+    folderRepairs
     items {
       collectionId
       seriesMovieLinkIds

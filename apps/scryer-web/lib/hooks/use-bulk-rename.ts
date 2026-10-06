@@ -5,7 +5,10 @@ import {
   mediaRenamePreviewBulkQuery,
   mediaRenamePreviewQuery,
 } from "@/lib/graphql/queries";
-import type { MediaRenamePlan } from "@/components/common/media-rename-plan-panel";
+import {
+  renamePlanHasWork,
+  type MediaRenamePlan,
+} from "@/components/common/media-rename-plan-panel";
 import type { JobRun, TitleRecord } from "@/lib/types";
 import { normalizeJobRun } from "@/lib/utils/job-runs";
 import { selectedTitleIdsKey } from "@/lib/utils/title-selection";
@@ -37,6 +40,7 @@ export type BulkRenameSummary = {
   noop: number;
   conflicts: number;
   errors: number;
+  folderRepairs: number;
 };
 
 export function useBulkRename({
@@ -269,22 +273,25 @@ export function useBulkRename({
         noop: summary.noop + plan.noop,
         conflicts: summary.conflicts + plan.conflicts,
         errors: summary.errors + plan.errors,
+        folderRepairs: summary.folderRepairs + (plan.folderRepairs ?? 0),
       }),
-      { total: 0, renamable: 0, noop: 0, conflicts: 0, errors: 0 },
+      { total: 0, renamable: 0, noop: 0, conflicts: 0, errors: 0, folderRepairs: 0 },
     );
   }, [bulkRenamePlansByTitleId, selectedTitles]);
 
+  // A plan with nothing to move can still repair a title's folder record, so
+  // it is worth applying.
   const bulkRenameConfirmDisabled =
     bulkActionBusy ||
     selectedTitles.length === 0 ||
     bulkRenamePreviewLoading ||
     !bulkRenameSummary ||
-    bulkRenameSummary.renamable === 0;
+    !renamePlanHasWork(bulkRenameSummary);
 
   const confirmBulkRenameTitles = React.useCallback(async () => {
     const targets = selectedTitles.filter((title) => {
       const plan = bulkRenamePlansByTitleId[title.id];
-      return plan !== undefined && plan.renamable > 0;
+      return plan !== undefined && renamePlanHasWork(plan);
     });
     if (targets.length === 0 || bulkActionBusy) {
       return;

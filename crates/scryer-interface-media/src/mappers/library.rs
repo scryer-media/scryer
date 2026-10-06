@@ -663,6 +663,7 @@ pub fn from_media_rename_plan(plan: RenamePlan) -> MediaRenamePlanPayload {
         noop: plan.noop as i32,
         conflicts: plan.conflicts as i32,
         errors: plan.errors as i32,
+        folder_repairs: plan.folder_repairs.len() as i32,
         items: plan
             .items
             .into_iter()
