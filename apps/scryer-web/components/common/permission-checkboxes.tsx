@@ -10,12 +10,10 @@ import {
   LIBRARY_PERMISSIONS,
   libraryPermissionShadowSource,
   libraryPermissionsWithRequestShadowing,
-  withHiddenPermissionsKept,
   type AppPermission,
   type LibraryPermission,
 } from "@/lib/utils/permissions";
 import { cn } from "@/lib/utils";
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { permissionIdToken } from "@/lib/utils/permissions";
 
 export type LibraryPermissionDrafts = Record<string, string[]>;
@@ -158,19 +156,8 @@ function AppPermissionDropdown({
   idPrefix?: string;
   onChange: (next: string[]) => void;
 }) {
-  // Lists are experimental: their permission is offered only once the
-  // instance has opted in, so the picker never grants a right nothing uses.
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
-  const offered = permissionOptions(permissions, APP_PERMISSION_OPTIONS);
-  const options = offered.filter(
-    (option) => experimentalFeaturesEnabled || option.value !== APP_PERMISSIONS.manageLists,
-  );
+  const options = permissionOptions(permissions, APP_PERMISSION_OPTIONS);
   const allPermissions = options.map((option) => option.value);
-  // A hidden grant stays as it is when the visible ones are edited.
-  const hidden = offered
-    .map((option) => option.value)
-    .filter((value) => !allPermissions.includes(value));
-  const change = (next: string[]) => onChange(withHiddenPermissionsKept(next, selected, hidden));
   const allSelected =
     allPermissions.length > 0 && allPermissions.every((permission) => selected.includes(permission));
 
@@ -199,12 +186,12 @@ function AppPermissionDropdown({
             })),
           }]}
           selectedValues={selected}
-          onSelectedValuesChange={change}
+          onSelectedValuesChange={onChange}
           allOption={showSelectAll ? {
             id: idPrefix ? `${idPrefix}-app-select-all` : undefined,
             label: allSelected ? "Unselect all" : "Select all",
             selected: allSelected,
-            onSelect: () => change(allSelected ? [] : allPermissions),
+            onSelect: () => onChange(allSelected ? [] : allPermissions),
           } : undefined}
           allOptionClassName="mb-1 rounded-b-none border-b border-[var(--scry-line2)] pb-2"
           disabled={disabled}

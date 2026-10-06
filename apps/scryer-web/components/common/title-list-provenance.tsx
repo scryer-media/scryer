@@ -2,7 +2,6 @@ import * as React from "react";
 import { ListPlus } from "lucide-react";
 import { useClient } from "urql";
 
-import { useExperimentalFeaturesEnabled } from "@/lib/context/instance-features-context";
 import { useReactiveRefresh } from "@/lib/context/reactive-refresh-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { titleListMembershipsQuery } from "@/lib/graphql/queries";
@@ -24,7 +23,6 @@ type TitleListProvenanceProps = {
 export function TitleListProvenance({ titleId, variant = "default", className }: TitleListProvenanceProps) {
   const client = useClient();
   const t = useTranslate();
-  const experimentalFeaturesEnabled = useExperimentalFeaturesEnabled();
   const { registerReactiveRefresh } = useReactiveRefresh();
   const refreshAliasId = React.useId();
   const [memberships, setMemberships] = React.useState<TitleListMembership[]>([]);
@@ -34,8 +32,6 @@ export function TitleListProvenance({ titleId, variant = "default", className }:
 
   React.useEffect(() => {
     setMemberships([]);
-    // Lists are experimental: nothing is asked for while the switch is off.
-    if (!experimentalFeaturesEnabled) return;
     const load = (requestPolicy: "cache-first" | "network-only") => {
       const request = ++latestRequestRef.current;
       void client
@@ -57,7 +53,7 @@ export function TitleListProvenance({ titleId, variant = "default", className }:
       latestRequestRef.current += 1;
       unregister();
     };
-  }, [client, experimentalFeaturesEnabled, refreshAliasId, registerReactiveRefresh, titleId]);
+  }, [client, refreshAliasId, registerReactiveRefresh, titleId]);
 
   const provenance = titleListProvenance(memberships);
   if (!provenance) return null;

@@ -87,10 +87,11 @@ export function InstanceFeaturesProvider({
       setInstanceFeaturesLoaded(true);
     } catch (error) {
       if (requestSequenceRef.current !== requestId) return;
-      // Falling back to the defaults keeps unfinished surfaces hidden rather
-      // than revealing them on a transient read failure. The defaults then
-      // stand as the answer, so pages waiting on the switches may decide.
-      setInstanceFeatures(DEFAULT_INSTANCE_FEATURES);
+      // A failed re-read keeps whatever the last successful read returned, so
+      // a dropped connection or a restarting server does not hide lists and
+      // other switched surfaces until the next successful read. Before any
+      // read has succeeded the defaults stand as the answer, so pages waiting
+      // on the switches may decide.
       setInstanceFeaturesLoaded(true);
       console.warn("Failed to load instance features", error);
     }

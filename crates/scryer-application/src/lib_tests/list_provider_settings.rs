@@ -21,9 +21,7 @@ async fn harness_with_provider() -> MediaRequestTestHarness {
         field("instance_key", ConfigFieldType::Password),
         field("region", ConfigFieldType::String),
     ]);
-    let harness = bootstrap_media_request_app_with_list_plugins(Arc::new(ScriptedProvider(lists)));
-    super::list_experimental_gate::set_experimental_features(&harness, true).await;
-    harness
+    bootstrap_media_request_app_with_list_plugins(Arc::new(ScriptedProvider(lists)))
 }
 
 fn list_manager() -> User {

@@ -269,8 +269,32 @@ async fn harness(auth: Arc<Auth>) -> MediaRequestTestHarness {
     harness.app.services.lists.auth = auth;
     harness.users.create(harness.user.clone()).await.unwrap();
     harness.users.create(harness.manager.clone()).await.unwrap();
-    super::list_experimental_gate::set_experimental_features(&harness, true).await;
     harness
+}
+/// Deny or allow the member's personal lists, the one check every personal
+/// list write passes through.
+async fn set_personal_lists_allowed(harness: &MediaRequestTestHarness, allowed: bool) {
+    // Member list policy is a list-management action; the harness manager
+    // administers users, not lists.
+    let mut list_manager = User::new_admin("list-manager");
+    list_manager.authorization = scryer_domain::UserAuthorization {
+        app: AppPermissionMask::MANAGE_LISTS,
+        loaded: true,
+        ..Default::default()
+    };
+    harness
+        .app
+        .set_member_list_policy(
+            &list_manager,
+            &harness.user.id,
+            if allowed {
+                scryer_domain::ListPolicy::Approval
+            } else {
+                scryer_domain::ListPolicy::None
+            },
+        )
+        .await
+        .unwrap();
 }
 async fn seed_expired(harness: &MediaRequestTestHarness) -> UserListAccount {
     let now = chrono::Utc::now();
@@ -496,17 +520,18 @@ async fn private_account_poll_ends_when_the_approved_link_can_never_be_recorded(
     })
     .await
     .expect("provider check entered");
-    // Lists are turned off while the provider is approving the link.
-    super::list_experimental_gate::set_experimental_features(&harness, false).await;
+    // The member's personal lists are denied while the provider is approving
+    // the link.
+    set_personal_lists_allowed(&harness, false).await;
     auth.poll_release.notify_one();
-    let Err(AppError::Validation(message)) = timeout(Duration::from_secs(30), first)
+    let Err(AppError::Unauthorized(message)) = timeout(Duration::from_secs(30), first)
         .await
         .expect("first poll finished")
     else {
         panic!("a write that cannot succeed must end the link with its reason");
     };
-    assert!(message.contains("experimental"), "{message}");
-    super::list_experimental_gate::set_experimental_features(&harness, true).await;
+    assert!(message.contains("personal lists"), "{message}");
+    set_personal_lists_allowed(&harness, true).await;
     assert!(matches!(
         harness
             .app
@@ -727,7 +752,7 @@ async fn private_account_completion_is_single_use_and_gate_rechecked() {
         .start_list_account_link(&harness.user, "trakt", "https://instance.invalid")
         .await
         .unwrap();
-    super::list_experimental_gate::set_experimental_features(&harness, false).await;
+    set_personal_lists_allowed(&harness, false).await;
     assert!(
         harness
             .app
@@ -1570,7 +1595,7 @@ async fn private_account_refused_grant_requires_reconnect_without_replay() {
 }
 
 #[tokio::test]
-async fn private_account_unlink_revokes_even_when_event_write_fails_and_gate_is_off() {
+async fn private_account_unlink_revokes_when_event_write_fails_and_lists_are_denied() {
     let auth = Arc::new(Auth::default());
     let harness = harness(auth.clone()).await;
     let account = seed_expired(&harness).await;
@@ -1581,7 +1606,7 @@ async fn private_account_unlink_revokes_even_when_event_write_fails_and_gate_is_
     crate::lists::ListSubscriptionRepository::create(harness.lists.as_ref(), list)
         .await
         .unwrap();
-    super::list_experimental_gate::set_experimental_features(&harness, false).await;
+    set_personal_lists_allowed(&harness, false).await;
     assert_eq!(
         harness
             .app

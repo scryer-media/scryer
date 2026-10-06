@@ -5753,6 +5753,8 @@ const en: LocaleDictionary = {
   "lists.exclusions.deleteCheckbox": "Also exclude from lists",
   "lists.exclusions.deleteNoIds": "{{name}} was removed, but it has no external IDs to exclude from lists.",
   "lists.exclusions.deleteFailed": "{{name}} was removed, but excluding it from lists failed. Add the exclusion on the Lists page.",
+  "lists.exclusions.bulkDeleteNoIds": "{{count}} of the removed titles have no external IDs to exclude from lists.",
+  "lists.exclusions.bulkDeleteFailed": "Excluding {{count}} of the removed titles from lists failed. Add those exclusions on the Lists page.",
   "lists.policy.heading": "Member list policy",
   "lists.policy.help": "Controls how members' personal lists turn into requests.",
   "lists.policy.empty": "No members to show.",
