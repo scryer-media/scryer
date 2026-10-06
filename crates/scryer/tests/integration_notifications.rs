@@ -2055,6 +2055,7 @@ async fn notification_dispatcher_delivers_download_failed() {
         schema_version: 1,
         stream: DomainEventStream::Global,
         payload: DomainEventPayload::DownloadFailed(DownloadFailedEventData {
+            canonical_download_id: None,
             title: Some(title_context(
                 "Failed Movie",
                 "movie",
