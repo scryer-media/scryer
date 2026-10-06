@@ -7,6 +7,8 @@ mod blake3_identities_upgrade_tests;
 #[path = "blocklist_release_identity_upgrade_tests.rs"]
 mod blocklist_release_identity_upgrade_tests;
 pub mod canonical_download_identity;
+#[cfg(test)]
+mod discovery_query_indexes_upgrade_tests;
 pub mod event_storage;
 #[cfg(test)]
 #[path = "full_admin_manage_lists_upgrade_tests.rs"]
