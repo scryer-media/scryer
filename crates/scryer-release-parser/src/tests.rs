@@ -2736,6 +2736,33 @@ fn bracketed_short_hyphenated_release_group_preserves_both_parts() {
     assert_eq!(candidate.projected.release_group.as_deref(), Some("C-W"));
 }
 
+/// An anime group name can be hyphenated. The finalizer used to keep only the
+/// final element, because it absorbed a preceding hyphenated token just when it
+/// was three characters or shorter.
+#[test]
+fn anime_release_group_keeps_the_whole_hyphenated_suffix() {
+    let target = context(ContextFacetHint::Anime, "Show A");
+
+    for (release, expected) in [
+        (
+            "Show A S01E02 MULTi 1080p NF WEB-DL AAC2.0 AV1-Group-Raws (READNFO, VF, FRENCH, SUBFRENCH, VOSTFR, Alias)",
+            "Group-Raws",
+        ),
+        (
+            "Show A S01E01 1080p WEB-DL AAC2.0 H.264-Group-Raws",
+            "Group-Raws",
+        ),
+    ] {
+        let analysis = analyze_release_for_target(release, &target);
+        let candidate = analysis.best_candidate().expect("best candidate");
+        assert_eq!(
+            candidate.projected.release_group.as_deref(),
+            Some(expected),
+            "{release}"
+        );
+    }
+}
+
 #[test]
 fn terminal_language_adjacent_token_can_be_release_group() {
     let mut target = context(
