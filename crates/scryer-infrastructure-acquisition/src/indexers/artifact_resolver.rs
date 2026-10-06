@@ -11,7 +11,7 @@ use tokio::sync::Semaphore;
 
 use crate::downloads::clients::StagedNzbLease;
 use crate::indexers::artifact_staging::{
-    BufferedOrStagedNzb, stage_nzb_from_bytes, stage_or_buffer_nzb_response,
+    BufferedOrStagedNzb, inflate_compressed_nzb, stage_nzb_from_bytes, stage_or_buffer_nzb_response,
 };
 use crate::indexers::artifact_transport::{
     ArtifactFetchResponse, ArtifactHttpResponse, IndexerArtifactTransport, classify,
@@ -215,6 +215,9 @@ impl AcquisitionIndexerArtifactResolver {
                     );
                 }
                 let headers = (!headers.is_empty()).then_some(serde_json::Value::Object(headers));
+                // A plugin's grab may return an NZB still compressed the way
+                // the indexer stored it.
+                let bytes = inflate_compressed_nzb(bytes).await?;
                 Ok(PreparedIndexerArtifact::Resolved(classify(
                     "indexer",
                     Some(source),

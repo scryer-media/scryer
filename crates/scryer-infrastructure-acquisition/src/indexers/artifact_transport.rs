@@ -720,13 +720,8 @@ impl IndexerArtifactTransport {
                 egress,
             )
             .await?;
-        classify(
-            name,
-            fetched.2.as_deref(),
-            fetched.1.as_ref(),
-            fetched.0,
-            hint,
-        )
+        let body = crate::indexers::artifact_staging::inflate_compressed_nzb(fetched.0).await?;
+        classify(name, fetched.2.as_deref(), fetched.1.as_ref(), body, hint)
     }
 
     #[expect(
