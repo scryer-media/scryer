@@ -854,6 +854,9 @@ pub struct MediaRenamePlanPayload {
     pub conflicts: i32,
     /// Number of items with planning errors.
     pub errors: i32,
+    /// Number of titles with nothing to move whose recorded folder is not a
+    /// title folder; applying the plan records the planned folder for them.
+    pub folder_repairs: i32,
     /// Plan items in deterministic service order.
     pub items: Vec<MediaRenamePlanItemPayload>,
 }

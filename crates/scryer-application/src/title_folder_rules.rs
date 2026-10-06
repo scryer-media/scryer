@@ -40,15 +40,99 @@ impl TitleFolderRootViolation {
     }
 }
 
+fn is_path_separator(character: char) -> bool {
+    character == '/' || character == '\\'
+}
+
+/// Whether a path spells a `.` or `..` component in either separator.
+pub(crate) fn path_has_dot_segments(path: &str) -> bool {
+    path.split(is_path_separator)
+        .any(|segment| segment == "." || segment == "..")
+}
+
+/// `path` with its `.` and `..` components resolved lexically, so a folder
+/// spelled `/media/tv/Show/..` compares as the `/media/tv` it names. A `..`
+/// never climbs above a filesystem, drive or share root. Paths without such
+/// components come back untouched.
+fn collapse_dot_segments(path: &str) -> std::borrow::Cow<'_, str> {
+    if !path_has_dot_segments(path) {
+        return std::borrow::Cow::Borrowed(path);
+    }
+    let separator = path.chars().find(|c| is_path_separator(*c)).unwrap_or('/');
+    let bytes = path.as_bytes();
+    let starts_with_separator = |index: usize| {
+        bytes
+            .get(index)
+            .is_some_and(|byte| is_path_separator(*byte as char))
+    };
+    // The anchor a `..` cannot climb past: a share (`\\server\share`), a
+    // drive (`D:\`), the filesystem root, or nothing for a relative path.
+    let (anchor, rest) = if starts_with_separator(0) && starts_with_separator(1) {
+        let mut segments = path[2..].splitn(3, is_path_separator);
+        let server = segments.next().unwrap_or_default();
+        let share = segments.next().unwrap_or_default();
+        let rest = segments.next().unwrap_or_default();
+        (
+            format!("{separator}{separator}{server}{separator}{share}"),
+            rest,
+        )
+    } else if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
+        let rest = path[2..].trim_start_matches(is_path_separator);
+        (format!("{}{separator}", &path[..2]), rest)
+    } else if starts_with_separator(0) {
+        (separator.to_string(), &path[1..])
+    } else {
+        (String::new(), path)
+    };
+    let anchored = !anchor.is_empty();
+    let mut kept: Vec<&str> = Vec::new();
+    for segment in rest.split(is_path_separator) {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                if kept.last().is_some_and(|last| *last != "..") {
+                    kept.pop();
+                } else if !anchored {
+                    kept.push(segment);
+                }
+            }
+            _ => kept.push(segment),
+        }
+    }
+    let joined = kept.join(&separator.to_string());
+    if anchor.is_empty() {
+        return std::borrow::Cow::Owned(joined);
+    }
+    let needs_separator = !joined.is_empty() && !anchor.ends_with(separator);
+    std::borrow::Cow::Owned(if needs_separator {
+        format!("{anchor}{separator}{joined}")
+    } else {
+        format!("{anchor}{joined}")
+    })
+}
+
+/// A stored path decoded for display with its dot components resolved.
+fn resolved_display(path: &str) -> String {
+    collapse_dot_segments(&stored_path_to_display_string(path)).into_owned()
+}
+
 /// The comparable spelling of a stored path: the escape form decoded for
-/// display, then normalized the way configured roots are.
+/// display, dot components resolved, then normalized the way configured roots
+/// are.
 fn comparable(path: &str) -> String {
-    normalize_library_root_path(&stored_path_to_display_string(path))
+    normalize_library_root_path(&resolved_display(path))
 }
 
 /// Whether `path` is `folder` or lies beneath it, across both separator
 /// spellings, so a Windows-style record compares the same on every host.
+/// Dot components are resolved first, so `/media/tv/Show/..` is the root
+/// itself and `/media/tv/../movies` is not under `/media/tv` at all.
 fn under_or_equal(path: &str, folder: &str) -> bool {
+    library_path_is_under_root(&resolved_display(path), &resolved_display(folder))
+}
+
+/// [`under_or_equal`] on the paths exactly as spelled.
+fn spelled_under_or_equal(path: &str, folder: &str) -> bool {
     library_path_is_under_root(
         &stored_path_to_display_string(path),
         &stored_path_to_display_string(folder),
@@ -69,12 +153,14 @@ pub fn path_is_strictly_within(path: &str, folder: &str) -> bool {
 ///
 /// Plain stored paths are compared separator-agnostically; the escape form
 /// for names that are not UTF-8 falls back to native path containment, which
-/// is exact for it.
+/// is exact for it. A path that is inside the folder either as spelled or
+/// with its dot components resolved counts as inside, so callers that keep
+/// what is inside a folder never keep less than before dots were resolved.
 pub fn stored_path_is_inside_folder(folder: &str, path: &str) -> bool {
     if is_escaped_stored_path(folder) || is_escaped_stored_path(path) {
         return stored_path_is_within_folder(folder, path);
     }
-    under_or_equal(path, folder)
+    under_or_equal(path, folder) || spelled_under_or_equal(path, folder)
 }
 
 /// The key a plain stored folder is compared under, for callers that index
@@ -169,7 +255,9 @@ fn most_specific_root_strictly_containing<'a>(path: &str, roots: &'a [String]) -
 /// spelling. `None` when the file is directly in a root, outside every root,
 /// or stored in the escape form.
 fn first_segment_folder(path: &str, library_roots: &[String]) -> Option<String> {
-    if is_escaped_stored_path(path) {
+    // A dot component makes the spelled first segment something other than
+    // the folder the file is really in.
+    if is_escaped_stored_path(path) || path_has_dot_segments(path) {
         return None;
     }
     let root = most_specific_root_strictly_containing(path, library_roots)?;
@@ -434,6 +522,99 @@ mod tests {
         }
         assert!(containing_folder_keys("scryer-path-v1:u:/media/tv/Show/%FF.mkv").is_empty());
         assert_eq!(folder_containment_key(""), None);
+    }
+
+    #[test]
+    fn dot_components_are_resolved_before_the_root_check() {
+        let library = roots(&["/media/tv"]);
+        let all = roots(&["/media/tv", "/media/movies"]);
+        assert_eq!(
+            title_folder_root_violation("/media/tv/Synthetic Show/..", &library, &all),
+            Some(TitleFolderRootViolation::EqualsRoot)
+        );
+        assert_eq!(
+            title_folder_root_violation("/media/tv/./Synthetic Show/../.", &library, &all),
+            Some(TitleFolderRootViolation::EqualsRoot)
+        );
+        assert_eq!(
+            title_folder_root_violation("/media/tv/Synthetic Show/../..", &library, &all),
+            Some(TitleFolderRootViolation::ContainsRoot)
+        );
+        assert_eq!(
+            title_folder_root_violation("/media/tv/../movies/Synthetic Film", &library, &all),
+            Some(TitleFolderRootViolation::OutsideLibraryRoots)
+        );
+        assert_eq!(
+            title_folder_root_violation("/media/tv/Other/../Synthetic Show/.", &library, &all),
+            None
+        );
+        assert!(!path_is_strictly_within(
+            "/media/tv/Synthetic Show/..",
+            "/media/tv"
+        ));
+        assert!(!path_is_strictly_within(
+            "/media/tv/../elsewhere",
+            "/media/tv"
+        ));
+    }
+
+    #[test]
+    fn a_path_climbing_above_the_filesystem_root_stays_at_the_root() {
+        let library = roots(&["/media/tv"]);
+        assert_eq!(
+            title_folder_root_violation("/media/tv/../../../..", &library, &library),
+            Some(TitleFolderRootViolation::ContainsRoot)
+        );
+        assert_eq!(
+            title_folder_root_violation(
+                r"D:\Media\TV\Show\..\..\..\..",
+                &roots(&[r"D:\Media\TV"]),
+                &roots(&[r"D:\Media\TV"])
+            ),
+            Some(TitleFolderRootViolation::ContainsRoot)
+        );
+    }
+
+    #[test]
+    fn dot_components_resolve_across_trailing_and_mixed_separators() {
+        let library = roots(&[r"D:\Media\TV"]);
+        assert_eq!(
+            title_folder_root_violation(r"D:\Media\TV\Show\..\", &library, &library),
+            Some(TitleFolderRootViolation::EqualsRoot)
+        );
+        assert_eq!(
+            title_folder_root_violation(r"D:\Media\TV/Show/..", &library, &library),
+            Some(TitleFolderRootViolation::EqualsRoot)
+        );
+        assert_eq!(
+            title_folder_root_violation(r"D:/Media/TV\Other\..\Show/", &library, &library),
+            None
+        );
+        assert_eq!(
+            title_folder_root_violation(
+                "/media/tv/Synthetic Show/../",
+                &roots(&["/media/tv"]),
+                &roots(&["/media/tv"])
+            ),
+            Some(TitleFolderRootViolation::EqualsRoot)
+        );
+        assert_eq!(
+            title_folder_root_violation(
+                r"\\nas\share\Show\..\..",
+                &roots(&[r"\\nas\share\TV"]),
+                &roots(&[r"\\nas\share\TV"])
+            ),
+            Some(TitleFolderRootViolation::ContainsRoot)
+        );
+    }
+
+    #[test]
+    fn a_dotted_file_path_derives_no_folder() {
+        let library = roots(&["/media/tv"]);
+        assert_eq!(
+            title_folder_from_media_paths(&library, ["/media/tv/Show A/../Show B/E01.mkv"]),
+            None
+        );
     }
 
     #[test]

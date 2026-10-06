@@ -1,7 +1,10 @@
 import { Eye } from "lucide-react";
 
 import { LoadingMark } from "@/components/common/loading-mark";
-import { MediaRenamePlanPanel } from "@/components/common/media-rename-plan-panel";
+import {
+  MediaRenamePlanPanel,
+  renamePlanHasWork,
+} from "@/components/common/media-rename-plan-panel";
 import { Button } from "@/components/ui/button";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleRenameController } from "@/lib/hooks/use-title-rename";
@@ -67,7 +70,9 @@ export function TitleRenamePlan({
       plan={rename.plan}
       applying={rename.applying}
       applyDisabled={
-        rename.applying || rename.previewing || rename.plan.renamable === 0
+        rename.applying ||
+        rename.previewing ||
+        !renamePlanHasWork(rename.plan)
       }
       applyButtonId={applyButtonId}
       onApply={() => void rename.apply()}

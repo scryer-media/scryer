@@ -243,7 +243,12 @@ async fn discover_movie_title_files(
                 None,
             )
         });
-    if default_candidate_path != media_root_path
+    // A recorded folder that is a library root, or holds one, holds other
+    // titles' files; walking it would read all of them as this title's.
+    let recorded_folder_spans_a_root =
+        crate::folder_ownership::title_folder_spans_a_library_root(app, title).await?;
+    if !recorded_folder_spans_a_root
+        && default_candidate_path != media_root_path
         && seen_candidate_paths.insert(path_to_stored_string(&default_candidate_path))
     {
         candidate_paths.push(default_candidate_path);
@@ -2436,13 +2441,52 @@ impl AppUseCase {
             mode,
             cancel_token,
             file_total_mode,
-            full_folder_scan: _,
+            full_folder_scan,
             file_analysis_concurrency: _,
         } = options;
         let started_at = Instant::now();
         let session_coordinator =
             session_id.map(|value| LibraryScanCoordinator::new(self.clone(), value.to_string()));
-        let mut summary = LibraryScanSummary::default();
+        let summary = LibraryScanSummary::default();
+
+        // A recorded folder that is a library root is not this title's to
+        // walk: everything under it would be read as this title's files. A
+        // scan the operator asked for says so; any other walk of the folder
+        // does nothing for the title. Either way it stops here, before the
+        // cleanup below could read an empty walk as files that are gone. A
+        // scoped scan only touches the files it was handed and carries on.
+        let walks_title_folder = pre_scanned_files.is_none() || full_folder_scan;
+        if walks_title_folder
+            && crate::folder_ownership::title_folder_spans_a_library_root(self, &title).await?
+        {
+            if matches!(mode, LibraryScanTitleWalkMode::OneOff) {
+                crate::folder_ownership::ensure_title_folder_is_not_a_library_root(self, &title)
+                    .await?;
+            }
+            warn!(
+                title_id = %title.id,
+                folder_path = %title.folder_path.as_deref().unwrap_or_default(),
+                "movie title scan skipped: the recorded folder is a library root, not a title folder"
+            );
+            if let Some(coordinator) = session_coordinator.as_ref() {
+                match pre_scanned_files.as_ref() {
+                    // Files counted toward the session total are settled as
+                    // done so its progress still completes.
+                    Some(files) if !files.is_empty() => {
+                        coordinator.mark_file_completed(files.len()).await;
+                    }
+                    Some(_) => {}
+                    None if file_total_mode == LibraryScanFileTotalMode::MarkKnownAfterThisWalk => {
+                        coordinator.mark_file_total_known().await;
+                    }
+                    None => {}
+                }
+                coordinator.publish_progress().await;
+            }
+            return Ok(LibraryTitleWalkResult { summary });
+        }
+
+        let mut summary = summary;
         let discovered_files = match pre_scanned_files {
             Some(files) => files,
             None => {
@@ -3480,6 +3524,39 @@ pub(crate) struct LibraryScanTitleWalkRequest {
     pub(crate) file_total_mode: LibraryScanFileTotalMode,
     pub(crate) full_folder_scan: bool,
     pub(crate) file_analysis_concurrency: usize,
+}
+
+#[cfg(test)]
+impl AppUseCase {
+    /// Walk one movie title the way a full library scan does once it has
+    /// enumerated the title's folder into `files`.
+    pub(crate) async fn walk_movie_title_as_full_library_scan(
+        &self,
+        actor: &User,
+        title: Title,
+        files: Vec<LibraryFile>,
+    ) -> AppResult<LibraryScanSummary> {
+        let work = LibraryScanTitleWork {
+            facet_plan: title_scan_facet_plan(&title),
+            title,
+            scope: LibraryScanTitleWorkScope::PreEnumeratedFullFolder(files),
+            mode: LibraryScanTitleWalkMode::Full,
+            created_in_scan: false,
+        };
+        self.walk_library_title(
+            actor,
+            LibraryScanTitleWalkRequest {
+                work,
+                session_id: None,
+                cancel_token: None,
+                file_total_mode: LibraryScanFileTotalMode::FullScanAggregate,
+                full_folder_scan: true,
+                file_analysis_concurrency: 1,
+            },
+        )
+        .await
+        .map(|result| result.summary)
+    }
 }
 
 #[cfg(test)]

@@ -1137,7 +1137,9 @@ async fn title_scan_returns_error_when_one_off_walk_fails() {
 #[tokio::test]
 async fn movie_title_scan_removes_missing_tracked_movie_file() {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let movie_path = tempdir.path().join("Ironclad (1997) - 2160p.mkv");
+    let title_folder = tempdir.path().join("Ironclad (1997)");
+    std::fs::create_dir_all(&title_folder).expect("create movie folder");
+    let movie_path = title_folder.join("Ironclad (1997) - 2160p.mkv");
     std::fs::write(&movie_path, b"movie").expect("write movie file");
 
     let settings = Arc::new(StoredSettingsRepo::default());
@@ -1189,7 +1191,7 @@ async fn movie_title_scan_removes_missing_tracked_movie_file() {
     app.services
         .catalog
         .titles
-        .set_folder_path(&title.id, tempdir.path().to_string_lossy().as_ref())
+        .set_folder_path(&title.id, title_folder.to_string_lossy().as_ref())
         .await
         .expect("set movie folder path");
 
@@ -1257,7 +1259,9 @@ async fn movie_title_scan_removes_missing_tracked_movie_file() {
 /// The coverage receipts left for a movie whose tracked file vanished.
 async fn movie_lost_file_coverage_after_scan(monitored: bool) -> Vec<String> {
     let tempdir = tempfile::tempdir().expect("tempdir");
-    let movie_path = tempdir.path().join("Quiet Lantern (2026) - 1080p.mkv");
+    let title_folder = tempdir.path().join("Quiet Lantern (2026)");
+    std::fs::create_dir_all(&title_folder).expect("create movie folder");
+    let movie_path = title_folder.join("Quiet Lantern (2026) - 1080p.mkv");
     std::fs::write(&movie_path, b"movie").expect("write movie file");
 
     let settings = Arc::new(StoredSettingsRepo::default());
@@ -1296,7 +1300,7 @@ async fn movie_lost_file_coverage_after_scan(monitored: bool) -> Vec<String> {
     app.services
         .catalog
         .titles
-        .set_folder_path(&title.id, tempdir.path().to_string_lossy().as_ref())
+        .set_folder_path(&title.id, title_folder.to_string_lossy().as_ref())
         .await
         .expect("set movie folder path");
     app.services

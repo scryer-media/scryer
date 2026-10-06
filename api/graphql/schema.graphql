@@ -16043,6 +16043,11 @@ type MediaRenamePlanPayload {
 	"""
 	errors: Int!
 	"""
+	Number of titles with nothing to move whose recorded folder is not a
+	title folder; applying the plan records the planned folder for them.
+	"""
+	folderRepairs: Int!
+	"""
 	Plan items in deterministic service order.
 	"""
 	items: [MediaRenamePlanItemPayload!]!

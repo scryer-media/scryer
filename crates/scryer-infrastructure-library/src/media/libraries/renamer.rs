@@ -407,6 +407,7 @@ mod tests {
                 item(&movable_source, &movable_target),
             ],
             title_folders: Vec::new(),
+            folder_repairs: Vec::new(),
         };
 
         let results = FileSystemLibraryRenamer::new()

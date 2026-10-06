@@ -1079,6 +1079,145 @@ async fn reconciling_a_title_recorded_at_the_library_root_is_refused() {
     );
 }
 
+/// A movie title recorded above the library root, with a bystander title in
+/// the library and a row of its own for a file that is no longer on disk.
+struct AncestorRecordedMovie {
+    rooted: Title,
+    bystander: Title,
+    bystander_file: std::path::PathBuf,
+    missing_row: String,
+    ancestor: std::path::PathBuf,
+}
+
+impl AncestorRecordedMovie {
+    async fn seed(fixture: &FolderMatchFixture) -> Self {
+        let ancestor = fixture
+            .root
+            .path()
+            .parent()
+            .expect("library root has a parent")
+            .to_path_buf();
+        let bystander_folder = fixture.folder("Bystander Title (2022)");
+        let bystander_file =
+            fixture.write_media(&bystander_folder, "Bystander.Title.2022.1080p.mkv");
+        fixture.scanner.set_files(&[bystander_file.as_path()]).await;
+        let rooted = fixture
+            .create_title_with_folder("Rooted Title", ancestor.as_path())
+            .await;
+        let missing = bystander_folder.join("Rooted.Title.2020.1080p.mkv");
+        fixture.seed_media_row(&rooted.id, &missing).await;
+        let bystander = create_movie_title_with_folder(
+            &fixture.app,
+            &fixture.user,
+            "Bystander Title",
+            bystander_folder.as_path(),
+        )
+        .await;
+        fixture.seed_media_row(&bystander.id, &bystander_file).await;
+        Self {
+            rooted,
+            bystander,
+            bystander_file,
+            missing_row: missing.to_string_lossy().to_string(),
+            ancestor,
+        }
+    }
+
+    async fn assert_untouched(&self, fixture: &FolderMatchFixture) {
+        assert_eq!(
+            fixture.media_paths(&self.rooted.id).await,
+            vec![self.missing_row.clone()],
+            "the rooted title gains nothing and keeps its existing row"
+        );
+        assert_eq!(
+            fixture.media_paths(&self.bystander.id).await,
+            vec![self.bystander_file.to_string_lossy().to_string()],
+            "the bystander keeps its file"
+        );
+        assert!(
+            fixture
+                .scanner
+                .roots
+                .lock()
+                .await
+                .iter()
+                .all(|root| Path::new(root) != self.ancestor.as_path()),
+            "the folder above the library root is never walked"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_scan_of_a_movie_recorded_above_the_library_root_is_refused() {
+    let fixture = FolderMatchFixture::new().await;
+    let seeded = AncestorRecordedMovie::seed(&fixture).await;
+    let before = snapshot_tree(fixture.root.path());
+
+    let error = fixture
+        .app
+        .scan_title_library(&fixture.user, &seeded.rooted.id)
+        .await
+        .expect_err("a record above the library root is refused");
+
+    assert!(
+        matches!(error, AppError::Validation(_)),
+        "unexpected error: {error}"
+    );
+    seeded.assert_untouched(&fixture).await;
+    assert_eq!(snapshot_tree(fixture.root.path()), before);
+}
+
+#[tokio::test]
+async fn a_library_scan_walks_nothing_for_a_movie_recorded_above_the_library_root() {
+    let fixture = FolderMatchFixture::new().await;
+    let seeded = AncestorRecordedMovie::seed(&fixture).await;
+    let before = snapshot_tree(fixture.root.path());
+
+    let summary = fixture
+        .app
+        .walk_movie_title_as_full_library_scan(
+            &fixture.user,
+            seeded.rooted.clone(),
+            build_test_library_files(&[seeded.bystander_file.as_path()]),
+        )
+        .await
+        .expect("the walk skips the title");
+
+    assert_eq!(summary.imported, 0);
+    seeded.assert_untouched(&fixture).await;
+    assert_eq!(snapshot_tree(fixture.root.path()), before);
+}
+
+#[tokio::test]
+async fn a_library_scan_of_a_movie_in_its_own_folder_still_attaches_and_retires() {
+    let fixture = FolderMatchFixture::new().await;
+    let folder = fixture.folder("Own Folder Title (2023)");
+    let file = fixture.write_media(&folder, "Own.Folder.Title.2023.1080p.mkv");
+    let missing = folder.join("Own.Folder.Title.2023.720p.mkv");
+    let title = fixture
+        .create_title_with_folder("Own Folder Title", folder.as_path())
+        .await;
+    fixture.seed_media_row(&title.id, &missing).await;
+    let before = snapshot_tree(fixture.root.path());
+
+    fixture
+        .app
+        .walk_movie_title_as_full_library_scan(
+            &fixture.user,
+            title.clone(),
+            build_test_library_files(&[file.as_path()]),
+        )
+        .await
+        .expect("walk the title folder");
+
+    assert_eq!(
+        fixture.media_paths(&title.id).await,
+        vec![file.to_string_lossy().to_string()],
+        "the file on disk is attached and the row for the missing one is retired"
+    );
+    assert_eq!(snapshot_tree(fixture.root.path()), before);
+}
+
 #[tokio::test]
 async fn a_title_recorded_at_the_library_root_cannot_swap_its_record_away() {
     let fixture = FolderMatchFixture::new().await;
@@ -1320,6 +1459,41 @@ async fn folders_outside_the_titles_library_roots_are_rejected() {
         .await
         .expect_err("a folder outside the library roots should be refused");
     assert!(matches!(error, AppError::Validation(_)));
+}
+
+/// A folder spelled with `..` can read as inside a root while naming somewhere
+/// else entirely, so dotted spellings are refused before any root check.
+#[tokio::test]
+async fn folders_spelled_with_dot_components_are_rejected() {
+    let fixture = FolderMatchFixture::new().await;
+    let folder = fixture.folder("Dotted Spelling (2024)");
+    let title = create_movie_title_with_folder(
+        &fixture.app,
+        &fixture.user,
+        "Dotted Spelling",
+        folder.as_path(),
+    )
+    .await;
+
+    for spelled in [
+        folder.join("..").join("..").join("Elsewhere"),
+        folder.join(".."),
+        fixture.root.path().join(".").join("Dotted Spelling (2024)"),
+    ] {
+        let error = fixture
+            .app
+            .change_title_folder_preview(&fixture.user, &title.id, &spelled.to_string_lossy())
+            .await
+            .expect_err("a dotted folder should be refused");
+        assert!(
+            matches!(&error, AppError::Validation(message) if message.contains(". or .. components")),
+            "expected a dot-component validation error, got {error:?}"
+        );
+    }
+    assert_eq!(
+        fixture.folder_path_of(&title.id).await.as_deref(),
+        Some(folder.to_string_lossy().as_ref())
+    );
 }
 
 /// FR-083 — the workflow needs management permission on the title's library.

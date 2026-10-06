@@ -27,8 +27,20 @@ export type MediaRenamePlan = {
   noop: number;
   conflicts: number;
   errors: number;
+  folderRepairs?: number;
   items: MediaRenamePlanItem[];
 };
+
+/**
+ * Whether applying a plan would change anything: a file to rename, or a
+ * title whose folder record is repaired although none of its files move.
+ */
+export function renamePlanHasWork(plan: {
+  renamable: number;
+  folderRepairs?: number;
+}): boolean {
+  return plan.renamable > 0 || (plan.folderRepairs ?? 0) > 0;
+}
 
 export function MediaRenamePlanPanel({
   plan,

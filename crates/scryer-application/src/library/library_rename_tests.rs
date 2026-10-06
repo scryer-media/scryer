@@ -1834,3 +1834,122 @@ fn rename_planning_key_still_separates_different_paths() {
         rename_planning_path_key("/media/TV/Show/two.mkv")
     );
 }
+
+fn planned_folder(title_id: &str, folder_path: &str) -> RenamePlanTitleFolder {
+    RenamePlanTitleFolder {
+        title_id: title_id.to_string(),
+        folder_path: folder_path.to_string(),
+    }
+}
+
+fn overlap_titles(overlap: &PlannedTitleFolderOverlap<'_>) -> (String, String) {
+    (
+        overlap.outer.folder.title_id.clone(),
+        overlap.inner.folder.title_id.clone(),
+    )
+}
+
+#[test]
+fn two_titles_planned_into_the_same_folder_overlap() {
+    let folders = vec![
+        planned_folder("title-a", "/media/movies/Shared Name (2024)"),
+        planned_folder("title-b", "/media/movies/Other Name (2021)"),
+        planned_folder("title-c", "/media/movies/Shared Name (2024)/"),
+    ];
+    let overlap = planned_title_folder_overlap(&folders, &[]).expect("the shared folder is found");
+    assert!(!overlap.nested);
+    let (outer, inner) = overlap_titles(&overlap);
+    let mut pair = [outer, inner];
+    pair.sort();
+    assert_eq!(pair, ["title-a", "title-c"]);
+}
+
+#[test]
+fn a_title_planned_inside_another_titles_folder_overlaps() {
+    let folders = vec![
+        planned_folder("title-inner", "/media/movies/Outer Name (2020)/Extras Name"),
+        planned_folder("title-outer", "/media/movies/Outer Name (2020)"),
+    ];
+    let overlap = planned_title_folder_overlap(&folders, &[]).expect("the nesting is found");
+    assert!(overlap.nested);
+    assert_eq!(
+        overlap_titles(&overlap),
+        ("title-outer".to_string(), "title-inner".to_string())
+    );
+}
+
+#[test]
+fn distinct_planned_folders_do_not_overlap() {
+    let folders = vec![
+        planned_folder("title-a", "/media/movies/Name (2020)"),
+        // A shared name prefix is not containment.
+        planned_folder("title-b", "/media/movies/Name (2020) Remastered"),
+        planned_folder("title-c", "/media/series/Name (2020)"),
+        // One title listed twice is still one title.
+        planned_folder("title-a", "/media/movies/Name (2020)"),
+    ];
+    assert!(planned_title_folder_overlap(&folders, &[]).is_none());
+}
+
+#[test]
+fn titles_left_where_they_are_never_overlap_each_other() {
+    let planned = vec![planned_folder(
+        "title-moving",
+        "/media/movies/Fresh Name (2022)",
+    )];
+    let standing = vec![
+        planned_folder("title-a", "/media/movies/Shared Name (2024)"),
+        planned_folder("title-b", "/media/movies/Shared Name (2024)"),
+        planned_folder("title-c", "/media/movies/Shared Name (2024)/Nested Name"),
+    ];
+    assert!(planned_title_folder_overlap(&planned, &standing).is_none());
+}
+
+#[test]
+fn a_planned_folder_that_is_another_titles_current_folder_overlaps() {
+    let planned = vec![planned_folder(
+        "title-moving",
+        "/media/movies/Shared Name (2024)",
+    )];
+    let standing = vec![planned_folder(
+        "title-idle",
+        "/media/movies/Shared Name (2024)/",
+    )];
+    let overlap =
+        planned_title_folder_overlap(&planned, &standing).expect("the shared folder is found");
+    assert!(!overlap.nested);
+    assert!(overlap.outer.planned != overlap.inner.planned);
+}
+
+#[test]
+fn a_planned_folder_nested_with_another_titles_current_folder_overlaps() {
+    let planned = vec![planned_folder(
+        "title-moving",
+        "/media/movies/Outer Name (2020)/Inner Name",
+    )];
+    let standing = vec![planned_folder(
+        "title-idle",
+        "/media/movies/Outer Name (2020)",
+    )];
+    let overlap = planned_title_folder_overlap(&planned, &standing).expect("inside is found");
+    assert!(overlap.nested);
+    assert_eq!(
+        overlap_titles(&overlap),
+        ("title-idle".to_string(), "title-moving".to_string())
+    );
+
+    let planned = vec![planned_folder(
+        "title-moving",
+        "/media/movies/Outer Name (2020)",
+    )];
+    let standing = vec![planned_folder(
+        "title-idle",
+        "/media/movies/Outer Name (2020)/Inner Name",
+    )];
+    let overlap = planned_title_folder_overlap(&planned, &standing).expect("around is found");
+    assert!(overlap.nested);
+    assert_eq!(
+        overlap_titles(&overlap),
+        ("title-moving".to_string(), "title-idle".to_string())
+    );
+}
