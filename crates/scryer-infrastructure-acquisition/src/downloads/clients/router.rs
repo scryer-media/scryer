@@ -591,6 +591,20 @@ impl DownloadClient for FeedbackTimeoutDownloadClient {
         .await
     }
 
+    async fn get_cleanup_payload_for_source(
+        &self,
+        client_id: &str,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<scryer_application::DownloadCleanupPayload>> {
+        self.run_feedback_read(self.inner.get_cleanup_payload_for_source(
+            client_id,
+            client_type,
+            download_client_item_id,
+        ))
+        .await
+    }
+
     async fn get_completed_download_for_source(
         &self,
         client_id: &str,
@@ -3631,6 +3645,59 @@ impl DownloadClient for PrioritizedDownloadClientRouter {
 
         all_items.sort_by(compare_completed_downloads_desc);
         Ok(all_items)
+    }
+
+    async fn get_cleanup_payload_for_source(
+        &self,
+        client_id: &str,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<scryer_application::DownloadCleanupPayload>> {
+        if !client_type.trim().eq_ignore_ascii_case("nzbget") {
+            return Ok(self
+                .get_completed_download_for_source(client_id, client_type, download_client_item_id)
+                .await?
+                .map(|download| scryer_application::DownloadCleanupPayload {
+                    download,
+                    native_delete_paths: Vec::new(),
+                }));
+        }
+        let reference = download_client_item_id.trim();
+        if client_id.trim().is_empty() || reference.is_empty() {
+            return Ok(None);
+        }
+        let clients = self.list_enabled_clients_by_priority_excluding(&[]).await?;
+        let Some(config) = clients.iter().find(|config| {
+            config.id == client_id.trim() && config.client_type.eq_ignore_ascii_case("nzbget")
+        }) else {
+            return Ok(None);
+        };
+        let proxy_config = self.proxy_for_download_client(config).await?;
+        let client = Self::client_from_config(
+            config,
+            self.staged_nzb_store.clone(),
+            self.staged_nzb_pipeline_limit.clone(),
+            self.plugin_provider.as_ref(),
+            self.feedback_read_timeout,
+            proxy_config.as_ref(),
+        )?;
+        let Some(mut payload) = client
+            .get_cleanup_payload_for_source(&config.id, &config.client_type, reference)
+            .await?
+        else {
+            return Ok(None);
+        };
+        payload.download.client_id = config.id.clone();
+        if let Some(mappings) = download_client_remote_path_mappings(config).as_deref() {
+            for path in &mut payload.native_delete_paths {
+                let mut location = payload.download.clone();
+                location.dest_dir = path.clone();
+                apply_remote_path_mappings_to_completed_download(&mut location, mappings);
+                *path = location.dest_dir;
+            }
+            apply_remote_path_mappings_to_completed_download(&mut payload.download, mappings);
+        }
+        Ok(Some(payload))
     }
 
     async fn get_completed_download_for_source(
@@ -8537,6 +8604,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nzbget_cleanup_lookup_maps_final_and_native_paths_for_exact_client() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"result":[{
+                "NZBID":42, "Status":"FAILURE/UNPACK", "Name":"Job", "DestDir":"/remote/intermediate/job",
+                "FinalDir":"/remote/final/job", "DeleteStatus":"NONE", "ParStatus":"SUCCESS", "UnpackStatus":"FAILURE",
+                "MoveStatus":"NONE", "ScriptStatus":"NONE", "MarkStatus":"NONE", "UrlStatus":"NONE"
+            }]}))).expect(1).mount(&server).await;
+        let router = PrioritizedDownloadClientRouter::new(
+            Arc::new(MockDownloadClientConfigRepository { configs: vec![DownloadClientConfig {
+                config_json: serde_json::json!({"host":server.address().ip().to_string(), "port":server.address().port().to_string(), "remote_path_mappings":"/remote => /mapped"}).to_string(),
+                ..test_config("nzb", "NZBGet", "nzbget", 0)
+            }] }),
+            Arc::new(MockSettingsRepository::default()), null_staged_nzb_store(), test_pipeline_limit(), None,
+        );
+        assert!(
+            router
+                .get_cleanup_payload_for_source("other", "nzbget", "42")
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let payload = router
+            .get_cleanup_payload_for_source("nzb", "nzbget", "42")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(payload.download.client_id, "nzb");
+        assert_eq!(payload.download.dest_dir, "/mapped/final/job");
+        assert_eq!(
+            payload.native_delete_paths,
+            vec!["/mapped/intermediate/job"]
+        );
+    }
+
+    #[tokio::test]
     async fn list_completed_downloads_applies_remote_path_mappings_from_client_config() {
         let client = Arc::new(MockDownloadClient::default());
         client
@@ -8821,6 +8924,10 @@ mod tests {
                 .get_completed_download_for_source("client-a", "qbittorrent", "item-a")
                 .await
                 .expect_err("targeted completed download reads should time out"),
+            wrapped
+                .get_cleanup_payload_for_source("client-a", "nzbget", "item-a")
+                .await
+                .expect_err("cleanup-only reads should time out"),
         ];
 
         for error in errors {

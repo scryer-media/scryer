@@ -2080,6 +2080,12 @@ pub(super) struct StubDownloadClient {
     pub(super) queue_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) history_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) completed_downloads: Arc<Mutex<Vec<CompletedDownload>>>,
+    pub(super) cleanup_payloads: Arc<Mutex<HashMap<String, crate::DownloadCleanupPayload>>>,
+    pub(super) cleanup_payload_error: Arc<Mutex<Option<String>>>,
+    /// How many times `get_cleanup_payload_for_source` was asked, so a test
+    /// can prove one cleanup attempt costs a single history read.
+    pub(super) cleanup_payload_lookups: Arc<Mutex<usize>>,
+    pub(super) delete_requires_absent_paths: Arc<Mutex<Vec<std::path::PathBuf>>>,
     pub(super) recent_completed_downloads: Arc<Mutex<Option<Vec<CompletedDownload>>>>,
     pub(super) deleted_items: Arc<Mutex<Vec<(String, bool)>>>,
     pub(super) deleted_requests: DeletedDownloadRequests,
@@ -2186,6 +2192,13 @@ impl StubDownloadClient {
         is_history: bool,
         remove_data: bool,
     ) -> AppResult<()> {
+        for path in self.delete_requires_absent_paths.lock().await.iter() {
+            assert!(
+                !path.exists(),
+                "payload must be removed before the client entry: {}",
+                path.display()
+            );
+        }
         if let Some(error) = self.delete_error.lock().await.clone() {
             return Err(AppError::Repository(error));
         }
@@ -2464,6 +2477,28 @@ impl DownloadClient for StubDownloadClient {
             None => self.completed_downloads.lock().await.clone(),
         };
         Ok(items.into_iter().take(limit).collect())
+    }
+
+    async fn get_cleanup_payload_for_source(
+        &self,
+        client_id: &str,
+        client_type: &str,
+        item_id: &str,
+    ) -> AppResult<Option<crate::DownloadCleanupPayload>> {
+        *self.cleanup_payload_lookups.lock().await += 1;
+        if let Some(error) = self.cleanup_payload_error.lock().await.clone() {
+            return Err(AppError::Repository(error));
+        }
+        if let Some(payload) = self.cleanup_payloads.lock().await.get(item_id).cloned() {
+            return Ok(Some(payload));
+        }
+        Ok(self
+            .get_completed_download_for_source(client_id, client_type, item_id)
+            .await?
+            .map(|download| crate::DownloadCleanupPayload {
+                download,
+                native_delete_paths: Vec::new(),
+            }))
     }
 
     async fn get_completed_download_for_source(

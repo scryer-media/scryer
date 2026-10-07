@@ -104,7 +104,9 @@ pub use ports::{
     DownloadPasswordRetryClaim, DownloadPasswordRetryClaimOutcome,
     DownloadPasswordRetryObservation,
 };
-pub use ports::{DownloadCleanupClaim, DownloadCleanupRecord, DownloadClientObservation};
+pub use ports::{
+    DownloadCleanupClaim, DownloadCleanupPayload, DownloadCleanupRecord, DownloadClientObservation,
+};
 pub use ports::{DownloadTitleReassignment, DownloadTitleReferences};
 mod quality;
 mod rate_limit_signal;

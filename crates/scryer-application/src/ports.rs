@@ -10356,6 +10356,14 @@ pub enum DownloadClientObservation {
     },
 }
 
+/// Metadata for terminal payload cleanup, never for import admission.
+#[derive(Clone, Debug)]
+pub struct DownloadCleanupPayload {
+    pub download: CompletedDownload,
+    /// Additional paths an entry-removal RPC can delete regardless of its data flag.
+    pub native_delete_paths: Vec<String>,
+}
+
 /// Persistent automatic cleanup, separate from the import outcome.
 #[derive(Clone, Debug)]
 pub struct DownloadCleanupRecord {
@@ -10916,6 +10924,22 @@ pub trait DownloadClient: Send + Sync {
             excluded_client_types,
         )
         .await
+    }
+
+    /// Cleanup-only lookup. Failed jobs must not enter completed-download discovery.
+    async fn get_cleanup_payload_for_source(
+        &self,
+        client_id: &str,
+        client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<DownloadCleanupPayload>> {
+        Ok(self
+            .get_completed_download_for_source(client_id, client_type, download_client_item_id)
+            .await?
+            .map(|download| DownloadCleanupPayload {
+                download,
+                native_delete_paths: Vec::new(),
+            }))
     }
 
     /// Fetch a single completed download by its client-scoped source
