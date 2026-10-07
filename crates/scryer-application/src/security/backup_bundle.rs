@@ -689,6 +689,12 @@ pub const BACKUP_TABLE_CATALOG: &[BackupTableCatalogEntry] = &[
         table: "download_cleanup",
         classification: BackupTableClassification::Export,
     },
+    // Cleanup seeding progress. Clearing it on restore makes the next seed a
+    // full pass over the restored downloads.
+    BackupTableCatalogEntry {
+        table: "download_cleanup_seed_state",
+        classification: BackupTableClassification::ResetOnRestore,
+    },
     BackupTableCatalogEntry {
         table: "downloads",
         classification: BackupTableClassification::Export,

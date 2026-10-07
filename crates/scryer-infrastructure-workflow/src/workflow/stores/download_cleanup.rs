@@ -113,30 +113,115 @@ pub(super) async fn enqueue_cleanup_tx(tx: &mut SqlTx<'_>, id: &str, state: &str
     Ok(())
 }
 
+/// How far before the recorded watermark a narrowed seed looks again, so a
+/// transaction that stamped its change before the last seed read but committed
+/// after it is still examined.
+const CLEANUP_SEED_CHANGE_OVERLAP: chrono::Duration = chrono::Duration::minutes(5);
+
+/// How long a narrowed seed may stand in for a full one. A blank client item id
+/// that is filled in later carries no change timestamp, so only a full pass can
+/// see that it made an old terminal download eligible.
+const CLEANUP_SEED_FULL_SCAN_INTERVAL: chrono::Duration = chrono::Duration::minutes(15);
+
+/// Selects downloads with no cleanup intent whose client item is known and
+/// whose tracked state (the latest identity state, else the submission's own)
+/// is terminal. `{changed}` is empty for a full pass, or narrows the read to
+/// downloads whose state, submission state, or row changed since a bound.
+const CLEANUP_SEED_SQL_TEMPLATE: &str = "SELECT d.id, COALESCE(st.tracked_state, s.tracked_state) AS tracked_state
+     FROM downloads d JOIN download_submissions s ON s.id = d.id
+     LEFT JOIN download_client_bindings b ON b.download_id = d.id
+     LEFT JOIN download_identity_states st ON st.id = (
+         SELECT latest.id FROM download_identity_states latest
+          WHERE latest.canonical_download_id = d.id
+          ORDER BY latest.updated_at DESC, latest.id DESC LIMIT 1)
+     WHERE {changed}NOT EXISTS (SELECT 1 FROM download_cleanup c WHERE c.download_id = d.id)
+       AND TRIM(COALESCE(b.native_item_id, s.download_client_item_id, '')) <> ''
+       AND COALESCE(st.tracked_state, s.tracked_state) IN ('imported', 'imported_seeding', 'failed', 'ignored')
+     ORDER BY d.created_at, d.id LIMIT {}";
+
+/// Any identity state row changing moves the latest one's `updated_at` to at
+/// least that bound, so this covers the latest-state input exactly.
+const CLEANUP_SEED_CHANGED_FILTER: &str = "d.id IN (
+           SELECT changed.canonical_download_id FROM download_identity_states changed
+            WHERE changed.updated_at >= {}
+           UNION SELECT changed.id FROM download_submissions changed
+            WHERE changed.tracked_state_at >= {}
+           UNION SELECT changed.id FROM downloads changed
+            WHERE changed.created_at >= {})
+       AND ";
+
+fn cleanup_seed_sql(narrowed: bool) -> String {
+    CLEANUP_SEED_SQL_TEMPLATE.replace(
+        "{changed}",
+        if narrowed { CLEANUP_SEED_CHANGED_FILTER } else { "" },
+    )
+}
+
+/// The persisted seed progress: changes up to `changed_through` have been
+/// examined, and the last complete full pass started at `full_scan_at`.
+struct CleanupSeedWatermark {
+    changed_through: chrono::DateTime<Utc>,
+    full_scan_at: chrono::DateTime<Utc>,
+}
+
+/// The lower change bound for a narrowed pass, or `None` when this pass must
+/// read every download: no watermark yet, a stale full pass, or a clock that
+/// moved backwards past either recorded instant.
+fn cleanup_seed_since(
+    watermark: Option<&CleanupSeedWatermark>,
+    now: chrono::DateTime<Utc>,
+) -> Option<chrono::DateTime<Utc>> {
+    let watermark = watermark?;
+    if watermark.full_scan_at > now
+        || watermark.changed_through > now
+        || now - watermark.full_scan_at >= CLEANUP_SEED_FULL_SCAN_INTERVAL
+    {
+        return None;
+    }
+    Some(watermark.changed_through - CLEANUP_SEED_CHANGE_OVERLAP)
+}
+
 impl DownloadSubmissionStore {
+    async fn cleanup_seed_watermark(&self) -> AppResult<Option<CleanupSeedWatermark>> {
+        let Some(row) = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT changed_through, full_scan_at FROM download_cleanup_seed_state WHERE id = 1",
+            &[],
+        )
+        .await?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(CleanupSeedWatermark {
+            changed_through: row.timestamp("changed_through")?,
+            full_scan_at: row.timestamp("full_scan_at")?,
+        }))
+    }
+
     async fn seed_cleanup(&self, limit: usize) -> AppResult<()> {
         if limit == 0 {
             return Ok(());
         }
+        let limit = limit.min(100);
+        // Taken before the read: whatever changes after this instant is past
+        // the watermark this pass records.
+        let started = Utc::now();
+        let watermark = self.cleanup_seed_watermark().await?;
+        let since = cleanup_seed_since(watermark.as_ref(), started);
+        let mut args = Vec::with_capacity(4);
+        if let Some(since) = since {
+            args.extend(std::iter::repeat_n(SqlArg::Timestamp(since), 3));
+        }
+        args.push(SqlArg::I64(limit as i64));
         // Keyset-like progress through the missing-intent set: completed and
         // failing cleanup rows cannot monopolize this backfill's first page.
         let rows = SqlRuntime::fetch_all(
             self.datastore.read_exec(),
-            "SELECT d.id, COALESCE(
-                (SELECT st.tracked_state FROM download_identity_states st
-                 WHERE st.canonical_download_id = d.id ORDER BY st.updated_at DESC, st.id DESC LIMIT 1),
-                s.tracked_state) AS tracked_state
-             FROM downloads d JOIN download_submissions s ON s.id = d.id
-             LEFT JOIN download_client_bindings b ON b.download_id = d.id
-             WHERE NOT EXISTS (SELECT 1 FROM download_cleanup c WHERE c.download_id = d.id)
-               AND TRIM(COALESCE(b.native_item_id, s.download_client_item_id, '')) <> ''
-               AND COALESCE(
-                (SELECT st.tracked_state FROM download_identity_states st
-                 WHERE st.canonical_download_id = d.id ORDER BY st.updated_at DESC, st.id DESC LIMIT 1),
-                s.tracked_state) IN ('imported', 'imported_seeding', 'failed', 'ignored')
-             ORDER BY d.created_at, d.id LIMIT {}",
-            &[SqlArg::I64(limit.min(100) as i64)],
-        ).await?;
+            &cleanup_seed_sql(since.is_some()),
+            &args,
+        )
+        .await?;
+        let drained = rows.len() < limit;
         for row in rows {
             let id = row.text("id")?;
             let state = row.text("tracked_state")?;
@@ -145,6 +230,26 @@ impl DownloadSubmissionStore {
                 let state = state.clone();
                 Box::pin(async move { enqueue_cleanup_tx(tx, &id, &state).await })
             })
+            .await?;
+        }
+        // A full page may have left eligible rows behind, so the bound stays
+        // where it was until a pass drains its candidate set; every seed
+        // transaction above has committed by now.
+        if drained {
+            let full_scan_at = match (&since, &watermark) {
+                (Some(_), Some(watermark)) => watermark.full_scan_at,
+                _ => started,
+            };
+            SqlRuntime::execute_write(
+                &self.datastore,
+                "advance_download_cleanup_seed",
+                "INSERT INTO download_cleanup_seed_state (id, changed_through, full_scan_at)
+                 VALUES (1, {}, {})
+                 ON CONFLICT(id) DO UPDATE SET
+                     changed_through = excluded.changed_through,
+                     full_scan_at = excluded.full_scan_at",
+                vec![SqlArg::Timestamp(started), SqlArg::Timestamp(full_scan_at)],
+            )
             .await?;
         }
         Ok(())

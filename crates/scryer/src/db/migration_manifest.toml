@@ -2916,7 +2916,7 @@ scope = "all"
 
 [[migration]]
 version = 277
-description = "title lookup spelling and download seed ordering indexes"
+description = "title lookup and download cleanup seed indexes and watermark"
 checksum_algo = "blake3"
 
 [[migration.steps]]

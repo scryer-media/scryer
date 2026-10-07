@@ -2691,6 +2691,20 @@ mod seed_goal_tests {
         .execute(&pool)
         .await
         .expect("download state lookup indexes should apply");
+        // The cleanup seed indexes and watermark; this fixture has no title
+        // search tables.
+        for statement in include_str!(
+            "../../../../scryer/src/db/migrations/0277_title_lookup_and_download_seed_indexes.sql"
+        )
+        .split(';')
+        .map(str::trim)
+        .filter(|statement| !statement.is_empty() && !statement.contains("title_search_terms"))
+        {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .expect("cleanup seed migration should apply");
+        }
         DownloadSubmissionStore::new(StoreDatastore::Sqlite {
             pool,
             writer_gate: Arc::new(tokio::sync::Mutex::new(())),
@@ -5698,6 +5712,404 @@ mod seed_goal_tests {
                 .await
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    /// A terminal download that lost its cleanup intent, with every change
+    /// timestamp the seed reads pinned to `changed_at`.
+    async fn missed_terminal_download(
+        store: &DownloadSubmissionStore,
+        item_id: &str,
+        changed_at: chrono::DateTime<Utc>,
+    ) -> DownloadId {
+        let id = DownloadId::new();
+        store
+            .record_submission_with_identity(
+                submission(id, item_id, "title-1"),
+                submission_identity(id),
+                None,
+            )
+            .await
+            .unwrap();
+        store
+            .record_identity_tracked_state_for_download(
+                Some(&id),
+                &submission_identity(id),
+                Some(&ClientJobLocator::new(
+                    Some("primary"),
+                    "qbittorrent",
+                    item_id,
+                )),
+                "imported",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        for sql in [
+            "DELETE FROM download_cleanup WHERE download_id = {}",
+            "UPDATE downloads SET created_at = {} WHERE id = {}",
+            "UPDATE download_identity_states SET updated_at = {} WHERE canonical_download_id = {}",
+            "UPDATE download_submissions SET tracked_state_at = {} WHERE id = {}",
+        ] {
+            let args = if sql.starts_with("DELETE") {
+                vec![SqlArg::Text(id.to_string())]
+            } else {
+                vec![SqlArg::Timestamp(changed_at), SqlArg::Text(id.to_string())]
+            };
+            SqlRuntime::execute_write(&store.datastore, "missed_cleanup_fixture", sql, args)
+                .await
+                .unwrap();
+        }
+        id
+    }
+
+    async fn set_cleanup_seed_watermark(
+        store: &DownloadSubmissionStore,
+        changed_through: chrono::DateTime<Utc>,
+        full_scan_at: chrono::DateTime<Utc>,
+    ) {
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "cleanup_seed_watermark_fixture",
+            "INSERT INTO download_cleanup_seed_state (id, changed_through, full_scan_at)
+             VALUES (1, {}, {})
+             ON CONFLICT(id) DO UPDATE SET changed_through = excluded.changed_through,
+                 full_scan_at = excluded.full_scan_at",
+            vec![
+                SqlArg::Timestamp(changed_through),
+                SqlArg::Timestamp(full_scan_at),
+            ],
+        )
+        .await
+        .unwrap();
+    }
+
+    async fn seeded_cleanup_ids(store: &DownloadSubmissionStore) -> Vec<DownloadId> {
+        let mut ids = store
+            .list_due_download_cleanup(100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|record| record.download_id)
+            .collect::<Vec<_>>();
+        ids.sort_by_key(|id| id.to_string());
+        ids
+    }
+
+    fn sorted(mut ids: Vec<DownloadId>) -> Vec<DownloadId> {
+        ids.sort_by_key(|id| id.to_string());
+        ids
+    }
+
+    #[tokio::test]
+    async fn cleanup_seed_without_a_watermark_seeds_everything_already_eligible() {
+        let store = store().await;
+        let long_ago = Utc::now() - chrono::Duration::days(30);
+        let first = missed_terminal_download(&store, "old-a", long_ago).await;
+        let second = missed_terminal_download(&store, "old-b", long_ago).await;
+        assert!(store.cleanup_seed_watermark().await.unwrap().is_none());
+
+        store.seed_download_cleanup(100).await.unwrap();
+
+        assert_eq!(
+            seeded_cleanup_ids(&store).await,
+            sorted(vec![first, second])
+        );
+        let watermark = store
+            .cleanup_seed_watermark()
+            .await
+            .unwrap()
+            .expect("a drained full pass records its watermark");
+        assert_eq!(watermark.changed_through, watermark.full_scan_at);
+    }
+
+    #[tokio::test]
+    async fn cleanup_seed_watermark_narrows_the_scan_but_seeds_later_changes() {
+        let store = store().await;
+        let now = Utc::now();
+        let watermark = now - chrono::Duration::minutes(1);
+        set_cleanup_seed_watermark(&store, watermark, watermark).await;
+        // Unchanged since well before the watermark and its overlap.
+        let untouched =
+            missed_terminal_download(&store, "untouched", watermark - chrono::Duration::hours(1))
+                .await;
+        // Changed after the watermark.
+        let changed = missed_terminal_download(&store, "changed", now).await;
+
+        store.seed_download_cleanup(100).await.unwrap();
+        assert_eq!(
+            seeded_cleanup_ids(&store).await,
+            vec![changed],
+            "a narrowed pass examines only downloads changed since the watermark"
+        );
+        let advanced = store.cleanup_seed_watermark().await.unwrap().unwrap();
+        assert!(advanced.changed_through >= now);
+        assert_eq!(
+            advanced.full_scan_at, watermark,
+            "a narrowed pass is not a full pass"
+        );
+
+        // Once the full pass is stale the next seed reads every download.
+        set_cleanup_seed_watermark(
+            &store,
+            advanced.changed_through,
+            now - CLEANUP_SEED_FULL_SCAN_INTERVAL - chrono::Duration::minutes(1),
+        )
+        .await;
+        store.seed_download_cleanup(100).await.unwrap();
+        assert_eq!(
+            seeded_cleanup_ids(&store).await,
+            sorted(vec![untouched, changed])
+        );
+    }
+
+    #[tokio::test]
+    async fn cleanup_seed_overlap_covers_a_change_stamped_just_before_the_watermark() {
+        let store = store().await;
+        let watermark = Utc::now() - chrono::Duration::minutes(1);
+        set_cleanup_seed_watermark(&store, watermark, watermark).await;
+        let in_overlap = missed_terminal_download(
+            &store,
+            "in-overlap",
+            watermark - CLEANUP_SEED_CHANGE_OVERLAP + chrono::Duration::seconds(30),
+        )
+        .await;
+        let before_overlap = missed_terminal_download(
+            &store,
+            "before-overlap",
+            watermark - CLEANUP_SEED_CHANGE_OVERLAP - chrono::Duration::minutes(1),
+        )
+        .await;
+
+        store.seed_download_cleanup(100).await.unwrap();
+
+        let seeded = seeded_cleanup_ids(&store).await;
+        assert_eq!(seeded, vec![in_overlap]);
+        assert!(!seeded.contains(&before_overlap));
+    }
+
+    #[tokio::test]
+    async fn cleanup_seed_watermark_holds_until_a_pass_drains_its_candidates() {
+        let store = store().await;
+        let long_ago = Utc::now() - chrono::Duration::days(30);
+        for index in 0..3 {
+            missed_terminal_download(&store, &format!("page-{index}"), long_ago).await;
+        }
+        store.seed_download_cleanup(2).await.unwrap();
+        assert_eq!(seeded_cleanup_ids(&store).await.len(), 2);
+        assert!(
+            store.cleanup_seed_watermark().await.unwrap().is_none(),
+            "a full page may have left eligible rows behind"
+        );
+        store.seed_download_cleanup(2).await.unwrap();
+        assert_eq!(seeded_cleanup_ids(&store).await.len(), 3);
+        assert!(store.cleanup_seed_watermark().await.unwrap().is_some());
+    }
+
+    #[test]
+    fn cleanup_seed_falls_back_to_a_full_pass_when_the_watermark_is_not_trustworthy() {
+        let now = Utc::now();
+        let fresh = CleanupSeedWatermark {
+            changed_through: now - chrono::Duration::minutes(1),
+            full_scan_at: now - chrono::Duration::minutes(1),
+        };
+        assert_eq!(
+            cleanup_seed_since(Some(&fresh), now),
+            Some(fresh.changed_through - CLEANUP_SEED_CHANGE_OVERLAP)
+        );
+        assert_eq!(cleanup_seed_since(None, now), None);
+        for watermark in [
+            CleanupSeedWatermark {
+                changed_through: now,
+                full_scan_at: now - CLEANUP_SEED_FULL_SCAN_INTERVAL,
+            },
+            CleanupSeedWatermark {
+                changed_through: now + chrono::Duration::minutes(1),
+                full_scan_at: now,
+            },
+            CleanupSeedWatermark {
+                changed_through: now,
+                full_scan_at: now + chrono::Duration::minutes(1),
+            },
+        ] {
+            assert_eq!(cleanup_seed_since(Some(&watermark), now), None);
+        }
+    }
+
+    /// The selection before the latest identity state became a join: the same
+    /// subquery written out twice.
+    const CORRELATED_CLEANUP_SEED_SQL: &str = "SELECT d.id, COALESCE(
+            (SELECT st.tracked_state FROM download_identity_states st
+             WHERE st.canonical_download_id = d.id ORDER BY st.updated_at DESC, st.id DESC LIMIT 1),
+            s.tracked_state) AS tracked_state
+         FROM downloads d JOIN download_submissions s ON s.id = d.id
+         LEFT JOIN download_client_bindings b ON b.download_id = d.id
+         WHERE NOT EXISTS (SELECT 1 FROM download_cleanup c WHERE c.download_id = d.id)
+           AND TRIM(COALESCE(b.native_item_id, s.download_client_item_id, '')) <> ''
+           AND COALESCE(
+            (SELECT st.tracked_state FROM download_identity_states st
+             WHERE st.canonical_download_id = d.id ORDER BY st.updated_at DESC, st.id DESC LIMIT 1),
+            s.tracked_state) IN ('imported', 'imported_seeding', 'failed', 'ignored')
+         ORDER BY d.created_at, d.id LIMIT {}";
+
+    #[tokio::test]
+    async fn cleanup_seed_join_selects_exactly_what_the_correlated_query_did() {
+        let store = store().await;
+        let submission_states = [
+            None,
+            Some("imported"),
+            Some("downloading"),
+            Some("failed"),
+            Some("ignored"),
+            Some("imported_seeding"),
+        ];
+        let state_values = ["imported", "downloading", "failed", "queued", "ignored"];
+        let base = Utc::now() - chrono::Duration::days(10);
+        for index in 0..240usize {
+            let id = DownloadId::new();
+            let created_at = base + chrono::Duration::minutes((index % 17) as i64);
+            let item = match index % 4 {
+                0 => "NULL".to_string(),
+                1 => "'  '".to_string(),
+                _ => format!("'item-{index}'"),
+            };
+            let tracked = submission_states[index % submission_states.len()]
+                .map_or("NULL".to_string(), |state| format!("'{state}'"));
+            SqlRuntime::execute_write(
+                &store.datastore,
+                "seed_equivalence_fixture",
+                "INSERT INTO downloads (id, origin, created_at) VALUES ({}, 'scryer_submission', {})",
+                vec![SqlArg::Text(id.to_string()), SqlArg::Timestamp(created_at)],
+            )
+            .await
+            .unwrap();
+            SqlRuntime::execute_write(
+                &store.datastore,
+                "seed_equivalence_fixture",
+                &format!(
+                    "INSERT INTO download_submissions
+                     (id, title_id, facet, download_client_type, download_client_item_id, tracked_state)
+                     VALUES ({{}}, 'title-1', 'series', 'qbittorrent', {item}, {tracked})"
+                ),
+                vec![SqlArg::Text(id.to_string())],
+            )
+            .await
+            .unwrap();
+            if index % 3 != 0 {
+                let native = match index % 5 {
+                    0 => "NULL".to_string(),
+                    1 => "''".to_string(),
+                    _ => format!("'native-{index}'"),
+                };
+                SqlRuntime::execute_write(
+                    &store.datastore,
+                    "seed_equivalence_fixture",
+                    &format!(
+                        "INSERT INTO download_client_bindings (download_id, native_item_id, created_at)
+                         VALUES ({{}}, {native}, {{}})"
+                    ),
+                    vec![SqlArg::Text(id.to_string()), SqlArg::Timestamp(created_at)],
+                )
+                .await
+                .unwrap();
+            }
+            // Zero to three identity states, some sharing an updated_at so
+            // the id tie-breaker decides.
+            for state in 0..(index % 4) {
+                let updated_at = base + chrono::Duration::hours(((index + state) % 3) as i64);
+                SqlRuntime::execute_write(
+                    &store.datastore,
+                    "seed_equivalence_fixture",
+                    "INSERT INTO download_identity_states
+                     (id, identity_key, canonical_download_id, tracked_state, created_at, updated_at)
+                     VALUES ({}, {}, {}, {}, {}, {})",
+                    vec![
+                        SqlArg::Text(format!("state-{index}-{state}")),
+                        SqlArg::Text(format!("key-{index}-{state}")),
+                        SqlArg::Text(id.to_string()),
+                        SqlArg::Text(state_values[(index * 7 + state) % state_values.len()].into()),
+                        SqlArg::Timestamp(updated_at),
+                        SqlArg::Timestamp(updated_at),
+                    ],
+                )
+                .await
+                .unwrap();
+            }
+            if index % 5 == 0 {
+                SqlRuntime::execute_write(
+                    &store.datastore,
+                    "seed_equivalence_fixture",
+                    "INSERT INTO download_cleanup
+                     (download_id, client_id, client_type, item_id, tracked_state,
+                      next_attempt_at, created_at, updated_at)
+                     VALUES ({}, '', 'qbittorrent', 'x', 'imported', {}, {}, {})",
+                    vec![
+                        SqlArg::Text(id.to_string()),
+                        SqlArg::Timestamp(created_at),
+                        SqlArg::Timestamp(created_at),
+                        SqlArg::Timestamp(created_at),
+                    ],
+                )
+                .await
+                .unwrap();
+            }
+        }
+
+        let selection = |rows: Vec<SqlRow>| {
+            rows.iter()
+                .map(|row| {
+                    (
+                        row.text("id").unwrap(),
+                        row.opt_text("tracked_state").unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let mut compared = 0;
+        for limit in [1i64, 7, 100, 1000] {
+            let correlated = selection(
+                SqlRuntime::fetch_all(
+                    store.datastore.read_exec(),
+                    CORRELATED_CLEANUP_SEED_SQL,
+                    &[SqlArg::I64(limit)],
+                )
+                .await
+                .unwrap(),
+            );
+            let joined = selection(
+                SqlRuntime::fetch_all(
+                    store.datastore.read_exec(),
+                    &cleanup_seed_sql(false),
+                    &[SqlArg::I64(limit)],
+                )
+                .await
+                .unwrap(),
+            );
+            assert_eq!(joined, correlated, "limit {limit}");
+            // Bounded below every fixture timestamp, the narrowed read is the
+            // full one.
+            let since = base - chrono::Duration::days(1);
+            let narrowed = selection(
+                SqlRuntime::fetch_all(
+                    store.datastore.read_exec(),
+                    &cleanup_seed_sql(true),
+                    &[
+                        SqlArg::Timestamp(since),
+                        SqlArg::Timestamp(since),
+                        SqlArg::Timestamp(since),
+                        SqlArg::I64(limit),
+                    ],
+                )
+                .await
+                .unwrap(),
+            );
+            assert_eq!(narrowed, correlated, "limit {limit}");
+            compared = correlated.len();
+        }
+        assert!(
+            compared > 20,
+            "the fixture must exercise the selection: {compared}"
         );
     }
 
