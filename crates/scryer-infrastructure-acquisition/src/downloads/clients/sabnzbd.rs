@@ -702,6 +702,15 @@ impl SabnzbdDownloadClient {
                 "SABnzbd history contains an invalid job identity".into(),
             ));
         }
+        let mut seen = std::collections::HashSet::new();
+        if slots
+            .iter()
+            .any(|slot| !seen.insert(slot.get("nzo_id").and_then(Value::as_str)))
+        {
+            return Err(AppError::Repository(
+                "duplicate nzo_id in SABnzbd history response".into(),
+            ));
+        }
         Ok(slots)
     }
 
@@ -2448,17 +2457,12 @@ fn sabnzbd_history_state(
         "REPAIRING" => (DownloadQueueState::Repairing, None),
         "EXTRACTING" => (DownloadQueueState::Extracting, None),
         "MOVING" | "RUNNING" => (DownloadQueueState::Downloading, None),
-        _ => {
-            if normalized.starts_with("FAILED") {
-                let reason = status
-                    .split_once(" - ")
-                    .map(|(_, detail)| detail.trim().to_string())
-                    .filter(|d| !d.is_empty());
-                (DownloadQueueState::Failed, reason)
-            } else {
-                (DownloadQueueState::Downloading, None)
-            }
-        }
+        "IDLE" | "CHECKING" | "DOWNLOADING" | "FETCHING" | "GRABBING" | "PAUSED"
+        | "PROPAGATING" => (DownloadQueueState::Downloading, None),
+        _ => (
+            DownloadQueueState::Warning,
+            Some(format!("Unrecognized SABnzbd history status: {status}")),
+        ),
     };
 
     if state == DownloadQueueState::Failed
@@ -2476,7 +2480,13 @@ fn sabnzbd_history_state(
                 ),
             ));
         }
-        if fail_message.eq_ignore_ascii_case(UNPACK_WRITE_FAILURE) {
+        // Deliberately broader than Sonarr's exact match: SAB emits the same
+        // recoverable write failure with additional details and a disk-full variant.
+        if fail_message
+            .get(..UNPACK_WRITE_FAILURE.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(UNPACK_WRITE_FAILURE))
+            || fail_message.eq_ignore_ascii_case("Unpacking failed, disk full")
+        {
             return Some((DownloadQueueState::Warning, Some(fail_message.to_string())));
         }
         if reason.is_none() {
@@ -3200,20 +3210,107 @@ mod tests {
     }
 
     #[test]
-    fn sabnzbd_unknown_history_status_remains_in_progress() {
-        assert_eq!(
-            sabnzbd_history_state("FutureStatus", None),
-            Some((DownloadQueueState::Downloading, None))
-        );
+    fn sabnzbd_unknown_history_status_is_a_warning() {
+        for status in ["FutureStatus", "FailedFuture", "Failed - future detail", ""] {
+            assert_eq!(
+                sabnzbd_history_state(status, None),
+                Some((
+                    DownloadQueueState::Warning,
+                    Some(format!("Unrecognized SABnzbd history status: {status}"))
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn sabnzbd_known_history_states_keep_their_mapping() {
+        for (status, state) in [
+            ("Idle", DownloadQueueState::Downloading),
+            ("Checking", DownloadQueueState::Downloading),
+            ("Downloading", DownloadQueueState::Downloading),
+            ("Fetching", DownloadQueueState::Downloading),
+            ("Grabbing", DownloadQueueState::Downloading),
+            ("Paused", DownloadQueueState::Downloading),
+            ("Propagating", DownloadQueueState::Downloading),
+            ("Queued", DownloadQueueState::Queued),
+            ("QuickCheck", DownloadQueueState::Verifying),
+            ("Verifying", DownloadQueueState::Verifying),
+            ("Repairing", DownloadQueueState::Repairing),
+            ("Extracting", DownloadQueueState::Extracting),
+            ("Moving", DownloadQueueState::Downloading),
+            ("Running", DownloadQueueState::Downloading),
+            ("Completed", DownloadQueueState::Completed),
+            ("Failed", DownloadQueueState::Failed),
+        ] {
+            assert_eq!(
+                sabnzbd_history_state(status, None),
+                Some((state, None)),
+                "{status}"
+            );
+        }
     }
 
     #[test]
     fn sabnzbd_unpack_write_failure_is_a_warning() {
-        let message = "Unpacking failed, write error or disk is full?";
+        for message in [
+            "Unpacking failed, write error or disk is full?",
+            "Unpacking failed, write error or disk is full? /mnt/downloads/job.r01",
+            "Unpacking failed, disk full",
+            "  UNPACKING FAILED, WRITE ERROR OR DISK IS FULL? detail  ",
+            "  UNPACKING FAILED, DISK FULL  ",
+        ] {
+            assert_eq!(
+                sabnzbd_history_state("Failed", Some(message)),
+                Some((
+                    DownloadQueueState::Warning,
+                    Some(message.trim().to_string())
+                ))
+            );
+        }
+    }
+
+    #[test]
+    fn sabnzbd_password_failure_keeps_its_retry_classification() {
         assert_eq!(
-            sabnzbd_history_state("Failed", Some(message)),
-            Some((DownloadQueueState::Warning, Some(message.to_string())))
+            sabnzbd_history_state(
+                "Failed",
+                Some("Unpacking failed, archive requires a password")
+            ),
+            Some((
+                DownloadQueueState::Failed,
+                Some(
+                    scryer_domain::DownloadPasswordFailure::Required
+                        .message()
+                        .into()
+                )
+            ))
         );
+    }
+
+    #[tokio::test]
+    async fn sabnzbd_duplicate_history_ids_fail_listing_and_exact_observation() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "history"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "history": {"slots": [
+                    {"nzo_id": "job", "status": "Failed"},
+                    {"nzo_id": "job", "status": "Running"}
+                ]}
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        mount_sab_queue_listing(&server, json!([]), 1).await;
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        let locator = scryer_application::ClientJobLocator::new(None, "sabnzbd", "job");
+        for result in [
+            client.list_history_page(0, 100).await.map(|_| ()),
+            client.observe_download(&locator, 0).await.map(|_| ()),
+        ] {
+            assert!(matches!(result, Err(AppError::Repository(message))
+                if message == "duplicate nzo_id in SABnzbd history response"));
+        }
     }
 
     #[test]
