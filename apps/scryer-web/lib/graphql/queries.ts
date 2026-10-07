@@ -1598,6 +1598,7 @@ export const mediaRequestRequesterLibrariesQuery = `query MediaRequestRequesterL
 
 export const librarySettingsQuery = `query LibrarySettings($libraryId: ID!) {
   librarySettings(libraryId: $libraryId) {
+    searchLanguages
     requiredAudioLanguagesOverride
     requiredAudioLanguages
     metadataLanguageOverride

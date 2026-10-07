@@ -359,6 +359,7 @@ export type MediaRequestRecord = {
 };
 
 export type LibrarySettingsRecord = {
+  searchLanguages: string[];
   requiredAudioLanguagesOverride: string[] | null;
   requiredAudioLanguages: string[];
   metadataLanguageOverride: string | null;
@@ -401,6 +402,7 @@ export type LibrarySettingsRecord = {
 };
 
 export type LibrarySettingsDraft = {
+  searchLanguages?: string[] | null;
   requiredAudioLanguages: string[] | null;
   metadataLanguage: string | null;
   useSeasonFolders: boolean | null;

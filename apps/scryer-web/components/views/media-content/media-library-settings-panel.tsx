@@ -19,6 +19,7 @@ import {
 import { AddNewButton } from "@/components/common/add-new-button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { ChangeRootDialog } from "@/components/dialogs/change-root-dialog";
+import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
@@ -312,6 +313,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
   const [settingsLoading, setSettingsLoading] = React.useState(false);
   const [settingsError, setSettingsError] = React.useState<string | null>(null);
   const [draftRequiredAudioLanguages, setDraftRequiredAudioLanguages] = React.useState<string[]>([]);
+  const [draftSearchLanguages, setDraftSearchLanguages] = React.useState<string[]>([]);
   const [draftMetadataLanguage, setDraftMetadataLanguage] = React.useState(INHERIT_VALUE);
   const [draftUseSeasonFolders, setDraftUseSeasonFolders] = React.useState(INHERIT_VALUE);
   const [draftQualityProfileId, setDraftQualityProfileId] = React.useState(INHERIT_VALUE);
@@ -397,6 +399,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
     (settings: LibrarySettingsRecord | null) => {
       setSavedSettings(settings);
       setDraftRequiredAudioLanguages(settings?.requiredAudioLanguagesOverride ?? []);
+      setDraftSearchLanguages(settings?.searchLanguages ?? []);
       setDraftMetadataLanguage(settings?.metadataLanguageOverride ?? INHERIT_VALUE);
       setDraftUseSeasonFolders(
         booleanOverrideSelectValue(settings?.useSeasonFoldersOverride),
@@ -646,6 +649,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
   const settingsDraft = React.useMemo<LibrarySettingsDraft>(
     () => {
       const draft: LibrarySettingsDraft = {
+        searchLanguages: draftSearchLanguages,
         requiredAudioLanguages:
           draftRequiredAudioLanguages.length > 0 ? draftRequiredAudioLanguages : null,
         metadataLanguage:
@@ -695,6 +699,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
       draftDownloadClientRoutingEntries,
       draftFillerPolicy,
       draftMetadataLanguage,
+      draftSearchLanguages,
       draftChownGroup,
       draftFileChmod,
       draftFolderChmod,
@@ -722,6 +727,7 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
     (savedSettings !== null &&
       (draftRequiredAudioLanguages.join("\n") !==
         (savedSettings.requiredAudioLanguagesOverride ?? []).join("\n") ||
+        draftSearchLanguages.join("\n") !== (savedSettings.searchLanguages ?? []).join("\n") ||
         settingsDraft.metadataLanguage !== savedSettings.metadataLanguageOverride ||
         settingsDraft.useSeasonFolders !== savedSettings.useSeasonFoldersOverride ||
         settingsDraft.qualityProfileId !== savedSettings.qualityProfileIdOverride ||
@@ -1408,6 +1414,11 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                       })}
                     </EffectiveChip>
                   ) : null}
+                </div>
+                <div className="space-y-2">
+                  <Label>{t("settings.searchLanguages")}</Label>
+                  <SubtitleLanguagePicker value={draftSearchLanguages} onChange={setDraftSearchLanguages} disabled={settingsBusy} />
+                  <p className="text-xs text-muted-foreground">{t("settings.searchLanguagesHelp")}</p>
                 </div>
                 <div className="space-y-2">
                   <Label>{t("settings.libraryMetadataLanguageLabel")}</Label>
