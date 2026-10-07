@@ -2931,6 +2931,23 @@ file = "postgres/migrations/0277_title_lookup_and_download_seed_indexes.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 278
+description = "title search language variants"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0278_title_search_language_variants.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0278_title_search_language_variants.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

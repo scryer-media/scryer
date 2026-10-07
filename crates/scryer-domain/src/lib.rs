@@ -1537,6 +1537,59 @@ pub struct Title {
     pub folder_path: Option<String>,
 }
 
+pub const SEARCH_LANGUAGES_TAG_PREFIX: &str = "scryer:search-languages:";
+pub const SEARCH_ALIASES_TAG_PREFIX: &str = "scryer:search-aliases:";
+
+impl Title {
+    /// User-owned options live with the other structured title options, not
+    /// in provider metadata that a hydration may replace.
+    pub fn search_languages_override(&self) -> Option<Vec<String>> {
+        let values: Vec<_> = self
+            .tags
+            .iter()
+            .filter_map(|tag| tag.strip_prefix(SEARCH_LANGUAGES_TAG_PREFIX))
+            .collect();
+        (!values.is_empty()).then(|| {
+            values
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .collect()
+        })
+    }
+
+    pub fn custom_search_aliases(&self) -> Vec<String> {
+        self.tags
+            .iter()
+            .filter_map(|tag| tag.strip_prefix(SEARCH_ALIASES_TAG_PREFIX))
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+
+    pub fn with_custom_search_aliases(&self) -> Self {
+        let mut title = self.clone();
+        for alias in self.custom_search_aliases() {
+            if !title.aliases.contains(&alias) {
+                title.aliases.push(alias);
+            }
+        }
+        title
+    }
+}
+
+/// Replace a user-owned list while retaining an explicit empty override.
+pub fn set_title_search_option(tags: &mut Vec<String>, prefix: &str, values: Option<Vec<String>>) {
+    tags.retain(|tag| !tag.starts_with(prefix));
+    if let Some(values) = values {
+        if values.is_empty() {
+            tags.push(prefix.to_owned());
+        } else {
+            tags.extend(values.into_iter().map(|value| format!("{prefix}{value}")));
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct TitleExternalRating {
     pub source: String,

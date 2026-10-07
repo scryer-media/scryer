@@ -157,6 +157,7 @@ pub struct TitleSearchProjectionSource {
 
 impl From<&Title> for TitleSearchProjectionSource {
     fn from(title: &Title) -> Self {
+        let title = title.with_custom_search_aliases();
         Self {
             title_id: title.id.clone(),
             facet: title.facet.clone(),
@@ -564,7 +565,7 @@ fn spelling_facts(raw_term: &str, language: Option<&str>, match_term: &str) -> S
 #[allow(clippy::too_many_arguments)]
 fn push_term_with_tokens(
     terms: &mut Vec<TitleSearchTerm>,
-    seen: &mut HashSet<(&'static str, String)>,
+    seen: &mut HashSet<(&'static str, String, String)>,
     term_kind: &'static str,
     token_term_kind: &'static str,
     weight: i64,
@@ -586,7 +587,11 @@ fn push_term_with_tokens(
     let (match_term, match_year) = title_spelling::title_match_form(raw_term, title_name, year);
     let facts = spelling_facts(raw_term, language, &match_term);
 
-    if seen.insert((term_kind, normalized_term.clone())) {
+    if seen.insert((
+        term_kind,
+        facts.literal.clone(),
+        language.unwrap_or_default().to_string(),
+    )) {
         terms.push(TitleSearchTerm {
             term_kind,
             raw_term: raw_term.to_string(),
@@ -614,10 +619,16 @@ fn push_term_with_tokens(
         .filter(|token| token.chars().count() >= 4)
     {
         let token = token.to_string();
-        if !seen.insert((token_term_kind, token.clone())) {
+        let token_facts = spelling_facts(&token, language, &token);
+        // Keyed exactly like the unique index (kind, literal, language) so a
+        // projection can never insert a row the index rejects.
+        if !seen.insert((
+            token_term_kind,
+            token_facts.literal.clone(),
+            language.unwrap_or_default().to_string(),
+        )) {
             continue;
         }
-        let token_facts = spelling_facts(&token, language, &token);
         terms.push(TitleSearchTerm {
             term_kind: token_term_kind,
             raw_term: token.clone(),
@@ -639,7 +650,7 @@ fn push_term_with_tokens(
 }
 
 pub fn build_title_search_terms(source: &TitleSearchProjectionSource) -> Vec<TitleSearchTerm> {
-    let mut seen = HashSet::<(&'static str, String)>::new();
+    let mut seen = HashSet::<(&'static str, String, String)>::new();
     let mut terms = Vec::new();
     let language = source.metadata_language.as_deref();
 
@@ -873,19 +884,6 @@ async fn replace_title_search_projection_pg_on_connection(
               numbers_key, char_length, romanization_key, language_tag, title_year)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
                      $15, $16)
-             ON CONFLICT (title_id, term_kind, normalized_term) DO UPDATE SET
-                raw_term = EXCLUDED.raw_term,
-                weight = EXCLUDED.weight,
-                literal_term = EXCLUDED.literal_term,
-                match_term = EXCLUDED.match_term,
-                match_year = EXCLUDED.match_year,
-                stripped_year_key = EXCLUDED.stripped_year_key,
-                script = EXCLUDED.script,
-                numbers_key = EXCLUDED.numbers_key,
-                char_length = EXCLUDED.char_length,
-                romanization_key = EXCLUDED.romanization_key,
-                language_tag = EXCLUDED.language_tag,
-                title_year = EXCLUDED.title_year
              RETURNING term_id",
         )
         .bind(&source.title_id)
@@ -1078,7 +1076,7 @@ pub async fn rebuild_title_search_projection_on_connection(
     let mut after_id = String::new();
     loop {
         let rows = sqlx::query(
-            "SELECT id, name, facet, sort_title, slug, aliases, tagged_aliases_json,
+            "SELECT id, name, facet, sort_title, slug, aliases, tagged_aliases_json, tags,
                     metadata_language, year
              FROM titles
              WHERE id > ?
@@ -1126,7 +1124,7 @@ pub async fn rebuild_title_search_projection_pg_on_connection(
     let mut after_id = String::new();
     loop {
         let rows = sqlx::query(
-            "SELECT id, name, facet, sort_title, slug, aliases, tagged_aliases_json,
+            "SELECT id, name, facet, sort_title, slug, aliases, tagged_aliases_json, tags,
                     metadata_language, year
              FROM titles
              WHERE id > $1
@@ -1230,6 +1228,17 @@ async fn stamp_collation_version_pg(connection: &mut sqlx::PgConnection) -> AppR
     Ok(())
 }
 
+fn aliases_with_user_tags(mut aliases: Vec<String>, tags: Vec<String>) -> AppResult<Vec<String>> {
+    for tag in tags {
+        if let Some(value) = tag.strip_prefix(scryer_domain::SEARCH_ALIASES_TAG_PREFIX) {
+            if !value.is_empty() {
+                aliases.push(value.to_owned());
+            }
+        }
+    }
+    Ok(aliases)
+}
+
 fn projection_source_from_row(
     row: &sqlx::sqlite::SqliteRow,
 ) -> AppResult<TitleSearchProjectionSource> {
@@ -1251,8 +1260,15 @@ fn projection_source_from_row(
             .map_err(|err| AppError::Repository(err.to_string()))?,
         sort_title: row.try_get("sort_title").unwrap_or(None),
         slug: row.try_get("slug").unwrap_or(None),
-        aliases: serde_json::from_str(&aliases_json)
+        aliases: aliases_with_user_tags(
+            serde_json::from_str(&aliases_json)
+                .map_err(|err| AppError::Repository(err.to_string()))?,
+            serde_json::from_str(
+                &row.try_get::<String, _>("tags")
+                    .unwrap_or_else(|_| "[]".into()),
+            )
             .map_err(|err| AppError::Repository(err.to_string()))?,
+        )?,
         tagged_aliases: serde_json::from_str(&tagged_aliases_json)
             .map_err(|err| AppError::Repository(err.to_string()))?,
         metadata_language: row.try_get("metadata_language").unwrap_or(None),
@@ -1289,7 +1305,10 @@ fn projection_source_from_pg_row(
             .map_err(|err| AppError::Repository(err.to_string()))?,
         sort_title: row.try_get("sort_title").unwrap_or(None),
         slug: row.try_get("slug").unwrap_or(None),
-        aliases: pg_json_column(row, "aliases")?,
+        aliases: aliases_with_user_tags(
+            pg_json_column(row, "aliases")?,
+            pg_json_column(row, "tags")?,
+        )?,
         tagged_aliases: pg_json_column(row, "tagged_aliases_json")?,
         metadata_language: row.try_get("metadata_language").unwrap_or(None),
         year: row.try_get("year").unwrap_or(None),
@@ -1299,6 +1318,44 @@ fn projection_source_from_pg_row(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linguistic_projection_preserves_spelling_and_language_provenance() {
+        let source = TitleSearchProjectionSource {
+            title_id: "local-show".into(),
+            facet: MediaFacet::Series,
+            name: "Over the Atlantic".into(),
+            sort_title: None,
+            slug: None,
+            aliases: vec![],
+            tagged_aliases: vec![
+                TaggedAlias {
+                    name: "Över Atlanten".into(),
+                    language: "swe".into(),
+                },
+                TaggedAlias {
+                    name: "Over Atlanten".into(),
+                    language: "swe".into(),
+                },
+                TaggedAlias {
+                    name: "Över Atlanten".into(),
+                    language: "dan".into(),
+                },
+            ],
+            metadata_language: Some("eng".into()),
+            year: Some(2019),
+        };
+        let terms = build_title_search_terms(&source);
+        let aliases: Vec<_> = terms
+            .iter()
+            .filter(|term| term.term_kind == TERM_KIND_TAGGED_ALIAS)
+            .collect();
+        assert_eq!(
+            aliases.len(),
+            3,
+            "distinct aliases must survive UI normalization"
+        );
+    }
 
     /// The index must be asked for exactly the whole-edit distance the
     /// precision check accepts. These are the two halves of one decision in

@@ -6169,3 +6169,242 @@ async fn title_folder_repair_upgrade_repairs_root_folders_and_is_idempotent() {
     drop(pool);
     let _ = std::fs::remove_file(db);
 }
+
+/// 0278 widens the title search projection's identity from the folded UI form
+/// to (literal spelling, language) and clears the collation stamp, so the next
+/// start reprojects every title under the new identity instead of serving rows
+/// written under the old one.
+#[tokio::test]
+async fn migration_0278_rekeys_search_terms_by_language_and_forces_reprojection() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let db = directory.path().join("search-language-variants.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("0277 database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(277), true)
+        .await
+        .expect("fresh 0277 fixture should apply");
+
+    sqlx::query(
+        "INSERT INTO titles (id, library_id, name, name_normalized, facet, root_folder_id,
+                             metadata_language, tagged_aliases_json, created_at)
+         VALUES ('title-0278', 'series_default_library', 'Over the Atlantic',
+                 'over the atlantic', 'series', 'canonical_root_for_series_default_library',
+                 'eng',
+                 '[{\"name\":\"Över Atlanten\",\"language\":\"swe\"},{\"name\":\"Över Atlanten\",\"language\":\"dan\"}]',
+                 '2026-10-01T00:00:00Z')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed title");
+    sqlx::query(
+        "INSERT INTO title_search_terms (title_id, facet, term_kind, raw_term, normalized_term,
+                                         weight, literal_term)
+         VALUES ('title-0278', 'series', 'name', 'Stale Row', 'stale row', 1, 'stale row')",
+    )
+    .execute(&pool)
+    .await
+    .expect("seed a term written under the pre-0278 identity");
+    sqlx::query("UPDATE title_search_meta SET collation_version = ?1 WHERE id = 1")
+        .bind(scryer_domain::title_spelling::title_collation_data_version())
+        .execute(&pool)
+        .await
+        .expect("stamp the projection as current");
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("0278 upgrade should apply");
+
+    let indexes: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM sqlite_master
+          WHERE type = 'index' AND tbl_name = 'title_search_terms'
+            AND name LIKE 'idx_title_search_terms_title_kind_%'",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("list projection identity indexes");
+    assert_eq!(indexes, ["idx_title_search_terms_title_kind_language"]);
+    let stamp: String =
+        sqlx::query_scalar("SELECT collation_version FROM title_search_meta WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read collation stamp");
+    assert_eq!(stamp, "", "0278 must invalidate the projection stamp");
+
+    scryer_infrastructure_library_search::seed_title_search_projection_if_stale(&pool)
+        .await
+        .expect("startup reprojection");
+
+    let stamp: String =
+        sqlx::query_scalar("SELECT collation_version FROM title_search_meta WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .expect("read collation stamp");
+    assert_eq!(
+        stamp,
+        scryer_domain::title_spelling::title_collation_data_version()
+    );
+    let stale: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM title_search_terms WHERE raw_term = 'Stale Row'")
+            .fetch_one(&pool)
+            .await
+            .expect("count stale rows");
+    assert_eq!(stale, 0, "the stale projection must be rebuilt, not kept");
+    let languages: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT language_tag FROM title_search_terms
+          WHERE title_id = 'title-0278' AND term_kind = 'tagged_alias'
+          ORDER BY language_tag",
+    )
+    .fetch_all(&pool)
+    .await
+    .expect("read tagged alias rows");
+    assert_eq!(
+        languages,
+        [Some("dan".to_string()), Some("swe".to_string())],
+        "one spelling in two languages keeps both provenance rows"
+    );
+
+    let duplicate = sqlx::query(
+        "INSERT INTO title_search_terms (title_id, facet, term_kind, raw_term, normalized_term,
+                                         weight, literal_term, language_tag)
+         SELECT title_id, facet, term_kind, raw_term, normalized_term, weight, literal_term,
+                language_tag
+           FROM title_search_terms
+          WHERE title_id = 'title-0278' AND term_kind = 'tagged_alias' AND language_tag = 'swe'",
+    )
+    .execute(&pool)
+    .await;
+    assert!(
+        duplicate.is_err(),
+        "the same spelling in the same language stays unique"
+    );
+
+    drop(pool);
+}
+
+#[tokio::test]
+async fn migration_0278_postgres_rekeys_search_terms_by_language() -> AppResult<()> {
+    let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let admin_pool = sqlx::PgPool::connect(&raw_url)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
+    let schema = format!(
+        "scryer_0278_migration_{}",
+        chrono::Utc::now().timestamp_micros()
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin_pool)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to create postgres schema: {error}"))
+        })?;
+    let mut schema_url = url::Url::parse(&raw_url)
+        .map_err(|error| AppError::Validation(format!("invalid postgres URL: {error}")))?;
+    schema_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-csearch_path={schema}"));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(schema_url.as_str())
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to open postgres schema: {error}"))
+        })?;
+
+    let result = async {
+        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(277)).await?;
+        sqlx::query(
+            "INSERT INTO titles (
+                id, library_id, name, name_normalized, facet, root_folder_id,
+                metadata_language, tagged_aliases_json, created_at
+             ) VALUES (
+                'title-0278', 'series_default_library', 'Over the Atlantic',
+                'over the atlantic', 'series', 'canonical_root_for_series_default_library',
+                'eng',
+                '[{\"name\":\"Över Atlanten\",\"language\":\"swe\"},{\"name\":\"Över Atlanten\",\"language\":\"dan\"}]'::jsonb,
+                '2026-10-01T00:00:00Z'::timestamptz
+             )",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        sqlx::query(
+            "INSERT INTO title_search_terms (title_id, facet, term_kind, raw_term,
+                                             normalized_term, weight, literal_term)
+             VALUES ('title-0278', 'series', 'name', 'Stale Row', 'stale row', 1, 'stale row')",
+        )
+        .execute(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        sqlx::query("UPDATE title_search_meta SET collation_version = $1 WHERE id = 1")
+            .bind(scryer_domain::title_spelling::title_collation_data_version())
+            .execute(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+
+        // Starting the services applies 0278 and runs the startup projection
+        // check, which must see the cleared stamp and reproject.
+        let services = crate::PostgresServices::new_with_mode(
+            schema_url.as_str(),
+            crate::types::MigrationMode::Apply,
+        )
+        .await?;
+        drop(services);
+
+        let indexes: Vec<String> = sqlx::query_scalar(
+            "SELECT indexname FROM pg_indexes
+              WHERE schemaname = current_schema() AND tablename = 'title_search_terms'
+                AND indexname LIKE 'idx_title_search_terms_title_kind_%'",
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(indexes, ["idx_title_search_terms_title_kind_language"]);
+        let stamp: String =
+            sqlx::query_scalar("SELECT collation_version FROM title_search_meta WHERE id = 1")
+                .fetch_one(&pool)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(
+            stamp,
+            scryer_domain::title_spelling::title_collation_data_version()
+        );
+
+        let stale: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM title_search_terms WHERE raw_term = 'Stale Row'",
+        )
+        .fetch_one(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(stale, 0);
+        let languages: Vec<Option<String>> = sqlx::query_scalar(
+            "SELECT language_tag FROM title_search_terms
+              WHERE title_id = 'title-0278' AND term_kind = 'tagged_alias'
+              ORDER BY language_tag",
+        )
+        .fetch_all(&pool)
+        .await
+        .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_eq!(languages, [Some("dan".to_string()), Some("swe".to_string())]);
+        Ok(())
+    }
+    .await;
+
+    drop(pool);
+    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin_pool)
+        .await;
+    drop(admin_pool);
+    cleanup.map_err(|error| {
+        AppError::Repository(format!("failed to drop postgres schema: {error}"))
+    })?;
+    result
+}

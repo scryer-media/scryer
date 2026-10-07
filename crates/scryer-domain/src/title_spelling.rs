@@ -505,6 +505,8 @@ fn title_spelling_fingerprint_seeded(
 /// Every profile tag [`title_spelling_profiles`] can return. Kept next to it:
 /// a new tag there must be added here or the fingerprint stops covering it.
 pub const COLLATION_PROFILES: &[&str] = &[
+    "sv",
+    "latin-accents",
     "en",
     "de",
     "fr",
@@ -553,6 +555,7 @@ fn profile(language: Option<&str>, script: TitleScript) -> Option<&'static str> 
     let root = language.split('-').next().unwrap_or("");
     match root {
         "en" | "eng" => Some("en"),
+        "sv" | "swe" => Some("sv"),
         "de" | "deu" | "ger" => Some("de"),
         "fr" | "fra" | "fre" => Some("fr"),
         "es" | "spa" => Some("es"),
@@ -582,8 +585,11 @@ pub fn title_spelling_profiles(value: &str, language: Option<&str>) -> Vec<&'sta
         return Vec::new();
     }
     let mut profiles = vec![tag];
-    if script == TitleScript::Latin && (tag == "de" || value.contains(['ä', 'ö', 'ü'])) {
-        profiles.push("de-u-co-phonebk");
+    if script == TitleScript::Latin {
+        profiles.push("latin-accents");
+        if tag == "de" {
+            profiles.push("de-u-co-phonebk");
+        }
     }
     profiles
 }
@@ -598,6 +604,15 @@ pub fn title_spelling_profiles(value: &str, language: Option<&str>) -> Vec<&'sta
 /// mis-compared; `title_search_meta.collation_version` is where the projection
 /// records it.
 pub fn title_spelling_key(value: &str, profile: &'static str) -> Option<Vec<u8>> {
+    if profile == "latin-accents" {
+        return Some(
+            value
+                .nfd()
+                .filter(|ch| !is_combining_mark(*ch))
+                .collect::<String>()
+                .into_bytes(),
+        );
+    }
     let mut key = Vec::new();
     collator(profile)?.write_sort_key_to(value, &mut key).ok()?;
     Some(key)
@@ -621,8 +636,8 @@ pub fn compare_title_spelling(
     if profiles.is_empty() {
         return None;
     }
-    for tag in profiles {
-        if collator(tag)?.compare(left, right).is_eq() {
+    for tag in profiles.into_iter().filter(|tag| *tag != "latin-accents") {
+        if title_spelling_key(left, tag)? == title_spelling_key(right, tag)? {
             return Some(SpellingEquivalence::Locale(tag));
         }
     }
@@ -635,9 +650,64 @@ pub fn compare_title_spelling(
     Some(SpellingEquivalence::Different)
 }
 
+/// Candidate equivalence for identity resolution. Accent omission is not a
+/// linguistic equality: callers must prove that no other local title claims
+/// the equivalent spelling before accepting it.
+pub fn compare_title_spelling_for_resolution(
+    left: &str,
+    right: &str,
+    language: Option<&str>,
+) -> Option<SpellingEquivalence> {
+    let result = compare_title_spelling(left, right, language)?;
+    if result == SpellingEquivalence::Different
+        && title_script(left) == TitleScript::Latin
+        && title_script(right) == TitleScript::Latin
+        && title_spelling_key(left, "latin-accents") == title_spelling_key(right, "latin-accents")
+    {
+        return Some(SpellingEquivalence::Locale("latin-accents"));
+    }
+    Some(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swedish_resolution_keeps_collation_distinct_from_accent_omission() {
+        assert_eq!(
+            title_spelling_profiles("över atlanten", Some("swe")),
+            vec!["sv", "latin-accents"]
+        );
+        assert_eq!(
+            compare_title_spelling("over atlanten", "över atlanten", Some("swe")),
+            Some(SpellingEquivalence::Different)
+        );
+        assert_eq!(
+            compare_title_spelling_for_resolution("over atlanten", "över atlanten", Some("swe")),
+            Some(SpellingEquivalence::Locale("latin-accents"))
+        );
+        assert_ne!(
+            title_spelling_key("over atlanten", "sv"),
+            title_spelling_key("över atlanten", "sv")
+        );
+        assert_eq!(
+            title_spelling_key("over atlanten", "latin-accents"),
+            title_spelling_key("över atlanten", "latin-accents")
+        );
+        assert_eq!(
+            compare_title_spelling_for_resolution("oever atlanten", "över atlanten", Some("swe")),
+            Some(SpellingEquivalence::Different)
+        );
+        assert_eq!(
+            compare_title_spelling_for_resolution(
+                "over atlanten 2",
+                "över atlanten 3",
+                Some("swe")
+            ),
+            Some(SpellingEquivalence::Different)
+        );
+    }
 
     #[test]
     fn title_identity_loose_form_collapses_punctuation_between_words() {

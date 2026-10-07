@@ -167,6 +167,63 @@ async fn assert_multilingual_projection(
     .text("collation_version")?;
     assert_eq!(stamped, title_spelling::title_collation_data_version());
 
+    let mut swedish = multilingual_title(
+        "swedish-show",
+        "Over the Atlantic",
+        Some("eng"),
+        Some(2019),
+        &[],
+        &[
+            ("Över Atlanten", "swe"),
+            ("Over Atlanten", "swe"),
+            ("Över Atlanten", "dan"),
+        ],
+    );
+    scryer_domain::set_title_search_option(
+        &mut swedish.tags,
+        scryer_domain::SEARCH_ALIASES_TAG_PREFIX,
+        Some(vec!["Sailing Together".into()]),
+    );
+    TitleRepository::create(catalog, swedish).await?;
+    match datastore {
+        StoreDatastore::Sqlite { pool, .. } => {
+            scryer_infrastructure_library_search::rebuild_title_search_projection(pool).await?
+        }
+        StoreDatastore::Postgres { pool } => {
+            scryer_infrastructure_library_search::rebuild_title_search_projection_pg(pool).await?
+        }
+    }
+
+    let terms = projected_terms(datastore, "swedish-show").await?;
+    assert_eq!(
+        terms
+            .iter()
+            .filter(|term| term.term_kind == "tagged_alias")
+            .count(),
+        3
+    );
+    assert!(
+        terms
+            .iter()
+            .any(|term| term.raw_term == "Sailing Together" && term.term_kind == "alias")
+    );
+    let swedish_name = terms
+        .iter()
+        .find(|term| {
+            term.raw_term == "Över Atlanten"
+                && term.term_kind == "tagged_alias"
+                && term.language_tag.as_deref() == Some("swe")
+        })
+        .unwrap();
+    assert_eq!(
+        profiles_for(datastore, swedish_name).await?,
+        vec!["latin-accents".to_string(), "sv".to_string()]
+    );
+    assert_eq!(
+        key_for(datastore, swedish_name, "latin-accents").await?,
+        title_spelling::title_spelling_key("over atlanten", "latin-accents").unwrap()
+    );
+
     // --- German: umlauts and ß -------------------------------------------
     TitleRepository::create(
         catalog,
@@ -198,7 +255,11 @@ async fn assert_multilingual_projection(
     assert_eq!(name.title_year, Some(1998));
     assert_eq!(
         profiles_for(datastore, name).await?,
-        vec!["de".to_string(), "de-u-co-phonebk".to_string()]
+        vec![
+            "de".to_string(),
+            "de-u-co-phonebk".to_string(),
+            "latin-accents".to_string()
+        ]
     );
 
     let alias = term(&terms, "alias", "grusse aus berlin");
@@ -372,7 +433,7 @@ async fn assert_multilingual_projection(
     assert_eq!(latin.romanization_key.as_deref(), Some("kokakukidotai"));
     assert_eq!(
         profiles_for(datastore, latin).await?,
-        vec!["und".to_string()],
+        vec!["latin-accents".to_string(), "und".to_string()],
         "an unknown language tag on a Latin name still collates as und"
     );
     let cjk = term(&terms, "alias", "攻殻機動隊");
