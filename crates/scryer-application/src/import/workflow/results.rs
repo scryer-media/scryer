@@ -1530,13 +1530,7 @@ fn remove_inventoried_payload_blocking(
         std::cmp::Reverse(directory.matches(std::path::MAIN_SEPARATOR).count())
     });
     for directory in directories {
-        let path = target.join(directory);
-        if payload_file_location_is_verified(target, &canonical_target, &path, protected_roots)
-            && std::fs::symlink_metadata(&path)
-                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
-        {
-            let _ = std::fs::remove_dir(path);
-        }
+        let _ = std::fs::remove_dir(target.join(directory));
     }
     let directory_removed = match std::fs::remove_dir(target) {
         Ok(()) => true,
@@ -1827,7 +1821,6 @@ async fn remove_host_payload_before_entry_cleanup(
     // Scryer's own completed import records for this canonical job: the files
     // it actually imported from this payload, with the sizes it verified.
     let mut imported_sources: Vec<(std::path::PathBuf, Option<u64>)> = Vec::new();
-    let mut artifact_proofs = std::collections::HashMap::new();
     if let Some(download_id) = canonical_download_id {
         let locator =
             crate::ClientJobLocator::new(Some(client_id), client_type, download_client_item_id);
@@ -1835,9 +1828,8 @@ async fn remove_host_payload_before_entry_cleanup(
             .services
             .workflow
             .imports
-            .list_imports_for_identities(std::slice::from_ref(&locator))
+            .list_imports_for_identities(&[locator])
             .await?;
-        let mut completed_import_ids = std::collections::HashSet::new();
         for import in imports {
             if import.status != ImportStatus::Completed
                 || app
@@ -1860,7 +1852,6 @@ async fn remove_host_payload_before_entry_cleanup(
             if result.get("decision").and_then(|v| v.as_str()) != Some("imported") {
                 continue;
             }
-            completed_import_ids.insert(import.id);
             if let Some(source) = result.get("source_path").and_then(|v| v.as_str()) {
                 imported_sources.push((
                     std::path::PathBuf::from(source),
@@ -1869,72 +1860,6 @@ async fn remove_host_payload_before_entry_cleanup(
                         .and_then(serde_json::Value::as_i64)
                         .and_then(|size| u64::try_from(size).ok()),
                 ));
-            }
-        }
-        if client_type == "sabnzbd" {
-            let artifacts = app
-                .services
-                .workflow
-                .import_artifacts
-                .list_by_source_identity_for_download(Some(download_id), &locator)
-                .await?;
-            let mut checked_artifacts = std::collections::HashSet::new();
-            for artifact in artifacts {
-                if artifact.result != "imported"
-                    || !artifact
-                        .import_id
-                        .as_ref()
-                        .is_some_and(|id| completed_import_ids.contains(id))
-                {
-                    continue;
-                }
-                let Some(relative) = artifact
-                    .relative_path
-                    .as_deref()
-                    .filter(|relative| relative_payload_path_is_safe(relative))
-                else {
-                    continue;
-                };
-                let source = target.join(relative);
-                if !checked_artifacts
-                    .insert((source.clone(), artifact.imported_media_file_id.clone()))
-                {
-                    continue;
-                }
-                // A known import whose proof is unavailable must not fall
-                // back to directory naming or a summary's size-only proof.
-                artifact_proofs.entry(source.clone()).or_insert(None);
-                let Some(media_id) = artifact.imported_media_file_id.as_deref() else {
-                    continue;
-                };
-                let Some(media) = app
-                    .services
-                    .library
-                    .media_files
-                    .get_media_file_by_id(media_id)
-                    .await?
-                else {
-                    continue;
-                };
-                let Ok(size) = u64::try_from(media.size_bytes) else {
-                    continue;
-                };
-                let destination = std::path::PathBuf::from(&media.file_path);
-                let proof_source = source.clone();
-                let relative = relative.to_owned();
-                let proof = tokio::task::spawn_blocking(move || {
-                    verified_artifact_source(&proof_source, &destination, size, &relative)
-                })
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!(
-                        "import source verification task panicked: {error}"
-                    ))
-                })?;
-                if let Some(proof) = proof {
-                    artifact_proofs.insert(source.clone(), proof);
-                    imported_sources.push((source, Some(size)));
-                }
             }
         }
     }
@@ -2062,7 +1987,7 @@ async fn remove_host_payload_before_entry_cleanup(
             if name_matches_release {
                 // The release's own job directory: inventory it once, then
                 // delete only what re-verifies.
-                let mut inventory = match saved
+                let inventory = match saved
                     .as_ref()
                     .and_then(|checkpoint| checkpoint.get("inventory").cloned())
                     .and_then(|value| serde_json::from_value::<PayloadInventory>(value).ok())
@@ -2088,11 +2013,6 @@ async fn remove_host_payload_before_entry_cleanup(
                         inventory
                     }
                 };
-                inventory.entries.retain(|entry| {
-                    artifact_proofs
-                        .get(&target.join(&entry.path))
-                        .is_none_or(|proof| proof.as_ref() == Some(entry))
-                });
                 let remove_target = target.clone();
                 let remove_protected = protected_roots.clone();
                 let result = tokio::task::spawn_blocking(move || {
@@ -2118,77 +2038,14 @@ async fn remove_host_payload_before_entry_cleanup(
                         "terminal download payload partially retained: unrecognised or changed files were left in place");
                     HostPayloadDisposition::PartiallyRetained
                 }
-            } else if client_type == "sabnzbd"
-                && (!imported_here.is_empty()
-                    || imported_sources.iter().any(|(source, _)| source == &target))
+            } else if !imported_here.is_empty()
+                || (client_type == "sabnzbd"
+                    && imported_sources.iter().any(|(source, _)| source == &target))
             {
-                let inventory = match saved
-                    .as_ref()
-                    .and_then(|checkpoint| checkpoint.get("imported_inventory").cloned())
-                    .and_then(|value| serde_json::from_value::<PayloadInventory>(value).ok())
-                    .filter(|inventory| std::path::Path::new(&inventory.target) == target)
-                {
-                    Some(inventory) => inventory,
-                    None => {
-                        let walk_target = target.clone();
-                        let mut inventory = tokio::task::spawn_blocking(move || {
-                            inventory_payload_directory_blocking(&walk_target)
-                        })
-                        .await
-                        .map_err(|error| {
-                            AppError::Repository(format!(
-                                "payload inventory task panicked: {error}"
-                            ))
-                        })??;
-                        inventory.entries.retain(|entry| {
-                            let path = target.join(&entry.path);
-                            let owned = imported_here.iter().any(|(source, size)| {
-                                source == &path && size.is_none_or(|size| size == entry.len)
-                            }) && artifact_proofs
-                                .get(&path)
-                                .is_none_or(|proof| proof.as_ref() == Some(entry));
-                            if !owned {
-                                inventory.retained.push(entry.path.clone());
-                            }
-                            owned
-                        });
-                        inventory.directories.retain(|directory| {
-                            let path = target.join(directory);
-                            imported_here
-                                .iter()
-                                .any(|(source, _)| source.starts_with(&path))
-                        });
-                        persist_plan(serde_json::json!({
-                            "completed": authoritative_completed, "payload_removed": false,
-                            "target": target, "imported_inventory": inventory,
-                        }))
-                        .await?;
-                        inventory
-                    }
-                };
-                let remove_target = target.clone();
-                let remove_protected = protected_roots.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    remove_inventoried_payload_blocking(
-                        &remove_target,
-                        &inventory,
-                        &remove_protected,
-                    )
-                })
-                .await
-                .map_err(|error| {
-                    AppError::Repository(format!("payload removal task panicked: {error}"))
-                })??;
-                if result.directory_removed && result.retained.is_empty() {
-                    HostPayloadDisposition::Removed
-                } else {
-                    HostPayloadDisposition::PartiallyRetained
-                }
-            } else if !imported_here.is_empty() {
                 // Not provably the job's own directory (a shared completed
                 // folder, or a client-renamed duplicate). Remove only the files
                 // Scryer itself imported from it, verified by size, and leave
-                // the directory and everything else alone.
+                // everything else alone; remove directories only when empty.
                 persist_plan(serde_json::json!({
                     "completed": authoritative_completed, "payload_removed": false,
                     "target": target,
@@ -2218,13 +2075,35 @@ async fn remove_host_payload_before_entry_cleanup(
                             crate::fs_safety::remove_file_safely_if_exists(source).await?;
                             removed += 1;
                         }
-                        Ok(_) => {}
+                        Ok(_) => continue,
                         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
                         Err(error) => {
                             return Err(AppError::Repository(format!(
                                 "failed to inspect imported source {}: {error}",
                                 source.display()
                             )));
+                        }
+                    }
+                    if client_type == "sabnzbd" {
+                        // Prune only this imported source's empty ancestors,
+                        // stopping before the job boundary or any retained entry.
+                        for directory in source.ancestors().skip(1) {
+                            if directory == target || !directory.starts_with(&target) {
+                                break;
+                            }
+                            if !payload_file_location_is_verified(
+                                &target,
+                                &canonical_target,
+                                directory,
+                                &protected_roots,
+                            ) || !tokio::fs::symlink_metadata(directory).await.is_ok_and(
+                                |metadata| metadata.is_dir() && !metadata.file_type().is_symlink(),
+                            ) {
+                                break;
+                            }
+                            if tokio::fs::remove_dir(directory).await.is_err() {
+                                break;
+                            }
                         }
                     }
                 }
@@ -2296,65 +2175,6 @@ async fn remove_host_payload_before_entry_cleanup(
         disposition,
         filesystem_checkpoint: checkpoint,
     })
-}
-
-// A missing source only permits empty-parent pruning. An existing source must
-// match the imported copy in full; its identity is carried into the inventory
-// so a replacement between verification and planning is retained as well.
-fn verified_artifact_source(
-    source: &std::path::Path,
-    destination: &std::path::Path,
-    size: u64,
-    relative: &str,
-) -> Option<Option<PayloadInventoryEntry>> {
-    use std::io::Read;
-    let metadata = match std::fs::symlink_metadata(source) {
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(None),
-        Ok(metadata)
-            if metadata.is_file()
-                && !metadata.file_type().is_symlink()
-                && metadata.len() == size =>
-        {
-            metadata
-        }
-        _ => return None,
-    };
-    let dest_metadata = std::fs::symlink_metadata(destination).ok()?;
-    if !dest_metadata.is_file()
-        || dest_metadata.file_type().is_symlink()
-        || dest_metadata.len() != size
-    {
-        return None;
-    }
-    let hash = |path: &std::path::Path| -> Option<blake3::Hash> {
-        let mut file = std::fs::File::open(path).ok()?.take(size.checked_add(1)?);
-        let mut hasher = blake3::Hasher::new();
-        let mut buffer = vec![0u8; PAYLOAD_SAMPLE_BYTES as usize];
-        let mut total = 0u64;
-        loop {
-            let read = file.read(&mut buffer).ok()?;
-            if read == 0 {
-                break;
-            }
-            total += read as u64;
-            hasher.update(&buffer[..read]);
-        }
-        (total == size).then(|| hasher.finalize())
-    };
-    if hash(source)? != hash(destination)? {
-        return None;
-    }
-    let (sample_bytes, sample_blake3) = sample_file_proof(source, size).ok()?;
-    let (dev, ino) = file_device_and_inode(&metadata);
-    Some(Some(PayloadInventoryEntry {
-        path: relative.into(),
-        len: size,
-        modified_unix_nanos: unix_nanos(metadata.modified().ok()),
-        dev,
-        ino,
-        sample_bytes,
-        sample_blake3,
-    }))
 }
 
 fn remove_empty_sab_job_parents(
@@ -2848,37 +2668,6 @@ mod move_import_source_cleanup_gate_tests {
         ImportSourceIdentityKind, ImportStrategy,
     };
     use std::path::PathBuf;
-
-    #[test]
-    fn sab_cleanup_artifact_proof_rejects_changes_outside_the_sample() {
-        let root = tempfile::tempdir().unwrap();
-        let source = root.path().join("source.mkv");
-        let destination = root.path().join("imported.mkv");
-        let mut bytes = vec![1u8; 3 * super::PAYLOAD_SAMPLE_BYTES as usize];
-        std::fs::write(&source, &bytes).unwrap();
-        std::fs::write(&destination, &bytes).unwrap();
-        assert!(
-            super::verified_artifact_source(
-                &source,
-                &destination,
-                bytes.len() as u64,
-                "source.mkv"
-            )
-            .unwrap()
-            .is_some()
-        );
-        bytes[super::PAYLOAD_SAMPLE_BYTES as usize + 1] = 2;
-        std::fs::write(&source, &bytes).unwrap();
-        assert!(
-            super::verified_artifact_source(
-                &source,
-                &destination,
-                bytes.len() as u64,
-                "source.mkv"
-            )
-            .is_none()
-        );
-    }
 
     #[test]
     fn sab_cleanup_empty_parent_preserves_output_library_and_recycle_roots() {

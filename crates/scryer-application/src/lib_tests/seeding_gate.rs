@@ -5514,24 +5514,17 @@ async fn sab_cleanup_storage_leaf_prunes_empty_job_parent_and_preserves_siblings
 }
 
 #[tokio::test]
-async fn sab_cleanup_series_artifacts_verify_sources_and_nested_empty_folders() {
+async fn sab_cleanup_existing_import_evidence_prunes_nested_empty_folders() {
     for scenario in [
         "imported",
         "moved",
-        "changed",
-        "changed-original-folder",
+        "size-changed",
+        "library-copy-unavailable",
         "unrelated",
-        "wrong-import",
-        "traversal",
     ] {
         let (mut app, _user, client, tracked, root, payload) = sab_cleanup_fixture().await;
-        let renamed = if scenario == "changed-original-folder" {
-            payload.clone()
-        } else {
-            let renamed = root.path().join("renamed-job.1");
-            std::fs::rename(&payload, &renamed).unwrap();
-            renamed
-        };
+        let renamed = root.path().join("renamed-job.1");
+        std::fs::rename(&payload, &renamed).unwrap();
         std::fs::create_dir(renamed.join("nested")).unwrap();
         let source = renamed.join("nested/episode.mkv");
         std::fs::rename(renamed.join("movie.mkv"), &source).unwrap();
@@ -5540,73 +5533,17 @@ async fn sab_cleanup_series_artifacts_verify_sources_and_nested_empty_folders() 
         if scenario == "moved" {
             std::fs::remove_file(&source).unwrap();
         }
-        if matches!(scenario, "changed" | "changed-original-folder") {
-            std::fs::write(&source, b"other").unwrap();
+        if scenario == "size-changed" {
+            std::fs::write(&source, b"changed-size").unwrap();
+        }
+        if scenario == "library-copy-unavailable" {
+            std::fs::remove_file(&destination).unwrap();
         }
         if scenario == "unrelated" {
             std::fs::write(renamed.join("keep.txt"), b"unrelated").unwrap();
         }
         client.completed_downloads.lock().await[0].dest_dir = renamed.display().to_string();
-        record_file_import_ownership(&mut app, &tracked, &renamed).await;
-        let import_id = app
-            .services
-            .workflow
-            .imports
-            .list_imports_for_identities(&[ClientJobLocator::new(
-                Some(&tracked.client_id),
-                "sabnzbd",
-                "SABnzbd_nzo_fixture",
-            )])
-            .await
-            .unwrap()[0]
-            .id
-            .clone();
-        let media = Arc::new(MockMediaFileRepo::default());
-        let media_id = media
-            .insert_media_file(&crate::InsertMediaFileInput {
-                title_id: tracked.title_id.clone().unwrap(),
-                file_path: destination.display().to_string(),
-                size_bytes: 5,
-                ..Default::default()
-            })
-            .await
-            .unwrap();
-        app.services.library.media_files = media;
-        let artifacts = Arc::new(RecordingImportArtifactRepo::default());
-        artifacts
-            .insert_artifact(crate::ImportArtifact {
-                id: "artifact".into(),
-                source_client_id: Some(tracked.client_id.clone()),
-                source_system: "sabnzbd".into(),
-                source_ref: "SABnzbd_nzo_fixture".into(),
-                import_id: Some(if scenario == "wrong-import" {
-                    "other-import".into()
-                } else {
-                    import_id
-                }),
-                relative_path: Some(
-                    if scenario == "traversal" {
-                        "../imported.mkv"
-                    } else {
-                        "nested/episode.mkv"
-                    }
-                    .into(),
-                ),
-                workspace_relative_path: None,
-                normalized_file_name: "episode.mkv".into(),
-                media_kind: "video".into(),
-                title_id: tracked.title_id.clone(),
-                episode_id: None,
-                season_number: None,
-                episode_number: None,
-                result: "imported".into(),
-                reason_code: None,
-                imported_media_file_id: Some(media_id),
-                created_at: Utc::now(),
-            })
-            .await
-            .unwrap();
-        app.services.workflow.import_artifacts = artifacts;
+        record_sized_file_import_ownership(&mut app, &tracked, &source, Some(5)).await;
         let result = crate::import::import::run_claimed_download_cleanup(
             &app,
             cleanup_record_for(&tracked),
@@ -5619,17 +5556,14 @@ async fn sab_cleanup_series_artifacts_verify_sources_and_nested_empty_folders() 
             TerminalDownloadCleanupOutcome::Removed,
             "{scenario}"
         );
-        let retained = !matches!(scenario, "imported" | "moved");
+        let retained = !matches!(scenario, "imported" | "moved" | "library-copy-unavailable");
         assert_eq!(renamed.exists(), retained, "{scenario}");
-        assert_eq!(
-            source.exists(),
-            matches!(
-                scenario,
-                "changed" | "changed-original-folder" | "wrong-import" | "traversal"
-            ),
-            "{scenario}"
-        );
-        assert_eq!(std::fs::read(&destination).unwrap(), b"media", "{scenario}");
+        assert_eq!(source.exists(), scenario == "size-changed", "{scenario}");
+        if scenario == "library-copy-unavailable" {
+            assert!(!destination.exists());
+        } else {
+            assert_eq!(std::fs::read(&destination).unwrap(), b"media", "{scenario}");
+        }
         assert_eq!(
             client.deleted_requests.lock().await[0].4,
             !retained,

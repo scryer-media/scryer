@@ -94,7 +94,7 @@ struct SabnzbdConfigMisc {
 #[derive(Debug, Default, Deserialize)]
 struct SabnzbdCategory {
     #[serde(default, alias = "Name")]
-    name: String,
+    _name: String,
     #[serde(default, alias = "Dir")]
     dir: String,
 }
@@ -934,88 +934,24 @@ impl SabnzbdDownloadClient {
     }
 
     fn derive_sorting_mode(config: &SabnzbdConfig) -> Option<String> {
-        let describe = |kind: &str, categories: &[String]| {
-            let scope = if categories.is_empty() {
-                "all categories".to_string()
-            } else {
-                format!("categories: {}", categories.join(", "))
-            };
-            format!("{kind} ({scope})")
-        };
-        let mut modes = config
+        if config
             .sorters
             .iter()
-            .filter(|sorter| sorter.is_active)
-            .map(|sorter| describe("custom", &sorter.sort_cats))
-            .collect::<Vec<_>>();
-        for (enabled, kind, categories) in [
-            (
-                config.misc.enable_tv_sorting,
-                "TV",
-                &config.misc.tv_categories,
-            ),
-            (
-                config.misc.enable_movie_sorting,
-                "Movie",
-                &config.misc.movie_categories,
-            ),
-            (
-                config.misc.enable_date_sorting,
-                "Date",
-                &config.misc.date_categories,
-            ),
-        ] {
-            if enabled {
-                modes.push(describe(kind, categories));
-            }
+            .any(|sorter| sorter.is_active && !sorter.sort_cats.is_empty())
+            || (config.misc.enable_tv_sorting && !config.misc.tv_categories.is_empty())
+        {
+            return Some("TV".to_string());
         }
-        (!modes.is_empty()).then(|| modes.join("; "))
-    }
 
-    fn job_folder_warnings(config: &SabnzbdConfig) -> Vec<String> {
-        config.categories.iter()
-            .filter(|category| category.dir.trim_end().ends_with('*'))
-            .map(|category| format!(
-                "SABnzbd category '{}' disables per-job folders (folder '{}'). Remove the trailing '*' before using this category with Scryer.",
-                category.name, category.dir
-            ))
-            .collect()
-    }
+        if config.misc.enable_movie_sorting && !config.misc.movie_categories.is_empty() {
+            return Some("Movie".to_string());
+        }
 
-    fn validate_category_config(config: &SabnzbdConfig, category: Option<&str>) -> AppResult<()> {
-        let category = category
-            .map(str::trim)
-            .filter(|category| !category.is_empty())
-            .unwrap_or("*");
-        let configured = config
-            .categories
-            .iter()
-            .find(|entry| entry.name.eq_ignore_ascii_case(category))
-            .or_else(|| config.categories.iter().find(|entry| entry.name == "*"));
-        if configured.is_some_and(|entry| entry.dir.trim_end().ends_with('*')) {
-            return Err(AppError::Validation(format!(
-                "SABnzbd category '{category}' disables per-job folders. Remove the trailing '*' from its folder setting before downloading with Scryer."
-            )));
+        if config.misc.enable_date_sorting && !config.misc.date_categories.is_empty() {
+            return Some("Date".to_string());
         }
-        let applies = |categories: &[String]| {
-            categories.is_empty()
-                || categories
-                    .iter()
-                    .any(|entry| entry.eq_ignore_ascii_case(category))
-        };
-        let sorting = config
-            .sorters
-            .iter()
-            .any(|sorter| sorter.is_active && applies(&sorter.sort_cats))
-            || (config.misc.enable_tv_sorting && applies(&config.misc.tv_categories))
-            || (config.misc.enable_movie_sorting && applies(&config.misc.movie_categories))
-            || (config.misc.enable_date_sorting && applies(&config.misc.date_categories));
-        if sorting {
-            return Err(AppError::Validation(format!(
-                "SABnzbd sorting is enabled for category '{category}'. Disable sorting for this category before downloading with Scryer."
-            )));
-        }
-        Ok(())
+
+        None
     }
 
     fn removes_completed_downloads(config: &SabnzbdConfig) -> bool {
@@ -1087,28 +1023,6 @@ impl SabnzbdDownloadClient {
         self.api_get(&[("mode", "queue"), ("limit", "0")])
             .await
             .map_err(map_sabnzbd_auth_validation_error)?;
-
-        // SAB-compatible clients may not expose configuration. A supported
-        // configuration response must be checked, while an unsupported API
-        // must not break their authenticated connection test.
-        if let Ok(config) = self.get_config().await {
-            let global_sorting = config
-                .sorters
-                .iter()
-                .any(|sorter| sorter.is_active && sorter.sort_cats.is_empty())
-                || (config.misc.enable_tv_sorting && config.misc.tv_categories.is_empty())
-                || (config.misc.enable_movie_sorting && config.misc.movie_categories.is_empty())
-                || (config.misc.enable_date_sorting && config.misc.date_categories.is_empty());
-            if global_sorting {
-                return Err(AppError::Validation("SABnzbd sorting is enabled for all categories. Disable sorting for Scryer downloads.".into()));
-            }
-            warnings.extend(Self::job_folder_warnings(&config));
-            if let Some(sorting) = Self::derive_sorting_mode(&config) {
-                warnings.push(format!(
-                    "Disable {sorting} sorting for categories used by Scryer"
-                ));
-            }
-        }
 
         if warnings.is_empty() {
             Ok(version)
@@ -1215,11 +1129,6 @@ impl DownloadClient for SabnzbdDownloadClient {
         &self,
         request: &DownloadClientAddRequest,
     ) -> AppResult<DownloadGrabResult> {
-        // Routing supplies the actual category here; connection tests do not
-        // know it. Do not reject sorting or folder settings of unrelated jobs.
-        if let Ok(config) = self.get_config().await {
-            Self::validate_category_config(&config, request.category.as_deref())?;
-        }
         let title = &request.title;
         let source_title = request.source_title_without_password();
         let nzb_name = source_title
@@ -1515,7 +1424,7 @@ impl DownloadClient for SabnzbdDownloadClient {
             remote_output_roots: self.output_roots_from_config(&config, full_status.as_ref()),
             removes_completed_downloads: Some(Self::removes_completed_downloads(&config)),
             sorting_mode: Self::derive_sorting_mode(&config),
-            warnings: Self::job_folder_warnings(&config),
+            warnings: Vec::new(),
         })
     }
 
@@ -2846,49 +2755,6 @@ mod tests {
 
     use crate::downloads::staged_nzb_store::FileSystemStagedNzbStore;
 
-    #[test]
-    fn sab_cleanup_validates_only_the_routed_category() {
-        for raw in [
-            json!({"categories": [{"name": "series", "dir": "series*"}, {"name": "movies", "dir": "movies"}]}),
-            json!({"sorters": [{"is_active": true, "sort_cats": ["series"]}]}),
-            json!({"misc": {"enable_tv_sorting": true, "tv_categories": ["series"]}}),
-        ] {
-            let config = serde_json::from_value(raw).unwrap();
-            assert!(
-                SabnzbdDownloadClient::validate_category_config(&config, Some("series")).is_err()
-            );
-            assert!(
-                SabnzbdDownloadClient::validate_category_config(&config, Some("movies")).is_ok()
-            );
-        }
-        let config =
-            serde_json::from_value(json!({"categories": [{"name": "*", "dir": "shared*"}]}))
-                .unwrap();
-        assert!(
-            SabnzbdDownloadClient::validate_category_config(&config, Some("unconfigured")).is_err()
-        );
-    }
-
-    #[tokio::test]
-    async fn sab_cleanup_refuses_unsafe_routed_category_before_upload() {
-        let server = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(query_param("mode", "get_config"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"config": {
-                "categories": [{"name": "series", "dir": "shared*"}]
-            }})))
-            .expect(1)
-            .mount(&server)
-            .await;
-        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
-        let mut request =
-            test_add_request(&scryer_domain::download_identity::DownloadId::new().to_wire());
-        request.category = Some("series".into());
-        let error = client.submit_download(&request).await.unwrap_err();
-        assert!(error.to_string().contains("per-job folders"));
-        assert_eq!(server.received_requests().await.unwrap().len(), 1);
-    }
-
     #[tokio::test]
     async fn sab_cleanup_queue_delete_honors_keep_data() {
         for remove_data in [false, true] {
@@ -2985,76 +2851,6 @@ mod tests {
                 .await;
             let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
             client.delete_queue_item("job", true, false).await.unwrap();
-        }
-    }
-
-    #[test]
-    fn sab_cleanup_detects_all_category_sorting_and_names_specific_categories() {
-        for raw in [
-            json!({"misc": {"enable_tv_sorting": true, "tv_categories": []}}),
-            json!({"misc": {"enable_movie_sorting": true, "movie_categories": []}}),
-            json!({"misc": {"enable_date_sorting": true, "date_categories": []}}),
-            json!({"sorters": [{"is_active": true, "sort_cats": []}]}),
-        ] {
-            let config = serde_json::from_value(raw).unwrap();
-            assert!(
-                SabnzbdDownloadClient::derive_sorting_mode(&config)
-                    .unwrap()
-                    .contains("all categories")
-            );
-        }
-        let config = serde_json::from_value(
-            json!({"sorters": [{"is_active": true, "sort_cats": ["unrelated"]}]}),
-        )
-        .unwrap();
-        assert!(
-            SabnzbdDownloadClient::derive_sorting_mode(&config)
-                .unwrap()
-                .contains("categories: unrelated")
-        );
-        assert!(
-            SabnzbdDownloadClient::derive_sorting_mode(&super::SabnzbdConfig::default()).is_none()
-        );
-    }
-
-    #[test]
-    fn sab_cleanup_category_warning_uses_sab_category_name() {
-        let config = serde_json::from_value(json!({"categories": [
-            {"name": "series", "dir": "series*"}, {"name": "movies", "dir": "movies"}
-        ]}))
-        .unwrap();
-        let warnings = SabnzbdDownloadClient::job_folder_warnings(&config);
-        assert_eq!(warnings.len(), 1);
-        assert!(warnings[0].contains("category 'series'"));
-    }
-
-    #[tokio::test]
-    async fn sab_cleanup_connection_rejects_global_sorting_and_reports_category_folders() {
-        for global_sorting in [false, true] {
-            let server = MockServer::start().await;
-            Mock::given(method("GET"))
-                .and(query_param("mode", "version"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"version": "4.5.1"})))
-                .expect(1)
-                .mount(&server)
-                .await;
-            mount_sab_queue_listing(&server, json!([]), 1).await;
-            Mock::given(method("GET"))
-                .and(query_param("mode", "get_config"))
-                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"config": {
-                    "misc": {"enable_tv_sorting": global_sorting, "tv_categories": []},
-                    "categories": [{"name": "series", "dir": "series*"}]
-                }})))
-                .expect(1)
-                .mount(&server)
-                .await;
-            let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
-            let result = client.test_connection().await;
-            if global_sorting {
-                assert!(result.unwrap_err().to_string().contains("all categories"));
-            } else {
-                assert!(result.unwrap().contains("category 'series'"));
-            }
         }
     }
 
