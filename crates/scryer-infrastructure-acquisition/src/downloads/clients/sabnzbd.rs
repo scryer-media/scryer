@@ -486,7 +486,11 @@ impl SabnzbdDownloadClient {
 
                 let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
                 let mut state = sabnzbd_queue_state(status)?;
+                // A global pause stops downloading only; verification, repair,
+                // extraction, moving and scripts keep running. This deliberately
+                // diverges from Sonarr, which reports every slot as paused.
                 if paused
+                    && sabnzbd_queue_status_is_download_phase(status)
                     && sabnzbd_queue_priority(slot.get("priority").and_then(Value::as_str)) != 2
                 {
                     state = DownloadQueueState::Paused;
@@ -2426,6 +2430,13 @@ fn sabnzbd_queue_state(status: &str) -> Option<DownloadQueueState> {
     }
 }
 
+fn sabnzbd_queue_status_is_download_phase(status: &str) -> bool {
+    matches!(
+        status.to_ascii_uppercase().as_str(),
+        "DOWNLOADING" | "CHECKING" | "FETCHING" | "QUEUED" | "PROPAGATING" | "GRABBING"
+    )
+}
+
 fn sabnzbd_postprocessing_stage(status: &str) -> Option<String> {
     let normalized = status.to_ascii_uppercase();
     match normalized.as_str() {
@@ -2460,6 +2471,10 @@ fn sabnzbd_history_state(
         "MOVING" | "RUNNING" => (DownloadQueueState::Downloading, None),
         "IDLE" | "CHECKING" | "DOWNLOADING" | "FETCHING" | "GRABBING" | "PAUSED"
         | "PROPAGATING" => (DownloadQueueState::Downloading, None),
+        "" => (
+            DownloadQueueState::Warning,
+            Some("SABnzbd history entry has no status".to_string()),
+        ),
         _ => (
             DownloadQueueState::Warning,
             Some(format!("Unrecognized SABnzbd history status: {status}")),
@@ -2786,7 +2801,9 @@ mod tests {
                     "queue": {"paused": paused, "slots": [
                         {"nzo_id": "normal", "status": "Downloading", "priority": "Normal"},
                         {"nzo_id": "force", "status": "Downloading", "priority": "Force"},
-                        {"nzo_id": "item-paused", "status": "Paused", "priority": "Force"}
+                        {"nzo_id": "item-paused", "status": "Paused", "priority": "Force"},
+                        {"nzo_id": "extracting", "status": "Extracting", "priority": "Normal"},
+                        {"nzo_id": "moving", "status": "Moving", "priority": "Normal"}
                     ]}
                 })))
                 .expect(1)
@@ -2794,7 +2811,7 @@ mod tests {
                 .await;
             let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
             let items = client.list_queue().await.unwrap();
-            assert_eq!(items.len(), 3);
+            assert_eq!(items.len(), 5);
             assert_eq!(
                 items[0].state,
                 if paused {
@@ -2805,6 +2822,8 @@ mod tests {
             );
             assert_eq!(items[1].state, DownloadQueueState::Downloading);
             assert_eq!(items[2].state, DownloadQueueState::Paused);
+            assert_eq!(items[3].state, DownloadQueueState::Extracting);
+            assert_eq!(items[4].state, DownloadQueueState::Downloading);
         }
     }
 
@@ -3281,7 +3300,7 @@ mod tests {
 
     #[test]
     fn sabnzbd_unknown_history_status_is_a_warning() {
-        for status in ["FutureStatus", "FailedFuture", "Failed - future detail", ""] {
+        for status in ["FutureStatus", "FailedFuture", "Failed - future detail"] {
             assert_eq!(
                 sabnzbd_history_state(status, None),
                 Some((
@@ -3290,6 +3309,13 @@ mod tests {
                 ))
             );
         }
+        assert_eq!(
+            sabnzbd_history_state("", None),
+            Some((
+                DownloadQueueState::Warning,
+                Some("SABnzbd history entry has no status".to_string())
+            ))
+        );
     }
 
     #[test]
