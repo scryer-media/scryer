@@ -1631,7 +1631,7 @@ impl SabnzbdDownloadClient {
     /// the caller can tell whether anything was actually removed.
     async fn send_delete(&self, id: &str, is_history: bool, remove_data: bool) -> AppResult<Value> {
         if is_history {
-            // Only an exact failed row authorizes permanent history removal.
+            // Only an exact job mapped to Failed authorizes permanent history removal.
             // Unknown states and compatible APIs retain the archive default.
             let failed = self
                 .api_get(&[
@@ -1646,10 +1646,11 @@ impl SabnzbdDownloadClient {
                 .is_some_and(|slots| {
                     slots.iter().any(|slot| {
                         slot.get("nzo_id").and_then(Value::as_str) == Some(id)
-                            && slot
-                                .get("status")
-                                .and_then(Value::as_str)
-                                .is_some_and(|status| status.eq_ignore_ascii_case("Failed"))
+                            && sabnzbd_history_state(
+                                slot.get("status").and_then(Value::as_str).unwrap_or(""),
+                                slot.get("fail_message").and_then(Value::as_str),
+                            )
+                            .is_some_and(|(state, _)| state == DownloadQueueState::Failed)
                     })
                 });
             let mut params = vec![
@@ -2890,17 +2891,35 @@ mod tests {
 
     #[tokio::test]
     async fn sab_cleanup_history_archives_completed_but_removes_exact_failed_record() {
-        for (observed_id, status, archive) in [
-            ("job", "Failed", "0"),
-            ("job", "Completed", "1"),
-            ("other", "Failed", "1"),
+        for (observed_id, status, fail_message, archive) in [
+            ("job", "Failed", None, "0"),
+            ("job", "Completed", None, "1"),
+            ("other", "Failed", None, "1"),
+            ("job", "Failed", Some("54 articles were missing"), "0"),
+            (
+                "job",
+                "Failed",
+                Some("Unpacking failed, write error or disk is full?"),
+                "1",
+            ),
+            (
+                "job",
+                "Failed",
+                Some("Unpacking failed, write error or disk is full? detail"),
+                "1",
+            ),
+            ("job", "Failed", Some("Unpacking failed, disk full"), "1"),
+            ("job", "FutureStatus", None, "1"),
+            ("job", "FailedFuture", None, "1"),
+            ("job", "Running", None, "1"),
+            ("job", "", None, "1"),
         ] {
             let server = MockServer::start().await;
             Mock::given(method("GET"))
                 .and(query_param("mode", "history"))
                 .and(query_param_is_missing("name"))
                 .respond_with(ResponseTemplate::new(200).set_body_json(
-                    json!({"history": {"slots": [{"nzo_id": observed_id, "status": status}]}}),
+                    json!({"history": {"slots": [{"nzo_id": observed_id, "status": status, "fail_message": fail_message}]}}),
                 ))
                 .expect(1)
                 .mount(&server)
@@ -2919,6 +2938,57 @@ mod tests {
                 .await;
             let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
             client.delete_queue_item("job", true, false).await.unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn sab_cleanup_uncertain_history_probe_preserves_archive_and_data_flag() {
+        for slots in [
+            json!([]),
+            json!([{"nzo_id": "job", "status": "Failed"}, {"nzo_id": "job", "status": "Running"}]),
+            json!([{"status": "Failed"}]),
+        ] {
+            for remove_data in [false, true] {
+                let server = MockServer::start().await;
+                Mock::given(method("GET"))
+                    .and(query_param("mode", "history"))
+                    .and(query_param("nzo_ids", "job"))
+                    .and(query_param_is_missing("name"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(json!({"history": {"slots": slots}})),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                let delete = Mock::given(method("GET"))
+                    .and(query_param("mode", "history"))
+                    .and(query_param("name", "delete"))
+                    .and(query_param("value", "job"))
+                    .and(query_param("archive", "1"));
+                let delete = if remove_data {
+                    delete
+                        .and(query_param("del_files", "1"))
+                        .and(query_param("del_completed_files", "1"))
+                } else {
+                    delete
+                        .and(query_param_is_missing("del_files"))
+                        .and(query_param_is_missing("del_completed_files"))
+                };
+                delete
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .set_body_json(json!({"status": true, "nzo_ids": ["job"]})),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+                client
+                    .delete_queue_item("job", true, remove_data)
+                    .await
+                    .unwrap();
+            }
         }
     }
 
