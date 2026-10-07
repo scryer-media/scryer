@@ -1459,7 +1459,10 @@ async fn handle_download_failure_for_download(
         .await;
     }
 
+    // NZBGet must retain history until terminal cleanup has inspected its payload.
+    // The tracked-state update below schedules that existing durable cleanup path.
     if context.remove_from_client_if_configured
+        && !context.client_type.eq_ignore_ascii_case("nzbget")
         && let Some(title) = attribution.title.as_ref()
         && app
             .should_remove_failed_download(

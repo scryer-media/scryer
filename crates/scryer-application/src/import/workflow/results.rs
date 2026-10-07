@@ -769,6 +769,7 @@ async fn reconcile_terminal_download_cleanup(
             torrent_data_removal_allowed
         }
         TrackedDownloadState::Failed if failure_origin == TerminalFailureOrigin::ImportGate => true,
+        TrackedDownloadState::Failed if client_type == "nzbget" => true,
         TrackedDownloadState::Failed => {
             observed_can_remove == Some(true) && torrent_data_removal_allowed
         }
@@ -899,6 +900,24 @@ async fn reconcile_terminal_download_cleanup(
             && (!host_managed_payload
                 || (client_type == "sabnzbd"
                     && payload_disposition == Some(HostPayloadDisposition::Removed)));
+        if client_type == "nzbget" && remove_data {
+            if let Err(error) = verify_nzbget_entry_cleanup(
+                app,
+                canonical_download_id,
+                client_id,
+                download_client_item_id,
+            )
+            .await
+            {
+                tracing::warn!(client_id, download_client_item_id, error = %error,
+                    "retaining NZBGet history because native deletion could bypass payload preservation");
+                return TerminalDownloadCleanup {
+                    outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
+                    seeding: seeding_report,
+                    payload: payload_disposition,
+                };
+            }
+        }
         if (client_remove_data || !remove_data)
             && !host_managed_payload
             && let Some(record) = record
@@ -1596,6 +1615,78 @@ fn client_refused_payload_deletion(checkpoint: Option<&serde_json::Value>) -> bo
     })
 }
 
+fn verify_nzbget_cleanup_identity(
+    download: &scryer_domain::CompletedDownload,
+    download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    item_id: &str,
+) -> AppResult<()> {
+    if download.download_client_item_id != item_id
+        || download
+            .download_id
+            .as_deref()
+            .and_then(scryer_domain::download_identity::DownloadId::from_wire)
+            .is_some_and(|id| Some(&id) != download_id)
+    {
+        return Err(AppError::Validation(
+            "NZBGet cleanup identity changed".into(),
+        ));
+    }
+    Ok(())
+}
+
+// NZBGet has no entry-only switch for the failed-history states that delete
+// DestDir. Inspect fresh metadata even on checkpoint recovery: a recreated
+// directory must never be deleted by an otherwise entry-only retry.
+async fn verify_nzbget_entry_cleanup(
+    app: &AppUseCase,
+    download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    client_id: &str,
+    item_id: &str,
+) -> AppResult<()> {
+    let payload = app
+        .services
+        .integrations
+        .download_client
+        .get_cleanup_payload_for_source(client_id, "nzbget", item_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound("NZBGet terminal cleanup metadata is unavailable".into())
+        })?;
+    verify_nzbget_cleanup_identity(&payload.download, download_id, item_id)?;
+    for path in payload.native_delete_paths {
+        let path = std::path::Path::new(&path);
+        if !path.is_absolute()
+            || path.parent().is_none()
+            || path
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+        {
+            return Err(AppError::Validation(
+                "NZBGet native deletion path is unverified".into(),
+            ));
+        }
+        match tokio::fs::symlink_metadata(path).await {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                // A missing mount or parent is not evidence that its data is gone.
+                if !tokio::fs::metadata(path.parent().expect("validated parent"))
+                    .await
+                    .is_ok_and(|metadata| metadata.is_dir())
+                {
+                    return Err(AppError::Validation(
+                        "NZBGet native deletion parent is unavailable".into(),
+                    ));
+                }
+            }
+            _ => {
+                return Err(AppError::Validation(
+                    "NZBGet history removal would delete retained or unverified data".into(),
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Host-side payload deletion for clients that cannot delete their own data
 /// (NZBGet, entry-only torrent plugins) or whose deletion Scryer mirrors
 /// (SABnzbd). Deletion is inventory-and-verify, never a recursive wipe:
@@ -1671,14 +1762,18 @@ async fn remove_host_payload_before_entry_cleanup(
         .services
         .integrations
         .download_client
-        .get_completed_download_for_source(client_id, client_type, download_client_item_id)
+        .get_cleanup_payload_for_source(client_id, client_type, download_client_item_id)
         .await?
+        .map(|payload| payload.download)
         .ok_or_else(|| {
             AppError::NotFound(format!(
                 "download client completed download {download_client_item_id} is unavailable for payload cleanup"
             ))
         })?
     };
+    if client_type == "nzbget" {
+        verify_nzbget_cleanup_identity(&completed, canonical_download_id, download_client_item_id)?;
+    }
     let authoritative_completed = completed.clone();
     let config = app
         .services
@@ -2084,7 +2179,7 @@ async fn remove_host_payload_before_entry_cleanup(
                             )));
                         }
                     }
-                    if client_type == "sabnzbd" {
+                    if matches!(client_type, "sabnzbd" | "nzbget") {
                         // Prune only this imported source's empty ancestors,
                         // stopping before the job boundary or any retained entry.
                         for directory in source.ancestors().skip(1) {

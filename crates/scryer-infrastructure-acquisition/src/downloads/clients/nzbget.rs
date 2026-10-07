@@ -1571,6 +1571,119 @@ impl DownloadClient for NzbgetDownloadClient {
             .collect())
     }
 
+    async fn get_cleanup_payload_for_source(
+        &self,
+        client_id: &str,
+        _client_type: &str,
+        download_client_item_id: &str,
+    ) -> AppResult<Option<scryer_application::DownloadCleanupPayload>> {
+        let Some(nzb_id) = download_client_item_id
+            .trim()
+            .parse::<i64>()
+            .ok()
+            .filter(|id| *id > 0)
+        else {
+            return Ok(None);
+        };
+        let entries = self.history_entries_newest_first(None).await?;
+        validate_nzbget_job_ids(&entries)?;
+        let Some(entry) = entries
+            .iter()
+            .find(|entry| {
+                extract_i64_value(entry.get("NZBID").or_else(|| entry.get("nzbId"))) == Some(nzb_id)
+            })
+            .and_then(Value::as_object)
+        else {
+            return Ok(None);
+        };
+        let status = history_field_str(entry, "Status", "status")
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        if !matches!(
+            status.split('/').next(),
+            Some("SUCCESS" | "FAILURE" | "WARNING" | "UNKNOWN")
+        ) {
+            return Ok(None);
+        }
+        let dest_dir = history_field_str(entry, "FinalDir", "finalDir")
+            .filter(|path| !path.trim().is_empty())
+            .or_else(|| {
+                history_field_str(entry, "DestDir", "destDir")
+                    .filter(|path| !path.trim().is_empty())
+            });
+        let Some(dest_dir) = dest_dir else {
+            return Ok(None);
+        };
+        let parameters = entry
+            .get("Parameters")
+            .or_else(|| entry.get("parameters"))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|parameter| {
+                let parameter = parameter.as_object()?;
+                Some((
+                    history_field_str(parameter, "Name", "name")?.to_string(),
+                    history_field_str(parameter, "Value", "value")?.to_string(),
+                ))
+            })
+            .collect::<Vec<_>>();
+        let identity = scryer_application::observed_download_identity(
+            scryer_application::ObservedDownloadIdentityInput {
+                download_id: None,
+                parameters: &parameters,
+                info_hash_hint: None,
+            },
+        );
+        // NZBGet HistoryDelete can recursively remove DestDir for these states,
+        // even when the caller requested entry-only removal.
+        let native_state_incomplete = [
+            ("DeleteStatus", "deleteStatus"),
+            ("ParStatus", "parStatus"),
+            ("UnpackStatus", "unpackStatus"),
+        ]
+        .iter()
+        .any(|(upper, lower)| {
+            history_field_str(entry, upper, lower).is_none_or(|value| value.trim().is_empty())
+        });
+        let native_deletes_data = native_state_incomplete
+            || history_field_str(entry, "DeleteStatus", "deleteStatus")
+                .is_some_and(|value| !value.is_empty() && !value.eq_ignore_ascii_case("NONE"))
+            || history_field_str(entry, "ParStatus", "parStatus")
+                .is_some_and(|value| value.eq_ignore_ascii_case("FAILURE"))
+            || history_field_str(entry, "UnpackStatus", "unpackStatus").is_some_and(|value| {
+                value.eq_ignore_ascii_case("FAILURE") || value.eq_ignore_ascii_case("PASSWORD")
+            });
+        let native_delete_paths = if native_deletes_data {
+            // Missing metadata must fail closed, rather than hide a native deletion target.
+            vec![
+                history_field_str(entry, "DestDir", "destDir")
+                    .unwrap_or("")
+                    .to_string(),
+            ]
+        } else {
+            Vec::new()
+        };
+        Ok(Some(scryer_application::DownloadCleanupPayload {
+            download: scryer_domain::CompletedDownload {
+                client_type: "nzbget".into(),
+                client_id: client_id.into(),
+                download_client_item_id: nzb_id.to_string(),
+                download_id: identity.download_id,
+                name: history_entry_name(entry),
+                release_name: history_entry_release_name(entry),
+                dest_dir: dest_dir.into(),
+                category: extract_nzbget_category(entry),
+                size_bytes: size_to_bytes(
+                    extract_f64_value(entry.get("FileSizeMB")).unwrap_or(0.0),
+                ),
+                completed_at: None,
+                parameters,
+            },
+            native_delete_paths,
+        }))
+    }
+
     async fn get_completed_download_for_source(
         &self,
         _client_id: &str,
@@ -1839,9 +1952,9 @@ fn extract_result_array(value: Value, preferred_key: &str) -> Option<Vec<Value>>
 /// the one to fall back to when NZBGet reports that nothing matched.
 fn nzbget_delete_commands(is_history: bool) -> (&'static str, &'static str) {
     if is_history {
-        ("HistoryDelete", "GroupDelete")
+        ("HistoryDelete", "GroupFinalDelete")
     } else {
-        ("GroupDelete", "HistoryDelete")
+        ("GroupFinalDelete", "HistoryDelete")
     }
 }
 
@@ -2457,18 +2570,18 @@ mod tests {
     fn nzbget_delete_commands_fall_back_to_the_other_list() {
         assert_eq!(
             nzbget_delete_commands(false),
-            ("GroupDelete", "HistoryDelete")
+            ("GroupFinalDelete", "HistoryDelete")
         );
         assert_eq!(
             nzbget_delete_commands(true),
-            ("HistoryDelete", "GroupDelete")
+            ("HistoryDelete", "GroupFinalDelete")
         );
     }
 
     #[tokio::test]
-    async fn delete_queue_hint_falls_back_to_history_when_group_delete_matches_nothing() {
+    async fn delete_queue_hint_falls_back_to_history_when_group_final_delete_matches_nothing() {
         let server = MockServer::start().await;
-        mount_editqueue(&server, "GroupDelete", 42, false, 1).await;
+        mount_editqueue(&server, "GroupFinalDelete", 42, false, 1).await;
         mount_editqueue(&server, "HistoryDelete", 42, true, 1).await;
 
         let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".to_string());
@@ -2482,7 +2595,7 @@ mod tests {
     async fn delete_history_hint_falls_back_to_queue_when_history_delete_matches_nothing() {
         let server = MockServer::start().await;
         mount_editqueue(&server, "HistoryDelete", 42, false, 1).await;
-        mount_editqueue(&server, "GroupDelete", 42, true, 1).await;
+        mount_editqueue(&server, "GroupFinalDelete", 42, true, 1).await;
 
         let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".to_string());
         client
@@ -2494,7 +2607,7 @@ mod tests {
     #[tokio::test]
     async fn delete_with_correct_hint_issues_exactly_one_command() {
         let server = MockServer::start().await;
-        mount_editqueue(&server, "GroupDelete", 42, true, 1).await;
+        mount_editqueue(&server, "GroupFinalDelete", 42, true, 1).await;
         mount_editqueue(&server, "HistoryDelete", 42, true, 0).await;
 
         let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".to_string());
@@ -2507,7 +2620,7 @@ mod tests {
     #[tokio::test]
     async fn delete_fails_when_neither_list_holds_the_item() {
         let server = MockServer::start().await;
-        mount_editqueue(&server, "GroupDelete", 42, false, 1).await;
+        mount_editqueue(&server, "GroupFinalDelete", 42, false, 1).await;
         mount_editqueue(&server, "HistoryDelete", 42, false, 1).await;
 
         let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".to_string());
@@ -2519,6 +2632,173 @@ mod tests {
             error.to_string().contains("matched no items"),
             "unexpected error: {error}"
         );
+    }
+
+    #[tokio::test]
+    async fn cleanup_metadata_admits_exact_failed_history_without_admitting_imports() {
+        for (status, final_dir, par_status, unpack_status, delete_status, native) in [
+            (
+                "WARNING/SCRIPT",
+                "/complete/job",
+                "SUCCESS",
+                "SUCCESS",
+                "NONE",
+                false,
+            ),
+            ("WARNING/SCRIPT", "", "SUCCESS", "SUCCESS", "NONE", false),
+            (
+                "FAILURE/UNPACK",
+                "/complete/job",
+                "SUCCESS",
+                "FAILURE",
+                "NONE",
+                true,
+            ),
+            (
+                "FAILURE/PAR",
+                "/complete/job",
+                "FAILURE",
+                "NONE",
+                "NONE",
+                true,
+            ),
+            (
+                "FAILURE/PASSWORD",
+                "/complete/job",
+                "SUCCESS",
+                "PASSWORD",
+                "NONE",
+                true,
+            ),
+            (
+                "FAILURE/DELETED",
+                "/complete/job",
+                "SUCCESS",
+                "SUCCESS",
+                "MANUAL",
+                true,
+            ),
+            (
+                "WARNING/SCRIPT",
+                "/complete/job",
+                "",
+                "SUCCESS",
+                "NONE",
+                true,
+            ),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST")).and(path("/jsonrpc"))
+                .and(body_partial_json(json!({"method":"history"})))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result":[
+                    {"NZBID":41, "Name":"Other", "Status":"SUCCESS/ALL", "FinalDir":"/other"},
+                    {"NZBID":42, "Name":"Job", "Status":status, "FinalDir":final_dir, "DestDir":"/intermediate/job",
+                     "ParStatus":par_status, "UnpackStatus":unpack_status, "DeleteStatus":delete_status,
+                     "Category":"scryer", "Parameters":[]}
+                ]}))).mount(&server).await;
+            let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".into());
+            let payload = client
+                .get_cleanup_payload_for_source("client", "nzbget", "42")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(payload.download.download_client_item_id, "42");
+            assert_eq!(
+                payload.download.dest_dir,
+                if final_dir.is_empty() {
+                    "/intermediate/job"
+                } else {
+                    final_dir
+                }
+            );
+            assert_eq!(
+                payload.native_delete_paths,
+                if native {
+                    vec!["/intermediate/job"]
+                } else {
+                    vec![]
+                },
+                "{status}"
+            );
+            assert!(
+                client
+                    .get_cleanup_payload_for_source("client", "nzbget", "999")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                client
+                    .get_completed_download_for_source("client", "nzbget", "42")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(
+                client
+                    .list_completed_downloads()
+                    .await
+                    .unwrap()
+                    .iter()
+                    .all(|item| item.download_client_item_id != "42")
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_metadata_rejects_nonterminal_and_malformed_history() {
+        for entry in [
+            json!({"NZBID":42, "Status":"QUEUED", "DestDir":"/downloads/job"}),
+            json!({"NZBID":42, "Status":"DELETED/MANUAL", "DestDir":"/downloads/job"}),
+            json!({"NZBID":42, "Status":"FAILURE/SCRIPT"}),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result":[entry]})))
+                .mount(&server)
+                .await;
+            let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".into());
+            assert!(
+                client
+                    .get_cleanup_payload_for_source("client", "nzbget", "42")
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result":false})))
+            .mount(&server)
+            .await;
+        let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".into());
+        assert!(
+            client
+                .get_cleanup_payload_for_source("client", "nzbget", "42")
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_history_uses_history_delete_and_http_errors_do_not_fall_back() {
+        let server = MockServer::start().await;
+        mount_editqueue(&server, "HistoryDelete", 42, true, 1).await;
+        mount_editqueue(&server, "GroupFinalDelete", 42, true, 0).await;
+        let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".into());
+        client.delete_queue_item("42", true, false).await.unwrap();
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_partial_json(
+                json!({"params":["GroupFinalDelete", "", [42]]}),
+            ))
+            .respond_with(ResponseTemplate::new(502))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".into());
+        assert!(client.delete_queue_item("42", false, true).await.is_err());
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 
     #[tokio::test]
