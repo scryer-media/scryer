@@ -48,5 +48,6 @@ scryer-infrastructure-configuration = { path = "../scryer-infrastructure-configu
 scryer-infrastructure-identity = { path = "../scryer-infrastructure-identity" }
 scryer-infrastructure-library = { path = "../scryer-infrastructure-library" }
 tempfile = "3"
+tokio = { workspace = true, features = ["test-util"] }
 tracing-subscriber = { workspace = true }
 url = "2"

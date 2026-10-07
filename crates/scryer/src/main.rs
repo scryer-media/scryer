@@ -1147,9 +1147,21 @@ async fn bootstrap_application(
 
     let t = std::time::Instant::now();
     let backup_datastore_config = datastore_config.clone();
-    let datastore = DatastoreAssembly::connect(datastore_config)
-        .await
-        .map_err(|e| format!("failed to initialize datastore services: {e}"))?;
+    let datastore = match DatastoreAssembly::connect(datastore_config).await {
+        Ok(datastore) => datastore,
+        // An unreachable server is the one datastore failure a restart can
+        // fix, so exit and let the service manager retry instead of parking
+        // on the bootstrap error page.
+        Err(error)
+            if scryer_infrastructure_datastore::postgres::is_startup_window_exhausted(&error) =>
+        {
+            tracing::error!(error = %error, "PostgreSQL is unreachable; exiting");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            return Err(format!("failed to initialize datastore services: {error}").into());
+        }
+    };
     let bootstrap_settings_store = datastore.settings_store();
     let bootstrap_quality_profile_store = datastore.quality_profile_store();
     let datastore_info = bootstrap_settings_store
