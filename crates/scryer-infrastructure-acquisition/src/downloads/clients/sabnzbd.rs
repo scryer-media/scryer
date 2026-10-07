@@ -1512,8 +1512,8 @@ impl DownloadClient for SabnzbdDownloadClient {
 
     /// A history delete includes `del_files=1` only when `remove_data` is
     /// requested, alongside nzbdav's non-standard `del_completed_files=1`
-    /// (see `send_delete`). Queue deletes continue to include `del_files=1`
-    /// regardless.
+    /// (see `send_delete`). Queue deletes always send `del_files`, as `1` when
+    /// `remove_data` is requested and `0` otherwise.
     ///
     /// `is_history` is only a hint: the caller derives it from the last polled
     /// state, and SAB moves a job into history the moment post-processing
@@ -1560,12 +1560,27 @@ impl DownloadClient for SabnzbdDownloadClient {
                         in_queue,
                         "sabnzbd queue probe contradicts the delete hint; retrying in the other mode"
                     );
-                    // The probe cannot tell "removed by the hinted delete"
-                    // from "never in that list", so this second delete is
-                    // best effort: backends that answer an unknown id with an
-                    // error (decypharr) must not turn a delete that already
-                    // landed into a failure.
-                    if let Err(error) = self.send_delete(id, !is_history, remove_data).await {
+                    // A positive queue observation proves the job remains.
+                    // Only an absent job permits a best-effort fallback for
+                    // compatible backends that reject already removed IDs.
+                    let fallback = self
+                        .send_delete(id, !is_history, remove_data)
+                        .await
+                        .and_then(|response| {
+                            if in_queue
+                                && sab_delete_removed_hinted_id(&response, id) == Some(false)
+                            {
+                                Err(AppError::Repository(
+                                    "SABnzbd did not remove the observed queue job".into(),
+                                ))
+                            } else {
+                                Ok(())
+                            }
+                        });
+                    if let Err(error) = fallback {
+                        if in_queue {
+                            return Err(error);
+                        }
                         debug!(
                             nzo_id = id,
                             hinted_history = is_history,
@@ -1597,7 +1612,33 @@ impl SabnzbdDownloadClient {
     /// the caller can tell whether anything was actually removed.
     async fn send_delete(&self, id: &str, is_history: bool, remove_data: bool) -> AppResult<Value> {
         if is_history {
-            let mut params = vec![("mode", "history"), ("name", "delete"), ("value", id)];
+            // Only an exact failed row authorizes permanent history removal.
+            // Unknown states and compatible APIs retain the archive default.
+            let failed = self
+                .api_get(&[
+                    ("mode", "history"),
+                    ("nzo_ids", id),
+                    ("start", "0"),
+                    ("limit", "1"),
+                ])
+                .await
+                .ok()
+                .and_then(|json| Self::history_slots_from_response(&json).ok())
+                .is_some_and(|slots| {
+                    slots.iter().any(|slot| {
+                        slot.get("nzo_id").and_then(Value::as_str) == Some(id)
+                            && slot
+                                .get("status")
+                                .and_then(Value::as_str)
+                                .is_some_and(|status| status.eq_ignore_ascii_case("Failed"))
+                    })
+                });
+            let mut params = vec![
+                ("mode", "history"),
+                ("name", "delete"),
+                ("value", id),
+                ("archive", if failed { "0" } else { "1" }),
+            ];
             if remove_data {
                 params.push(("del_files", "1"));
                 // nzbdav ignores `del_files` on history deletes and only drops
@@ -1617,7 +1658,7 @@ impl SabnzbdDownloadClient {
                     ("mode", "queue"),
                     ("name", "delete"),
                     ("value", id),
-                    ("del_files", "1"),
+                    ("del_files", if remove_data { "1" } else { "0" }),
                 ],
                 "sabnzbd_delete_queue_item",
             )
@@ -2713,6 +2754,105 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::downloads::staged_nzb_store::FileSystemStagedNzbStore;
+
+    #[tokio::test]
+    async fn sab_cleanup_queue_delete_honors_keep_data() {
+        for remove_data in [false, true] {
+            let server = MockServer::start().await;
+            mount_sab_delete(
+                &server,
+                "queue",
+                "job",
+                json!({"status": true, "nzo_ids": ["job"]}),
+                1,
+            )
+            .await;
+            let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+            client
+                .delete_queue_item("job", false, remove_data)
+                .await
+                .unwrap();
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            assert!(
+                requests[0]
+                    .url
+                    .query_pairs()
+                    .any(|(key, value)| key == "del_files"
+                        && value == if remove_data { "1" } else { "0" })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn sab_cleanup_known_queued_job_propagates_delete_rejection() {
+        let server = MockServer::start().await;
+        mount_sab_delete(&server, "history", "job", json!({"status": true}), 1).await;
+        mount_sab_queue_listing(&server, json!([{"nzo_id": "job"}]), 1).await;
+        Mock::given(method("GET"))
+            .and(query_param("mode", "queue"))
+            .and(query_param("name", "delete"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_json(json!({"status": false, "error": "synthetic rejection"})),
+            )
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        assert!(client.delete_queue_item("job", true, false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sab_cleanup_known_queued_job_propagates_empty_removal_report() {
+        let server = MockServer::start().await;
+        mount_sab_delete(&server, "history", "job", json!({"status": true}), 1).await;
+        mount_sab_queue_listing(&server, json!([{"nzo_id": "job"}]), 1).await;
+        mount_sab_delete(
+            &server,
+            "queue",
+            "job",
+            json!({"status": false, "nzo_ids": []}),
+            1,
+        )
+        .await;
+        let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+        assert!(client.delete_queue_item("job", true, false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn sab_cleanup_history_archives_completed_but_removes_exact_failed_record() {
+        for (observed_id, status, archive) in [
+            ("job", "Failed", "0"),
+            ("job", "Completed", "1"),
+            ("other", "Failed", "1"),
+        ] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param_is_missing("name"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(
+                    json!({"history": {"slots": [{"nzo_id": observed_id, "status": status}]}}),
+                ))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("GET"))
+                .and(query_param("mode", "history"))
+                .and(query_param("name", "delete"))
+                .and(query_param("archive", archive))
+                .and(query_param_is_missing("del_files"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .set_body_json(json!({"status": true, "nzo_ids": ["job"]})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+            client.delete_queue_item("job", true, false).await.unwrap();
+        }
+    }
 
     #[tokio::test]
     async fn password_retry_posts_secret_once_and_preserves_ambiguous_outcome() {
@@ -3991,6 +4131,10 @@ mod tests {
                     .url
                     .query_pairs()
                     .any(|(key, value)| key == "mode" && value == "history")
+                    && request
+                        .url
+                        .query_pairs()
+                        .any(|(key, value)| key == "name" && value == "delete")
             })
             .expect("history delete should be requested");
         // `remove_data` carries over to the fallback delete.
