@@ -12,7 +12,7 @@ use crate::types::MigrationMode;
 
 const DEFAULT_POSTGRES_MAX_CONNECTIONS: u32 = 16;
 const MAX_POSTGRES_CONNECTIONS_CAP: u32 = 128;
-const POSTGRES_SLOW_STATEMENT_WARN_MS: u64 = 1000;
+const POSTGRES_SLOW_STATEMENT_MS: u64 = 2000;
 
 fn postgres_max_connections_from_env() -> u32 {
     std::env::var("SCRYER_POSTGRES_MAX_CONNECTIONS")
@@ -67,8 +67,8 @@ impl PostgresServices {
                     AppError::Repository(format!("invalid PostgreSQL database URL: {error}"))
                 })?;
         connect_options = connect_options.log_slow_statements(
-            LevelFilter::Warn,
-            std::time::Duration::from_millis(POSTGRES_SLOW_STATEMENT_WARN_MS),
+            LevelFilter::Debug,
+            std::time::Duration::from_millis(POSTGRES_SLOW_STATEMENT_MS),
         );
 
         let pool = super::startup::connect_pool_with_startup_retry(
