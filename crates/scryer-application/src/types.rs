@@ -3705,17 +3705,13 @@ pub fn derive_primary_quality_label(
     quality_label: Option<&str>,
     resolution: Option<&str>,
 ) -> Option<String> {
-    // Use the scan's dimension thresholds so cropped HD files keep their quality tier.
+    // Use the scan's dimension thresholds for every quality tier.
     match crate::media::release_labels::quality_from_video_dimensions(video_width, video_height) {
         Some("2160p") => return Some("4K".to_string()),
-        Some(quality @ ("4320p" | "1440p" | "1080p" | "720p")) => {
+        Some(quality) => {
             return Some(quality.to_string());
         }
-        _ => {}
-    }
-    // Preserve exact-height labels for SD and other non-HD dimensions.
-    if let Some(height) = video_height.filter(|height| *height > 0) {
-        return Some(format!("{height}p"));
+        None => {}
     }
     quality_label
         .map(str::trim)
@@ -3734,16 +3730,47 @@ mod primary_quality_label_tests {
             (1916, 1076, "1080p"),
             (1920, 1088, "1080p"),
             (1920, 800, "1080p"),
+            (1916, 800, "1080p"),
             (1280, 720, "720p"),
             (1276, 716, "720p"),
+            (1276, 536, "720p"),
+            (2556, 1068, "1440p"),
+            (2560, 1080, "1440p"),
             (2560, 1440, "1440p"),
             (3836, 2156, "4K"),
+            (3836, 1600, "4K"),
             (7680, 4320, "4320p"),
+            (720, 576, "576p"),
+            (854, 480, "480p"),
+            (640, 360, "480p"),
         ] {
             assert_eq!(
                 derive_primary_quality_label(Some(width), Some(height), Some("720p"), None),
                 Some(expected.to_string()),
                 "dimensions {width}x{height}"
+            );
+        }
+    }
+
+    #[test]
+    fn unclassified_dimensions_use_stored_metadata_without_literal_height_labels() {
+        for (width, height) in [
+            (None, Some(536)),
+            (Some(0), Some(360)),
+            (Some(-1), Some(360)),
+            (None, None),
+        ] {
+            assert_eq!(
+                derive_primary_quality_label(width, height, Some(" 720p "), Some("1080p")),
+                Some("720p".into())
+            );
+            assert_eq!(
+                derive_primary_quality_label(width, height, Some(" "), Some(" 360p ")),
+                Some("360p".into())
+            );
+            assert_eq!(
+                derive_primary_quality_label(width, height, None, None),
+                None
             );
         }
     }

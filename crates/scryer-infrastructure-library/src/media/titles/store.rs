@@ -4813,32 +4813,34 @@ fn title_catalog_external_rating_subquery(sources: &[&str]) -> String {
     )
 }
 
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn title_catalog_movie_media_resolution_expression(alias: &str) -> String {
     format!(
         "CASE
             WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN '4320P'
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN '2160P'
-            WHEN {alias}.video_height >= 1300 THEN '1440P'
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN '1080P'
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN '720P'
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN '480P'
-            WHEN {alias}.video_height >= 300 THEN '360P'
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN '2160P'
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN '1440P'
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN '1080P'
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN '720P'
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN '576P'
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN '480P'
             WHEN TRIM(COALESCE({alias}.quality_id, '')) = '' THEN NULL
             ELSE UPPER(TRIM({alias}.quality_id))
          END"
     )
 }
 
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn title_catalog_movie_media_resolution_rank_expression(alias: &str) -> String {
     format!(
         "CASE
             WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN 4320
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN 2160
-            WHEN {alias}.video_height >= 1300 THEN 1440
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN 1080
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN 720
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN 480
-            WHEN {alias}.video_height >= 300 THEN 360
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN 2160
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN 1440
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN 1080
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN 720
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN 576
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN 480
             ELSE CASE UPPER(TRIM(COALESCE({alias}.quality_id, '')))
                 WHEN '4320P' THEN 4320
                 WHEN '2160P' THEN 2160
@@ -4846,6 +4848,7 @@ fn title_catalog_movie_media_resolution_rank_expression(alias: &str) -> String {
                 WHEN '1080P' THEN 1080
                 WHEN '1080I' THEN 1080
                 WHEN '720P' THEN 720
+                WHEN '576P' THEN 576
                 WHEN '480P' THEN 480
                 WHEN '360P' THEN 360
                 ELSE NULL
@@ -4869,23 +4872,25 @@ fn title_catalog_movie_media_hdr_rank_expression(alias: &str) -> String {
 
 /// Ranks a file's quality tier, higher is better; 0 for a tier outside the
 /// known ladder. Mirrors the tiers `normalized_quality_expression` reports.
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn title_catalog_media_quality_rank_expression(alias: &str) -> String {
     format!(
         "CASE
-            WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN 8
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN 7
-            WHEN {alias}.video_height >= 1300 THEN 6
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN 5
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN 3
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN 2
-            WHEN {alias}.video_height >= 300 THEN 1
+            WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN 9
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN 8
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN 7
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN 6
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN 4
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN 3
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN 2
             ELSE CASE UPPER(TRIM(COALESCE({alias}.quality_id, '')))
-                WHEN '4320P' THEN 8
-                WHEN '2160P' THEN 7
-                WHEN '1440P' THEN 6
-                WHEN '1080P' THEN 5
-                WHEN '1080I' THEN 4
-                WHEN '720P' THEN 3
+                WHEN '4320P' THEN 9
+                WHEN '2160P' THEN 8
+                WHEN '1440P' THEN 7
+                WHEN '1080P' THEN 6
+                WHEN '1080I' THEN 5
+                WHEN '720P' THEN 4
+                WHEN '576P' THEN 3
                 WHEN '480P' THEN 2
                 WHEN '360P' THEN 1
                 ELSE 0
@@ -4916,8 +4921,9 @@ fn title_catalog_media_quality_subquery(dialect: TitleCatalogSqlDialect) -> Stri
                    AND mf.role IN ('primary', 'additional')
                    AND mf.scan_status <> 'review_required'
                    AND (
-                       mf.video_height >= 300
-                       OR mf.video_width >= 854
+                       mf.video_width >= 1000
+                       OR mf.video_height >= 560
+                       OR (mf.video_width > 0 AND mf.video_height > 0)
                        OR TRIM(COALESCE(mf.quality_id, '')) <> ''
                    )
            ) ranked

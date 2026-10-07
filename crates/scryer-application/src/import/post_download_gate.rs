@@ -2303,6 +2303,56 @@ async fn reopen_series_movie_link_scope(
 mod tests {
     use super::*;
 
+    #[test]
+    fn resolution_boundaries_keep_cropped_analysis_and_rescoring_in_the_announced_tier() {
+        for (width, height, tier) in [
+            (1916, 800, "1080p"),
+            (1276, 536, "720p"),
+            (3836, 1600, "2160p"),
+            (2556, 1068, "1440p"),
+            (2560, 1080, "1440p"),
+            (7680, 3200, "4320p"),
+            (720, 576, "576p"),
+            (640, 360, "480p"),
+        ] {
+            let analysis = crate::MediaFileAnalysis {
+                video_width: Some(width),
+                video_height: Some(height),
+                ..Default::default()
+            };
+            let mut parsed = crate::parse_release_metadata("Fixture.Show.S01E01.WEB-DL");
+            parsed.quality = Some(tier.into());
+
+            assert_eq!(analysis.derived_labels().resolution.as_deref(), Some(tier));
+            let (rescored, changes) = rescore_parsed_from_analysis(&parsed, Some(&analysis));
+            assert_eq!(rescored.quality.as_deref(), Some(tier), "{width}x{height}");
+            assert!(
+                !changes
+                    .iter()
+                    .any(|change| change.starts_with("resolution:")),
+                "{changes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn resolution_boundaries_still_correct_a_genuine_lower_tier() {
+        let analysis = crate::MediaFileAnalysis {
+            video_width: Some(1280),
+            video_height: Some(720),
+            ..Default::default()
+        };
+        let parsed = crate::parse_release_metadata("Fixture.Show.S01E01.1080p.WEB-DL");
+        assert_eq!(parsed.quality.as_deref(), Some("1080p"));
+        assert_eq!(
+            analysis.derived_labels().resolution.as_deref(),
+            Some("720p")
+        );
+        let (rescored, changes) = rescore_parsed_from_analysis(&parsed, Some(&analysis));
+        assert_eq!(rescored.quality.as_deref(), Some("720p"));
+        assert!(changes.contains(&"resolution: 1080p → 720p".into()));
+    }
+
     fn automatic(expected_runtime_seconds: Option<i32>) -> RuntimeSampleValidation {
         RuntimeSampleValidation::automatic(expected_runtime_seconds)
     }

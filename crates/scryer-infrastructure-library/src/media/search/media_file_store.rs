@@ -2301,32 +2301,34 @@ fn total_size_bytes_sum_expression(dialect: SqlDialect, expr: &str) -> String {
     }
 }
 
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn normalized_quality_expression(alias: &str) -> String {
     format!(
         "CASE
             WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN '4320P'
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN '2160P'
-            WHEN {alias}.video_height >= 1300 THEN '1440P'
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN '1080P'
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN '720P'
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN '480P'
-            WHEN {alias}.video_height >= 300 THEN '360P'
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN '2160P'
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN '1440P'
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN '1080P'
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN '720P'
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN '576P'
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN '480P'
             WHEN trim(COALESCE({alias}.quality_id, '')) = '' THEN NULL
             ELSE upper(trim({alias}.quality_id))
          END"
     )
 }
 
+// Mirrors `quality_from_video_dimensions` in scryer-application; the two must change together.
 fn quality_rank_expression(alias: &str) -> String {
     format!(
         "CASE
             WHEN {alias}.video_width >= 7680 OR {alias}.video_height >= 4200 THEN 0
-            WHEN {alias}.video_width >= 3840 OR {alias}.video_height >= 2100 THEN 1
-            WHEN {alias}.video_height >= 1300 THEN 2
-            WHEN {alias}.video_width >= 1920 OR {alias}.video_height >= 1000 THEN 3
-            WHEN {alias}.video_width >= 1280 OR {alias}.video_height >= 700 THEN 5
-            WHEN {alias}.video_width >= 854 OR {alias}.video_height >= 480 THEN 6
-            WHEN {alias}.video_height >= 300 THEN 7
+            WHEN {alias}.video_width >= 3200 OR {alias}.video_height >= 2100 THEN 1
+            WHEN {alias}.video_width >= 2400 OR {alias}.video_height >= 1300 THEN 2
+            WHEN {alias}.video_width >= 1800 OR {alias}.video_height >= 1000 THEN 3
+            WHEN {alias}.video_width >= 1200 OR {alias}.video_height >= 700 THEN 5
+            WHEN {alias}.video_width >= 1000 OR {alias}.video_height >= 560 THEN 6
+            WHEN {alias}.video_width > 0 AND {alias}.video_height > 0 THEN 7
             ELSE CASE upper(trim(COALESCE({alias}.quality_id, '')))
                 WHEN '4320P' THEN 0
                 WHEN '2160P' THEN 1
@@ -2334,8 +2336,9 @@ fn quality_rank_expression(alias: &str) -> String {
                 WHEN '1080P' THEN 3
                 WHEN '1080I' THEN 4
                 WHEN '720P' THEN 5
-                WHEN '480P' THEN 6
-                WHEN '360P' THEN 7
+                WHEN '576P' THEN 6
+                WHEN '480P' THEN 7
+                WHEN '360P' THEN 8
                 ELSE 999
             END
          END"
@@ -6550,6 +6553,94 @@ mod tests {
             .expect("quality summaries should succeed");
         assert_eq!(quality_summaries.len(), 1);
         assert_eq!(quality_summaries[0].quality_tier, "1080P");
+
+        let _ = std::fs::remove_file(db);
+    }
+
+    #[tokio::test]
+    async fn title_quality_summaries_classify_cropped_dimensions_like_import() {
+        let db = std::env::temp_dir().join(format!(
+            "scryer_title_quality_cropped_{}.db",
+            chrono::Utc::now().timestamp_micros()
+        ));
+        let services = SqliteServices::new(db.to_string_lossy())
+            .await
+            .expect("db should initialize");
+        let titles = title_store(&services);
+        let media_files = media_file_store(&services);
+
+        let analysis = |width: i32, height: i32| MediaFileAnalysis {
+            details: Default::default(),
+            video_codec: None,
+            video_width: Some(width),
+            video_height: Some(height),
+            video_bitrate_kbps: None,
+            video_bit_depth: None,
+            video_hdr_format: None,
+            dovi_profile: None,
+            dovi_bl_compat_id: None,
+            video_frame_rate: None,
+            video_profile: None,
+            audio_codec: None,
+            audio_profile: None,
+            audio_channels: None,
+            audio_bitrate_kbps: None,
+            audio_languages: vec![],
+            audio_streams: vec![],
+            subtitle_languages: vec![],
+            subtitle_codecs: vec![],
+            subtitle_streams: vec![],
+            has_multiaudio: false,
+            duration_seconds: None,
+            num_chapters: None,
+            container_format: None,
+        };
+
+        let cases = [
+            ("cropped-1080", 1916, 800, "1080P"),
+            ("cropped-720", 1276, 536, "720P"),
+            ("cropped-1440", 2556, 1068, "1440P"),
+            ("pal-576", 720, 576, "576P"),
+            ("small-480", 640, 360, "480P"),
+        ];
+        let mut title_ids = Vec::new();
+        for (key, width, height, _) in cases {
+            let title = make_test_series_title(&format!("title-quality-{key}"));
+            titles
+                .create(title.clone())
+                .await
+                .expect("title should insert");
+            let file_id = media_files
+                .insert_media_file(&InsertMediaFileInput {
+                    title_id: title.id.clone(),
+                    file_path: format!("/library/Synthetic {key}/Season 01/Episode 01.mkv"),
+                    size_bytes: 1_000,
+                    ..Default::default()
+                })
+                .await
+                .expect("media file should insert");
+            media_files
+                .update_media_file_analysis(&file_id, analysis(width, height))
+                .await
+                .expect("analysis should update");
+            title_ids.push(title.id);
+        }
+
+        let quality_summaries = media_files
+            .list_title_quality_summaries(&title_ids)
+            .await
+            .expect("quality summaries should succeed");
+        assert_eq!(quality_summaries.len(), cases.len());
+        for (title_id, (key, width, height, expected)) in title_ids.iter().zip(cases) {
+            let summary = quality_summaries
+                .iter()
+                .find(|summary| &summary.title_id == title_id)
+                .unwrap_or_else(|| panic!("{key} should have a quality summary"));
+            assert_eq!(
+                summary.quality_tier, expected,
+                "{width}x{height} should rank as {expected}"
+            );
+        }
 
         let _ = std::fs::remove_file(db);
     }
