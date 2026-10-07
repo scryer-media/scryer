@@ -5952,6 +5952,8 @@ async fn nzbget_native_history_removal_follows_successful_payload_cleanup() {
     assert_eq!(result.2.outcome, TerminalDownloadCleanupOutcome::Removed);
     assert!(!payload.exists());
     assert_eq!(client.deleted_requests.lock().await.len(), 1);
+    // Payload removal and the native-deletion check share one history read.
+    assert_eq!(*client.cleanup_payload_lookups.lock().await, 1);
 }
 
 #[tokio::test]
@@ -6104,6 +6106,7 @@ async fn nzbget_retained_state_blocks_stale_cleanup_and_checkpoint_recovery() {
                 record.payload_checkpoint = Some(saved.to_string());
             }
             repository.cleanup_checkpoints.lock().await.clear();
+            *client.cleanup_payload_lookups.lock().await = 0;
             let result =
                 crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
                     .await
@@ -6115,6 +6118,11 @@ async fn nzbget_retained_state_blocks_stale_cleanup_and_checkpoint_recovery() {
                 "{label}"
             );
             assert!(client.deleted_requests.lock().await.is_empty(), "{label}");
+            assert_eq!(
+                *client.cleanup_payload_lookups.lock().await,
+                1,
+                "one history read per attempt: {label}"
+            );
             assert_eq!(
                 std::fs::read(payload.join("movie.mkv")).unwrap(),
                 b"media",

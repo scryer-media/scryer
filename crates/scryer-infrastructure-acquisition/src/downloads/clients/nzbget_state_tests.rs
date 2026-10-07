@@ -699,3 +699,42 @@ async fn contradictory_queue_history_and_unreadable_pause_state_remain_unknown()
         assert_eq!(rows[0].state, expected, "{status:?}");
     }
 }
+
+#[tokio::test]
+async fn observation_and_cleanup_lookup_each_read_history_once() {
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({"method":"history"})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result":[
+            history_entry(json!({"Status":"FAILURE/UNPACK","UnpackStatus":"FAILURE"}))
+        ]})))
+        .expect(2)
+        .mount(&server)
+        .await;
+    mount_rpc(&server, "listgroups", json!([])).await;
+    mount_rpc(&server, "postqueue", json!([])).await;
+    let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".into());
+    let observed = client
+        .observe_download(
+            &scryer_application::ClientJobLocator::new(Some("client"), "nzbget", "42"),
+            0,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        observed,
+        scryer_application::DownloadClientObservation::Present(_)
+    ));
+    let payload = client
+        .get_cleanup_payload_for_source("client", "nzbget", "42")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        payload.native_delete_paths,
+        vec!["/downloads/job".to_string()]
+    );
+    // Dropping the server verifies exactly one history RPC per call above.
+    drop(client);
+    server.verify().await;
+}

@@ -706,7 +706,7 @@ impl NzbgetDownloadClient {
                 let pp_stage = extract_postprocessing_stage_from_entry(group);
                 let state_problem = nzbget_queue_state_problem(group);
                 if let Some(problem) = state_problem.as_deref() {
-                    warn!(
+                    debug!(
                         nzb_id,
                         problem, "nzbget: retaining queue entry with unreadable state"
                     );
@@ -814,17 +814,17 @@ impl NzbgetDownloadClient {
                 Some(entries) => match validate_nzbget_job_ids(&entries) {
                     Ok(()) => entries,
                     Err(error) => {
-                        warn!(error = %error, "nzbget: malformed postqueue response; skipping pp queue merge");
+                        debug!(error = %error, "nzbget: malformed postqueue response; skipping pp queue merge");
                         Vec::new()
                     }
                 },
                 None => {
-                    warn!("nzbget: invalid postqueue response; skipping pp queue merge");
+                    debug!("nzbget: invalid postqueue response; skipping pp queue merge");
                     Vec::new()
                 }
             },
             Err(error) => {
-                warn!(error = %error, "nzbget: postqueue unavailable; skipping pp queue merge");
+                debug!(error = %error, "nzbget: postqueue unavailable; skipping pp queue merge");
                 Vec::new()
             }
         };
@@ -846,7 +846,7 @@ impl NzbgetDownloadClient {
                 let pp_stage = match nzbget_postqueue_stage(entry) {
                     Ok(stage) => Some(stage),
                     Err(error) => {
-                        warn!(nzb_id, error = %error, "nzbget: skipping postqueue entry with unreadable stage");
+                        debug!(nzb_id, error = %error, "nzbget: skipping postqueue entry with unreadable stage");
                         continue;
                     }
                 };
@@ -1019,7 +1019,7 @@ impl NzbgetDownloadClient {
                     let download_paused = flag("DownloadPaused", "downloadPaused");
                     let post_paused = flag("PostPaused", "postPaused");
                     if download_paused.is_none() || post_paused.is_none() {
-                        warn!(
+                        debug!(
                             "nzbget: status response lacks a readable pause flag; skipping that pause detection"
                         );
                     }
@@ -1029,7 +1029,7 @@ impl NzbgetDownloadClient {
                     ))
                 }
                 Err(error) => {
-                    warn!(error = %error, "nzbget: status unavailable; skipping pause detection");
+                    debug!(error = %error, "nzbget: status unavailable; skipping pause detection");
                     None
                 }
             }

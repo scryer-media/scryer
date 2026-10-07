@@ -799,8 +799,9 @@ async fn reconcile_terminal_download_cleanup(
         // A retained, unreadable or unavailable NZBGet state is not a host
         // payload failure. It retries without spending the give-up budget below,
         // so it can never fall through to entry removal (a HistoryDelete) with
-        // the payload unverified.
-        let revalidated_nzbget_download = if host_managed_payload && client_type == "nzbget" {
+        // the payload unverified. This is the attempt's only NZBGet cleanup
+        // read: payload removal and the native-deletion check both use it.
+        let nzbget_payload = if client_type == "nzbget" && remove_data {
             match revalidate_nzbget_cleanup_state(
                 app,
                 canonical_download_id,
@@ -809,15 +810,25 @@ async fn reconcile_terminal_download_cleanup(
             )
             .await
             {
-                Ok(download) => Some(download),
+                Ok(payload) => Some(payload),
                 Err(error) => {
-                    tracing::warn!(
-                        client_id,
-                        download_client_item_id,
-                        state = state.as_str(),
-                        error = %error,
-                        "NZBGet state does not authorize payload cleanup yet; retaining payload and history"
-                    );
+                    if nzbget_retention_log_due(record) {
+                        tracing::warn!(
+                            client_id,
+                            download_client_item_id,
+                            state = state.as_str(),
+                            error = %error,
+                            "NZBGet state does not authorize payload cleanup yet; retaining payload and history"
+                        );
+                    } else {
+                        tracing::debug!(
+                            client_id,
+                            download_client_item_id,
+                            state = state.as_str(),
+                            error = %error,
+                            "NZBGet state does not authorize payload cleanup yet; retaining payload and history"
+                        );
+                    }
                     let seeding = seeding_report.map(|report| SeedingGateReport {
                         action: Some(SeedingReleaseAction::Kept),
                         ..report
@@ -840,7 +851,9 @@ async fn reconcile_terminal_download_cleanup(
                 client_type,
                 download_client_item_id,
                 record,
-                revalidated_nzbget_download,
+                nzbget_payload
+                    .as_ref()
+                    .map(|payload| payload.download.clone()),
             )
             .await
             {
@@ -937,17 +950,15 @@ async fn reconcile_terminal_download_cleanup(
             && (!host_managed_payload
                 || (client_type == "sabnzbd"
                     && payload_disposition == Some(HostPayloadDisposition::Removed)));
-        if client_type == "nzbget" && remove_data {
-            if let Err(error) = verify_nzbget_entry_cleanup(
-                app,
-                canonical_download_id,
-                client_id,
-                download_client_item_id,
-            )
-            .await
-            {
-                tracing::warn!(client_id, download_client_item_id, error = %error,
-                    "retaining NZBGet history because native deletion could bypass payload preservation");
+        if let Some(payload) = nzbget_payload.as_ref() {
+            if let Err(error) = verify_nzbget_entry_cleanup(payload).await {
+                if nzbget_retention_log_due(record) {
+                    tracing::warn!(client_id, download_client_item_id, error = %error,
+                        "retaining NZBGet history because native deletion could bypass payload preservation");
+                } else {
+                    tracing::debug!(client_id, download_client_item_id, error = %error,
+                        "retaining NZBGet history because native deletion could bypass payload preservation");
+                }
                 return TerminalDownloadCleanup {
                     outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
                     seeding: seeding_report,
@@ -1679,7 +1690,7 @@ async fn revalidate_nzbget_cleanup_state(
     canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
     client_id: &str,
     item_id: &str,
-) -> AppResult<scryer_domain::CompletedDownload> {
+) -> AppResult<crate::DownloadCleanupPayload> {
     let payload = app
         .services
         .integrations
@@ -1690,30 +1701,24 @@ async fn revalidate_nzbget_cleanup_state(
             AppError::NotFound("NZBGet terminal cleanup metadata is unavailable".into())
         })?;
     verify_nzbget_cleanup_identity(&payload.download, canonical_download_id, item_id)?;
-    Ok(payload.download)
+    Ok(payload)
+}
+
+/// Retained NZBGet cleanup retries every few minutes indefinitely: warn on the
+/// first attempt and then once per twelve, mirroring "terminal cleanup remains
+/// pending". Calls outside a durable claim (manual import) always warn.
+fn nzbget_retention_log_due(record: Option<&crate::DownloadCleanupRecord>) -> bool {
+    record.is_none_or(|record| record.attempts <= 1 || record.attempts.is_multiple_of(12))
 }
 
 // NZBGet has no entry-only switch for the failed-history states that delete
-// DestDir. Inspect fresh metadata even on checkpoint recovery: a recreated
-// directory must never be deleted by an otherwise entry-only retry.
-async fn verify_nzbget_entry_cleanup(
-    app: &AppUseCase,
-    download_id: Option<&scryer_domain::download_identity::DownloadId>,
-    client_id: &str,
-    item_id: &str,
-) -> AppResult<()> {
-    let payload = app
-        .services
-        .integrations
-        .download_client
-        .get_cleanup_payload_for_source(client_id, "nzbget", item_id)
-        .await?
-        .ok_or_else(|| {
-            AppError::NotFound("NZBGet terminal cleanup metadata is unavailable".into())
-        })?;
-    verify_nzbget_cleanup_identity(&payload.download, download_id, item_id)?;
-    for path in payload.native_delete_paths {
-        let path = std::path::Path::new(&path);
+// DestDir. The metadata comes from this attempt's single revalidated read
+// (identity already checked there), even on checkpoint recovery, and the
+// filesystem is inspected now: a recreated directory must never be deleted by
+// an otherwise entry-only retry.
+async fn verify_nzbget_entry_cleanup(payload: &crate::DownloadCleanupPayload) -> AppResult<()> {
+    for path in &payload.native_delete_paths {
+        let path = std::path::Path::new(path);
         if !path.is_absolute()
             || path.parent().is_none()
             || path
@@ -1791,7 +1796,8 @@ async fn remove_host_payload_before_entry_cleanup(
                 client_id,
                 download_client_item_id,
             )
-            .await?,
+            .await?
+            .download,
         ),
         (false, _) => None,
     };
