@@ -1445,10 +1445,16 @@ impl TitleRepository for TitleStore {
         let placeholders = std::iter::repeat_n("{}", keys.len())
             .collect::<Vec<_>>()
             .join(", ");
+        // One indexed SELECT per key column. ORed into one predicate, SQLite
+        // narrows on term_kind alone and reads every name and alias row.
         let sql = format!(
-            "SELECT DISTINCT title_id FROM title_search_terms \
+            "SELECT title_id FROM title_search_terms \
              WHERE term_kind IN ('name', 'alias', 'tagged_alias') \
-             AND (literal_term IN ({placeholders}) OR stripped_year_key IN ({placeholders}))"
+             AND literal_term IN ({placeholders}) \
+             UNION \
+             SELECT title_id FROM title_search_terms \
+             WHERE term_kind IN ('name', 'alias', 'tagged_alias') \
+             AND stripped_year_key IN ({placeholders})"
         );
         let mut args = keys.iter().cloned().map(SqlArg::Text).collect::<Vec<_>>();
         args.extend(keys.iter().cloned().map(SqlArg::Text));
