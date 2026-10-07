@@ -660,6 +660,34 @@ impl NzbgetDownloadClient {
         let groups = extract_result_array(result, "Groups")
             .ok_or_else(|| AppError::Repository("invalid NZBGet queue response".into()))?;
         validate_nzbget_job_ids(&groups)?;
+        let mut forced_ids = std::collections::HashSet::new();
+        let mut fetching_ids = std::collections::HashSet::new();
+        for group in &groups {
+            let status = group
+                .get("Status")
+                .or_else(|| group.get("status"))
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if status.eq_ignore_ascii_case("FETCHING") {
+                fetching_ids.insert(
+                    extract_i64_value(group.get("NZBID").or_else(|| group.get("nzbId")))
+                        .expect("validated job id")
+                        .to_string(),
+                );
+            }
+            if extract_i64_value(group.get("MaxPriority").or_else(|| group.get("Priority")))
+                .is_some_and(|priority| priority >= 900)
+            {
+                if let Some(id) = extract_i64_value(
+                    group
+                        .get("NZBID")
+                        .or_else(|| group.get("nzbId"))
+                        .or_else(|| group.get("ID")),
+                ) {
+                    forced_ids.insert(id.to_string());
+                }
+            }
+        }
 
         let mut items: Vec<DownloadQueueItem> = groups
             .into_iter()
@@ -676,7 +704,18 @@ impl NzbgetDownloadClient {
                     .and_then(Value::as_str)
                     .unwrap_or("");
                 let pp_stage = extract_postprocessing_stage_from_entry(group);
-                let state = queue_state_from_status(status);
+                let state_problem = nzbget_queue_state_problem(group);
+                if let Some(problem) = state_problem.as_deref() {
+                    warn!(
+                        nzb_id,
+                        problem, "nzbget: retaining queue entry with unreadable state"
+                    );
+                }
+                let state = if state_problem.is_some() {
+                    DownloadQueueState::Warning
+                } else {
+                    queue_state_from_status(status)
+                };
 
                 let size_mb =
                     extract_f64_value(group.get("FileSizeMB").or_else(|| group.get("fileSizeMB")))
@@ -733,8 +772,10 @@ impl NzbgetDownloadClient {
                     )
                     .map(|value| value.to_string()),
                     last_updated_at: None,
-                    attention_required: false,
-                    attention_reason: if state == DownloadQueueState::Downloading {
+                    attention_required: state_problem.is_some(),
+                    attention_reason: if state_problem.is_some() {
+                        state_problem
+                    } else if state == DownloadQueueState::Downloading {
                         pp_stage
                     } else {
                         None
@@ -766,9 +807,28 @@ impl NzbgetDownloadClient {
             .enumerate()
             .map(|(index, item)| (item.download_client_item_id.clone(), index))
             .collect();
-        if let Ok(postqueue_result) = self.rpc_call("postqueue", vec![]).await {
-            let postqueue_entries =
-                extract_result_array(postqueue_result, "PostQueue").unwrap_or_default();
+        // The postqueue only enriches listgroups. An unavailable or malformed
+        // response skips that enrichment; it never fails or empties the queue.
+        let postqueue_entries = match self.rpc_call("postqueue", vec![]).await {
+            Ok(result) => match extract_result_array(result, "PostQueue") {
+                Some(entries) => match validate_nzbget_job_ids(&entries) {
+                    Ok(()) => entries,
+                    Err(error) => {
+                        warn!(error = %error, "nzbget: malformed postqueue response; skipping pp queue merge");
+                        Vec::new()
+                    }
+                },
+                None => {
+                    warn!("nzbget: invalid postqueue response; skipping pp queue merge");
+                    Vec::new()
+                }
+            },
+            Err(error) => {
+                warn!(error = %error, "nzbget: postqueue unavailable; skipping pp queue merge");
+                Vec::new()
+            }
+        };
+        {
             for entry in postqueue_entries {
                 let Some(entry) = entry.as_object() else {
                     continue;
@@ -783,25 +843,19 @@ impl NzbgetDownloadClient {
                 };
                 let id = nzb_id.to_string();
 
-                let status = entry
-                    .get("Status")
-                    .or_else(|| entry.get("status"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let stage = entry
-                    .get("Stage")
-                    .or_else(|| entry.get("stage"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let state = if !status.trim().is_empty() {
-                    queue_state_from_status(status)
-                } else {
-                    queue_state_from_status(stage)
+                let pp_stage = match nzbget_postqueue_stage(entry) {
+                    Ok(stage) => Some(stage),
+                    Err(error) => {
+                        warn!(nzb_id, error = %error, "nzbget: skipping postqueue entry with unreadable stage");
+                        continue;
+                    }
                 };
-                let pp_stage = extract_postprocessing_stage_from_entry(entry).or_else(|| {
-                    let fallback = format!("{status} {stage}");
-                    is_nzbget_postprocessing_status(&fallback).then(|| "POSTPROCESSING".to_string())
-                });
+                let state = DownloadQueueState::Downloading;
+                if extract_i64_value(entry.get("MaxPriority").or_else(|| entry.get("Priority")))
+                    .is_some_and(|priority| priority >= 900)
+                {
+                    forced_ids.insert(id.clone());
+                }
 
                 let progress_percent =
                     extract_postprocessing_progress_from_entry(entry).unwrap_or(0);
@@ -838,6 +892,25 @@ impl NzbgetDownloadClient {
 
                 if let Some(existing_index) = item_index_by_id.get(&id).copied() {
                     let existing = &mut items[existing_index];
+                    if existing.state == DownloadQueueState::Warning {
+                        // An unreadable listgroups state stays retained for
+                        // attention; the postqueue cannot vouch for it.
+                        existing.is_scryer_origin =
+                            existing.is_scryer_origin || scryer_parameters.is_scryer;
+                        continue;
+                    }
+                    // The deprecated postqueue QUEUED alias loses queue-script
+                    // detail already supplied by listgroups.
+                    let pp_stage = if pp_stage.as_deref() == Some("PP_QUEUED")
+                        && existing
+                            .attention_reason
+                            .as_deref()
+                            .is_some_and(|stage| matches!(stage, "QS_EXECUTING" | "QS_QUEUED"))
+                    {
+                        existing.attention_reason.clone()
+                    } else {
+                        pp_stage.clone()
+                    };
                     existing.state = state;
                     existing.progress_percent = progress_percent;
                     if existing.last_updated_at.is_none() {
@@ -926,28 +999,74 @@ impl NzbgetDownloadClient {
                 let next_index = items.len() - 1;
                 item_index_by_id.insert(id, next_index);
             }
-        } else {
-            debug!("nzbget postqueue endpoint unavailable; skipping pp queue merge");
         }
 
-        // Global pause detection: when NZBGet's download queue is globally paused,
-        // all non-completed items should show as Paused.
-        if !items.is_empty()
-            && let Ok(status_result) = self.rpc_call("status", vec![]).await
-        {
-            let download_paused = status_result
-                .get("DownloadPaused")
-                .or_else(|| status_result.get("downloadPaused"))
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            if download_paused {
-                for item in &mut items {
-                    if matches!(
+        // Download and post-processing pause controls are independent. Forced
+        // priority bypasses both controls in NZBGet.
+        // An unavailable or malformed status response only skips pause
+        // detection for the unreadable control; the queue itself still lists.
+        let pause_status = if items.is_empty() {
+            None
+        } else {
+            match self.rpc_call("status", vec![]).await {
+                Ok(status_result) => {
+                    let flag = |upper: &str, lower: &str| {
+                        status_result
+                            .get(upper)
+                            .or_else(|| status_result.get(lower))
+                            .and_then(Value::as_bool)
+                    };
+                    let download_paused = flag("DownloadPaused", "downloadPaused");
+                    let post_paused = flag("PostPaused", "postPaused");
+                    if download_paused.is_none() || post_paused.is_none() {
+                        warn!(
+                            "nzbget: status response lacks a readable pause flag; skipping that pause detection"
+                        );
+                    }
+                    Some((
+                        download_paused.unwrap_or(false),
+                        post_paused.unwrap_or(false),
+                    ))
+                }
+                Err(error) => {
+                    warn!(error = %error, "nzbget: status unavailable; skipping pause detection");
+                    None
+                }
+            }
+        };
+        if let Some((download_paused, post_paused)) = pause_status {
+            for item in &mut items {
+                let processing = item
+                    .attention_reason
+                    .as_deref()
+                    .is_some_and(is_nzbget_postprocessing_status);
+                // NZBGet pauses PAR work and post scripts, and prevents the
+                // next PP stage starting. Running unpack/move/rename, queue
+                // scripts and URL fetching do not obey those pause flags.
+                let paused = if processing {
+                    post_paused
+                        && matches!(
+                            item.attention_reason.as_deref(),
+                            Some(
+                                "PP_QUEUED"
+                                    | "LOADING_PARS"
+                                    | "VERIFYING_SOURCES"
+                                    | "REPAIRING"
+                                    | "VERIFYING_REPAIRED"
+                                    | "EXECUTING_SCRIPT"
+                            )
+                        )
+                } else {
+                    download_paused && !fetching_ids.contains(&item.download_client_item_id)
+                };
+                if paused
+                    && !forced_ids.contains(&item.download_client_item_id)
+                    && matches!(
                         item.state,
                         DownloadQueueState::Queued | DownloadQueueState::Downloading
-                    ) {
-                        item.state = DownloadQueueState::Paused;
-                    }
+                    )
+                {
+                    item.state = DownloadQueueState::Paused;
                 }
             }
         }
@@ -974,19 +1093,14 @@ impl NzbgetDownloadClient {
         let result = self.rpc_call("history", vec![json!(false)]).await?;
         let mut entries = extract_result_array(result, "History")
             .ok_or_else(|| AppError::Repository("invalid NZBGet history response".into()))?;
-        order_nzbget_history_entries(&mut entries, limit);
-        Ok(entries)
-    }
-
-    /// Same read, but a response whose shape cannot be parsed contributes no
-    /// entries instead of failing. The completed-download reads have always
-    /// degraded that way; only the history projection treats it as an error.
-    async fn history_entries_newest_first_lenient(
-        &self,
-        limit: Option<usize>,
-    ) -> AppResult<Vec<Value>> {
-        let result = self.rpc_call("history", vec![json!(false)]).await?;
-        let mut entries = extract_result_array(result, "History").unwrap_or_default();
+        // Structural problems fail the whole read. A per-entry state problem
+        // (an unknown or contradictory status) only degrades that entry to a
+        // retained Warning row in `map_history_state`, so one new NZBGet status
+        // value cannot blank the history.
+        if entries.iter().any(|entry| !entry.is_object()) {
+            return Err(AppError::Repository("invalid NZBGet history entry".into()));
+        }
+        validate_nzbget_job_ids(&entries)?;
         order_nzbget_history_entries(&mut entries, limit);
         Ok(entries)
     }
@@ -1045,11 +1159,7 @@ fn history_queue_item_from_nzbget_entry(entry: &Value) -> Option<DownloadQueueIt
         .unwrap_or("");
     let status_upper = status.to_ascii_uppercase();
 
-    if status_upper.starts_with("DELETED") {
-        return None;
-    }
-
-    let (state, attention_reason) = map_history_state(&status_upper, entry);
+    let (state, attention_reason) = map_history_state(&status_upper, entry)?;
     let history_ts = extract_i64_value(entry.get("HistoryTime").or_else(|| entry.get("time")));
     let title_name = entry
         .get("Name")
@@ -1088,7 +1198,10 @@ fn history_queue_item_from_nzbget_entry(entry: &Value) -> Option<DownloadQueueIt
         remaining_seconds: None,
         queued_at: None,
         last_updated_at: history_ts.map(|value| value.to_string()),
-        attention_required: matches!(state, DownloadQueueState::Failed),
+        attention_required: matches!(
+            state,
+            DownloadQueueState::Failed | DownloadQueueState::Warning
+        ),
         attention_reason,
         download_client_item_id: nzb_id.to_string(),
         download_id: scryer_parameters.download_id,
@@ -1405,6 +1518,7 @@ impl DownloadClient for NzbgetDownloadClient {
         locator: &scryer_application::ClientJobLocator,
         _offset: usize,
     ) -> AppResult<scryer_application::DownloadClientObservation> {
+        let mut observed = None;
         for item in self
             .list_queue()
             .await?
@@ -1412,12 +1526,18 @@ impl DownloadClient for NzbgetDownloadClient {
             .chain(self.list_history().await?)
         {
             if item.download_client_item_id == locator.item_id {
-                return Ok(scryer_application::DownloadClientObservation::Present(
-                    Box::new(item),
-                ));
+                if observed.is_some() {
+                    return Err(AppError::Repository(
+                        "NZBGet job appeared in both queue and history; retry observation".into(),
+                    ));
+                }
+                observed = Some(item);
             }
         }
-        Ok(scryer_application::DownloadClientObservation::Absent)
+        Ok(match observed {
+            Some(item) => scryer_application::DownloadClientObservation::Present(Box::new(item)),
+            None => scryer_application::DownloadClientObservation::Absent,
+        })
     }
 
     async fn list_history(&self) -> AppResult<Vec<DownloadQueueItem>> {
@@ -1555,7 +1675,7 @@ impl DownloadClient for NzbgetDownloadClient {
     }
 
     async fn list_completed_downloads(&self) -> AppResult<Vec<scryer_domain::CompletedDownload>> {
-        let entries = self.history_entries_newest_first_lenient(None).await?;
+        let entries = self.history_entries_newest_first(None).await?;
         let cutoff_ts = Utc::now().timestamp() - (7 * 24 * 60 * 60);
 
         debug!(
@@ -1599,11 +1719,19 @@ impl DownloadClient for NzbgetDownloadClient {
         let status = history_field_str(entry, "Status", "status")
             .unwrap_or("")
             .to_ascii_uppercase();
-        if !matches!(
-            status.split('/').next(),
-            Some("SUCCESS" | "FAILURE" | "WARNING" | "UNKNOWN")
-        ) {
-            return Ok(None);
+        // A recovered or stale cleanup claim must recheck the current state.
+        // None is reserved for actual absence; a retained job must stop cleanup.
+        if !map_history_state(&status, entry).is_some_and(|(state, _)| {
+            matches!(
+                state,
+                DownloadQueueState::Completed | DownloadQueueState::Failed
+            )
+        }) || history_field_str(entry, "UnpackStatus", "unpackStatus")
+            .is_some_and(|value| value.eq_ignore_ascii_case("PASSWORD"))
+        {
+            return Err(AppError::Repository(
+                "NZBGet history is retained; cleanup is not authorized by its current state".into(),
+            ));
         }
         let dest_dir = history_field_str(entry, "FinalDir", "finalDir")
             .filter(|path| !path.trim().is_empty())
@@ -1656,11 +1784,14 @@ impl DownloadClient for NzbgetDownloadClient {
             });
         let native_delete_paths = if native_deletes_data {
             // Missing metadata must fail closed, rather than hide a native deletion target.
-            vec![
-                history_field_str(entry, "DestDir", "destDir")
-                    .unwrap_or("")
-                    .to_string(),
-            ]
+            let native_dest_dir = history_field_str(entry, "DestDir", "destDir").unwrap_or("");
+            if native_dest_dir.trim().is_empty() {
+                warn!(
+                    nzb_id,
+                    "nzbget: history entry lacks DestDir while NZBGet would natively delete its data; cleanup will be retained"
+                );
+            }
+            vec![native_dest_dir.to_string()]
         } else {
             Vec::new()
         };
@@ -1694,7 +1825,7 @@ impl DownloadClient for NzbgetDownloadClient {
             return Ok(None);
         };
         let entry = self
-            .history_entries_newest_first_lenient(None)
+            .history_entries_newest_first(None)
             .await?
             .into_iter()
             .find(|entry| {
@@ -1722,26 +1853,9 @@ fn completed_download_from_nzbget_history_entry(
         .unwrap_or("");
     let status_upper = status.to_ascii_uppercase();
 
-    if !status_upper.starts_with("SUCCESS") {
-        debug!(
-            nzb_id,
-            name = name.as_str(),
-            status,
-            "nzbget: skipping non-SUCCESS history entry"
-        );
-        return None;
-    }
-
-    // Multi-field failure detection (mirrors Sonarr's cascade):
-    // Even when top-level Status is SUCCESS, individual stages may
-    // indicate problems that make the download unusable.
-    if let Some(reason) = check_history_stage_failure(entry) {
-        warn!(
-            nzb_id,
-            name = name.as_str(),
-            reason = reason.as_str(),
-            "skipping completed download due to stage failure"
-        );
+    if !map_history_state(&status_upper, entry)
+        .is_some_and(|(state, _)| state == DownloadQueueState::Completed)
+    {
         return None;
     }
 
@@ -1917,15 +2031,30 @@ fn extract_nzbget_parameters(entry: &serde_json::Map<String, Value>) -> Extracte
 }
 
 fn validate_nzbget_job_ids(items: &[Value]) -> AppResult<()> {
-    if items.iter().any(|item| {
-        extract_i64_value(item.get("NZBID"))
-            .or_else(|| extract_i64_value(item.get("nzbId")))
-            .or_else(|| extract_i64_value(item.get("ID")))
-            .is_none_or(|id| id <= 0)
-    }) {
-        return Err(AppError::Repository(
-            "NZBGet listing contains an invalid job identity".into(),
-        ));
+    let mut seen = std::collections::HashSet::new();
+    for item in items {
+        let mut identity = None;
+        for key in ["NZBID", "nzbId"] {
+            if let Some(value) = item.get(key) {
+                let id = value.as_i64().filter(|id| *id > 0).ok_or_else(|| {
+                    AppError::Repository("NZBGet listing contains an invalid job identity".into())
+                })?;
+                if identity.is_some_and(|previous| previous != id) {
+                    return Err(AppError::Repository(
+                        "NZBGet listing contains conflicting job identities".into(),
+                    ));
+                }
+                identity = Some(id);
+            }
+        }
+        let id = identity.ok_or_else(|| {
+            AppError::Repository("NZBGet listing contains an invalid job identity".into())
+        })?;
+        if !seen.insert(id) {
+            return Err(AppError::Repository(
+                "NZBGet listing contains duplicate job identities".into(),
+            ));
+        }
     }
     Ok(())
 }
@@ -1959,14 +2088,12 @@ fn nzbget_delete_commands(is_history: bool) -> (&'static str, &'static str) {
 }
 
 fn queue_state_from_status(status: &str) -> DownloadQueueState {
-    let normalized = status.to_ascii_uppercase();
-    match normalized.as_str() {
-        "DOWNLOADING" | "PP_QUEUED" | "LOADING_PARS" | "VERIFYING_SOURCES" | "REPAIRING"
-        | "VERIFYING_REPAIRED" | "RENAMING" | "UNPACKING" | "MOVING" | "EXECUTING_SCRIPT"
-        | "POSTPROCESSING" => DownloadQueueState::Downloading,
+    match status.to_ascii_uppercase().as_str() {
         "QUEUED" => DownloadQueueState::Queued,
-        "PAUSED" | "PAUSED_DOWNLOAD" => DownloadQueueState::Paused,
-        _ => DownloadQueueState::Queued,
+        "PAUSED" => DownloadQueueState::Paused,
+        "DOWNLOADING" | "FETCHING" => DownloadQueueState::Downloading,
+        value if is_nzbget_postprocessing_status(value) => DownloadQueueState::Downloading,
+        _ => DownloadQueueState::Warning,
     }
 }
 
@@ -1975,8 +2102,7 @@ fn is_nzbget_postprocessing_status(status: &str) -> bool {
 }
 
 fn find_nzbget_postprocessing_token(value: &str) -> Option<&'static str> {
-    let normalized = value.to_ascii_uppercase().replace([' ', '-'], "_");
-    const TOKENS: [&str; 10] = [
+    const TOKENS: &[&str] = &[
         "PP_QUEUED",
         "LOADING_PARS",
         "VERIFYING_SOURCES",
@@ -1985,64 +2111,45 @@ fn find_nzbget_postprocessing_token(value: &str) -> Option<&'static str> {
         "RENAMING",
         "UNPACKING",
         "MOVING",
+        "POST_UNPACK_RENAMING",
         "EXECUTING_SCRIPT",
-        "POSTPROCESSING",
+        "PP_FINISHED",
+        "POST_DOWNLOAD_RENAMING",
+        "QS_EXECUTING",
+        "QS_QUEUED",
     ];
     TOKENS
         .iter()
         .copied()
-        .find(|token| normalized.contains(token))
+        .find(|token| value.eq_ignore_ascii_case(token))
 }
 
 fn extract_postprocessing_stage_from_entry(
     entry: &serde_json::Map<String, Value>,
 ) -> Option<String> {
-    let candidates = [
-        entry.get("Status"),
-        entry.get("status"),
-        entry.get("Stage"),
-        entry.get("stage"),
-        entry.get("PostInfoText"),
-        entry.get("postInfoText"),
-        entry.get("PostInfo"),
-        entry.get("postInfo"),
-    ];
+    // Free-text messages and rounded remaining megabytes cannot identify a phase.
+    history_field_str(entry, "Status", "status")
+        .and_then(find_nzbget_postprocessing_token)
+        .or_else(|| {
+            history_field_str(entry, "Stage", "stage").and_then(find_nzbget_postprocessing_token)
+        })
+        .map(str::to_string)
+}
 
-    for candidate in candidates.into_iter().flatten() {
-        if let Some(text) = candidate.as_str()
-            && let Some(token) = find_nzbget_postprocessing_token(text)
-        {
-            return Some(token.to_string());
-        }
-    }
-
-    // NZBGet includes PostInfoText/PostStageProgress/PostTotalTimeSec on every
-    // group entry — these can contain stale values from a previous PP attempt
-    // even for items that are actively downloading. We intentionally do NOT
-    // use these fields as evidence of post-processing here. Instead, real PP
-    // items are detected via:
-    //   1. The Status/Stage tokens above (PP_QUEUED, UNPACKING, etc.)
-    //   2. The postqueue API merge in list_queue_for_client
-    //   3. The remaining=0 heuristic below (download done, PP likely starting)
-
-    let status = entry
-        .get("Status")
-        .or_else(|| entry.get("status"))
-        .and_then(Value::as_str)
+fn nzbget_postqueue_stage(entry: &serde_json::Map<String, Value>) -> AppResult<String> {
+    validate_nzbget_state_alias(entry, "Stage", "stage")?;
+    validate_nzbget_state_alias(entry, "Status", "status")?;
+    let raw = history_field_str(entry, "Stage", "stage")
+        .or_else(|| history_field_str(entry, "Status", "status"))
         .unwrap_or("");
-    let size_mb = extract_f64_value(entry.get("FileSizeMB").or_else(|| entry.get("fileSizeMB")))
-        .unwrap_or(0.0);
-    let remaining_mb = extract_f64_value(
-        entry
-            .get("RemainingSizeMB")
-            .or_else(|| entry.get("remainingSizeMB")),
-    )
-    .unwrap_or(0.0);
-    if status.eq_ignore_ascii_case("downloading") && size_mb > 0.0 && remaining_mb <= 0.0 {
-        return Some("POSTPROCESSING".to_string());
-    }
-
-    None
+    let stage = match raw.to_ascii_uppercase().as_str() {
+        "QUEUED" => "PP_QUEUED",
+        "FINISHED" => "PP_FINISHED",
+        _ => find_nzbget_postprocessing_token(raw).ok_or_else(|| {
+            AppError::Repository(format!("unrecognized NZBGet postqueue stage: {raw}"))
+        })?,
+    };
+    Ok(stage.into())
 }
 
 fn extract_postprocessing_progress_from_entry(
@@ -2164,47 +2271,270 @@ fn extract_remaining_seconds_from_entry(entry: &serde_json::Map<String, Value>) 
     Some(remaining.max(0))
 }
 
+/// One decision for activity, import discovery, and cleanup admission. The stage
+/// cascade follows Sonarr; explicit native failures and password holds remain
+/// authoritative even when the other stage fields look successful.
 fn map_history_state(
     status_upper: &str,
     entry: &serde_json::Map<String, Value>,
-) -> (DownloadQueueState, Option<String>) {
-    if entry
-        .get("UnpackStatus")
-        .or_else(|| entry.get("unpackStatus"))
-        .and_then(Value::as_str)
-        .is_some_and(|status| status.eq_ignore_ascii_case("PASSWORD"))
-    {
-        return (
-            DownloadQueueState::Failed,
+) -> Option<(DownloadQueueState, Option<String>)> {
+    use DownloadQueueState::{Completed, Failed, Warning};
+    // An unreadable state is retained for attention: never importable, never
+    // cleanup-authorized, and never hidden as if the job were absent.
+    if let Err(error) = validate_nzbget_history_state(entry) {
+        return Some((Warning, Some(nzbget_state_problem_message(error))));
+    }
+    let field = |upper, lower| {
+        history_field_str(entry, upper, lower)
+            .unwrap_or("NONE")
+            .to_ascii_uppercase()
+    };
+    let delete = field("DeleteStatus", "deleteStatus");
+    let mark = field("MarkStatus", "markStatus");
+    if delete == "MANUAL" {
+        return (mark == "BAD").then(|| (Failed, Some("marked bad and manually deleted".into())));
+    }
+    let par = field("ParStatus", "parStatus");
+    let unpack = field("UnpackStatus", "unpackStatus");
+    let movement = field("MoveStatus", "moveStatus");
+    let script = field("ScriptStatus", "scriptStatus");
+    let url = field("UrlStatus", "urlStatus");
+    if unpack == "PASSWORD" || status_upper == "WARNING/PASSWORD" {
+        return Some((
+            Failed,
             Some(
                 scryer_domain::DownloadPasswordFailure::Required
                     .message()
                     .into(),
             ),
-        );
+        ));
     }
-    if status_upper.starts_with("SUCCESS") {
-        // Even with SUCCESS status, check individual stage fields for failures
-        if let Some(reason) = check_history_stage_failure(entry) {
-            return (DownloadQueueState::Failed, Some(reason));
-        }
-        (DownloadQueueState::Completed, None)
-    } else if status_upper.starts_with("FAILURE") {
-        let reason = check_history_stage_failure(entry).or_else(|| {
-            status_upper.split_once('/').and_then(|(_, detail)| {
-                let detail = detail.trim();
-                (!detail.is_empty()).then_some(detail.to_string())
-            })
-        });
-        (DownloadQueueState::Failed, reason)
-    } else if status_upper.starts_with("UNKNOWN") {
+    let mut decision = (Completed, None);
+    if !is_nzbget_success_value(&par) {
+        decision = (Failed, Some(format!("par repair failed: {par}")));
+    }
+    if unpack == "SPACE" {
+        decision = (Warning, Some("unpack failed: disk space".into()));
+    } else if !is_nzbget_success_value(&unpack) {
+        decision = (Failed, Some(format!("unpack failed: {unpack}")));
+    }
+    if !is_nzbget_success_value(&movement) {
+        decision = (Warning, Some(format!("move failed: {movement}")));
+    }
+    if !is_nzbget_success_value(&script) {
+        decision = (Failed, Some(format!("script failed: {script}")));
+    }
+    if !is_nzbget_success_value(&delete) {
+        let state = if matches!(delete.as_str(), "HEALTH" | "DUPE" | "SCAN" | "COPY" | "BAD") {
+            Failed
+        } else {
+            Warning
+        };
+        decision = (state, Some(format!("deleted: {delete}")));
+    }
+    if mark == "BAD" || matches!(url.as_str(), "FAILURE" | "SCAN_FAILURE") {
+        return Some((
+            Failed,
+            Some(format!("NZBGet terminal failure: {status_upper}")),
+        ));
+    }
+    if decision.0 == Completed {
+        decision = match status_upper {
+            "FAILURE/MOVE" => (Warning, Some("move failed: FAILURE".into())),
+            "WARNING/SPACE" => (Warning, Some("unpack failed: disk space".into())),
+            "WARNING/SKIPPED" | "DELETED/GOOD" => (
+                Warning,
+                Some(format!("NZBGet retained history: {status_upper}")),
+            ),
+            "WARNING/SCRIPT"
+            | "WARNING/DAMAGED"
+            | "WARNING/REPAIRABLE"
+            | "FAILURE/PAR"
+            | "FAILURE/UNPACK"
+            | "FAILURE/HEALTH"
+            | "FAILURE/BAD"
+            | "FAILURE/FETCH"
+            | "FAILURE/SCAN"
+            | "FAILURE/INTERNAL_ERROR"
+            | "DELETED/DUPE"
+            | "DELETED/COPY" => (
+                Failed,
+                Some(format!("NZBGet terminal failure: {status_upper}")),
+            ),
+            _ => decision,
+        };
+    }
+    Some(decision)
+}
+
+/// Reject incomplete or unrecognized observations instead of treating an
+/// unreadable listing as proof that a job disappeared or completed.
+fn validate_nzbget_history_state(entry: &serde_json::Map<String, Value>) -> AppResult<()> {
+    validate_nzbget_state_alias(entry, "Status", "status")?;
+    let status = history_field_str(entry, "Status", "status")
+        .unwrap_or("")
+        .to_ascii_uppercase();
+    if !matches!(
+        status.as_str(),
+        "SUCCESS/ALL"
+            | "SUCCESS/UNPACK"
+            | "SUCCESS/PAR"
+            | "SUCCESS/HEALTH"
+            | "SUCCESS/GOOD"
+            | "SUCCESS/MARK"
+            | "FAILURE/PAR"
+            | "FAILURE/UNPACK"
+            | "FAILURE/MOVE"
+            | "FAILURE/HEALTH"
+            | "FAILURE/BAD"
+            | "FAILURE/FETCH"
+            | "FAILURE/SCAN"
+            | "FAILURE/INTERNAL_ERROR"
+            | "WARNING/DAMAGED"
+            | "WARNING/REPAIRABLE"
+            | "WARNING/HEALTH"
+            | "WARNING/SPACE"
+            | "WARNING/PASSWORD"
+            | "WARNING/SCRIPT"
+            | "WARNING/SKIPPED"
+            | "DELETED/MANUAL"
+            | "DELETED/DUPE"
+            | "DELETED/GOOD"
+            | "DELETED/COPY"
+    ) {
+        return Err(AppError::Repository(format!(
+            "unrecognized NZBGet history status: {status}"
+        )));
+    }
+    for (upper, lower, allowed) in [
         (
-            DownloadQueueState::Failed,
-            Some("unknown failure".to_string()),
-        )
-    } else {
-        (DownloadQueueState::Completed, None)
+            "ParStatus",
+            "parStatus",
+            "NONE SUCCESS FAILURE REPAIR_POSSIBLE MANUAL",
+        ),
+        (
+            "UnpackStatus",
+            "unpackStatus",
+            "NONE SUCCESS FAILURE SPACE PASSWORD",
+        ),
+        ("MoveStatus", "moveStatus", "NONE SUCCESS FAILURE"),
+        ("ScriptStatus", "scriptStatus", "NONE SUCCESS FAILURE"),
+        (
+            "DeleteStatus",
+            "deleteStatus",
+            "NONE MANUAL HEALTH DUPE BAD GOOD COPY SCAN",
+        ),
+        ("MarkStatus", "markStatus", "NONE BAD GOOD SUCCESS"),
+        (
+            "UrlStatus",
+            "urlStatus",
+            "NONE UNKNOWN SUCCESS FAILURE SCAN_SKIPPED SCAN_FAILURE",
+        ),
+    ] {
+        validate_nzbget_state_alias(entry, upper, lower)?;
+        let value = history_field_str(entry, upper, lower)
+            .unwrap_or("")
+            .to_ascii_uppercase();
+        if !allowed.split_whitespace().any(|known| known == value) {
+            return Err(AppError::Repository(format!(
+                "missing or invalid NZBGet {upper}"
+            )));
+        }
     }
+    let field = |upper, lower| {
+        history_field_str(entry, upper, lower)
+            .unwrap_or("")
+            .to_ascii_uppercase()
+    };
+    // Native marks can override the top-level result while failed stages remain;
+    // ordinary success cannot. Reject contradictory observations, never delete
+    // their payload based on one half of the response.
+    if matches!(
+        status.as_str(),
+        "SUCCESS/ALL" | "SUCCESS/UNPACK" | "SUCCESS/PAR" | "SUCCESS/HEALTH"
+    ) {
+        let stages_ok = [
+            ("ParStatus", "parStatus"),
+            ("UnpackStatus", "unpackStatus"),
+            ("MoveStatus", "moveStatus"),
+            ("ScriptStatus", "scriptStatus"),
+        ]
+        .iter()
+        .all(|(upper, lower)| is_nzbget_success_value(&field(upper, lower)));
+        if !stages_ok
+            || field("DeleteStatus", "deleteStatus") != "NONE"
+            || field("MarkStatus", "markStatus") != "NONE"
+            || field("UrlStatus", "urlStatus") != "NONE"
+        {
+            return Err(AppError::Repository(
+                "contradictory NZBGet successful history state".into(),
+            ));
+        }
+    }
+    let required = match status.as_str() {
+        "SUCCESS/GOOD" => Some(("MarkStatus", "markStatus", "GOOD")),
+        "SUCCESS/MARK" => Some(("MarkStatus", "markStatus", "SUCCESS")),
+        "FAILURE/PAR" => Some(("ParStatus", "parStatus", "FAILURE")),
+        "FAILURE/UNPACK" => Some(("UnpackStatus", "unpackStatus", "FAILURE")),
+        "FAILURE/MOVE" => Some(("MoveStatus", "moveStatus", "FAILURE")),
+        "FAILURE/FETCH" => Some(("UrlStatus", "urlStatus", "FAILURE")),
+        "WARNING/DAMAGED" => Some(("ParStatus", "parStatus", "MANUAL")),
+        "WARNING/REPAIRABLE" => Some(("ParStatus", "parStatus", "REPAIR_POSSIBLE")),
+        "WARNING/SPACE" => Some(("UnpackStatus", "unpackStatus", "SPACE")),
+        "WARNING/PASSWORD" => Some(("UnpackStatus", "unpackStatus", "PASSWORD")),
+        "WARNING/SCRIPT" => Some(("ScriptStatus", "scriptStatus", "FAILURE")),
+        "WARNING/SKIPPED" => Some(("UrlStatus", "urlStatus", "SCAN_SKIPPED")),
+        "DELETED/MANUAL" => Some(("DeleteStatus", "deleteStatus", "MANUAL")),
+        "DELETED/DUPE" => Some(("DeleteStatus", "deleteStatus", "DUPE")),
+        "DELETED/GOOD" => Some(("DeleteStatus", "deleteStatus", "GOOD")),
+        "DELETED/COPY" => Some(("DeleteStatus", "deleteStatus", "COPY")),
+        _ => None,
+    };
+    if required.is_some_and(|(upper, lower, expected)| field(upper, lower) != expected) {
+        return Err(AppError::Repository(
+            "contradictory NZBGet terminal history state".into(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_nzbget_state_alias(
+    entry: &serde_json::Map<String, Value>,
+    upper: &str,
+    lower: &str,
+) -> AppResult<()> {
+    if let (Some(a), Some(b)) = (entry.get(upper), entry.get(lower)) {
+        if !a
+            .as_str()
+            .zip(b.as_str())
+            .is_some_and(|(a, b)| a.eq_ignore_ascii_case(b))
+        {
+            return Err(AppError::Repository(format!(
+                "conflicting NZBGet {upper} fields"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// The validation message itself, without the error-kind prefix, for display
+/// as a retained row's attention reason.
+fn nzbget_state_problem_message(error: AppError) -> String {
+    match error {
+        AppError::Repository(message) => message,
+        other => other.to_string(),
+    }
+}
+
+/// A per-entry queue state problem degrades that row to Warning; it never
+/// fails the listing.
+fn nzbget_queue_state_problem(group: &serde_json::Map<String, Value>) -> Option<String> {
+    if let Err(error) = validate_nzbget_state_alias(group, "Status", "status") {
+        return Some(nzbget_state_problem_message(error));
+    }
+    let status = history_field_str(group, "Status", "status").unwrap_or("");
+    (queue_state_from_status(status) == DownloadQueueState::Warning)
+        .then(|| format!("unrecognized NZBGet queue status: {status}"))
 }
 
 /// Extracts the downloader display Name field from a history entry.
@@ -2248,61 +2578,6 @@ fn history_field_str<'a>(
         .get(pascal)
         .or_else(|| entry.get(camel))
         .and_then(Value::as_str)
-}
-
-/// Checks NZBGet's individual post-processing stage fields for failures.
-/// Returns Some(reason) if any stage indicates a problem, None if all stages passed.
-///
-/// Mirrors Sonarr's multi-field cascade:
-///   DeleteStatus → MarkStatus → ParStatus → UnpackStatus → ScriptStatus
-///
-/// Success values are "SUCCESS" and "NONE" (step was skipped/not applicable).
-fn check_history_stage_failure(entry: &serde_json::Map<String, Value>) -> Option<String> {
-    let delete_status = history_field_str(entry, "DeleteStatus", "deleteStatus").unwrap_or("NONE");
-    let mark_status = history_field_str(entry, "MarkStatus", "markStatus").unwrap_or("NONE");
-
-    // Manual deletion: user removed from NZBGet UI
-    if delete_status.eq_ignore_ascii_case("MANUAL") {
-        if mark_status.eq_ignore_ascii_case("BAD") {
-            return Some("marked bad and manually deleted".to_string());
-        }
-        // User-deleted but not marked bad — skip entirely (handled by caller via DELETED status)
-        return None;
-    }
-    if delete_status.eq_ignore_ascii_case("HEALTH") {
-        return Some("deleted due to health check failure".to_string());
-    }
-    if delete_status.eq_ignore_ascii_case("DUPE") {
-        return Some("deleted as duplicate".to_string());
-    }
-    if !is_nzbget_success_value(delete_status) {
-        return Some(format!("delete failed: {delete_status}"));
-    }
-
-    let par_status = history_field_str(entry, "ParStatus", "parStatus").unwrap_or("NONE");
-    if !is_nzbget_success_value(par_status) {
-        return Some(format!("par repair failed: {par_status}"));
-    }
-
-    let unpack_status = history_field_str(entry, "UnpackStatus", "unpackStatus").unwrap_or("NONE");
-    if unpack_status.eq_ignore_ascii_case("SPACE") {
-        return Some("unpack failed: disk space".to_string());
-    }
-    if !is_nzbget_success_value(unpack_status) {
-        return Some(format!("unpack failed: {unpack_status}"));
-    }
-
-    let move_status = history_field_str(entry, "MoveStatus", "moveStatus").unwrap_or("NONE");
-    if !is_nzbget_success_value(move_status) {
-        return Some(format!("move failed: {move_status}"));
-    }
-
-    let script_status = history_field_str(entry, "ScriptStatus", "scriptStatus").unwrap_or("NONE");
-    if !is_nzbget_success_value(script_status) {
-        return Some(format!("script failed: {script_status}"));
-    }
-
-    None
 }
 
 /// NZBGet considers "SUCCESS" and "NONE" (step skipped) as passing values.
@@ -2495,7 +2770,12 @@ fn derive_nzb_filename(
 }
 
 #[cfg(test)]
+#[path = "nzbget_state_tests.rs"]
+mod state_tests;
+
+#[cfg(test)]
 mod tests {
+    use super::state_tests::history_entry;
     use super::*;
     use wiremock::matchers::{body_partial_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -2663,27 +2943,11 @@ mod tests {
                 true,
             ),
             (
-                "FAILURE/PASSWORD",
-                "/complete/job",
-                "SUCCESS",
-                "PASSWORD",
-                "NONE",
-                true,
-            ),
-            (
-                "FAILURE/DELETED",
+                "DELETED/DUPE",
                 "/complete/job",
                 "SUCCESS",
                 "SUCCESS",
-                "MANUAL",
-                true,
-            ),
-            (
-                "WARNING/SCRIPT",
-                "/complete/job",
-                "",
-                "SUCCESS",
-                "NONE",
+                "DUPE",
                 true,
             ),
         ] {
@@ -2691,10 +2955,11 @@ mod tests {
             Mock::given(method("POST")).and(path("/jsonrpc"))
                 .and(body_partial_json(json!({"method":"history"})))
                 .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result":[
-                    {"NZBID":41, "Name":"Other", "Status":"SUCCESS/ALL", "FinalDir":"/other"},
-                    {"NZBID":42, "Name":"Job", "Status":status, "FinalDir":final_dir, "DestDir":"/intermediate/job",
+                    history_entry(json!({"NZBID":41, "Name":"Other", "Status":"SUCCESS/ALL", "FinalDir":"/other"})),
+                    history_entry(json!({"NZBID":42, "Name":"Job", "Status":status, "FinalDir":final_dir, "DestDir":"/intermediate/job",
                      "ParStatus":par_status, "UnpackStatus":unpack_status, "DeleteStatus":delete_status,
-                     "Category":"scryer", "Parameters":[]}
+                     "ScriptStatus":if status == "WARNING/SCRIPT" { "FAILURE" } else { "NONE" },
+                     "Category":"scryer", "Parameters":[]}))
                 ]}))).mount(&server).await;
             let client = NzbgetDownloadClient::new(server.uri(), None, None, "SCORE".into());
             let payload = client
@@ -2762,8 +3027,7 @@ mod tests {
                 client
                     .get_cleanup_payload_for_source("client", "nzbget", "42")
                     .await
-                    .unwrap()
-                    .is_none()
+                    .is_err()
             );
         }
         let server = MockServer::start().await;
@@ -2816,6 +3080,8 @@ mod tests {
                         "NZBID": 7,
                         "Name": "Tin.Whistle.2019.1080p",
                         "Status": "SUCCESS/ALL",
+                        "ParStatus":"SUCCESS", "UnpackStatus":"SUCCESS", "MoveStatus":"SUCCESS",
+                        "ScriptStatus":"SUCCESS", "DeleteStatus":"NONE", "MarkStatus":"NONE", "UrlStatus":"NONE",
                         "HistoryTime": now - 600,
                         "FinalDir": "/downloads/complete/tin-whistle",
                         "FileSizeMB": 1,
@@ -2824,6 +3090,8 @@ mod tests {
                         "NZBID": 9,
                         "Name": "Paper.Lantern.2012.1080p",
                         "Status": "SUCCESS/ALL",
+                        "ParStatus":"SUCCESS", "UnpackStatus":"SUCCESS", "MoveStatus":"SUCCESS",
+                        "ScriptStatus":"SUCCESS", "DeleteStatus":"NONE", "MarkStatus":"NONE", "UrlStatus":"NONE",
                         "HistoryTime": now,
                         "FinalDir": "/downloads/complete/paper-lantern",
                         "FileSizeMB": 1,
@@ -2879,13 +3147,13 @@ mod tests {
 
     #[test]
     fn exact_completed_lookup_keeps_old_retained_history() {
-        let entry = serde_json::json!({
+        let entry = history_entry(serde_json::json!({
             "NZBID": 42,
             "Status": "SUCCESS/ALL",
             "HistoryTime": 0,
             "FinalDir": "/downloads/complete/retained",
             "FileSizeMB": 1,
-        });
+        }));
 
         assert!(
             completed_download_from_nzbget_history_entry(

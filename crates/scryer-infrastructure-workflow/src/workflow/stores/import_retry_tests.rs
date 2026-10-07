@@ -850,3 +850,44 @@ async fn open_manual_selection_roots_lists_only_unconsumed_selections() {
         ]
     );
 }
+
+#[tokio::test]
+async fn nzbget_password_holds_block_actual_cleanup_claim_after_store_restart() {
+    for reason in [
+        scryer_application::DOWNLOAD_PASSWORD_REQUIRED_REASON,
+        scryer_application::DOWNLOAD_PASSWORD_RETRY_REASON,
+        scryer_application::DOWNLOAD_PASSWORD_AMBIGUOUS_REASON,
+    ] {
+        let (store, _cleanup, claim, _) = retry_fixture().await;
+        let StoreDatastore::Sqlite { pool, .. } = &store.datastore else {
+            panic!("SQLite fixture")
+        };
+        sqlx::query("INSERT INTO download_identity_states (id, identity_key, canonical_download_id, tracked_state, reason) VALUES ('hold', 'hold', ?, 'failed', ?)")
+            .bind(claim.download_id.to_string()).bind(reason).execute(pool).await.unwrap();
+        for _ in 0..2 {
+            let recovered = super::super::download_submission_store::DownloadSubmissionStore::new(
+                store.datastore.clone(),
+            );
+            assert!(
+                matches!(
+                    recovered
+                        .claim_download_cleanup(&claim.download_id)
+                        .await
+                        .unwrap(),
+                    DownloadCleanupClaim::Deferred
+                ),
+                "{reason}"
+            );
+        }
+        let attempts: i64 =
+            sqlx::query_scalar("SELECT attempts FROM download_cleanup WHERE download_id = ?")
+                .bind(claim.download_id.to_string())
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            attempts, 0,
+            "a password hold must not spend cleanup attempts"
+        );
+    }
+}

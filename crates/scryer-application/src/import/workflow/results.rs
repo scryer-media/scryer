@@ -796,6 +796,42 @@ async fn reconcile_terminal_download_cleanup(
         let record = refused_record.as_ref().or(record);
         let mut intent_record: Option<crate::DownloadCleanupRecord> = None;
         let mut payload_disposition = None;
+        // A retained, unreadable or unavailable NZBGet state is not a host
+        // payload failure. It retries without spending the give-up budget below,
+        // so it can never fall through to entry removal (a HistoryDelete) with
+        // the payload unverified.
+        let revalidated_nzbget_download = if host_managed_payload && client_type == "nzbget" {
+            match revalidate_nzbget_cleanup_state(
+                app,
+                canonical_download_id,
+                client_id,
+                download_client_item_id,
+            )
+            .await
+            {
+                Ok(download) => Some(download),
+                Err(error) => {
+                    tracing::warn!(
+                        client_id,
+                        download_client_item_id,
+                        state = state.as_str(),
+                        error = %error,
+                        "NZBGet state does not authorize payload cleanup yet; retaining payload and history"
+                    );
+                    let seeding = seeding_report.map(|report| SeedingGateReport {
+                        action: Some(SeedingReleaseAction::Kept),
+                        ..report
+                    });
+                    return TerminalDownloadCleanup {
+                        outcome: TerminalDownloadCleanupOutcome::RetryableFailure,
+                        seeding,
+                        payload: None,
+                    };
+                }
+            }
+        } else {
+            None
+        };
         let payload_cleanup_checkpoint = if host_managed_payload {
             match remove_host_payload_before_entry_cleanup(
                 app,
@@ -804,6 +840,7 @@ async fn reconcile_terminal_download_cleanup(
                 client_type,
                 download_client_item_id,
                 record,
+                revalidated_nzbget_download,
             )
             .await
             {
@@ -1634,6 +1671,28 @@ fn verify_nzbget_cleanup_identity(
     Ok(())
 }
 
+/// NZBGet's current terminal metadata for this exact job, or an error while the
+/// job is retained (non-terminal, warning, password hold, unreadable state),
+/// absent, or re-identified. Cleanup must not proceed past an error here.
+async fn revalidate_nzbget_cleanup_state(
+    app: &AppUseCase,
+    canonical_download_id: Option<&scryer_domain::download_identity::DownloadId>,
+    client_id: &str,
+    item_id: &str,
+) -> AppResult<scryer_domain::CompletedDownload> {
+    let payload = app
+        .services
+        .integrations
+        .download_client
+        .get_cleanup_payload_for_source(client_id.trim(), "nzbget", item_id)
+        .await?
+        .ok_or_else(|| {
+            AppError::NotFound("NZBGet terminal cleanup metadata is unavailable".into())
+        })?;
+    verify_nzbget_cleanup_identity(&payload.download, canonical_download_id, item_id)?;
+    Ok(payload.download)
+}
+
 // NZBGet has no entry-only switch for the failed-history states that delete
 // DestDir. Inspect fresh metadata even on checkpoint recovery: a recreated
 // directory must never be deleted by an otherwise entry-only retry.
@@ -1712,6 +1771,7 @@ async fn remove_host_payload_before_entry_cleanup(
     client_type: &str,
     download_client_item_id: &str,
     record: Option<&crate::DownloadCleanupRecord>,
+    revalidated_nzbget_download: Option<scryer_domain::CompletedDownload>,
 ) -> AppResult<HostPayloadCleanupReport> {
     let client_id = client_id.trim();
     if client_id.is_empty() {
@@ -1719,6 +1779,22 @@ async fn remove_host_payload_before_entry_cleanup(
             "download client payload cleanup requires a configured client id".to_string(),
         ));
     }
+
+    // A cleanup claim/checkpoint can outlive a client retry. Revalidate NZBGet's
+    // current terminal state before any filesystem step, including recovery.
+    let current_nzbget_download = match (client_type == "nzbget", revalidated_nzbget_download) {
+        (true, Some(download)) => Some(download),
+        (true, None) => Some(
+            revalidate_nzbget_cleanup_state(
+                app,
+                canonical_download_id,
+                client_id,
+                download_client_item_id,
+            )
+            .await?,
+        ),
+        (false, _) => None,
+    };
 
     let saved = record
         .and_then(|record| record.payload_checkpoint.as_deref())
@@ -1756,6 +1832,8 @@ async fn remove_host_payload_before_entry_cleanup(
         .and_then(|completed| {
             serde_json::from_value::<scryer_domain::CompletedDownload>(completed).ok()
         }) {
+        completed
+    } else if let Some(completed) = current_nzbget_download {
         completed
     } else {
         app

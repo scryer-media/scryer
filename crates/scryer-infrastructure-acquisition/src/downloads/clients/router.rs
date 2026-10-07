@@ -8609,7 +8609,8 @@ mod tests {
         wiremock::Mock::given(wiremock::matchers::method("POST"))
             .respond_with(wiremock::ResponseTemplate::new(200).set_body_json(serde_json::json!({"result":[{
                 "NZBID":42, "Status":"FAILURE/UNPACK", "Name":"Job", "DestDir":"/remote/intermediate/job",
-                "FinalDir":"/remote/final/job", "DeleteStatus":"NONE", "ParStatus":"SUCCESS", "UnpackStatus":"FAILURE"
+                "FinalDir":"/remote/final/job", "DeleteStatus":"NONE", "ParStatus":"SUCCESS", "UnpackStatus":"FAILURE",
+                "MoveStatus":"NONE", "ScriptStatus":"NONE", "MarkStatus":"NONE", "UrlStatus":"NONE"
             }]}))).expect(1).mount(&server).await;
         let router = PrioritizedDownloadClientRouter::new(
             Arc::new(MockDownloadClientConfigRepository { configs: vec![DownloadClientConfig {

@@ -2081,6 +2081,7 @@ pub(super) struct StubDownloadClient {
     pub(super) history_items: Arc<Mutex<Vec<DownloadQueueItem>>>,
     pub(super) completed_downloads: Arc<Mutex<Vec<CompletedDownload>>>,
     pub(super) cleanup_payloads: Arc<Mutex<HashMap<String, crate::DownloadCleanupPayload>>>,
+    pub(super) cleanup_payload_error: Arc<Mutex<Option<String>>>,
     pub(super) delete_requires_absent_paths: Arc<Mutex<Vec<std::path::PathBuf>>>,
     pub(super) recent_completed_downloads: Arc<Mutex<Option<Vec<CompletedDownload>>>>,
     pub(super) deleted_items: Arc<Mutex<Vec<(String, bool)>>>,
@@ -2481,6 +2482,9 @@ impl DownloadClient for StubDownloadClient {
         client_type: &str,
         item_id: &str,
     ) -> AppResult<Option<crate::DownloadCleanupPayload>> {
+        if let Some(error) = self.cleanup_payload_error.lock().await.clone() {
+            return Err(AppError::Repository(error));
+        }
         if let Some(payload) = self.cleanup_payloads.lock().await.get(item_id).cloned() {
             return Ok(Some(payload));
         }

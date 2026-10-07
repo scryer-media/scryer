@@ -6016,3 +6016,120 @@ async fn nzbget_imported_sources_prune_only_their_empty_ancestors() {
         assert!(!client.deleted_requests.lock().await[0].4);
     }
 }
+
+#[tokio::test]
+async fn nzbget_recoverable_warnings_never_enter_import_or_failure_after_poll_or_restart() {
+    for reason in [
+        "unpack failed: disk space",
+        "move failed: FAILURE",
+        "deleted: GOOD",
+        "NZBGet retained history: WARNING/SKIPPED",
+    ] {
+        let (app, _user, client, repository, mut tracked, _root, payload) =
+            nzbget_cleanup_fixture(TrackedDownloadState::Downloading).await;
+        tracked.import_attempted = false;
+        tracked.client_item.is_scryer_origin = true;
+        tracked.client_item.state = DownloadQueueState::Warning;
+        tracked.client_item.attention_reason = Some(reason.into());
+        *client.history_items.lock().await = vec![tracked.client_item.clone()];
+        let now = Utc::now();
+        for restart in 0..2 {
+            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+            tracker.insert_for_tests(tracked.clone());
+            for hours in [0, 24, 72] {
+                let timeout =
+                    crate::app_usecase_integration::warning_timeout_applies(&app, &tracked);
+                assert!(!timeout);
+                assert!(!tracker.fail_persistent_warning_for_download(
+                    tracked.download_id,
+                    now + chrono::Duration::hours(hours + restart * 100),
+                    timeout
+                ));
+                tracked = tracker
+                    .get_by_download_id(tracked.download_id)
+                    .unwrap()
+                    .clone();
+                crate::import::failed_download::check(&mut tracked);
+                crate::completed_download_handler::check(&app, &mut tracked).await;
+                assert_eq!(tracked.state, TrackedDownloadState::Downloading, "{reason}");
+                assert!(!tracked.waiting_for_completed_history, "{reason}");
+                assert!(
+                    tracker
+                        .persist_terminal_state_by_download_id(
+                            &app,
+                            tracked.download_id,
+                            tracked.state
+                        )
+                        .await
+                );
+            }
+        }
+        assert!(repository.pending_cleanup.lock().await.is_empty());
+        assert!(client.deleted_requests.lock().await.is_empty());
+        assert_eq!(std::fs::read(payload.join("movie.mkv")).unwrap(), b"media");
+    }
+}
+
+#[tokio::test]
+async fn nzbget_retained_state_blocks_stale_cleanup_and_checkpoint_recovery() {
+    let budget = crate::import::import::HOST_PAYLOAD_CLEANUP_ATTEMPTS_BEFORE_ENTRY_REMOVAL;
+    for checkpoint in ["none", "incomplete", "removed"] {
+        let (app, _user, client, repository, tracked, _root, payload) =
+            nzbget_cleanup_fixture(TrackedDownloadState::Failed).await;
+        let completed = client.cleanup_payloads.lock().await["42"].download.clone();
+        *client.cleanup_payload_error.lock().await = Some(
+            "NZBGet history is retained; cleanup is not authorized by its current state".into(),
+        );
+        // Attempts and host-payload failures at, around and well past the
+        // give-up budget must all retain: the retained state never falls
+        // through to entry removal.
+        for (attempts, failures) in [
+            (1, 0),
+            (10, 1),
+            (budget, budget - 1),
+            (budget + 1, budget),
+            (budget + 7, budget + 7),
+        ] {
+            let mut record = cleanup_record_for(&tracked);
+            record.attempts = attempts;
+            let mut saved = serde_json::json!({});
+            if checkpoint != "none" {
+                saved["completed"] = serde_json::json!(completed);
+                saved["payload_removed"] = serde_json::json!(checkpoint == "removed");
+            }
+            if failures > 0 {
+                saved["host_payload_failures"] = serde_json::json!(failures);
+            }
+            if saved.as_object().is_some_and(|saved| !saved.is_empty()) {
+                record.payload_checkpoint = Some(saved.to_string());
+            }
+            repository.cleanup_checkpoints.lock().await.clear();
+            let result =
+                crate::import::import::run_claimed_download_cleanup(&app, record.clone(), None)
+                    .await
+                    .unwrap();
+            let label = format!("{checkpoint} attempts={attempts} failures={failures}");
+            assert_eq!(
+                result.2.outcome,
+                TerminalDownloadCleanupOutcome::RetryableFailure,
+                "{label}"
+            );
+            assert!(client.deleted_requests.lock().await.is_empty(), "{label}");
+            assert_eq!(
+                std::fs::read(payload.join("movie.mkv")).unwrap(),
+                b"media",
+                "{label}"
+            );
+            // A retained state does not spend the host-payload give-up budget.
+            assert!(
+                repository
+                    .cleanup_checkpoints
+                    .lock()
+                    .await
+                    .values()
+                    .all(|saved| !saved.contains("host_payload_failures")),
+                "{label}"
+            );
+        }
+    }
+}
