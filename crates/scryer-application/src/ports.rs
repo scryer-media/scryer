@@ -5199,6 +5199,13 @@ pub trait IndexerSearchLearningRepository: Send + Sync {
         Ok(0)
     }
 
+    /// Deletes up to `limit` learning rows whose title or indexer no longer
+    /// exists and reports how many went. Title deletion and indexer pruning
+    /// clear their own rows; this sweep catches rows any other path left.
+    async fn prune_orphaned_learning(&self, _limit: u32) -> AppResult<u32> {
+        Ok(0)
+    }
+
     async fn prune_indexer(&self, _indexer_id: &str) -> AppResult<()> {
         Ok(())
     }

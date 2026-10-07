@@ -36,6 +36,8 @@ use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use super::search_learning::FREETEXT_LEARNING_KEY_PREFIX;
+
 use scryer_outbound_http::{
     DestinationKey, HostKey, HostRpsProfile, HostRpsProfileSource, LOCAL_MANAGED_HOST_RPS,
     LOCAL_MANAGED_HOST_RPS_BURST, RateLimitRegistry, effective_indexer_timeout,
@@ -1094,6 +1096,16 @@ async fn drain_search_diagnostics(
             .await?;
         deleted_total = deleted_total.saturating_add(deleted);
         if deleted == 0 {
+            break;
+        }
+        tokio::task::yield_now().await;
+    }
+    loop {
+        let deleted = repository
+            .prune_orphaned_learning(SEARCH_DIAGNOSTIC_CLEANUP_LIMIT)
+            .await?;
+        deleted_total = deleted_total.saturating_add(deleted);
+        if deleted == 0 {
             return Ok(deleted_total);
         }
         tokio::task::yield_now().await;
@@ -1951,10 +1963,13 @@ fn is_title_query_strategy_label(label: &str) -> bool {
     is_freetext_strategy_label(label) || label == "fallback"
 }
 
+/// Title-text strategies learn per query text, so a localized name and the
+/// primary name never share evidence. The shared `v2:freetext` row they used
+/// to write is retired; migration 0279 carries it forward.
 fn query_learning_label(label: &str, query: &str) -> String {
     if is_title_query_strategy_label(label) {
         format!(
-            "v3:freetext:{}",
+            "{FREETEXT_LEARNING_KEY_PREFIX}{}",
             blake3_identity_hex(HashDomain::IndexerQuerySignature, query)
         )
     } else {
@@ -1962,18 +1977,14 @@ fn query_learning_label(label: &str, query: &str) -> String {
     }
 }
 
+/// The learning key of a strategy. A bare text label has no key: text learns
+/// only through [`query_learning_label`], which knows the query.
 fn learning_strategy_key(label: &str) -> Option<&str> {
     match label {
         "ids_abs" => Some("v2:ids_abs"),
         "ids_sxex" => Some("v2:ids_sxex"),
         "ids" => Some("v2:ids"),
-        "freetext"
-        | "freetext_alias"
-        | ANIME_ABSOLUTE_TEXT_LABEL
-        | ANIME_COUR_TEXT_LABEL
-        | ANIME_COUR_NAME_TEXT_LABEL
-        | "fallback" => Some("v2:freetext"),
-        key if key.starts_with("v3:freetext:") => Some(key),
+        key if key.starts_with(FREETEXT_LEARNING_KEY_PREFIX) => Some(key),
         _ => None,
     }
 }
@@ -15394,17 +15405,19 @@ mod tests {
             candidate_reuse_allowed: true,
         };
 
+        let cour_name = query_learning_label(ANIME_COUR_NAME_TEXT_LABEL, "Ember Tide Arc - 03");
+        let absolute_text = query_learning_label(ANIME_ABSOLUTE_TEXT_LABEL, "Lantern Verge 014");
         record_strategy_learning_outcome(
             &repo,
             Some(&context),
             SearchMode::Auto,
             "idx",
             "Indexer",
-            ANIME_COUR_NAME_TEXT_LABEL,
+            &cour_name,
             1,
         )
         .await;
-        for label in ["ids_abs", ANIME_ABSOLUTE_TEXT_LABEL] {
+        for label in ["ids_abs", absolute_text.as_str()] {
             for _ in 0..LEARNED_EMPTY_SUPPRESSION_THRESHOLD {
                 record_strategy_learning_outcome(
                     &repo,
@@ -15423,16 +15436,23 @@ mod tests {
             .list_for_title("idx", "title-1", "anime")
             .await
             .expect("learning records");
-        let text_record = records
+        let cour_record = records
             .iter()
-            .find(|record| record.key.strategy_key == "v2:freetext")
-            .expect("shared text record");
-        assert_eq!(text_record.usable_successes, 1);
+            .find(|record| record.key.strategy_key == cour_name)
+            .expect("cour-name text record");
+        assert_eq!(cour_record.usable_successes, 1);
+        let absolute_record = records
+            .iter()
+            .find(|record| record.key.strategy_key == absolute_text)
+            .expect("absolute text record");
         assert_eq!(
-            text_record.empty_successes,
+            absolute_record.empty_successes,
             LEARNED_EMPTY_SUPPRESSION_THRESHOLD
         );
-        assert!(!text_record.suppressed);
+        assert!(
+            !absolute_record.suppressed,
+            "text forms are never suppressed"
+        );
 
         let abs_record = records
             .iter()
@@ -15461,7 +15481,7 @@ mod tests {
                 SearchMode::Auto,
                 "idx",
                 "Indexer",
-                ANIME_COUR_NAME_TEXT_LABEL,
+                &cour_name,
                 0,
             )
             .await;
@@ -15472,8 +15492,8 @@ mod tests {
             .expect("learning records");
         let text_record = records
             .iter()
-            .find(|record| record.key.strategy_key == "v2:freetext")
-            .expect("shared text record");
+            .find(|record| record.key.strategy_key == cour_name)
+            .expect("cour-name text record");
         assert_eq!(text_record.usable_successes, 0);
         assert_eq!(
             text_record.empty_successes,
@@ -15548,7 +15568,13 @@ mod tests {
         assert_eq!(abs.usable_successes, 0);
         assert!(abs.suppressed);
         assert!(
-            record("v2:freetext").is_none_or(|text| text.usable_successes == 0),
+            records
+                .iter()
+                .filter(|record| record
+                    .key
+                    .strategy_key
+                    .starts_with(FREETEXT_LEARNING_KEY_PREFIX))
+                .all(|text| text.usable_successes == 0),
             "no text query succeeded"
         );
 
@@ -16072,11 +16098,13 @@ mod tests {
             (None, None, None)
         );
         assert!(text.ids.is_empty());
+        let learned = query_learning_label(&text.label, &text.request_query);
         assert_eq!(
-            learning_strategy_key(&text.label),
-            Some("v2:freetext"),
-            "the cour-name form learns under the shared text key"
+            learning_strategy_key(&learned),
+            Some(learned.as_str()),
+            "the cour-name form learns under its own query key"
         );
+        assert_eq!(learning_strategy_key(&text.label), None);
     }
 
     #[test]

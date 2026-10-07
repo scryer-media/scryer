@@ -6408,3 +6408,249 @@ async fn migration_0278_postgres_rekeys_search_terms_by_language() -> AppResult<
     })?;
     result
 }
+
+/// Learning rows seeded under the pre-0279 shape. Plain literals so the same
+/// statements run on both engines.
+fn migration_0279_seed_statements(postgres: bool) -> Vec<String> {
+    let aliases = if postgres { "'[]'::jsonb" } else { "'[]'" };
+    let mut statements = vec![
+        format!(
+            "INSERT INTO titles (id, library_id, name, name_normalized, facet, root_folder_id,
+                                 metadata_language, tagged_aliases_json, created_at)
+             VALUES ('title-live', 'series_default_library', 'Live Title', 'live title',
+                     'series', 'canonical_root_for_series_default_library', 'eng', {aliases},
+                     '2026-10-01T00:00:00Z')"
+        ),
+        "INSERT INTO indexers (id, name, provider_type, base_url, created_at, updated_at)
+         VALUES ('idx-live', 'Live', 'newznab', 'https://indexer.invalid',
+                 '2026-10-01T00:00:00Z', '2026-10-01T00:00:00Z')"
+            .to_string(),
+    ];
+    let row = |indexer: &str, title: &str, facet: &str, key: &str, usable: i64, at: &str| {
+        format!(
+            "INSERT INTO indexer_search_learning (indexer_id, title_id, facet, strategy_key,
+                 attempts, empty_successes, usable_successes, last_attempt_at, updated_at)
+             VALUES ('{indexer}', '{title}', '{facet}', '{key}', {attempts}, 3, {usable},
+                     '{at}', '{at}')",
+            attempts = usable + 3,
+        )
+    };
+    // The shared text row of a live pair with evidence maps to the reserved
+    // v3 row; one without a usable success carries nothing forward.
+    statements.push(row(
+        "idx-live",
+        "title-live",
+        "series",
+        "v2:freetext",
+        2,
+        "2026-10-02T00:00:00Z",
+    ));
+    statements.push(row(
+        "idx-live",
+        "title-live",
+        "movie",
+        "v2:freetext",
+        0,
+        "2026-10-02T00:00:00Z",
+    ));
+    statements.push(row(
+        "idx-live",
+        "title-live",
+        "series",
+        "v2:ids",
+        0,
+        "2026-10-02T00:00:00Z",
+    ));
+    // Rows of a deleted indexer or title are pruned, whatever their key.
+    statements.push(row(
+        "idx-gone",
+        "title-live",
+        "series",
+        "v2:ids",
+        1,
+        "2026-10-02T00:00:00Z",
+    ));
+    statements.push(row(
+        "idx-live",
+        "title-gone",
+        "series",
+        "v2:freetext",
+        1,
+        "2026-10-02T00:00:00Z",
+    ));
+    // Forty per-query rows: the oldest has the only usable success.
+    for ordinal in 0..40 {
+        statements.push(row(
+            "idx-live",
+            "title-live",
+            "series",
+            &format!("v3:freetext:q{ordinal:02}"),
+            i64::from(ordinal == 0),
+            &format!("2026-10-01T00:00:{ordinal:02}Z"),
+        ));
+    }
+    statements
+}
+
+fn assert_migration_0279_outcome(keys: &[String], aggregate: (i64, i64, i64)) {
+    let text_keys: Vec<&str> = keys
+        .iter()
+        .filter_map(|key| key.strip_prefix("idx-live/title-live/series/v3:freetext:"))
+        .collect();
+    assert_eq!(
+        text_keys.len(),
+        32,
+        "the per-title text cap holds: {keys:?}"
+    );
+    assert!(text_keys.contains(&"v2-aggregate"), "{keys:?}");
+    assert!(
+        text_keys.contains(&"q00"),
+        "the usable row outlives newer empty rows: {keys:?}"
+    );
+    for ordinal in 1..10 {
+        assert!(
+            !text_keys.contains(&format!("q{ordinal:02}").as_str()),
+            "the least recently attempted empty rows are evicted: {keys:?}"
+        );
+    }
+    for ordinal in 10..40 {
+        assert!(text_keys.contains(&format!("q{ordinal:02}").as_str()));
+    }
+    assert!(keys.contains(&"idx-live/title-live/series/v2:ids".to_string()));
+    assert!(
+        keys.iter().all(|key| !key.ends_with("/v2:freetext")),
+        "no shared text row survives: {keys:?}"
+    );
+    assert!(
+        keys.iter()
+            .all(|key| key.starts_with("idx-live/title-live/")),
+        "orphaned rows are pruned: {keys:?}"
+    );
+    assert_eq!(keys.len(), 33);
+    assert_eq!(
+        aggregate,
+        (5, 3, 2),
+        "the reserved row keeps the shared row's counters"
+    );
+}
+
+const MIGRATION_0279_KEYS_SQL: &str =
+    "SELECT indexer_id || '/' || title_id || '/' || facet || '/' || strategy_key
+   FROM indexer_search_learning ORDER BY 1";
+const MIGRATION_0279_AGGREGATE_SQL: &str =
+    "SELECT CAST(attempts AS BIGINT), CAST(empty_successes AS BIGINT),
+        CAST(usable_successes AS BIGINT)
+   FROM indexer_search_learning
+  WHERE strategy_key = 'v3:freetext:v2-aggregate'";
+
+/// 0279 carries the shared `v2:freetext` learning rows into the per-query v3
+/// shape, drops what cannot be carried, prunes orphans and applies the cap.
+#[tokio::test]
+async fn migration_0279_carries_text_learning_into_v3_and_applies_the_cap() {
+    let directory = tempfile::tempdir().expect("synthetic schema fixture");
+    let db = directory.path().join("freetext-learning.db");
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&sqlite_url_with_create(db.to_string_lossy().as_ref()))
+        .await
+        .expect("0278 database should open");
+    crate::migrations::replay_source_catalog_for_fresh_install(&pool, Some(278), true)
+        .await
+        .expect("fresh 0278 fixture should apply");
+    for statement in migration_0279_seed_statements(false) {
+        sqlx::query(sqlx::AssertSqlSafe(statement))
+            .execute(&pool)
+            .await
+            .expect("seed pre-0279 learning");
+    }
+
+    crate::migrations::run_migrations(&pool, crate::types::MigrationMode::Apply)
+        .await
+        .expect("0279 upgrade should apply");
+
+    let keys: Vec<String> = sqlx::query_scalar(MIGRATION_0279_KEYS_SQL)
+        .fetch_all(&pool)
+        .await
+        .expect("read learning keys");
+    let aggregate: (i64, i64, i64) = sqlx::query_as(MIGRATION_0279_AGGREGATE_SQL)
+        .fetch_one(&pool)
+        .await
+        .expect("read the carried row");
+    assert_migration_0279_outcome(&keys, aggregate);
+    drop(pool);
+}
+
+#[tokio::test]
+async fn migration_0279_postgres_carries_text_learning_into_v3_and_applies_the_cap() -> AppResult<()>
+{
+    let Some(raw_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(());
+    };
+    let admin_pool = sqlx::PgPool::connect(&raw_url)
+        .await
+        .map_err(|error| AppError::Repository(format!("failed to connect to postgres: {error}")))?;
+    let schema = format!(
+        "scryer_0279_migration_{}",
+        chrono::Utc::now().timestamp_micros()
+    );
+    sqlx::query(sqlx::AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
+        .execute(&admin_pool)
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to create postgres schema: {error}"))
+        })?;
+    let mut schema_url = url::Url::parse(&raw_url)
+        .map_err(|error| AppError::Validation(format!("invalid postgres URL: {error}")))?;
+    schema_url
+        .query_pairs_mut()
+        .append_pair("options", &format!("-csearch_path={schema}"));
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .connect(schema_url.as_str())
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("failed to open postgres schema: {error}"))
+        })?;
+
+    let result = async {
+        crate::postgres::replay_source_catalog_for_fresh_install(&pool, Some(278)).await?;
+        for statement in migration_0279_seed_statements(true) {
+            sqlx::query(sqlx::AssertSqlSafe(statement))
+                .execute(&pool)
+                .await
+                .map_err(|error| AppError::Repository(error.to_string()))?;
+        }
+        let services = crate::PostgresServices::new_with_mode(
+            schema_url.as_str(),
+            crate::types::MigrationMode::Apply,
+        )
+        .await?;
+        drop(services);
+
+        let keys: Vec<String> = sqlx::query_scalar(MIGRATION_0279_KEYS_SQL)
+            .fetch_all(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        let aggregate: (i64, i64, i64) = sqlx::query_as(MIGRATION_0279_AGGREGATE_SQL)
+            .fetch_one(&pool)
+            .await
+            .map_err(|error| AppError::Repository(error.to_string()))?;
+        assert_migration_0279_outcome(&keys, aggregate);
+        Ok(())
+    }
+    .await;
+
+    drop(pool);
+    let cleanup = sqlx::query(sqlx::AssertSqlSafe(format!("DROP SCHEMA {schema} CASCADE")))
+        .execute(&admin_pool)
+        .await;
+    drop(admin_pool);
+    cleanup.map_err(|error| {
+        AppError::Repository(format!("failed to drop postgres schema: {error}"))
+    })?;
+    result
+}

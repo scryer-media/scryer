@@ -15,6 +15,32 @@ use scryer_infrastructure_crypto::{
 
 use crate::queries::sql_runtime::{SqlArg, SqlExec, SqlRow, SqlRuntime, StoreDatastore, repo_err};
 
+/// Strategy-key prefix of title-text learning rows. One row exists per
+/// distinct query text (`v3:freetext:<query digest>`), so a localized name and
+/// the primary name never share evidence.
+pub(crate) const FREETEXT_LEARNING_KEY_PREFIX: &str = "v3:freetext:";
+
+/// Most title-text learning rows kept per (indexer, title, facet).
+///
+/// Text rows are keyed per query, so without a bound they grow with every
+/// episode number, localized name and custom alias an indexer is ever asked
+/// for. The rows are read back in two ways only, both through
+/// `list_for_title` on every automatic search of that indexer and title: a
+/// text row with a usable success is the "working alternative" that lets an
+/// empty ID strategy be suppressed, and any usable row marks the indexer as
+/// historically useful to the scheduler. Neither needs history beyond the
+/// queries the title is currently searched with, so the cap only has to hold
+/// one complete search pass: the primary name, up to 16 search languages
+/// (the library and title validation limit) and the anime numbering and
+/// alias forms. Twice the language limit covers that pass with headroom, so a
+/// pass never evicts its own rows, while keeping the per-search read at a few
+/// dozen rows instead of one per episode ever searched.
+///
+/// Eviction keeps the row just written, then rows with a usable success, then
+/// the most recently attempted, so the evidence the readers depend on is the
+/// last to go.
+pub(crate) const FREETEXT_LEARNING_ROWS_PER_TITLE: i64 = 32;
+
 fn sqlite_timestamp(timestamp: DateTime<Utc>) -> String {
     timestamp.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
@@ -206,6 +232,7 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                     move |pool| {
                         let key = key.clone();
                         async move {
+                            let mut tx = pool.begin().await.map_err(repo_err)?;
                             sqlx::query(
                                 "INSERT INTO indexer_search_learning (
                                     indexer_id, title_id, facet, strategy_key, attempts,
@@ -246,9 +273,24 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                             .bind(usable_hits as i64)
                             .bind(usable_hits as i64)
                             .bind(usable_hits as i64)
-                            .execute(&pool)
+                            .execute(&mut *tx)
                             .await
                             .map_err(repo_err)?;
+                            if key.strategy_key.starts_with(FREETEXT_LEARNING_KEY_PREFIX) {
+                                sqlx::query(SQLITE_EVICT_FREETEXT_LEARNING_SQL)
+                                    .bind(&key.indexer_id)
+                                    .bind(&key.title_id)
+                                    .bind(&key.facet)
+                                    .bind(&key.indexer_id)
+                                    .bind(&key.title_id)
+                                    .bind(&key.facet)
+                                    .bind(&key.strategy_key)
+                                    .bind(FREETEXT_LEARNING_ROWS_PER_TITLE)
+                                    .execute(&mut *tx)
+                                    .await
+                                    .map_err(repo_err)?;
+                            }
+                            tx.commit().await.map_err(repo_err)?;
                             Ok(())
                         }
                     },
@@ -256,6 +298,7 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                 .await?;
             }
             StoreDatastore::Postgres { pool } => {
+                let mut tx = pool.begin().await.map_err(repo_err)?;
                 sqlx::query(
                     "INSERT INTO indexer_search_learning (
                         indexer_id, title_id, facet, strategy_key, attempts,
@@ -294,9 +337,21 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
                 .bind(&key.facet)
                 .bind(&key.strategy_key)
                 .bind(usable_hits as i64)
-                .execute(pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(repo_err)?;
+                if key.strategy_key.starts_with(FREETEXT_LEARNING_KEY_PREFIX) {
+                    sqlx::query(POSTGRES_EVICT_FREETEXT_LEARNING_SQL)
+                        .bind(&key.indexer_id)
+                        .bind(&key.title_id)
+                        .bind(&key.facet)
+                        .bind(&key.strategy_key)
+                        .bind(FREETEXT_LEARNING_ROWS_PER_TITLE)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(repo_err)?;
+                }
+                tx.commit().await.map_err(repo_err)?;
             }
         }
 
@@ -903,6 +958,24 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
             .min(u64::from(u32::MAX)) as u32)
     }
 
+    async fn prune_orphaned_learning(&self, limit: u32) -> AppResult<u32> {
+        let deleted = SqlRuntime::execute_write(
+            &self.datastore,
+            "prune_orphaned_indexer_search_learning",
+            "DELETE FROM indexer_search_learning
+              WHERE (indexer_id, title_id, facet, strategy_key) IN (
+                  SELECT l.indexer_id, l.title_id, l.facet, l.strategy_key
+                    FROM indexer_search_learning l
+                   WHERE NOT EXISTS (SELECT 1 FROM titles t WHERE t.id = l.title_id)
+                      OR NOT EXISTS (SELECT 1 FROM indexers i WHERE i.id = l.indexer_id)
+                   LIMIT {}
+              )",
+            vec![SqlArg::I64(i64::from(limit.max(1)))],
+        )
+        .await?;
+        Ok(deleted.min(u64::from(u32::MAX)) as u32)
+    }
+
     async fn prune_indexer(&self, indexer_id: &str) -> AppResult<()> {
         SqlRuntime::execute_write(
             &self.datastore,
@@ -1002,6 +1075,36 @@ impl IndexerSearchLearningRepository for IndexerSearchLearningStore {
         Ok(rows > 0)
     }
 }
+
+/// Drops the title-text rows of one (indexer, title, facet) beyond
+/// [`FREETEXT_LEARNING_ROWS_PER_TITLE`]; see that constant for the order.
+const SQLITE_EVICT_FREETEXT_LEARNING_SQL: &str = "DELETE FROM indexer_search_learning
+  WHERE indexer_id = ? AND title_id = ? AND facet = ?
+    AND strategy_key LIKE 'v3:freetext:%'
+    AND strategy_key NOT IN (
+        SELECT strategy_key FROM indexer_search_learning
+         WHERE indexer_id = ? AND title_id = ? AND facet = ?
+           AND strategy_key LIKE 'v3:freetext:%'
+         ORDER BY CASE WHEN strategy_key = ? THEN 0 ELSE 1 END,
+                  CASE WHEN usable_successes > 0 THEN 0 ELSE 1 END,
+                  COALESCE(last_attempt_at, updated_at) DESC,
+                  strategy_key
+         LIMIT ?
+    )";
+
+const POSTGRES_EVICT_FREETEXT_LEARNING_SQL: &str = "DELETE FROM indexer_search_learning
+  WHERE indexer_id = $1 AND title_id = $2 AND facet = $3
+    AND strategy_key LIKE 'v3:freetext:%'
+    AND strategy_key NOT IN (
+        SELECT strategy_key FROM indexer_search_learning
+         WHERE indexer_id = $1 AND title_id = $2 AND facet = $3
+           AND strategy_key LIKE 'v3:freetext:%'
+         ORDER BY CASE WHEN strategy_key = $4 THEN 0 ELSE 1 END,
+                  CASE WHEN usable_successes > 0 THEN 0 ELSE 1 END,
+                  COALESCE(last_attempt_at, updated_at) DESC,
+                  strategy_key
+         LIMIT $5
+    )";
 
 fn row_to_learning_record(row: &SqlRow) -> AppResult<IndexerSearchLearningRecord> {
     Ok(IndexerSearchLearningRecord {
@@ -1170,6 +1273,14 @@ mod tests {
         .execute(&pool)
         .await
         .expect("search candidate value table should be created");
+        for table in ["titles", "indexers"] {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "CREATE TABLE {table} (id TEXT PRIMARY KEY)"
+            )))
+            .execute(&pool)
+            .await
+            .expect("owner table should be created");
+        }
 
         let store = IndexerSearchLearningStore::new(
             StoreDatastore::Sqlite {
@@ -1276,6 +1387,231 @@ mod tests {
         assert!(usable_record.last_attempt_at.is_some());
         assert!(usable_record.last_usable_at.is_some());
         assert!(!usable_record.suppressed);
+    }
+
+    fn text_learning_key(
+        indexer_id: &str,
+        title_id: &str,
+        query: &str,
+    ) -> IndexerSearchLearningKey {
+        IndexerSearchLearningKey {
+            indexer_id: indexer_id.into(),
+            title_id: title_id.into(),
+            facet: "series".into(),
+            strategy_key: format!("{FREETEXT_LEARNING_KEY_PREFIX}{query}"),
+        }
+    }
+
+    async fn seed_learning_row(
+        store: &IndexerSearchLearningStore,
+        key: &IndexerSearchLearningKey,
+        usable: i64,
+        attempted_at: DateTime<Utc>,
+    ) {
+        SqlRuntime::execute_write(
+            &store.datastore,
+            "seed_indexer_search_learning",
+            "INSERT INTO indexer_search_learning (
+                indexer_id, title_id, facet, strategy_key, attempts, empty_successes,
+                usable_successes, last_attempt_at, suppressed, updated_at
+             ) VALUES ({}, {}, {}, {}, 1, {}, {}, {}, {}, {})",
+            vec![
+                SqlArg::Text(key.indexer_id.clone()),
+                SqlArg::Text(key.title_id.clone()),
+                SqlArg::Text(key.facet.clone()),
+                SqlArg::Text(key.strategy_key.clone()),
+                SqlArg::I64(1 - usable.min(1)),
+                SqlArg::I64(usable),
+                SqlArg::Timestamp(attempted_at),
+                SqlArg::Bool(false),
+                SqlArg::Timestamp(attempted_at),
+            ],
+        )
+        .await
+        .expect("learning row should seed");
+    }
+
+    /// Forty-one text rows of one title arrive at an indexer: the oldest
+    /// with the only usable success, forty empty ones after it, then a new
+    /// empty query. The write keeps the cap, never evicts the row it wrote,
+    /// keeps the usable row and evicts the least recently attempted empties.
+    /// ID rows and other titles are outside the cap.
+    async fn assert_text_learning_cap(store: &IndexerSearchLearningStore) {
+        let base = DateTime::parse_from_rfc3339("2020-01-01T00:00:00Z")
+            .expect("fixed timestamp")
+            .with_timezone(&Utc);
+        seed_learning_row(
+            store,
+            &text_learning_key("idx-1", "title-1", "usable"),
+            1,
+            base,
+        )
+        .await;
+        for ordinal in 0..40 {
+            seed_learning_row(
+                store,
+                &text_learning_key("idx-1", "title-1", &format!("e{ordinal:02}")),
+                0,
+                base + chrono::Duration::minutes(ordinal + 1),
+            )
+            .await;
+        }
+        seed_learning_row(
+            store,
+            &text_learning_key("idx-1", "title-2", "other"),
+            0,
+            base,
+        )
+        .await;
+        let ids = IndexerSearchLearningKey {
+            strategy_key: "v2:ids".into(),
+            ..text_learning_key("idx-1", "title-1", "")
+        };
+        seed_learning_row(store, &ids, 0, base).await;
+
+        let written = store
+            .record_outcome(&text_learning_key("idx-1", "title-1", "new"), 0)
+            .await
+            .expect("the newest query must survive its own write");
+        assert_eq!(written.attempts, 1);
+
+        let records = store
+            .list_for_title("idx-1", "title-1", "series")
+            .await
+            .expect("records should list");
+        let text: Vec<String> = records
+            .iter()
+            .filter_map(|record| {
+                record
+                    .key
+                    .strategy_key
+                    .strip_prefix(FREETEXT_LEARNING_KEY_PREFIX)
+                    .map(str::to_owned)
+            })
+            .collect();
+        assert_eq!(
+            text.len() as i64,
+            FREETEXT_LEARNING_ROWS_PER_TITLE,
+            "{text:?}"
+        );
+        assert!(text.contains(&"new".to_string()));
+        assert!(text.contains(&"usable".to_string()), "{text:?}");
+        for ordinal in 0..10 {
+            assert!(!text.contains(&format!("e{ordinal:02}")), "{text:?}");
+        }
+        for ordinal in 10..40 {
+            assert!(text.contains(&format!("e{ordinal:02}")), "{text:?}");
+        }
+        assert!(
+            records
+                .iter()
+                .any(|record| record.key.strategy_key == "v2:ids")
+        );
+        assert_eq!(
+            store
+                .list_for_title("idx-1", "title-2", "series")
+                .await
+                .expect("other title should list")
+                .len(),
+            1
+        );
+    }
+
+    /// Rows whose indexer or title is gone go, a bounded batch at a time.
+    async fn assert_orphan_learning_pruning(store: &IndexerSearchLearningStore) {
+        for (table, id) in [("titles", "title-live"), ("indexers", "idx-live")] {
+            SqlRuntime::execute_write(
+                &store.datastore,
+                "seed_owner",
+                &format!("INSERT INTO {table} (id) VALUES ({{}})"),
+                vec![SqlArg::Text(id.into())],
+            )
+            .await
+            .expect("owner row should seed");
+        }
+        let now = Utc::now();
+        for (indexer_id, title_id) in [
+            ("idx-live", "title-live"),
+            ("idx-gone", "title-live"),
+            ("idx-live", "title-gone"),
+        ] {
+            seed_learning_row(store, &text_learning_key(indexer_id, title_id, "q"), 1, now).await;
+        }
+        assert_eq!(store.prune_orphaned_learning(1).await.expect("prune"), 1);
+        assert_eq!(store.prune_orphaned_learning(5).await.expect("prune"), 1);
+        assert_eq!(store.prune_orphaned_learning(5).await.expect("prune"), 0);
+        assert_eq!(
+            store
+                .list_for_title("idx-live", "title-live", "series")
+                .await
+                .expect("live records should list")
+                .len(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_caps_text_learning_rows_per_title() {
+        let (store, _) = sqlite_store().await;
+        assert_text_learning_cap(&store).await;
+    }
+
+    #[tokio::test]
+    async fn sqlite_store_prunes_orphaned_learning_rows() {
+        let (store, _) = sqlite_store().await;
+        assert_orphan_learning_pruning(&store).await;
+    }
+
+    #[tokio::test]
+    async fn postgres_store_caps_text_learning_and_prunes_orphans_from_env() -> AppResult<()> {
+        let Some(database_url) = std::env::var("SCRYER_TEST_POSTGRES_URL")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+        else {
+            eprintln!(
+                "skipping PostgreSQL search-learning cap test; SCRYER_TEST_POSTGRES_URL is not set"
+            );
+            return Ok(());
+        };
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .connect(&database_url)
+            .await
+            .map_err(repo_err)?;
+        for statement in [
+            "CREATE TEMP TABLE indexer_search_learning (
+                indexer_id TEXT NOT NULL,
+                title_id TEXT NOT NULL,
+                facet TEXT NOT NULL,
+                strategy_key TEXT NOT NULL,
+                attempts INTEGER NOT NULL DEFAULT 0,
+                empty_successes INTEGER NOT NULL DEFAULT 0,
+                usable_successes INTEGER NOT NULL DEFAULT 0,
+                last_attempt_at TIMESTAMPTZ,
+                last_usable_at TIMESTAMPTZ,
+                suppressed BOOLEAN NOT NULL DEFAULT FALSE,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (indexer_id, title_id, facet, strategy_key)
+            ) ON COMMIT PRESERVE ROWS",
+            "CREATE TEMP TABLE titles (id TEXT PRIMARY KEY) ON COMMIT PRESERVE ROWS",
+            "CREATE TEMP TABLE indexers (id TEXT PRIMARY KEY) ON COMMIT PRESERVE ROWS",
+        ] {
+            sqlx::query(statement)
+                .execute(&pool)
+                .await
+                .map_err(repo_err)?;
+        }
+        let store = IndexerSearchLearningStore::new(
+            StoreDatastore::Postgres { pool: pool.clone() },
+            std::sync::Arc::new(std::sync::RwLock::new(None)),
+        );
+        assert_text_learning_cap(&store).await;
+        sqlx::query("DELETE FROM indexer_search_learning")
+            .execute(&pool)
+            .await
+            .map_err(repo_err)?;
+        assert_orphan_learning_pruning(&store).await;
+        Ok(())
     }
 
     #[tokio::test]

@@ -2948,6 +2948,23 @@ file = "postgres/migrations/0278_title_search_language_variants.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 279
+description = "per-query title text search learning"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0279_freetext_search_learning_v3.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0279_freetext_search_learning_v3.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"
