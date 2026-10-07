@@ -5390,3 +5390,250 @@ async fn delete_title_settles_the_pending_cleanup_of_its_seeding_download() {
     assert!(crate::import::import::terminal_download_cleanup_is_complete(result.outcome));
     assert!(client.deleted_requests.lock().await.is_empty());
 }
+
+async fn sab_cleanup_fixture() -> (
+    AppUseCase,
+    User,
+    Arc<StubDownloadClient>,
+    TrackedDownload,
+    tempfile::TempDir,
+    std::path::PathBuf,
+) {
+    let client = Arc::new(StubDownloadClient::default());
+    let (app, user, _) = bootstrap_with_torrent_clients(client.clone());
+    let config = create_enabled_download_client_config(&app, &user, "SAB", "sabnzbd").await;
+    set_download_client_cleanup_routing(&app, &user, "movie", &config.id, true, true).await;
+    let title = movie_title(&app, &user, "Fixture:Show.S01E01.1080p-GRP").await;
+    let mut tracked = tracked_for(
+        &config.id,
+        "sabnzbd",
+        "SABnzbd_nzo_fixture",
+        &title,
+        TrackedDownloadState::Imported,
+        true,
+    );
+    tracked.client_item.download_id = Some("SABnzbd_nzo_fixture".into());
+    tracked.client_item.title_name = "Fixture_Show.S01E01.1080p-GRP".into();
+    app.services
+        .workflow
+        .download_registry
+        .resolve_observation(&ObservedClientJob {
+            locator: ClientJobLocator::new(Some(&config.id), "sabnzbd", "SABnzbd_nzo_fixture"),
+            wire_token: Some(tracked.download_id.to_wire()),
+            observed_name: Some(title.name.clone()),
+            observed_at: Utc::now(),
+        })
+        .await
+        .unwrap();
+    client
+        .history_items
+        .lock()
+        .await
+        .push(tracked.client_item.clone());
+    let source_title = tracked.source_title.clone();
+    tracked.source_title = Some(tracked.client_item.title_name.clone());
+    let (root, payload) = host_payload_fixture(&app, &user, &client, &tracked).await;
+    tracked.source_title = source_title;
+    (app, user, client, tracked, root, payload)
+}
+
+#[tokio::test]
+async fn sab_cleanup_sanitized_name_keeps_canonical_ownership() {
+    let (app, _user, client, tracked, _root, payload) = sab_cleanup_fixture().await;
+    let result = crate::import::import::run_claimed_download_cleanup(
+        &app,
+        cleanup_record_for(&tracked),
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.2.outcome, TerminalDownloadCleanupOutcome::Removed);
+    assert!(!payload.exists());
+    assert_eq!(client.deleted_requests.lock().await.len(), 1);
+}
+
+#[tokio::test]
+async fn sab_cleanup_renamed_directory_summary_removes_only_empty_folder() {
+    for keep_file in [false, true] {
+        let (mut app, _user, client, tracked, root, payload) = sab_cleanup_fixture().await;
+        let renamed = root.path().join("renamed-job.1");
+        std::fs::rename(&payload, &renamed).unwrap();
+        if !keep_file {
+            std::fs::rename(renamed.join("movie.mkv"), root.path().join("imported.mkv")).unwrap();
+        }
+        client.completed_downloads.lock().await[0].dest_dir = renamed.display().to_string();
+        record_file_import_ownership(&mut app, &tracked, &renamed).await;
+        let result = crate::import::import::run_claimed_download_cleanup(
+            &app,
+            cleanup_record_for(&tracked),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.2.outcome, TerminalDownloadCleanupOutcome::Removed);
+        assert_eq!(renamed.exists(), keep_file);
+        assert_eq!(
+            result.2.payload,
+            Some(if keep_file {
+                crate::import::import::HostPayloadDisposition::PartiallyRetained
+            } else {
+                crate::import::import::HostPayloadDisposition::Removed
+            })
+        );
+        let deleted = client.deleted_requests.lock().await;
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(
+            deleted[0].4, !keep_file,
+            "SAB must not delete files that the host retained"
+        );
+    }
+}
+
+#[tokio::test]
+async fn sab_cleanup_storage_leaf_prunes_empty_job_parent_and_preserves_siblings() {
+    for keep_sibling in [false, true] {
+        let (app, _user, client, tracked, root, payload) = sab_cleanup_fixture().await;
+        let source = payload.join("movie.mkv");
+        std::fs::rename(&source, root.path().join("imported.mkv")).unwrap();
+        if keep_sibling {
+            std::fs::write(payload.join("keep.txt"), b"unrelated").unwrap();
+        }
+        client.completed_downloads.lock().await[0].dest_dir = source.display().to_string();
+        let result = crate::import::import::run_claimed_download_cleanup(
+            &app,
+            cleanup_record_for(&tracked),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.2.outcome, TerminalDownloadCleanupOutcome::Removed);
+        assert_eq!(payload.exists(), keep_sibling);
+        assert!(root.path().join("imported.mkv").exists());
+        assert_eq!(client.deleted_requests.lock().await[0].4, !keep_sibling);
+    }
+}
+
+#[tokio::test]
+async fn sab_cleanup_series_artifacts_verify_sources_and_nested_empty_folders() {
+    for scenario in [
+        "imported",
+        "moved",
+        "changed",
+        "changed-original-folder",
+        "unrelated",
+        "wrong-import",
+        "traversal",
+    ] {
+        let (mut app, _user, client, tracked, root, payload) = sab_cleanup_fixture().await;
+        let renamed = if scenario == "changed-original-folder" {
+            payload.clone()
+        } else {
+            let renamed = root.path().join("renamed-job.1");
+            std::fs::rename(&payload, &renamed).unwrap();
+            renamed
+        };
+        std::fs::create_dir(renamed.join("nested")).unwrap();
+        let source = renamed.join("nested/episode.mkv");
+        std::fs::rename(renamed.join("movie.mkv"), &source).unwrap();
+        let destination = root.path().join("imported.mkv");
+        std::fs::copy(&source, &destination).unwrap();
+        if scenario == "moved" {
+            std::fs::remove_file(&source).unwrap();
+        }
+        if matches!(scenario, "changed" | "changed-original-folder") {
+            std::fs::write(&source, b"other").unwrap();
+        }
+        if scenario == "unrelated" {
+            std::fs::write(renamed.join("keep.txt"), b"unrelated").unwrap();
+        }
+        client.completed_downloads.lock().await[0].dest_dir = renamed.display().to_string();
+        record_file_import_ownership(&mut app, &tracked, &renamed).await;
+        let import_id = app
+            .services
+            .workflow
+            .imports
+            .list_imports_for_identities(&[ClientJobLocator::new(
+                Some(&tracked.client_id),
+                "sabnzbd",
+                "SABnzbd_nzo_fixture",
+            )])
+            .await
+            .unwrap()[0]
+            .id
+            .clone();
+        let media = Arc::new(MockMediaFileRepo::default());
+        let media_id = media
+            .insert_media_file(&crate::InsertMediaFileInput {
+                title_id: tracked.title_id.clone().unwrap(),
+                file_path: destination.display().to_string(),
+                size_bytes: 5,
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        app.services.library.media_files = media;
+        let artifacts = Arc::new(RecordingImportArtifactRepo::default());
+        artifacts
+            .insert_artifact(crate::ImportArtifact {
+                id: "artifact".into(),
+                source_client_id: Some(tracked.client_id.clone()),
+                source_system: "sabnzbd".into(),
+                source_ref: "SABnzbd_nzo_fixture".into(),
+                import_id: Some(if scenario == "wrong-import" {
+                    "other-import".into()
+                } else {
+                    import_id
+                }),
+                relative_path: Some(
+                    if scenario == "traversal" {
+                        "../imported.mkv"
+                    } else {
+                        "nested/episode.mkv"
+                    }
+                    .into(),
+                ),
+                workspace_relative_path: None,
+                normalized_file_name: "episode.mkv".into(),
+                media_kind: "video".into(),
+                title_id: tracked.title_id.clone(),
+                episode_id: None,
+                season_number: None,
+                episode_number: None,
+                result: "imported".into(),
+                reason_code: None,
+                imported_media_file_id: Some(media_id),
+                created_at: Utc::now(),
+            })
+            .await
+            .unwrap();
+        app.services.workflow.import_artifacts = artifacts;
+        let result = crate::import::import::run_claimed_download_cleanup(
+            &app,
+            cleanup_record_for(&tracked),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            result.2.outcome,
+            TerminalDownloadCleanupOutcome::Removed,
+            "{scenario}"
+        );
+        let retained = !matches!(scenario, "imported" | "moved");
+        assert_eq!(renamed.exists(), retained, "{scenario}");
+        assert_eq!(
+            source.exists(),
+            matches!(
+                scenario,
+                "changed" | "changed-original-folder" | "wrong-import" | "traversal"
+            ),
+            "{scenario}"
+        );
+        assert_eq!(std::fs::read(&destination).unwrap(), b"media", "{scenario}");
+        assert_eq!(
+            client.deleted_requests.lock().await[0].4,
+            !retained,
+            "{scenario}"
+        );
+    }
+}

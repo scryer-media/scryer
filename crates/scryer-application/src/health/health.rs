@@ -73,6 +73,32 @@ fn download_client_status_health_results(
         });
     }
 
+    if status.removes_completed_downloads == Some(true) {
+        results.push(HealthCheckResult {
+            source: "DownloadClient".into(),
+            status: HealthCheckStatus::Warning,
+            message: format!(
+                "Download client '{config_name}' automatically removes completed history. Keep download history until Scryer has imported and cleaned up each job."
+            ),
+        });
+    }
+
+    if let Some(sorting_mode) = &status.sorting_mode {
+        results.push(HealthCheckResult {
+            source: "DownloadClient".into(),
+            status: HealthCheckStatus::Warning,
+            message: format!(
+                "Download client '{config_name}' has {sorting_mode} sorting enabled. Disable sorting for Scryer categories so each download retains its own job folder."
+            ),
+        });
+    }
+
+    results.extend(status.warnings.iter().map(|warning| HealthCheckResult {
+        source: "DownloadClient".into(),
+        status: HealthCheckStatus::Warning,
+        message: format!("Download client '{config_name}': {warning}"),
+    }));
+
     results
 }
 
@@ -746,6 +772,44 @@ mod tests {
                 .message
                 .contains("/srv/downloads/complete/series overlaps /srv/downloads/complete/series")
         );
+    }
+
+    #[test]
+    fn download_client_health_reports_retention_sorting_and_category_warnings() {
+        let status = DownloadClientStatus {
+            removes_completed_downloads: Some(true),
+            sorting_mode: Some("TV (all categories)".into()),
+            warnings: vec!["Category 'series' disables per-job folders".into()],
+            ..DownloadClientStatus::default()
+        };
+        let results = download_client_status_health_results("SAB", &status, false, &[]);
+        assert_eq!(results.len(), 3);
+        assert!(
+            results
+                .iter()
+                .all(|result| result.source == "DownloadClient"
+                    && result.status == HealthCheckStatus::Warning)
+        );
+        assert!(
+            results[0]
+                .message
+                .contains("automatically removes completed history")
+        );
+        assert!(results[1].message.contains("TV (all categories)"));
+        assert!(
+            results[2]
+                .message
+                .contains("Category 'series' disables per-job folders")
+        );
+    }
+
+    #[test]
+    fn download_client_health_accepts_retained_history_without_sorting() {
+        let status = DownloadClientStatus {
+            removes_completed_downloads: Some(false),
+            ..DownloadClientStatus::default()
+        };
+        assert!(download_client_status_health_results("SAB", &status, false, &[]).is_empty());
     }
 
     fn health_result(source: &str, status: HealthCheckStatus) -> HealthCheckResult {

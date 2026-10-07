@@ -896,7 +896,9 @@ async fn reconcile_terminal_download_cleanup(
             });
         let client_remove_data = remove_data
             && !payload_already_removed
-            && (!host_managed_payload || client_type == "sabnzbd");
+            && (!host_managed_payload
+                || (client_type == "sabnzbd"
+                    && payload_disposition == Some(HostPayloadDisposition::Removed)));
         if (client_remove_data || !remove_data)
             && !host_managed_payload
             && let Some(record) = record
@@ -1528,7 +1530,13 @@ fn remove_inventoried_payload_blocking(
         std::cmp::Reverse(directory.matches(std::path::MAIN_SEPARATOR).count())
     });
     for directory in directories {
-        let _ = std::fs::remove_dir(target.join(directory));
+        let path = target.join(directory);
+        if payload_file_location_is_verified(target, &canonical_target, &path, protected_roots)
+            && std::fs::symlink_metadata(&path)
+                .is_ok_and(|metadata| metadata.is_dir() && !metadata.file_type().is_symlink())
+        {
+            let _ = std::fs::remove_dir(path);
+        }
     }
     let directory_removed = match std::fs::remove_dir(target) {
         Ok(()) => true,
@@ -1819,6 +1827,7 @@ async fn remove_host_payload_before_entry_cleanup(
     // Scryer's own completed import records for this canonical job: the files
     // it actually imported from this payload, with the sizes it verified.
     let mut imported_sources: Vec<(std::path::PathBuf, Option<u64>)> = Vec::new();
+    let mut artifact_proofs = std::collections::HashMap::new();
     if let Some(download_id) = canonical_download_id {
         let locator =
             crate::ClientJobLocator::new(Some(client_id), client_type, download_client_item_id);
@@ -1826,8 +1835,9 @@ async fn remove_host_payload_before_entry_cleanup(
             .services
             .workflow
             .imports
-            .list_imports_for_identities(&[locator])
+            .list_imports_for_identities(std::slice::from_ref(&locator))
             .await?;
+        let mut completed_import_ids = std::collections::HashSet::new();
         for import in imports {
             if import.status != ImportStatus::Completed
                 || app
@@ -1850,6 +1860,7 @@ async fn remove_host_payload_before_entry_cleanup(
             if result.get("decision").and_then(|v| v.as_str()) != Some("imported") {
                 continue;
             }
+            completed_import_ids.insert(import.id);
             if let Some(source) = result.get("source_path").and_then(|v| v.as_str()) {
                 imported_sources.push((
                     std::path::PathBuf::from(source),
@@ -1858,6 +1869,72 @@ async fn remove_host_payload_before_entry_cleanup(
                         .and_then(serde_json::Value::as_i64)
                         .and_then(|size| u64::try_from(size).ok()),
                 ));
+            }
+        }
+        if client_type == "sabnzbd" {
+            let artifacts = app
+                .services
+                .workflow
+                .import_artifacts
+                .list_by_source_identity_for_download(Some(download_id), &locator)
+                .await?;
+            let mut checked_artifacts = std::collections::HashSet::new();
+            for artifact in artifacts {
+                if artifact.result != "imported"
+                    || !artifact
+                        .import_id
+                        .as_ref()
+                        .is_some_and(|id| completed_import_ids.contains(id))
+                {
+                    continue;
+                }
+                let Some(relative) = artifact
+                    .relative_path
+                    .as_deref()
+                    .filter(|relative| relative_payload_path_is_safe(relative))
+                else {
+                    continue;
+                };
+                let source = target.join(relative);
+                if !checked_artifacts
+                    .insert((source.clone(), artifact.imported_media_file_id.clone()))
+                {
+                    continue;
+                }
+                // A known import whose proof is unavailable must not fall
+                // back to directory naming or a summary's size-only proof.
+                artifact_proofs.entry(source.clone()).or_insert(None);
+                let Some(media_id) = artifact.imported_media_file_id.as_deref() else {
+                    continue;
+                };
+                let Some(media) = app
+                    .services
+                    .library
+                    .media_files
+                    .get_media_file_by_id(media_id)
+                    .await?
+                else {
+                    continue;
+                };
+                let Ok(size) = u64::try_from(media.size_bytes) else {
+                    continue;
+                };
+                let destination = std::path::PathBuf::from(&media.file_path);
+                let proof_source = source.clone();
+                let relative = relative.to_owned();
+                let proof = tokio::task::spawn_blocking(move || {
+                    verified_artifact_source(&proof_source, &destination, size, &relative)
+                })
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!(
+                        "import source verification task panicked: {error}"
+                    ))
+                })?;
+                if let Some(proof) = proof {
+                    artifact_proofs.insert(source.clone(), proof);
+                    imported_sources.push((source, Some(size)));
+                }
             }
         }
     }
@@ -1889,7 +1966,7 @@ async fn remove_host_payload_before_entry_cleanup(
         }
     };
 
-    let disposition = match tokio::fs::symlink_metadata(&target).await {
+    let mut disposition = match tokio::fs::symlink_metadata(&target).await {
         Ok(metadata) if metadata.file_type().is_symlink() || metadata.is_file() => {
             // A single-file job: the client's path and name are not proof.
             // Require Scryer's persisted import result for this canonical job.
@@ -1985,7 +2062,7 @@ async fn remove_host_payload_before_entry_cleanup(
             if name_matches_release {
                 // The release's own job directory: inventory it once, then
                 // delete only what re-verifies.
-                let inventory = match saved
+                let mut inventory = match saved
                     .as_ref()
                     .and_then(|checkpoint| checkpoint.get("inventory").cloned())
                     .and_then(|value| serde_json::from_value::<PayloadInventory>(value).ok())
@@ -2011,6 +2088,11 @@ async fn remove_host_payload_before_entry_cleanup(
                         inventory
                     }
                 };
+                inventory.entries.retain(|entry| {
+                    artifact_proofs
+                        .get(&target.join(&entry.path))
+                        .is_none_or(|proof| proof.as_ref() == Some(entry))
+                });
                 let remove_target = target.clone();
                 let remove_protected = protected_roots.clone();
                 let result = tokio::task::spawn_blocking(move || {
@@ -2034,6 +2116,72 @@ async fn remove_host_payload_before_entry_cleanup(
                         path = %target.display(), removed = result.removed,
                         retained = ?result.retained,
                         "terminal download payload partially retained: unrecognised or changed files were left in place");
+                    HostPayloadDisposition::PartiallyRetained
+                }
+            } else if client_type == "sabnzbd"
+                && (!imported_here.is_empty()
+                    || imported_sources.iter().any(|(source, _)| source == &target))
+            {
+                let inventory = match saved
+                    .as_ref()
+                    .and_then(|checkpoint| checkpoint.get("imported_inventory").cloned())
+                    .and_then(|value| serde_json::from_value::<PayloadInventory>(value).ok())
+                    .filter(|inventory| std::path::Path::new(&inventory.target) == target)
+                {
+                    Some(inventory) => inventory,
+                    None => {
+                        let walk_target = target.clone();
+                        let mut inventory = tokio::task::spawn_blocking(move || {
+                            inventory_payload_directory_blocking(&walk_target)
+                        })
+                        .await
+                        .map_err(|error| {
+                            AppError::Repository(format!(
+                                "payload inventory task panicked: {error}"
+                            ))
+                        })??;
+                        inventory.entries.retain(|entry| {
+                            let path = target.join(&entry.path);
+                            let owned = imported_here.iter().any(|(source, size)| {
+                                source == &path && size.is_none_or(|size| size == entry.len)
+                            }) && artifact_proofs
+                                .get(&path)
+                                .is_none_or(|proof| proof.as_ref() == Some(entry));
+                            if !owned {
+                                inventory.retained.push(entry.path.clone());
+                            }
+                            owned
+                        });
+                        inventory.directories.retain(|directory| {
+                            let path = target.join(directory);
+                            imported_here
+                                .iter()
+                                .any(|(source, _)| source.starts_with(&path))
+                        });
+                        persist_plan(serde_json::json!({
+                            "completed": authoritative_completed, "payload_removed": false,
+                            "target": target, "imported_inventory": inventory,
+                        }))
+                        .await?;
+                        inventory
+                    }
+                };
+                let remove_target = target.clone();
+                let remove_protected = protected_roots.clone();
+                let result = tokio::task::spawn_blocking(move || {
+                    remove_inventoried_payload_blocking(
+                        &remove_target,
+                        &inventory,
+                        &remove_protected,
+                    )
+                })
+                .await
+                .map_err(|error| {
+                    AppError::Repository(format!("payload removal task panicked: {error}"))
+                })??;
+                if result.directory_removed && result.retained.is_empty() {
+                    HostPayloadDisposition::Removed
+                } else {
                     HostPayloadDisposition::PartiallyRetained
                 }
             } else if !imported_here.is_empty() {
@@ -2113,6 +2261,31 @@ async fn remove_host_payload_before_entry_cleanup(
             )));
         }
     };
+    if client_type == "sabnzbd"
+        && canonical_download_id.is_some()
+        && disposition == HostPayloadDisposition::Removed
+        && let Some(source_title) = record.and_then(|record| record.source_title.as_deref())
+    {
+        let parent_target = target.clone();
+        let parent_roots = roots.clone();
+        let parent_protected = protected_roots.clone();
+        let source_title = source_title.to_owned();
+        let parent_removed = tokio::task::spawn_blocking(move || {
+            remove_empty_sab_job_parents(
+                &parent_target,
+                &source_title,
+                &parent_roots,
+                &parent_protected,
+            )
+        })
+        .await
+        .map_err(|error| {
+            AppError::Repository(format!("empty job folder cleanup task panicked: {error}"))
+        })??;
+        if parent_removed == Some(false) {
+            disposition = HostPayloadDisposition::PartiallyRetained;
+        }
+    }
     persist_plan(serde_json::json!({
         "completed": authoritative_completed, "payload_removed": true,
         "target": target, "disposition": disposition,
@@ -2123,6 +2296,137 @@ async fn remove_host_payload_before_entry_cleanup(
         disposition,
         filesystem_checkpoint: checkpoint,
     })
+}
+
+// A missing source only permits empty-parent pruning. An existing source must
+// match the imported copy in full; its identity is carried into the inventory
+// so a replacement between verification and planning is retained as well.
+fn verified_artifact_source(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+    size: u64,
+    relative: &str,
+) -> Option<Option<PayloadInventoryEntry>> {
+    use std::io::Read;
+    let metadata = match std::fs::symlink_metadata(source) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Some(None),
+        Ok(metadata)
+            if metadata.is_file()
+                && !metadata.file_type().is_symlink()
+                && metadata.len() == size =>
+        {
+            metadata
+        }
+        _ => return None,
+    };
+    let dest_metadata = std::fs::symlink_metadata(destination).ok()?;
+    if !dest_metadata.is_file()
+        || dest_metadata.file_type().is_symlink()
+        || dest_metadata.len() != size
+    {
+        return None;
+    }
+    let hash = |path: &std::path::Path| -> Option<blake3::Hash> {
+        let mut file = std::fs::File::open(path).ok()?.take(size.checked_add(1)?);
+        let mut hasher = blake3::Hasher::new();
+        let mut buffer = vec![0u8; PAYLOAD_SAMPLE_BYTES as usize];
+        let mut total = 0u64;
+        loop {
+            let read = file.read(&mut buffer).ok()?;
+            if read == 0 {
+                break;
+            }
+            total += read as u64;
+            hasher.update(&buffer[..read]);
+        }
+        (total == size).then(|| hasher.finalize())
+    };
+    if hash(source)? != hash(destination)? {
+        return None;
+    }
+    let (sample_bytes, sample_blake3) = sample_file_proof(source, size).ok()?;
+    let (dev, ino) = file_device_and_inode(&metadata);
+    Some(Some(PayloadInventoryEntry {
+        path: relative.into(),
+        len: size,
+        modified_unix_nanos: unix_nanos(metadata.modified().ok()),
+        dev,
+        ino,
+        sample_bytes,
+        sample_blake3,
+    }))
+}
+
+fn remove_empty_sab_job_parents(
+    target: &std::path::Path,
+    source_title: &str,
+    output_roots: &[std::path::PathBuf],
+    protected_roots: &[String],
+) -> AppResult<Option<bool>> {
+    let parents: Vec<_> = target
+        .ancestors()
+        .skip(1)
+        .take(PAYLOAD_INVENTORY_MAX_DEPTH)
+        .collect();
+    let Some(index) = parents.iter().position(|parent| {
+        parent
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| payload_directory_name_matches_release(name, source_title))
+    }) else {
+        return Ok(None);
+    };
+    let job = parents[index];
+    if output_roots.iter().any(|root| root.starts_with(job)) {
+        return Ok(Some(false));
+    }
+    // Check ancestors up to the explicitly configured output root. System
+    // aliases above that root (such as /var on macOS) do not change ownership.
+    let boundary = crate::fs_safety::most_specific_containing_root(job, output_roots);
+    for parent in job.ancestors() {
+        match std::fs::symlink_metadata(parent) {
+            Ok(metadata) if metadata.is_dir() && !metadata.file_type().is_symlink() => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound && parent == job => {
+                return Ok(Some(true));
+            }
+            _ => return Ok(Some(false)),
+        }
+        if boundary.as_deref() == Some(parent) {
+            break;
+        }
+    }
+    let canonical = canonical_payload_directory(job)?;
+    if protected_roots.iter().any(|root| {
+        crate::catalog_workflow::library_root_paths_overlap(&canonical.to_string_lossy(), root)
+    }) {
+        return Ok(Some(false));
+    }
+    for directory in &parents[..=index] {
+        if *directory != job
+            && !payload_file_location_is_verified(job, &canonical, directory, protected_roots)
+        {
+            return Ok(Some(false));
+        }
+        if std::fs::symlink_metadata(directory)
+            .is_ok_and(|metadata| metadata.file_type().is_symlink())
+        {
+            return Ok(Some(false));
+        }
+        match std::fs::remove_dir(directory) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) if error.kind() == std::io::ErrorKind::DirectoryNotEmpty => {
+                return Ok(Some(false));
+            }
+            Err(error) => {
+                return Err(AppError::Repository(format!(
+                    "failed to remove empty SAB job folder {}: {error}",
+                    directory.display()
+                )));
+            }
+        }
+    }
+    Ok(Some(true))
 }
 
 fn host_payload_cleanup_checkpoint(
@@ -2545,6 +2849,106 @@ mod move_import_source_cleanup_gate_tests {
     };
     use std::path::PathBuf;
 
+    #[test]
+    fn sab_cleanup_artifact_proof_rejects_changes_outside_the_sample() {
+        let root = tempfile::tempdir().unwrap();
+        let source = root.path().join("source.mkv");
+        let destination = root.path().join("imported.mkv");
+        let mut bytes = vec![1u8; 3 * super::PAYLOAD_SAMPLE_BYTES as usize];
+        std::fs::write(&source, &bytes).unwrap();
+        std::fs::write(&destination, &bytes).unwrap();
+        assert!(
+            super::verified_artifact_source(
+                &source,
+                &destination,
+                bytes.len() as u64,
+                "source.mkv"
+            )
+            .unwrap()
+            .is_some()
+        );
+        bytes[super::PAYLOAD_SAMPLE_BYTES as usize + 1] = 2;
+        std::fs::write(&source, &bytes).unwrap();
+        assert!(
+            super::verified_artifact_source(
+                &source,
+                &destination,
+                bytes.len() as u64,
+                "source.mkv"
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn sab_cleanup_empty_parent_preserves_output_library_and_recycle_roots() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let job = root_path.join("Fixture.Release");
+        std::fs::create_dir(&job).unwrap();
+        let leaf = job.join("missing.mkv");
+        assert_eq!(
+            super::remove_empty_sab_job_parents(
+                &leaf,
+                "Fixture.Release",
+                std::slice::from_ref(&job),
+                &[]
+            )
+            .unwrap(),
+            Some(false)
+        );
+        for protected in [
+            job.clone(),
+            job.join("library"),
+            job.join(".scryer-recycle"),
+        ] {
+            assert_eq!(
+                super::remove_empty_sab_job_parents(
+                    &leaf,
+                    "Fixture.Release",
+                    std::slice::from_ref(&root_path),
+                    &[protected.display().to_string()]
+                )
+                .unwrap(),
+                Some(false)
+            );
+            assert!(job.is_dir());
+        }
+        assert_eq!(
+            super::remove_empty_sab_job_parents(
+                &leaf,
+                "Other.Release",
+                std::slice::from_ref(&root_path),
+                &[]
+            )
+            .unwrap(),
+            None
+        );
+        assert!(job.is_dir());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn sab_cleanup_empty_parent_never_follows_a_job_symlink() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let real = root_path.join("unrelated");
+        std::fs::create_dir(&real).unwrap();
+        let job = root_path.join("Fixture.Release");
+        std::os::unix::fs::symlink(&real, &job).unwrap();
+        assert_eq!(
+            super::remove_empty_sab_job_parents(
+                &job.join("missing.mkv"),
+                "Fixture.Release",
+                std::slice::from_ref(&root_path),
+                &[]
+            )
+            .unwrap(),
+            Some(false)
+        );
+        assert!(real.is_dir());
+        assert!(job.is_symlink());
+    }
     fn proof() -> ImportContentProof {
         ImportContentProof {
             size_bytes: 23,
