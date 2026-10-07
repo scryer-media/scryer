@@ -428,6 +428,11 @@ impl SabnzbdDownloadClient {
         }
         let json = self.api_get(&params).await?;
 
+        let paused = json
+            .get("queue")
+            .and_then(|queue| queue.get("paused"))
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let slots = json
             .get("queue")
             .and_then(slots_from_api_section)
@@ -480,7 +485,12 @@ impl SabnzbdDownloadClient {
                     };
 
                 let status = slot.get("status").and_then(Value::as_str).unwrap_or("");
-                let state = sabnzbd_queue_state(status)?;
+                let mut state = sabnzbd_queue_state(status)?;
+                if paused
+                    && sabnzbd_queue_priority(slot.get("priority").and_then(Value::as_str)) != 2
+                {
+                    state = DownloadQueueState::Paused;
+                }
 
                 let percentage = slot
                     .get("percentage")
@@ -2394,8 +2404,8 @@ fn sabnzbd_queue_state(status: &str) -> Option<DownloadQueueState> {
     let normalized = status.to_ascii_uppercase();
     match normalized.as_str() {
         "DELETED" => None,
-        "DOWNLOADING" => Some(DownloadQueueState::Downloading),
-        "QUEUED" | "FETCHING" | "PROPAGATING" | "GRABBING" => Some(DownloadQueueState::Queued),
+        "DOWNLOADING" | "CHECKING" | "FETCHING" => Some(DownloadQueueState::Downloading),
+        "QUEUED" | "PROPAGATING" | "GRABBING" => Some(DownloadQueueState::Queued),
         "PAUSED" => Some(DownloadQueueState::Paused),
         // Post-processing stages reported in queue (SABnzbd 4.x can show these)
         "VERIFYING" | "QUICKCHECK" => Some(DownloadQueueState::Verifying),
@@ -2754,6 +2764,54 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::downloads::staged_nzb_store::FileSystemStagedNzbStore;
+
+    #[tokio::test]
+    async fn sabnzbd_queue_pause_respects_force_priority_and_item_pause() {
+        for paused in [false, true] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(query_param("mode", "queue"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "queue": {"paused": paused, "slots": [
+                        {"nzo_id": "normal", "status": "Downloading", "priority": "Normal"},
+                        {"nzo_id": "force", "status": "Downloading", "priority": "Force"},
+                        {"nzo_id": "item-paused", "status": "Paused", "priority": "Force"}
+                    ]}
+                })))
+                .expect(1)
+                .mount(&server)
+                .await;
+            let client = SabnzbdDownloadClient::new(server.uri(), "key".into());
+            let items = client.list_queue().await.unwrap();
+            assert_eq!(items.len(), 3);
+            assert_eq!(
+                items[0].state,
+                if paused {
+                    DownloadQueueState::Paused
+                } else {
+                    DownloadQueueState::Downloading
+                }
+            );
+            assert_eq!(items[1].state, DownloadQueueState::Downloading);
+            assert_eq!(items[2].state, DownloadQueueState::Paused);
+        }
+    }
+
+    #[test]
+    fn sabnzbd_queue_distinguishes_active_work_from_waiting() {
+        for status in ["Checking", "Fetching", "Downloading"] {
+            assert_eq!(
+                sabnzbd_queue_state(status),
+                Some(DownloadQueueState::Downloading)
+            );
+        }
+        for status in ["Queued", "Propagating", "Grabbing", "FutureStatus", ""] {
+            assert_eq!(
+                sabnzbd_queue_state(status),
+                Some(DownloadQueueState::Queued)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn sab_cleanup_queue_delete_honors_keep_data() {
