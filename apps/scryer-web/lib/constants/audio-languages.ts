@@ -123,3 +123,17 @@ export function formatAudioLanguageLabels(
     .map((code) => audioLanguageLabel(code, originalLanguageLabel))
     .join(", ");
 }
+
+/**
+ * Release-search languages. The server accepts exactly these codes
+ * (`SEARCH_LANGUAGE_CODES` in `scryer-application`, kept in step by a guard
+ * test) and stores them in this spelling, so the picker can tick every stored
+ * value. Audio's per-title `original` selector has no meaning for search.
+ */
+export const SEARCH_LANGUAGES: SubtitleLanguage[] = AUDIO_LANGUAGES;
+
+export function formatSearchLanguageLabels(codes: string[]): string {
+  return codes
+    .map((code) => audioLanguageByCode.get(code.trim().toLowerCase())?.name ?? code)
+    .join(", ");
+}

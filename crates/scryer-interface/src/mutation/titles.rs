@@ -206,26 +206,23 @@ fn normalize_search_option_list(
         MaybeUndefined::Null => return Ok(Some(None)),
         MaybeUndefined::Value(values) => values,
     };
+    if languages {
+        return scryer_application::normalize_search_languages(values)
+            .map(|languages| Some(Some(languages)))
+            .map_err(to_gql_error);
+    }
     if values.len() > 32 {
         return Err(validation_error("search options accept at most 32 values"));
     }
     let mut result = Vec::new();
     for value in values {
-        let value = if languages {
-            scryer_application::normalize_detected_subtitle_language_code(&value)
-                .ok_or_else(|| validation_error("unsupported search language"))?
-        } else {
-            let value = value.trim();
-            if value.is_empty()
-                || value.chars().count() > 200
-                || value.chars().any(char::is_control)
-            {
-                return Err(validation_error(
-                    "search aliases must contain 1–200 characters without control characters",
-                ));
-            }
-            value.to_string()
-        };
+        let value = value.trim();
+        if value.is_empty() || value.chars().count() > 200 || value.chars().any(char::is_control) {
+            return Err(validation_error(
+                "search aliases must contain 1–200 characters without control characters",
+            ));
+        }
+        let value = value.to_string();
         if !result.contains(&value) {
             result.push(value);
         }
@@ -761,6 +758,18 @@ mod linguistic_option_tests {
             .unwrap(),
             Some(Some(vec!["swe".into(), "eng".into()]))
         );
+        for unknown in ["xyz", "@@", "tgl"] {
+            let error = normalize_search_option_list(
+                MaybeUndefined::Value(vec!["swe".into(), unknown.into()]),
+                true,
+            )
+            .expect_err("a language outside the picker is refused");
+            assert!(
+                error.message.contains(&format!("\"{unknown}\"")),
+                "{}",
+                error.message
+            );
+        }
     }
 
     #[test]

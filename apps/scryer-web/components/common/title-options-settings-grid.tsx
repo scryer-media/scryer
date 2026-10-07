@@ -19,12 +19,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
+import { SearchLanguagePicker } from "@/components/common/search-language-picker";
 import { Input } from "@/components/ui/input";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { TitleTagsEditor } from "@/components/common/title-tags-picker";
 import { Button } from "@/components/ui/button";
-import { formatAudioLanguageLabels } from "@/lib/constants/audio-languages";
+import {
+  formatAudioLanguageLabels,
+  formatSearchLanguageLabels,
+} from "@/lib/constants/audio-languages";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { setTitleRequiredAudioMutation } from "@/lib/graphql/mutations";
@@ -421,10 +424,14 @@ export function TitleOptionsSettingsGrid({
           <SettingsRow
             icon={Languages}
             label={t("settings.searchLanguages")}
-            effective={inheritsSearchLanguages ? t("title.inheritDefault") : searchLanguages.join(", ")}
+            effective={
+              inheritsSearchLanguages
+                ? t("title.inheritDefault")
+                : formatSearchLanguageLabels(searchLanguages)
+            }
           >
             <div className="space-y-2">
-              <SubtitleLanguagePicker
+              <SearchLanguagePicker
                 value={searchLanguages}
                 onChange={(codes) => void saveTitleOptions({ searchLanguages: codes })}
                 disabled={saving}

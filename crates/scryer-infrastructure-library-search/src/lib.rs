@@ -1230,10 +1230,10 @@ async fn stamp_collation_version_pg(connection: &mut sqlx::PgConnection) -> AppR
 
 fn aliases_with_user_tags(mut aliases: Vec<String>, tags: Vec<String>) -> AppResult<Vec<String>> {
     for tag in tags {
-        if let Some(value) = tag.strip_prefix(scryer_domain::SEARCH_ALIASES_TAG_PREFIX) {
-            if !value.is_empty() {
-                aliases.push(value.to_owned());
-            }
+        if let Some(value) = tag.strip_prefix(scryer_domain::SEARCH_ALIASES_TAG_PREFIX)
+            && !value.is_empty()
+        {
+            aliases.push(value.to_owned());
         }
     }
     Ok(aliases)

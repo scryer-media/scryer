@@ -5737,4 +5737,126 @@ async fn graphql_library_search_languages_round_trip_in_order() {
         rejected.get("errors").is_some(),
         "an unknown search language must be refused: {rejected}"
     );
+
+    // A well-formed ISO code the language picker does not offer is refused
+    // too, and the stored list is left as it was.
+    for unknown in ["xyz", "tgl"] {
+        let rejected = gql(
+            &ctx,
+            r#"mutation($input: UpdateLibraryInput!) {
+                updateLibrary(input: $input) { id }
+            }"#,
+            json!({
+                "input": {
+                    "libraryId": library_id,
+                    "settings": { "searchLanguages": ["swe", unknown] }
+                }
+            }),
+        )
+        .await;
+        let message = rejected["errors"][0]["message"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            message.contains(&format!("unknown search language \"{unknown}\"")),
+            "{rejected}"
+        );
+        assert_eq!(
+            rejected["errors"][0]["extensions"]["code"], "VALIDATION_ERROR",
+            "{rejected}"
+        );
+    }
+    let read = gql(
+        &ctx,
+        r#"query($libraryId: ID!) {
+            librarySettings(libraryId: $libraryId) { searchLanguages }
+        }"#,
+        json!({ "libraryId": library_id }),
+    )
+    .await;
+    assert_eq!(
+        read["data"]["librarySettings"]["searchLanguages"],
+        json!(["swe", "deu"])
+    );
+}
+
+/// The per-title override validates against the same picker set as the
+/// library setting and distinguishes inherit (null), searching only the
+/// primary name (empty) and an ordered list.
+#[tokio::test]
+async fn graphql_title_search_language_override_accepts_picker_languages_only() {
+    let ctx = TestContext::new().await;
+    let added = gql(
+        &ctx,
+        r#"mutation($input: AddTitleInput!) {
+            addTitle(input: $input) { title { id tags } }
+        }"#,
+        json!({
+            "input": {
+                "name": "Search Language Override",
+                "facet": "MOVIE",
+                "monitored": true,
+                "tags": [],
+                "externalIds": [{ "source": "tvdb", "value": "130279" }],
+                "options": { "searchLanguages": ["sv", "ger", "swe"] }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&added);
+    let title = &added["data"]["addTitle"]["title"];
+    let title_id = title["id"].clone();
+    let language_tags = |title: &serde_json::Value| -> Vec<String> {
+        title["tags"]
+            .as_array()
+            .expect("tags array")
+            .iter()
+            .filter_map(|tag| tag.as_str())
+            .filter(|tag| tag.starts_with("scryer:search-languages:"))
+            .map(str::to_owned)
+            .collect()
+    };
+    assert_eq!(
+        language_tags(title),
+        ["scryer:search-languages:swe", "scryer:search-languages:deu"],
+        "codes are canonicalized to the picker spelling and keep their order"
+    );
+
+    let update = |options: serde_json::Value| {
+        let ctx = &ctx;
+        let title_id = title_id.clone();
+        async move {
+            gql(
+                ctx,
+                r#"mutation($input: UpdateTitleInput!) {
+                    updateTitle(input: $input) { tags }
+                }"#,
+                json!({ "input": { "titleId": title_id, "options": options } }),
+            )
+            .await
+        }
+    };
+
+    for unknown in ["xyz", "tgl", "@@"] {
+        let rejected = update(json!({ "searchLanguages": ["swe", unknown] })).await;
+        let message = rejected["errors"][0]["message"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            message.contains(&format!("unknown search language \"{unknown}\"")),
+            "{rejected}"
+        );
+    }
+
+    let disabled = update(json!({ "searchLanguages": [] })).await;
+    assert_no_errors(&disabled);
+    assert_eq!(
+        language_tags(&disabled["data"]["updateTitle"]),
+        ["scryer:search-languages:"],
+        "an empty list is an explicit override, not inheritance"
+    );
+
+    let inherited = update(json!({ "searchLanguages": null })).await;
+    assert_no_errors(&inherited);
+    assert!(language_tags(&inherited["data"]["updateTitle"]).is_empty());
 }

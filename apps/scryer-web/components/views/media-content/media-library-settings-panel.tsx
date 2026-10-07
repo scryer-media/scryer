@@ -19,7 +19,7 @@ import {
 import { AddNewButton } from "@/components/common/add-new-button";
 import { ConfirmDialog } from "@/components/common/confirm-dialog";
 import { ChangeRootDialog } from "@/components/dialogs/change-root-dialog";
-import { SubtitleLanguagePicker } from "@/components/common/subtitle-language-picker";
+import { SearchLanguagePicker } from "@/components/common/search-language-picker";
 import { AudioLanguagePicker } from "@/components/common/audio-language-picker";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
@@ -1417,7 +1417,11 @@ export const MediaLibrarySettingsPanel = React.memo(function MediaLibrarySetting
                 </div>
                 <div className="space-y-2">
                   <Label>{t("settings.searchLanguages")}</Label>
-                  <SubtitleLanguagePicker value={draftSearchLanguages} onChange={setDraftSearchLanguages} disabled={settingsBusy} />
+                  <SearchLanguagePicker
+                    value={draftSearchLanguages}
+                    onChange={setDraftSearchLanguages}
+                    disabled={settingsBusy}
+                  />
                   <p className="text-xs text-muted-foreground">{t("settings.searchLanguagesHelp")}</p>
                 </div>
                 <div className="space-y-2">

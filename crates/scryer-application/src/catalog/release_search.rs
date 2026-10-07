@@ -1978,6 +1978,12 @@ impl AppUseCase {
                 .await?
                 .unwrap_or_default(),
         };
+        // Writes are validated; a stored value from outside the picker (a
+        // hand-edited tag or setting) is ignored rather than searched.
+        let languages = languages
+            .iter()
+            .filter_map(|language| crate::normalize_search_language_code(language))
+            .collect::<Vec<_>>();
         let names = localized_search_names(title, &languages);
         let mut outcome = self
             .search_and_score_subject_query_round(

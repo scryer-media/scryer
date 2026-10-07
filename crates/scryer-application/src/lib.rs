@@ -402,9 +402,10 @@ pub(crate) use library::rename::{
 };
 pub use location::backfill::start_full_hash_backfill_worker;
 pub use media::language::{
-    normalize_detected_audio_language_code, normalize_detected_audio_languages,
-    normalize_detected_subtitle_language_code, normalize_detected_subtitle_languages,
-    normalize_known_audio_language_code, normalize_metadata_language_code,
+    MAX_SEARCH_LANGUAGES, SEARCH_LANGUAGE_CODES, normalize_detected_audio_language_code,
+    normalize_detected_audio_languages, normalize_detected_subtitle_language_code,
+    normalize_detected_subtitle_languages, normalize_known_audio_language_code,
+    normalize_metadata_language_code, normalize_search_language_code, normalize_search_languages,
 };
 pub use media_requests::snapshot::{
     MEDIA_REQUEST_SNAPSHOT_SCHEMA_VERSION, MediaRequestMetadataSnapshot,
