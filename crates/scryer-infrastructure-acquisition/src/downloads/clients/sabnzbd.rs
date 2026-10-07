@@ -1512,8 +1512,8 @@ impl DownloadClient for SabnzbdDownloadClient {
 
     /// A history delete includes `del_files=1` only when `remove_data` is
     /// requested, alongside nzbdav's non-standard `del_completed_files=1`
-    /// (see `send_delete`). Queue deletes continue to include `del_files=1`
-    /// regardless.
+    /// (see `send_delete`). Queue deletes always send `del_files`, as `1` when
+    /// `remove_data` is requested and `0` otherwise.
     ///
     /// `is_history` is only a hint: the caller derives it from the last polled
     /// state, and SAB moves a job into history the moment post-processing

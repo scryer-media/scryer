@@ -2239,10 +2239,14 @@ fn remove_empty_sab_job_parents(
                 return Ok(Some(false));
             }
             Err(error) => {
-                return Err(AppError::Repository(format!(
-                    "failed to remove empty SAB job folder {}: {error}",
-                    directory.display()
-                )));
+                // The payload is already gone; failing here would rerun the
+                // same prune on every retry and never settle the cleanup row.
+                tracing::warn!(
+                    path = %directory.display(),
+                    error = %error,
+                    "failed to remove empty SAB job folder; retaining it"
+                );
+                return Ok(Some(false));
             }
         }
     }
@@ -2738,6 +2742,32 @@ mod move_import_source_cleanup_gate_tests {
         assert!(real.is_dir());
         assert!(job.is_symlink());
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn sab_cleanup_empty_parent_retains_job_when_removal_fails() {
+        use std::os::unix::fs::PermissionsExt;
+        if std::env::var("USER").as_deref() == Ok("root") {
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().canonicalize().unwrap();
+        let locked = root_path.join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        let job = locked.join("Fixture.Release");
+        std::fs::create_dir(&job).unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let result = super::remove_empty_sab_job_parents(
+            &job.join("missing.mkv"),
+            "Fixture.Release",
+            std::slice::from_ref(&root_path),
+            &[],
+        );
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(result.unwrap(), Some(false));
+        assert!(job.is_dir());
+    }
+
     fn proof() -> ImportContentProof {
         ImportContentProof {
             size_bytes: 23,
