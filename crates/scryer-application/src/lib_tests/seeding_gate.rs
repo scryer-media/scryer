@@ -6019,8 +6019,13 @@ async fn nzbget_imported_sources_prune_only_their_empty_ancestors() {
     }
 }
 
+/// NZBGet warnings keep the operator's 24 h timeout like every other usenet
+/// client. Until the day is up the warning is recoverable: no import, no
+/// failure, no client removal, payload untouched. Once it elapses the download
+/// fails through the ordinary failed-download path; payload safety from there
+/// is the cleanup revalidation's job, not the timeout's.
 #[tokio::test]
-async fn nzbget_recoverable_warnings_never_enter_import_or_failure_after_poll_or_restart() {
+async fn nzbget_recoverable_warnings_fail_only_after_the_warning_timeout() {
     for reason in [
         "unpack failed: disk space",
         "move failed: FAILURE",
@@ -6035,38 +6040,55 @@ async fn nzbget_recoverable_warnings_never_enter_import_or_failure_after_poll_or
         tracked.client_item.attention_reason = Some(reason.into());
         *client.history_items.lock().await = vec![tracked.client_item.clone()];
         let now = Utc::now();
-        for restart in 0..2 {
-            let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
-            tracker.insert_for_tests(tracked.clone());
-            for hours in [0, 24, 72] {
-                let timeout =
-                    crate::app_usecase_integration::warning_timeout_applies(&app, &tracked);
-                assert!(!timeout);
-                assert!(!tracker.fail_persistent_warning_for_download(
+        let mut tracker = crate::tracked_downloads::TrackedDownloadService::new();
+        tracker.insert_for_tests(tracked.clone());
+        let timeout = crate::app_usecase_integration::warning_timeout_applies(&app, &tracked);
+        assert!(timeout, "{reason}: usenet warnings keep the timeout");
+
+        for hours in [0, 23] {
+            assert!(
+                !tracker.fail_persistent_warning_for_download(
                     tracked.download_id,
-                    now + chrono::Duration::hours(hours + restart * 100),
+                    now + chrono::Duration::hours(hours),
                     timeout
-                ));
-                tracked = tracker
-                    .get_by_download_id(tracked.download_id)
-                    .unwrap()
-                    .clone();
-                crate::import::failed_download::check(&mut tracked);
-                crate::completed_download_handler::check(&app, &mut tracked).await;
-                assert_eq!(tracked.state, TrackedDownloadState::Downloading, "{reason}");
-                assert!(!tracked.waiting_for_completed_history, "{reason}");
-                assert!(
-                    tracker
-                        .persist_terminal_state_by_download_id(
-                            &app,
-                            tracked.download_id,
-                            tracked.state
-                        )
-                        .await
-                );
-            }
+                ),
+                "{reason}: no failure before the timeout"
+            );
+            tracked = tracker
+                .get_by_download_id(tracked.download_id)
+                .unwrap()
+                .clone();
+            crate::import::failed_download::check(&mut tracked);
+            crate::completed_download_handler::check(&app, &mut tracked).await;
+            assert_eq!(tracked.state, TrackedDownloadState::Downloading, "{reason}");
+            assert!(!tracked.waiting_for_completed_history, "{reason}");
         }
         assert!(repository.pending_cleanup.lock().await.is_empty());
+        assert!(client.deleted_requests.lock().await.is_empty());
+        assert_eq!(std::fs::read(payload.join("movie.mkv")).unwrap(), b"media");
+
+        assert!(
+            tracker.fail_persistent_warning_for_download(
+                tracked.download_id,
+                now + crate::tracked_downloads::TrackedDownloadService::WARNING_FAILURE_TIMEOUT,
+                timeout
+            ),
+            "{reason}: the warning fails once the timeout elapses"
+        );
+        let failed = tracker.get_by_download_id(tracked.download_id).unwrap();
+        assert_eq!(
+            failed.state,
+            TrackedDownloadState::FailedPending,
+            "{reason}"
+        );
+        assert!(
+            failed
+                .status_messages
+                .iter()
+                .any(|message| message.contains(reason)),
+            "{reason}: timeout message carries the attention reason"
+        );
+        // Promotion alone touches nothing on the client or disk.
         assert!(client.deleted_requests.lock().await.is_empty());
         assert_eq!(std::fs::read(payload.join("movie.mkv")).unwrap(), b"media");
     }

@@ -914,11 +914,13 @@ impl AppUseCase {
 /// resolve or replace the download; Sonarr's `FailedDownloadService` acts only
 /// on `Failed`/`IsEncrypted` and lets warnings persist the same way.
 ///
-/// NZBGet warnings also remain recoverable: a timeout must not turn a disk-space
-/// or move failure into permission to delete the payload. Other Usenet clients
-/// keep the timeout. Anything that is not a warned,
-/// Scryer-origin download is irrelevant and reports `true` (the tracker then
-/// ignores it on its own checks).
+/// Usenet clients keep the timeout: no seeding obligation exists, and a stuck
+/// usenet download is exactly what failed-download handling is for. For NZBGet
+/// the resulting cleanup still revalidates the history row before any native
+/// delete, so a retained warning is failed in Scryer without touching its
+/// payload. Anything that is not a warned, Scryer-origin download is
+/// irrelevant and reports `true` (the tracker then ignores it on its own
+/// checks).
 pub(crate) fn warning_timeout_applies(
     app: &AppUseCase,
     td: &crate::tracked_downloads::TrackedDownload,
@@ -928,8 +930,7 @@ pub(crate) fn warning_timeout_applies(
     {
         return true;
     }
-    !td.client_type.eq_ignore_ascii_case("nzbget")
-        && !crate::seeding_gate::client_type_is_torrent(app, &td.client_type)
+    !crate::seeding_gate::client_type_is_torrent(app, &td.client_type)
 }
 
 #[expect(
