@@ -18,6 +18,7 @@ pub struct IndexerRoutingSettingsEntry {
 }
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct LibrarySettingsOverrideDraft {
+    pub search_languages: Option<Vec<String>>,
     pub required_audio_languages: Option<Vec<String>>,
     pub metadata_language: Option<String>,
     pub use_season_folders: Option<bool>,
@@ -65,6 +66,7 @@ pub struct ExternalImportSettingsAutoApplySkip {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LibrarySettings {
+    pub search_languages: Vec<String>,
     pub required_audio_languages_override: Option<Vec<String>>,
     pub required_audio_languages: Vec<String>,
     pub metadata_language_override: Option<String>,

@@ -4,6 +4,8 @@ use scryer_domain::{ExternalId, NewTitle};
 use crate::types::{AddTitleInput, DownloadSourceKindValue, IntoApplication};
 
 pub(crate) struct ResolvedTitleOptionsInput {
+    pub search_languages: Option<Option<Vec<String>>>,
+    pub search_aliases: Option<Option<Vec<String>>>,
     /// `None` preserves the stored value; `Some(None)` clears it; `Some(Some(_))` sets it.
     pub quality_profile_id: Option<Option<String>>,
     pub root_folder_id: Option<Option<String>>,
@@ -21,6 +23,8 @@ pub(crate) struct ResolvedTitleOptionsInput {
 impl ResolvedTitleOptionsInput {
     pub(crate) fn to_application_patch(&self) -> scryer_application::TitleOptionsPatch {
         scryer_application::TitleOptionsPatch {
+            search_languages: self.search_languages.clone(),
+            search_aliases: self.search_aliases.clone(),
             quality_profile_id: self.quality_profile_id.clone(),
             root_folder_id: self.root_folder_id.clone(),
             monitor_type: self.monitor_type.clone(),
@@ -69,6 +73,20 @@ pub(crate) fn normalize_title_tags(tags: Vec<String>) -> Vec<String> {
 }
 
 pub(crate) fn apply_title_options(tags: &mut Vec<String>, options: ResolvedTitleOptionsInput) {
+    for (prefix, patch) in [
+        (
+            scryer_domain::SEARCH_LANGUAGES_TAG_PREFIX,
+            options.search_languages,
+        ),
+        (
+            scryer_domain::SEARCH_ALIASES_TAG_PREFIX,
+            options.search_aliases,
+        ),
+    ] {
+        if let Some(value) = patch {
+            scryer_domain::set_title_search_option(tags, prefix, value);
+        }
+    }
     if let Some(value) = options.quality_profile_id {
         set_structured_tag(tags, "scryer:quality-profile:", value);
     }

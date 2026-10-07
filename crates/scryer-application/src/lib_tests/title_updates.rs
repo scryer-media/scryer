@@ -3075,3 +3075,43 @@ async fn a_tag_patch_naming_a_label_on_both_sides_is_refused_before_any_write() 
         "nothing may be written when the patch contradicts itself"
     );
 }
+
+#[tokio::test]
+async fn custom_release_names_survive_provider_hydration() {
+    let (app, user) = bootstrap();
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Primary Title".into(),
+                facet: MediaFacet::Series,
+                tags: vec![format!(
+                    "{}Över Atlanten II",
+                    scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+                )],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let refreshed = app
+        .services
+        .catalog
+        .titles
+        .update_title_hydrated_metadata(
+            &title.id,
+            TitleMetadataUpdate {
+                aliases: vec!["Provider Name".into()],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(refreshed.custom_search_aliases(), vec!["Över Atlanten II"]);
+    assert!(
+        refreshed
+            .with_custom_search_aliases()
+            .aliases
+            .contains(&"Över Atlanten II".into())
+    );
+}

@@ -9649,6 +9649,10 @@ Acquisition, import, routing, and filesystem settings for a library.
 """
 input LibrarySettingsInput {
 	"""
+	Ordered release-search languages, independent of metadata and audio.
+	"""
+	searchLanguages: [String!]
+	"""
 	Required audio-language codes; use `original` to resolve per title.
 	"""
 	requiredAudioLanguages: [String!]
@@ -9734,6 +9738,10 @@ input LibrarySettingsInput {
 Effective library settings together with nullable per-library overrides.
 """
 type LibrarySettingsPayload {
+	"""
+	Ordered release-search languages whose localized titles are also queried; empty searches only the primary name.
+	"""
+	searchLanguages: [String!]!
 	"""
 	Library override for required audio language codes; `original` resolves per title.
 	"""
@@ -29578,6 +29586,14 @@ type TitleMediaFilePayload {
 Optional title settings used when creating or updating a title.
 """
 input TitleOptionsInput {
+	"""
+	Search-language override: omitted preserves, null inherits the library, empty searches only the primary name and custom aliases.
+	"""
+	searchLanguages: [String!]
+	"""
+	User-owned search aliases: omitted preserves, null or empty clears. Metadata refresh preserves these aliases.
+	"""
+	searchAliases: [String!]
 	"""
 	Quality profile identity; omission preserves the current value, null clears it, and a value replaces it.
 	"""

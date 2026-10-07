@@ -7,6 +7,7 @@ pub const SETTINGS_SOURCE_TYPED_GRAPHQL: &str = "typed_graphql";
 
 pub const SCORING_PERSONA_KEY: &str = "quality.scoring_persona";
 pub const REQUIRED_AUDIO_LANGUAGES_KEY: &str = "audio.required_languages";
+pub const SEARCH_LANGUAGES_KEY: &str = "search.languages";
 pub const TITLE_REQUIRED_AUDIO_OVERRIDE_KEY: &str = "audio.required_languages.title_override";
 pub const AUDIO_PERSONA_MIGRATION_SENTINEL_KEY: &str = "audio_persona_settings_migrated";
 

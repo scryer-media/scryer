@@ -71,6 +71,8 @@ fn resolved_title_options(
     root_folder_id: Option<Option<String>>,
 ) -> GqlResult<ResolvedTitleOptionsInput> {
     let TitleOptionsInput {
+        search_languages,
+        search_aliases,
         quality_profile_id,
         root_folder_id: _,
         monitor_type,
@@ -145,6 +147,8 @@ fn resolved_title_options(
     }
 
     Ok(ResolvedTitleOptionsInput {
+        search_languages: normalize_search_option_list(search_languages, true)?,
+        search_aliases: normalize_search_option_list(search_aliases, false)?,
         quality_profile_id: match quality_profile_id {
             MaybeUndefined::Undefined => None,
             MaybeUndefined::Null => Some(None),
@@ -191,6 +195,42 @@ fn resolved_title_options(
         release_numbering,
         monitor_selection,
     })
+}
+
+fn normalize_search_option_list(
+    value: MaybeUndefined<Vec<String>>,
+    languages: bool,
+) -> GqlResult<Option<Option<Vec<String>>>> {
+    let values = match value {
+        MaybeUndefined::Undefined => return Ok(None),
+        MaybeUndefined::Null => return Ok(Some(None)),
+        MaybeUndefined::Value(values) => values,
+    };
+    if values.len() > 32 {
+        return Err(validation_error("search options accept at most 32 values"));
+    }
+    let mut result = Vec::new();
+    for value in values {
+        let value = if languages {
+            scryer_application::normalize_detected_subtitle_language_code(&value)
+                .ok_or_else(|| validation_error("unsupported search language"))?
+        } else {
+            let value = value.trim();
+            if value.is_empty()
+                || value.chars().count() > 200
+                || value.chars().any(char::is_control)
+            {
+                return Err(validation_error(
+                    "search aliases must contain 1–200 characters without control characters",
+                ));
+            }
+            value.to_string()
+        };
+        if !result.contains(&value) {
+            result.push(value);
+        }
+    }
+    Ok(Some(Some(result)))
 }
 
 async fn manageable_libraries_for_facet(
@@ -692,5 +732,50 @@ impl TitleMutations {
             .await
             .map_err(to_gql_error)?;
         Ok(from_title(&app, title))
+    }
+}
+
+#[cfg(test)]
+mod linguistic_option_tests {
+    use super::*;
+
+    #[test]
+    fn language_options_distinguish_inherit_disabled_and_ordered_values() {
+        assert_eq!(
+            normalize_search_option_list(MaybeUndefined::Undefined, true).unwrap(),
+            None
+        );
+        assert_eq!(
+            normalize_search_option_list(MaybeUndefined::Null, true).unwrap(),
+            Some(None)
+        );
+        assert_eq!(
+            normalize_search_option_list(MaybeUndefined::Value(vec![]), true).unwrap(),
+            Some(Some(vec![]))
+        );
+        assert_eq!(
+            normalize_search_option_list(
+                MaybeUndefined::Value(vec!["sv".into(), "swe".into(), "en".into()]),
+                true
+            )
+            .unwrap(),
+            Some(Some(vec!["swe".into(), "eng".into()]))
+        );
+    }
+
+    #[test]
+    fn custom_alias_options_preserve_case_and_reject_control_characters() {
+        assert_eq!(
+            normalize_search_option_list(
+                MaybeUndefined::Value(vec![" Över Atlanten II ".into()]),
+                false
+            )
+            .unwrap(),
+            Some(Some(vec!["Över Atlanten II".into()]))
+        );
+        assert!(
+            normalize_search_option_list(MaybeUndefined::Value(vec!["bad\nname".into()]), false)
+                .is_err()
+        );
     }
 }

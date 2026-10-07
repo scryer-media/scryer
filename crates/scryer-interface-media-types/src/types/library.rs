@@ -32,6 +32,8 @@ pub struct LibraryRootPayload {
 #[derive(SimpleObject, Clone)]
 /// Effective library settings together with nullable per-library overrides.
 pub struct LibrarySettingsPayload {
+    /// Ordered release-search languages whose localized titles are also queried; empty searches only the primary name.
+    pub search_languages: Vec<String>,
     /// Library override for required audio language codes; `original` resolves per title.
     pub required_audio_languages_override: Option<Vec<String>>,
     /// Effective configured requirements after inheritance; `original` remains unchanged.
@@ -932,6 +934,10 @@ impl ExternalIdInput {
 #[derive(InputObject, Clone)]
 /// Optional title settings used when creating or updating a title.
 pub struct TitleOptionsInput {
+    /// Search-language override: omitted preserves, null inherits the library, empty searches only the primary name and custom aliases.
+    pub search_languages: MaybeUndefined<Vec<String>>,
+    /// User-owned search aliases: omitted preserves, null or empty clears. Metadata refresh preserves these aliases.
+    pub search_aliases: MaybeUndefined<Vec<String>>,
     /// Quality profile identity; omission preserves the current value, null clears it, and a value replaces it.
     pub quality_profile_id: MaybeUndefined<ID>,
     /// Root-folder identity used when a title is created; omission preserves the current value, null clears it, and a value replaces it. Changing the root of an existing title that has tracked files is refused: preview the change with locationOperationPreview and run it with startLocationOperation.
@@ -1322,6 +1328,8 @@ pub struct UpdateLibraryInput {
 #[derive(InputObject, Clone)]
 /// Acquisition, import, routing, and filesystem settings for a library.
 pub struct LibrarySettingsInput {
+    /// Ordered release-search languages, independent of metadata and audio.
+    pub search_languages: Option<Vec<String>>,
     /// Required audio-language codes; use `original` to resolve per title.
     pub required_audio_languages: Option<Vec<String>>,
     /// Metadata language override; null inherits the global default.

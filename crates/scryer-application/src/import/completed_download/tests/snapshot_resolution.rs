@@ -1,6 +1,54 @@
 use super::*;
 
 #[tokio::test]
+async fn foreign_swedish_download_resolves_unique_local_alias_without_year_or_id() {
+    let release = "Over.Atlanten.S11E02.SWEDiSH.1080p.WEB.h264-INGRID";
+    let mut title = build_title("swedish-show", "Over the Atlantic", MediaFacet::Series);
+    title.year = Some(2019);
+    title.tagged_aliases = vec![scryer_domain::TaggedAlias {
+        name: "Över Atlanten".into(),
+        language: "swe".into(),
+    }];
+    let app = build_app(vec![title.clone()], vec![], vec![], vec![]);
+    let mut td = build_tracked_download("", "series", release);
+    td.title_id = None;
+    td.match_type = TitleMatchType::Unmatched;
+    td.client_item.is_scryer_origin = false;
+    let mut completed = build_completed_download(release, "/synthetic/completed", Some("series"));
+    completed.release_name = Some(release.into());
+
+    maybe_resolve_title_from_completed_download(&app, &mut td, &completed).await;
+    assert_eq!(td.title_id.as_deref(), Some(title.id.as_str()));
+    assert_eq!(td.match_type, TitleMatchType::TitleParse);
+    assert_eq!(
+        completed_download_proves_assigned_title(&app, &td, &completed).await,
+        AssignedTitleProof::Proven
+    );
+}
+
+#[tokio::test]
+async fn foreign_swedish_download_refuses_equivalent_unmonitored_local_competitor() {
+    let release = "Over.Atlanten.S11E02.SWEDiSH.1080p.WEB.h264-INGRID";
+    let mut title = build_title("swedish-show", "Over the Atlantic", MediaFacet::Series);
+    title.tagged_aliases = vec![scryer_domain::TaggedAlias {
+        name: "Över Atlanten".into(),
+        language: "swe".into(),
+    }];
+    let mut rival = build_title("other-show", "Over Atlanten", MediaFacet::Series);
+    rival.monitored = false;
+    let app = build_app(vec![title, rival], vec![], vec![], vec![]);
+    let mut td = build_tracked_download("", "series", release);
+    td.title_id = None;
+    td.match_type = TitleMatchType::Unmatched;
+    td.client_item.is_scryer_origin = false;
+    let mut completed = build_completed_download(release, "/synthetic/completed", Some("series"));
+    completed.release_name = Some(release.into());
+    maybe_resolve_title_from_completed_download(&app, &mut td, &completed).await;
+    assert_eq!(td.match_type, TitleMatchType::Unmatched);
+    assert!(td.title_id.is_none());
+}
+
+#[tokio::test]
 async fn completed_download_reresolution_ignores_conflicting_display_label() {
     let existing_title = build_title("title-1", "Paper Lantern", MediaFacet::Movie);
     let parsed_title = build_title("title-2", "The Other Movie", MediaFacet::Movie);

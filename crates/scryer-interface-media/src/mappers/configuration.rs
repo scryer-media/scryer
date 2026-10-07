@@ -415,6 +415,7 @@ pub fn from_indexer_routing_entry(
 
 pub fn from_library_settings(settings: LibrarySettings) -> LibrarySettingsPayload {
     LibrarySettingsPayload {
+        search_languages: settings.search_languages,
         required_audio_languages_override: settings.required_audio_languages_override,
         required_audio_languages: settings.required_audio_languages,
         metadata_language_override: settings.metadata_language_override,

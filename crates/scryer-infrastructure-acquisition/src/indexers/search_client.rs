@@ -1951,7 +1951,18 @@ fn is_title_query_strategy_label(label: &str) -> bool {
     is_freetext_strategy_label(label) || label == "fallback"
 }
 
-fn learning_strategy_key(label: &str) -> Option<&'static str> {
+fn query_learning_label(label: &str, query: &str) -> String {
+    if is_title_query_strategy_label(label) {
+        format!(
+            "v3:freetext:{}",
+            blake3_identity_hex(HashDomain::IndexerQuerySignature, query)
+        )
+    } else {
+        label.to_string()
+    }
+}
+
+fn learning_strategy_key(label: &str) -> Option<&str> {
     match label {
         "ids_abs" => Some("v2:ids_abs"),
         "ids_sxex" => Some("v2:ids_sxex"),
@@ -1962,6 +1973,7 @@ fn learning_strategy_key(label: &str) -> Option<&'static str> {
         | ANIME_COUR_TEXT_LABEL
         | ANIME_COUR_NAME_TEXT_LABEL
         | "fallback" => Some("v2:freetext"),
+        key if key.starts_with("v3:freetext:") => Some(key),
         _ => None,
     }
 }
@@ -5904,7 +5916,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                         mode,
                                         &indexer_id,
                                         &indexer_name,
-                                        label,
+                                        &query_learning_label(label, &search_query),
                                         response.results.len(),
                                     )
                                     .await;
@@ -6237,7 +6249,7 @@ impl IndexerClient for MultiIndexerSearchClient {
                                             mode,
                                             &indexer_id,
                                             &indexer_name,
-                                            label,
+                                            &query_learning_label(label, &search_query),
                                             response.results.len(),
                                         )
                                         .await;
@@ -7752,6 +7764,17 @@ mod tests {
     use scryer_domain::IndexerProviderCapabilities;
 
     use super::*;
+
+    #[test]
+    fn localized_text_learning_does_not_mix_different_names_or_suppress_ids() {
+        let primary = query_learning_label("freetext", "Quicksand S01E01");
+        let localized = query_learning_label("freetext", "Störst av allt S01E01");
+        assert_ne!(primary, localized);
+        assert_eq!(learning_strategy_key(&localized), Some(localized.as_str()));
+        assert!(!is_learning_id_strategy_key(&localized));
+        assert_eq!(query_learning_label("ids", "Quicksand"), "ids");
+        assert_eq!(learning_strategy_key("ids"), Some("v2:ids"));
+    }
 
     #[test]
     fn rss_feed_cache_entry_allows_one_feedback_claim() {

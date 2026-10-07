@@ -8,13 +8,9 @@
 //! loses its ligature and its accent in one step, `cœur` becoming `coeur`.
 //! All of them name one subject.
 //!
-//! What these pin is that a folded spelling is an *equivalence* and not a
-//! typo: the identity gate accepts it when the release also carries the
-//! title's year, and it keeps rejecting a genuine misspelling under exactly
-//! the same corroboration. The year is not incidental. A folded spelling is
-//! not a literal match, and the matcher requires a year or an asserted indexer
-//! id before accepting one; the last test here pins that rule and records what
-//! it costs an undated series release.
+//! Established locale equivalents can identify a unique local title without
+//! corroboration. Actual typos still need corroboration, and collisions remain
+//! ambiguous. German phonebook expansion requires a German language tag.
 //!
 //! These go through the identity gate — the monitored-title matcher the import
 //! path, the tracked-download sweep and the acquisition lanes all resolve
@@ -95,6 +91,20 @@ async fn catalog_with(subjects: &[(&str, MediaFacet, Option<i32>)]) -> Catalog {
             )
             .await
             .expect("create title");
+        if name.starts_with("Die ") {
+            app.services
+                .catalog
+                .titles
+                .update_title_hydrated_metadata(
+                    &title.id,
+                    TitleMetadataUpdate {
+                        metadata_language: Some("deu".into()),
+                        ..Default::default()
+                    },
+                )
+                .await
+                .expect("tag German names");
+        }
         ids.insert((*name).to_string(), title.id);
     }
     (app, ids)
@@ -281,48 +291,19 @@ async fn a_corroborating_year_does_not_admit_a_mangled_name() {
     );
 }
 
-/// The corroboration rule, asserted from the outside. A folded spelling is not
-/// a literal match, and `find_spelling_match` requires a year or an asserted
-/// indexer id before it will accept one. Nothing corroborates a bare
-/// `Die.Hoehle.der.Loewen.S01E01`, so it reaches nothing — while the same
-/// release with `.2019.` in it reaches the title, as the dated test above
-/// pins.
-///
-/// This is deliberate and only one equivalence is exempt: a Japanese
-/// romanization, because a catalog carries the romanized alias precisely so a
-/// release named in romaji is recognizable, and an anime episode carries
-/// neither a year nor usually an indexer id. Every other locale equivalence,
-/// including every diacritic fold here, keeps the requirement. That exemption
-/// is pinned from the outside in `romaji_release_matching`.
-///
-/// The cost is worth stating plainly for whoever revisits the rule: a series
-/// release rarely carries a year, `S01E01` being the disambiguator a group
-/// reaches for, so a German or Portuguese series is reachable under the
-/// spelling groups actually ship only when the group also dates it. Movies are
-/// unaffected because a movie release carries its year by convention. Widening
-/// the exemption is a product decision, not a bug fix, which is why this is an
-/// assertion of current behaviour rather than an ignored wish.
+/// A unique established locale equivalent does not need a release year or ID.
 #[tokio::test]
-async fn an_undated_series_release_needs_the_catalog_spelling() {
+async fn an_undated_series_release_accepts_unique_locale_equivalents() {
     let (app, ids) = catalog_of_subjects(MediaFacet::Series).await;
-
     for subject in SUBJECTS {
         let expected = title_id_for(&ids, subject.catalog);
         for spelling in subject.spellings {
             let release = format!("{}.S01E01.1080p.WEB-DL.H264-Group", scene_name(spelling));
-            let reached = resolve_episode(&app, &release).await;
-            if spelling == &subject.catalog {
-                assert_eq!(
-                    reached.as_deref(),
-                    Some(expected),
-                    "{release} is the catalogued spelling and needs no corroboration"
-                );
-            } else {
-                assert_eq!(
-                    reached, None,
-                    "{release} is a folded spelling with nothing to corroborate it"
-                );
-            }
+            assert_eq!(
+                resolve_episode(&app, &release).await.as_deref(),
+                Some(expected),
+                "{release}"
+            );
         }
     }
 }

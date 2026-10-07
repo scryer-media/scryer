@@ -123,6 +123,8 @@ impl Drop for IndexerDispatchAdmission {
 /// clears an override, and `Some(Some(_))` applies an explicit override.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TitleOptionsPatch {
+    pub search_languages: Option<Option<Vec<String>>>,
+    pub search_aliases: Option<Option<Vec<String>>>,
     pub quality_profile_id: Option<Option<String>>,
     pub root_folder_id: Option<Option<String>>,
     pub monitor_type: Option<Option<String>>,
@@ -1029,6 +1031,7 @@ pub struct TitleNameBucketQuery<'a> {
 /// Name, aliases and tagged aliases in their lookup form, deduplicated. This
 /// is what the persisted projection keys its exact lane on.
 pub fn title_lookup_forms(title: &Title) -> Vec<String> {
+    let title = title.with_custom_search_aliases();
     let mut forms = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for name in std::iter::once(title.name.as_str())
@@ -1049,6 +1052,7 @@ pub fn title_lookup_forms(title: &Title) -> Vec<String> {
 /// derivation for repositories that have no projection behind them, and the
 /// reason both agree is that the forms come from one place in the domain.
 pub fn title_name_candidates(title: &Title) -> Vec<TitleNameCandidate> {
+    let title = title.with_custom_search_aliases();
     let mut seen = std::collections::HashSet::new();
     title
         .tagged_aliases
@@ -1066,7 +1070,7 @@ pub fn title_name_candidates(title: &Title) -> Vec<TitleNameCandidate> {
         )
         .filter_map(|(name, language)| {
             let literal_term = scryer_domain::title_spelling::title_lookup_form(name);
-            if literal_term.is_empty() || !seen.insert(literal_term.clone()) {
+            if literal_term.is_empty() || !seen.insert((literal_term.clone(), language)) {
                 return None;
             }
             let (match_term, match_year) =

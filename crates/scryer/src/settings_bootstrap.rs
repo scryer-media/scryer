@@ -672,6 +672,14 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_MEDIA,
             scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: scryer_application::SEARCH_LANGUAGES_KEY,
+            data_type: "json",
+            default_value_json: "[]",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_MEDIA,
+            scope: SETTINGS_SCOPE_SYSTEM,
             key_name: TITLE_METADATA_LANGUAGE_OVERRIDE_KEY,
             data_type: "string",
             default_value_json: "null",

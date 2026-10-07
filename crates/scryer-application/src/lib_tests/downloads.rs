@@ -5639,6 +5639,93 @@ fn series_pack_completed_download(
 /// that the release misrepresented itself — sets `release_burned`; that path
 /// needs runtime media analysis and is covered at the `result_state` level.
 #[tokio::test]
+async fn foreign_swedish_upgrade_preserves_incumbent_until_replacement_is_accepted() {
+    let (fixture, _) = build_fail_closed_pack_fixture(FailClosedPackFixtureOptions {
+        series_root_at_library_dir: true,
+        title_name: "Over the Atlantic".into(),
+        ..Default::default()
+    })
+    .await;
+    let FailClosedPackFixture {
+        app,
+        user,
+        title,
+        library_dir,
+        ..
+    } = fixture;
+    app.services
+        .catalog
+        .titles
+        .update_title_hydrated_metadata(
+            &title.id,
+            TitleMetadataUpdate {
+                tagged_aliases: vec![TaggedAlias {
+                    name: "Över Atlanten".into(),
+                    language: "swe".into(),
+                }],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let unrelated = library_dir.path().join("unrelated.txt");
+    std::fs::write(&unrelated, b"preserve me").unwrap();
+    let initial_source = tempfile::tempdir().unwrap();
+    write_pack_video(
+        initial_source.path(),
+        "Over.the.Atlantic.S01E01.720p.WEB-DL.mkv",
+    );
+    let initial = series_pack_completed_download(
+        "swedish-initial",
+        &title.id,
+        "Over.the.Atlantic.S01E01.720p.WEB-DL",
+        initial_source.path(),
+    );
+    {
+        let _probe = probe_agrees_with_the_name(1280, 720);
+        let result = crate::import::import::import_completed_download(&app, &user, &initial)
+            .await
+            .unwrap();
+        assert_eq!(
+            result.decision,
+            scryer_domain::ImportDecision::Imported,
+            "{result:?}"
+        );
+    }
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    let incumbent = events[0].media_updates[0].path.clone();
+    let incumbent_size = std::fs::metadata(&incumbent).unwrap().len();
+    for (quality, width, height, expected) in [
+        ("480p", 640, 480, scryer_domain::ImportDecision::Rejected),
+        ("1080p", 1920, 1080, scryer_domain::ImportDecision::Imported),
+    ] {
+        let source = tempfile::tempdir().unwrap();
+        let release = format!("Over.Atlanten.S01E01.{quality}.WEB-DL");
+        let incoming = write_pack_video(source.path(), &format!("{release}.mkv"));
+        let mut completed = series_pack_completed_download(
+            &format!("swedish-{quality}"),
+            &title.id,
+            &release,
+            source.path(),
+        );
+        completed.parameters.clear(); // A foreign download has no Scryer target assertion.
+        let _probe = probe_agrees_with_the_name(width, height);
+        let result = crate::import::import::import_completed_download(&app, &user, &completed)
+            .await
+            .unwrap();
+        assert_eq!(result.title_id.as_deref(), Some(title.id.as_str()));
+        assert_eq!(result.decision, expected, "{result:?}");
+        if expected == scryer_domain::ImportDecision::Rejected {
+            assert_eq!(std::fs::metadata(&incumbent).unwrap().len(), incumbent_size);
+            assert!(incoming.exists());
+        }
+        assert_eq!(std::fs::read(&unrelated).unwrap(), b"preserve me");
+    }
+    let events = import_completed_events_for_title(&app, &title.id).await;
+    assert!(events.iter().any(|event| event.upgrade));
+}
+
+#[tokio::test]
 async fn automatic_episode_upgrade_rejection_is_not_burned() {
     let (
         FailClosedPackFixture {

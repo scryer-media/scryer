@@ -303,6 +303,35 @@ async fn attempted_import_does_not_reopen_when_durable_reason_is_stale() {
 }
 
 #[tokio::test]
+async fn explicit_retry_resolves_previously_unmatched_swedish_release() {
+    let release = "Over.Atlanten.S11E02.SWEDiSH.1080p.WEB.h264-INGRID";
+    let (_dir, mut completed) = completed_without_video(Some(release));
+    completed.category = Some("series".into());
+    let mut title = build_title("swedish-show", "Over the Atlantic", MediaFacet::Series);
+    title.tagged_aliases = vec![scryer_domain::TaggedAlias {
+        name: "Över Atlanten".into(),
+        language: "swe".into(),
+    }];
+    let mut record = test_import_record(
+        "swedish-retry",
+        &source_identity(),
+        ImportStatus::Skipped,
+        completed_request_payload(&completed, observation_evidence_json(release), None),
+    );
+    record.result_json =
+        Some(r#"{"decision":"rejected","error_message":"could not match title"}"#.into());
+    let repo = Arc::new(TestImportRepo::with_records(vec![record]));
+    let app = build_app(vec![title], vec![], vec![], vec![])
+        .with_test_overrides(|services| services.with_imports(repo));
+    let result =
+        crate::import_workflow::retry_failed_import(&app, &import_actor(), "swedish-retry", None)
+            .await
+            .unwrap();
+    assert_eq!(result.title_id.as_deref(), Some("swedish-show"));
+    assert_eq!(result.skip_reason, Some(ImportSkipReason::NoVideoFiles));
+}
+
+#[tokio::test]
 async fn retry_skipped_import_reevaluates_instead_of_replaying_rejection() {
     let (_dir, completed) = completed_without_video(Some(PAPER_LANTERN_RELEASE));
     let mut record = test_import_record(

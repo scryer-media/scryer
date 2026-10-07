@@ -5415,6 +5415,20 @@ fn apply_reused_title_options_patch(
     if let Some(value) = &patch.quality_profile_id {
         set_reused_title_option_tag(&mut title.tags, "scryer:quality-profile:", value.clone());
     }
+    for (prefix, patch) in [
+        (
+            scryer_domain::SEARCH_LANGUAGES_TAG_PREFIX,
+            &patch.search_languages,
+        ),
+        (
+            scryer_domain::SEARCH_ALIASES_TAG_PREFIX,
+            &patch.search_aliases,
+        ),
+    ] {
+        if let Some(value) = patch {
+            scryer_domain::set_title_search_option(&mut title.tags, prefix, value.clone());
+        }
+    }
     if let Some(value) = &patch.monitor_type {
         set_reused_title_option_tag(&mut title.tags, "scryer:monitor-type:", value.clone());
     }

@@ -97,7 +97,50 @@ fn candidate_is_reusable(candidate: &IndexerSearchResult) -> bool {
     )
 }
 
+fn localized_search_names(title: &Title, languages: &[String]) -> Vec<String> {
+    let mut names = title.custom_search_aliases();
+    for language in languages {
+        let Some(language) = crate::normalize_detected_subtitle_language_code(language) else {
+            continue;
+        };
+        let mut localized = title
+            .tagged_aliases
+            .iter()
+            .filter(|alias| {
+                crate::normalize_detected_subtitle_language_code(&alias.language).as_ref()
+                    == Some(&language)
+            })
+            .map(|alias| alias.name.trim().to_string())
+            .collect::<Vec<_>>();
+        localized.sort();
+        names.extend(localized);
+    }
+    let mut seen = HashSet::from([scryer_domain::title_spelling::title_lookup_form(
+        &title.name,
+    )]);
+    names
+        .into_iter()
+        .filter(|name| {
+            let key = scryer_domain::title_spelling::title_lookup_form(name);
+            !key.is_empty() && seen.insert(key)
+        })
+        .collect()
+}
+
+fn localized_search_queries(primary: &str, alias: &str, queries: &[String]) -> Vec<String> {
+    queries
+        .iter()
+        .filter_map(|query| {
+            query
+                .strip_prefix(primary.trim())
+                .filter(|suffix| suffix.is_empty() || suffix.starts_with(' '))
+                .map(|suffix| format!("{alias}{suffix}"))
+        })
+        .collect()
+}
+
 fn release_search_tagged_aliases(title: &Title) -> Vec<TaggedAlias> {
+    let title = title.with_custom_search_aliases();
     let mut aliases = title.tagged_aliases.clone();
     let mut seen: HashSet<String> = aliases
         .iter()
@@ -1925,6 +1968,147 @@ impl AppUseCase {
         background_value: Option<f64>,
         scoring_now: chrono::DateTime<chrono::Utc>,
     ) -> AppResult<ScoredSearchOutcome> {
+        let languages = match title.search_languages_override() {
+            Some(languages) => languages,
+            None => self
+                .read_setting_json_value::<Vec<String>>(
+                    crate::SEARCH_LANGUAGES_KEY,
+                    Some(&title.library_id),
+                )
+                .await?
+                .unwrap_or_default(),
+        };
+        let names = localized_search_names(title, &languages);
+        let mut outcome = self
+            .search_and_score_subject_query_round(
+                title,
+                subject,
+                caller_label,
+                mode,
+                cancel_token.clone(),
+                restrict_to_indexer_ids.clone(),
+                background_value,
+                scoring_now,
+            )
+            .await?;
+        let mut listing_keys = outcome
+            .results
+            .iter()
+            .map(|candidate| (candidate.indexer_id.clone(), release_search_key(candidate)))
+            .collect::<HashSet<_>>();
+        for name in names {
+            if cancel_token.is_cancelled() {
+                return Err(AppError::canceled("indexer search canceled"));
+            }
+            if mode == SearchMode::Auto {
+                let evaluated = self
+                    .evaluate_search_results_for_subject(
+                        title,
+                        subject,
+                        outcome.results.clone(),
+                        background_value.is_none(),
+                    )
+                    .await?;
+                if evaluated.iter().any(candidate_is_reusable) {
+                    break;
+                }
+            }
+            let mut localized = subject.clone();
+            localized.queries = localized_search_queries(&title.name, &name, &subject.queries);
+            if localized.queries.is_empty() {
+                continue;
+            }
+            // IDs have already been tried. This round asks the indexer a new
+            // textual question and cannot be collapsed into its ID strategy.
+            localized.imdb_id = None;
+            localized.tmdb_id = None;
+            localized.tvdb_id = None;
+            localized.anidb_id = None;
+            localized.mal_id = None;
+            let next = self
+                .search_and_score_subject_query_round(
+                    title,
+                    &localized,
+                    caller_label,
+                    mode,
+                    cancel_token.clone(),
+                    restrict_to_indexer_ids.clone(),
+                    background_value,
+                    scoring_now,
+                )
+                .await;
+            let mut next = match next {
+                Ok(next) => next,
+                Err(error) if error.is_canceled() => return Err(error),
+                Err(error) => {
+                    for id in outcome.complete_indexer_ids.drain(..) {
+                        outcome
+                            .incomplete_indexer_reasons
+                            .insert(id, format!("localized query for {name} failed: {error}"));
+                    }
+                    outcome.unsupported_indexer_ids.clear();
+                    warn!(title_id = title.id, query_name = name, error = %error, "localized query failed; retaining earlier results");
+                    continue;
+                }
+            };
+            let evaluated = self
+                .evaluate_search_results_for_subject(
+                    title,
+                    subject,
+                    next.results.clone(),
+                    mode == SearchMode::Interactive || background_value.is_none(),
+                )
+                .await?;
+            if !self
+                .finalize_evaluated_search_session_or_warn(
+                    &next.search_session_id,
+                    &evaluated,
+                    &title.id,
+                )
+                .await
+            {
+                next.complete_indexer_ids.clear();
+            }
+            for candidate in &mut next.results {
+                candidate
+                    .extra
+                    .insert("searched_title".into(), Value::String(name.clone()));
+            }
+            outcome
+                .results
+                .extend(next.results.into_iter().filter(|candidate| {
+                    listing_keys
+                        .insert((candidate.indexer_id.clone(), release_search_key(candidate)))
+                }));
+            outcome
+                .complete_indexer_ids
+                .retain(|id| next.complete_indexer_ids.contains(id));
+            outcome
+                .unsupported_indexer_ids
+                .retain(|id| next.unsupported_indexer_ids.contains(id));
+            outcome
+                .incomplete_indexer_reasons
+                .extend(next.incomplete_indexer_reasons);
+        }
+        outcome.results.sort_by(compare_release_search_results);
+        Ok(outcome)
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one localized round preserves the original search scope"
+    )]
+    async fn search_and_score_subject_query_round(
+        &self,
+        title: &Title,
+        subject: &ResolvedReleaseSearchSubject,
+        caller_label: &str,
+        mode: SearchMode,
+        cancel_token: CancellationToken,
+        restrict_to_indexer_ids: Option<HashSet<String>>,
+        background_value: Option<f64>,
+        scoring_now: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<ScoredSearchOutcome> {
         let tagged_aliases = release_search_tagged_aliases(title);
         self.search_and_score_releases(ReleaseSearchRequest {
             queries: subject.queries.clone(),
@@ -3143,5 +3327,24 @@ mod season_multi_episode_filter_tests {
             parsed.episode.as_ref(),
             2
         ));
+    }
+}
+
+#[cfg(test)]
+mod localized_query_tests {
+    use super::*;
+
+    #[test]
+    fn localized_queries_preserve_episode_and_year_boundaries() {
+        let queries = vec![
+            "Over the Atlantic S11E02".into(),
+            "Over the Atlantic 2019".into(),
+            "Another Cour 02".into(),
+            "Over the AtlanticOcean".into(),
+        ];
+        assert_eq!(
+            localized_search_queries("Over the Atlantic", "Över Atlanten", &queries),
+            vec!["Över Atlanten S11E02", "Över Atlanten 2019"]
+        );
     }
 }

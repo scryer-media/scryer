@@ -660,6 +660,88 @@ async fn rename_template_resolution_preserves_legacy_facet_fallback() {
 }
 
 #[tokio::test]
+async fn library_search_languages_preserve_order_and_omitted_updates() {
+    let (app, user) = bootstrap();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    for (languages, expected) in [
+        (
+            Some(vec!["swe".into(), "de".into(), "sv".into()]),
+            vec!["swe", "deu"],
+        ),
+        (None, vec!["swe", "deu"]),
+        (Some(vec![]), vec![]),
+    ] {
+        app.update_library_settings(
+            &user,
+            &library_id,
+            LibrarySettingsOverrideDraft {
+                search_languages: languages,
+                ..empty_library_settings_override()
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            app.get_library_settings(&user, &library_id)
+                .await
+                .unwrap()
+                .search_languages,
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn library_search_languages_reject_unknown_codes_and_oversized_lists_without_writing() {
+    let (app, user) = bootstrap();
+    let library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);
+    app.update_library_settings(
+        &user,
+        &library_id,
+        LibrarySettingsOverrideDraft {
+            search_languages: Some(vec!["swe".into()]),
+            ..empty_library_settings_override()
+        },
+    )
+    .await
+    .unwrap();
+
+    let too_many = [
+        "eng", "deu", "fra", "spa", "ita", "jpn", "kor", "zho", "rus", "por", "nld", "swe", "dan",
+        "nor", "fin", "pol", "ces",
+    ];
+    for languages in [
+        vec!["@@".to_string()],
+        too_many.iter().map(|code| code.to_string()).collect(),
+    ] {
+        let error = app
+            .update_library_settings(
+                &user,
+                &library_id,
+                LibrarySettingsOverrideDraft {
+                    search_languages: Some(languages.clone()),
+                    ..empty_library_settings_override()
+                },
+            )
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("{languages:?} must be refused"));
+        assert!(
+            matches!(error, AppError::Validation(_)),
+            "{languages:?}: {error:?}"
+        );
+        assert_eq!(
+            app.get_library_settings(&user, &library_id)
+                .await
+                .unwrap()
+                .search_languages,
+            vec!["swe"],
+            "a refused update must leave the stored languages unchanged"
+        );
+    }
+}
+
+#[tokio::test]
 async fn library_sidecar_settings_resolve_facet_defaults_and_library_overrides() {
     let (app, user) = bootstrap();
     let series_library_id = scryer_domain::default_library_id_for_facet(&MediaFacet::Series);

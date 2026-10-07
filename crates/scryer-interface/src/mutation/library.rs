@@ -50,6 +50,7 @@ fn library_settings_draft(
     let import_mode = input.import_mode.map(scryer_domain::ImportMode::from);
 
     Ok(scryer_application::LibrarySettingsOverrideDraft {
+        search_languages: input.search_languages,
         required_audio_languages: input.required_audio_languages,
         metadata_language: input.metadata_language,
         use_season_folders: input.use_season_folders,

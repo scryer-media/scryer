@@ -500,7 +500,14 @@ pub(crate) fn filesystem_space(path: &str) -> Option<FilesystemSpace> {
 }
 
 fn normalize_tag(raw: String) -> String {
-    raw.trim().to_lowercase()
+    let raw = raw.trim();
+    // A custom release name is case-bearing title data (including Roman
+    // numerals), not a case-insensitive user label.
+    if raw.starts_with(scryer_domain::SEARCH_ALIASES_TAG_PREFIX) {
+        raw.to_string()
+    } else {
+        raw.to_lowercase()
+    }
 }
 
 /// Namespace inside `Title::tags` reserved for structured settings

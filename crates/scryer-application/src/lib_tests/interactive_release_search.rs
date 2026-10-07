@@ -13,6 +13,7 @@ use crate::{
 #[derive(Clone, Debug)]
 struct RecordedSearchCall {
     query: String,
+    ids: HashMap<String, String>,
     facet: Option<String>,
     newznab_categories: Option<Vec<String>>,
     season: Option<u32>,
@@ -31,6 +32,7 @@ struct ScriptedIndexerClient {
     releases: Arc<Mutex<HashMap<String, Vec<IndexerSearchResult>>>>,
     /// Indexers that report this outcome instead of answering.
     outcomes: Arc<Mutex<HashMap<String, crate::IndexerSearchOutcome>>>,
+    failed_query_prefix: Option<String>,
 }
 
 impl ScriptedIndexerClient {
@@ -104,7 +106,7 @@ impl IndexerClient for ScriptedIndexerClient {
     async fn search(
         &self,
         query: String,
-        _ids: HashMap<String, String>,
+        ids: HashMap<String, String>,
         _category: Option<String>,
         facet: Option<String>,
         _id_search_facet: Option<String>,
@@ -127,16 +129,27 @@ impl IndexerClient for ScriptedIndexerClient {
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
         enabled_indexers.sort();
-        self.record_and_answer(RecordedSearchCall {
+        let call = RecordedSearchCall {
             query,
+            ids,
             facet,
             newznab_categories,
             season,
             episode,
             enabled_indexers,
             limit: None,
-        })
-        .await
+        };
+        if self
+            .failed_query_prefix
+            .as_ref()
+            .is_some_and(|prefix| call.query.starts_with(prefix))
+        {
+            self.calls.lock().await.push(call);
+            return Err(AppError::Repository(
+                "synthetic localized query failure".into(),
+            ));
+        }
+        self.record_and_answer(call).await
     }
 
     async fn search_raw_text(
@@ -152,6 +165,7 @@ impl IndexerClient for ScriptedIndexerClient {
         enabled_indexers.sort();
         self.record_and_answer(RecordedSearchCall {
             query: request.query,
+            ids: HashMap::new(),
             facet: None,
             newznab_categories: Some(request.categories).filter(|values| !values.is_empty()),
             season: None,
@@ -2469,4 +2483,251 @@ async fn browser_downloads_refuse_empty_oversized_and_unprivileged_requests() {
         .await
         .expect_err("permission gate");
     assert!(matches!(denied, AppError::Unauthorized(_)), "{denied:?}");
+}
+
+#[tokio::test]
+async fn localized_search_rounds_follow_acceptance_and_interactive_policy() {
+    for (mode, release, expect_localized) in [
+        (
+            SearchMode::Auto,
+            "Primary.Title.2019.1080p.WEB-DL-GROUP",
+            false,
+        ),
+        (
+            SearchMode::Auto,
+            "Unrelated.Movie.2019.1080p.WEB-DL-GROUP",
+            true,
+        ),
+        (
+            SearchMode::Interactive,
+            "Primary.Title.2019.1080p.WEB-DL-GROUP",
+            true,
+        ),
+    ] {
+        let indexer = ScriptedIndexerClient::default()
+            .with_releases(
+                "idx-linguistic",
+                vec![nzb_release(release, "linguistic-result")],
+            )
+            .await;
+        let (app, user) = bootstrap_search(
+            Arc::new(StoredSettingsRepo::default()),
+            indexer.clone(),
+            vec![synthetic_direct_nab_indexer_config(
+                "idx-linguistic",
+                "newznab",
+            )],
+        );
+        create_enabled_download_client_config(&app, &user, "Primary", "nzbget").await;
+        let title = app
+            .add_title(
+                &user,
+                NewTitle {
+                    name: "Primary Title".into(),
+                    facet: MediaFacet::Movie,
+                    year: Some(2019),
+                    tags: vec![format!(
+                        "{}Svensk Titel",
+                        scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+                    )],
+                    ..Default::default()
+                },
+            )
+            .await
+            .unwrap();
+        let subject = app
+            .resolve_release_search_subject_for_title(&title)
+            .await
+            .unwrap();
+        let result = app
+            .search_and_evaluate_subject_restricted(
+                &title,
+                &subject,
+                "linguistic-test",
+                mode,
+                tokio_util::sync::CancellationToken::new(),
+                Some(HashSet::from(["idx-linguistic".into()])),
+                None,
+                Utc::now(),
+            )
+            .await
+            .unwrap();
+        let calls = indexer.calls.lock().await;
+        assert!(
+            calls
+                .iter()
+                .any(|call| call.query.starts_with("Primary Title"))
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .any(|call| call.query.starts_with("Svensk Titel")),
+            expect_localized,
+            "{mode:?}: {result:?}"
+        );
+        for call in calls
+            .iter()
+            .filter(|call| call.query.starts_with("Svensk Titel"))
+        {
+            assert!(call.ids.is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn localized_search_languages_inherit_override_and_ignore_metadata_language() {
+    let settings = Arc::new(StoredSettingsRepo::default());
+    let indexer = Arc::new(TrackingIndexerClient::default().returning_no_results());
+    let (app, user) = bootstrap_with_search_settings_and_indexer(settings.clone(), indexer.clone());
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Quicksand".into(),
+                facet: MediaFacet::Series,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let mut title = app
+        .services
+        .catalog
+        .titles
+        .update_title_hydrated_metadata(
+            &title.id,
+            TitleMetadataUpdate {
+                metadata_language: Some("eng".into()),
+                tagged_aliases: vec![
+                    TaggedAlias {
+                        name: "Störst av allt".into(),
+                        language: "swe".into(),
+                    },
+                    TaggedAlias {
+                        name: "Other Translation".into(),
+                        language: "deu".into(),
+                    },
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    settings
+        .set_scoped_value(
+            SETTINGS_SCOPE_SYSTEM,
+            crate::SEARCH_LANGUAGES_KEY,
+            &title.library_id,
+            r#"["sv"]"#,
+        )
+        .await;
+    for (override_languages, expected) in [
+        (None, true),
+        (Some(vec![]), false),
+        (Some(vec!["swe".into()]), true),
+    ] {
+        scryer_domain::set_title_search_option(
+            &mut title.tags,
+            scryer_domain::SEARCH_LANGUAGES_TAG_PREFIX,
+            override_languages,
+        );
+        indexer.searches.lock().await.clear();
+        let subject = app
+            .resolve_release_search_subject_for_title(&title)
+            .await
+            .unwrap();
+        app.search_and_evaluate_subject(
+            &title,
+            &subject,
+            "language-test",
+            SearchMode::Interactive,
+            tokio_util::sync::CancellationToken::new(),
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+        let calls = indexer.searches.lock().await;
+        assert_eq!(
+            calls
+                .iter()
+                .any(|call| call.query.starts_with("Störst av allt")),
+            expected,
+            "{calls:?}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.query.starts_with("Other Translation"))
+        );
+    }
+}
+
+#[tokio::test]
+async fn localized_search_failure_retains_primary_results() {
+    let mut indexer = ScriptedIndexerClient::default()
+        .with_releases(
+            "idx-localized",
+            vec![nzb_release(
+                "Primary.Title.2019.1080p.WEB-DL-GROUP",
+                "primary",
+            )],
+        )
+        .await;
+    indexer.failed_query_prefix = Some("Svensk Titel".into());
+    let (app, user) = bootstrap_search(
+        Arc::new(StoredSettingsRepo::default()),
+        indexer.clone(),
+        vec![synthetic_direct_nab_indexer_config(
+            "idx-localized",
+            "newznab",
+        )],
+    );
+    create_enabled_download_client_config(&app, &user, "Primary", "nzbget").await;
+    let title = app
+        .add_title(
+            &user,
+            NewTitle {
+                name: "Primary Title".into(),
+                facet: MediaFacet::Movie,
+                year: Some(2019),
+                tags: vec![format!(
+                    "{}Svensk Titel",
+                    scryer_domain::SEARCH_ALIASES_TAG_PREFIX
+                )],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+    let subject = app
+        .resolve_release_search_subject_for_title(&title)
+        .await
+        .unwrap();
+    let outcome = app
+        .search_and_evaluate_subject_restricted_with_outcome(
+            &title,
+            &subject,
+            "localized-test",
+            SearchMode::Interactive,
+            tokio_util::sync::CancellationToken::new(),
+            Some(HashSet::from(["idx-localized".into()])),
+            None,
+            Utc::now(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        outcome
+            .results
+            .iter()
+            .any(|result| result.guid.as_deref() == Some("primary"))
+    );
+    assert!(outcome.complete_indexer_ids.is_empty());
+    assert!(
+        indexer
+            .calls()
+            .await
+            .iter()
+            .any(|call| call.query.starts_with("Svensk Titel"))
+    );
 }

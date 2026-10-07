@@ -5604,3 +5604,137 @@ async fn graphql_tmdb_primary_series_is_added_hydrated_and_searched_by_smg_id() 
             .collect::<Vec<_>>()
     );
 }
+
+#[tokio::test]
+async fn graphql_library_search_languages_round_trip_in_order() {
+    let ctx = TestContext::new().await;
+    seed_typed_settings_definitions(&ctx).await;
+    // Saving library settings also touches the import, permission and routing
+    // keys, which the shared typed-settings seed does not cover.
+    ctx.settings_store
+        .batch_ensure_setting_definitions(vec![
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "import.mode".into(),
+                data_type: "string".into(),
+                default_value_json: "\"hardlink_or_copy\"".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "permissions.set_linux".into(),
+                data_type: "boolean".into(),
+                default_value_json: "false".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "permissions.file_chmod".into(),
+                data_type: "string".into(),
+                default_value_json: "null".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "permissions.folder_chmod".into(),
+                data_type: "string".into(),
+                default_value_json: "\"755\"".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "permissions.chown_group".into(),
+                data_type: "string".into(),
+                default_value_json: "null".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "download_client.routing".into(),
+                data_type: "string".into(),
+                default_value_json: "{}".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "nzbget.client_routing".into(),
+                data_type: "string".into(),
+                default_value_json: "{}".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+            SettingDefinitionSeed {
+                category: "media".into(),
+                scope: "system".into(),
+                key_name: "indexer.routing".into(),
+                data_type: "string".into(),
+                default_value_json: "{}".into(),
+                is_sensitive: false,
+                validation_json: None,
+            },
+        ])
+        .await
+        .expect("seed library import settings definitions");
+    let library_id =
+        scryer_domain::default_library_id_for_facet(&scryer_domain::MediaFacet::Series);
+    let update = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) { id }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "settings": { "searchLanguages": ["sv", "deu", "swe"] }
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&update);
+
+    let read = gql(
+        &ctx,
+        r#"query($libraryId: ID!) {
+            librarySettings(libraryId: $libraryId) { searchLanguages }
+        }"#,
+        json!({ "libraryId": library_id }),
+    )
+    .await;
+    assert_no_errors(&read);
+    assert_eq!(
+        read["data"]["librarySettings"]["searchLanguages"],
+        json!(["swe", "deu"]),
+        "codes are normalized, deduplicated and keep the operator's order"
+    );
+
+    let rejected = gql(
+        &ctx,
+        r#"mutation($input: UpdateLibraryInput!) {
+            updateLibrary(input: $input) { id }
+        }"#,
+        json!({
+            "input": {
+                "libraryId": library_id,
+                "settings": { "searchLanguages": ["@@"] }
+            }
+        }),
+    )
+    .await;
+    assert!(
+        rejected.get("errors").is_some(),
+        "an unknown search language must be refused: {rejected}"
+    );
+}

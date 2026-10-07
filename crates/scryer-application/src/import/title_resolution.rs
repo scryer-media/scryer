@@ -98,13 +98,27 @@ pub(crate) fn title_with_index_names(
 ) -> Title {
     let mut seen = std::iter::once(title.name.as_str())
         .chain(title.aliases.iter().map(String::as_str))
-        .chain(title.tagged_aliases.iter().map(|alias| alias.name.as_str()))
-        .map(crate::title_matching::canonical_lookup_key)
+        .map(|name| (name, title.metadata_language.as_deref().unwrap_or_default()))
+        .chain(
+            title
+                .tagged_aliases
+                .iter()
+                .map(|alias| (alias.name.as_str(), alias.language.as_str())),
+        )
+        .map(|(name, language)| {
+            (
+                scryer_domain::title_spelling::title_lookup_form(name),
+                language.to_owned(),
+            )
+        })
         .collect::<HashSet<_>>();
     let mut evidence_title = title.clone();
     for name in names {
         if name.title_id != title.id
-            || !seen.insert(crate::title_matching::canonical_lookup_key(&name.raw_term))
+            || !seen.insert((
+                scryer_domain::title_spelling::title_lookup_form(&name.raw_term),
+                name.language_tag.clone().unwrap_or_default(),
+            ))
         {
             continue;
         }
@@ -536,7 +550,6 @@ impl MonitoredTitleMatcher {
         let mut year_matches = Vec::<Title>::new();
         let mut any_matches = Vec::<Title>::new();
         let mut seen = HashSet::<String>::new();
-        let mut seen_year = HashSet::<String>::new();
 
         let by_key = match &self.titles {
             TitleSource::Repository(titles) => {
@@ -546,23 +559,6 @@ impl MonitoredTitleMatcher {
                 crate::ports::titles_matching_lookup_keys(titles.as_ref().clone(), &candidates)
             }
         };
-        for title in by_key {
-            if !title.monitored || !filter(&title) {
-                continue;
-            }
-            let year_match = parsed.year.is_some() && title.year == parsed.year;
-            if seen.insert(title.id.clone()) {
-                if year_match && seen_year.insert(title.id.clone()) {
-                    year_matches.push(title.clone());
-                }
-                any_matches.push(title);
-            }
-        }
-
-        if !any_matches.is_empty() {
-            return Ok((year_matches, any_matches));
-        }
-
         let (anchors, _) =
             crate::title_matching::relaxed::neutral_spelling_forms(&parsed.raw_title);
         let facet = facet_hint.and_then(canonical_facet_hint);
@@ -579,8 +575,8 @@ impl MonitoredTitleMatcher {
                 .cloned()
                 .collect(),
         };
-        for title in discovered {
-            if !title.monitored || !filter(&title) {
+        for title in by_key.into_iter().chain(discovered) {
+            if !title.monitored || !filter(&title) || !seen.insert(title.id.clone()) {
                 continue;
             }
             // The spelling lane found this title through the index, so the
@@ -996,6 +992,36 @@ mod tests {
             digital_release_date: None,
             folder_path: None,
         }
+    }
+
+    #[test]
+    fn indexed_evidence_preserves_language_variants() {
+        let title = test_title("Över Atlanten", MediaFacet::Series, None, &[]);
+        let mut indexed = title.clone();
+        indexed.tagged_aliases = vec![
+            scryer_domain::TaggedAlias {
+                name: "Över Atlanten".into(),
+                language: "swe".into(),
+            },
+            scryer_domain::TaggedAlias {
+                name: "Över Atlanten".into(),
+                language: "dan".into(),
+            },
+        ];
+        let names = crate::ports::title_name_candidates(&indexed);
+        let evidence = title_with_index_names(&title, names);
+        assert!(
+            evidence
+                .tagged_aliases
+                .iter()
+                .any(|alias| alias.language == "swe")
+        );
+        assert!(
+            evidence
+                .tagged_aliases
+                .iter()
+                .any(|alias| alias.language == "dan")
+        );
     }
 
     #[tokio::test]
