@@ -2965,6 +2965,23 @@ file = "postgres/migrations/0279_freetext_search_learning_v3.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 280
+description = "relabel stored resolutions with the crop-tolerant ladder"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0280_cropped_resolution_relabel.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0280_cropped_resolution_relabel.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"
