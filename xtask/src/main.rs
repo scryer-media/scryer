@@ -1109,6 +1109,12 @@ fn dotenv_or_process_env(dotenv_envs: &[(String, String)], key: &str) -> Option<
     })
 }
 
+fn serve_public_url(configured: Option<String>, frontend_url: &str) -> String {
+    configured
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| frontend_url.to_string())
+}
+
 fn ensure_frontend_dependencies(ctx: &TaskContext, web_dir: &Path) -> Result<()> {
     step("Syncing frontend dependencies for Vite dev server");
     let mut install = ctx.command_in("npm", web_dir);
@@ -1223,6 +1229,11 @@ fn serve_local_scryer(ctx: &TaskContext, args: ServeArgs, mode: ServeMode) -> Re
         .unwrap_or_else(|| "localhost".to_string());
     let webauthn_rp_origin = dotenv_or_process_env(&dotenv_envs, "SCRYER_WEBAUTHN_RP_ORIGIN")
         .unwrap_or_else(|| frontend_url.clone());
+    // Account callbacks return through Vite, not the backend listener port.
+    let public_url = serve_public_url(
+        dotenv_or_process_env(&dotenv_envs, "SCRYER_PUBLIC_URL"),
+        &frontend_url,
+    );
     let backend_binary = ctx.path("target/debug/scryer");
     let backend_log = PathBuf::from(
         std::env::var("SCRYER_DEV_BACKEND_LOG")
@@ -1298,6 +1309,7 @@ fn serve_local_scryer(ctx: &TaskContext, args: ServeArgs, mode: ServeMode) -> Re
         .env("SCRYER_METRICS", &metrics)
         .env("SCRYER_OPEN_BROWSER", "false")
         .env("SCRYER_WEB_UI_URL", &frontend_url)
+        .env("SCRYER_PUBLIC_URL", &public_url)
         .env("SCRYER_WEBAUTHN_RP_ID", &webauthn_rp_id)
         .env("SCRYER_WEBAUTHN_RP_ORIGIN", &webauthn_rp_origin)
         .env("SCRYER_BIND", &args.bind)
@@ -1496,6 +1508,30 @@ pub(crate) fn run_capture(command: &mut Command) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn serve_public_url_uses_resolved_frontend_port_when_unconfigured() {
+        for port in [3000, 3001, 5173] {
+            let frontend = format!("http://localhost:{port}");
+            for configured in [None, Some(String::new()), Some("  ".to_string())] {
+                assert_eq!(serve_public_url(configured, &frontend), frontend);
+            }
+        }
+    }
+
+    #[test]
+    fn serve_public_url_preserves_explicit_configuration_for_backend_validation() {
+        for configured in [
+            "https://dev.example.invalid",
+            "http://127.0.0.1:5173",
+            "invalid",
+        ] {
+            assert_eq!(
+                serve_public_url(Some(configured.to_string()), "http://localhost:3000"),
+                configured
+            );
+        }
+    }
 
     #[test]
     fn embedded_descriptor_section_is_appended_to_a_component() {

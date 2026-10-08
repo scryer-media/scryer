@@ -310,6 +310,22 @@ mod tests {
     }
 
     #[test]
+    fn account_link_origin_vite_port_requires_explicit_public_url() {
+        let frontend = "http://localhost:3001";
+        assert!(!origins(None, "127.0.0.1:8080", false).contains(&frontend.to_string()));
+        let approved = origins(Some(frontend), "127.0.0.1:8080", false);
+        assert!(approved.contains(&frontend.to_string()));
+        for unapproved in [
+            "http://localhost:3000",
+            "http://127.0.0.1:3001",
+            "https://localhost:3001",
+            "http://attacker.invalid:3001",
+        ] {
+            assert!(!approved.contains(&unapproved.to_string()));
+        }
+    }
+
+    #[test]
     fn account_link_origin_approves_configured_private_and_proxy_urls_with_base_paths() {
         for (url, expected) in [
             ("https://media.home/scryer/", "https://media.home"),
