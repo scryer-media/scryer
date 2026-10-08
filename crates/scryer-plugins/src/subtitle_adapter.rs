@@ -59,7 +59,8 @@ pub struct WasmSubtitleClient {
 }
 
 impl WasmSubtitleClient {
-    pub fn new_with_archive_provider(
+    #[cfg(test)]
+    fn new_with_archive_provider(
         wasm_bytes: Vec<u8>,
         descriptor: PluginDescriptor,
         config: SubtitleProviderConfig,

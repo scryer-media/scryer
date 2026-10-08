@@ -72,25 +72,6 @@ impl WasmIndexerClient {
     /// first operation; its state then remains alive until a trap, timeout,
     /// cancellation, provider reload, or configuration change replaces this
     /// client.
-    pub fn new_component_with_indexer_error_recorder(
-        wasm_bytes: Vec<u8>,
-        descriptor: PluginDescriptor,
-        indexer_name: String,
-        config: IndexerConfig,
-        proxy_config: Option<ProxyConfig>,
-        indexer_error_recorder: Arc<dyn IndexerErrorRecorder>,
-    ) -> Result<Self, AppError> {
-        Self::new_component_with_plugin_settings(
-            wasm_bytes,
-            descriptor,
-            indexer_name,
-            config,
-            proxy_config,
-            indexer_error_recorder,
-            &BTreeMap::new(),
-        )
-    }
-
     pub(crate) fn new_component_with_plugin_settings(
         wasm_bytes: Vec<u8>,
         descriptor: PluginDescriptor,
