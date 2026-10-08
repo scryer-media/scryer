@@ -242,6 +242,13 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
     void loadProviderSettings();
   }, [loadProviderSettings]);
 
+  const refreshProviders = React.useCallback(async () => {
+    const result = await client.query(listProvidersQuery, {}, { requestPolicy: "network-only" }).toPromise();
+    if (result.error) throw result.error;
+    setProviders((result.data?.listProviders ?? []) as ListProviderManifest[]);
+    await loadProviderSettings();
+  }, [client, loadProviderSettings]);
+
   const saveProviderSettings = React.useCallback(
     async (provider: string, changes: ListProviderSettingChange[]): Promise<boolean> => {
       try {
@@ -673,6 +680,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       canManageLists={canManageLists}
       experimentalFeaturesEnabled={experimentalFeaturesEnabled}
       canManageProviderApps={canManageProviderApps}
+      onRefreshProviders={refreshProviders}
       accounts={accounts}
       managedAccount={managedAccount}
       accountLoading={accountLoading}

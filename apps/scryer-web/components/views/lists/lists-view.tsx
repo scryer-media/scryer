@@ -5,6 +5,7 @@ import { LoadingMark } from "@/components/common/loading-mark";
 import { UnderlineFilterButton } from "@/components/common/underline-filter-button";
 import type { ListsSection } from "@/components/root/types";
 import { Button } from "@/components/ui/button";
+import { FilteredPluginList } from "@/components/views/settings/filtered-plugin-list";
 import { useTranslate } from "@/lib/context/translate-context";
 import type {
   ListAccount,
@@ -53,6 +54,7 @@ type ListsViewProps = {
   canManageLists: boolean;
   experimentalFeaturesEnabled: boolean;
   canManageProviderApps: boolean;
+  onRefreshProviders: () => Promise<void>;
   accounts: ListAccount[];
   managedAccount: ListAccount | null;
   accountLoading: boolean;
@@ -270,6 +272,13 @@ export function ListsView(props: ListsViewProps) {
             ) : null}
           </div>
         )}
+        {props.canManageProviderApps && (section === "public" || (section === "personal" && props.experimentalFeaturesEnabled)) ? (
+          <FilteredPluginList
+            family="LIST"
+            title={t("lists.plugins.heading")}
+            refreshProviderOptions={props.onRefreshProviders}
+          />
+        ) : null}
       </div>
 
       <ListDetailPanel

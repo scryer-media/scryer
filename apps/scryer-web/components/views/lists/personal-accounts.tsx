@@ -1,11 +1,15 @@
 import * as React from "react";
+import { Link } from "react-router";
 import { LoadingMark } from "@/components/common/loading-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { ListAccount, ListProviderItem, ListProviderManifest, ListSourceDraft } from "@/lib/types/lists";
+import { buildViewPath } from "@/lib/utils/routing";
 import { ProviderTile } from "./provider-tile";
+import { ListProviderSetup } from "./list-provider-setup";
 
 type Props = {
   providers: ListProviderManifest[];
@@ -21,6 +25,42 @@ type Props = {
   onUnlink: (account: ListAccount) => Promise<boolean>;
   onFollow: (manifest: ListProviderManifest, item: ListProviderItem, source: ListSourceDraft, name: string) => void;
 };
+
+type ConnectionsProps = Pick<Props, "providers" | "accounts" | "linkingProvider" | "onLink"> & {
+  renderActions?: (account: ListAccount) => React.ReactNode;
+};
+
+export function PersonalAccountConnections(props: ConnectionsProps) {
+  const t = useTranslate();
+  return (
+    <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {props.providers.flatMap((provider) => {
+        const linkedAccounts = props.accounts.filter((entry) => entry.provider === provider.providerType);
+        return (linkedAccounts.length ? linkedAccounts : [null]).map((linked) => ({ provider, linked }));
+      }).map(({ provider, linked }) => (
+        <Card key={linked?.id ?? provider.providerType} id={`lists-account-${linked?.id ?? provider.providerType}`}>
+          <CardContent>
+            <div className="flex items-center gap-3">
+              <ProviderTile provider={provider} />
+              <div className="min-w-0 flex-1">
+                <h3 className="font-semibold">{provider.name}</h3>
+                {linked ? <p className="truncate text-sm text-muted-foreground">{linked.displayName ?? linked.username ?? linked.externalUserId}</p> : null}
+              </div>
+              {linked ? <Badge tone={linked.status.toUpperCase() === "LINKED" || linked.status.toUpperCase() === "ACTIVE" ? "positive" : "warning"}>{t(linked.status.toUpperCase() === "LINKED" || linked.status.toUpperCase() === "ACTIVE" ? "lists.accounts.connected" : "lists.accounts.reconnect")}</Badge> : null}
+            </div>
+            {linked?.errorMessage ? <p className="text-sm text-destructive">{linked.errorMessage}</p> : null}
+            <div className="flex flex-wrap gap-2">
+              {linked ? props.renderActions?.(linked) : null}
+              <Button size="sm" variant={linked ? "outline" : "default"} disabled={!!props.linkingProvider} onClick={() => props.onLink(provider.providerType)}>
+                {t(linked ? "lists.accounts.reconnect" : "lists.accounts.connect")}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ))}
+    </div>
+  );
+}
 
 export function PersonalAccounts(props: Props) {
   const t = useTranslate();
@@ -38,6 +78,11 @@ export function PersonalAccounts(props: Props) {
     <section id="lists-personal-accounts" className="space-y-3">
       <h2 className="font-display text-[17px] font-bold">{t("lists.accounts.heading")}</h2>
       <p className="text-sm text-[var(--scry-muted)]">{t("lists.accounts.copy")}</p>
+      <Button asChild size="sm" variant="outline">
+        <Link id="lists-profile-link" to={buildViewPath("settings", "profile")}>
+          {t("lists.accounts.linkProfile")}
+        </Link>
+      </Button>
       {props.linkError ? <p role="alert" className="text-sm text-[var(--scry-danger-text)]">{props.linkError}</p> : null}
       {props.linkingProvider ? (
         <div role="status" className="flex items-center gap-2 text-sm">
@@ -45,34 +90,19 @@ export function PersonalAccounts(props: Props) {
           <Button size="sm" variant="outline" onClick={props.onCancelLink}>{t("label.cancel")}</Button>
         </div>
       ) : null}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {catalog.flatMap((provider) => {
-          const linkedAccounts = props.accounts.filter((entry) => entry.provider === provider.providerType);
-          return (linkedAccounts.length ? linkedAccounts : [null]).map((linked) => ({ provider, linked }));
-        }).map(({ provider, linked }) => {
-          return (
-            <article key={linked?.id ?? provider.providerType} id={`lists-account-${linked?.id ?? provider.providerType}`} className="space-y-3 rounded-xl border border-[var(--scry-border3)] bg-[var(--scry-inset)] p-4">
-              <div className="flex items-center gap-3">
-                <ProviderTile provider={provider} />
-                <div className="min-w-0 flex-1">
-                  <h3 className="font-semibold">{provider.name}</h3>
-                  {linked ? <p className="truncate text-sm text-[var(--scry-muted)]">{linked.displayName ?? linked.username ?? linked.externalUserId}</p> : null}
-                </div>
-                {linked ? <Badge tone={linked.status.toUpperCase() === "LINKED" || linked.status.toUpperCase() === "ACTIVE" ? "positive" : "warning"}>{t(linked.status.toUpperCase() === "LINKED" || linked.status.toUpperCase() === "ACTIVE" ? "lists.accounts.connected" : "lists.accounts.reconnect")}</Badge> : null}
-              </div>
-              {linked?.errorMessage ? <p className="text-sm text-[var(--scry-danger-text)]">{linked.errorMessage}</p> : null}
-              <div className="flex flex-wrap gap-2">
-                {linked ? <Button size="sm" variant="outline" onClick={() => { setConfirmUnlink(false); props.onManage(linked); }}>{t("lists.accounts.manage")}</Button> : null}
-                {linked ? <Button size="sm" variant="outline" onClick={() => { setConfirmUnlink(true); props.onManage(linked); }}>{t("lists.accounts.unlink")}</Button> : null}
-                <Button size="sm" variant={linked ? "outline" : "default"} disabled={!!props.linkingProvider} onClick={() => props.onLink(provider.providerType)}>
-                  {t(linked ? "lists.accounts.reconnect" : "lists.accounts.connect")}
-                </Button>
-              </div>
-            </article>
-          );
-        })}
-      </div>
-      {catalog.length === 0 ? <p className="text-sm text-[var(--scry-muted)]">{t("lists.accounts.noProviders")}</p> : null}
+      <PersonalAccountConnections
+        providers={catalog}
+        accounts={props.accounts}
+        linkingProvider={props.linkingProvider}
+        onLink={props.onLink}
+        renderActions={(linked) => (
+          <>
+            <Button size="sm" variant="outline" onClick={() => { setConfirmUnlink(false); props.onManage(linked); }}>{t("lists.accounts.manage")}</Button>
+            <Button size="sm" variant="outline" onClick={() => { setConfirmUnlink(true); props.onManage(linked); }}>{t("lists.accounts.unlink")}</Button>
+          </>
+        )}
+      />
+      {catalog.length === 0 ? <ListProviderSetup /> : null}
       <Dialog open={!!account} onOpenChange={(open) => { if (!open) props.onManage(null); }}>
         {account ? (
           <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">

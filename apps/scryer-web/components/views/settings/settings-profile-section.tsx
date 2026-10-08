@@ -26,7 +26,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Check, Palette } from "lucide-react";
-import { lazy, Suspense, useEffect, useState, type FormEvent } from "react";
+import { lazy, Suspense, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { useTheme } from "next-themes";
 import { TotpQrCode } from "@/components/common/totp-qr-code";
 import { isVisibleExternalAccountProvider } from "@/lib/constants/integration-providers";
@@ -172,6 +172,23 @@ const PROFILE_CARD_TITLE_CLASS =
 const PROFILE_MUTED_TEXT_CLASS = "text-sm text-[var(--scry-muted3)]";
 const PROFILE_ROW_CARD_CLASS =
   "flex flex-col gap-3 rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)] p-4 md:flex-row md:items-center md:justify-between";
+
+export function SettingsProfileCard({ id, title, action, children }: {
+  id?: string;
+  title: string;
+  action?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <section id={id} className={PROFILE_CARD_CLASS}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className={PROFILE_CARD_TITLE_CLASS}>{title}</h3>
+        {action}
+      </div>
+      {children}
+    </section>
+  );
+}
 
 export function SettingsProfileSection({
   username,
@@ -353,8 +370,7 @@ export function SettingsProfileSection({
       id="settings-profile-section"
       className="space-y-4 text-sm text-[var(--scry-body)]"
     >
-      <div className={PROFILE_CARD_CLASS}>
-        <h3 className={PROFILE_CARD_TITLE_CLASS}>{t("profile.accountInfo")}</h3>
+      <SettingsProfileCard title={t("profile.accountInfo")}>
         <div className="flex items-center gap-2 text-[var(--scry-muted3)]">
           <span>{t("settings.username")}:</span>
           <span
@@ -364,7 +380,7 @@ export function SettingsProfileSection({
             {username ?? "—"}
           </span>
         </div>
-      </div>
+      </SettingsProfileCard>
 
       <div className={PROFILE_CARD_CLASS}>
         <div className="space-y-1">
@@ -933,7 +949,7 @@ export function SettingsProfileSection({
         <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
           <div className="space-y-1">
             <h3 className={PROFILE_CARD_TITLE_CLASS}>
-              {t("profile.linkedAccounts")}
+              {t("profile.mediaServerAccounts")}
             </h3>
           </div>
           <div className="flex flex-wrap items-center gap-2">
