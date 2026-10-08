@@ -186,3 +186,97 @@ async fn the_catalog_shows_whether_a_value_is_stored_only_to_a_list_manager() {
             .all(|field| !field.is_set && field.value.is_none())
     );
 }
+
+async fn store_gateway_client_id(harness: &MediaRequestTestHarness, value: &str) {
+    harness
+        .app
+        .services
+        .config
+        .settings
+        .upsert_setting_json(
+            "system",
+            &crate::lists::gateway_list_client_id_setting_key(PROVIDER),
+            None,
+            serde_json::json!(value).to_string(),
+            "smg-enrollment",
+            None,
+        )
+        .await
+        .expect("store gateway client id");
+}
+
+#[tokio::test]
+async fn a_gateway_client_id_reaches_a_provider_without_server_wide_fields() {
+    let harness = bootstrap_media_request_app_with_list_plugins(Arc::new(ScriptedProvider(
+        ScriptedLists::new(),
+    )));
+    super::list_experimental_gate::set_experimental_features(&harness, true).await;
+    assert!(
+        harness
+            .app
+            .load_list_provider_configs()
+            .await
+            .for_provider(harness.app.services.lists.plugins.as_ref(), PROVIDER)
+            .is_empty()
+    );
+
+    store_gateway_client_id(&harness, "synthetic-gateway-id").await;
+
+    let expected = BTreeMap::from([("client_id".to_string(), "synthetic-gateway-id".to_string())]);
+    let configs = harness.app.load_list_provider_configs().await;
+    assert_eq!(
+        configs.for_provider(harness.app.services.lists.plugins.as_ref(), PROVIDER),
+        expected,
+        "a sync gets the gateway client id"
+    );
+    assert_eq!(
+        harness.app.list_provider_config_for(PROVIDER).await,
+        expected,
+        "a preview and an account link get the same id"
+    );
+}
+
+#[tokio::test]
+async fn an_operator_client_id_wins_over_the_gateway_one_and_a_blank_one_is_ignored() {
+    let lists =
+        ScriptedLists::with_config_fields(vec![field("client_id", ConfigFieldType::String)]);
+    let harness = bootstrap_media_request_app_with_list_plugins(Arc::new(ScriptedProvider(lists)));
+    super::list_experimental_gate::set_experimental_features(&harness, true).await;
+
+    store_gateway_client_id(&harness, "   ").await;
+    assert!(
+        harness
+            .app
+            .list_provider_config_for(PROVIDER)
+            .await
+            .is_empty()
+    );
+
+    store_gateway_client_id(&harness, "synthetic-gateway-id").await;
+    harness
+        .app
+        .update_list_provider_settings(
+            &list_manager(),
+            PROVIDER,
+            BTreeMap::from([(
+                "client_id".to_string(),
+                Some("synthetic-operator-id".to_string()),
+            )]),
+        )
+        .await
+        .expect("operator sets a client id");
+
+    let expected = BTreeMap::from([("client_id".to_string(), "synthetic-operator-id".to_string())]);
+    assert_eq!(
+        harness.app.list_provider_config_for(PROVIDER).await,
+        expected
+    );
+    assert_eq!(
+        harness
+            .app
+            .load_list_provider_configs()
+            .await
+            .for_provider(harness.app.services.lists.plugins.as_ref(), PROVIDER),
+        expected
+    );
+}

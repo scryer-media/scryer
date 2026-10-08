@@ -446,6 +446,29 @@ fn personal_request_harness(policy: Option<ListPolicy>) -> Harness {
     harness
 }
 
+#[tokio::test]
+async fn a_member_app_client_id_overrides_the_gateway_client_id() {
+    let mut harness = personal_request_harness(None);
+    harness.store.accounts.lock().unwrap()[0]
+        .credential
+        .client_id = Some("synthetic-member-app-id".to_string());
+    harness.provider_configs.insert(
+        crate::lists::test_support::PROVIDER,
+        std::collections::BTreeMap::from([(
+            "client_id".to_string(),
+            "synthetic-gateway-id".to_string(),
+        )]),
+    );
+
+    harness.sync_at(at(0)).await;
+
+    let configs = harness.lists.configs.lock().unwrap().clone();
+    assert_eq!(
+        configs[0].get("client_id").map(String::as_str),
+        Some("synthetic-member-app-id")
+    );
+}
+
 fn request_holds(harness: &Harness) -> Vec<bool> {
     harness
         .actions

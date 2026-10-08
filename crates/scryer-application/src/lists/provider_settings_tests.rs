@@ -107,6 +107,40 @@ fn a_view_never_returns_a_secret_value() {
 }
 
 #[test]
+fn a_gateway_client_id_fills_in_only_where_the_operator_set_none() {
+    let filled = with_gateway_client_id(BTreeMap::new(), Some(" synthetic-gateway-id "));
+    assert_eq!(
+        filled,
+        BTreeMap::from([("client_id".to_string(), "synthetic-gateway-id".to_string())])
+    );
+
+    let operator = BTreeMap::from([("client_id".to_string(), "synthetic-operator-id".to_string())]);
+    assert_eq!(
+        with_gateway_client_id(operator.clone(), Some("synthetic-gateway-id")),
+        operator
+    );
+
+    let blank_operator = BTreeMap::from([("client_id".to_string(), " ".to_string())]);
+    assert_eq!(
+        with_gateway_client_id(blank_operator, Some("synthetic-gateway-id"))["client_id"],
+        "synthetic-gateway-id"
+    );
+
+    let region = BTreeMap::from([("region".to_string(), "north".to_string())]);
+    for blank in [None, Some(""), Some("   ")] {
+        assert_eq!(with_gateway_client_id(region.clone(), blank), region);
+    }
+}
+
+#[test]
+fn gateway_client_id_settings_are_keyed_by_lowercased_provider_type() {
+    assert_eq!(
+        gateway_list_client_id_setting_key("Trakt"),
+        "lists.trakt.client_id"
+    );
+}
+
+#[test]
 fn configs_are_found_by_any_casing_of_the_provider_type() {
     let provider = ScriptedProvider(ScriptedLists::with_config_fields(fixture_fields()));
     let mut configs = ListProviderConfigs::default();
