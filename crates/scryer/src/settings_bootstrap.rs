@@ -1155,6 +1155,40 @@ pub(crate) fn service_setting_seeds() -> &'static [ServiceSettingSeed] {
             default_value_json: "null",
             is_sensitive: true,
         },
+        // Public OAuth app client ids SMG issues at enrollment, one per list
+        // provider it holds an app for.
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.anilist.client_id",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.mal.client_id",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.simkl.client_id",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
+        ServiceSettingSeed {
+            category: SETTINGS_CATEGORY_ACQUISITION,
+            scope: SETTINGS_SCOPE_SYSTEM,
+            key_name: "lists.trakt.client_id",
+            data_type: "string",
+            default_value_json: "null",
+            is_sensitive: false,
+        },
         ServiceSettingSeed {
             category: SETTINGS_CATEGORY_ACQUISITION,
             scope: SETTINGS_SCOPE_SYSTEM,
@@ -2192,6 +2226,42 @@ mod tests {
             assert_eq!(seed.data_type, "json");
             assert_eq!(seed.default_value_json, "null");
             assert!(!seed.is_sensitive);
+        }
+    }
+
+    #[tokio::test]
+    async fn every_gateway_list_client_id_setting_is_declared_and_storable() {
+        let seeds = service_setting_seeds();
+        let (_temp, store) = bootstrap_settings_store().await;
+        for provider in scryer_application::lists::GATEWAY_LIST_CLIENT_ID_PROVIDERS {
+            let key = scryer_application::lists::gateway_list_client_id_setting_key(provider);
+            let seed = seeds
+                .iter()
+                .find(|seed| seed.scope == SETTINGS_SCOPE_SYSTEM && seed.key_name == key)
+                .unwrap_or_else(|| panic!("missing list client id setting seed {key}"));
+            assert_eq!(seed.data_type, "string");
+            assert_eq!(seed.default_value_json, "null");
+            assert!(!seed.is_sensitive, "a public client id is not a secret");
+
+            store
+                .upsert_setting_json(
+                    SETTINGS_SCOPE_SYSTEM,
+                    &key,
+                    None,
+                    json!("synthetic-client-id").to_string(),
+                    "smg-enrollment",
+                    None,
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{key} should be storable: {error}"));
+            assert_eq!(
+                store
+                    .get_setting_json(SETTINGS_SCOPE_SYSTEM, &key, None)
+                    .await
+                    .expect("read back")
+                    .as_deref(),
+                Some("\"synthetic-client-id\"")
+            );
         }
     }
 

@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::sync::{OnceLock, mpsc};
 use std::thread;
@@ -10,6 +11,9 @@ use aws_lc_rs::{
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use scryer_application::lists::{
+    GATEWAY_LIST_CLIENT_ID_PROVIDERS, gateway_list_client_id_setting_key,
+};
 use scryer_application::{SettingsRepository, SmgScryerUpdateNotice};
 use scryer_outbound_http::{
     OutboundHttpClient, OutboundHttpError, OutboundRequestError, RequestPolicy, parse_retry_after,
@@ -129,6 +133,34 @@ struct PqRegisterResponse {
     enrollment_generation: i64,
     #[serde(default)]
     opensubtitles_api_key: Option<String>,
+    /// Public OAuth app client ids for list providers, keyed by provider type.
+    #[serde(default)]
+    list_client_ids: Option<BTreeMap<String, String>>,
+}
+
+/// Store each non-empty list client id from a registration response. An id
+/// for a provider this release does not know is skipped.
+async fn persist_list_client_ids(
+    db: &dyn SettingsRepository,
+    ids: Option<&BTreeMap<String, String>>,
+) -> Result<(), String> {
+    for (provider, id) in ids.into_iter().flatten() {
+        let provider = provider.trim().to_ascii_lowercase();
+        let id = id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        if !GATEWAY_LIST_CLIENT_ID_PROVIDERS.contains(&provider.as_str()) {
+            debug!(
+                provider,
+                "ignoring SMG list client id for an unknown provider"
+            );
+            continue;
+        }
+        persist_setting(db, &gateway_list_client_id_setting_key(&provider), id).await?;
+        debug!(provider, "list provider client id received from SMG");
+    }
+    Ok(())
 }
 
 /// Load or generate the instance ID (UUIDv4) for this Scryer instance.
@@ -316,6 +348,11 @@ async fn enroll_pq_with_smg(
             .map_err(EnrollmentError::Other)?;
         info!("OpenSubtitles API key received from SMG");
     }
+    // The enrollment itself is stored by now; a list id that fails to save
+    // must not fail it. The next rotation delivers the ids again.
+    if let Err(error) = persist_list_client_ids(db, reg.list_client_ids.as_ref()).await {
+        warn!(error, "failed to store list provider client ids from SMG");
+    }
 
     info!(
         instance_id,
@@ -431,6 +468,11 @@ pub async fn rotate_pq_enrollment(
         persist_setting(db, "subtitles.opensubtitles_api_key", os_key)
             .await
             .map_err(EnrollmentError::Other)?;
+    }
+    // The enrollment itself is stored by now; a list id that fails to save
+    // must not fail it. The next rotation delivers the ids again.
+    if let Err(error) = persist_list_client_ids(db, reg.list_client_ids.as_ref()).await {
+        warn!(error, "failed to store list provider client ids from SMG");
     }
 
     info!(
@@ -1069,6 +1111,230 @@ mod tests {
     use std::time::Duration;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// System settings held in memory, keyed by setting name.
+    #[derive(Default)]
+    struct MemorySettings(std::sync::Mutex<std::collections::BTreeMap<String, String>>);
+
+    impl MemorySettings {
+        fn string(&self, key: &str) -> Option<String> {
+            let raw = self.0.lock().unwrap().get(key).cloned()?;
+            super::parse_string_json(&raw)
+        }
+
+        fn list_keys(&self) -> Vec<String> {
+            self.0
+                .lock()
+                .unwrap()
+                .keys()
+                .filter(|key| key.starts_with("lists."))
+                .cloned()
+                .collect()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl scryer_application::SettingsRepository for MemorySettings {
+        async fn get_setting_json(
+            &self,
+            _scope: &str,
+            key_name: &str,
+            _scope_id: Option<String>,
+        ) -> scryer_application::AppResult<Option<String>> {
+            Ok(self.0.lock().unwrap().get(key_name).cloned())
+        }
+
+        async fn upsert_setting_json(
+            &self,
+            _scope: &str,
+            key_name: &str,
+            _scope_id: Option<String>,
+            value_json: String,
+            _source: &str,
+            _updated_by_user_id: Option<String>,
+        ) -> scryer_application::AppResult<()> {
+            self.0
+                .lock()
+                .unwrap()
+                .insert(key_name.to_string(), value_json);
+            Ok(())
+        }
+
+        async fn delete_setting_value(
+            &self,
+            _scope: &str,
+            key_name: &str,
+            _scope_id: Option<String>,
+        ) -> scryer_application::AppResult<()> {
+            self.0.lock().unwrap().remove(key_name);
+            Ok(())
+        }
+
+        async fn delete_values_for_scope_id(
+            &self,
+            _scope_id: &str,
+        ) -> scryer_application::AppResult<u32> {
+            Ok(0)
+        }
+    }
+
+    /// A registration answer that echoes the key id Scryer sent, plus `extra`.
+    fn registration_answer(extra: serde_json::Value) -> impl wiremock::Respond {
+        move |request: &wiremock::Request| {
+            let sent: serde_json::Value =
+                serde_json::from_slice(&request.body).expect("registration body is JSON");
+            let mut body = serde_json::json!({
+                "key_id": sent["key_id"],
+                "enrollment_generation": 2,
+            });
+            for (key, value) in extra.as_object().expect("extra fields").clone() {
+                body[key] = value;
+            }
+            ResponseTemplate::new(200).set_body_json(body)
+        }
+    }
+
+    fn challenge_answer() -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "challenge_id": "synthetic-challenge",
+            "nonce": base64::engine::general_purpose::STANDARD.encode([7_u8; 16]),
+        }))
+    }
+
+    fn synthetic_list_client_ids() -> serde_json::Value {
+        serde_json::json!({
+            "list_client_ids": {
+                "Trakt": "synthetic-trakt-id",
+                "simkl": "synthetic-simkl-id",
+                "mal": "  ",
+                "unknown-provider": "synthetic-unknown-id",
+            }
+        })
+    }
+
+    fn assert_list_client_ids_stored(settings: &MemorySettings) {
+        assert_eq!(
+            settings.list_keys(),
+            ["lists.simkl.client_id", "lists.trakt.client_id"],
+            "only non-empty ids for known providers are stored, under lowercased keys"
+        );
+        assert_eq!(
+            settings.string("lists.trakt.client_id").as_deref(),
+            Some("synthetic-trakt-id")
+        );
+        assert_eq!(
+            settings.string("lists.simkl.client_id").as_deref(),
+            Some("synthetic-simkl-id")
+        );
+    }
+
+    #[test]
+    fn registration_response_reads_list_client_ids_when_present() {
+        let without: super::PqRegisterResponse = serde_json::from_value(serde_json::json!({
+            "key_id": "key",
+            "enrollment_generation": 1,
+        }))
+        .expect("a response without list client ids parses");
+        assert!(without.list_client_ids.is_none());
+
+        let with: super::PqRegisterResponse = serde_json::from_value(serde_json::json!({
+            "key_id": "key",
+            "enrollment_generation": 1,
+            "list_client_ids": { "trakt": "synthetic-trakt-id" },
+        }))
+        .expect("a response with list client ids parses");
+        assert_eq!(
+            with.list_client_ids
+                .as_ref()
+                .and_then(|ids| ids.get("trakt"))
+                .map(String::as_str),
+            Some("synthetic-trakt-id")
+        );
+    }
+
+    #[tokio::test]
+    async fn enrollment_stores_list_client_ids_from_smg() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/register-challenge"))
+            .respond_with(challenge_answer())
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/register-key"))
+            .respond_with(registration_answer(synthetic_list_client_ids()))
+            .mount(&server)
+            .await;
+        let settings = MemorySettings::default();
+
+        super::enroll_pq_with_smg(
+            &settings,
+            "synthetic-instance",
+            &format!("{}/api/register", server.uri()),
+            "synthetic-secret",
+        )
+        .await
+        .expect("enrollment succeeds");
+
+        assert_list_client_ids_stored(&settings);
+    }
+
+    #[tokio::test]
+    async fn enrollment_without_list_client_ids_stores_none() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/register-challenge"))
+            .respond_with(challenge_answer())
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/register-key"))
+            .respond_with(registration_answer(serde_json::json!({})))
+            .mount(&server)
+            .await;
+        let settings = MemorySettings::default();
+
+        super::enroll_pq_with_smg(
+            &settings,
+            "synthetic-instance",
+            &format!("{}/api/register", server.uri()),
+            "synthetic-secret",
+        )
+        .await
+        .expect("enrollment succeeds");
+
+        assert!(settings.list_keys().is_empty());
+        assert!(settings.string("smg.pq_key_id").is_some());
+    }
+
+    #[tokio::test]
+    async fn rotation_stores_list_client_ids_from_smg() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/api/register-rotate-challenge"))
+            .respond_with(challenge_answer())
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/api/register-rotate"))
+            .respond_with(registration_answer(synthetic_list_client_ids()))
+            .mount(&server)
+            .await;
+        let settings = MemorySettings::default();
+        let current = generate_pq_keypair().await.expect("current key");
+
+        super::rotate_pq_enrollment(
+            &settings,
+            "synthetic-instance",
+            &current.seed_b64,
+            &current.key_id,
+            &format!("{}/api/register", server.uri()),
+        )
+        .await
+        .expect("rotation succeeds");
+
+        assert_list_client_ids_stored(&settings);
+    }
 
     #[test]
     fn enrollment_transient_statuses_are_narrowly_scoped() {

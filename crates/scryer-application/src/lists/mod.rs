@@ -38,7 +38,10 @@ pub use ports::{
     ListExclusionRepository, ListMembershipRepository, ListSubscriptionQuery,
     ListSubscriptionRepository, UserListAccountRepository, UserListPolicyRepository,
 };
-pub use provider_settings::{ListProviderConfigs, ListProviderSettingField, ListProviderSettings};
+pub use provider_settings::{
+    GATEWAY_LIST_CLIENT_ID_PROVIDERS, ListProviderConfigs, ListProviderSettingField,
+    ListProviderSettings, gateway_list_client_id_setting_key,
+};
 pub use public::{
     ListExclusionView, ListMembershipPage, ListPreview, ListPreviewItem, ListSourceDraft,
     MemberListPolicy, NewListExclusionInput, PublicListInput, PublicListPatch,
