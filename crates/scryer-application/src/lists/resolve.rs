@@ -34,12 +34,31 @@ pub struct ResolveOutput {
 
 #[async_trait]
 pub trait ListItemResolver: Send + Sync {
+    async fn normalize_filters(
+        &self,
+        subscription: &ListSubscription,
+    ) -> AppResult<ListSubscription> {
+        Ok(subscription.clone())
+    }
     async fn resolve(&self, inputs: &[ResolveInput]) -> AppResult<Vec<ResolveOutput>>;
+    async fn enrich(&self, _items: &mut [ResolvedItem]) -> AppResult<()> {
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ListMetadataFacts {
+    pub ratings: Vec<scryer_domain::TitleExternalRating>,
+    pub canonical_keys: Vec<String>,
+    pub original_language: Option<String>,
+    pub year: Option<i32>,
+    pub release_date: Option<chrono::NaiveDate>,
 }
 
 /// One fetched item after resolution.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ResolvedItem {
+    pub facts: Option<ListMetadataFacts>,
     pub item: ListPluginItem,
     /// `None` when neither the item nor the subscription says what it is.
     pub kind: Option<MediaFacet>,
@@ -54,6 +73,7 @@ impl ResolvedItem {
     pub fn unresolved(item: ListPluginItem, kind: Option<MediaFacet>) -> Self {
         let external_ids = item_external_ids(&item);
         Self {
+            facts: None,
             item,
             kind,
             external_ids,
@@ -166,5 +186,54 @@ pub async fn resolve_items(
         item.library_title_id = output.library_title_id;
         item.external_ids = merge_ids(std::mem::take(&mut item.external_ids), output.external_ids);
     }
+    let positions = resolved
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let required = subscription
+                .filters
+                .iter()
+                .filter(|filter| match filter {
+                    scryer_domain::ListFilter::Ratings { facet, .. }
+                    | scryer_domain::ListFilter::ExcludeCanonicalTags { facet, .. } => {
+                        item.kind.as_ref() == Some(facet)
+                    }
+                    _ => true,
+                })
+                .any(filter_requires_metadata);
+            required.then_some(index)
+        })
+        .collect::<Vec<_>>();
+    if !positions.is_empty() {
+        let mut needed = positions
+            .iter()
+            .map(|index| resolved[*index].clone())
+            .collect::<Vec<_>>();
+        resolver.enrich(&mut needed).await?;
+        for (index, enriched) in positions.into_iter().zip(needed) {
+            resolved[index].facts = enriched.facts;
+        }
+    }
     Ok(resolved)
+}
+
+pub fn requires_metadata(filters: &[scryer_domain::ListFilter]) -> bool {
+    filters.iter().any(filter_requires_metadata)
+}
+
+fn filter_requires_metadata(filter: &scryer_domain::ListFilter) -> bool {
+    use scryer_domain::ListFilter;
+    match filter {
+        ListFilter::Ratings { minimums, .. } => !minimums.is_empty(),
+        ListFilter::ExcludeCanonicalTags {
+            keys,
+            unresolved_labels,
+            ..
+        } => !keys.is_empty() || !unresolved_labels.is_empty(),
+        ListFilter::RatingAtLeast { .. } | ListFilter::ReleasedOnly => true,
+        ListFilter::ReleaseYear { from, to } => from.is_some() || to.is_some(),
+        ListFilter::ExcludeGenres { genres } => !genres.is_empty(),
+        ListFilter::Language { languages } => !languages.is_empty(),
+        _ => false,
+    }
 }

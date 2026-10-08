@@ -277,11 +277,11 @@ impl AppUseCase {
                 .filter(|name| !name.trim().is_empty())
                 .unwrap_or(classified.name),
             provider_url: None,
-            kinds,
+            kinds: kinds.clone(),
             enabled: true,
             mode: input.mode,
             routes: input.routes,
-            filters: input.filters,
+            filters: self.normalize_list_filters(&input.filters, &kinds).await?,
             max_per_sync: input.max_per_sync,
             on_leave: input.on_leave,
             interval_seconds: i64::try_from(classified.interval_seconds).unwrap_or(i64::MAX),
@@ -325,11 +325,15 @@ impl AppUseCase {
             source: classified.source,
             name: classified.name,
             provider_url: None,
-            kinds: classified.kinds.clone(),
+            kinds: draft
+                .preview_kinds
+                .clone()
+                .unwrap_or_else(|| classified.kinds.clone()),
             enabled: true,
             mode: ListMode::Request,
-            routes: classified
-                .kinds
+            routes: draft
+                .preview_kinds
+                .unwrap_or(classified.kinds)
                 .into_iter()
                 .map(|kind| scryer_domain::ListRoute {
                     kind,
@@ -343,7 +347,7 @@ impl AppUseCase {
                     tags: Vec::new(),
                 })
                 .collect(),
-            filters: Vec::new(),
+            filters: draft.preview_filters,
             max_per_sync: None,
             on_leave: Default::default(),
             interval_seconds: i64::try_from(classified.interval_seconds).unwrap_or(i64::MAX),
@@ -381,7 +385,7 @@ impl AppUseCase {
             row.routes = routes;
         }
         if let Some(filters) = patch.filters {
-            row.filters = filters;
+            row.filters = self.normalize_list_filters(&filters, &row.kinds).await?;
         }
         if let Some(cap) = patch.max_per_sync {
             row.max_per_sync = cap;
@@ -516,11 +520,40 @@ impl AppUseCase {
             .await
     }
     pub async fn preview_visible_list(&self, actor: &User, id: &str) -> AppResult<ListPreview> {
-        if !self.is_personal_list(actor, id).await? {
-            return self.preview_public_list(actor, id).await;
+        self.preview_visible_list_with_filters(actor, id, None, None)
+            .await
+    }
+
+    pub async fn preview_visible_list_with_filters(
+        &self,
+        actor: &User,
+        id: &str,
+        filters: Option<Vec<scryer_domain::ListFilter>>,
+        kinds: Option<Vec<scryer_domain::MediaFacet>>,
+    ) -> AppResult<ListPreview> {
+        let mut row = self.personal_subscription(actor, id).await?;
+        if row.is_personal() {
+            self.require_personal_lists_allowed(actor).await?;
+        } else {
+            self.require_app_permission(actor, scryer_domain::AppPermission::ManageLists)
+                .await?;
+            self.require_lists_enabled().await?;
         }
-        self.require_personal_lists_allowed(actor).await?;
-        let row = self.personal_subscription(actor, id).await?;
+        if let Some(filters) = filters {
+            row.filters = filters;
+        }
+        if let Some(kinds) = kinds {
+            for route in super::public::preview_routes(&kinds) {
+                if !row
+                    .routes
+                    .iter()
+                    .any(|existing| existing.kind == route.kind)
+                {
+                    row.routes.push(route);
+                }
+            }
+            row.kinds = kinds;
+        }
         let existing = self
             .services
             .lists

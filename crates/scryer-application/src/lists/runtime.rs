@@ -637,7 +637,8 @@ impl AppUseCase {
         let actions = AppListActions::new(self);
         let gateway = self.services.library.metadata_gateway.clone();
         let resolver =
-            GatewayListItemResolver::new(gateway.clone(), AppListLibraryLookup::new(self));
+            GatewayListItemResolver::new(gateway.clone(), AppListLibraryLookup::new(self))
+                .with_vocabulary(lists.vocabulary.clone(), lists.subscriptions.clone());
         let charts = GatewayListChartSource::new(gateway);
         let provider_configs = self.load_list_provider_configs().await;
         let context = ListSyncContext {

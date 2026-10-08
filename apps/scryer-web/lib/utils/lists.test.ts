@@ -605,7 +605,7 @@ test("inputs built from query results carry no __typename at any depth", () => {
     },
   ]);
   assert.deepEqual(update.filters, [
-    { kind: "RATING_AT_LEAST", scale: "tmdb", value: 7.5, from: null, to: null, values: [] },
+    { kind: "RATING_AT_LEAST", scale: "tmdb", value: 7.5, from: null, to: null, values: [], facet: null, matchAny: false, minimums: [], unresolvedLabels: [] },
   ]);
 
   const source = {

@@ -199,6 +199,41 @@ fn a_preview_adds_exactly_the_candidates() {
     );
 }
 
+#[tokio::test]
+async fn preview_and_sync_evaluator_use_the_same_canonical_facts_for_both_scopes() {
+    use crate::lists::resolve::{ListMetadataFacts, resolve_items};
+    use crate::lists::test_support::{FixtureResolver, plugin_item};
+    use scryer_domain::{ListFilter, ListScope};
+    for scope in [ListScope::Public, ListScope::Personal] {
+        let mut list = subscription("filtered-preview");
+        list.scope = scope;
+        list.filters = vec![ListFilter::Language {
+            languages: vec!["eng".into()],
+        }];
+        let resolver = FixtureResolver::default();
+        for (language, expected_candidates) in [(None, 0), (Some("ja"), 0), (Some("en"), 1)] {
+            *resolver.facts.lock().unwrap() = Some(ListMetadataFacts {
+                original_language: language.map(str::to_string),
+                ..Default::default()
+            });
+            let resolved = resolve_items(&list, vec![plugin_item("one")], &resolver)
+                .await
+                .unwrap();
+            let decisions = evaluate(&list, resolved, &[], &HashMap::new());
+            let preview = summarize_preview(&decisions, &HashMap::new());
+            assert_eq!(preview.would_add.len(), expected_candidates);
+            assert_eq!(preview.filtered, 1 - expected_candidates as u64);
+            assert_eq!(
+                decisions
+                    .iter()
+                    .filter(|item| matches!(item.decision, ItemDecision::Candidate))
+                    .count(),
+                expected_candidates
+            );
+        }
+    }
+}
+
 #[test]
 fn list_request_counts_skip_manual_and_old_requests() {
     let request = |id: &str, owner: &str, origin: MediaRequestOrigin, minutes: i64| {

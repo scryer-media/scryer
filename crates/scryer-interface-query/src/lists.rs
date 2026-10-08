@@ -14,6 +14,20 @@ use scryer_interface_media::types::{
     ListSubscriptionPayload, ListSyncRunPayload, MemberListPolicyPayload,
 };
 
+#[derive(async_graphql::SimpleObject)]
+struct CanonicalTagVocabularyPayload {
+    version: String,
+    entries: Vec<CanonicalTagVocabularyEntryPayload>,
+}
+
+#[derive(async_graphql::SimpleObject)]
+struct CanonicalTagVocabularyEntryPayload {
+    key: String,
+    category: String,
+    name: String,
+    aliases: Vec<String>,
+}
+
 const DEFAULT_MEMBERSHIP_LIMIT: i32 = 100;
 const DEFAULT_SYNC_RUN_LIMIT: i32 = 20;
 
@@ -28,6 +42,31 @@ pub(crate) struct ListQueries;
 
 #[Object]
 impl ListQueries {
+    async fn canonical_tag_vocabulary(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(default = false)] retry: bool,
+    ) -> GqlResult<CanonicalTagVocabularyPayload> {
+        actor_from_ctx(ctx)?;
+        let snapshot = app_from_ctx(ctx)?
+            .canonical_tag_vocabulary(retry)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(CanonicalTagVocabularyPayload {
+            version: snapshot.version,
+            entries: snapshot
+                .entries
+                .into_iter()
+                .map(|entry| CanonicalTagVocabularyEntryPayload {
+                    key: entry.key,
+                    category: entry.category,
+                    name: entry.name,
+                    aliases: entry.aliases,
+                })
+                .collect(),
+        })
+    }
+
     /// Linked accounts owned by the current member. Credentials are never returned.
     async fn my_list_accounts(&self, ctx: &Context<'_>) -> GqlResult<Vec<ListAccountPayload>> {
         let app = app_from_ctx(ctx)?;
@@ -193,11 +232,21 @@ impl ListQueries {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "ID of a public list or a personal list owned by the current member.")] id: ID,
+        filters: Option<Vec<scryer_interface_media::types::ListFilterInput>>,
+        kinds: Option<Vec<scryer_interface_media::types::MediaFacetValue>>,
     ) -> GqlResult<ListPreviewPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let preview = app
-            .preview_visible_list(&actor, id.as_str())
+            .preview_visible_list_with_filters(
+                &actor,
+                id.as_str(),
+                filters
+                    .map(scryer_interface_media::mappers::filters_from_input)
+                    .transpose()
+                    .map_err(to_gql_error)?,
+                kinds.map(|kinds| kinds.into_iter().map(|kind| kind.into_domain()).collect()),
+            )
             .await
             .map_err(to_gql_error)?;
         Ok(from_list_preview(preview))
@@ -228,10 +277,16 @@ impl ListQueries {
             desc = "The provider, source type and parameters, or a link; personal sources also require an owned linked account."
         )]
         input: ListSourceInput,
+        #[graphql(default)] filters: Vec<scryer_interface_media::types::ListFilterInput>,
+        kinds: Option<Vec<scryer_interface_media::types::MediaFacetValue>>,
     ) -> GqlResult<ListPreviewPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let draft = list_source_draft_from_input(input);
+        let mut draft = list_source_draft_from_input(input);
+        draft.preview_filters =
+            scryer_interface_media::mappers::filters_from_input(filters).map_err(to_gql_error)?;
+        draft.preview_kinds =
+            kinds.map(|kinds| kinds.into_iter().map(|kind| kind.into_domain()).collect());
         let preview = if draft.credential_id.is_some() {
             app.preview_personal_source(&actor, draft).await
         } else {

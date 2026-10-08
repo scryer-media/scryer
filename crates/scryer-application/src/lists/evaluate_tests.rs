@@ -307,9 +307,13 @@ fn a_rating_filter_matches_only_a_rating_from_the_source_it_names() {
     }];
     let rated = |scale: &str, value: f64| {
         let mut item = resolved_item("alpha");
-        item.item.provider_rating = Some(ListProviderRating {
-            scale: scale.to_string(),
-            value,
+        item.facts = Some(crate::lists::resolve::ListMetadataFacts {
+            ratings: vec![scryer_domain::TitleExternalRating {
+                source: scale.into(),
+                normalized: value,
+                ..Default::default()
+            }],
+            ..Default::default()
         });
         item
     };
@@ -338,6 +342,142 @@ fn a_rating_filter_matches_only_a_rating_from_the_source_it_names() {
     );
     assert!(matches!(
         other_source[0].decision,
+        ItemDecision::Filtered { .. }
+    ));
+}
+
+#[test]
+fn facet_rating_groups_use_explicit_scales_and_truth_tables() {
+    use crate::lists::resolve::ListMetadataFacts;
+    use scryer_domain::{ListRatingMinimum, TitleExternalRating};
+    let mut item = resolved_item("rated");
+    item.facts = Some(ListMetadataFacts {
+        ratings: vec![TitleExternalRating {
+            source: "anilist".into(),
+            normalized: 8.0,
+            value: Some(80.0),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let mut rule = ListFilter::Ratings {
+        facet: MediaFacet::Anime,
+        match_any: false,
+        minimums: vec![
+            ListRatingMinimum {
+                source: "anilist".into(),
+                value: 80.0,
+            },
+            ListRatingMinimum {
+                source: "mal".into(),
+                value: 8.0,
+            },
+        ],
+    };
+    assert!(passes(&rule, &item), "another facet is unaffected");
+    item.kind = Some(MediaFacet::Anime);
+    assert!(!passes(&rule, &item), "all requires missing MAL");
+    if let ListFilter::Ratings { match_any, .. } = &mut rule {
+        *match_any = true;
+    }
+    assert!(passes(&rule, &item));
+    item.facts.as_mut().unwrap().ratings[0].normalized = 7.9;
+    assert!(!passes(&rule, &item));
+    if let ListFilter::Ratings { minimums, .. } = &mut rule {
+        minimums.clear();
+    }
+    item.facts = None;
+    assert!(passes(&rule, &item), "empty any imposes no restriction");
+    for (source, scale) in [
+        ("imdb", 10.0),
+        ("anilist", 100.0),
+        ("letterboxd", 5.0),
+        ("tomatoes", 100.0),
+    ] {
+        item.facts = Some(ListMetadataFacts {
+            ratings: vec![TitleExternalRating {
+                source: source.into(),
+                normalized: 8.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(rating_passes(item.facts.as_ref(), source, scale * 0.8));
+        assert!(!rating_passes(item.facts.as_ref(), source, scale * 0.81));
+    }
+}
+
+#[test]
+fn a_missing_score_cannot_pass_even_a_zero_minimum() {
+    let mut item = resolved_item("missing-score");
+    item.facts = Some(crate::lists::resolve::ListMetadataFacts {
+        ratings: vec![scryer_domain::TitleExternalRating {
+            source: "imdb".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let mut list = subscription("zero-minimum");
+    list.filters = vec![ListFilter::RatingAtLeast {
+        scale: "imdb".into(),
+        value: 0.0,
+    }];
+    assert_eq!(
+        filter_reason(&list, &item).as_deref(),
+        Some("missing_rating")
+    );
+    item.facts.as_mut().unwrap().ratings[0].value = Some(0.0);
+    assert_eq!(filter_reason(&list, &item), None);
+}
+
+#[test]
+fn canonical_exclusions_language_and_missing_facts_are_distinct() {
+    use crate::lists::resolve::ListMetadataFacts;
+    let mut item = resolved_item("facts");
+    let mut list = subscription("list");
+    list.filters = vec![ListFilter::Language {
+        languages: vec!["eng".into()],
+    }];
+    assert_eq!(
+        filter_reason(&list, &item).as_deref(),
+        Some("missing_language")
+    );
+    item.facts = Some(ListMetadataFacts {
+        original_language: Some("en".into()),
+        canonical_keys: vec!["canonical:genre:action".into()],
+        ..Default::default()
+    });
+    assert_eq!(filter_reason(&list, &item), None);
+    item.facts.as_mut().unwrap().original_language = Some("ja".into());
+    assert_eq!(filter_reason(&list, &item).as_deref(), Some("language"));
+    list.filters = vec![ListFilter::ExcludeCanonicalTags {
+        facet: MediaFacet::Movie,
+        keys: vec!["canonical:genre:action".into()],
+        unresolved_labels: vec![],
+    }];
+    assert_eq!(filter_reason(&list, &item).as_deref(), Some("genre"));
+    item.kind = Some(MediaFacet::Anime);
+    assert!(passes(&list.filters[0], &item));
+}
+
+#[test]
+fn filter_changes_preserve_existing_linked_membership_protection() {
+    let mut list = subscription("list");
+    list.filters = vec![ListFilter::RatingAtLeast {
+        scale: "imdb".into(),
+        value: 10.0,
+    }];
+    let item = resolved_item("linked");
+    for state in [ListMembershipState::Added, ListMembershipState::InLibrary] {
+        let mut row = membership("list", "linked", state);
+        row.title_id = Some("existing-title".into());
+        assert_eq!(
+            evaluate(&list, vec![item.clone()], &[], &existing(vec![row]))[0].decision,
+            ItemDecision::Keep { state }
+        );
+    }
+    assert!(matches!(
+        evaluate(&list, vec![item], &[], &HashMap::new())[0].decision,
         ItemDecision::Filtered { .. }
     ));
 }

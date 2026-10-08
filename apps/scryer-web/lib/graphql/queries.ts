@@ -5389,6 +5389,10 @@ export const LIST_SUBSCRIPTION_FIELDS = `
       tags
     }
     filters {
+      facet
+      matchAny
+      minimums { source value }
+      unresolvedLabels
       kind
       scale
       value
@@ -5596,8 +5600,8 @@ export const listSubscriptionDetailQuery = `query ListSubscriptionDetail($id: ID
   }
 }`;
 
-export const listSubscriptionPreviewQuery = `query ListSubscriptionPreview($id: ID!) {
-  listSubscriptionPreview(id: $id) {${LIST_PREVIEW_FIELDS}
+export const listSubscriptionPreviewQuery = `query ListSubscriptionPreview($id: ID!, $filters: [ListFilterInput!], $kinds: [MediaFacetValue!]) {
+  listSubscriptionPreview(id: $id, filters: $filters, kinds: $kinds) {${LIST_PREVIEW_FIELDS}
   }
 }`;
 
@@ -5606,8 +5610,8 @@ export const listUrlPreviewQuery = `query ListUrlPreview($url: String!) {
   }
 }`;
 
-export const listSourcePreviewQuery = `query ListSourcePreview($input: ListSourceInput!) {
-  listSourcePreview(input: $input) {${LIST_PREVIEW_FIELDS}
+export const listSourcePreviewQuery = `query ListSourcePreview($input: ListSourceInput!, $filters: [ListFilterInput!]!, $kinds: [MediaFacetValue!]) {
+  listSourcePreview(input: $input, filters: $filters, kinds: $kinds) {${LIST_PREVIEW_FIELDS}
   }
 }`;
 

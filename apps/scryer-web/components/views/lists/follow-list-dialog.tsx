@@ -74,6 +74,7 @@ type FollowListDialogProps = {
   routeOptions: ListRouteOptions;
   onClose: () => void;
   onPreviewSource: (source: ListSourceDraft) => Promise<ListPreview | null>;
+  onPreviewSubscription: (id: string, draft?: ListSubscriptionDraft) => Promise<ListPreview | null>;
   onSubscribe: (source: ListSourceDraft, draft: ListSubscriptionDraft) => Promise<boolean>;
   onUpdate: (id: string, draft: ListSubscriptionDraft) => Promise<boolean>;
 };
@@ -117,6 +118,7 @@ function FollowListDialogBody({
   routeOptions,
   onClose,
   onPreviewSource,
+  onPreviewSubscription,
   onSubscribe,
   onUpdate,
 }: FollowListDialogProps & { target: FollowListTarget }) {
@@ -173,10 +175,11 @@ function FollowListDialogBody({
   };
 
   const runPreview = async () => {
-    if (!source) return;
     setPreviewing(true);
     try {
-      setPreview(await onPreviewSource(source));
+      setPreview(target.kind === "edit"
+        ? await onPreviewSubscription(target.subscription.id, draft)
+        : source ? await onPreviewSource({ ...source, previewFilters: draft.filters, previewKinds: draft.kinds }) : null);
     } finally {
       setPreviewing(false);
     }
@@ -336,6 +339,8 @@ function FollowListDialogBody({
                 defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind));
               return (
                 <ListRouteCard
+                  filters={draft.filters}
+                  onFiltersChange={(filters) => setDraft((current) => ({ ...current, filters }))}
                   key={kind}
                   kind={kind}
                   route={route}
@@ -409,7 +414,7 @@ function FollowListDialogBody({
           ) : null}
         </section>
 
-        {source ? (
+        {source || target.kind === "edit" ? (
           <section className="space-y-3">
             <div className="flex items-center justify-between gap-3">
               <h3 className={SECTION_HEADING}>{t("lists.preview.heading")}</h3>

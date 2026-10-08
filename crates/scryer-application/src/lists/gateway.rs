@@ -181,6 +181,16 @@ pub fn title_ref(ids: &[ExternalId]) -> TitleExternalRef {
     }
 }
 
+fn parse_release_date(value: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .ok()
+                .map(|date| date.date_naive())
+        })
+}
+
 fn merge_ids(target: &mut Vec<ExternalId>, extra: Vec<ExternalId>) {
     for id in extra {
         if !target.iter().any(|existing| {
@@ -197,6 +207,10 @@ fn merge_ids(target: &mut Vec<ExternalId>, extra: Vec<ExternalId>) {
 pub struct GatewayListItemResolver<L> {
     gateway: Arc<dyn MetadataGateway>,
     library: L,
+    vocabulary: Option<(
+        Arc<super::vocabulary::VocabularyRuntime>,
+        Arc<dyn super::ListSubscriptionRepository>,
+    )>,
 }
 
 /// Finds a library title of a kind by external ids, in any library.
@@ -207,12 +221,143 @@ pub trait ListLibraryLookup: Send + Sync {
 
 impl<L: ListLibraryLookup> GatewayListItemResolver<L> {
     pub fn new(gateway: Arc<dyn MetadataGateway>, library: L) -> Self {
-        Self { gateway, library }
+        Self {
+            gateway,
+            library,
+            vocabulary: None,
+        }
+    }
+
+    pub fn with_vocabulary(
+        mut self,
+        runtime: Arc<super::vocabulary::VocabularyRuntime>,
+        store: Arc<dyn super::ListSubscriptionRepository>,
+    ) -> Self {
+        self.vocabulary = Some((runtime, store));
+        self
     }
 }
 
 #[async_trait]
 impl<L: ListLibraryLookup> ListItemResolver for GatewayListItemResolver<L> {
+    async fn normalize_filters(
+        &self,
+        subscription: &scryer_domain::ListSubscription,
+    ) -> AppResult<scryer_domain::ListSubscription> {
+        let mut subscription = subscription.clone();
+        let snapshot = if subscription.filters.iter().any(|filter| matches!(filter, scryer_domain::ListFilter::ExcludeGenres { genres } if !genres.is_empty())) {
+            let (runtime, store) = self.vocabulary.as_ref().ok_or_else(|| crate::AppError::Repository("canonical vocabulary is not configured".into()))?;
+            Some(runtime.get(store.clone(), self.gateway.clone(), false).await?)
+        } else { None };
+        subscription.filters = super::vocabulary::normalize_filters(
+            &subscription.filters,
+            &subscription.kinds,
+            snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.entries.as_slice())
+                .unwrap_or_default(),
+        );
+        Ok(subscription)
+    }
+
+    async fn enrich(&self, items: &mut [super::resolve::ResolvedItem]) -> AppResult<()> {
+        use super::resolve::ListMetadataFacts;
+        use std::collections::BTreeSet;
+        let mut movies = BTreeSet::new();
+        let mut series = BTreeSet::new();
+        for item in items.iter() {
+            if let Some(id) = item.smg_title_id {
+                if item.kind == Some(MediaFacet::Movie) {
+                    movies.insert(id);
+                } else {
+                    series.insert(id);
+                }
+            }
+        }
+        let mut facts = HashMap::new();
+        for chunk in movies
+            .into_iter()
+            .collect::<Vec<_>>()
+            .chunks(RESOLVE_TITLES_BATCH)
+        {
+            let refs = chunk
+                .iter()
+                .map(|id| crate::MovieTitleRef {
+                    smg_id: Some(*id),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>();
+            let result = self
+                .gateway
+                .get_movie_titles(&refs, LIST_CHART_LANGUAGE)
+                .await?;
+            for (index, metadata) in result.by_ref_index {
+                if let Some(id) = chunk.get(index) {
+                    facts.insert(
+                        (true, *id),
+                        ListMetadataFacts {
+                            ratings: metadata.ratings.external_ratings,
+                            canonical_keys: metadata
+                                .canonical_tags
+                                .into_iter()
+                                .map(|tag| tag.key)
+                                .collect(),
+                            original_language: metadata.original_language,
+                            year: metadata.year,
+                            release_date: metadata
+                                .tmdb_release_date
+                                .as_deref()
+                                .and_then(parse_release_date),
+                        },
+                    );
+                }
+            }
+        }
+        for chunk in series
+            .into_iter()
+            .collect::<Vec<_>>()
+            .chunks(RESOLVE_TITLES_BATCH)
+        {
+            let refs = chunk
+                .iter()
+                .map(|id| crate::SeriesTitleRef {
+                    smg_id: Some(*id),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>();
+            let result = self
+                .gateway
+                .get_series_titles(&refs, LIST_CHART_LANGUAGE, false, false)
+                .await?;
+            for (index, metadata) in result.by_ref_index {
+                if let Some(id) = chunk.get(index) {
+                    facts.insert(
+                        (false, *id),
+                        ListMetadataFacts {
+                            ratings: metadata.ratings.external_ratings,
+                            canonical_keys: metadata
+                                .canonical_tags
+                                .into_iter()
+                                .map(|tag| tag.key)
+                                .collect(),
+                            original_language: metadata.original_language,
+                            year: metadata.year,
+                            release_date: parse_release_date(&metadata.first_aired),
+                        },
+                    );
+                }
+            }
+        }
+        for item in items {
+            item.facts = item.smg_title_id.and_then(|id| {
+                facts
+                    .get(&(item.kind == Some(MediaFacet::Movie), id))
+                    .cloned()
+            });
+        }
+        Ok(())
+    }
+
     async fn resolve(&self, inputs: &[ResolveInput]) -> AppResult<Vec<ResolveOutput>> {
         let mut outputs = inputs
             .iter()

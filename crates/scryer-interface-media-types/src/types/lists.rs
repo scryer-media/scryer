@@ -250,6 +250,8 @@ impl ListMembershipStateValue {
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(name = "ListFilterKind", rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum ListFilterKindValue {
+    Ratings,
+    ExcludeCanonicalTags,
     /// The provider's rating is at least `value` on `scale`.
     RatingAtLeast,
     /// Released between `from` and `to`, either end open.
@@ -617,9 +619,25 @@ pub struct ListRouteInput {
     pub tags: Vec<String>,
 }
 
+#[derive(SimpleObject, Clone)]
+pub struct ListRatingMinimumPayload {
+    pub source: String,
+    pub value: f64,
+}
+
+#[derive(InputObject, Clone)]
+pub struct ListRatingMinimumInput {
+    pub source: String,
+    pub value: f64,
+}
+
 /// One list filter. Only the fields its kind uses are set.
 #[derive(SimpleObject, Clone)]
 pub struct ListFilterPayload {
+    pub facet: Option<MediaFacetValue>,
+    pub match_any: bool,
+    pub minimums: Vec<ListRatingMinimumPayload>,
+    pub unresolved_labels: Vec<String>,
     /// The filter's kind.
     pub kind: ListFilterKindValue,
     /// Rating scale, for `RATING_AT_LEAST`.
@@ -637,6 +655,13 @@ pub struct ListFilterPayload {
 /// One list filter, as entered. Fields its kind does not use are ignored.
 #[derive(InputObject, Clone)]
 pub struct ListFilterInput {
+    pub facet: Option<MediaFacetValue>,
+    #[graphql(default)]
+    pub match_any: bool,
+    #[graphql(default)]
+    pub minimums: Vec<ListRatingMinimumInput>,
+    #[graphql(default)]
+    pub unresolved_labels: Vec<String>,
     /// The filter's kind.
     pub kind: ListFilterKindValue,
     /// Rating scale, required for `RATING_AT_LEAST`.

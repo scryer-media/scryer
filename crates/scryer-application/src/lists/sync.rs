@@ -361,6 +361,63 @@ pub async fn sync_subscription(
         Err(failure) => return record_failure(context, subscription, run, now, failure).await,
     };
 
+    if fetched.unchanged
+        && super::resolve::requires_metadata(&subscription.filters)
+        && !subscription
+            .filters
+            .iter()
+            .any(|filter| matches!(filter, scryer_domain::ListFilter::Format { .. }))
+    {
+        let mut stored = context
+            .memberships
+            .list_by_subscription(&subscription.id)
+            .await?;
+        stored.retain(|row| row.left_at.is_none());
+        stored.sort_by(|a, b| {
+            a.rank
+                .cmp(&b.rank)
+                .then_with(|| a.item_key.cmp(&b.item_key))
+        });
+        fetched.items = stored
+            .into_iter()
+            .map(|row| {
+                let mut external_ids = row
+                    .external_ids
+                    .into_iter()
+                    .map(|id| scryer_plugin_sdk::ListExternalId {
+                        source: id.source,
+                        kind: id.kind,
+                        id: id.value,
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(id) = row.smg_title_id {
+                    external_ids.push(scryer_plugin_sdk::ListExternalId {
+                        source: "smg".into(),
+                        kind: None,
+                        id: id.to_string(),
+                    });
+                }
+                scryer_plugin_sdk::ListPluginItem {
+                    item_key: row.item_key,
+                    rank: row.rank.and_then(|rank| u32::try_from(rank).ok()),
+                    season: row.season,
+                    title: row.display_title,
+                    year: row.year,
+                    external_ids,
+                    kind_hint: Some(match row.kind {
+                        scryer_domain::MediaFacet::Movie => scryer_plugin_sdk::ListMediaKind::Movie,
+                        scryer_domain::MediaFacet::Series => {
+                            scryer_plugin_sdk::ListMediaKind::Series
+                        }
+                        scryer_domain::MediaFacet::Anime => scryer_plugin_sdk::ListMediaKind::Anime,
+                    }),
+                    ..Default::default()
+                }
+            })
+            .collect();
+        fetched.unchanged = false;
+    }
+
     if fetched.unchanged {
         if !has_unfinished_work(context, subscription).await? {
             return record_unchanged(context, subscription, run, now, fetched.fingerprint).await;
@@ -386,6 +443,14 @@ pub async fn sync_subscription(
     if fetched.items.is_empty() {
         return record_empty_fetch(context, subscription, run, now, fetched.fingerprint).await;
     }
+    let normalized = match context.resolver.normalize_filters(subscription).await {
+        Ok(subscription) => subscription,
+        Err(_) => {
+            let failure = ListFailure::new(ListFailureClass::Unavailable, "The metadata service");
+            return record_failure(context, subscription, run, now, failure).await;
+        }
+    };
+    let subscription = &normalized;
     let resolved = match resolve_items(subscription, fetched.items, context.resolver).await {
         Ok(resolved) => resolved,
         Err(_) => {

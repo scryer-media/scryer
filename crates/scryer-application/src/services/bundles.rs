@@ -256,6 +256,7 @@ pub struct AppListServices {
     pub(crate) plugins: Arc<dyn crate::lists::ListPluginProvider>,
     pub(crate) auth: Arc<dyn crate::lists::account_transport::ListAccountAuthGateway>,
     pub(crate) account_runtime: Arc<crate::lists::accounts::ListAccountRuntime>,
+    pub(crate) vocabulary: Arc<crate::lists::vocabulary::VocabularyRuntime>,
 }
 
 impl AppListServices {
@@ -270,6 +271,7 @@ impl AppListServices {
             plugins: Arc::new(crate::lists::NullListPluginProvider),
             auth: Arc::new(crate::lists::account_transport::NullListAccountAuthGateway),
             account_runtime: Arc::new(crate::lists::accounts::ListAccountRuntime::default()),
+            vocabulary: Arc::new(crate::lists::vocabulary::VocabularyRuntime::default()),
         }
     }
 }

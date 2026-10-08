@@ -117,6 +117,75 @@ async fn a_first_sync_adds_candidates_and_records_counts() {
 }
 
 #[tokio::test]
+async fn unchanged_membership_rechecks_filtered_candidates_without_refetching() {
+    let mut list = subscription("list-a");
+    list.filters = vec![scryer_domain::ListFilter::ReleaseYear {
+        from: Some(2020),
+        to: None,
+    }];
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2019),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(0)).await.added, 0);
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Filtered
+    );
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2021),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(360)).await.added, 1);
+    assert_eq!(
+        harness.lists.fetched.lock().unwrap().len(),
+        2,
+        "one provider request per scheduled sync, including unchanged"
+    );
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Added
+    );
+}
+
+#[tokio::test]
+async fn enrichment_failure_preserves_memberships_and_never_runs_departures() {
+    let mut list = subscription("list-a");
+    list.filters = vec![scryer_domain::ListFilter::ReleaseYear {
+        from: Some(2020),
+        to: None,
+    }];
+    list.on_leave = ListOnLeave::Unmonitor;
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2021),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(0)).await.added, 1);
+    harness.lists.serve("list-a", &["beta"]);
+    harness
+        .resolver
+        .fail_enrichment
+        .store(true, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(harness.sync_at(at(360)).await.failed, 1);
+    let retained = harness.store.row("list-a", "alpha");
+    assert_eq!(retained.state, ListMembershipState::Added);
+    assert!(retained.left_at.is_none());
+    assert_eq!(
+        harness
+            .actions
+            .calls()
+            .iter()
+            .filter(|call| !matches!(call, RecordedAction::SyncFailure { .. }))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
 async fn the_provider_is_built_with_its_server_wide_values() {
     let mut harness = Harness::new(vec![subscription("list-a")]);
     let values = std::collections::BTreeMap::from([(
@@ -1234,6 +1303,33 @@ async fn a_title_another_list_still_wants_is_left_alone() {
             .any(|call| matches!(call, RecordedAction::Tag { .. })),
         "no tag while the other list keeps the title"
     );
+    assert!(!harness.store.row("list-a", "alpha").left_handled);
+}
+
+#[tokio::test]
+async fn changing_filters_keeps_cross_list_cleanup_protection() {
+    let harness = title_on_two_lists(ListOnLeave::Unmonitor).await;
+    {
+        let mut rows = harness.store.subscriptions.lock().unwrap();
+        let follower = rows.iter_mut().find(|row| row.id == "list-b").unwrap();
+        follower.filters = vec![scryer_domain::ListFilter::ReleaseYear {
+            from: Some(2020),
+            to: None,
+        }];
+    }
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(1900),
+        ..Default::default()
+    });
+    harness.lists.serve("list-a", &["beta"]);
+    for minutes in [10, 20] {
+        harness.sync_at(at(minutes)).await;
+    }
+    let follower = harness.store.row("list-b", "alpha");
+    assert_eq!(follower.state, ListMembershipState::InLibrary);
+    assert_eq!(follower.title_id.as_deref(), Some("title-alpha"));
+    assert!(follower.left_at.is_none());
+    assert_eq!(unmonitors_of(&harness.actions, "title-alpha"), 0);
     assert!(!harness.store.row("list-a", "alpha").left_handled);
 }
 

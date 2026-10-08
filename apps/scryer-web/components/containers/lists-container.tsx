@@ -56,6 +56,7 @@ import {
   draftToSubscribeInput,
   draftToUpdateInput,
   listParamInput,
+  listFilterInput,
   listSyncWatchSchedule,
   listSyncWatchSettled,
   type AddListExclusionInput,
@@ -390,6 +391,8 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       runPreview(
         listSourcePreviewQuery,
         {
+          filters: (source.previewFilters ?? []).map(listFilterInput),
+          kinds: source.previewKinds ?? null,
           input: {
             provider: source.provider,
             sourceType: source.sourceType,
@@ -404,7 +407,11 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
   );
 
   const previewSubscription = React.useCallback(
-    (id: string) => runPreview(listSubscriptionPreviewQuery, { id }, "listSubscriptionPreview"),
+    (id: string, draft?: ListSubscriptionDraft) => runPreview(listSubscriptionPreviewQuery, {
+      id,
+      filters: draft?.filters.map(listFilterInput) ?? null,
+      kinds: draft?.kinds ?? null,
+    }, "listSubscriptionPreview"),
     [runPreview],
   );
 

@@ -275,6 +275,10 @@ fn route_from_input(input: ListRouteInput) -> Result<ListRoute, AppError> {
 
 fn from_filter(filter: ListFilter) -> ListFilterPayload {
     let empty = |kind| ListFilterPayload {
+        facet: None,
+        match_any: false,
+        minimums: Vec::new(),
+        unresolved_labels: Vec::new(),
         kind,
         scale: None,
         value: None,
@@ -283,6 +287,32 @@ fn from_filter(filter: ListFilter) -> ListFilterPayload {
         values: Vec::new(),
     };
     match filter {
+        ListFilter::Ratings {
+            facet,
+            match_any,
+            minimums,
+        } => ListFilterPayload {
+            facet: Some(MediaFacetValue::from_domain(facet)),
+            match_any,
+            minimums: minimums
+                .into_iter()
+                .map(|minimum| ListRatingMinimumPayload {
+                    source: minimum.source,
+                    value: minimum.value,
+                })
+                .collect(),
+            ..empty(ListFilterKindValue::Ratings)
+        },
+        ListFilter::ExcludeCanonicalTags {
+            facet,
+            keys,
+            unresolved_labels,
+        } => ListFilterPayload {
+            facet: Some(MediaFacetValue::from_domain(facet)),
+            values: keys,
+            unresolved_labels,
+            ..empty(ListFilterKindValue::ExcludeCanonicalTags)
+        },
         ListFilter::RatingAtLeast { scale, value } => ListFilterPayload {
             scale: Some(scale),
             value: Some(value),
@@ -324,6 +354,67 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
             .collect::<Vec<_>>()
     };
     Ok(match input.kind {
+        ListFilterKindValue::Ratings => {
+            let facet = input
+                .facet
+                .ok_or_else(|| AppError::Validation("ratings need a facet".into()))?
+                .into_domain();
+            if input.minimums.len() > 32 {
+                return Err(AppError::Validation("too many rating minimums".into()));
+            }
+            let minimums = input
+                .minimums
+                .into_iter()
+                .map(|minimum| {
+                    let (source, scale) =
+                        scryer_application::lists::evaluate::rating_source(&minimum.source)
+                            .ok_or_else(|| {
+                                AppError::Validation("unsupported rating source".into())
+                            })?;
+                    if !minimum.value.is_finite() || !(0.0..=scale).contains(&minimum.value) {
+                        return Err(AppError::Validation(
+                            "rating minimum is outside its source scale".into(),
+                        ));
+                    }
+                    Ok(scryer_domain::ListRatingMinimum {
+                        source: source.into(),
+                        value: minimum.value,
+                    })
+                })
+                .collect::<Result<Vec<_>, AppError>>()?;
+            ListFilter::Ratings {
+                facet,
+                match_any: input.match_any,
+                minimums,
+            }
+        }
+        ListFilterKindValue::ExcludeCanonicalTags => {
+            let keys = values();
+            if keys.len() > 10_000
+                || keys.iter().any(|key| {
+                    key.len() > 256
+                        || !(key.starts_with("canonical:genre:")
+                            || key.starts_with("canonical:theme:"))
+                })
+                || input.unresolved_labels.len() > 10_000
+                || input
+                    .unresolved_labels
+                    .iter()
+                    .any(|label| label.len() > 256)
+            {
+                return Err(AppError::Validation("invalid canonical exclusions".into()));
+            }
+            ListFilter::ExcludeCanonicalTags {
+                facet: input
+                    .facet
+                    .ok_or_else(|| {
+                        AppError::Validation("canonical exclusions need a facet".into())
+                    })?
+                    .into_domain(),
+                keys,
+                unresolved_labels: input.unresolved_labels,
+            }
+        }
         ListFilterKindValue::RatingAtLeast => {
             let scale = input
                 .scale
@@ -347,7 +438,13 @@ fn filter_from_input(input: ListFilterInput) -> Result<ListFilter, AppError> {
         ListFilterKindValue::ExcludeGenres => ListFilter::ExcludeGenres { genres: values() },
         ListFilterKindValue::Format => ListFilter::Format { formats: values() },
         ListFilterKindValue::Language => ListFilter::Language {
-            languages: values(),
+            languages: values()
+                .into_iter()
+                .map(|language| {
+                    scryer_application::normalize_search_language_code(&language)
+                        .ok_or_else(|| AppError::Validation("unsupported original language".into()))
+                })
+                .collect::<Result<Vec<_>, _>>()?,
         },
         ListFilterKindValue::SkipOnMyStreamingServices => ListFilter::SkipOnMyStreamingServices,
         ListFilterKindValue::ReleasedOnly => ListFilter::ReleasedOnly,
@@ -360,7 +457,7 @@ fn routes_from_input(routes: Vec<ListRouteInput>) -> Result<Vec<ListRoute>, AppE
     routes.into_iter().map(route_from_input).collect()
 }
 
-fn filters_from_input(filters: Vec<ListFilterInput>) -> Result<Vec<ListFilter>, AppError> {
+pub fn filters_from_input(filters: Vec<ListFilterInput>) -> Result<Vec<ListFilter>, AppError> {
     filters.into_iter().map(filter_from_input).collect()
 }
 
@@ -523,6 +620,8 @@ pub fn from_member_list_policy(entry: MemberListPolicy) -> MemberListPolicyPaylo
 
 pub fn list_source_draft_from_input(input: ListSourceInput) -> ListSourceDraft {
     ListSourceDraft {
+        preview_filters: Vec::new(),
+        preview_kinds: None,
         credential_id: input.credential_id.map(|id| id.to_string()),
         provider: input.provider,
         source_type: input.source_type,

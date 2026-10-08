@@ -1,0 +1,238 @@
+import * as React from "react";
+import { Input, decimalInputProps } from "@/components/ui/input";
+import { CheckboxField } from "@/components/ui/checkbox";
+import { SingleSelectField } from "@/components/ui/select";
+import { useTranslate } from "@/lib/context/translate-context";
+import { useCanonicalVocabulary } from "@/lib/hooks/use-canonical-vocabulary";
+import type { ListFilter } from "@/lib/types/lists";
+import type { Facet } from "@/lib/types/titles";
+import { EMPTY_LIST_FILTER } from "@/lib/utils/lists";
+import { ratingSourceInfo } from "@/lib/utils/title-ratings";
+
+const SOURCES = [
+  "imdb",
+  "tomatoes",
+  "audience",
+  "metacritic",
+  "mcuser",
+  "letterboxd",
+  "tmdb",
+  "tvdb",
+  "trakt",
+  "mal",
+  "anilist",
+  "anidb",
+  "mdblist",
+];
+const SCALES: Record<string, number> = {
+  tomatoes: 100,
+  audience: 100,
+  metacritic: 100,
+  letterboxd: 5,
+  anilist: 100,
+  mdblist: 100,
+};
+
+export function ListFacetFilters({
+  facet,
+  filters,
+  onChange,
+  disabled,
+  idPrefix,
+}: {
+  facet: Facet;
+  filters: ListFilter[];
+  onChange: (filters: ListFilter[]) => void;
+  disabled?: boolean;
+  idPrefix: string;
+}) {
+  const t = useTranslate();
+  const { vocabulary, error, loading, retry } = useCanonicalVocabulary();
+  const [search, setSearch] = React.useState("");
+  const ratings = filters.filter((filter) => filter.kind === "RATINGS" && filter.facet === facet);
+  const legacyRatings = filters
+    .filter((filter) => filter.kind === "RATING_AT_LEAST")
+    .map((filter) => ({ source: filter.scale ?? "tmdb", value: filter.value ?? 0 }));
+  const minimums = [...ratings.flatMap((filter) => filter.minimums ?? []), ...legacyRatings];
+  const exclusions = filters.filter(
+    (filter) => filter.kind === "EXCLUDE_CANONICAL_TAGS" && filter.facet === facet,
+  );
+  const resolveLabels = (labels: string[]) => {
+    const values: string[] = [];
+    const unresolvedLabels: string[] = [];
+    for (const label of labels) {
+      const matches =
+        vocabulary?.entries.filter((entry) =>
+          [entry.name, ...entry.aliases].some(
+            (name) => name.toLowerCase() === label.trim().toLowerCase(),
+          ),
+        ) ?? [];
+      if (matches.length === 1) values.push(matches[0].key);
+      else unresolvedLabels.push(label);
+    }
+    return { values, unresolvedLabels };
+  };
+  const converted = resolveLabels([
+    ...exclusions.flatMap((filter) => filter.unresolvedLabels ?? []),
+    ...filters
+      .filter((filter) => filter.kind === "EXCLUDE_GENRES")
+      .flatMap((filter) => filter.values),
+  ]);
+  const keys = [
+    ...new Set([...exclusions.flatMap((filter) => filter.values), ...converted.values]),
+  ];
+  const unresolved = converted.unresolvedLabels;
+  const sources =
+    facet === "ANIME"
+      ? [
+          "mal",
+          "anilist",
+          "anidb",
+          ...SOURCES.filter((source) => !["mal", "anilist", "anidb"].includes(source)),
+        ]
+      : SOURCES;
+  const setFacet = (kind: ListFilter["kind"], patch: Partial<ListFilter>) => {
+    // Expand alpha filters before editing one facet so the other facets retain their rules.
+    const expanded = filters.flatMap((filter): ListFilter[] =>
+      filter.kind === "RATING_AT_LEAST"
+        ? (["MOVIE", "SERIES", "ANIME"] as Facet[]).map((facet) => ({
+            ...EMPTY_LIST_FILTER,
+            kind: "RATINGS",
+            facet,
+            matchAny: false,
+            minimums: [{ source: filter.scale ?? "tmdb", value: filter.value ?? 0 }],
+          }))
+        : filter.kind === "EXCLUDE_GENRES"
+          ? (["MOVIE", "SERIES", "ANIME"] as Facet[]).map((facet) => ({
+              ...EMPTY_LIST_FILTER,
+              kind: "EXCLUDE_CANONICAL_TAGS",
+              facet,
+              ...resolveLabels(filter.values),
+            }))
+          : [filter],
+    );
+    onChange([
+      ...expanded.filter((filter) => !(filter.kind === kind && filter.facet === facet)),
+      { ...EMPTY_LIST_FILTER, kind, facet, ...patch },
+    ]);
+  };
+  const setExclusions = (values: string[], unresolvedLabels = unresolved) =>
+    setFacet("EXCLUDE_CANONICAL_TAGS", { values, unresolvedLabels });
+  return (
+    <div className="space-y-4 border-t border-[var(--scry-border3)] pt-4">
+      <h4 className="text-sm font-semibold">{t("lists.filter.ratings")}</h4>
+      <SingleSelectField
+        id={`${idPrefix}-rating-match`}
+        label={t("lists.filter.match")}
+        value={ratings[0]?.matchAny ? "any" : "all"}
+        options={[
+          { value: "all", label: t("lists.filter.all") },
+          { value: "any", label: t("lists.filter.any") },
+        ]}
+        disabled={disabled}
+        onValueChange={(value) => setFacet("RATINGS", { matchAny: value === "any", minimums })}
+      />
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,220px),1fr))] gap-2">
+        {sources.map((source) => {
+          const info = ratingSourceInfo(source);
+          return (
+            <label key={source} className="flex items-center gap-2 text-sm">
+              {info.logoSrc ? (
+                <img src={info.logoSrc} alt="" className="size-5 object-contain" />
+              ) : null}
+              <span className="min-w-0 flex-1">{info.label}</span>
+              <Input
+                {...decimalInputProps}
+                className="w-20"
+                disabled={disabled}
+                aria-label={info.label}
+                placeholder={`0–${SCALES[source] ?? 10}`}
+                value={minimums.find((minimum) => minimum.source === source)?.value ?? ""}
+                onChange={(event) => {
+                  const value = event.target.value.trim();
+                  if (value && !Number.isFinite(Number(value))) return;
+                  setFacet("RATINGS", {
+                    matchAny: ratings[0]?.matchAny ?? false,
+                    minimums: [
+                      ...minimums.filter((minimum) => minimum.source !== source),
+                      ...(value ? [{ source, value: Number(value) }] : []),
+                    ],
+                  });
+                }}
+              />
+            </label>
+          );
+        })}
+      </div>
+      <h4 className="text-sm font-semibold">{t("lists.filter.canonical")}</h4>
+      {error ? (
+        <div role="alert">
+          {t("lists.filter.vocabularyError")}{" "}
+          <button type="button" disabled={loading || disabled} onClick={() => void retry()}>
+            {t("lists.filter.retry")}
+          </button>
+        </div>
+      ) : null}
+      {keys
+        .filter((key) => !vocabulary?.entries.some((entry) => entry.key === key))
+        .map((key) => (
+          <CheckboxField
+            key={key}
+            id={`${idPrefix}-${key}`}
+            checked
+            label={t("lists.filter.unavailable", { label: key })}
+            disabled={disabled}
+            onCheckedChange={() => setExclusions(keys.filter((value) => value !== key))}
+          />
+        ))}
+      {unresolved.map((label) => (
+        <CheckboxField
+          key={label}
+          id={`${idPrefix}-legacy-${label}`}
+          checked
+          label={t("lists.filter.unresolved", { label })}
+          disabled={disabled}
+          onCheckedChange={() =>
+            setExclusions(
+              keys,
+              unresolved.filter((value) => value !== label),
+            )
+          }
+        />
+      ))}
+      {vocabulary ? (
+        <>
+          <Input
+            aria-label={t("lists.filter.searchCanonical")}
+            placeholder={t("lists.filter.searchCanonical")}
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            disabled={disabled}
+          />
+          <div className="grid max-h-48 gap-2 overflow-y-auto sm:grid-cols-2">
+            {vocabulary.entries
+              .filter((entry) =>
+                [entry.name, ...entry.aliases].some((name) =>
+                  name.toLowerCase().includes(search.toLowerCase()),
+                ),
+              )
+              .map((entry) => (
+                <CheckboxField
+                  key={entry.key}
+                  id={`${idPrefix}-${entry.key}`}
+                  label={entry.name}
+                  checked={keys.includes(entry.key)}
+                  disabled={disabled}
+                  onCheckedChange={(checked) =>
+                    setExclusions(
+                      checked ? [...keys, entry.key] : keys.filter((key) => key !== entry.key),
+                    )
+                  }
+                />
+              ))}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}

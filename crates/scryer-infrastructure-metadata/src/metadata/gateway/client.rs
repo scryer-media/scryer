@@ -3019,6 +3019,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn canonical_vocabulary_uses_signed_gateway_transport_and_known_version() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/graphql"))
+            .and(body_string_contains("canonicalTagVocabulary"))
+            .and(body_string_contains("\"knownVersion\":\"fixture-v1\""))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": { "canonicalTagVocabulary": { "version": "fixture-v1", "unchanged": true, "entries": [] } }
+            }))).expect(1).mount(&server).await;
+        let client = signed_gateway_client(format!("{}/graphql", server.uri())).await;
+        let reply = client
+            .canonical_tag_vocabulary(Some("fixture-v1"))
+            .await
+            .unwrap();
+        assert!(reply.unchanged);
+        assert!(reply.entries.is_empty());
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_v2_signed_request(&requests[0]);
+    }
+
+    #[tokio::test]
     async fn get_metadata_bulk_uses_metadata_bulk_when_available() {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
@@ -7025,6 +7046,22 @@ impl MetadataGateway for MetadataGatewayClient {
         }
         self.resolve_alias_title_refs(refs, kind, create_missing)
             .await
+    }
+
+    async fn canonical_tag_vocabulary(
+        &self,
+        known_version: Option<&str>,
+    ) -> AppResult<scryer_application::lists::vocabulary::VocabularyReply> {
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Response {
+            canonical_tag_vocabulary: scryer_application::lists::vocabulary::VocabularyReply,
+        }
+        let response: Response = self.execute_graphql(serde_json::json!({
+            "query": "query CanonicalTagVocabulary($knownVersion: String) { canonicalTagVocabulary(knownVersion: $knownVersion) { version unchanged entries { key category name aliases } } }",
+            "variables": { "knownVersion": known_version }
+        })).await?;
+        Ok(response.canonical_tag_vocabulary)
     }
 
     async fn list_chart_catalog(

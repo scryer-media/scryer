@@ -26,6 +26,7 @@ pub mod rejection;
 pub mod resolve;
 mod route_options;
 mod runtime;
+pub mod vocabulary;
 #[cfg(test)]
 pub(crate) use runtime::AppListActions;
 pub mod sync;

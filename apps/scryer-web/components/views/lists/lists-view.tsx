@@ -77,7 +77,7 @@ type ListsViewProps = {
   membershipPageSize: number;
   onPreviewUrl: (url: string) => Promise<ListPreview | null>;
   onPreviewSource: (source: ListSourceDraft) => Promise<ListPreview | null>;
-  onPreviewSubscription: (id: string) => Promise<ListPreview | null>;
+  onPreviewSubscription: (id: string, draft?: ListSubscriptionDraft) => Promise<ListPreview | null>;
   onSubscribe: (source: ListSourceDraft, draft: ListSubscriptionDraft) => Promise<boolean>;
   onUpdate: (id: string, draft: ListSubscriptionDraft) => Promise<boolean>;
   onSetEnabled: (subscription: ListSubscription, enabled: boolean) => void;
@@ -309,6 +309,7 @@ export function ListsView(props: ListsViewProps) {
           routeOptions={routeOptions}
           onClose={() => setFollowTarget(null)}
           onPreviewSource={props.onPreviewSource}
+          onPreviewSubscription={props.onPreviewSubscription}
           onSubscribe={props.onSubscribe}
           onUpdate={props.onUpdate}
         />

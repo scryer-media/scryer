@@ -2,13 +2,16 @@ import { TitleTagsPicker } from "@/components/common/title-tags-picker";
 import { SingleSelectField } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import type { TitleTagDefinition } from "@/lib/types/title-tags";
-import type { ListRoute } from "@/lib/types/lists";
+import type { ListRoute, ListFilter } from "@/lib/types/lists";
+import { ListFacetFilters } from "./list-facet-filters";
 import type { Facet, LibraryRecord } from "@/lib/types/titles";
 import { listKindLabelKey } from "@/lib/utils/lists";
 
 const INHERIT_QUALITY_PROFILE = "__inherit__";
 
 type ListRouteCardProps = {
+  filters: ListFilter[];
+  onFiltersChange: (filters: ListFilter[]) => void;
   kind: Facet;
   route: ListRoute;
   libraries: readonly LibraryRecord[];
@@ -33,6 +36,8 @@ export function ListRouteCard({
   requestOnly = false,
   idPrefix,
   onChange,
+  filters,
+  onFiltersChange,
 }: ListRouteCardProps) {
   const t = useTranslate();
   const kindLibraries = libraries.filter((library) => library.facet === kind);
@@ -157,6 +162,7 @@ export function ListRouteCard({
         loading={tagsLoading}
         disabled={disabled}
       /> : null}
+      <ListFacetFilters facet={kind} filters={filters} onChange={onFiltersChange} disabled={disabled} idPrefix={`${idPrefix}-${kind.toLowerCase()}`} />
     </fieldset>
   );
 }

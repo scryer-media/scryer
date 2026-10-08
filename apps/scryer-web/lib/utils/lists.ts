@@ -451,6 +451,10 @@ export function listRouteInput(route: ListRoute): ListRouteInput {
 
 export function listFilterInput(filter: ListFilter): ListFilterInput {
   return {
+    facet: filter.facet ?? null,
+    matchAny: filter.matchAny ?? false,
+    minimums: (filter.minimums ?? []).map(({ source, value }) => ({ source, value })),
+    unresolvedLabels: [...(filter.unresolvedLabels ?? [])],
     kind: filter.kind,
     scale: filter.scale,
     value: filter.value,

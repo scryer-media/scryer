@@ -89,11 +89,68 @@ async fn a_chart_the_gateway_cannot_serve_is_a_plain_failure() {
 
 #[derive(Default)]
 struct RecordingResolveGateway {
+    metadata_calls: Mutex<Vec<(bool, usize)>>,
     calls: Mutex<Vec<(String, Vec<TitleExternalRef>)>>,
 }
 
 #[async_trait]
 impl MetadataGateway for RecordingResolveGateway {
+    async fn get_movie_titles(
+        &self,
+        refs: &[crate::MovieTitleRef],
+        _: &str,
+    ) -> AppResult<crate::MovieTitleBulkResult> {
+        self.metadata_calls.lock().unwrap().push((true, refs.len()));
+        Ok(crate::MovieTitleBulkResult {
+            by_ref_index: refs
+                .iter()
+                .enumerate()
+                .map(|(index, reference)| {
+                    (
+                        index,
+                        MovieMetadata {
+                            smg_id: reference.smg_id,
+                            original_language: Some("en".into()),
+                            year: Some(2020),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        })
+    }
+    async fn get_series_titles(
+        &self,
+        refs: &[crate::SeriesTitleRef],
+        _: &str,
+        episodes: bool,
+        orders: bool,
+    ) -> AppResult<crate::SeriesTitleBulkResult> {
+        assert!(!episodes && !orders);
+        self.metadata_calls
+            .lock()
+            .unwrap()
+            .push((false, refs.len()));
+        Ok(crate::SeriesTitleBulkResult {
+            by_ref_index: refs
+                .iter()
+                .enumerate()
+                .map(|(index, reference)| {
+                    (
+                        index,
+                        crate::SeriesMetadata {
+                            smg_id: reference.smg_id,
+                            original_language: Some("ja".into()),
+                            year: Some(2021),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect(),
+            ..Default::default()
+        })
+    }
     async fn search_tvdb(
         &self,
         _query: &str,
@@ -175,6 +232,51 @@ impl MetadataGateway for RecordingResolveGateway {
             })
             .collect())
     }
+}
+
+#[tokio::test]
+async fn enrichment_deduplicates_across_facets_and_scales_with_batches() {
+    let gateway = Arc::new(RecordingResolveGateway::default());
+    let resolver = GatewayListItemResolver::new(gateway.clone(), FixtureLibrary(HashMap::new()));
+    let mut items = Vec::new();
+    for facet in [MediaFacet::Movie, MediaFacet::Series, MediaFacet::Anime] {
+        for id in 1..=101 {
+            let mut item = crate::lists::test_support::resolved_item(&format!("{facet:?}-{id}"));
+            item.kind = Some(facet.clone());
+            item.smg_title_id = Some(id);
+            items.push(item);
+        }
+    }
+    resolver.enrich(&mut items).await.unwrap();
+    assert_eq!(
+        *gateway.metadata_calls.lock().unwrap(),
+        vec![
+            (true, 50),
+            (true, 50),
+            (true, 1),
+            (false, 50),
+            (false, 50),
+            (false, 1)
+        ]
+    );
+    assert!(items.iter().all(|item| item.facts.is_some()));
+    assert_eq!(
+        items[101].facts, items[202].facts,
+        "series/anime share fetched facts"
+    );
+    gateway.metadata_calls.lock().unwrap().clear();
+    let subscription = crate::lists::test_support::subscription("no-filters");
+    super::super::resolve::resolve_items(
+        &subscription,
+        vec![crate::lists::test_support::plugin_item("one")],
+        &resolver,
+    )
+    .await
+    .unwrap();
+    assert!(
+        gateway.metadata_calls.lock().unwrap().is_empty(),
+        "no enrichment without active filters"
+    );
 }
 
 struct FixtureLibrary(HashMap<String, String>);

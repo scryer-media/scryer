@@ -2982,6 +2982,23 @@ file = "postgres/migrations/0280_cropped_resolution_relabel.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 281
+description = "canonical tag vocabulary cache"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0281_canonical_tag_vocabulary.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0281_canonical_tag_vocabulary.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

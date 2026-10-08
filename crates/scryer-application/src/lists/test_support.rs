@@ -105,6 +105,7 @@ pub(crate) fn plugin_item(key: &str) -> ListPluginItem {
 pub(crate) fn resolved_item(key: &str) -> ResolvedItem {
     let item = plugin_item(key);
     ResolvedItem {
+        facts: None,
         external_ids: vec![tmdb(&format!("{key}-id"))],
         item,
         kind: Some(MediaFacet::Movie),
@@ -145,6 +146,10 @@ pub(crate) fn membership(
 
 #[derive(Default)]
 pub(crate) struct MemoryListStore {
+    pub vocabulary: Mutex<Option<super::vocabulary::VocabularySnapshot>>,
+    pub vocabulary_reads: std::sync::atomic::AtomicUsize,
+    pub vocabulary_writes: Mutex<Vec<bool>>,
+    pub fail_vocabulary_write: std::sync::atomic::AtomicBool,
     pub subscriptions: Mutex<Vec<ListSubscription>>,
     pub memberships: Mutex<Vec<ListMembership>>,
     pub exclusions: Mutex<Vec<ListExclusion>>,
@@ -203,6 +208,26 @@ impl MemoryListStore {
 
 #[async_trait]
 impl ListSubscriptionRepository for MemoryListStore {
+    async fn vocabulary_cache(&self) -> AppResult<Option<super::vocabulary::VocabularySnapshot>> {
+        self.vocabulary_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Ok(self.vocabulary.lock().unwrap().clone())
+    }
+    async fn save_vocabulary_cache(
+        &self,
+        snapshot: &super::vocabulary::VocabularySnapshot,
+        unchanged: bool,
+    ) -> AppResult<()> {
+        if self
+            .fail_vocabulary_write
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository("fixture cache write failure".into()));
+        }
+        self.vocabulary_writes.lock().unwrap().push(unchanged);
+        *self.vocabulary.lock().unwrap() = Some(snapshot.clone());
+        Ok(())
+    }
     async fn create(&self, subscription: ListSubscription) -> AppResult<ListSubscription> {
         self.subscriptions
             .lock()
@@ -738,10 +763,27 @@ impl ListActions for RecordingActions {
 pub(crate) struct FixtureResolver {
     pub in_library: HashMap<String, String>,
     pub fail: bool,
+    pub facts: Mutex<Option<super::resolve::ListMetadataFacts>>,
+    pub fail_enrichment: std::sync::atomic::AtomicBool,
 }
 
 #[async_trait]
 impl ListItemResolver for FixtureResolver {
+    async fn enrich(&self, items: &mut [ResolvedItem]) -> AppResult<()> {
+        if self
+            .fail_enrichment
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            return Err(AppError::Repository(
+                "fixture enrichment unavailable".into(),
+            ));
+        }
+        for item in items {
+            item.facts = self.facts.lock().unwrap().clone();
+        }
+        Ok(())
+    }
+
     async fn resolve(&self, inputs: &[ResolveInput]) -> AppResult<Vec<ResolveOutput>> {
         if self.fail {
             return Err(AppError::Repository("fixture gateway down".into()));

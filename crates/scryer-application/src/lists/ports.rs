@@ -43,6 +43,18 @@ impl ListSubscriptionQuery {
 
 #[async_trait]
 pub trait ListSubscriptionRepository: Send + Sync {
+    async fn vocabulary_cache(&self) -> AppResult<Option<super::vocabulary::VocabularySnapshot>> {
+        Ok(None)
+    }
+    async fn save_vocabulary_cache(
+        &self,
+        _snapshot: &super::vocabulary::VocabularySnapshot,
+        _unchanged: bool,
+    ) -> AppResult<()> {
+        Err(crate::AppError::Repository(
+            "vocabulary cache is not configured".into(),
+        ))
+    }
     /// Stores a new subscription. A public subscription whose source
     /// (provider, source type and params) another public subscription already
     /// follows is refused with a validation error; the check and the insert

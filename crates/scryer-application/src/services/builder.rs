@@ -706,6 +706,7 @@ impl AppServicesBuilder {
             plugins,
             auth: self.services.lists.auth.clone(),
             account_runtime: self.services.lists.account_runtime.clone(),
+            vocabulary: self.services.lists.vocabulary.clone(),
         };
         self
     }

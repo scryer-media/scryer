@@ -20,6 +20,8 @@ export type ListMembershipState =
   | "DISCOVER"
   | "PENDING";
 export type ListFilterKind =
+  | "RATINGS"
+  | "EXCLUDE_CANONICAL_TAGS"
   | "RATING_AT_LEAST"
   | "RELEASE_YEAR"
   | "EXCLUDE_GENRES"
@@ -137,6 +139,10 @@ export type ListRoute = {
 };
 
 export type ListFilter = {
+  facet?: Facet | null;
+  matchAny?: boolean;
+  minimums?: Array<{ source: string; value: number }>;
+  unresolvedLabels?: string[];
   kind: ListFilterKind;
   scale: string | null;
   value: number | null;
@@ -273,6 +279,8 @@ export type ListSubscriptionDraft = {
 
 /** Where a new subscription reads from: a manifest item or a recognised URL. */
 export type ListSourceDraft = {
+  previewFilters?: ListFilter[];
+  previewKinds?: Facet[];
   provider: string;
   sourceType: string;
   params: ListParam[];

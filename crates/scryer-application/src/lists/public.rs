@@ -82,6 +82,8 @@ pub struct PublicListPatch {
 /// A source to preview before following it.
 #[derive(Clone, Debug, Default)]
 pub struct ListSourceDraft {
+    pub preview_filters: Vec<ListFilter>,
+    pub preview_kinds: Option<Vec<MediaFacet>>,
     pub provider: Option<String>,
     pub source_type: Option<String>,
     pub params: BTreeMap<String, String>,
@@ -394,7 +396,7 @@ fn draft_subscription(
 
 /// A route for every kind, so a draft preview filters nothing for want of a
 /// route.
-fn preview_routes(kinds: &[MediaFacet]) -> Vec<ListRoute> {
+pub(super) fn preview_routes(kinds: &[MediaFacet]) -> Vec<ListRoute> {
     kinds
         .iter()
         .map(|kind| ListRoute {
@@ -682,10 +684,12 @@ impl AppUseCase {
         let lists = &self.services.lists;
         let gateway = self.services.library.metadata_gateway.clone();
         let charts = GatewayListChartSource::new(gateway.clone());
-        let resolver = GatewayListItemResolver::new(gateway, AppListLibraryLookup::new(self));
+        let resolver = GatewayListItemResolver::new(gateway, AppListLibraryLookup::new(self))
+            .with_vocabulary(lists.vocabulary.clone(), lists.subscriptions.clone());
         // A preview always reads the whole list: an "unchanged" answer would
         // leave it nothing to show.
-        let mut subscription = subscription.clone();
+        let mut subscription =
+            super::resolve::ListItemResolver::normalize_filters(&resolver, subscription).await?;
         subscription.sync.fetch_fingerprint = None;
         let mut config = self
             .list_provider_config_for(&subscription.source.provider)
@@ -813,9 +817,12 @@ impl AppUseCase {
         else {
             return Ok(ListPreview::default());
         };
-        let kinds = classified.kinds.clone();
-        let subscription =
+        let kinds = draft
+            .preview_kinds
+            .unwrap_or_else(|| classified.kinds.clone());
+        let mut subscription =
             draft_subscription(actor, &classified, kinds.clone(), preview_routes(&kinds));
+        subscription.filters = draft.preview_filters;
         self.run_preview(&subscription, HashMap::new()).await
     }
 
@@ -875,7 +882,9 @@ impl AppUseCase {
         subscription.name = trimmed(input.name.as_deref()).unwrap_or(subscription.name);
         subscription.provider_url = trimmed(input.url.as_deref());
         subscription.mode = input.mode;
-        subscription.filters = input.filters;
+        subscription.filters = self
+            .normalize_list_filters(&input.filters, &subscription.kinds)
+            .await?;
         subscription.max_per_sync = input.max_per_sync;
         subscription.on_leave = input.on_leave;
         subscription.sync.next_at = Some(subscription.created_at);
@@ -937,7 +946,9 @@ impl AppUseCase {
         subscription.mode = mode;
         subscription.routes = routes;
         if let Some(filters) = patch.filters {
-            subscription.filters = filters;
+            subscription.filters = self
+                .normalize_list_filters(&filters, &subscription.kinds)
+                .await?;
         }
         subscription.max_per_sync = max_per_sync;
         if let Some(on_leave) = patch.on_leave {

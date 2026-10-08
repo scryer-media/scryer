@@ -33,6 +33,60 @@ const RUN_COLUMNS: &str =
 
 #[async_trait]
 impl ListSubscriptionRepository for ListStore {
+    async fn vocabulary_cache(
+        &self,
+    ) -> AppResult<Option<scryer_application::lists::vocabulary::VocabularySnapshot>> {
+        let row = SqlRuntime::fetch_optional(
+            self.datastore.read_exec(),
+            "SELECT version, payload_json, checked_at, jitter_seconds FROM canonical_tag_vocabulary_cache WHERE id = 'canonical'",
+            &[],
+        ).await?;
+        row.map(|row| {
+            Ok(scryer_application::lists::vocabulary::VocabularySnapshot {
+                version: row.text("version")?,
+                entries: json_column(&row, "payload_json", "[]")?,
+                checked_at: row.timestamp("checked_at")?,
+                jitter_seconds: row.i64("jitter_seconds")?,
+            })
+        })
+        .transpose()
+    }
+
+    async fn save_vocabulary_cache(
+        &self,
+        snapshot: &scryer_application::lists::vocabulary::VocabularySnapshot,
+        unchanged: bool,
+    ) -> AppResult<()> {
+        let (sql, args) = if unchanged {
+            (
+                "UPDATE canonical_tag_vocabulary_cache SET checked_at = {} WHERE id = 'canonical' AND version = {}",
+                vec![
+                    SqlArg::Timestamp(snapshot.checked_at),
+                    SqlArg::Text(snapshot.version.clone()),
+                ],
+            )
+        } else {
+            (
+                "INSERT INTO canonical_tag_vocabulary_cache (id, version, payload_json, checked_at, jitter_seconds) VALUES ('canonical', {}, {}, {}, {}) ON CONFLICT (id) DO UPDATE SET version = excluded.version, payload_json = excluded.payload_json, checked_at = excluded.checked_at, jitter_seconds = excluded.jitter_seconds",
+                vec![
+                    SqlArg::Text(snapshot.version.clone()),
+                    json_arg(&snapshot.entries)?,
+                    SqlArg::Timestamp(snapshot.checked_at),
+                    SqlArg::I64(snapshot.jitter_seconds),
+                ],
+            )
+        };
+        let changed =
+            SqlRuntime::execute_write(&self.datastore, "save_canonical_vocabulary", sql, args)
+                .await?;
+        if changed != 1 {
+            return Err(AppError::Repository(
+                "canonical vocabulary cache changed during refresh".into(),
+            ));
+        }
+        Ok(())
+    }
+
     async fn create(&self, subscription: ListSubscription) -> AppResult<ListSubscription> {
         let insert_args = subscription_insert_args(&subscription)?;
         let route_rows = route_rows(&subscription)?;

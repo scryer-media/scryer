@@ -100,6 +100,20 @@ fn decide(
         return ItemDecision::Excluded;
     }
 
+    // Filters govern admission, not cleanup protection for an existing link.
+    if let Some(previous) = memberships.get(&item.item.item_key)
+        && previous.left_at.is_none()
+        && previous.title_id.is_some()
+        && !matches!(
+            previous.state,
+            ListMembershipState::Filtered | ListMembershipState::Excluded
+        )
+    {
+        return ItemDecision::Keep {
+            state: previous.state,
+        };
+    }
+
     if let Some(reason) = filter_reason(subscription, item) {
         return ItemDecision::Filtered { reason };
     }
@@ -179,40 +193,118 @@ pub fn filter_reason(subscription: &ListSubscription, item: &ResolvedItem) -> Op
         .filters
         .iter()
         .find(|filter| !passes(filter, item))
-        .map(filter_label)
+        .map(|filter| {
+            let missing = match filter {
+                ListFilter::Ratings { minimums, .. } => minimums.iter().any(|minimum| {
+                    !item.facts.as_ref().is_some_and(|facts| {
+                        facts.ratings.iter().any(|rating| {
+                            rating_source(&rating.source).map(|value| value.0)
+                                == rating_source(&minimum.source).map(|value| value.0)
+                                && usable_rating(rating)
+                        })
+                    })
+                }),
+                ListFilter::RatingAtLeast { scale, .. } => {
+                    !item.facts.as_ref().is_some_and(|facts| {
+                        facts.ratings.iter().any(|rating| {
+                            rating_source(&rating.source).map(|value| value.0)
+                                == rating_source(scale).map(|value| value.0)
+                                && usable_rating(rating)
+                        })
+                    })
+                }
+                ListFilter::ReleaseYear { .. } => {
+                    item.facts.as_ref().and_then(|facts| facts.year).is_none()
+                }
+                ListFilter::Language { .. } => item
+                    .facts
+                    .as_ref()
+                    .and_then(|facts| facts.original_language.as_ref())
+                    .is_none(),
+                ListFilter::ReleasedOnly => item
+                    .facts
+                    .as_ref()
+                    .and_then(|facts| facts.release_date)
+                    .is_none(),
+                ListFilter::ExcludeCanonicalTags { .. } => item.facts.is_none(),
+                _ => false,
+            };
+            let label = filter_label(filter);
+            if missing {
+                format!("missing_{label}")
+            } else {
+                label
+            }
+        })
 }
 
 fn passes(filter: &ListFilter, item: &ResolvedItem) -> bool {
-    let item = &item.item;
+    let facts = item.facts.as_ref();
     match filter {
         // A rating's scale names the source that rated the item, such as
         // `tmdb` or `imdb`, and its value is on that source's own scale. A
         // filter matches only a rating from the source it names.
-        ListFilter::RatingAtLeast { scale, value } => {
-            item.provider_rating.as_ref().is_some_and(|rating| {
-                rating.scale.trim().eq_ignore_ascii_case(scale.trim()) && rating.value >= *value
-            })
-        }
-        ListFilter::ReleaseYear { from, to } => match item.year {
-            Some(year) => from.is_none_or(|from| year >= from) && to.is_none_or(|to| year <= to),
-            None => true,
-        },
-        ListFilter::ExcludeGenres { genres } => !item.genres.iter().any(|genre| {
-            genres
+        ListFilter::Ratings {
+            facet,
+            match_any,
+            minimums,
+        } => {
+            if item.kind.as_ref() != Some(facet) || minimums.is_empty() {
+                return true;
+            }
+            let mut checks = minimums
                 .iter()
-                .any(|excluded| excluded.eq_ignore_ascii_case(genre))
-        }),
-        ListFilter::Format { formats } => item.format.as_ref().is_none_or(|format| {
+                .map(|minimum| rating_passes(facts, &minimum.source, minimum.value));
+            if *match_any {
+                checks.any(|passes| passes)
+            } else {
+                checks.all(|passes| passes)
+            }
+        }
+        ListFilter::ExcludeCanonicalTags {
+            facet,
+            keys,
+            unresolved_labels,
+        } => {
+            if item.kind.as_ref() != Some(facet)
+                || (keys.is_empty() && unresolved_labels.is_empty())
+            {
+                return true;
+            }
+            unresolved_labels.is_empty()
+                && facts
+                    .is_some_and(|facts| !facts.canonical_keys.iter().any(|key| keys.contains(key)))
+        }
+        ListFilter::RatingAtLeast { scale, value } => rating_passes(facts, scale, *value),
+        ListFilter::ReleaseYear { from, to } => match facts.and_then(|facts| facts.year) {
+            Some(year) => from.is_none_or(|from| year >= from) && to.is_none_or(|to| year <= to),
+            None => from.is_none() && to.is_none(),
+        },
+        // Legacy labels must be resolved through the vocabulary before evaluation.
+        ListFilter::ExcludeGenres { genres } => genres.is_empty(),
+        ListFilter::Format { formats } => item.item.format.as_ref().is_none_or(|format| {
             formats
                 .iter()
                 .any(|allowed| allowed.eq_ignore_ascii_case(format))
         }),
-        ListFilter::Language { languages } => item.language.as_ref().is_none_or(|language| {
-            languages
-                .iter()
-                .any(|allowed| allowed.eq_ignore_ascii_case(language))
-        }),
-        ListFilter::ReleasedOnly => item.released != Some(false),
+        ListFilter::Language { languages } => {
+            languages.is_empty()
+                || facts
+                    .and_then(|facts| facts.original_language.as_ref())
+                    .is_some_and(|language| {
+                        languages.iter().any(|allowed| {
+                            crate::normalize_search_language_code(language).is_some_and(
+                                |language| {
+                                    crate::normalize_search_language_code(allowed).as_ref()
+                                        == Some(&language)
+                                },
+                            )
+                        })
+                    })
+        }
+        ListFilter::ReleasedOnly => facts
+            .and_then(|facts| facts.release_date)
+            .is_some_and(|date| date <= chrono::Utc::now().date_naive()),
         // These need facts the fetched item does not carry (the member's
         // streaming services, credits, franchise order). Until the engine has
         // them they pass rather than silently dropping every item.
@@ -222,8 +314,58 @@ fn passes(filter: &ListFilter, item: &ResolvedItem) -> bool {
     }
 }
 
+pub fn rating_source(source: &str) -> Option<(&'static str, f64)> {
+    Some(match source.trim().to_ascii_lowercase().as_str() {
+        "imdb" => ("imdb", 10.0),
+        "tmdb" => ("tmdb", 10.0),
+        "tvdb" | "thetvdb" => ("tvdb", 10.0),
+        "trakt" => ("trakt", 10.0),
+        "mal" | "myanimelist" | "myanimelist.net" => ("mal", 10.0),
+        "anilist" => ("anilist", 100.0),
+        "anidb" => ("anidb", 10.0),
+        "letterboxd" => ("letterboxd", 5.0),
+        "tomatoes" | "rottentomatoes" => ("tomatoes", 100.0),
+        "audience" | "popcorn" | "popcornmeter" => ("audience", 100.0),
+        "metacritic" => ("metacritic", 100.0),
+        "mcuser" | "metacriticuser" => ("mcuser", 10.0),
+        "mdblist" => ("mdblist", 100.0),
+        _ => return None,
+    })
+}
+
+fn usable_rating(rating: &scryer_domain::TitleExternalRating) -> bool {
+    rating.normalized.is_finite()
+        && (0.0..=10.0).contains(&rating.normalized)
+        // A default zero with no supplied score is missing, not a zero-star rating.
+        && (rating.normalized > 0.0
+            || rating.value.is_some_and(f64::is_finite)
+            || rating.score.is_some_and(f64::is_finite))
+}
+
+fn rating_passes(
+    facts: Option<&super::resolve::ListMetadataFacts>,
+    source: &str,
+    minimum: f64,
+) -> bool {
+    let Some((source, scale)) = rating_source(source) else {
+        return false;
+    };
+    if !minimum.is_finite() || !(0.0..=scale).contains(&minimum) {
+        return false;
+    }
+    facts.is_some_and(|facts| {
+        facts.ratings.iter().any(|rating| {
+            rating_source(&rating.source).is_some_and(|(name, _)| name == source)
+                && usable_rating(rating)
+                && rating.normalized / 10.0 >= minimum / scale
+        })
+    })
+}
+
 fn filter_label(filter: &ListFilter) -> String {
     match filter {
+        ListFilter::Ratings { .. } => "rating",
+        ListFilter::ExcludeCanonicalTags { .. } => "genre",
         ListFilter::RatingAtLeast { .. } => "rating",
         ListFilter::ReleaseYear { .. } => "release_year",
         ListFilter::ExcludeGenres { .. } => "genre",

@@ -3,45 +3,29 @@ import { useNavigate } from "react-router";
 import { useClient } from "urql";
 import { Tag, X } from "lucide-react";
 
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectSeparator,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
+import { titleTagDefinitionsQuery } from "@/lib/graphql/queries";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import {
+  createTitleTagDefinitionMutation,
   updateSeriesMovieTagsMutation,
   updateTitleTagsMutation,
 } from "@/lib/graphql/mutations";
 import { useSessionUser } from "@/lib/hooks/use-auth";
-import { useTitleTagDefinitions } from "@/lib/hooks/use-title-tag-definitions";
+import { useTitleTagDefinitions, refreshTitleTagConsumers } from "@/lib/hooks/use-title-tag-definitions";
 import type { TitleTagDefinition } from "@/lib/types/title-tags";
 import { APP_PERMISSIONS, hasAppPermission } from "@/lib/utils/permissions";
 import {
+  normalizeTitleTagLabel,
+  titleTagLabelErrorKey,
   availableTitleTagLabels,
   isEmptyTitleTagsDelta,
   titleTagsDelta,
   userTitleTags,
 } from "@/lib/utils/title-tags";
-
-/// Sentinel for the select's resting state. Radix selects need a non-empty
-/// value, and the control is an action ("add this one"), not a field with a
-/// current value.
-const ADD_PLACEHOLDER_VALUE = "__add_title_tag__";
-
-/// Sentinel for the way out of the picker. The registry is administrator-owned
-/// and this control cannot add to it, so the one thing it can offer someone who
-/// runs out of tags is the screen that defines them.
-const MANAGE_REGISTRY_VALUE = "__manage_title_tags__";
-
-/// Where the tag registry is edited. The section is gated on catalog settings,
-/// not system settings, so that is what decides whether the way out is offered
-/// -- pointing anyone else at it would be a link to a page they cannot open.
-const TITLE_TAGS_SETTINGS_PATH = "/settings/tags";
 
 export type TitleTagsPickerProps = {
   /** Labels currently applied. Reserved `scryer:` entries are ignored. */
@@ -63,13 +47,7 @@ export type TitleTagsPickerProps = {
   layout?: "stacked" | "horizontal" | "table";
 };
 
-/**
- * Chips plus a registry-backed select. There is deliberately no free-text
- * entry: an administrator decides which tags exist, and everything else only
- * decides which titles carry them -- so for a viewer who is that administrator
- * the list ends in the way to go and define more, which is the only thing this
- * control cannot do for them.
- */
+/** Shared searchable registry picker with permission-gated inline creation. */
 export function TitleTagsPicker({
   value,
   onChange,
@@ -83,6 +61,14 @@ export function TitleTagsPicker({
 }: TitleTagsPickerProps) {
   const t = useTranslate();
   const navigate = useNavigate();
+  const client = useClient();
+  const [open, setOpen] = React.useState(false);
+  const [search, setSearch] = React.useState("");
+  const [creating, setCreating] = React.useState(false);
+  const [createError, setCreateError] = React.useState<string | null>(null);
+  const busyRef = React.useRef(false);
+  const current = React.useRef({ value, excludedLabels, onChange, disabled });
+  React.useEffect(() => { current.current = { value, excludedLabels, onChange, disabled }; }, [value, excludedLabels, onChange, disabled]);
   const sessionUser = useSessionUser();
   const canManageRegistry = hasAppPermission(
     sessionUser,
@@ -102,19 +88,45 @@ export function TitleTagsPicker({
   );
   const registryIsEmpty = !loading && definitions.length === 0;
 
-  const addLabel = React.useCallback(
-    (label: string) => {
-      if (label === ADD_PLACEHOLDER_VALUE) {
-        return;
+  const addLabel = (label: string) => {
+    const latest = current.current;
+    if (latest.disabled || userTitleTags(latest.excludedLabels).includes(label)) return;
+    latest.onChange(userTitleTags([...userTitleTags(latest.value), label]));
+    setOpen(false);
+    setSearch("");
+  };
+  const candidate = normalizeTitleTagLabel(search);
+  const candidateError = titleTagLabelErrorKey(candidate);
+  const canCreate = canManageRegistry && candidate.length > 0 && !candidateError
+    && !definitions.some((definition) => normalizeTitleTagLabel(definition.label) === candidate)
+    && !excluded.has(candidate) && !applied.includes(candidate);
+  const createAndSelect = async () => {
+    if (!canCreate || disabled || loading || busyRef.current) return;
+    busyRef.current = true;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const result = await client.mutation(createTitleTagDefinitionMutation, { input: { label: candidate, description: null } }).toPromise();
+      let label: string | undefined = result.data?.createTitleTagDefinition?.definition?.label;
+      let refreshedDefinitions: TitleTagDefinition[] | undefined;
+      if (result.error) {
+        if (!result.error.message.toLowerCase().includes("already exists")) throw result.error;
+        const refreshed = await client.query(titleTagDefinitionsQuery, {}, { requestPolicy: "network-only" }).toPromise();
+        if (refreshed.error) throw refreshed.error;
+        refreshedDefinitions = refreshed.data?.titleTagDefinitions;
+        label = refreshed.data?.titleTagDefinitions?.find((definition: TitleTagDefinition) => normalizeTitleTagLabel(definition.label) === candidate)?.label;
+        if (!label) throw result.error;
       }
-      if (label === MANAGE_REGISTRY_VALUE) {
-        void navigate(TITLE_TAGS_SETTINGS_PATH);
-        return;
-      }
-      onChange(userTitleTags([...applied, label]));
-    },
-    [applied, navigate, onChange],
-  );
+      if (!label) throw new Error(t("settings.titleTagSaveError"));
+      refreshTitleTagConsumers(client, refreshedDefinitions);
+      addLabel(label);
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : t("settings.titleTagSaveError"));
+    } finally {
+      busyRef.current = false;
+      setCreating(false);
+    }
+  };
 
   const removeLabel = React.useCallback(
     (label: string) => {
@@ -153,49 +165,29 @@ export function TitleTagsPicker({
   );
 
   const selector = registryIsEmpty && !canManageRegistry ? (
-    // No free text means an empty registry has nothing to offer, so the
-    // picker says where tags come from instead of showing a dead control.
-    // Someone who can define them keeps the control, because for them it is
-    // not dead: it still carries the way to the screen that defines them.
     <p className="text-xs text-muted-foreground">{t("title.tagsEmptyRegistry")}</p>
   ) : (
-    <Select
-      value={ADD_PLACEHOLDER_VALUE}
-      onValueChange={addLabel}
-      disabled={disabled || loading || (options.length === 0 && !canManageRegistry)}
-    >
-      <SelectTrigger
-        id={`${idPrefix}-tags-add`}
-        className={layout === "table" ? "ml-auto h-9 w-[70%]" : "h-9 w-full"}
-      >
-        <SelectValue placeholder={t("title.tagsAdd")} />
-      </SelectTrigger>
-      <SelectContent>
-        <SelectItem value={ADD_PLACEHOLDER_VALUE}>
-          {options.length > 0
-            ? t("title.tagsAdd")
-            : registryIsEmpty
-              ? t("title.tagsNoneDefined")
-              : t("title.tagsAllApplied")}
-        </SelectItem>
-        {options.map((label) => (
-          <SelectItem key={label} value={label}>
-            {label}
-          </SelectItem>
-        ))}
-        {canManageRegistry ? (
-          <>
-            <SelectSeparator />
-            <SelectItem
-              id={`${idPrefix}-tags-manage`}
-              value={MANAGE_REGISTRY_VALUE}
-            >
-              {t("title.tagsCreateMore")}
-            </SelectItem>
-          </>
-        ) : null}
-      </SelectContent>
-    </Select>
+    <Popover open={open && !disabled} onOpenChange={(next) => { if (!creating) { setOpen(next); setCreateError(null); } }} modal>
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" id={`${idPrefix}-tags-add`} disabled={disabled || loading || creating}
+          className={layout === "table" ? "ml-auto h-9 w-[70%]" : "h-9 w-full"}>{t("title.tagsAdd")}</Button>
+      </PopoverTrigger>
+      <PopoverContent className="z-[90] w-[var(--radix-popover-trigger-width)] min-w-64 p-0">
+        <Command shouldFilter={false}>
+          <CommandInput value={search} onValueChange={(value) => { setSearch(value); setCreateError(null); }} placeholder={t("title.tagsSearch")} disabled={creating} />
+          <CommandList>
+            {options.filter((label) => label.includes(normalizeTitleTagLabel(search))).map((label) => (
+              <CommandItem key={label} value={label} onSelect={() => addLabel(label)} disabled={creating}>{label}</CommandItem>
+            ))}
+            {canCreate ? <CommandItem value={`create-${candidate}`} onSelect={() => void createAndSelect()} disabled={creating}>
+              {t("title.tagsCreateSelect", { label: candidate })}
+            </CommandItem> : null}
+            {canManageRegistry ? <CommandItem id={`${idPrefix}-tags-manage`} value="manage-registry" disabled={creating} onSelect={() => { setOpen(false); void navigate("/settings/tags"); }}>{t("title.tagsCreateMore")}</CommandItem> : null}
+          </CommandList>
+        </Command>
+        {createError || (candidate && candidateError) ? <p role="alert" className="p-3 text-sm text-destructive">{createError ?? t(candidateError!)}</p> : null}
+      </PopoverContent>
+    </Popover>
   );
 
   if (layout === "table") {

@@ -219,6 +219,18 @@ pub struct ListRoute {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "filter", rename_all = "snake_case")]
 pub enum ListFilter {
+    Ratings {
+        facet: MediaFacet,
+        #[serde(default)]
+        match_any: bool,
+        minimums: Vec<ListRatingMinimum>,
+    },
+    ExcludeCanonicalTags {
+        facet: MediaFacet,
+        keys: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        unresolved_labels: Vec<String>,
+    },
     RatingAtLeast {
         scale: String,
         value: f64,
@@ -242,6 +254,12 @@ pub enum ListFilter {
     ReleasedOnly,
     DirectorCreditsOnly,
     NotSequelWithoutBase,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct ListRatingMinimum {
+    pub source: String,
+    pub value: f64,
 }
 
 /// The sync bookkeeping a subscription carries.

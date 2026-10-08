@@ -145,6 +145,49 @@ fn membership(
 }
 
 #[tokio::test]
+async fn vocabulary_cache_round_trip_timestamp_only_and_primary_key_plan() {
+    use scryer_application::lists::vocabulary::{VocabularyEntry, VocabularySnapshot};
+    let store = test_store(None).await;
+    assert!(store.vocabulary_cache().await.unwrap().is_none());
+    let mut snapshot = VocabularySnapshot {
+        version: "v1".into(),
+        entries: vec![VocabularyEntry {
+            key: "canonical:genre:action".into(),
+            category: "genre".into(),
+            name: "Action".into(),
+            aliases: vec![],
+        }],
+        checked_at: Utc::now(),
+        jitter_seconds: 42,
+    };
+    store.save_vocabulary_cache(&snapshot, false).await.unwrap();
+    let loaded = store.vocabulary_cache().await.unwrap().unwrap();
+    assert_eq!(loaded.entries, snapshot.entries);
+    snapshot.checked_at += Duration::hours(1);
+    snapshot.entries.clear(); // Timestamp-only updates must not rewrite payload.
+    store.save_vocabulary_cache(&snapshot, true).await.unwrap();
+    let checked = store.vocabulary_cache().await.unwrap().unwrap();
+    assert_eq!(checked.entries, loaded.entries);
+    assert_eq!(
+        checked.checked_at.timestamp(),
+        snapshot.checked_at.timestamp()
+    );
+    snapshot.version = "v2".into();
+    snapshot.entries = loaded.entries;
+    store.save_vocabulary_cache(&snapshot, false).await.unwrap();
+    assert_eq!(
+        store.vocabulary_cache().await.unwrap().unwrap().version,
+        "v2"
+    );
+    let plans = SqlRuntime::fetch_all(store.datastore.read_exec(), "EXPLAIN QUERY PLAN SELECT version, payload_json, checked_at, jitter_seconds FROM canonical_tag_vocabulary_cache WHERE id = 'canonical'", &[]).await.unwrap();
+    assert!(
+        plans
+            .iter()
+            .any(|row| row.text("detail").unwrap().contains("USING INDEX"))
+    );
+}
+
+#[tokio::test]
 async fn subscription_round_trips_with_routes_and_update_replaces_them() {
     let store = test_store(None).await;
     let created =
