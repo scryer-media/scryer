@@ -250,7 +250,9 @@ impl ListMembershipStateValue {
 #[derive(Enum, Copy, Clone, Eq, PartialEq)]
 #[graphql(name = "ListFilterKind", rename_items = "SCREAMING_SNAKE_CASE")]
 pub enum ListFilterKindValue {
+    /// Per-facet rating minimums, matching all sources or at least one source.
     Ratings,
+    /// Exclude titles matching selected canonical genre or theme keys in a facet.
     ExcludeCanonicalTags,
     /// The provider's rating is at least `value` on `scale`.
     RatingAtLeast,
@@ -619,24 +621,34 @@ pub struct ListRouteInput {
     pub tags: Vec<String>,
 }
 
+/// A minimum rating from one attributed rating source.
 #[derive(SimpleObject, Clone)]
 pub struct ListRatingMinimumPayload {
+    /// Canonical identifier of the rating source.
     pub source: String,
+    /// Inclusive minimum on the named source's native rating scale.
     pub value: f64,
 }
 
+/// A minimum rating to require from one supported rating source.
 #[derive(InputObject, Clone)]
 pub struct ListRatingMinimumInput {
+    /// Supported rating source identifier; registered aliases are normalized.
     pub source: String,
+    /// Inclusive minimum on the named source's native rating scale.
     pub value: f64,
 }
 
 /// One list filter. Only the fields its kind uses are set.
 #[derive(SimpleObject, Clone)]
 pub struct ListFilterPayload {
+    /// Movie, Series, or Anime scope for ratings and canonical exclusions.
     pub facet: Option<MediaFacetValue>,
+    /// Whether any rating minimum may pass; false requires every minimum.
     pub match_any: bool,
+    /// Attributed minimum ratings; an empty group imposes no restriction.
     pub minimums: Vec<ListRatingMinimumPayload>,
+    /// Legacy genre labels without an unambiguous canonical match, retained for correction.
     pub unresolved_labels: Vec<String>,
     /// The filter's kind.
     pub kind: ListFilterKindValue,
@@ -655,11 +667,15 @@ pub struct ListFilterPayload {
 /// One list filter, as entered. Fields its kind does not use are ignored.
 #[derive(InputObject, Clone)]
 pub struct ListFilterInput {
+    /// Required Movie, Series, or Anime scope for ratings and canonical exclusions.
     pub facet: Option<MediaFacetValue>,
+    /// Whether any rating minimum may pass; defaults to requiring every minimum.
     #[graphql(default)]
     pub match_any: bool,
     #[graphql(default)]
+    /// Attributed minimum ratings; an empty group imposes no restriction.
     pub minimums: Vec<ListRatingMinimumInput>,
+    /// Legacy genre labels without an unambiguous canonical match, retained for correction.
     #[graphql(default)]
     pub unresolved_labels: Vec<String>,
     /// The filter's kind.

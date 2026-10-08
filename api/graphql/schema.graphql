@@ -1444,15 +1444,39 @@ type CanonicalTagFilterOptionPayload {
 	name: String!
 }
 
+"""
+A registered canonical genre or theme available to list filters.
+"""
 type CanonicalTagVocabularyEntryPayload {
+	"""
+	Stable canonical key stored in saved filters.
+	"""
 	key: String!
+	"""
+	Registry category: genre or theme.
+	"""
 	category: String!
+	"""
+	Display name of the canonical entry.
+	"""
 	name: String!
+	"""
+	Registered aliases usable for search and unambiguous legacy-label conversion.
+	"""
 	aliases: [String!]!
 }
 
+"""
+Cached canonical genre and theme vocabulary supplied by the metadata gateway.
+"""
 type CanonicalTagVocabularyPayload {
+	"""
+	BLAKE3 content version of the canonical registry snapshot.
+	"""
 	version: String!
+	"""
+	Complete canonical vocabulary in deterministic order.
+	"""
 	entries: [CanonicalTagVocabularyEntryPayload!]!
 }
 
@@ -10349,9 +10373,21 @@ enum ListExclusionScope {
 One list filter, as entered. Fields its kind does not use are ignored.
 """
 input ListFilterInput {
+	"""
+	Required Movie, Series, or Anime scope for ratings and canonical exclusions.
+	"""
 	facet: MediaFacetValue
+	"""
+	Whether any rating minimum may pass; defaults to requiring every minimum.
+	"""
 	matchAny: Boolean! = false
+	"""
+	Attributed minimum ratings; an empty group imposes no restriction.
+	"""
 	minimums: [ListRatingMinimumInput!]! = []
+	"""
+	Legacy genre labels without an unambiguous canonical match, retained for correction.
+	"""
 	unresolvedLabels: [String!]! = []
 	"""
 	The filter's kind.
@@ -10383,7 +10419,13 @@ input ListFilterInput {
 The kind of one list filter.
 """
 enum ListFilterKind {
+	"""
+	Per-facet rating minimums, matching all sources or at least one source.
+	"""
 	RATINGS
+	"""
+	Exclude titles matching selected canonical genre or theme keys in a facet.
+	"""
 	EXCLUDE_CANONICAL_TAGS
 	"""
 	The provider's rating is at least `value` on `scale`.
@@ -10427,9 +10469,21 @@ enum ListFilterKind {
 One list filter. Only the fields its kind uses are set.
 """
 type ListFilterPayload {
+	"""
+	Movie, Series, or Anime scope for ratings and canonical exclusions.
+	"""
 	facet: MediaFacetValue
+	"""
+	Whether any rating minimum may pass; false requires every minimum.
+	"""
 	matchAny: Boolean!
+	"""
+	Attributed minimum ratings; an empty group imposes no restriction.
+	"""
 	minimums: [ListRatingMinimumPayload!]!
+	"""
+	Legacy genre labels without an unambiguous canonical match, retained for correction.
+	"""
 	unresolvedLabels: [String!]!
 	"""
 	The filter's kind.
@@ -11020,13 +11074,31 @@ type ListProviderTilePayload {
 	abbr: String!
 }
 
+"""
+A minimum rating to require from one supported rating source.
+"""
 input ListRatingMinimumInput {
+	"""
+	Supported rating source identifier; registered aliases are normalized.
+	"""
 	source: String!
+	"""
+	Inclusive minimum on the named source's native rating scale.
+	"""
 	value: Float!
 }
 
+"""
+A minimum rating from one attributed rating source.
+"""
 type ListRatingMinimumPayload {
+	"""
+	Canonical identifier of the rating source.
+	"""
 	source: String!
+	"""
+	Inclusive minimum on the named source's native rating scale.
+	"""
 	value: Float!
 }
 
@@ -24332,7 +24404,15 @@ type QueryRoot {
 		"""
 		id: ID!
 	): IndexerErrorDetailPayload
-	canonicalTagVocabulary(retry: Boolean! = false): CanonicalTagVocabularyPayload!
+	"""
+	Read the canonical vocabulary, refreshing stale snapshots on demand.
+	"""
+	canonicalTagVocabulary(
+		"""
+		Explicitly refresh the snapshot, bypassing retry delay while sharing any in-flight request.
+		"""
+		retry: Boolean! = false
+	): CanonicalTagVocabularyPayload!
 	"""
 	Linked accounts owned by the current member. Credentials are never returned.
 	"""
@@ -24418,7 +24498,15 @@ type QueryRoot {
 		"""
 		ID of a public list or a personal list owned by the current member.
 		"""
-		id: ID!,		filters: [ListFilterInput!],		kinds: [MediaFacetValue!]
+		id: ID!,
+		"""
+		Draft filter override for this preview; omitted uses the saved filters.
+		"""
+		filters: [ListFilterInput!],
+		"""
+		Draft facet override for this preview; omitted uses the saved facets.
+		"""
+		kinds: [MediaFacetValue!]
 	): ListPreviewPayload!
 	"""
 	What following the list at a link would do. An unknown link answers
@@ -24438,7 +24526,15 @@ type QueryRoot {
 		"""
 		The provider, source type and parameters, or a link; personal sources also require an owned linked account.
 		"""
-		input: ListSourceInput!,		filters: [ListFilterInput!]! = [],		kinds: [MediaFacetValue!]
+		input: ListSourceInput!,
+		"""
+		Draft filters to evaluate before following the list; defaults to no filters.
+		"""
+		filters: [ListFilterInput!]! = [],
+		"""
+		Draft facets to preview; omitted uses the source's available facets.
+		"""
+		kinds: [MediaFacetValue!]
 	): ListPreviewPayload!
 	"""
 	Titles no list may add.

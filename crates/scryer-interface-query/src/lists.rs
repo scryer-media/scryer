@@ -14,17 +14,25 @@ use scryer_interface_media::types::{
     ListSubscriptionPayload, ListSyncRunPayload, MemberListPolicyPayload,
 };
 
+/// Cached canonical genre and theme vocabulary supplied by the metadata gateway.
 #[derive(async_graphql::SimpleObject)]
 struct CanonicalTagVocabularyPayload {
+    /// BLAKE3 content version of the canonical registry snapshot.
     version: String,
+    /// Complete canonical vocabulary in deterministic order.
     entries: Vec<CanonicalTagVocabularyEntryPayload>,
 }
 
+/// A registered canonical genre or theme available to list filters.
 #[derive(async_graphql::SimpleObject)]
 struct CanonicalTagVocabularyEntryPayload {
+    /// Stable canonical key stored in saved filters.
     key: String,
+    /// Registry category: genre or theme.
     category: String,
+    /// Display name of the canonical entry.
     name: String,
+    /// Registered aliases usable for search and unambiguous legacy-label conversion.
     aliases: Vec<String>,
 }
 
@@ -42,10 +50,15 @@ pub(crate) struct ListQueries;
 
 #[Object]
 impl ListQueries {
+    /// Read the canonical vocabulary, refreshing stale snapshots on demand.
     async fn canonical_tag_vocabulary(
         &self,
         ctx: &Context<'_>,
-        #[graphql(default = false)] retry: bool,
+        #[graphql(
+            default = false,
+            desc = "Explicitly refresh the snapshot, bypassing retry delay while sharing any in-flight request."
+        )]
+        retry: bool,
     ) -> GqlResult<CanonicalTagVocabularyPayload> {
         actor_from_ctx(ctx)?;
         let snapshot = app_from_ctx(ctx)?
@@ -232,7 +245,11 @@ impl ListQueries {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "ID of a public list or a personal list owned by the current member.")] id: ID,
+        #[graphql(
+            desc = "Draft filter override for this preview; omitted uses the saved filters."
+        )]
         filters: Option<Vec<scryer_interface_media::types::ListFilterInput>>,
+        #[graphql(desc = "Draft facet override for this preview; omitted uses the saved facets.")]
         kinds: Option<Vec<scryer_interface_media::types::MediaFacetValue>>,
     ) -> GqlResult<ListPreviewPayload> {
         let app = app_from_ctx(ctx)?;
@@ -277,7 +294,12 @@ impl ListQueries {
             desc = "The provider, source type and parameters, or a link; personal sources also require an owned linked account."
         )]
         input: ListSourceInput,
-        #[graphql(default)] filters: Vec<scryer_interface_media::types::ListFilterInput>,
+        #[graphql(
+            default,
+            desc = "Draft filters to evaluate before following the list; defaults to no filters."
+        )]
+        filters: Vec<scryer_interface_media::types::ListFilterInput>,
+        #[graphql(desc = "Draft facets to preview; omitted uses the source's available facets.")]
         kinds: Option<Vec<scryer_interface_media::types::MediaFacetValue>>,
     ) -> GqlResult<ListPreviewPayload> {
         let app = app_from_ctx(ctx)?;

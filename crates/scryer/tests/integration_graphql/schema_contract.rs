@@ -754,8 +754,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // one more read: 184->185. Keeping the jobs view current adds
     // `latestJobRuns`, the newest run per job in one read: 185->186.
     assert!(query_field_names.contains(&"latestJobRuns"));
+    // Canonical list vocabulary adds one authenticated registry query.
     assert_eq!(
-        query_field_count, 190,
+        query_field_count, 191,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -1061,9 +1062,20 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // ENUM 176->178.
     assert!(public_type_names.contains(&"UiCatalogViewSettingPayload"));
     assert!(public_type_names.contains(&"SetMyCatalogViewInput"));
-    assert_eq!(public_types.len(), 930);
-    assert_eq!(kind_count("OBJECT"), 506);
-    assert_eq!(kind_count("INPUT_OBJECT"), 234);
+    // Facet ratings and canonical vocabulary add three payload objects and
+    // one rating-minimum input. Existing filter enums gain values, not types.
+    assert!(query_field_names.contains(&"canonicalTagVocabulary"));
+    for name in [
+        "CanonicalTagVocabularyPayload",
+        "CanonicalTagVocabularyEntryPayload",
+        "ListRatingMinimumPayload",
+        "ListRatingMinimumInput",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    assert_eq!(public_types.len(), 934);
+    assert_eq!(kind_count("OBJECT"), 509);
+    assert_eq!(kind_count("INPUT_OBJECT"), 235);
     assert_eq!(kind_count("ENUM"), 178);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
