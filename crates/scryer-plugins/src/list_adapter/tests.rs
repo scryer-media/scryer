@@ -93,6 +93,37 @@ fn a_runtime_plugin_is_found_by_type_and_alias() {
 }
 
 #[test]
+fn host_oauth_client_id_reaches_plugins_without_editable_config_fields() {
+    let provider = WasmListPluginProvider::empty().with_runtime_plugin(runtime_plugin(descriptor(
+        serde_json::json!({
+            "provider_type": "fixture-lists",
+            "capabilities": { "requires_member_credential": true },
+            "config_fields": [],
+        }),
+    )));
+    let config = BTreeMap::from([
+        ("client_id".to_string(), "fixture-oauth-app".to_string()),
+        ("client_secret".to_string(), "fixture-secret".to_string()),
+        ("access_token".to_string(), "fixture-token".to_string()),
+        ("undeclared".to_string(), "fixture-value".to_string()),
+    ]);
+    let loaded = provider
+        .plugins
+        .get("fixture-lists")
+        .expect("loaded plugin");
+    let client =
+        WasmListPluginProvider::build_client(loaded, &config, &provider.pacer).expect("client");
+    let binding = client.binding.expect("host binding");
+    assert_eq!(
+        binding.plugin_config.get("client_id"),
+        config.get("client_id")
+    );
+    for excluded in ["client_secret", "access_token", "undeclared"] {
+        assert!(!binding.plugin_config.contains_key(excluded));
+    }
+}
+
+#[test]
 fn a_descriptor_of_another_family_is_refused() {
     let mut subtitle = descriptor(serde_json::json!({ "provider_type": "fixture-lists" }));
     subtitle.provider = ProviderDescriptor::Subtitle(

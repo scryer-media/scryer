@@ -476,8 +476,9 @@ impl WasmListPluginProvider {
             }
         }
 
-        // Only the keys the descriptor declares reach the guest; anything
-        // else a caller put in the map stays on the host.
+        // The OAuth app's public client id is supplied by the host after
+        // account linking, not declared as a user-editable plugin setting.
+        // All other keys must be declared by the descriptor.
         let declared = loaded
             .descriptor
             .config_fields()
@@ -486,7 +487,7 @@ impl WasmListPluginProvider {
             .collect::<std::collections::HashSet<_>>();
         let mut plugin_config = config
             .iter()
-            .filter(|(key, _)| declared.contains(key.as_str()))
+            .filter(|(key, _)| key.as_str() == "client_id" || declared.contains(key.as_str()))
             .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<BTreeMap<_, _>>();
         let config_json = serde_json::to_string(&plugin_config).unwrap_or_default();
