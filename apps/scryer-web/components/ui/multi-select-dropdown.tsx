@@ -1,7 +1,7 @@
 import * as React from "react";
 import { ChevronDown } from "lucide-react";
 
-import { Checkbox } from "@/components/ui/checkbox";
+import { CheckboxField } from "@/components/ui/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   type SelectChrome,
@@ -52,30 +52,21 @@ const MultiSelectOptionRow = React.memo(function MultiSelectOptionRow({
   onToggle,
 }: MultiSelectOptionRowProps) {
   const optionDisabled = disabled || option.disabled === true;
+  const fallbackId = React.useId();
   return (
-    <button
-      id={option.id ?? (optionIdPrefix ? `${optionIdPrefix}-${option.value}` : undefined)}
-      type="button"
-      onClick={() => onToggle(option.value)}
-      disabled={optionDisabled}
-      title={option.title}
-      className={cn(
-        "flex w-full items-center gap-2 rounded-[8px] px-2 py-1.5 text-left text-sm text-[var(--scry-ink2)] transition-colors",
-        "hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(var(--scry-accent-rgb),0.32)]",
-        "disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent",
-        optionClassName,
-      )}
-    >
-      <Checkbox
+    <div title={option.title}>
+      <CheckboxField
+        id={option.id ?? (optionIdPrefix ? `${optionIdPrefix}-${option.value}` : fallbackId)}
         checked={checked}
         disabled={optionDisabled}
         size="compact"
-        className="pointer-events-none"
+        onCheckedChange={() => onToggle(option.value)}
+        className={cn("w-full items-center gap-2 rounded-[8px] px-2 py-1.5 hover:bg-[var(--scry-hover)]", optionClassName)}
+        checkboxClassName="mt-0"
+        labelClassName={cn("block truncate font-normal text-[var(--scry-ink2)]", optionLabelClassName)}
+        label={option.label}
       />
-      <span className={cn("min-w-0 flex-1 truncate", optionLabelClassName)}>
-        {option.label}
-      </span>
-    </button>
+    </div>
   );
 });
 
@@ -113,6 +104,7 @@ function MultiSelectOptionList({
   maxHeightClassName = "max-h-72",
 }: MultiSelectOptionListProps) {
   const allOptions = React.useMemo(() => flattenOptions(groups), [groups]);
+  const allOptionId = React.useId();
   const selectedSet = React.useMemo(
     () => new Set(selectedValues),
     [selectedValues],
@@ -147,29 +139,21 @@ function MultiSelectOptionList({
   return (
     <div className={cn("flex flex-col gap-1 overflow-y-auto", maxHeightClassName, className)}>
       {allOption ? (
-        <button
-          id={allOption.id}
-          type="button"
-          onClick={allOption.onSelect}
+        <CheckboxField
+          id={allOption.id ?? allOptionId}
+          onCheckedChange={allOption.onSelect}
           disabled={disabled}
+          checked={allOption.selected}
+          size="compact"
+          checkboxClassName="mt-0"
+          labelClassName={cn("block truncate font-normal text-[var(--scry-ink2)]", optionLabelClassName)}
+          label={allOption.label}
           className={cn(
-            "flex w-full items-center gap-2 rounded-[8px] px-2 py-1.5 text-left text-sm text-[var(--scry-ink2)] transition-colors",
-            "hover:bg-[var(--scry-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[rgba(var(--scry-accent-rgb),0.32)]",
-            "disabled:cursor-not-allowed disabled:opacity-55 disabled:hover:bg-transparent",
+            "w-full items-center gap-2 rounded-[8px] px-2 py-1.5 hover:bg-[var(--scry-hover)]",
             allOptionClassName,
             optionClassName,
           )}
-        >
-          <Checkbox
-            checked={allOption.selected}
-            disabled={disabled}
-            size="compact"
-            className="pointer-events-none"
-          />
-          <span className={cn("min-w-0 flex-1 truncate", optionLabelClassName)}>
-            {allOption.label}
-          </span>
-        </button>
+        />
       ) : null}
 
       {groups.map((group, index) => (

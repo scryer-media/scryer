@@ -1,11 +1,11 @@
 import * as React from "react";
 import { useNavigate } from "react-router";
 import { useClient } from "urql";
-import { Tag, X } from "lucide-react";
+import { ChevronDown, Tag, X } from "lucide-react";
 
 import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { Button } from "@/components/ui/button";
+import { selectContentClassName, selectTriggerClassName } from "@/components/ui/select";
 import { titleTagDefinitionsQuery } from "@/lib/graphql/queries";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -169,10 +169,13 @@ export function TitleTagsPicker({
   ) : (
     <Popover open={open && !disabled} onOpenChange={(next) => { if (!creating) { setOpen(next); setCreateError(null); } }} modal>
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" id={`${idPrefix}-tags-add`} disabled={disabled || loading || creating}
-          className={layout === "table" ? "ml-auto h-9 w-[70%]" : "h-9 w-full"}>{t("title.tagsAdd")}</Button>
+        <button type="button" id={`${idPrefix}-tags-add`} disabled={disabled || loading || creating}
+          className={selectTriggerClassName({ className: layout === "table" ? "ml-auto h-9 w-[70%]" : "h-9 w-full" })}>
+          <span className="min-w-0 truncate text-left">{t("title.tagsAdd")}</span>
+          <ChevronDown className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
+        </button>
       </PopoverTrigger>
-      <PopoverContent className="z-[90] w-[var(--radix-popover-trigger-width)] min-w-64 p-0">
+      <PopoverContent className={selectContentClassName("z-[90] w-[var(--radix-popover-trigger-width)] min-w-64 p-0")}>
         <Command shouldFilter={false}>
           <CommandInput value={search} onValueChange={(value) => { setSearch(value); setCreateError(null); }} placeholder={t("title.tagsSearch")} disabled={creating} />
           <CommandList>

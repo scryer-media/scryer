@@ -847,6 +847,15 @@ pub struct EpisodeMetadata {
 
 #[async_trait]
 pub trait MetadataGateway: Send + Sync {
+    async fn canonical_tag_vocabulary(
+        &self,
+        _known_version: Option<&str>,
+    ) -> AppResult<crate::lists::vocabulary::VocabularyReply> {
+        Err(crate::AppError::Repository(
+            "canonical vocabulary is not configured".into(),
+        ))
+    }
+
     async fn search_tvdb(
         &self,
         query: &str,

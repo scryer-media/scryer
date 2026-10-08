@@ -151,6 +151,83 @@ async fn unchanged_membership_rechecks_filtered_candidates_without_refetching() 
 }
 
 #[tokio::test]
+async fn unchanged_membership_with_format_rechecks_metadata_after_full_fetch() {
+    let mut list = subscription("list-a");
+    list.filters = vec![
+        scryer_domain::ListFilter::ReleaseYear {
+            from: Some(2020),
+            to: None,
+        },
+        scryer_domain::ListFilter::Format {
+            formats: vec!["movie".into()],
+        },
+    ];
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    {
+        let mut pages = harness.lists.pages.lock().unwrap();
+        let scryer_plugin_sdk::PluginResult::Ok(page) = pages.get_mut("list-a-source").unwrap()
+        else {
+            panic!("fixture page");
+        };
+        page.items[0].format = Some("movie".into());
+    }
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2019),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(0)).await.added, 0);
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Filtered
+    );
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2021),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(360)).await.added, 1);
+    assert_eq!(
+        harness.lists.fetched.lock().unwrap().len(),
+        3,
+        "unchanged response requires one full fetch to recover provider-only format facts"
+    );
+}
+
+#[tokio::test]
+async fn unchanged_membership_does_not_reinterpret_an_unroutable_provider_kind() {
+    let mut list = subscription("list-a");
+    list.filters = vec![scryer_domain::ListFilter::ReleaseYear {
+        from: Some(2020),
+        to: None,
+    }];
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    {
+        let mut pages = harness.lists.pages.lock().unwrap();
+        let scryer_plugin_sdk::PluginResult::Ok(page) = pages.get_mut("list-a-source").unwrap()
+        else {
+            panic!("fixture page");
+        };
+        page.items[0].kind_hint = Some(scryer_plugin_sdk::ListMediaKind::Series);
+    }
+    *harness.resolver.facts.lock().unwrap() = Some(super::super::resolve::ListMetadataFacts {
+        year: Some(2021),
+        ..Default::default()
+    });
+    assert_eq!(harness.sync_at(at(0)).await.added, 0);
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Unresolved
+    );
+    assert_eq!(harness.sync_at(at(360)).await.added, 0);
+    assert_eq!(
+        harness.store.row("list-a", "alpha").state,
+        ListMembershipState::Unresolved
+    );
+    assert_eq!(harness.lists.fetched.lock().unwrap().len(), 3);
+}
+
+#[tokio::test]
 async fn enrichment_failure_preserves_memberships_and_never_runs_departures() {
     let mut list = subscription("list-a");
     list.filters = vec![scryer_domain::ListFilter::ReleaseYear {

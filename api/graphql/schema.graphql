@@ -1444,6 +1444,18 @@ type CanonicalTagFilterOptionPayload {
 	name: String!
 }
 
+type CanonicalTagVocabularyEntryPayload {
+	key: String!
+	category: String!
+	name: String!
+	aliases: [String!]!
+}
+
+type CanonicalTagVocabularyPayload {
+	version: String!
+	entries: [CanonicalTagVocabularyEntryPayload!]!
+}
+
 """
 Classification of a catalog discovery group.
 """
@@ -10337,6 +10349,10 @@ enum ListExclusionScope {
 One list filter, as entered. Fields its kind does not use are ignored.
 """
 input ListFilterInput {
+	facet: MediaFacetValue
+	matchAny: Boolean! = false
+	minimums: [ListRatingMinimumInput!]! = []
+	unresolvedLabels: [String!]! = []
 	"""
 	The filter's kind.
 	"""
@@ -10367,6 +10383,8 @@ input ListFilterInput {
 The kind of one list filter.
 """
 enum ListFilterKind {
+	RATINGS
+	EXCLUDE_CANONICAL_TAGS
 	"""
 	The provider's rating is at least `value` on `scale`.
 	"""
@@ -10409,6 +10427,10 @@ enum ListFilterKind {
 One list filter. Only the fields its kind uses are set.
 """
 type ListFilterPayload {
+	facet: MediaFacetValue
+	matchAny: Boolean!
+	minimums: [ListRatingMinimumPayload!]!
+	unresolvedLabels: [String!]!
 	"""
 	The filter's kind.
 	"""
@@ -10996,6 +11018,16 @@ type ListProviderTilePayload {
 	Short label shown on the tile.
 	"""
 	abbr: String!
+}
+
+input ListRatingMinimumInput {
+	source: String!
+	value: Float!
+}
+
+type ListRatingMinimumPayload {
+	source: String!
+	value: Float!
 }
 
 """
@@ -24300,6 +24332,7 @@ type QueryRoot {
 		"""
 		id: ID!
 	): IndexerErrorDetailPayload
+	canonicalTagVocabulary(retry: Boolean! = false): CanonicalTagVocabularyPayload!
 	"""
 	Linked accounts owned by the current member. Credentials are never returned.
 	"""
@@ -24385,7 +24418,7 @@ type QueryRoot {
 		"""
 		ID of a public list or a personal list owned by the current member.
 		"""
-		id: ID!
+		id: ID!,		filters: [ListFilterInput!],		kinds: [MediaFacetValue!]
 	): ListPreviewPayload!
 	"""
 	What following the list at a link would do. An unknown link answers
@@ -24405,7 +24438,7 @@ type QueryRoot {
 		"""
 		The provider, source type and parameters, or a link; personal sources also require an owned linked account.
 		"""
-		input: ListSourceInput!
+		input: ListSourceInput!,		filters: [ListFilterInput!]! = [],		kinds: [MediaFacetValue!]
 	): ListPreviewPayload!
 	"""
 	Titles no list may add.

@@ -373,53 +373,66 @@ pub async fn sync_subscription(
             .list_by_subscription(&subscription.id)
             .await?;
         stored.retain(|row| row.left_at.is_none());
-        stored.sort_by(|a, b| {
-            a.rank
-                .cmp(&b.rank)
-                .then_with(|| a.item_key.cmp(&b.item_key))
-        });
-        fetched.items = stored
-            .into_iter()
-            .map(|row| {
-                let mut external_ids = row
-                    .external_ids
-                    .into_iter()
-                    .map(|id| scryer_plugin_sdk::ListExternalId {
-                        source: id.source,
-                        kind: id.kind,
-                        id: id.value,
-                    })
-                    .collect::<Vec<_>>();
-                if let Some(id) = row.smg_title_id {
-                    external_ids.push(scryer_plugin_sdk::ListExternalId {
-                        source: "smg".into(),
-                        kind: None,
-                        id: id.to_string(),
-                    });
-                }
-                scryer_plugin_sdk::ListPluginItem {
-                    item_key: row.item_key,
-                    rank: row.rank.and_then(|rank| u32::try_from(rank).ok()),
-                    season: row.season,
-                    title: row.display_title,
-                    year: row.year,
-                    external_ids,
-                    kind_hint: Some(match row.kind {
-                        scryer_domain::MediaFacet::Movie => scryer_plugin_sdk::ListMediaKind::Movie,
-                        scryer_domain::MediaFacet::Series => {
-                            scryer_plugin_sdk::ListMediaKind::Series
-                        }
-                        scryer_domain::MediaFacet::Anime => scryer_plugin_sdk::ListMediaKind::Anime,
-                    }),
-                    ..Default::default()
-                }
-            })
-            .collect();
-        fetched.unchanged = false;
+        // Unresolved rows can carry a storage fallback kind rather than the
+        // provider's original hint. Recover the provider item before routing it.
+        if stored
+            .iter()
+            .all(|row| row.state != ListMembershipState::Unresolved)
+        {
+            stored.sort_by(|a, b| {
+                a.rank
+                    .cmp(&b.rank)
+                    .then_with(|| a.item_key.cmp(&b.item_key))
+            });
+            fetched.items = stored
+                .into_iter()
+                .map(|row| {
+                    let mut external_ids = row
+                        .external_ids
+                        .into_iter()
+                        .map(|id| scryer_plugin_sdk::ListExternalId {
+                            source: id.source,
+                            kind: id.kind,
+                            id: id.value,
+                        })
+                        .collect::<Vec<_>>();
+                    if let Some(id) = row.smg_title_id {
+                        external_ids.push(scryer_plugin_sdk::ListExternalId {
+                            source: "smg".into(),
+                            kind: None,
+                            id: id.to_string(),
+                        });
+                    }
+                    scryer_plugin_sdk::ListPluginItem {
+                        item_key: row.item_key,
+                        rank: row.rank.and_then(|rank| u32::try_from(rank).ok()),
+                        season: row.season,
+                        title: row.display_title,
+                        year: row.year,
+                        external_ids,
+                        kind_hint: Some(match row.kind {
+                            scryer_domain::MediaFacet::Movie => {
+                                scryer_plugin_sdk::ListMediaKind::Movie
+                            }
+                            scryer_domain::MediaFacet::Series => {
+                                scryer_plugin_sdk::ListMediaKind::Series
+                            }
+                            scryer_domain::MediaFacet::Anime => {
+                                scryer_plugin_sdk::ListMediaKind::Anime
+                            }
+                        }),
+                        ..Default::default()
+                    }
+                })
+                .collect();
+            fetched.unchanged = false;
+        }
     }
 
     if fetched.unchanged {
-        if !has_unfinished_work(context, subscription).await? {
+        if !super::resolve::requires_metadata(&subscription.filters)
+            && !has_unfinished_work(context, subscription).await?
+        {
             return record_unchanged(context, subscription, run, now, fetched.fingerprint).await;
         }
         // The provider's "unchanged" carries no items. Work is still left, so
