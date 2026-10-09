@@ -648,3 +648,16 @@ pub(super) fn monitor_type_value_from_normalized(value: &str) -> Option<MonitorT
 pub fn json_string_to_value(raw: String) -> async_graphql::Json<serde_json::Value> {
     async_graphql::Json(serde_json::from_str(&raw).unwrap_or(serde_json::Value::Null))
 }
+
+pub fn from_script_interpreter_config(
+    config: scryer_application::scripts::runner::InterpreterConfig,
+) -> ScriptInterpreterSettingsPayload {
+    let display =
+        |path: Option<std::path::PathBuf>| path.map(|path| path.to_string_lossy().into_owned());
+    ScriptInterpreterSettingsPayload {
+        python: display(config.python),
+        powershell: display(config.powershell),
+        batch: display(config.batch),
+        go: display(config.go),
+    }
+}

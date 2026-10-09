@@ -539,6 +539,7 @@ impl AppServicesBuilder {
         Arc<dyn LogicalBackupExporter>
     );
     app_services_builder_setter!(with_backup_dir, config.backup_dir, PathBuf);
+    app_services_builder_setter!(with_scripts_dir, config.scripts_dir, PathBuf);
     app_services_builder_setter!(
         with_smg_registration_secret,
         config.smg_registration_secret,

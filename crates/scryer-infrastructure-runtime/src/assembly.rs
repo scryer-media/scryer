@@ -157,6 +157,11 @@ impl DatastoreConfig {
         self.data_dir.join("backups")
     }
 
+    pub fn scripts_dir(&self) -> PathBuf {
+        let dir = self.data_dir.join("scripts");
+        std::path::absolute(&dir).unwrap_or(dir)
+    }
+
     pub fn safe_database_url(&self) -> &str {
         if self.redacted_database_url.is_empty() {
             &self.database_url
@@ -1128,6 +1133,10 @@ impl DatastoreAssembly {
         self.config.backup_dir()
     }
 
+    pub fn scripts_dir(&self) -> PathBuf {
+        self.config.scripts_dir()
+    }
+
     pub fn staged_nzb_path(&self) -> PathBuf {
         match self.config.engine {
             DatastoreEngine::Sqlite => {
@@ -1639,6 +1648,7 @@ impl DatastoreAssembly {
                     self.quality_profiles(),
                     self.backup_dir(),
                 )
+                .with_scripts_dir(self.scripts_dir())
                 .with_indexer_error_repository(self.indexer_errors())
                 .with_libraries(libraries)
                 .with_media_requests(media_requests)
@@ -1771,6 +1781,7 @@ impl DatastoreAssembly {
                     self.quality_profiles(),
                     self.backup_dir(),
                 )
+                .with_scripts_dir(self.scripts_dir())
                 .with_indexer_error_repository(self.indexer_errors())
                 .with_libraries(libraries)
                 .with_media_requests(media_requests)

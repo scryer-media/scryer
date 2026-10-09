@@ -707,3 +707,268 @@ async fn script_configuration_changes_are_audited_without_script_content() {
         "update and toggle should both emit updated audit events"
     );
 }
+
+const SCRIPT_INTERPRETER_KEYS: [&str; 4] = [
+    scryer_application::SCRIPT_INTERPRETER_PYTHON_KEY,
+    scryer_application::SCRIPT_INTERPRETER_POWERSHELL_KEY,
+    scryer_application::SCRIPT_INTERPRETER_BATCH_KEY,
+    scryer_application::SCRIPT_INTERPRETER_GO_KEY,
+];
+
+async fn seed_script_interpreter_setting_definitions(ctx: &TestContext) {
+    ctx.settings_store
+        .batch_ensure_setting_definitions(
+            SCRIPT_INTERPRETER_KEYS
+                .iter()
+                .map(
+                    |key_name| scryer_infrastructure_sql::types::SettingDefinitionSeed {
+                        category: "general".into(),
+                        scope: scryer_application::SETTINGS_SCOPE_SYSTEM.into(),
+                        key_name: (*key_name).into(),
+                        data_type: "string".into(),
+                        default_value_json: "null".into(),
+                        is_sensitive: false,
+                        validation_json: None,
+                    },
+                )
+                .collect(),
+        )
+        .await
+        .expect("seed script interpreter setting definitions");
+}
+
+async fn script_interpreter_gql(
+    ctx: &TestContext,
+    query: &str,
+    variables: serde_json::Value,
+) -> serde_json::Value {
+    let response = ctx
+        .http_client()
+        .post(ctx.graphql_url())
+        .json(&serde_json::json!({ "query": query, "variables": variables }))
+        .send()
+        .await
+        .expect("graphql request should succeed");
+    assert_eq!(response.status(), 200);
+    let body: serde_json::Value = response.json().await.expect("valid JSON body");
+    assert!(
+        body.get("errors").is_none(),
+        "unexpected GraphQL errors: {body}"
+    );
+    body
+}
+
+#[tokio::test]
+async fn graphql_script_interpreter_settings_round_trip() {
+    let ctx = TestContext::new().await;
+    seed_script_interpreter_setting_definitions(&ctx).await;
+    let read = "query { scriptInterpreterSettings { python powershell batch go } }";
+    let update = r#"mutation($input: ScriptInterpreterSettingsInput!) {
+        updateScriptInterpreterSettings(input: $input) { python powershell batch go }
+    }"#;
+
+    let body = script_interpreter_gql(&ctx, read, serde_json::json!({})).await;
+    assert_eq!(
+        body["data"]["scriptInterpreterSettings"],
+        serde_json::json!({ "python": null, "powershell": null, "batch": null, "go": null })
+    );
+
+    let body = script_interpreter_gql(
+        &ctx,
+        update,
+        serde_json::json!({ "input": {
+            "python": "/opt/synthetic/python3",
+            "powershell": "  /opt/synthetic/pwsh  ",
+            "batch": "",
+            "go": "/opt/synthetic/go",
+        } }),
+    )
+    .await;
+    let expected = serde_json::json!({
+        "python": "/opt/synthetic/python3",
+        "powershell": "/opt/synthetic/pwsh",
+        "batch": null,
+        "go": "/opt/synthetic/go",
+    });
+    assert_eq!(body["data"]["updateScriptInterpreterSettings"], expected);
+    let body = script_interpreter_gql(&ctx, read, serde_json::json!({})).await;
+    assert_eq!(body["data"]["scriptInterpreterSettings"], expected);
+
+    // Omitted fields keep their pins; null and blank clear only their own.
+    let body = script_interpreter_gql(
+        &ctx,
+        update,
+        serde_json::json!({ "input": { "python": null } }),
+    )
+    .await;
+    let expected = serde_json::json!({
+        "python": null,
+        "powershell": "/opt/synthetic/pwsh",
+        "batch": null,
+        "go": "/opt/synthetic/go",
+    });
+    assert_eq!(body["data"]["updateScriptInterpreterSettings"], expected);
+
+    let body = script_interpreter_gql(
+        &ctx,
+        update,
+        serde_json::json!({ "input": { "powershell": "", "batch": "cmd.exe" } }),
+    )
+    .await;
+    let expected = serde_json::json!({
+        "python": null,
+        "powershell": null,
+        "batch": "cmd.exe",
+        "go": "/opt/synthetic/go",
+    });
+    assert_eq!(body["data"]["updateScriptInterpreterSettings"], expected);
+    let body = script_interpreter_gql(&ctx, read, serde_json::json!({})).await;
+    assert_eq!(body["data"]["scriptInterpreterSettings"], expected);
+}
+
+#[tokio::test]
+async fn script_interpreter_settings_require_system_settings_permission() {
+    let ctx = TestContext::new().await;
+    seed_script_interpreter_setting_definitions(&ctx).await;
+
+    // The catalog-settings admin used by the other tests lacks system settings.
+    let read_error = ctx
+        .app
+        .get_script_interpreter_settings(&admin())
+        .await
+        .expect_err("reading requires system settings");
+    assert!(
+        matches!(read_error, scryer_application::AppError::Unauthorized(_)),
+        "unexpected error: {read_error:?}"
+    );
+    let update_error = ctx
+        .app
+        .update_script_interpreter_settings(
+            &admin(),
+            scryer_application::UpdateScriptInterpreterSettings {
+                python: Some(Some("/opt/synthetic/python3".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect_err("updating requires system settings");
+    assert!(
+        matches!(update_error, scryer_application::AppError::Unauthorized(_)),
+        "unexpected error: {update_error:?}"
+    );
+}
+
+#[tokio::test]
+async fn script_interpreter_pins_must_be_absolute_paths_or_command_names() {
+    let ctx = TestContext::new().await;
+    seed_script_interpreter_setting_definitions(&ctx).await;
+    let mut system_admin = admin();
+    system_admin.authorization.app =
+        AppPermissionMask::from_permissions([AppPermission::ManageSystemSettings]);
+
+    for rejected in ["bin/python3", "./python3", "..\\tools\\pwsh.exe"] {
+        let error = ctx
+            .app
+            .update_script_interpreter_settings(
+                &system_admin,
+                scryer_application::UpdateScriptInterpreterSettings {
+                    go: Some(Some("/opt/synthetic/go".to_string())),
+                    python: Some(Some(rejected.to_string())),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("relative interpreter paths are rejected");
+        assert!(
+            matches!(error, scryer_application::AppError::Validation(_)),
+            "{rejected:?} gave {error:?}"
+        );
+    }
+    // A rejected update writes none of its pins.
+    let settings = ctx
+        .app
+        .get_script_interpreter_settings(&system_admin)
+        .await
+        .expect("read settings");
+    assert_eq!(settings, Default::default());
+
+    let settings = ctx
+        .app
+        .update_script_interpreter_settings(
+            &system_admin,
+            scryer_application::UpdateScriptInterpreterSettings {
+                python: Some(Some("python3".to_string())),
+                go: Some(Some("/opt/synthetic/go".to_string())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("absolute paths and command names are accepted");
+    assert_eq!(settings.python, Some(std::path::PathBuf::from("python3")));
+    assert_eq!(
+        settings.go,
+        Some(std::path::PathBuf::from("/opt/synthetic/go"))
+    );
+}
+
+/// A file script with a `.py` entry point is launched through the configured
+/// Python interpreter.
+#[cfg(unix)]
+#[tokio::test]
+async fn file_python_script_runs_through_the_configured_interpreter() {
+    let ctx = TestContext::new().await;
+    seed_title(&ctx, "title-pp-test", "Test Movie", MediaFacet::Movie).await;
+    seed_script_interpreter_setting_definitions(&ctx).await;
+
+    let script_dir = tempfile::tempdir().expect("tempdir");
+    let fake_python = script_dir.path().join("fake-python");
+    write_executable_script(
+        &fake_python,
+        "#!/bin/sh\nfor a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done\n",
+    );
+    let script_path = script_dir.path().join("synthetic-job.py");
+    std::fs::write(&script_path, "print('synthetic')\n").expect("write script");
+
+    let mut system_admin = admin();
+    system_admin.authorization.app =
+        AppPermissionMask::from_permissions([AppPermission::ManageSystemSettings]);
+    ctx.app
+        .update_script_interpreter_settings(
+            &system_admin,
+            scryer_application::UpdateScriptInterpreterSettings {
+                python: Some(Some(fake_python.to_string_lossy().into_owned())),
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("configure python interpreter");
+
+    let script_id = create_script_with_type(
+        &ctx,
+        MediaFacet::Movie,
+        ScriptType::File,
+        script_path.to_str().expect("utf-8 script path"),
+        300,
+        true,
+    )
+    .await;
+
+    let dest_dir = tempfile::tempdir().expect("tempdir");
+    let dest_file = dest_dir.path().join("Movie.2024.1080p.mkv");
+    std::fs::write(&dest_file, b"fake").expect("write");
+    run_post_processing(movie_context(&ctx.app, &dest_file))
+        .await
+        .expect("run");
+
+    let runs = ctx
+        .app
+        .list_post_processing_script_runs(&admin(), &script_id, 1)
+        .await
+        .expect("list script runs");
+    assert_eq!(runs.len(), 1);
+    assert_eq!(runs[0].status, ScriptRunStatus::Success);
+    assert_eq!(
+        runs[0].stdout_tail.as_deref(),
+        Some(format!("arg={}", script_path.display()).as_str())
+    );
+}

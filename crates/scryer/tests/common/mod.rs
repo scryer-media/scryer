@@ -963,6 +963,7 @@ impl TestContext {
             quality_profiles,
             app_data_dir.path().display().to_string(),
         )
+        .with_scripts_dir(app_data_dir.path().join("scripts"))
         .with_media_files(Arc::new(media_file_store.clone()))
         .with_acquisition_scope_states(Arc::new(wanted_store))
         .with_pending_releases(Arc::new(pending_release_store))

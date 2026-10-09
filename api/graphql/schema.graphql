@@ -20191,6 +20191,15 @@ type MutationRoot {
 		inlineShellAcknowledged: Boolean
 	): PostProcessingScriptPayload!
 	"""
+	Replace the interpreters operator scripts are launched with; null or an empty string restores the default command.
+	"""
+	updateScriptInterpreterSettings(
+		"""
+		Interpreter path or command for each script language.
+		"""
+		input: ScriptInterpreterSettingsInput!
+	): ScriptInterpreterSettingsPayload!
+	"""
 	Search configured providers for subtitles matching a media file, and
 	report why the search returned what it did.
 	"""
@@ -24192,6 +24201,10 @@ type QueryRoot {
 		limit: Int
 	): [PostProcessingScriptRunPayload!]!
 	"""
+	Interpreters operator scripts are launched with; null fields use the default command.
+	"""
+	scriptInterpreterSettings: ScriptInterpreterSettingsPayload!
+	"""
 	Read the installed plugin's settings declaration and redacted values.
 	"""
 	installedPluginSettings(pluginId: ID!): JSON!
@@ -26764,6 +26777,51 @@ enum ScoringPersonaValue {
 	Favors broad playback compatibility.
 	"""
 	COMPATIBLE
+}
+
+"""
+Interpreter pin changes for operator scripts. An omitted field keeps the
+current pin; null or an empty string clears it.
+"""
+input ScriptInterpreterSettingsInput {
+	"""
+	Python interpreter path or command, or null to use `python3`.
+	"""
+	python: String
+	"""
+	PowerShell interpreter path or command, or null to use `pwsh`.
+	"""
+	powershell: String
+	"""
+	Batch interpreter path or command, or null to use `COMSPEC` or `cmd.exe`.
+	"""
+	batch: String
+	"""
+	Go toolchain path or command, or null to use `go`.
+	"""
+	go: String
+}
+
+"""
+Interpreters operator scripts are launched with.
+"""
+type ScriptInterpreterSettingsPayload {
+	"""
+	Python interpreter path or command, or null to use `python3`.
+	"""
+	python: String
+	"""
+	PowerShell interpreter path or command, or null to use `pwsh`.
+	"""
+	powershell: String
+	"""
+	Batch interpreter path or command, or null to use `COMSPEC` or `cmd.exe`.
+	"""
+	batch: String
+	"""
+	Go toolchain path or command, or null to use `go`.
+	"""
+	go: String
 }
 
 """
