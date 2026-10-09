@@ -452,7 +452,7 @@ function CustomJobCapturedOutput({
             return (
               <TableRow
                 key={run.id}
-                id={`jobs-history-run-${run.id}`}
+                id={selectorId("jobs-history-run", run.id)}
                 data-state={isSelected ? "selected" : undefined}
                 aria-selected={isSelected}
                 tabIndex={0}
@@ -512,7 +512,9 @@ function CustomJobCapturedOutput({
         {showStdout ? (
           <div>
             {showStreamLabels ? (
-              <p className="mb-0.5 text-[10px] font-medium text-muted-foreground">stdout</p>
+              <p className="mb-0.5 text-[10px] font-medium text-muted-foreground">
+                {t("script.output.stream.stdout")}
+              </p>
             ) : null}
             <pre
               id="jobs-history-output-stdout"
@@ -525,7 +527,9 @@ function CustomJobCapturedOutput({
         {showStderr ? (
           <div>
             {showStreamLabels ? (
-              <p className="mb-0.5 text-[10px] font-medium text-muted-foreground">stderr</p>
+              <p className="mb-0.5 text-[10px] font-medium text-muted-foreground">
+                {t("script.output.stream.stderr")}
+              </p>
             ) : null}
             <pre
               id="jobs-history-output-stderr"
@@ -1064,10 +1068,10 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
             </p>
           ) : (
             <div className="overflow-x-auto">
-              <Table className="min-w-[48rem] table-fixed">
+              <Table className="min-w-[70rem] table-fixed">
                 <TableHeader>
                   <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
-                    <TableHead className={`font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                    <TableHead className={`w-[16rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
                       {t("jobs.column.name")}
                     </TableHead>
                     <TableHead className={`w-[12rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>

@@ -1,4 +1,4 @@
-import { type FormEvent, useCallback, useEffect, useState } from "react";
+import { type FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { useClient } from "urql";
 
 import { useGlobalStatus } from "@/lib/context/global-status-context";
@@ -235,18 +235,26 @@ export function useScriptEditor(trigger: ScriptTrigger, options: { onChanged?: (
     onChanged?.();
   }, [onChanged, refreshScripts]);
 
+  // Latest request per script; an older response never replaces a newer one.
+  const runRequestSeq = useRef<Map<string, number>>(new Map());
+
   const loadRunsForScript = useCallback(
     async (scriptId: string) => {
+      const seq = (runRequestSeq.current.get(scriptId) ?? 0) + 1;
+      runRequestSeq.current.set(scriptId, seq);
+      const isCurrent = () => runRequestSeq.current.get(scriptId) === seq;
       try {
         const { data, error } = await client
           .query(postProcessingScriptRunsQuery, { scriptId, limit: 20 }, { requestPolicy: "network-only" })
           .toPromise();
+        if (!isCurrent()) return;
         if (error) throw error;
         setScriptRuns((prev) => ({
           ...prev,
           [scriptId]: data.postProcessingScriptRuns || [],
         }));
       } catch (error) {
+        if (!isCurrent()) return;
         setGlobalStatus(error instanceof Error ? error.message : t("status.failedToLoad"));
       }
     },
@@ -265,7 +273,6 @@ export function useScriptEditor(trigger: ScriptTrigger, options: { onChanged?: (
         timeoutSecs: scriptDraft.timeoutSecs,
         debug: scriptDraft.debug,
         language: scriptDraft.language,
-        trigger,
         ...(isScheduled
           ? {
               schedule: toScriptScheduleInput(scriptDraft.schedule ?? defaultScriptSchedule()),
@@ -298,20 +305,17 @@ export function useScriptEditor(trigger: ScriptTrigger, options: { onChanged?: (
           if (error) throw error;
           setGlobalStatus(t("settings.pp.updated"));
         } else {
-          const { data, error } = await client
-            .mutation(createPostProcessingScriptMutation, { input: payload })
+          // The trigger is fixed at creation; updates never send it.
+          const { error } = await client
+            .mutation(createPostProcessingScriptMutation, {
+              input: {
+                ...payload,
+                trigger,
+                ...(isScheduled ? { enabled: scriptDraft.enabled } : {}),
+              },
+            })
             .toPromise();
           if (error) throw error;
-          // Creation takes no enabled state; a job saved disabled is switched off after.
-          const createdId = data?.createPostProcessingScript?.id;
-          if (isScheduled && !scriptDraft.enabled && typeof createdId === "string") {
-            const { error: disableError } = await client
-              .mutation(updatePostProcessingScriptMutation, {
-                input: { id: createdId, enabled: false },
-              })
-              .toPromise();
-            if (disableError) throw disableError;
-          }
           setGlobalStatus(t("settings.pp.created"));
         }
         closeEditor();

@@ -48,9 +48,12 @@ export function toggleWeekday(
   days: readonly ScheduleWeekday[],
   day: ScheduleWeekday,
 ): ScheduleWeekday[] {
-  return days.includes(day)
-    ? orderWeekdays(days.filter((candidate) => candidate !== day))
-    : orderWeekdays([...days, day]);
+  if (days.includes(day)) {
+    // A weekly schedule always keeps at least one day.
+    if (days.length === 1) return orderWeekdays(days);
+    return orderWeekdays(days.filter((candidate) => candidate !== day));
+  }
+  return orderWeekdays([...days, day]);
 }
 
 /**
@@ -93,7 +96,7 @@ export function defaultScriptSchedule(): ScriptSchedule {
 
 /**
  * The `ScriptScheduleInput` sent to the server: only the fields the kind
- * reads, with a cron expression passed through as typed.
+ * reads, with a cron expression trimmed of surrounding whitespace.
  */
 export function toScriptScheduleInput(schedule: ScriptSchedule): ScriptSchedule {
   const normalized = scheduleForKind(schedule.kind, null);
@@ -114,7 +117,7 @@ export function toScriptScheduleInput(schedule: ScriptSchedule): ScriptSchedule 
         days: orderWeekdays(schedule.days ?? []),
       };
     case "CRON":
-      return { ...normalized, expression: schedule.expression ?? "" };
+      return { ...normalized, expression: (schedule.expression ?? "").trim() };
   }
 }
 

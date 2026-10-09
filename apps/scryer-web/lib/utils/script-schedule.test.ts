@@ -34,6 +34,10 @@ test("weekly days toggle on and off and stay in week order", () => {
   assert.deepEqual(toggleWeekday(days, "MONDAY"), ["WEDNESDAY", "FRIDAY"]);
 });
 
+test("the last selected weekly day cannot be toggled off", () => {
+  assert.deepEqual(toggleWeekday(["THURSDAY"], "THURSDAY"), ["THURSDAY"]);
+});
+
 test("the schedule input keeps only the fields its kind reads", () => {
   const weekly = toScriptScheduleInput({
     kind: "WEEKLY",
@@ -51,13 +55,13 @@ test("the schedule input keeps only the fields its kind reads", () => {
   });
 });
 
-test("a cron expression is passed through as typed", () => {
+test("a cron expression is sent without surrounding whitespace", () => {
   const input = toScriptScheduleInput({
     kind: "CRON",
     everySeconds: null,
     timeLocal: "03:00",
     days: null,
-    expression: "*/5 1-3 * * MON-FRI",
+    expression: "  */5 1-3 * * MON-FRI \n",
   });
   assert.equal(input.expression, "*/5 1-3 * * MON-FRI");
   assert.equal(input.timeLocal, null);

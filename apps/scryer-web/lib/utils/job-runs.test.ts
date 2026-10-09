@@ -6,6 +6,7 @@ import {
   mergeLatestJobRun,
   normalizeJobRun,
   parseFullHashBackfillFailures,
+  runAwaitingScriptOutput,
   scriptRunForJobRun,
   scriptRunIdOf,
 } from "./job-runs.ts";
@@ -185,4 +186,34 @@ test("a custom job run joins to its script run through the summary", () => {
     "script-run-2",
   );
   assert.equal(scriptRunForJobRun({ summaryJson: { script_run_id: "gone" } }, scriptRuns), null);
+});
+
+test("the newest finished run waits until its script run has settled", () => {
+  const older = jobRun({
+    id: "run-old",
+    jobKey: "CUSTOM_JOB",
+    status: "COMPLETED",
+    startedAt: "2026-01-01T00:00:00Z",
+    summaryJson: { script_run_id: "script-run-old" },
+  });
+  const newer = jobRun({
+    id: "run-new",
+    jobKey: "CUSTOM_JOB",
+    status: "COMPLETED",
+    startedAt: "2026-01-01T00:05:00Z",
+    summaryJson: { script_run_id: "script-run-new" },
+  });
+  const active = jobRun({ id: "run-active", jobKey: "CUSTOM_JOB", status: "RUNNING", startedAt: "2026-01-01T00:09:00Z" });
+  const settledOld = { id: "script-run-old", status: "success" };
+
+  assert.equal(runAwaitingScriptOutput([older, newer, active], [settledOld]), "run-new");
+  assert.equal(
+    runAwaitingScriptOutput([older, newer], [settledOld, { id: "script-run-new", status: "running" }]),
+    "run-new",
+  );
+  assert.equal(
+    runAwaitingScriptOutput([older, newer], [settledOld, { id: "script-run-new", status: "failed" }]),
+    null,
+  );
+  assert.equal(runAwaitingScriptOutput([active], []), null);
 });

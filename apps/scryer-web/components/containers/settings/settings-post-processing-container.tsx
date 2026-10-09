@@ -40,6 +40,15 @@ function interpreterDraftFrom(value: unknown): ScriptInterpreterDraft {
   };
 }
 
+function sameInterpreters(left: ScriptInterpreterDraft, right: ScriptInterpreterDraft): boolean {
+  return (
+    left.python === right.python &&
+    left.powershell === right.powershell &&
+    left.batch === right.batch &&
+    left.go === right.go
+  );
+}
+
 /** Interpreter paths saved as entered; an empty field clears the path. */
 function interpreterInput(draft: ScriptInterpreterDraft): ScriptInterpreterSettings {
   const value = (path: string) => (path.trim() ? path.trim() : null);
@@ -71,7 +80,8 @@ function useScriptInterpreterSettings() {
           return;
         }
         const loaded = interpreterDraftFrom(data?.scriptInterpreterSettings);
-        setDraft(loaded);
+        // Keep anything typed while the settings were loading.
+        setDraft((current) => (sameInterpreters(current, EMPTY_INTERPRETERS) ? loaded : current));
         setBaseline(loaded);
       });
     return () => {
@@ -105,7 +115,7 @@ function useScriptInterpreterSettings() {
   return {
     draft,
     setDraft,
-    isDirty: JSON.stringify(draft) !== JSON.stringify(baseline),
+    isDirty: !sameInterpreters(draft, baseline),
     isSaving,
     save,
   };

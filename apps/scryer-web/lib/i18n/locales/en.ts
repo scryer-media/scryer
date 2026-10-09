@@ -5874,6 +5874,8 @@ const en: LocaleDictionary = {
   "script.output.filter.combined": "Combined",
   "script.output.filter.stdout": "Stdout",
   "script.output.filter.stderr": "Stderr",
+  "script.output.stream.stdout": "stdout",
+  "script.output.stream.stderr": "stderr",
   "script.schedule.kind": "Runs",
   "script.schedule.kind.manual": "Only when run manually",
   "script.schedule.kind.interval": "Every interval",

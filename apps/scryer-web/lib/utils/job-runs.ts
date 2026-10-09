@@ -357,3 +357,30 @@ export function scriptRunForJobRun<T extends { id: string }>(
   if (!scriptRunId) return null;
   return scriptRuns.find((scriptRun) => scriptRun.id === scriptRunId) ?? null;
 }
+
+/** Waits between captured-output reloads; they add up to about two minutes. */
+export const SCRIPT_OUTPUT_POLL_DELAYS_MS: readonly number[] = [
+  1_000, 2_000, 5_000, 5_000, 10_000, 10_000, 15_000, 15_000, 15_000, 20_000, 20_000,
+];
+
+/**
+ * The newest finished run whose captured output has not arrived yet: its
+ * script run is missing, or still recorded as running. Null when there is
+ * nothing to wait for.
+ */
+export function runAwaitingScriptOutput(
+  history: readonly Pick<JobRun, "id" | "status" | "summaryJson" | "startedAt">[],
+  scriptRuns: readonly { id: string; status: string }[],
+): string | null {
+  const newestFinished = history
+    .filter((run) => isTerminalJobRunStatus(run.status))
+    .reduce<(typeof history)[number] | null>(
+      (newest, run) =>
+        newest === null || Date.parse(run.startedAt) > Date.parse(newest.startedAt) ? run : newest,
+      null,
+    );
+  if (!newestFinished) return null;
+  const scriptRun = scriptRunForJobRun(newestFinished, scriptRuns);
+  if (scriptRun && scriptRun.status !== "running") return null;
+  return newestFinished.id;
+}

@@ -98,7 +98,8 @@ export function describeCronExpression(
   options: CronDescriptionOptions = {},
 ): string | null {
   const trimmed = expression.trim();
-  if (!trimmed) {
+  // The server reads standard five-field expressions only.
+  if (trimmed.split(/\s+/).length !== 5) {
     return null;
   }
   const locale = cronstrueLocaleFor(uiLanguage);

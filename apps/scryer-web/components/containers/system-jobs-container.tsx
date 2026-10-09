@@ -24,6 +24,8 @@ import {
   normalizeCustomJobId,
   normalizeJobRun,
   preferJobRunSnapshot,
+  runAwaitingScriptOutput,
+  SCRIPT_OUTPUT_POLL_DELAYS_MS,
 } from "@/lib/utils/job-runs";
 import type {
   JobCategory,
@@ -298,7 +300,7 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
         jobKey: selectedJobKey,
         ...(selectedCustomJobId ? { customJobId: selectedCustomJobId } : {}),
         limit: selectedJobRunId ? 50 : 10,
-      })
+      }, { requestPolicy: "network-only" })
       .toPromise()
       .then(({ data, error }) => {
         if (cancelled) {
@@ -333,6 +335,36 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     selectedJobRunId,
     setGlobalStatus,
   ]);
+
+  // Fire-and-forget scripts record their output after the job run finishes:
+  // reload it with a bounded backoff until it settles or the sheet closes.
+  const awaitingOutputRunId =
+    selectedCustomJobId && selectedInstanceKey
+      ? runAwaitingScriptOutput(
+          jobHistoryByKey[selectedInstanceKey] ?? [],
+          scriptRuns[selectedCustomJobId] ?? [],
+        )
+      : null;
+  useEffect(() => {
+    if (!selectedCustomJobId || !awaitingOutputRunId) {
+      return;
+    }
+    let attempt = 0;
+    let timer: number | undefined;
+    const schedule = () => {
+      const delay = SCRIPT_OUTPUT_POLL_DELAYS_MS[attempt];
+      if (delay === undefined) return;
+      attempt += 1;
+      timer = window.setTimeout(() => {
+        void loadRunsForScript(selectedCustomJobId);
+        schedule();
+      }, delay);
+    };
+    schedule();
+    return () => {
+      window.clearTimeout(timer);
+    };
+  }, [awaitingOutputRunId, loadRunsForScript, selectedCustomJobId]);
 
   const onSelectJob = useCallback(
     (target: JobTarget | null) => {

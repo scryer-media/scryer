@@ -185,10 +185,10 @@ export function ScriptEditorForm({
           </>
         ) : (
           <>
-            <Label className="mb-2 block">
+            <Label htmlFor={pathIds.control} className="mb-2 block">
               {isScheduled ? t("script.editor.filePathHelp") : t("settings.pp.filePathHelp")}
             </Label>
-            <label id={pathIds.wrapper} className="flex gap-2">
+            <div id={pathIds.wrapper} className="flex gap-2">
               <Input
                 id={pathIds.control}
                 value={draft.scriptContent}
@@ -207,7 +207,7 @@ export function ScriptEditorForm({
                 <FolderOpen className="mr-1 h-4 w-4" />
                 Browse
               </Button>
-            </label>
+            </div>
             <FolderBrowserDialog
               open={folderBrowserOpen}
               onOpenChange={setFolderBrowserOpen}

@@ -30,4 +30,6 @@ test("languages cronstrue does not translate fall back to English", () => {
 test("an unreadable or empty expression has no description", () => {
   assert.equal(describeCronExpression("not a cron", "eng"), null);
   assert.equal(describeCronExpression("   ", "eng"), null);
+  assert.equal(describeCronExpression("0 0 3 * * *", "eng"), null);
+  assert.equal(describeCronExpression("0 3 * *", "eng"), null);
 });

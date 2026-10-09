@@ -129,6 +129,7 @@ export function ScriptRunsTable({
   ids?: ScriptRunsTableIds;
   leadingColumn?: ScriptRunsLeadingColumn;
 }) {
+  const t = useTranslate();
   const [outputFilter, setOutputFilter] = useState<ScriptOutputFilter>("combined");
 
   if (runs.length === 0) {
@@ -183,7 +184,7 @@ export function ScriptRunsTable({
                         <div>
                           {showStreamLabels ? (
                             <p className="mb-0.5 text-[10px] font-medium text-muted-foreground">
-                              stdout
+                              {t("script.output.stream.stdout")}
                             </p>
                           ) : null}
                           <pre
@@ -198,7 +199,7 @@ export function ScriptRunsTable({
                         <div>
                           {showStreamLabels ? (
                             <p className="mb-0.5 text-[10px] font-medium text-muted-foreground">
-                              stderr
+                              {t("script.output.stream.stderr")}
                             </p>
                           ) : null}
                           <pre

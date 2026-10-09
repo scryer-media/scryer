@@ -288,6 +288,7 @@ function WeekdayToggles({
               id={`script-schedule-day-${day.toLowerCase()}`}
               type="button"
               aria-pressed={selected}
+              aria-disabled={selected && days.length === 1 ? true : undefined}
               disabled={disabled}
               onClick={() => onChange(toggleWeekday(days, day))}
               className={cn(
