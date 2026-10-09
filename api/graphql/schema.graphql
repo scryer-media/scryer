@@ -9072,6 +9072,11 @@ type JobDefinitionPayload {
 	"""
 	key: JobKeyValue!
 	"""
+	ID of the scheduled script behind a `CUSTOM_JOB` definition, or null
+	for built-in jobs.
+	"""
+	customJobId: ID
+	"""
 	Display name of the job.
 	"""
 	displayName: String!
@@ -9229,6 +9234,11 @@ enum JobKeyValue {
 	Location operation: a root move, transfer, or other placement change.
 	"""
 	LOCATION_OPERATION
+	"""
+	A user-defined scheduled script; each script is told apart by its
+	`customJobId`.
+	"""
+	CUSTOM_JOB
 }
 
 """
@@ -9243,6 +9253,11 @@ type JobRunPayload {
 	Stable key of the job being run.
 	"""
 	jobKey: JobKeyValue!
+	"""
+	ID of the scheduled script a `CUSTOM_JOB` run executes, or null for
+	built-in jobs.
+	"""
+	customJobId: ID
 	"""
 	Display name of the job.
 	"""
@@ -18199,13 +18214,18 @@ type MutationRoot {
 		input: DeleteDownloadInput!
 	): DownloadQueueActionPayload!
 	"""
-	Start the configured background job and return its accepted run snapshot.
+	Start the configured background job, or a scheduled script when the key is
+	`CUSTOM_JOB`, and return its accepted run snapshot.
 	"""
 	triggerJob(
 		"""
 		Job key identifying the server-side job to start.
 		"""
-		jobKey: JobKeyValue!
+		jobKey: JobKeyValue!,
+		"""
+		Scheduled script to run; required with `CUSTOM_JOB` and rejected with any other key.
+		"""
+		customJobId: ID
 	): JobRunPayload!
 	"""
 	Create an indexer configuration with provider, routing, and search defaults.
@@ -23412,13 +23432,18 @@ type QueryRoot {
 	"""
 	activeJobRuns: [JobRunPayload!]!
 	"""
-	List recent runs for one job key; the limit defaults to 10 and values below 1 become 1.
+	List recent runs for one job key, or for one scheduled script when the key is
+	`CUSTOM_JOB`; the limit defaults to 10 and values below 1 become 1.
 	"""
 	jobRuns(
 		"""
 		Job key whose runs should be listed.
 		"""
 		jobKey: JobKeyValue!,
+		"""
+		Scheduled script whose runs should be listed; required with `CUSTOM_JOB` and rejected with any other key.
+		"""
+		customJobId: ID,
 		"""
 		Maximum runs to return; defaults to 10 and values below 1 become 1.
 		"""

@@ -758,8 +758,12 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // Scheduled scripts add `validateScriptSchedule`, the schedule check and
     // next-run preview the script editor calls before saving: 191->192.
     assert!(query_field_names.contains(&"validateScriptSchedule"));
+    // Rebased to the release tree: work that landed without moving this
+    // census (installed plugin settings, download password retry, and others)
+    // brings query fields to 195. Scheduled scripts as jobs add no root field;
+    // they ride `jobs`, `jobRuns`, and `triggerJob` with a `customJobId`.
     assert_eq!(
-        query_field_count, 192,
+        query_field_count, 195,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -792,8 +796,9 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // one more: 259->260.
     // Reopening a dismissed request and saving one catalog layout add
     // `reopenMediaRequest` and `setMyCatalogView`: 265->267.
+    // Rebased to the release tree, as with the query count above: 267->271.
     assert_eq!(
-        mutation_field_count, 267,
+        mutation_field_count, 271,
         "mutation fields: {mutation_field_names:?}"
     );
     // Cross-library transfer (T082, FR-055/FR-056) surfaces destination-title
@@ -1091,10 +1096,14 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
-    assert_eq!(public_types.len(), 941);
-    assert_eq!(kind_count("OBJECT"), 511);
-    assert_eq!(kind_count("INPUT_OBJECT"), 236);
-    assert_eq!(kind_count("ENUM"), 182);
+    // Rebased to the release tree: public types 941->954, OBJECT 511->516,
+    // INPUT_OBJECT 236->239, ENUM 182->187. `CUSTOM_JOB` is a value on the
+    // existing job-key enum and `customJobId` an additive field, so scheduled
+    // scripts as jobs add no type.
+    assert_eq!(public_types.len(), 954);
+    assert_eq!(kind_count("OBJECT"), 516);
+    assert_eq!(kind_count("INPUT_OBJECT"), 239);
+    assert_eq!(kind_count("ENUM"), 187);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));

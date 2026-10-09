@@ -2664,24 +2664,39 @@ impl JobAndDownloadQueries {
         Ok(runs.into_iter().map(from_job_run).collect())
     }
 
-    /// List recent runs for one job key; the limit defaults to 10 and values below 1 become 1.
+    /// List recent runs for one job key, or for one scheduled script when the key is
+    /// `CUSTOM_JOB`; the limit defaults to 10 and values below 1 become 1.
     async fn job_runs(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Job key whose runs should be listed.")] job_key: JobKeyValue,
+        #[graphql(
+            desc = "Scheduled script whose runs should be listed; required with `CUSTOM_JOB` and rejected with any other key."
+        )]
+        custom_job_id: Option<ID>,
         #[graphql(desc = "Maximum runs to return; defaults to 10 and values below 1 become 1.")]
         limit: Option<i32>,
     ) -> GqlResult<Vec<JobRunPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
-        let runs = app
-            .list_job_runs(
-                &actor,
-                job_key.into_application(),
-                limit.unwrap_or(10).max(1) as usize,
-            )
-            .await
-            .map_err(to_gql_error)?;
+        let limit = limit.unwrap_or(10).max(1) as usize;
+        let runs = match (job_key, custom_job_id) {
+            (JobKeyValue::CustomJob, Some(custom_job_id)) => {
+                app.list_custom_job_runs(&actor, custom_job_id.as_str(), limit)
+                    .await
+            }
+            (JobKeyValue::CustomJob, None) => Err(AppError::Validation(
+                "customJobId is required for CUSTOM_JOB".to_string(),
+            )),
+            (_, Some(_)) => Err(AppError::Validation(
+                "customJobId is only accepted with CUSTOM_JOB".to_string(),
+            )),
+            (job_key, None) => {
+                app.list_job_runs(&actor, job_key.into_application(), limit)
+                    .await
+            }
+        }
+        .map_err(to_gql_error)?;
         Ok(runs.into_iter().map(from_job_run).collect())
     }
 

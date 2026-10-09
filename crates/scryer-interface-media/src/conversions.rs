@@ -369,6 +369,7 @@ impl IntoApplication<AppJobKey> for JobKeyValue {
             Self::AcquisitionSearch => AppJobKey::AcquisitionSearch,
             Self::ApplicationUpgrade => AppJobKey::ApplicationUpgrade,
             Self::LocationOperation => AppJobKey::LocationOperation,
+            Self::CustomJob => AppJobKey::CustomJob,
         }
     }
 }
@@ -407,6 +408,7 @@ impl FromApplication<AppJobKey> for JobKeyValue {
             AppJobKey::AcquisitionSearch => Self::AcquisitionSearch,
             AppJobKey::ApplicationUpgrade => Self::ApplicationUpgrade,
             AppJobKey::LocationOperation => Self::LocationOperation,
+            AppJobKey::CustomJob => Self::CustomJob,
         }
     }
 }
