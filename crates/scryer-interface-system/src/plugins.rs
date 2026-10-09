@@ -17,7 +17,10 @@ impl PluginMutations {
     async fn update_installed_plugin_settings(
         &self,
         ctx: &Context<'_>,
-        plugin_id: ID,
+        #[graphql(desc = "Installed plugin ID whose settings are changed.")] plugin_id: ID,
+        #[graphql(
+            desc = "Object mapping declared setting keys to a new value, or null to clear the stored value; omitted keys are unchanged and unknown keys are rejected."
+        )]
         changes: async_graphql::Json<std::collections::BTreeMap<String, Option<String>>>,
     ) -> GqlResult<async_graphql::Json<scryer_application::PluginSettingsView>> {
         let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;

@@ -5274,14 +5274,35 @@ type DownloadImportPagePayload {
 	totalCount: Int!
 }
 
+"""
+Result of a download password retry.
+"""
 type DownloadPasswordRetryPayload {
-	status: DownloadPasswordRetryStatus!
+	"""
+	Whether the download client accepted, refused, or has not confirmed the retry.
+	"""
+	status: DownloadPasswordRetryStatusValue!
+	"""
+	Client-side item ID of the retried job when the client accepted it; null otherwise.
+	"""
 	downloadClientItemId: String
 }
 
-enum DownloadPasswordRetryStatus {
+"""
+Outcome of a single password retry dispatch to the download client.
+"""
+enum DownloadPasswordRetryStatusValue {
+	"""
+	The download client accepted the retry.
+	"""
 	ACCEPTED
+	"""
+	The download client refused the retry.
+	"""
 	REFUSED
+	"""
+	The outcome is unknown; the retry stays claimed until reconciliation resolves it.
+	"""
 	AWAITING_RECONCILIATION
 }
 
@@ -10779,7 +10800,7 @@ type ListPreviewItemPayload {
 	"""
 	Release or first-air date, when known.
 	"""
-	releaseDate: String
+	releaseDate: Date
 	"""
 	The provider's own key for the title.
 	"""
@@ -18021,7 +18042,15 @@ type MutationRoot {
 		"""
 		input: UpdateSeriesMovieTagsInput!
 	): [SeriesMovieLinkPayload!]!
-	retryDownloadPassword(input: RetryDownloadPasswordInput!): DownloadPasswordRetryPayload!
+	"""
+	Retry a failed download client job once with a new archive password; requires import-resolution permission on the download's library.
+	"""
+	retryDownloadPassword(
+		"""
+		Download and client job to retry, with the replacement password.
+		"""
+		input: RetryDownloadPasswordInput!
+	): DownloadPasswordRetryPayload!
 	"""
 	Evaluate an external announcement using normal automatic acquisition rules.
 	"""
@@ -19888,7 +19917,16 @@ type MutationRoot {
 	"""
 	Replace or clear explicitly supplied installation-wide settings.
 	"""
-	updateInstalledPluginSettings(pluginId: ID!, changes: JSON!): JSON!
+	updateInstalledPluginSettings(
+		"""
+		Installed plugin ID whose settings are changed.
+		"""
+		pluginId: ID!,
+		"""
+		Object mapping declared setting keys to a new value, or null to clear the stored value; omitted keys are unchanged and unknown keys are rejected.
+		"""
+		changes: JSON!
+	): JSON!
 	"""
 	Refresh the configured plugin registry catalogs and return the available plugins.
 	"""
@@ -24194,7 +24232,12 @@ type QueryRoot {
 	"""
 	Read the installed plugin's settings declaration and redacted values.
 	"""
-	installedPluginSettings(pluginId: ID!): JSON!
+	installedPluginSettings(
+		"""
+		Installed plugin ID whose settings are returned.
+		"""
+		pluginId: ID!
+	): JSON!
 	"""
 	List available registry plugins visible to the caller.
 	"""
@@ -26021,11 +26064,29 @@ type ResumeWantedItemPayload {
 	id: ID!
 }
 
+"""
+Replacement archive password for one failed download client job.
+"""
 input RetryDownloadPasswordInput {
+	"""
+	Canonical Scryer download ID of the submission whose job is retried.
+	"""
 	downloadId: ID!
+	"""
+	Download client ID that owns the failed job; required for a retry.
+	"""
 	clientId: ID!
+	"""
+	Download client type; only `sabnzbd`, `nzbget`, and `weaver` support password retries.
+	"""
 	clientType: String!
+	"""
+	Client-side item ID of the failed job.
+	"""
 	downloadClientItemId: String!
+	"""
+	New archive password to try; must not be empty. Write-only: it is never returned or logged.
+	"""
 	password: String!
 }
 

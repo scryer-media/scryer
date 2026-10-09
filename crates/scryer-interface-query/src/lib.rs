@@ -4110,7 +4110,7 @@ impl AcquisitionQueries {
     async fn installed_plugin_settings(
         &self,
         ctx: &Context<'_>,
-        plugin_id: ID,
+        #[graphql(desc = "Installed plugin ID whose settings are returned.")] plugin_id: ID,
     ) -> GqlResult<async_graphql::Json<async_graphql::Value>> {
         let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
         let settings = app_from_ctx(ctx)?
