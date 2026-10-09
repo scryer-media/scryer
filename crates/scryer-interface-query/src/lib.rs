@@ -4095,6 +4095,10 @@ impl AcquisitionQueries {
     ) -> GqlResult<ScriptScheduleValidationPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
+        // Refuse before looking at the input so an unauthorized caller learns
+        // nothing about the schedule it sent.
+        require_app_permission(ctx, AppPermission::ManageCatalogSettings).await?;
+        require_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
 
         let schedule = match schedule.into_domain() {
             Ok(schedule) => schedule,

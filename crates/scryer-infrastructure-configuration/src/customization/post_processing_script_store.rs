@@ -253,11 +253,23 @@ async fn fetch_scripts(
     sql: &str,
     args: &[SqlArg],
 ) -> AppResult<Vec<PostProcessingScript>> {
-    SqlRuntime::fetch_all(exec, sql, args)
+    // One undecodable row (a language or trigger written by a newer build,
+    // say) must not hide every other script, so list paths skip it.
+    Ok(SqlRuntime::fetch_all(exec, sql, args)
         .await?
         .iter()
-        .map(row_to_script)
-        .collect()
+        .filter_map(|row| match row_to_script(row) {
+            Ok(script) => Some(script),
+            Err(error) => {
+                tracing::warn!(
+                    script_id = row.text("id").ok().as_deref().unwrap_or("<unknown>"),
+                    error = %error,
+                    "skipping undecodable post-processing script row"
+                );
+                None
+            }
+        })
+        .collect())
 }
 
 async fn fetch_optional_script(
@@ -450,15 +462,26 @@ fn applied_facets(row: &SqlRow) -> AppResult<Vec<String>> {
     Ok(serde_json::from_str(&raw).unwrap_or_default())
 }
 
+/// An undecodable schedule reads as no schedule, so the script stays visible
+/// for editing but is never runnable.
 fn schedule(row: &SqlRow) -> AppResult<Option<ScriptSchedule>> {
-    row.opt_text("schedule_json")?
+    let Some(raw) = row
+        .opt_text("schedule_json")?
         .filter(|raw| !raw.trim().is_empty())
-        .map(|raw| {
-            serde_json::from_str(&raw).map_err(|error| {
-                AppError::Repository(format!("invalid script schedule_json: {error}"))
-            })
-        })
-        .transpose()
+    else {
+        return Ok(None);
+    };
+    match serde_json::from_str(&raw) {
+        Ok(schedule) => Ok(Some(schedule)),
+        Err(error) => {
+            tracing::warn!(
+                script_id = row.text("id").ok().as_deref().unwrap_or("<unknown>"),
+                error = %error,
+                "ignoring undecodable script schedule"
+            );
+            Ok(None)
+        }
+    }
 }
 
 fn timestamp_or_now(row: &SqlRow, column: &str) -> AppResult<DateTime<Utc>> {
@@ -664,5 +687,60 @@ mod tests {
             .collect::<Vec<_>>();
         by_trigger.sort();
         assert_eq!(by_trigger, vec!["disabled-scheduled", "scheduled"]);
+    }
+
+    #[tokio::test]
+    async fn undecodable_rows_never_become_runnable_or_hide_other_scripts() {
+        let (store, pool) = store().await;
+        let mut valid = script("valid", ScriptTrigger::Schedule);
+        valid.schedule = Some(ScriptSchedule::Manual);
+        store.create_script(valid).await.expect("create");
+        sqlx::query(
+            "INSERT INTO post_processing_scripts
+                (id, name, script_type, script_content, created_at, updated_at,
+                 trigger, schedule_json)
+             VALUES ('bogus-schedule', 'fixture bogus', 'inline', 'echo fixture',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z',
+                     'schedule', '{\"kind\":\"bogus\"}')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert bogus schedule row");
+        sqlx::query(
+            "INSERT INTO post_processing_scripts
+                (id, name, script_type, script_content, created_at, updated_at,
+                 trigger)
+             VALUES ('unknown-trigger', 'fixture unknown', 'inline', 'echo fixture',
+                     '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', 'on_full_moon')",
+        )
+        .execute(&pool)
+        .await
+        .expect("insert unknown trigger row");
+
+        let bogus = store
+            .get_script("bogus-schedule")
+            .await
+            .expect("get")
+            .expect("script exists");
+        assert_eq!(bogus.schedule, None);
+
+        let scheduled = store.list_enabled_scheduled().await.expect("scheduled");
+        let mut runnable = scheduled
+            .iter()
+            .filter(|script| script.schedule.is_some())
+            .map(|script| script.id.as_str())
+            .collect::<Vec<_>>();
+        runnable.sort();
+        assert_eq!(runnable, vec!["valid"]);
+
+        let mut all = store
+            .list_scripts()
+            .await
+            .expect("list")
+            .into_iter()
+            .map(|script| script.id)
+            .collect::<Vec<_>>();
+        all.sort();
+        assert_eq!(all, vec!["bogus-schedule", "valid"]);
     }
 }

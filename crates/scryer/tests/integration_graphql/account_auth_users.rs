@@ -1240,6 +1240,44 @@ async fn graphql_post_processing_inline_shell_requires_acknowledgement() {
     .await;
     assert_no_errors(&update_inline_with_ack);
 
+    let update_language = r#"mutation($input: UpdatePostProcessingScriptInput!) {
+        updatePostProcessingScript(input: $input) { id language }
+    }"#;
+    let language_without_ack = gql(
+        &ctx,
+        update_language,
+        json!({ "input": { "id": inline_id, "language": "PYTHON" } }),
+    )
+    .await;
+    assert!(
+        language_without_ack.get("errors").is_some(),
+        "inline language change should require acknowledgement: {language_without_ack}"
+    );
+    let language_with_ack = gql(
+        &ctx,
+        update_language,
+        json!({
+            "input": {
+                "id": inline_id,
+                "language": "PYTHON",
+                "inlineShellAcknowledged": true
+            }
+        }),
+    )
+    .await;
+    assert_no_errors(&language_with_ack);
+    assert_eq!(
+        language_with_ack["data"]["updatePostProcessingScript"]["language"],
+        "PYTHON"
+    );
+    let unchanged_language = gql(
+        &ctx,
+        update_language,
+        json!({ "input": { "id": inline_id, "language": "PYTHON" } }),
+    )
+    .await;
+    assert_no_errors(&unchanged_language);
+
     let toggle = r#"mutation($id: ID!, $inlineShellAcknowledged: Boolean) {
         togglePostProcessingScript(id: $id, inlineShellAcknowledged: $inlineShellAcknowledged) {
             id

@@ -715,3 +715,181 @@ async fn script_configuration_changes_are_audited_without_script_content() {
         "update and toggle should both emit updated audit events"
     );
 }
+
+fn system_admin() -> User {
+    let mut user = admin();
+    user.authorization.app = AppPermissionMask::from_permissions([
+        AppPermission::ManageCatalogSettings,
+        AppPermission::ManageSystemSettings,
+    ]);
+    user
+}
+
+fn scheduled_script(id: &str, schedule: scryer_domain::ScriptSchedule) -> PostProcessingScript {
+    let now = chrono::Utc::now();
+    PostProcessingScript {
+        id: id.to_string(),
+        name: format!("Scheduled fixture {id}"),
+        description: String::new(),
+        script_type: ScriptType::Inline,
+        script_content: "echo scheduled-fixture".to_string(),
+        applied_facets: vec![],
+        execution_mode: scryer_domain::ExecutionMode::Blocking,
+        timeout_secs: 60,
+        priority: 0,
+        enabled: true,
+        debug: false,
+        language: scryer_domain::ScriptLanguage::Shell,
+        trigger: scryer_domain::ScriptTrigger::Schedule,
+        schedule: Some(schedule),
+        run_on_startup: false,
+        created_at: now,
+        updated_at: now,
+    }
+}
+
+fn assert_unauthorized<T: std::fmt::Debug>(result: Result<T, scryer_application::AppError>) {
+    match result {
+        Err(scryer_application::AppError::Unauthorized(_)) => {}
+        other => panic!("expected Unauthorized, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn scheduled_scripts_require_system_settings_permission() {
+    let ctx = TestContext::new().await;
+    let system = system_admin();
+    let catalog_only = admin();
+    let interval = scryer_domain::ScriptSchedule::Interval { every_seconds: 600 };
+
+    let stored = ctx
+        .app
+        .create_post_processing_script(
+            &system,
+            scheduled_script("pp-scheduled-guarded", interval.clone()),
+        )
+        .await
+        .expect("system admin creates scheduled script");
+    create_script(&ctx, MediaFacet::Movie, "echo import-fixture", 60, false).await;
+
+    assert_unauthorized(
+        ctx.app
+            .create_post_processing_script(
+                &catalog_only,
+                scheduled_script("pp-scheduled-refused", interval.clone()),
+            )
+            .await,
+    );
+    let mut edited = stored.clone();
+    edited.description = "edited".to_string();
+    assert_unauthorized(
+        ctx.app
+            .update_post_processing_script(&catalog_only, edited.clone())
+            .await,
+    );
+    // The stored trigger decides, so relabelling the row does not get past the check.
+    edited.trigger = scryer_domain::ScriptTrigger::PostImport;
+    assert_unauthorized(
+        ctx.app
+            .update_post_processing_script(&catalog_only, edited)
+            .await,
+    );
+    assert_unauthorized(
+        ctx.app
+            .toggle_post_processing_script(&catalog_only, &stored.id)
+            .await,
+    );
+    assert_unauthorized(
+        ctx.app
+            .delete_post_processing_script(&catalog_only, &stored.id)
+            .await,
+    );
+    assert_unauthorized(
+        ctx.app
+            .validate_script_schedule(&catalog_only, &interval)
+            .await,
+    );
+    assert_unauthorized(
+        ctx.app
+            .list_post_processing_scripts_by_trigger(
+                &catalog_only,
+                scryer_domain::ScriptTrigger::Schedule,
+            )
+            .await,
+    );
+
+    let visible = ctx
+        .app
+        .list_post_processing_scripts(&catalog_only)
+        .await
+        .expect("catalog admin lists scripts");
+    assert!(!visible.is_empty(), "import scripts stay visible");
+    assert!(
+        visible
+            .iter()
+            .all(|script| script.trigger == scryer_domain::ScriptTrigger::PostImport),
+        "scheduled scripts are hidden from a catalog-only actor"
+    );
+    let all = ctx
+        .app
+        .list_post_processing_scripts(&system)
+        .await
+        .expect("system admin lists scripts");
+    assert!(all.iter().any(|script| script.id == stored.id));
+
+    let still_enabled = ctx
+        .app
+        .list_post_processing_scripts_by_trigger(&system, scryer_domain::ScriptTrigger::Schedule)
+        .await
+        .expect("list scheduled");
+    assert!(
+        still_enabled
+            .iter()
+            .any(|script| script.id == stored.id && script.enabled)
+    );
+}
+
+#[tokio::test]
+async fn trigger_cannot_change_on_update() {
+    let ctx = TestContext::new().await;
+    let system = system_admin();
+    let stored = ctx
+        .app
+        .create_post_processing_script(
+            &system,
+            scheduled_script("pp-trigger-fixed", scryer_domain::ScriptSchedule::Manual),
+        )
+        .await
+        .expect("create scheduled script");
+    let mut relabelled = stored;
+    relabelled.trigger = scryer_domain::ScriptTrigger::PostImport;
+    match ctx
+        .app
+        .update_post_processing_script(&system, relabelled)
+        .await
+    {
+        Err(scryer_application::AppError::Validation(_)) => {}
+        other => panic!("expected Validation, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn cron_schedule_that_never_fires_is_rejected_on_create() {
+    let ctx = TestContext::new().await;
+    let result = ctx
+        .app
+        .create_post_processing_script(
+            &system_admin(),
+            scheduled_script(
+                "pp-cron-never",
+                scryer_domain::ScriptSchedule::Cron {
+                    expression: "0 0 30 2 *".to_string(),
+                },
+            ),
+        )
+        .await;
+    match result {
+        Err(scryer_application::AppError::Validation(_)) => {}
+        other => panic!("expected Validation, got {other:?}"),
+    }
+}

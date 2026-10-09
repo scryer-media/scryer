@@ -3,10 +3,11 @@ use crate::stored_paths::path_to_stored_string;
 use crate::{AppError, AppUseCase};
 use chrono::Utc;
 use scryer_domain::{
-    ConfigurationChangeAction, DomainEventPayload, DomainEventStream, DomainExternalIds,
-    ExecutionMode, Id, MediaFacet, NewDomainEvent, PostProcessingCompletedEventData,
-    PostProcessingResult, PostProcessingScript, PostProcessingScriptRun, ScriptRunStatus,
-    ScriptSchedule, ScriptTrigger, ScriptType, TitleContextSnapshot, User,
+    AppPermission, ConfigurationChangeAction, DomainEventPayload, DomainEventStream,
+    DomainExternalIds, ExecutionMode, Id, MediaFacet, NewDomainEvent,
+    PostProcessingCompletedEventData, PostProcessingResult, PostProcessingScript,
+    PostProcessingScriptRun, ScriptRunStatus, ScriptSchedule, ScriptTrigger, ScriptType,
+    TitleContextSnapshot, User,
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -38,13 +39,47 @@ pub struct PostProcessingContext {
 }
 
 impl AppUseCase {
+    /// Catalog-settings permission covers import-triggered scripts. A
+    /// scheduled script runs arbitrary code on the host on its own clock, so
+    /// it also needs system-settings permission.
+    async fn require_script_trigger_permission(
+        &self,
+        actor: &User,
+        trigger: ScriptTrigger,
+    ) -> crate::AppResult<()> {
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
+            .await?;
+        if trigger == ScriptTrigger::Schedule {
+            self.require_app_permission(actor, AppPermission::ManageSystemSettings)
+                .await?;
+        }
+        Ok(())
+    }
+
+    /// Every script the caller may manage. Scheduled scripts are left out
+    /// for callers without system-settings permission.
     pub async fn list_post_processing_scripts(
         &self,
         actor: &User,
     ) -> crate::AppResult<Vec<PostProcessingScript>> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
-        self.services.customization.pp_scripts.list_scripts().await
+        let scripts = self
+            .services
+            .customization
+            .pp_scripts
+            .list_scripts()
+            .await?;
+        if self
+            .has_app_permission(actor, AppPermission::ManageSystemSettings)
+            .await?
+        {
+            return Ok(scripts);
+        }
+        Ok(scripts
+            .into_iter()
+            .filter(|script| script.trigger != ScriptTrigger::Schedule)
+            .collect())
     }
 
     pub async fn list_post_processing_scripts_by_trigger(
@@ -52,7 +87,7 @@ impl AppUseCase {
         actor: &User,
         trigger: ScriptTrigger,
     ) -> crate::AppResult<Vec<PostProcessingScript>> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+        self.require_script_trigger_permission(actor, trigger)
             .await?;
         self.services
             .customization
@@ -67,7 +102,7 @@ impl AppUseCase {
         actor: &User,
         schedule: &ScriptSchedule,
     ) -> crate::AppResult<crate::scripts::schedule::ScriptScheduleValidation> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+        self.require_script_trigger_permission(actor, ScriptTrigger::Schedule)
             .await?;
         Ok(crate::scripts::schedule::check_schedule(
             schedule,
@@ -81,7 +116,7 @@ impl AppUseCase {
         script_id: &str,
         limit: usize,
     ) -> crate::AppResult<Vec<PostProcessingScriptRun>> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
         self.services
             .customization
@@ -110,7 +145,7 @@ impl AppUseCase {
         actor: &User,
         script: PostProcessingScript,
     ) -> crate::AppResult<PostProcessingScript> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+        self.require_script_trigger_permission(actor, script.trigger)
             .await?;
         let script = normalize_script_trigger(script)?;
         let created = self
@@ -133,18 +168,39 @@ impl AppUseCase {
         actor: &User,
         id: &str,
     ) -> crate::AppResult<Option<PostProcessingScript>> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
-        self.services.customization.pp_scripts.get_script(id).await
+        let script = self
+            .services
+            .customization
+            .pp_scripts
+            .get_script(id)
+            .await?;
+        if let Some(script) = &script {
+            self.require_script_trigger_permission(actor, script.trigger)
+                .await?;
+        }
+        Ok(script)
     }
 
+    /// Replaces a script. The trigger is fixed at creation: an update whose
+    /// trigger differs from the stored one is rejected, and permission is
+    /// checked against the stored trigger.
     pub async fn update_post_processing_script(
         &self,
         actor: &User,
         script: PostProcessingScript,
     ) -> crate::AppResult<PostProcessingScript> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
+        let stored = self.load_post_processing_script(&script.id).await?;
+        self.require_script_trigger_permission(actor, stored.trigger)
+            .await?;
+        if script.trigger != stored.trigger {
+            return Err(AppError::Validation(
+                "a script's trigger cannot be changed after it is created".to_string(),
+            ));
+        }
         let script = normalize_script_trigger(script)?;
         let updated = self
             .services
@@ -166,7 +222,7 @@ impl AppUseCase {
         actor: &User,
         id: &str,
     ) -> crate::AppResult<()> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
         let existing = self
             .services
@@ -174,6 +230,10 @@ impl AppUseCase {
             .pp_scripts
             .get_script(id)
             .await?;
+        if let Some(script) = &existing {
+            self.require_script_trigger_permission(actor, script.trigger)
+                .await?;
+        }
         self.services
             .customization
             .pp_scripts
@@ -195,15 +255,11 @@ impl AppUseCase {
         actor: &User,
         id: &str,
     ) -> crate::AppResult<PostProcessingScript> {
-        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+        self.require_app_permission(actor, AppPermission::ManageCatalogSettings)
             .await?;
-        let mut script = self
-            .services
-            .customization
-            .pp_scripts
-            .get_script(id)
-            .await?
-            .ok_or_else(|| AppError::NotFound(format!("script {id} not found")))?;
+        let mut script = self.load_post_processing_script(id).await?;
+        self.require_script_trigger_permission(actor, script.trigger)
+            .await?;
         script.enabled = !script.enabled;
         script.updated_at = Utc::now();
         let updated = self
@@ -220,6 +276,18 @@ impl AppUseCase {
         .await;
         Ok(updated)
     }
+
+    async fn load_post_processing_script(
+        &self,
+        id: &str,
+    ) -> crate::AppResult<PostProcessingScript> {
+        self.services
+            .customization
+            .pp_scripts
+            .get_script(id)
+            .await?
+            .ok_or_else(|| AppError::NotFound(format!("script {id} not found")))
+    }
 }
 
 /// Applies the per-trigger rules. A scheduled script needs a valid
@@ -231,9 +299,13 @@ fn normalize_script_trigger(
 ) -> crate::AppResult<PostProcessingScript> {
     match script.trigger {
         ScriptTrigger::Schedule => {
-            let schedule = script.schedule.as_ref().ok_or_else(|| {
+            let schedule = script.schedule.as_mut().ok_or_else(|| {
                 AppError::Validation("scheduled scripts require a schedule".to_string())
             })?;
+            if let ScriptSchedule::Weekly { days, .. } = schedule {
+                days.sort();
+                days.dedup();
+            }
             crate::scripts::schedule::validate_schedule(schedule)
                 .map_err(crate::scripts::schedule::ScheduleError::into_app_error)?;
         }

@@ -133,6 +133,7 @@ impl PostProcessingMutations {
         let previous_script_type = script.script_type;
         let previous_script_content = script.script_content.clone();
         let previous_enabled = script.enabled;
+        let previous_language = script.language;
         let next_script_type = match input.script_type.as_deref() {
             Some(value) => Some(parse_script_type(value)?),
             None => None,
@@ -192,7 +193,10 @@ impl PostProcessingMutations {
             && script.script_content != previous_script_content;
         let inline_enabled =
             script.script_type == ScriptType::Inline && !previous_enabled && script.enabled;
-        if inline_transition || inline_content_changed || inline_enabled {
+        let inline_language_changed =
+            script.script_type == ScriptType::Inline && script.language != previous_language;
+        if inline_transition || inline_content_changed || inline_enabled || inline_language_changed
+        {
             require_inline_shell_acknowledgement(input.inline_shell_acknowledged)?;
         }
         if script.script_type == ScriptType::File {
