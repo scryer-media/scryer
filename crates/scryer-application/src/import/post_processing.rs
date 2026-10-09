@@ -1,6 +1,6 @@
 use crate::domain_events::DomainEventActor;
 use crate::scripts::runner::{
-    ScriptExecution, ScriptInvocation, ScriptOutcome, ScriptSource, run_script,
+    InterpreterConfig, ScriptExecution, ScriptInvocation, ScriptOutcome, ScriptSource, run_script,
 };
 use crate::stored_paths::path_to_stored_string;
 use crate::{AppError, AppUseCase};
@@ -223,6 +223,7 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
     // Build the JSON metadata payload once for all scripts.
     let env_payload = build_script_env_payload(&ctx, facet_str);
     let env_json = serde_json::to_string(&env_payload).unwrap_or_default();
+    let interpreters = ctx.app.script_interpreter_config().await;
 
     // Partition by execution mode.
     let mut blocking: Vec<&PostProcessingScript> = scripts
@@ -238,7 +239,7 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
 
     // Run blocking scripts sequentially in priority order.
     for script in &blocking {
-        let run = execute_script(script, &ctx, facet_str, &env_json).await;
+        let run = execute_script(script, &ctx, facet_str, &env_json, &interpreters).await;
         log_run_activity(&ctx, &run).await;
         persist_run_record(&ctx.app, run).await;
     }
@@ -252,6 +253,7 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
         let dest_path = ctx.dest_path.clone();
         let facet = ctx.facet.clone();
         let env_json = env_json.clone();
+        let interpreters = interpreters.clone();
         let script = (*script).clone();
         let facet_str_owned = facet_str.to_string();
         tokio::spawn(async move {
@@ -269,7 +271,8 @@ pub async fn run_post_processing(ctx: PostProcessingContext) -> crate::AppResult
                 episode: None,
                 quality: None,
             };
-            let run = execute_script(&script, &ff_ctx, &facet_str_owned, &env_json).await;
+            let run =
+                execute_script(&script, &ff_ctx, &facet_str_owned, &env_json, &interpreters).await;
             log_run_activity(&ff_ctx, &run).await;
             persist_run_record(&app, run).await;
         });
@@ -325,6 +328,7 @@ async fn execute_script(
     ctx: &PostProcessingContext,
     facet_str: &str,
     env_json: &str,
+    interpreters: &InterpreterConfig,
 ) -> PostProcessingScriptRun {
     let run_id = Id::new().0;
 
@@ -351,7 +355,7 @@ async fn execute_script(
         cwd,
         timeout: Duration::from_secs(script.timeout_secs.max(1) as u64),
         capture_output: script.debug,
-        interpreters: ctx.app.script_interpreter_config().await,
+        interpreters: interpreters.clone(),
         materialize_root: ctx.app.services.config.scripts_dir.clone(),
     };
 

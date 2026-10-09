@@ -158,7 +158,8 @@ impl DatastoreConfig {
     }
 
     pub fn scripts_dir(&self) -> PathBuf {
-        self.data_dir.join("scripts")
+        let dir = self.data_dir.join("scripts");
+        std::path::absolute(&dir).unwrap_or(dir)
     }
 
     pub fn safe_database_url(&self) -> &str {
