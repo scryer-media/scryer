@@ -2399,6 +2399,26 @@ input CreatePostProcessingScriptInput {
 	Whether debug output is enabled, or null for the service default.
 	"""
 	debug: Boolean
+	"""
+	Whether the script starts enabled, or null for true.
+	"""
+	enabled: Boolean
+	"""
+	Language of inline script content, or null for `SHELL`.
+	"""
+	language: ScriptLanguage
+	"""
+	What starts the script, or null for `POST_IMPORT`.
+	"""
+	trigger: ScriptTrigger
+	"""
+	Schedule, required when the trigger is `SCHEDULE`.
+	"""
+	schedule: ScriptScheduleInput
+	"""
+	Whether a scheduled script also runs once at host start, or null for false.
+	"""
+	runOnStartup: Boolean
 }
 
 """
@@ -20151,7 +20171,7 @@ type MutationRoot {
 		input: ExecuteExternalImportInput!
 	): ExternalImportResultPayload!
 	"""
-	Create an enabled post-processing script after validating its type and content.
+	Create a post-processing script, enabled unless the input says otherwise, after validating its type, content, and schedule.
 	"""
 	createPostProcessingScript(
 		"""
@@ -21891,6 +21911,26 @@ type PostProcessingScriptPayload {
 	Whether debug output is enabled.
 	"""
 	debug: Boolean!
+	"""
+	Language of inline script content.
+	"""
+	language: ScriptLanguage!
+	"""
+	What starts the script.
+	"""
+	trigger: ScriptTrigger!
+	"""
+	Schedule of a scheduled script, or null for import-triggered scripts.
+	"""
+	schedule: ScriptSchedulePayload
+	"""
+	Whether a scheduled script also runs once when the host starts.
+	"""
+	runOnStartup: Boolean!
+	"""
+	Short description of the schedule, or null when the script has none.
+	"""
+	scheduleDescription: String
 	"""
 	Creation time in UTC.
 	"""
@@ -24184,9 +24224,23 @@ type QueryRoot {
 		titleId: ID!
 	): [TitleClaim!]!
 	"""
-	List post-processing scripts visible to the caller.
+	List post-processing scripts visible to the caller, optionally only those with one trigger.
 	"""
-	postProcessingScripts: [PostProcessingScriptPayload!]!
+	postProcessingScripts(
+		"""
+		Only return scripts started by this trigger; null returns every script.
+		"""
+		trigger: ScriptTrigger
+	): [PostProcessingScriptPayload!]!
+	"""
+	Check a script schedule before saving it and preview its next three fire times.
+	"""
+	validateScriptSchedule(
+		"""
+		Schedule to check.
+		"""
+		schedule: ScriptScheduleInput!
+	): ScriptScheduleValidationPayload!
 	"""
 	List runs for one post-processing script; the limit defaults to 50 and is clamped to 1 through 500.
 	"""
@@ -26680,6 +26734,40 @@ input ScanLibraryInput {
 }
 
 """
+Day of the week for weekly schedules.
+"""
+enum ScheduleWeekday {
+	"""
+	Monday.
+	"""
+	MONDAY
+	"""
+	Tuesday.
+	"""
+	TUESDAY
+	"""
+	Wednesday.
+	"""
+	WEDNESDAY
+	"""
+	Thursday.
+	"""
+	THURSDAY
+	"""
+	Friday.
+	"""
+	FRIDAY
+	"""
+	Saturday.
+	"""
+	SATURDAY
+	"""
+	Sunday.
+	"""
+	SUNDAY
+}
+
+"""
 One scoring rule contribution used in a quality decision.
 """
 type ScoringEntryPayload {
@@ -26822,6 +26910,146 @@ type ScriptInterpreterSettingsPayload {
 	Go toolchain path or command, or null to use `go`.
 	"""
 	go: String
+}
+
+"""
+Language an inline script is written in; selects its interpreter.
+"""
+enum ScriptLanguage {
+	"""
+	Shell script.
+	"""
+	SHELL
+	"""
+	Python 3.
+	"""
+	PYTHON
+	"""
+	PowerShell.
+	"""
+	POWERSHELL
+	"""
+	Windows batch file.
+	"""
+	BATCH
+	"""
+	Go source file.
+	"""
+	GO
+}
+
+"""
+Schedule for a scheduled script. Only the fields of the chosen kind are read.
+"""
+input ScriptScheduleInput {
+	"""
+	Schedule shape.
+	"""
+	kind: ScriptScheduleKind!
+	"""
+	Interval length in seconds, at least 60. Required for `INTERVAL`.
+	"""
+	everySeconds: Int
+	"""
+	Host-local time of day as 24-hour `HH:MM`. Required for `DAILY` and `WEEKLY`.
+	"""
+	timeLocal: String
+	"""
+	Days to run on. Required for `WEEKLY`.
+	"""
+	days: [ScheduleWeekday!]
+	"""
+	Five-field crontab expression in host-local time. Required for `CRON`.
+	"""
+	expression: String
+}
+
+"""
+Shape of a script schedule.
+"""
+enum ScriptScheduleKind {
+	"""
+	Runs only when started by hand.
+	"""
+	MANUAL
+	"""
+	Repeats every `everySeconds` seconds.
+	"""
+	INTERVAL
+	"""
+	Runs once a day at `timeLocal`.
+	"""
+	DAILY
+	"""
+	Runs on each of `days` at `timeLocal`.
+	"""
+	WEEKLY
+	"""
+	Runs on a five-field crontab `expression`.
+	"""
+	CRON
+}
+
+"""
+Stored schedule of a scheduled script.
+"""
+type ScriptSchedulePayload {
+	"""
+	Schedule shape.
+	"""
+	kind: ScriptScheduleKind!
+	"""
+	Interval length in seconds, for `INTERVAL`.
+	"""
+	everySeconds: Int
+	"""
+	Host-local time of day as `HH:MM`, for `DAILY` and `WEEKLY`.
+	"""
+	timeLocal: String
+	"""
+	Days to run on, for `WEEKLY`.
+	"""
+	days: [ScheduleWeekday!]
+	"""
+	Crontab expression, for `CRON`.
+	"""
+	expression: String
+}
+
+"""
+Result of checking a schedule before saving it.
+"""
+type ScriptScheduleValidationPayload {
+	"""
+	Whether the schedule can be saved.
+	"""
+	valid: Boolean!
+	"""
+	Why the schedule is invalid, or null when it is valid.
+	"""
+	error: String
+	"""
+	Short description of the schedule; the raw expression for cron schedules.
+	"""
+	description: String
+	"""
+	The next three fire times, empty for manual or invalid schedules.
+	"""
+	nextRuns: [DateTime!]!
+}
+
+"""
+What starts a script.
+"""
+enum ScriptTrigger {
+	"""
+	The import pipeline, after a file lands in the library.
+	"""
+	POST_IMPORT
+	"""
+	The job scheduler, on the script's own schedule.
+	"""
+	SCHEDULE
 }
 
 """
@@ -31817,6 +32045,24 @@ input UpdatePostProcessingScriptInput {
 	Replacement debug state, or null to leave unchanged.
 	"""
 	debug: Boolean
+	"""
+	Replacement inline script language, or null to leave unchanged.
+	"""
+	language: ScriptLanguage
+	"""
+	The trigger is fixed when a script is created. Omit this field, or
+	pass the stored trigger; any other value is rejected with a validation
+	error.
+	"""
+	trigger: ScriptTrigger
+	"""
+	Replacement schedule, or null to leave unchanged.
+	"""
+	schedule: ScriptScheduleInput
+	"""
+	Replacement startup-run setting, or null to leave unchanged.
+	"""
+	runOnStartup: Boolean
 }
 
 """

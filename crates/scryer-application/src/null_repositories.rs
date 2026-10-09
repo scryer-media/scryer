@@ -2064,6 +2064,15 @@ impl PostProcessingScriptRepository for NullPostProcessingScriptRepository {
     ) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
         Ok(vec![])
     }
+    async fn list_enabled_scheduled(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        Ok(vec![])
+    }
+    async fn list_scripts_by_trigger(
+        &self,
+        _trigger: scryer_domain::ScriptTrigger,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        Ok(vec![])
+    }
     async fn record_run(&self, _run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
         Ok(())
     }

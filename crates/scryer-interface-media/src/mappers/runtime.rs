@@ -539,6 +539,14 @@ pub fn from_pp_script(s: scryer_domain::PostProcessingScript) -> PostProcessingS
         priority: s.priority,
         enabled: s.enabled,
         debug: s.debug,
+        language: s.language.into(),
+        trigger: s.trigger.into(),
+        schedule_description: s
+            .schedule
+            .as_ref()
+            .map(scryer_application::scripts::schedule::describe_schedule),
+        schedule: s.schedule.map(Into::into),
+        run_on_startup: s.run_on_startup,
         created_at: s.created_at,
         updated_at: s.updated_at,
     }

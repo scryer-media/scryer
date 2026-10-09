@@ -1005,13 +1005,12 @@ mod tests {
     async fn executable_python_file_is_executed_directly() {
         let fixture = Fixture::new();
         let pinned = fixture.fake_interpreter("fake-python");
-        let shebang = fixture.fake_interpreter("fake-python-shebang");
+        // The shebang names a real binary: macOS refuses a script as a
+        // shebang interpreter, so a fake interpreter cannot stand in here.
+        // Run directly, `$0` is the script itself; through the python pin it
+        // would be the fake interpreter's own reporting instead.
         let script = fixture.work.join("job.py");
-        write_file(
-            &script,
-            &format!("#!{}\nprint('synthetic')\n", shebang.display()),
-            0o755,
-        );
+        write_file(&script, "#!/bin/sh\nprintf 'argv0=%s\\n' \"$0\"\n", 0o755);
         let mut invocation = fixture.file_invocation(&script);
         invocation.interpreters.python = Some(pinned);
 
@@ -1021,8 +1020,8 @@ mod tests {
         let execution = run(invocation).await;
         assert_succeeded(&execution);
         assert_eq!(
-            stdout_lines(&execution)[0],
-            format!("argv0={}", shebang.display())
+            stdout_lines(&execution),
+            vec![format!("argv0={}", script.display())]
         );
     }
 

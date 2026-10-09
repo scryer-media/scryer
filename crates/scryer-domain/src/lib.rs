@@ -7944,6 +7944,16 @@ pub struct PostProcessingScript {
     pub priority: i32,
     pub enabled: bool,
     pub debug: bool,
+    #[serde(default)]
+    pub language: ScriptLanguage,
+    #[serde(default)]
+    pub trigger: ScriptTrigger,
+    /// Set when `trigger` is `Schedule`; ignored for import-triggered scripts.
+    #[serde(default)]
+    pub schedule: Option<ScriptSchedule>,
+    /// Scheduled scripts only: also run once when the host starts.
+    #[serde(default)]
+    pub run_on_startup: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }

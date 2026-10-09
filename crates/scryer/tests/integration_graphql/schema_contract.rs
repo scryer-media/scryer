@@ -755,8 +755,11 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     // `latestJobRuns`, the newest run per job in one read: 185->186.
     assert!(query_field_names.contains(&"latestJobRuns"));
     // Canonical list vocabulary adds one authenticated registry query.
+    // Scheduled scripts add `validateScriptSchedule`, the schedule check and
+    // next-run preview the script editor calls before saving: 191->192.
+    assert!(query_field_names.contains(&"validateScriptSchedule"));
     assert_eq!(
-        query_field_count, 191,
+        query_field_count, 192,
         "query fields: {query_field_names:?}"
     );
     // First-class proxies (WP4) add one mutation, resetProxyHostKey: SSH host
@@ -1073,10 +1076,25 @@ async fn graphql_introspection_schema_census_matches_contract_baseline() {
     ] {
         assert!(public_type_names.contains(&name), "missing type {name}");
     }
-    assert_eq!(public_types.len(), 934);
-    assert_eq!(kind_count("OBJECT"), 509);
-    assert_eq!(kind_count("INPUT_OBJECT"), 235);
-    assert_eq!(kind_count("ENUM"), 178);
+    // Scheduled scripts add the language, trigger, schedule kind and weekday
+    // enums, the schedule input, and the stored-schedule and schedule-check
+    // payloads: public types 934->941, OBJECT 509->511, INPUT_OBJECT 235->236,
+    // ENUM 178->182.
+    for name in [
+        "ScriptLanguage",
+        "ScriptTrigger",
+        "ScriptScheduleKind",
+        "ScheduleWeekday",
+        "ScriptScheduleInput",
+        "ScriptSchedulePayload",
+        "ScriptScheduleValidationPayload",
+    ] {
+        assert!(public_type_names.contains(&name), "missing type {name}");
+    }
+    assert_eq!(public_types.len(), 941);
+    assert_eq!(kind_count("OBJECT"), 511);
+    assert_eq!(kind_count("INPUT_OBJECT"), 236);
+    assert_eq!(kind_count("ENUM"), 182);
     assert_eq!(kind_count("SCALAR"), 10);
     assert_eq!(kind_count("UNION"), 2);
     assert!(mutation_field_names.contains(&"mediaFileDiscEpisodeTargets"));
