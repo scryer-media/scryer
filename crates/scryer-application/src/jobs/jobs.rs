@@ -39,6 +39,10 @@ const DISCOVERY_DIRTY_REASON_SCAN_BOUNDARY: i64 = 1 << 1;
 const DISCOVERY_PUBLIC_FEED_REQUEST_TIMEOUT_SECONDS: u64 = 30;
 pub(crate) const SCHEDULER_INSTANCE_ID_KEY: &str = "scheduler.instance_id";
 
+#[path = "custom_jobs.rs"]
+mod custom_jobs;
+pub use custom_jobs::start_background_custom_job_scheduler;
+
 #[derive(Clone)]
 enum JobExecutionPrincipal {
     User(User),
@@ -841,6 +845,7 @@ impl AppUseCase {
                 self.runtime.catalog.artwork_wait_reason.read().await,
             );
         }
+        definitions.extend(self.custom_job_definitions());
         Ok(definitions)
     }
 
@@ -1055,6 +1060,7 @@ impl AppUseCase {
                     .unwrap_or_else(|| JobRun::from_record(&record, None))
             }));
         }
+        runs.extend(self.latest_custom_job_runs(&active_runs_by_id).await?);
         Ok(runs)
     }
 
@@ -1157,6 +1163,11 @@ impl AppUseCase {
         actor: &User,
         job_key: JobKey,
     ) -> AppResult<JobRun> {
+        if job_key == JobKey::CustomJob {
+            return Err(AppError::Validation(
+                "a custom job run needs the id of the scheduled script to run".to_string(),
+            ));
+        }
         let hash_start = if job_key == JobKey::FullHashBackfill {
             let guard = self.runtime.jobs.full_hash_start_lock.lock().await;
             if self.runtime.jobs.full_hash_shutdown.is_cancelled() {
@@ -1735,6 +1746,7 @@ impl AppUseCase {
         let run_id = run.id.as_str();
         let actor = actor.unwrap_or_else(User::system_execution_actor);
         match job_key {
+            JobKey::CustomJob => self.execute_custom_job(run).await,
             JobKey::LibraryScanMovies | JobKey::LibraryScanSeries | JobKey::LibraryScanAnime => {
                 let summary = if let Some(library_id) = job_run_library_id(run) {
                     self.scan_library_by_id_with_tracking(

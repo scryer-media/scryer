@@ -1157,3 +1157,332 @@ async fn cron_schedule_that_never_fires_is_rejected_on_create() {
         other => panic!("expected Validation, got {other:?}"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Scheduled scripts run as jobs
+// ---------------------------------------------------------------------------
+
+/// A system admin that exists in the user table, as a run's actor must.
+async fn persisted_system_admin(ctx: &TestContext) -> User {
+    ctx.app
+        .find_or_create_default_user()
+        .await
+        .expect("default user")
+}
+
+async fn create_custom_job(
+    ctx: &TestContext,
+    id: &str,
+    content: &str,
+    execution_mode: scryer_domain::ExecutionMode,
+) -> PostProcessingScript {
+    let mut script = scheduled_script(id, scryer_domain::ScriptSchedule::Manual);
+    script.script_content = content.to_string();
+    script.execution_mode = execution_mode;
+    ctx.app
+        .create_post_processing_script(&system_admin(), script)
+        .await
+        .expect("create scheduled script")
+}
+
+/// Waits for the job run `run_id` of `script_id` to reach a terminal state.
+async fn wait_for_custom_job_run(
+    ctx: &TestContext,
+    script_id: &str,
+    run_id: &str,
+) -> scryer_application::JobRun {
+    let found = std::sync::Arc::new(std::sync::Mutex::new(None));
+    common::wait_until(&format!("job run {run_id} to finish"), || {
+        let found = found.clone();
+        async move {
+            let runs = ctx
+                .app
+                .list_custom_job_runs(&system_admin(), script_id, 20)
+                .await
+                .expect("list custom job runs");
+            match runs
+                .into_iter()
+                .find(|run| run.id == run_id && run.status.is_terminal())
+            {
+                Some(run) => {
+                    *found.lock().unwrap() = Some(run);
+                    true
+                }
+                None => false,
+            }
+        }
+    })
+    .await;
+    found.lock().unwrap().take().expect("terminal run")
+}
+
+fn summary(run: &scryer_application::JobRun) -> serde_json::Value {
+    serde_json::from_str(run.summary_json.as_deref().expect("summary json")).expect("summary")
+}
+
+async fn script_run(
+    ctx: &TestContext,
+    script_id: &str,
+    script_run_id: &str,
+) -> scryer_domain::PostProcessingScriptRun {
+    ctx.app
+        .list_post_processing_script_runs(&system_admin(), script_id, 20)
+        .await
+        .expect("list script runs")
+        .into_iter()
+        .find(|run| run.id == script_run_id)
+        .expect("script run recorded")
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_custom_job_run_records_its_script_run_and_summary() {
+    let ctx = TestContext::new().await;
+    let script = create_custom_job(
+        &ctx,
+        "cj-success",
+        "printf '%s|%s|%s|%s|%s' \"$SCRYER_EVENT\" \"$SCRYER_JOB_ID\" \"$SCRYER_TRIGGER_SOURCE\" \"$SCRYER_RUN_ID\" \"$(basename \"$PWD\")\"",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+
+    let started = ctx
+        .app
+        .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+        .await
+        .expect("trigger custom job");
+    assert_eq!(started.job_key, scryer_application::JobKey::CustomJob);
+    assert_eq!(started.custom_job_id(), Some(script.id.as_str()));
+    assert_eq!(
+        started.trigger_source,
+        scryer_application::JobTriggerSource::Manual
+    );
+
+    let finished = wait_for_custom_job_run(&ctx, &script.id, &started.id).await;
+    assert_eq!(finished.status, scryer_application::JobRunStatus::Completed);
+    let summary = summary(&finished);
+    assert_eq!(summary["exit_code"], 0);
+    assert!(summary["duration_ms"].is_i64(), "{summary}");
+    let script_run_id = summary["script_run_id"].as_str().expect("script run id");
+
+    let recorded = script_run(&ctx, &script.id, script_run_id).await;
+    assert_eq!(recorded.status, ScriptRunStatus::Success);
+    assert_eq!(recorded.exit_code, Some(0));
+    assert_eq!(recorded.title_id, None);
+    assert_eq!(recorded.file_path, None);
+    assert_eq!(
+        recorded.stdout_tail.as_deref(),
+        Some(format!("scheduled_job|{}|manual|{}|scripts", script.id, started.id).as_str())
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failing_custom_job_fails_its_run_with_the_exit_code() {
+    let ctx = TestContext::new().await;
+    let script = create_custom_job(
+        &ctx,
+        "cj-failing",
+        "exit 3",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    let started = ctx
+        .app
+        .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+        .await
+        .expect("trigger custom job");
+    let finished = wait_for_custom_job_run(&ctx, &script.id, &started.id).await;
+    assert_eq!(finished.status, scryer_application::JobRunStatus::Failed);
+    let summary = summary(&finished);
+    assert_eq!(summary["exit_code"], 3);
+    let recorded = script_run(
+        &ctx,
+        &script.id,
+        summary["script_run_id"].as_str().expect("script run id"),
+    )
+    .await;
+    assert_eq!(recorded.status, ScriptRunStatus::Failed);
+    assert_eq!(recorded.exit_code, Some(3));
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_fire_and_forget_custom_job_completes_at_spawn_and_records_the_exit_later() {
+    let ctx = TestContext::new().await;
+    let gate_dir = tempfile::tempdir().expect("tempdir");
+    let gate = gate_dir.path().join("release");
+    let script = create_custom_job(
+        &ctx,
+        "cj-detached",
+        &format!(
+            "while [ ! -f '{}' ]; do sleep 0.05; done; echo released",
+            gate.display()
+        ),
+        scryer_domain::ExecutionMode::FireAndForget,
+    )
+    .await;
+    let started = ctx
+        .app
+        .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+        .await
+        .expect("trigger custom job");
+
+    // The job finishes while the script is still held at the gate.
+    let finished = wait_for_custom_job_run(&ctx, &script.id, &started.id).await;
+    assert_eq!(finished.status, scryer_application::JobRunStatus::Completed);
+    let summary = summary(&finished);
+    let script_run_id = summary["script_run_id"]
+        .as_str()
+        .expect("script run id")
+        .to_string();
+    let running = script_run(&ctx, &script.id, &script_run_id).await;
+    assert_eq!(running.status, ScriptRunStatus::Running);
+    assert_eq!(running.completed_at, None);
+
+    std::fs::write(&gate, b"").expect("open gate");
+    common::wait_until("the detached script run to finish", || {
+        let script_id = script.id.clone();
+        let script_run_id = script_run_id.clone();
+        let ctx = &ctx;
+        async move {
+            script_run(ctx, &script_id, &script_run_id).await.status == ScriptRunStatus::Success
+        }
+    })
+    .await;
+    let done = script_run(&ctx, &script.id, &script_run_id).await;
+    assert_eq!(done.exit_code, Some(0));
+    assert_eq!(done.stdout_tail.as_deref(), Some("released"));
+    assert_eq!(done.started_at, running.started_at);
+    assert!(done.completed_at.is_some());
+}
+
+#[tokio::test]
+async fn a_disabled_custom_job_cannot_be_triggered() {
+    let ctx = TestContext::new().await;
+    let script = create_custom_job(
+        &ctx,
+        "cj-disabled",
+        "echo never",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    ctx.app
+        .toggle_post_processing_script(&system_admin(), &script.id)
+        .await
+        .expect("disable");
+    match ctx
+        .app
+        .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+        .await
+    {
+        Err(scryer_application::AppError::Validation(message)) => {
+            assert!(message.contains("disabled"), "{message}")
+        }
+        other => panic!("expected Validation, got {other:?}"),
+    }
+    let jobs = ctx.app.list_jobs(&system_admin()).await.expect("list jobs");
+    assert!(
+        jobs.iter()
+            .all(|job| job.custom_job_id.as_deref() != Some(script.id.as_str())),
+        "a disabled script is not listed as a job"
+    );
+}
+
+#[tokio::test]
+async fn custom_jobs_require_system_settings_permission() {
+    let ctx = TestContext::new().await;
+    let script = create_custom_job(
+        &ctx,
+        "cj-guarded",
+        "echo guarded",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    assert_unauthorized(ctx.app.trigger_custom_job(&admin(), &script.id).await);
+    assert_unauthorized(ctx.app.list_custom_job_runs(&admin(), &script.id, 5).await);
+}
+
+#[tokio::test]
+async fn scheduled_scripts_are_listed_as_jobs_with_their_next_run() {
+    let ctx = TestContext::new().await;
+    let interval = ctx
+        .app
+        .create_post_processing_script(
+            &system_admin(),
+            scheduled_script(
+                "cj-interval",
+                scryer_domain::ScriptSchedule::Interval { every_seconds: 600 },
+            ),
+        )
+        .await
+        .expect("create interval script");
+    let manual = create_custom_job(
+        &ctx,
+        "cj-manual",
+        "echo manual",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+
+    let jobs = ctx.app.list_jobs(&system_admin()).await.expect("list jobs");
+    let job = |id: &str| {
+        jobs.iter()
+            .find(|job| job.custom_job_id.as_deref() == Some(id))
+            .unwrap_or_else(|| panic!("job for {id}"))
+            .clone()
+    };
+    let interval_job = job(&interval.id);
+    assert_eq!(interval_job.key, scryer_application::JobKey::CustomJob);
+    assert_eq!(interval_job.display_name, interval.name);
+    assert!(interval_job.schedule.next_run_at.is_some());
+    assert_eq!(interval_job.schedule.interval_seconds, Some(600));
+    assert!(!interval_job.schedule.description.is_empty());
+    let manual_job = job(&manual.id);
+    assert_eq!(manual_job.schedule.next_run_at, None);
+    assert!(manual_job.manual_trigger_allowed);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn latest_job_runs_has_a_row_per_custom_job() {
+    let ctx = TestContext::new().await;
+    let first = create_custom_job(
+        &ctx,
+        "cj-latest-a",
+        "echo a",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    let second = create_custom_job(
+        &ctx,
+        "cj-latest-b",
+        "echo b",
+        scryer_domain::ExecutionMode::Blocking,
+    )
+    .await;
+    for script in [&first, &second] {
+        let started = ctx
+            .app
+            .trigger_custom_job(&persisted_system_admin(&ctx).await, &script.id)
+            .await
+            .expect("trigger custom job");
+        wait_for_custom_job_run(&ctx, &script.id, &started.id).await;
+    }
+    let latest = ctx
+        .app
+        .list_latest_job_runs(&system_admin())
+        .await
+        .expect("latest job runs");
+    for script in [&first, &second] {
+        assert_eq!(
+            latest
+                .iter()
+                .filter(|run| run.custom_job_id() == Some(script.id.as_str()))
+                .count(),
+            1,
+            "one latest run for {}",
+            script.id
+        );
+    }
+}

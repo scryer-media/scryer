@@ -2280,6 +2280,11 @@ pub struct AppRuntimeJobState {
         Arc<std::sync::RwLock<Option<application_updater::macos_bundle::BundleSignatureCheck>>>,
     /// Single-flight guard for the interactive acquisition-search job — mirrors `title_deletion_lock`.
     pub acquisition_search_lock: Arc<tokio::sync::Mutex<()>>,
+    /// In-memory schedule of enabled scheduled scripts; the jobs query reads
+    /// each script's next run from it.
+    pub custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler,
+    /// Serializes the overlap check and run start for scheduled scripts.
+    pub(crate) custom_job_start_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 #[derive(Clone)]
@@ -2627,6 +2632,8 @@ impl AppRuntimeState {
                 #[cfg(not(windows))]
                 application_upgrade_bundle_signature_check: Arc::new(std::sync::RwLock::new(None)),
                 acquisition_search_lock: Arc::new(tokio::sync::Mutex::new(())),
+                custom_job_scheduler: crate::scripts::scheduler::CustomJobScheduler::default(),
+                custom_job_start_lock: Arc::new(tokio::sync::Mutex::new(())),
             },
             health: AppRuntimeHealthState {
                 results: Arc::new(tokio::sync::RwLock::new(Vec::new())),

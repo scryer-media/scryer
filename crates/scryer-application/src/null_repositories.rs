@@ -2076,6 +2076,9 @@ impl PostProcessingScriptRepository for NullPostProcessingScriptRepository {
     async fn record_run(&self, _run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
         Ok(())
     }
+    async fn update_run(&self, _run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
+        Ok(())
+    }
     async fn list_runs_for_script(
         &self,
         _script_id: &str,

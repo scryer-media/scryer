@@ -7964,6 +7964,9 @@ pub enum ScriptRunStatus {
     Success,
     Failed,
     Timeout,
+    /// Started and not yet finished: a fire-and-forget scheduled script
+    /// records its run at spawn and updates it when the script exits.
+    Running,
 }
 
 impl ScriptRunStatus {
@@ -7972,6 +7975,7 @@ impl ScriptRunStatus {
             Self::Success => "success",
             Self::Failed => "failed",
             Self::Timeout => "timeout",
+            Self::Running => "running",
         }
     }
 
@@ -7980,6 +7984,7 @@ impl ScriptRunStatus {
             "success" => Some(Self::Success),
             "failed" => Some(Self::Failed),
             "timeout" => Some(Self::Timeout),
+            "running" => Some(Self::Running),
             _ => None,
         }
     }

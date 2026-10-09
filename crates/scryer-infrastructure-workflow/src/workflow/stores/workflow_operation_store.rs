@@ -300,6 +300,29 @@ impl JobRunRepository for WorkflowOperationStore {
             .collect()
     }
 
+    async fn list_job_runs_by_operation_type(
+        &self,
+        job_key: JobKey,
+        operation_type: &str,
+        limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        SqlRuntime::fetch_all(
+            self.datastore.read_exec(),
+            "SELECT * FROM workflow_operations
+             WHERE job_key = {} AND operation_type = {}
+             ORDER BY started_at DESC LIMIT {}",
+            &[
+                SqlArg::Text(job_key.as_str().to_string()),
+                SqlArg::Text(operation_type.to_string()),
+                SqlArg::I64(limit as i64),
+            ],
+        )
+        .await?
+        .into_iter()
+        .map(|row| workflow_operation_from_row(&row).and_then(job_run_record_from_workflow))
+        .collect()
+    }
+
     async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>> {
         SqlRuntime::fetch_all(
             self.datastore.read_exec(),

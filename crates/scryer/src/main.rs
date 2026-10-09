@@ -140,8 +140,9 @@ use scryer_application::{
     RuntimePluginLoad, SETTINGS_SCOPE_SYSTEM, SeriesFacetHandler, SubtitlePluginProvider,
     SystemInfoProvider, TitleImageKind, TitleImageRepository,
     load_runtime_plugin_from_persisted_installation_payload, start_background_acquisition_poller,
-    start_background_auto_backup_scheduler, start_background_download_delete_poller,
-    start_background_library_refresh_loop, start_background_manual_import_poller,
+    start_background_auto_backup_scheduler, start_background_custom_job_scheduler,
+    start_background_download_delete_poller, start_background_library_refresh_loop,
+    start_background_manual_import_poller,
     start_background_media_server_playback_reconciliation_loop, start_background_subtitle_poller,
     start_background_title_hydration_loop, start_background_title_image_loop,
     start_download_queue_poller_with_options, start_navigation_badge_facts_refresh,
@@ -2191,6 +2192,10 @@ async fn bootstrap_application(
         shutdown_token.child_token(),
     ));
     tokio::spawn(start_background_auto_backup_scheduler(
+        app_use_case.clone(),
+        shutdown_token.child_token(),
+    ));
+    tokio::spawn(start_background_custom_job_scheduler(
         app_use_case.clone(),
         shutdown_token.child_token(),
     ));

@@ -195,6 +195,25 @@ pub enum JobKey {
     MediaServerSignalSync,
     ListSync,
     LocationOperation,
+    /// A user-defined scheduled script. Every one shares this key and is told
+    /// apart by its operation type, `custom_job:<script id>`; it is never in
+    /// [`ALL_JOB_KEYS`] because its definitions come from the scripts table.
+    CustomJob,
+}
+
+/// Operation-type prefix of a user-defined job's runs.
+pub const CUSTOM_JOB_OPERATION_PREFIX: &str = "custom_job:";
+
+/// Operation type of a run of the user-defined job backed by `script_id`.
+pub fn custom_job_operation_type(script_id: &str) -> String {
+    format!("{CUSTOM_JOB_OPERATION_PREFIX}{script_id}")
+}
+
+/// The script id behind a user-defined job run's operation type.
+pub fn custom_job_id_from_operation_type(operation_type: &str) -> Option<&str> {
+    operation_type
+        .strip_prefix(CUSTOM_JOB_OPERATION_PREFIX)
+        .filter(|id| !id.trim().is_empty())
 }
 
 impl JobKey {
@@ -231,6 +250,7 @@ impl JobKey {
             Self::MediaServerSignalSync => "media_server_signal_sync",
             Self::ListSync => "list_sync",
             Self::LocationOperation => "location_operation",
+            Self::CustomJob => "custom_job",
         }
     }
 
@@ -267,6 +287,7 @@ impl JobKey {
             "media_server_signal_sync" => Some(Self::MediaServerSignalSync),
             "list_sync" => Some(Self::ListSync),
             "location_operation" => Some(Self::LocationOperation),
+            "custom_job" => Some(Self::CustomJob),
             _ => None,
         }
     }
@@ -304,6 +325,7 @@ impl JobKey {
             Self::MediaServerSignalSync => "Media Server Signal Sync",
             Self::ListSync => "List Sync",
             Self::LocationOperation => "Location Operation",
+            Self::CustomJob => "Custom Job",
         }
     }
 
@@ -372,6 +394,7 @@ impl JobKey {
             Self::LocationOperation => {
                 "Move title content and catalog placement between roots or libraries."
             }
+            Self::CustomJob => "Run a user-defined script on its own schedule.",
         }
     }
 
@@ -399,7 +422,8 @@ impl JobKey {
             | Self::RecycleBinRestore
             | Self::RecycleBinPurge
             | Self::ApplicationUpgrade
-            | Self::LocationOperation => JobCategory::System,
+            | Self::LocationOperation
+            | Self::CustomJob => JobCategory::System,
             Self::Housekeeping
             | Self::PendingReleaseProcessing
             | Self::StagedNzbPrune
@@ -451,7 +475,8 @@ impl JobKey {
             | Self::PendingReleaseProcessing
             | Self::AcquisitionSearch
             | Self::ApplicationUpgrade
-            | Self::LocationOperation => JobScheduleKind::Manual,
+            | Self::LocationOperation
+            | Self::CustomJob => JobScheduleKind::Manual,
         }
     }
 
@@ -488,6 +513,7 @@ impl JobKey {
             | Self::AcquisitionSearch
             | Self::ApplicationUpgrade
             | Self::LocationOperation => "Manual only",
+            Self::CustomJob => "User-defined schedule",
         }
     }
 
@@ -591,6 +617,8 @@ pub struct JobScheduleInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct JobDefinition {
     pub key: JobKey,
+    /// The script behind a user-defined job; `None` for built-in jobs.
+    pub custom_job_id: Option<String>,
     pub display_name: String,
     pub description: String,
     pub category: JobCategory,
@@ -604,6 +632,7 @@ impl JobDefinition {
     pub fn from_key(key: JobKey, next_run_at: Option<DateTime<Utc>>) -> Self {
         Self {
             key,
+            custom_job_id: None,
             display_name: key.display_name().to_string(),
             description: key.description().to_string(),
             category: key.category(),
@@ -672,6 +701,14 @@ pub struct JobRun {
 }
 
 impl JobRun {
+    /// The script behind a user-defined job run; `None` for built-in jobs.
+    pub fn custom_job_id(&self) -> Option<&str> {
+        if self.job_key != JobKey::CustomJob {
+            return None;
+        }
+        custom_job_id_from_operation_type(&self.operation_type)
+    }
+
     pub fn from_record(
         record: &JobRunRecord,
         library_scan_progress: Option<LibraryScanSession>,
@@ -832,6 +869,16 @@ impl JobRunTracker {
     pub async fn has_active_job(&self, job_key: JobKey) -> bool {
         let state = self.state.lock().await;
         state.active_runs.values().any(|run| run.job_key == job_key)
+    }
+
+    /// Whether a run of `job_key` with exactly `operation_type` is active.
+    /// Scheduled scripts share one job key and differ by operation type.
+    pub async fn has_active_operation(&self, job_key: JobKey, operation_type: &str) -> bool {
+        let state = self.state.lock().await;
+        state
+            .active_runs
+            .values()
+            .any(|run| run.job_key == job_key && run.operation_type == operation_type)
     }
 
     pub async fn active_run_for_job(&self, job_key: JobKey) -> Option<JobRun> {

@@ -559,6 +559,10 @@ impl PostProcessingScriptRepository for DatastoreCustomizationStore {
         self.post_processing_scripts.record_run(run).await
     }
 
+    async fn update_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
+        self.post_processing_scripts.update_run(run).await
+    }
+
     async fn list_runs_for_script(
         &self,
         script_id: &str,

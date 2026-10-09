@@ -6100,6 +6100,23 @@ pub trait JobRunRepository: Send + Sync {
         limit: usize,
     ) -> AppResult<Vec<JobRunRecord>>;
 
+    /// Newest runs of `job_key` whose operation type is exactly
+    /// `operation_type`, such as one user-defined job's runs.
+    async fn list_job_runs_by_operation_type(
+        &self,
+        job_key: JobKey,
+        operation_type: &str,
+        limit: usize,
+    ) -> AppResult<Vec<JobRunRecord>> {
+        Ok(self
+            .list_job_runs(Some(job_key), limit.saturating_mul(20).max(200))
+            .await?
+            .into_iter()
+            .filter(|run| run.operation_type == operation_type)
+            .take(limit)
+            .collect())
+    }
+
     async fn list_active_job_runs(&self) -> AppResult<Vec<JobRunRecord>>;
 
     /// Fail every persisted run still in a non-terminal state and return the
@@ -8982,6 +8999,9 @@ pub trait PostProcessingScriptRepository: Send + Sync {
         trigger: scryer_domain::ScriptTrigger,
     ) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
     async fn record_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()>;
+    /// Replace a recorded run's outcome, keyed by its id. A fire-and-forget
+    /// scheduled script records its run at spawn and finishes it here.
+    async fn update_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()>;
     async fn list_runs_for_script(
         &self,
         script_id: &str,

@@ -135,6 +135,9 @@ impl AppUseCase {
             action,
         )
         .await;
+        if script.trigger == ScriptTrigger::Schedule {
+            self.reload_custom_job_schedule().await;
+        }
     }
 
     pub async fn create_post_processing_script(
@@ -435,7 +438,7 @@ fn post_processing_script_resource_type(script_type: ScriptType) -> &'static str
     }
 }
 
-fn script_source(script: &PostProcessingScript) -> ScriptSource {
+pub(crate) fn script_source(script: &PostProcessingScript) -> ScriptSource {
     match script.script_type {
         ScriptType::Inline => ScriptSource::Inline {
             content: script.script_content.clone(),
@@ -499,21 +502,27 @@ async fn execute_script(
             "post-processing script failed to start"
         );
     }
-    script_run_record(script, ctx, facet_str, env_json, run_id, execution)
+    PostProcessingScriptRun {
+        title_id: Some(ctx.title_id.clone()),
+        title_name: Some(ctx.title_name.clone()),
+        facet: Some(facet_str.to_string()),
+        file_path: Some(path_to_stored_string(&ctx.dest_path)),
+        ..script_run_record(script, script.debug, env_json, run_id, execution)
+    }
 }
 
-/// Map a runner result onto the persisted run record. Output tails and the
-/// metadata payload are kept only for debug scripts, except that a launch
-/// failure always records its payload.
-fn script_run_record(
+/// Map a runner result onto a persisted run record with no title, facet or
+/// file. Error details and the metadata payload are kept only when
+/// `keep_details` is set (a debug import script, or any scheduled script),
+/// except that a launch failure always records its payload.
+pub(crate) fn script_run_record(
     script: &PostProcessingScript,
-    ctx: &PostProcessingContext,
-    facet_str: &str,
+    keep_details: bool,
     env_json: &str,
     run_id: String,
     execution: ScriptExecution,
 ) -> PostProcessingScriptRun {
-    let debug_env_payload = || script.debug.then(|| env_json.to_string());
+    let debug_env_payload = || keep_details.then(|| env_json.to_string());
     let (status, exit_code, stdout_tail, stderr_tail, env_payload_json) = match execution.outcome {
         ScriptOutcome::Exited { code, success } => (
             if success {
@@ -537,14 +546,14 @@ fn script_run_record(
             ScriptRunStatus::Failed,
             None,
             None,
-            script.debug.then(|| format!("I/O error: {reason}")),
+            keep_details.then(|| format!("I/O error: {reason}")),
             debug_env_payload(),
         ),
         ScriptOutcome::SpawnFailed { reason } => (
             ScriptRunStatus::Failed,
             None,
             None,
-            script.debug.then(|| format!("spawn error: {reason}")),
+            keep_details.then(|| format!("spawn error: {reason}")),
             Some(env_json.to_string()),
         ),
     };
@@ -553,10 +562,10 @@ fn script_run_record(
         id: run_id,
         script_id: script.id.clone(),
         script_name: script.name.clone(),
-        title_id: Some(ctx.title_id.clone()),
-        title_name: Some(ctx.title_name.clone()),
-        facet: Some(facet_str.to_string()),
-        file_path: Some(path_to_stored_string(&ctx.dest_path)),
+        title_id: None,
+        title_name: None,
+        facet: None,
+        file_path: None,
         status,
         exit_code,
         stdout_tail,

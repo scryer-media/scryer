@@ -193,6 +193,28 @@ impl PostProcessingScriptRepository for PostProcessingScriptStore {
         .await
     }
 
+    async fn update_run(&self, run: PostProcessingScriptRun) -> AppResult<()> {
+        let mut args = match &self.datastore {
+            StoreDatastore::Sqlite { .. } => sqlite_run_args(&run)?,
+            StoreDatastore::Postgres { .. } => postgres_run_args(&run)?,
+        };
+        // The insert arguments lead with the id; the update binds it last.
+        let id = args.remove(0);
+        args.push(id);
+        execute_write(
+            &self.datastore,
+            "update_post_processing_script_run",
+            "UPDATE post_processing_script_runs
+                SET script_id = {}, script_name = {}, title_id = {}, title_name = {},
+                    facet = {}, file_path = {}, status = {}, exit_code = {},
+                    stdout_tail = {}, stderr_tail = {}, duration_ms = {},
+                    env_payload_json = {}, started_at = {}, completed_at = {}
+              WHERE id = {}",
+            args,
+        )
+        .await
+    }
+
     async fn list_runs_for_script(
         &self,
         script_id: &str,
@@ -742,5 +764,60 @@ mod tests {
             .collect::<Vec<_>>();
         all.sort();
         assert_eq!(all, vec!["bogus-schedule", "valid"]);
+    }
+
+    #[tokio::test]
+    async fn a_running_run_is_finished_in_place_by_update_run() {
+        let (store, _pool) = store().await;
+        let mut scheduled = script("scheduled", ScriptTrigger::Schedule);
+        scheduled.schedule = Some(ScriptSchedule::Manual);
+        store.create_script(scheduled).await.expect("create");
+        let started_at = Utc::now().to_rfc3339();
+        let running = PostProcessingScriptRun {
+            id: "run-1".to_string(),
+            script_id: "scheduled".to_string(),
+            script_name: "fixture scheduled".to_string(),
+            title_id: None,
+            title_name: None,
+            facet: None,
+            file_path: None,
+            status: scryer_domain::ScriptRunStatus::Running,
+            exit_code: None,
+            stdout_tail: None,
+            stderr_tail: None,
+            duration_ms: None,
+            env_payload_json: Some("{}".to_string()),
+            started_at: started_at.clone(),
+            completed_at: None,
+        };
+        store.record_run(running.clone()).await.expect("record");
+        let recorded = store
+            .list_runs_for_script("scheduled", 10)
+            .await
+            .expect("list");
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].status, scryer_domain::ScriptRunStatus::Running);
+
+        let finished = PostProcessingScriptRun {
+            status: scryer_domain::ScriptRunStatus::Success,
+            exit_code: Some(0),
+            stdout_tail: Some("fixture output".to_string()),
+            duration_ms: Some(12),
+            completed_at: Some(Utc::now().to_rfc3339()),
+            ..running
+        };
+        store.update_run(finished).await.expect("update");
+
+        let runs = store
+            .list_runs_for_script("scheduled", 10)
+            .await
+            .expect("list");
+        assert_eq!(runs.len(), 1, "the update replaces the row, never adds one");
+        assert_eq!(runs[0].id, "run-1");
+        assert_eq!(runs[0].status, scryer_domain::ScriptRunStatus::Success);
+        assert_eq!(runs[0].exit_code, Some(0));
+        assert_eq!(runs[0].stdout_tail.as_deref(), Some("fixture output"));
+        assert_eq!(runs[0].duration_ms, Some(12));
+        assert!(runs[0].completed_at.is_some());
     }
 }
