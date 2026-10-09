@@ -270,6 +270,11 @@ struct ReleaseArgs {
     patch: bool,
     #[arg(long)]
     dry_run: bool,
+    /// Accept breaking GraphQL API changes on a patch release. The operator
+    /// takes responsibility for the break; every change the checker lists
+    /// must still be enumerated in the release notes.
+    #[arg(long)]
+    allow_breaking_api: bool,
     version: Option<String>,
 }
 
@@ -795,11 +800,22 @@ fn prompt_continue_if_dirty(ctx: &TaskContext) -> Result<()> {
     Ok(())
 }
 
-fn release_args_signature(explicit: Option<&Version>, bump: VersionBump) -> String {
-    explicit.map_or_else(
+fn release_args_signature(
+    explicit: Option<&Version>,
+    bump: VersionBump,
+    allow_breaking_api: bool,
+) -> String {
+    let base = explicit.map_or_else(
         || format!("bump:{}", version_bump_label(bump)),
         |version| format!("version:{version}"),
-    )
+    );
+    // The override changes what validation accepts, so a dry run made with
+    // it never stands in for a release made without it, and vice versa.
+    if allow_breaking_api {
+        format!("{base}+allow-breaking-api")
+    } else {
+        base
+    }
 }
 
 fn version_bump_label(bump: VersionBump) -> &'static str {
@@ -3571,7 +3587,7 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
         .transpose()?
         .unwrap_or_else(|| Version::new(0, 0, 0));
     let (bump, explicit) = parse_bump(&args)?;
-    let release_args = release_args_signature(explicit.as_ref(), bump);
+    let release_args = release_args_signature(explicit.as_ref(), bump, args.allow_breaking_api);
     let next_version = explicit.unwrap_or_else(|| next_version(&current_version, bump));
     let tag_name = format!("scryer-v{next_version}");
     let catalog_url = OFFICIAL_PLUGIN_CATALOG_V3_REDIRECT_URL.to_string();
@@ -3582,6 +3598,11 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
     );
     println!("   Next tag   : {tag_name}");
     println!("   Validation : {}", validation_scope.label());
+    if args.allow_breaking_api {
+        println!(
+            "   {YELLOW}Override   : breaking GraphQL API changes accepted (--allow-breaking-api){RESET}"
+        );
+    }
     if args.dry_run {
         println!("   {YELLOW}(dry run — no version bump, tag, or push){RESET}");
     }
@@ -3785,6 +3806,7 @@ fn run_release(ctx: &TaskContext, args: ReleaseArgs) -> Result<()> {
                     "[graphql] ",
                     latest_tag.as_deref(),
                     &next_version,
+                    args.allow_breaking_api,
                 )?;
                 run_scryer_release_hygiene_validation(ctx, "[hygiene] ")?;
                 ok("Full release validation passed");
@@ -4295,6 +4317,7 @@ fn run_scryer_graphql_api_compat_validation(
     prefix: &'static str,
     latest_tag: Option<&str>,
     next_version: &Version,
+    allow_breaking_api: bool,
 ) -> Result<()> {
     prefixed_step(prefix, "Exporting current GraphQL schema");
     let export_dir = ctx.path(GRAPHQL_SCHEMA_EXPORT_DIR);
@@ -4343,21 +4366,33 @@ fn run_scryer_graphql_api_compat_validation(
             check.arg("--allow-dangerous");
             match run_streaming(&mut check, prefix) {
                 Ok(()) => prefixed_ok(prefix, "GraphQL API compatibility passed"),
-                Err(error) if schema_breaks_allowed_for_bump(latest_tag, next_version) => {
-                    warn(format!(
-                        "GraphQL API breaking/dangerous changes detected and PERMITTED: this \
-                         release raises the minor or major version (next: {next_version}). The \
-                         full change list is streamed above — every break must be enumerated \
-                         in the release notes. Checker result: {error:#}"
-                    ));
-                }
                 Err(error) => {
-                    return Err(error).with_context(|| {
-                        "GraphQL API compatibility failed for a patch release — breaking \
-                         schema changes are only permitted when the minor or major version \
-                         increases"
-                            .to_string()
-                    });
+                    match schema_break_permission(latest_tag, next_version, allow_breaking_api) {
+                        Some(SchemaBreakPermission::VersionBump) => {
+                            warn(format!(
+                                "GraphQL API breaking/dangerous changes detected and PERMITTED: this \
+                             release raises the minor or major version (next: {next_version}). \
+                             The full change list is streamed above — every break must be \
+                             enumerated in the release notes. Checker result: {error:#}"
+                            ));
+                        }
+                        Some(SchemaBreakPermission::OperatorOverride) => {
+                            warn(format!(
+                                "GraphQL API breaking/dangerous changes detected and PERMITTED by \
+                             --allow-breaking-api on a patch release (next: {next_version}). \
+                             The full change list is streamed above — every break must be \
+                             enumerated in the release notes. Checker result: {error:#}"
+                            ));
+                        }
+                        None => {
+                            return Err(error).with_context(|| {
+                                "GraphQL API compatibility failed for a patch release — breaking \
+                             schema changes are only permitted when the minor or major version \
+                             increases, or when the release is run with --allow-breaking-api"
+                                    .to_string()
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -4389,6 +4424,34 @@ fn read_previous_release_graphql_schema(
     show.args(["show", &spec]);
     run_capture(&mut show)
         .with_context(|| format!("failed to read {GRAPHQL_SCHEMA_ARTIFACT} from {latest_tag}"))
+}
+
+/// Why a release may ship breaking GraphQL schema changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SchemaBreakPermission {
+    /// The release raises the minor or major version.
+    VersionBump,
+    /// The operator passed `--allow-breaking-api` to a patch release.
+    OperatorOverride,
+}
+
+/// Breaking/dangerous GraphQL schema changes are permitted when the release
+/// raises the minor or major version, or when the operator explicitly accepts
+/// them with `--allow-breaking-api`; otherwise a patch release keeps the hard
+/// compatibility failure. The version bump wins when both apply, so the
+/// override is only reported when it is what let the release through.
+fn schema_break_permission(
+    latest_tag: Option<&str>,
+    next_version: &Version,
+    allow_breaking_api: bool,
+) -> Option<SchemaBreakPermission> {
+    if schema_breaks_allowed_for_bump(latest_tag, next_version) {
+        Some(SchemaBreakPermission::VersionBump)
+    } else if allow_breaking_api {
+        Some(SchemaBreakPermission::OperatorOverride)
+    } else {
+        None
+    }
 }
 
 /// Breaking/dangerous GraphQL schema changes are permitted only when the
@@ -5638,7 +5701,7 @@ merge :2
     #[test]
     fn release_args_signature_uses_bump_mode_when_version_not_explicit() {
         assert_eq!(
-            release_args_signature(None, VersionBump::Minor),
+            release_args_signature(None, VersionBump::Minor, false),
             "bump:minor"
         );
     }
@@ -5647,8 +5710,51 @@ merge :2
     fn release_args_signature_uses_explicit_version_when_present() {
         let version = Version::parse("1.2.3").unwrap();
         assert_eq!(
-            release_args_signature(Some(&version), VersionBump::Patch),
+            release_args_signature(Some(&version), VersionBump::Patch, false),
             "version:1.2.3"
+        );
+    }
+
+    #[test]
+    fn release_args_signature_records_the_breaking_api_override() {
+        assert_eq!(
+            release_args_signature(None, VersionBump::Patch, true),
+            "bump:patch+allow-breaking-api"
+        );
+        let version = Version::parse("1.2.3").unwrap();
+        assert_eq!(
+            release_args_signature(Some(&version), VersionBump::Patch, true),
+            "version:1.2.3+allow-breaking-api"
+        );
+    }
+
+    #[test]
+    fn schema_break_permission_prefers_the_version_bump_over_the_override() {
+        assert_eq!(
+            schema_break_permission(Some("scryer-v0.21.14"), &Version::new(0, 22, 0), true),
+            Some(SchemaBreakPermission::VersionBump)
+        );
+        assert_eq!(
+            schema_break_permission(Some("scryer-v0.21.14"), &Version::new(0, 22, 0), false),
+            Some(SchemaBreakPermission::VersionBump)
+        );
+    }
+
+    #[test]
+    fn schema_break_permission_lets_the_override_through_on_a_patch_release() {
+        assert_eq!(
+            schema_break_permission(Some("scryer-v0.21.14"), &Version::new(0, 21, 15), true),
+            Some(SchemaBreakPermission::OperatorOverride)
+        );
+        assert_eq!(
+            schema_break_permission(Some("scryer-v0.21.14"), &Version::new(0, 21, 15), false),
+            None
+        );
+        // Without a parsable previous tag the bump rule cannot apply; the
+        // override still can.
+        assert_eq!(
+            schema_break_permission(None, &Version::new(0, 21, 15), true),
+            Some(SchemaBreakPermission::OperatorOverride)
         );
     }
 
