@@ -12,8 +12,9 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncRead, AsyncReadExt};
 use tokio::process::Command;
 
 /// How much of each captured stream a run keeps. The store compresses the
@@ -24,6 +25,14 @@ pub const OUTPUT_TAIL_BYTES: usize = 32 * 1024;
 /// the invocation does not choose one. The service account's home directory
 /// is not reliably writable, and `go run` refuses to start without a cache.
 const GO_CACHE_DIR_NAME: &str = ".gocache";
+
+/// Directory under the materialization root used as Go's temp directory when
+/// neither the invocation nor the server environment chooses one.
+const GO_TMP_DIR_NAME: &str = ".gotmp";
+
+/// How long to keep reading output after the script has exited or been
+/// killed. Only a background process still holding the pipe takes longer.
+const DRAIN_BOUND: Duration = Duration::from_secs(5);
 
 /// Interpreters the operator pinned. `None` falls back to the conventional
 /// command name, resolved through `PATH`.
@@ -143,7 +152,7 @@ pub async fn run_script(invocation: ScriptInvocation) -> ScriptExecution {
         Err(err) => {
             return finished(
                 ScriptOutcome::SpawnFailed {
-                    reason: err.to_string(),
+                    reason: format!("{}: {err}", plan.program.display()),
                 },
                 started_at,
                 start_instant,
@@ -169,23 +178,8 @@ pub async fn run_script(invocation: ScriptInvocation) -> ScriptExecution {
     }
 
     // Capture stdout/stderr (last OUTPUT_TAIL_BYTES of each).
-    let stderr_pipe = child.stderr.take();
-    let stdout_pipe = child.stdout.take();
-
-    let drain_stderr = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = stderr_pipe {
-            let _ = pipe.read_to_end(&mut buf).await;
-        }
-        buf
-    });
-    let drain_stdout = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        if let Some(mut pipe) = stdout_pipe {
-            let _ = pipe.read_to_end(&mut buf).await;
-        }
-        buf
-    });
+    let stdout_drain = OutputDrain::spawn(child.stdout.take());
+    let stderr_drain = OutputDrain::spawn(child.stderr.take());
 
     let outcome = match tokio::time::timeout(invocation.timeout, child.wait()).await {
         Ok(Ok(status)) => ScriptOutcome::Exited {
@@ -193,6 +187,8 @@ pub async fn run_script(invocation: ScriptInvocation) -> ScriptExecution {
             success: status.success(),
         },
         Ok(Err(err)) => {
+            stdout_drain.abort();
+            stderr_drain.abort();
             return finished(
                 ScriptOutcome::IoError {
                     reason: err.to_string(),
@@ -208,8 +204,8 @@ pub async fn run_script(invocation: ScriptInvocation) -> ScriptExecution {
     };
     let duration_ms = start_instant.elapsed().as_millis() as i64;
     let completed_at = Utc::now();
-    let stdout_bytes = drain_stdout.await.unwrap_or_default();
-    let stderr_bytes = drain_stderr.await.unwrap_or_default();
+    let stdout_bytes = stdout_drain.finish().await;
+    let stderr_bytes = stderr_drain.finish().await;
     ScriptExecution {
         outcome,
         stdout_tail: Some(last_bytes_utf8(&stdout_bytes, OUTPUT_TAIL_BYTES)),
@@ -217,6 +213,61 @@ pub async fn run_script(invocation: ScriptInvocation) -> ScriptExecution {
         duration_ms,
         started_at,
         completed_at,
+    }
+}
+
+/// Reads one output pipe in the background, keeping only its last
+/// [`OUTPUT_TAIL_BYTES`].
+struct OutputDrain {
+    tail: Arc<Mutex<Vec<u8>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl OutputDrain {
+    fn spawn<R>(pipe: Option<R>) -> Self
+    where
+        R: AsyncRead + Unpin + Send + 'static,
+    {
+        let tail = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::clone(&tail);
+        let task = tokio::spawn(async move {
+            let Some(mut pipe) = pipe else {
+                return;
+            };
+            let mut chunk = [0_u8; 8192];
+            loop {
+                match pipe.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(count) => {
+                        let mut tail = writer.lock().unwrap_or_else(|err| err.into_inner());
+                        tail.extend_from_slice(&chunk[..count]);
+                        if tail.len() > OUTPUT_TAIL_BYTES {
+                            let excess = tail.len() - OUTPUT_TAIL_BYTES;
+                            tail.drain(..excess);
+                        }
+                    }
+                }
+            }
+        });
+        Self { tail, task }
+    }
+
+    /// Wait briefly for the pipe to close, then take what was read. A
+    /// background process that inherited the pipe can hold it open long after
+    /// the script itself is gone, so the read is abandoned after
+    /// [`DRAIN_BOUND`] instead of waiting for it.
+    async fn finish(mut self) -> Vec<u8> {
+        if tokio::time::timeout(DRAIN_BOUND, &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
+        }
+        std::mem::take(&mut *self.tail.lock().unwrap_or_else(|err| err.into_inner()))
+    }
+
+    fn abort(self) {
+        self.task.abort();
     }
 }
 
@@ -259,11 +310,11 @@ fn plan_launch(invocation: &ScriptInvocation) -> Result<LaunchPlan, String> {
                 *language,
             )
             .map_err(|err| format!("failed to materialize inline script: {err}"))?;
-            plan_file(&path, invocation)
+            plan_materialized(&path, content, *language, invocation)
         }
         ScriptSource::File { path } => {
             let path = validate_file_script_path(path)?;
-            plan_file(Path::new(path), invocation)
+            plan_file_script(Path::new(path), invocation)
         }
     }
 }
@@ -297,15 +348,89 @@ pub(crate) fn validate_file_script_path(script_content: &str) -> Result<&str, St
     Ok(path)
 }
 
-fn plan_file(entrypoint: &Path, invocation: &ScriptInvocation) -> Result<LaunchPlan, String> {
-    let extension = entrypoint_extension(entrypoint);
-    let (program, args) = resolve_program(entrypoint, &extension, &invocation.interpreters);
-    let env = if extension == "go" {
-        go_environment(invocation)?
-    } else {
-        Vec::new()
+/// Launch plan for materialized inline content. The file is always handed to
+/// an interpreter and never executed itself, so the scripts directory needs no
+/// execute permission and a freshly written file is never exec'd.
+///
+/// A shebang naming an interpreter that exists on this host wins. Otherwise
+/// the language picks the interpreter, and shell falls back to `sh`, so a
+/// `#!/bin/bash` script still runs on a host that only has a POSIX shell.
+fn plan_materialized(
+    file: &Path,
+    content: &str,
+    language: ScriptLanguage,
+    invocation: &ScriptInvocation,
+) -> Result<LaunchPlan, String> {
+    if let Some((program, mut args)) = parse_shebang_text(content)
+        && program.is_absolute()
+        && program.is_file()
+    {
+        args.push(file.as_os_str().to_owned());
+        return Ok(LaunchPlan {
+            program,
+            args,
+            env: Vec::new(),
+        });
+    }
+    match language {
+        ScriptLanguage::Shell => Ok(LaunchPlan {
+            program: PathBuf::from("sh"),
+            args: vec![file.as_os_str().to_owned()],
+            env: Vec::new(),
+        }),
+        ScriptLanguage::Python
+        | ScriptLanguage::PowerShell
+        | ScriptLanguage::Batch
+        | ScriptLanguage::Go => plan_by_extension(file, language.file_extension(), invocation)?
+            .ok_or_else(|| {
+                format!(
+                    "no interpreter is defined for .{} scripts",
+                    language.file_extension()
+                )
+            }),
+    }
+}
+
+/// Launch plan for a script file on the server. An executable file runs
+/// directly, whatever its extension. Otherwise the extension picks the
+/// interpreter, then a shebang does, and as a last resort the file is
+/// executed directly so the OS reports why it cannot run.
+fn plan_file_script(
+    entrypoint: &Path,
+    invocation: &ScriptInvocation,
+) -> Result<LaunchPlan, String> {
+    let direct = LaunchPlan {
+        program: entrypoint.to_path_buf(),
+        args: Vec::new(),
+        env: Vec::new(),
     };
-    Ok(LaunchPlan { program, args, env })
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        // A file that cannot be inspected is launched directly too, so the
+        // spawn reports the failure exactly as it always has.
+        match std::fs::metadata(entrypoint) {
+            Ok(metadata) if metadata.permissions().mode() & 0o111 == 0 => {}
+            _ => return Ok(direct),
+        }
+    }
+    if let Some(plan) =
+        plan_by_extension(entrypoint, &entrypoint_extension(entrypoint), invocation)?
+    {
+        return Ok(plan);
+    }
+    #[cfg(unix)]
+    {
+        if let Ok(Some((program, mut args))) = parse_shebang_file(entrypoint) {
+            args.push(entrypoint.as_os_str().to_owned());
+            return Ok(LaunchPlan {
+                program,
+                args,
+                env: Vec::new(),
+            });
+        }
+    }
+    Ok(direct)
 }
 
 fn entrypoint_extension(entrypoint: &Path) -> String {
@@ -316,120 +441,110 @@ fn entrypoint_extension(entrypoint: &Path) -> String {
         .to_ascii_lowercase()
 }
 
-fn resolve_program(
+/// Interpreter for a known script extension, or `None` for any other.
+fn plan_by_extension(
     entrypoint: &Path,
     extension: &str,
-    interpreters: &InterpreterConfig,
-) -> (PathBuf, Vec<OsString>) {
+    invocation: &ScriptInvocation,
+) -> Result<Option<LaunchPlan>, String> {
+    let interpreters = &invocation.interpreters;
     let file = entrypoint.as_os_str().to_owned();
-    match extension {
-        "py" => (
-            interpreters
+    let plan = match extension {
+        "py" => LaunchPlan {
+            program: interpreters
                 .python
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("python3")),
-            vec![file],
-        ),
-        "ps1" => (
-            interpreters
+            args: vec![file],
+            env: Vec::new(),
+        },
+        "ps1" => LaunchPlan {
+            program: interpreters
                 .powershell
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("pwsh")),
-            vec![
+            args: vec![
                 OsString::from("-NoProfile"),
                 OsString::from("-NonInteractive"),
                 OsString::from("-File"),
                 file,
             ],
-        ),
-        "bat" | "cmd" => (
-            interpreters
+            env: Vec::new(),
+        },
+        // No `/S`: with it cmd strips the first and last quote of the command
+        // line, which breaks a script path containing spaces.
+        "bat" | "cmd" => LaunchPlan {
+            program: interpreters
                 .batch
                 .clone()
                 .or_else(|| std::env::var_os("COMSPEC").map(PathBuf::from))
                 .unwrap_or_else(|| PathBuf::from("cmd.exe")),
-            vec![
-                OsString::from("/D"),
-                OsString::from("/S"),
-                OsString::from("/C"),
-                file,
-            ],
-        ),
-        "go" => (
-            interpreters
+            args: vec![OsString::from("/D"), OsString::from("/C"), file],
+            env: Vec::new(),
+        },
+        "go" => LaunchPlan {
+            program: interpreters
                 .go
                 .clone()
                 .unwrap_or_else(|| PathBuf::from("go")),
-            vec![OsString::from("run"), file],
-        ),
-        _ => {
-            #[cfg(unix)]
-            {
-                if let Some((interpreter, mut args)) = non_executable_shebang(entrypoint) {
-                    args.push(file);
-                    return (interpreter, args);
-                }
-            }
-            (entrypoint.to_path_buf(), Vec::new())
-        }
-    }
-}
-
-/// The shebang interpreter of a file that lacks execute permission. An
-/// executable file, or one that cannot be inspected, is launched directly so
-/// the kernel reports any failure exactly as it would without this lookup.
-#[cfg(unix)]
-fn non_executable_shebang(entrypoint: &Path) -> Option<(PathBuf, Vec<OsString>)> {
-    use std::os::unix::fs::PermissionsExt;
-
-    let metadata = std::fs::metadata(entrypoint).ok()?;
-    if metadata.permissions().mode() & 0o111 != 0 {
-        return None;
-    }
-    parse_shebang(entrypoint).ok().flatten()
+            args: vec![OsString::from("run"), file],
+            env: go_environment(invocation, |name| std::env::var_os(name))?,
+        },
+        _ => return Ok(None),
+    };
+    Ok(Some(plan))
 }
 
 #[cfg(unix)]
-fn parse_shebang(entrypoint: &Path) -> io::Result<Option<(PathBuf, Vec<OsString>)>> {
+fn parse_shebang_file(entrypoint: &Path) -> io::Result<Option<(PathBuf, Vec<OsString>)>> {
     use std::io::Read;
 
     let mut file = std::fs::File::open(entrypoint)?;
     let mut bytes = [0_u8; 4096];
     let count = file.read(&mut bytes)?;
-    let first = String::from_utf8_lossy(&bytes[..count]);
-    let Some(line) = first
-        .lines()
-        .next()
-        .and_then(|line| line.strip_prefix("#!"))
-    else {
-        return Ok(None);
-    };
-    let mut words = line.split_ascii_whitespace();
-    let Some(program) = words.next() else {
-        return Ok(None);
-    };
-    Ok(Some((
-        PathBuf::from(program),
-        words.map(OsString::from).collect(),
+    Ok(parse_shebang_text(&String::from_utf8_lossy(
+        &bytes[..count],
     )))
 }
 
-fn go_environment(invocation: &ScriptInvocation) -> Result<Vec<(String, String)>, String> {
+/// Interpreter and arguments from a `#!` first line. Arguments are split on
+/// whitespace here rather than by the kernel, so `#!/usr/bin/env bash -e`
+/// passes both words.
+fn parse_shebang_text(content: &str) -> Option<(PathBuf, Vec<OsString>)> {
+    let line = content.lines().next()?.strip_prefix("#!")?;
+    let mut words = line.split_ascii_whitespace();
+    let program = words.next()?;
+    Some((PathBuf::from(program), words.map(OsString::from).collect()))
+}
+
+/// Go needs a writable build cache and temp directory; the service account's
+/// home is not reliably writable. A choice already made in the invocation or
+/// the server's own environment is kept.
+fn go_environment(
+    invocation: &ScriptInvocation,
+    process_env: impl Fn(&str) -> Option<OsString>,
+) -> Result<Vec<(String, String)>, String> {
+    let is_set = |name: &str| {
+        invocation.env.iter().any(|(key, _)| key == name)
+            || process_env(name).is_some_and(|value| !value.is_empty())
+    };
     let mut env = Vec::new();
-    if !invocation_sets_env(invocation, "GOCACHE") {
-        let cache = invocation.materialize_root.join(GO_CACHE_DIR_NAME);
-        create_private_dir_all(&cache)
-            .map_err(|err| format!("failed to create Go build cache {}: {err}", cache.display()))?;
-        env.push(("GOCACHE".to_string(), cache.to_string_lossy().into_owned()));
+    for (name, dir_name, purpose) in [
+        ("GOCACHE", GO_CACHE_DIR_NAME, "build cache"),
+        ("GOTMPDIR", GO_TMP_DIR_NAME, "temp directory"),
+    ] {
+        if is_set(name) {
+            continue;
+        }
+        let dir = invocation.materialize_root.join(dir_name);
+        create_private_dir_all(&dir)
+            .map_err(|err| format!("failed to create Go {purpose} {}: {err}", dir.display()))?;
+        env.push((name.to_string(), dir.to_string_lossy().into_owned()));
     }
-    if !invocation_sets_env(invocation, "GOFLAGS") {
+    if !is_set("GOFLAGS") {
         env.push(("GOFLAGS".to_string(), "-mod=mod".to_string()));
     }
     Ok(env)
-}
-
-fn invocation_sets_env(invocation: &ScriptInvocation, name: &str) -> bool {
-    invocation.env.iter().any(|(key, _)| key == name)
 }
 
 /// Write inline content to `<root>/<script_id>/<hash>.<ext>` unless that file
@@ -471,8 +586,7 @@ static MATERIALIZE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 fn validate_script_id(script_id: &str) -> io::Result<()> {
     let valid = !script_id.is_empty()
-        && script_id != "."
-        && script_id != ".."
+        && !script_id.starts_with('.')
         && script_id
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'));
@@ -543,6 +657,7 @@ mod tests {
         printf 'argv0=%s\\n' \"$0\"\n\
         for a in \"$@\"; do printf 'arg=%s\\n' \"$a\"; done\n\
         printf 'GOCACHE=%s\\n' \"${GOCACHE-}\"\n\
+        printf 'GOTMPDIR=%s\\n' \"${GOTMPDIR-}\"\n\
         printf 'GOFLAGS=%s\\n' \"${GOFLAGS-}\"\n";
 
     struct Fixture {
@@ -586,6 +701,12 @@ mod tests {
                 materialize_root: self.root.clone(),
             }
         }
+
+        fn file_invocation(&self, path: &Path) -> ScriptInvocation {
+            self.invocation(ScriptSource::File {
+                path: path.to_string_lossy().into_owned(),
+            })
+        }
     }
 
     fn write_file(path: &Path, content: &str, mode: u32) {
@@ -606,6 +727,13 @@ mod tests {
             .expect("stdout captured")
             .lines()
             .map(str::to_string)
+            .collect()
+    }
+
+    fn arg_lines(execution: &ScriptExecution) -> Vec<String> {
+        stdout_lines(execution)
+            .into_iter()
+            .filter(|line| line.starts_with("arg="))
             .collect()
     }
 
@@ -637,6 +765,14 @@ mod tests {
 
     fn file_count(dir: &Path) -> usize {
         std::fs::read_dir(dir).expect("read dir").count()
+    }
+
+    fn mode_of(path: &Path) -> u32 {
+        std::fs::metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777
     }
 
     #[tokio::test]
@@ -673,30 +809,32 @@ mod tests {
         assert_eq!(first.stdout_tail.as_deref(), Some("materialized-run"));
         assert!(expected.is_file(), "materialized at {}", expected.display());
         let script_dir = fixture.root.join("script-alpha");
-        assert_eq!(
-            std::fs::metadata(&expected)
-                .expect("file metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
-        assert_eq!(
-            std::fs::metadata(&script_dir)
-                .expect("dir metadata")
-                .permissions()
-                .mode()
-                & 0o777,
-            0o700
-        );
+        assert_eq!(mode_of(&expected), 0o700);
+        assert_eq!(mode_of(&script_dir), 0o700);
 
         let second = run(fixture.invocation(inline(content, ScriptLanguage::Shell))).await;
         assert_succeeded(&second);
         assert_eq!(second.stdout_tail.as_deref(), Some("materialized-run"));
         let plan =
             plan_launch(&fixture.invocation(inline(content, ScriptLanguage::Shell))).expect("plan");
-        assert_eq!(plan.program, expected);
+        assert_eq!(plan.program, PathBuf::from("/bin/sh"));
+        assert_eq!(plan.args, vec![expected.as_os_str().to_owned()]);
         assert_eq!(file_count(&script_dir), 1);
+    }
+
+    #[tokio::test]
+    async fn materialized_inline_scripts_never_need_execute_permission() {
+        let fixture = Fixture::new();
+        let content = "#!/bin/sh\necho still-runs\n";
+        let expected = materialized_path(&fixture.root, content, "sh");
+        assert_succeeded(&run(fixture.invocation(inline(content, ScriptLanguage::Shell))).await);
+
+        // Simulate a noexec data directory: the reused file cannot be exec'd,
+        // and the run must not care.
+        std::fs::set_permissions(&expected, std::fs::Permissions::from_mode(0o600)).expect("chmod");
+        let execution = run(fixture.invocation(inline(content, ScriptLanguage::Shell))).await;
+        assert_succeeded(&execution);
+        assert_eq!(execution.stdout_tail.as_deref(), Some("still-runs"));
     }
 
     #[tokio::test]
@@ -714,6 +852,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inline_shell_with_a_missing_shebang_interpreter_runs_under_sh() {
+        let fixture = Fixture::new();
+        let content = "#!/nonexistent/bash\necho ok\n";
+        let invocation = fixture.invocation(inline(content, ScriptLanguage::Shell));
+
+        let plan = plan_launch(&invocation).expect("plan");
+        assert_eq!(plan.program, PathBuf::from("sh"));
+        let execution = run(invocation).await;
+        assert_succeeded(&execution);
+        assert_eq!(execution.stdout_tail.as_deref(), Some("ok"));
+    }
+
+    #[tokio::test]
+    async fn inline_shell_with_a_resolvable_shebang_runs_under_it_with_its_arguments() {
+        let fixture = Fixture::new();
+        let interpreter = fixture.fake_interpreter("fake-bash");
+        let content = format!("#!{} -e --flag\necho unused\n", interpreter.display());
+
+        let execution = run(fixture.invocation(inline(&content, ScriptLanguage::Shell))).await;
+        assert_succeeded(&execution);
+        let expected = materialized_path(&fixture.root, &content, "sh");
+        assert_eq!(
+            stdout_lines(&execution)[0],
+            format!("argv0={}", interpreter.display())
+        );
+        assert_eq!(
+            arg_lines(&execution),
+            vec![
+                "arg=-e".to_string(),
+                "arg=--flag".to_string(),
+                format!("arg={}", expected.display()),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn inline_shell_env_shebang_passes_the_split_arguments_to_env() {
+        let fixture = Fixture::new();
+        let content = "#!/usr/bin/env sh\necho \"$0\"\n";
+        let invocation = fixture.invocation(inline(content, ScriptLanguage::Shell));
+        let expected = materialized_path(&fixture.root, content, "sh");
+
+        let plan = plan_launch(&invocation).expect("plan");
+        assert_eq!(plan.program, PathBuf::from("/usr/bin/env"));
+        assert_eq!(
+            plan.args,
+            vec![OsString::from("sh"), expected.as_os_str().to_owned()]
+        );
+        let execution = run(invocation).await;
+        assert_succeeded(&execution);
+        assert_eq!(
+            execution.stdout_tail.as_deref(),
+            Some(expected.to_string_lossy().as_ref())
+        );
+    }
+
+    #[tokio::test]
     async fn inline_python_is_materialized_and_dispatched_to_the_configured_python() {
         let fixture = Fixture::new();
         let python = fixture.fake_interpreter("fake-python");
@@ -725,29 +920,57 @@ mod tests {
         assert_succeeded(&execution);
         let expected = materialized_path(&fixture.root, content, "py");
         assert!(expected.is_file());
-        let lines = stdout_lines(&execution);
-        assert_eq!(lines[0], format!("argv0={}", python.display()));
-        let args: Vec<&String> = lines.iter().filter(|l| l.starts_with("arg=")).collect();
-        assert_eq!(args, vec![&format!("arg={}", expected.display())]);
+        assert_eq!(
+            stdout_lines(&execution)[0],
+            format!("argv0={}", python.display())
+        );
+        assert_eq!(
+            arg_lines(&execution),
+            vec![format!("arg={}", expected.display())]
+        );
     }
 
     #[tokio::test]
-    async fn file_powershell_script_gets_the_noninteractive_file_arguments() {
+    async fn inline_python_prefers_a_resolvable_shebang_over_the_python_pin() {
+        let fixture = Fixture::new();
+        let pinned = fixture.fake_interpreter("fake-python");
+        let shebang = fixture.fake_interpreter("fake-python-shebang");
+        let content = format!("#!{}\nprint('synthetic')\n", shebang.display());
+        let mut invocation = fixture.invocation(inline(&content, ScriptLanguage::Python));
+        invocation.interpreters.python = Some(pinned);
+
+        let execution = run(invocation).await;
+        assert_succeeded(&execution);
+        assert_eq!(
+            stdout_lines(&execution)[0],
+            format!("argv0={}", shebang.display())
+        );
+        assert_eq!(
+            arg_lines(&execution),
+            vec![format!(
+                "arg={}",
+                materialized_path(&fixture.root, &content, "py").display()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn non_executable_powershell_file_gets_the_noninteractive_file_arguments() {
         let fixture = Fixture::new();
         let powershell = fixture.fake_interpreter("fake-pwsh");
         let script = fixture.work.join("Job.PS1");
         write_file(&script, "Write-Output 'synthetic'\n", 0o644);
-        let mut invocation = fixture.invocation(ScriptSource::File {
-            path: script.to_string_lossy().into_owned(),
-        });
+        let mut invocation = fixture.file_invocation(&script);
         invocation.interpreters.powershell = Some(powershell.clone());
 
         let execution = run(invocation).await;
         assert_succeeded(&execution);
-        let lines = stdout_lines(&execution);
-        assert_eq!(lines[0], format!("argv0={}", powershell.display()));
         assert_eq!(
-            lines[1..5].to_vec(),
+            stdout_lines(&execution)[0],
+            format!("argv0={}", powershell.display())
+        );
+        assert_eq!(
+            arg_lines(&execution),
             vec![
                 "arg=-NoProfile".to_string(),
                 "arg=-NonInteractive".to_string(),
@@ -758,79 +981,152 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn file_go_script_runs_through_go_run_with_a_cache_under_the_root() {
+    async fn non_executable_python_file_dispatches_to_the_configured_python() {
         let fixture = Fixture::new();
-        let go = fixture.fake_interpreter("fake-go");
-        let script = fixture.work.join("job.go");
-        write_file(&script, "package main\nfunc main() {}\n", 0o644);
-        let mut invocation = fixture.invocation(ScriptSource::File {
-            path: script.to_string_lossy().into_owned(),
-        });
-        invocation.interpreters.go = Some(go.clone());
+        let python = fixture.fake_interpreter("fake-python");
+        let script = fixture.work.join("job.py");
+        write_file(&script, "print('synthetic')\n", 0o644);
+        let mut invocation = fixture.file_invocation(&script);
+        invocation.interpreters.python = Some(python.clone());
 
         let execution = run(invocation).await;
         assert_succeeded(&execution);
-        let cache = fixture.root.join(GO_CACHE_DIR_NAME);
-        assert!(cache.is_dir(), "Go build cache created under the root");
         assert_eq!(
-            stdout_lines(&execution),
-            vec![
-                format!("argv0={}", go.display()),
-                "arg=run".to_string(),
-                format!("arg={}", script.display()),
-                format!("GOCACHE={}", cache.display()),
-                "GOFLAGS=-mod=mod".to_string(),
-            ]
+            stdout_lines(&execution)[0],
+            format!("argv0={}", python.display())
+        );
+        assert_eq!(
+            arg_lines(&execution),
+            vec![format!("arg={}", script.display())]
         );
     }
 
     #[tokio::test]
-    async fn file_go_script_keeps_a_go_environment_the_invocation_sets() {
+    async fn executable_python_file_is_executed_directly() {
+        let fixture = Fixture::new();
+        let pinned = fixture.fake_interpreter("fake-python");
+        let shebang = fixture.fake_interpreter("fake-python-shebang");
+        let script = fixture.work.join("job.py");
+        write_file(
+            &script,
+            &format!("#!{}\nprint('synthetic')\n", shebang.display()),
+            0o755,
+        );
+        let mut invocation = fixture.file_invocation(&script);
+        invocation.interpreters.python = Some(pinned);
+
+        let plan = plan_launch(&invocation).expect("plan");
+        assert_eq!(plan.program, script);
+        assert!(plan.args.is_empty());
+        let execution = run(invocation).await;
+        assert_succeeded(&execution);
+        assert_eq!(
+            stdout_lines(&execution)[0],
+            format!("argv0={}", shebang.display())
+        );
+    }
+
+    #[tokio::test]
+    async fn non_executable_go_file_runs_through_go_run() {
         let fixture = Fixture::new();
         let go = fixture.fake_interpreter("fake-go");
         let script = fixture.work.join("job.go");
         write_file(&script, "package main\nfunc main() {}\n", 0o644);
-        let chosen_cache = fixture.work.join("chosen-cache");
-        let mut invocation = fixture.invocation(ScriptSource::File {
-            path: script.to_string_lossy().into_owned(),
-        });
-        invocation.interpreters.go = Some(go);
-        invocation.env = vec![
-            (
-                "GOCACHE".to_string(),
-                chosen_cache.to_string_lossy().into_owned(),
-            ),
-            ("GOFLAGS".to_string(), "-mod=vendor".to_string()),
-        ];
+        let mut invocation = fixture.file_invocation(&script);
+        invocation.interpreters.go = Some(go.clone());
 
         let execution = run(invocation).await;
         assert_succeeded(&execution);
         let lines = stdout_lines(&execution);
-        assert!(lines.contains(&format!("GOCACHE={}", chosen_cache.display())));
-        assert!(lines.contains(&"GOFLAGS=-mod=vendor".to_string()));
-        assert!(!fixture.root.join(GO_CACHE_DIR_NAME).exists());
+        assert_eq!(lines[0], format!("argv0={}", go.display()));
+        assert_eq!(
+            arg_lines(&execution),
+            vec!["arg=run".to_string(), format!("arg={}", script.display())]
+        );
+        // The server's own Go environment, when present, wins over the
+        // defaults under the scripts root.
+        let expected = |name: &str, default: String| match std::env::var_os(name) {
+            Some(value) if !value.is_empty() => value.to_string_lossy().into_owned(),
+            _ => default,
+        };
+        let cache = fixture.root.join(GO_CACHE_DIR_NAME);
+        let tmp = fixture.root.join(GO_TMP_DIR_NAME);
+        assert!(lines.contains(&format!(
+            "GOCACHE={}",
+            expected("GOCACHE", cache.display().to_string())
+        )));
+        assert!(lines.contains(&format!(
+            "GOTMPDIR={}",
+            expected("GOTMPDIR", tmp.display().to_string())
+        )));
+        assert!(lines.contains(&format!(
+            "GOFLAGS={}",
+            expected("GOFLAGS", "-mod=mod".to_string())
+        )));
+    }
+
+    #[test]
+    fn go_environment_defaults_under_the_root_and_keeps_existing_choices() {
+        let fixture = Fixture::new();
+        let invocation = fixture.invocation(ScriptSource::File {
+            path: "/unused/job.go".to_string(),
+        });
+
+        let defaults = go_environment(&invocation, |_| None).expect("go env");
+        let cache = fixture.root.join(GO_CACHE_DIR_NAME);
+        let tmp = fixture.root.join(GO_TMP_DIR_NAME);
+        assert_eq!(
+            defaults,
+            vec![
+                ("GOCACHE".to_string(), cache.to_string_lossy().into_owned()),
+                ("GOTMPDIR".to_string(), tmp.to_string_lossy().into_owned()),
+                ("GOFLAGS".to_string(), "-mod=mod".to_string()),
+            ]
+        );
+        assert!(cache.is_dir());
+        assert!(tmp.is_dir());
+
+        let from_process = go_environment(&invocation, |name| {
+            matches!(name, "GOCACHE" | "GOFLAGS").then(|| OsString::from("/srv/synthetic"))
+        })
+        .expect("go env");
+        assert_eq!(
+            from_process,
+            vec![("GOTMPDIR".to_string(), tmp.to_string_lossy().into_owned())]
+        );
+
+        let mut chosen = invocation.clone();
+        chosen.env = vec![
+            ("GOCACHE".to_string(), "/srv/cache".to_string()),
+            ("GOTMPDIR".to_string(), "/srv/tmp".to_string()),
+            ("GOFLAGS".to_string(), "-mod=vendor".to_string()),
+        ];
+        assert!(
+            go_environment(&chosen, |_| None)
+                .expect("go env")
+                .is_empty()
+        );
     }
 
     #[tokio::test]
-    async fn file_cmd_script_dispatches_to_the_configured_batch_interpreter() {
+    async fn non_executable_cmd_file_dispatches_to_the_configured_batch_interpreter() {
         let fixture = Fixture::new();
         let batch = fixture.fake_interpreter("fake-cmd");
         let script = fixture.work.join("job.cmd");
         write_file(&script, "@echo synthetic\r\n", 0o644);
-        let mut invocation = fixture.invocation(ScriptSource::File {
-            path: script.to_string_lossy().into_owned(),
-        });
+        let mut invocation = fixture.file_invocation(&script);
         invocation.interpreters.batch = Some(batch.clone());
 
         let execution = run(invocation).await;
         assert_succeeded(&execution);
-        let lines = stdout_lines(&execution);
-        assert_eq!(lines[0], format!("argv0={}", batch.display()));
         assert_eq!(
-            lines[1..5].to_vec(),
+            stdout_lines(&execution)[0],
+            format!("argv0={}", batch.display())
+        );
+        assert_eq!(
+            arg_lines(&execution),
             vec![
                 "arg=/D".to_string(),
-                "arg=/S".to_string(),
                 "arg=/C".to_string(),
                 format!("arg={}", script.display()),
             ]
@@ -848,15 +1144,14 @@ mod tests {
             0o644,
         );
 
-        let execution = run(fixture.invocation(ScriptSource::File {
-            path: script.to_string_lossy().into_owned(),
-        }))
-        .await;
+        let execution = run(fixture.file_invocation(&script)).await;
         assert_succeeded(&execution);
-        let lines = stdout_lines(&execution);
-        assert_eq!(lines[0], format!("argv0={}", interpreter.display()));
         assert_eq!(
-            lines[1..4].to_vec(),
+            stdout_lines(&execution)[0],
+            format!("argv0={}", interpreter.display())
+        );
+        assert_eq!(
+            arg_lines(&execution),
             vec![
                 "arg=--flag".to_string(),
                 "arg=value".to_string(),
@@ -870,9 +1165,7 @@ mod tests {
         let fixture = Fixture::new();
         let script = fixture.work.join("job-direct");
         write_file(&script, "#!/bin/sh\necho direct-run\n", 0o755);
-        let invocation = fixture.invocation(ScriptSource::File {
-            path: script.to_string_lossy().into_owned(),
-        });
+        let invocation = fixture.file_invocation(&script);
 
         let plan = plan_launch(&invocation).expect("plan");
         assert_eq!(plan.program, script);
@@ -897,44 +1190,69 @@ mod tests {
             }
         );
 
-        let missing = run(fixture.invocation(ScriptSource::File {
-            path: fixture
-                .work
-                .join("missing-job")
-                .to_string_lossy()
-                .into_owned(),
-        }))
-        .await;
-        assert!(matches!(missing.outcome, ScriptOutcome::SpawnFailed { .. }));
+        let missing_path = fixture.work.join("missing-job");
+        let missing = run(fixture.file_invocation(&missing_path)).await;
+        match &missing.outcome {
+            ScriptOutcome::SpawnFailed { reason } => assert!(
+                reason.starts_with(&format!("{}: ", missing_path.display())),
+                "spawn errors name the program: {reason}"
+            ),
+            other => panic!("expected a spawn failure, got {other:?}"),
+        }
         assert_eq!(missing.stdout_tail, None);
         assert_eq!(missing.stderr_tail, None);
     }
 
     #[tokio::test]
-    async fn unsafe_script_id_fails_materialization_without_writing_outside_the_root() {
+    async fn unsafe_script_ids_fail_materialization_without_writing() {
         let fixture = Fixture::new();
-        let mut invocation = fixture.invocation(inline("print(1)\n", ScriptLanguage::Python));
-        invocation.script_id = "../escape".to_string();
+        for script_id in ["../escape", ".hidden", "nested/id", ""] {
+            let mut invocation = fixture.invocation(inline("print(1)\n", ScriptLanguage::Python));
+            invocation.script_id = script_id.to_string();
 
-        let execution = run(invocation).await;
-        assert!(matches!(
-            execution.outcome,
-            ScriptOutcome::SpawnFailed { ref reason } if reason.starts_with("failed to materialize inline script")
-        ));
+            let execution = run(invocation).await;
+            assert!(
+                matches!(
+                    execution.outcome,
+                    ScriptOutcome::SpawnFailed { ref reason }
+                        if reason.starts_with("failed to materialize inline script")
+                ),
+                "{script_id:?} must be rejected"
+            );
+        }
         assert!(!fixture.root.exists());
     }
 
     #[tokio::test]
     async fn timeout_kills_the_whole_process_group() {
         let fixture = Fixture::new();
-        // The background child keeps the output pipes open; the run can only
-        // finish if the timeout kills the child as well as the shell.
+        // The background child keeps the output pipes open and would outlive
+        // the drain bound, so a prompt TimedOut shows the group was killed.
         let mut invocation = fixture.invocation(inline("sleep 300 & wait", ScriptLanguage::Shell));
         invocation.timeout = Duration::from_secs(1);
 
         let execution = run(invocation).await;
         assert_eq!(execution.outcome, ScriptOutcome::TimedOut);
         assert_eq!(execution.stdout_tail.as_deref(), Some(""));
+    }
+
+    #[tokio::test]
+    async fn a_background_process_holding_the_pipes_cannot_hang_the_run() {
+        let fixture = Fixture::new();
+        let invocation = fixture.invocation(inline(
+            "sleep 300 &\necho \"$!\"\necho done",
+            ScriptLanguage::Shell,
+        ));
+
+        let execution = run(invocation).await;
+        let lines = stdout_lines(&execution);
+        if let Some(pid) = lines.first().and_then(|line| line.parse::<i32>().ok()) {
+            unsafe {
+                libc::kill(pid, libc::SIGKILL);
+            }
+        }
+        assert_succeeded(&execution);
+        assert_eq!(lines.last().map(String::as_str), Some("done"));
     }
 
     #[tokio::test]
@@ -965,6 +1283,20 @@ mod tests {
         );
         assert_eq!(captured.stdout_tail.as_deref(), Some("synthetic-out"));
         assert_eq!(captured.stderr_tail.as_deref(), Some("synthetic-err"));
+    }
+
+    #[tokio::test]
+    async fn captured_output_keeps_only_the_last_bytes() {
+        let fixture = Fixture::new();
+        let content = "i=0; while [ $i -lt 2000 ]; do printf 'line-%05d-padding-padding\\n' $i; i=$((i+1)); done";
+
+        let execution = run(fixture.invocation(inline(content, ScriptLanguage::Shell))).await;
+        assert_succeeded(&execution);
+        let tail = execution.stdout_tail.expect("stdout captured");
+        assert!(tail.len() <= OUTPUT_TAIL_BYTES);
+        assert!(tail.len() > OUTPUT_TAIL_BYTES - 64);
+        assert!(tail.ends_with("line-01999-padding-padding"));
+        assert!(!tail.contains("line-00000-"));
     }
 
     #[test]
