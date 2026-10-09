@@ -9,7 +9,7 @@ import { ListFacetFilters } from "./list-facet-filters";
 import type { Facet, LibraryRecord } from "@/lib/types/titles";
 import { listKindLabelKey } from "@/lib/utils/lists";
 import { facetById } from "@/lib/facets/registry";
-import { facetPillStyle } from "@/lib/facets/style";
+import { facetStyle } from "@/lib/facets/style";
 
 const INHERIT_QUALITY_PROFILE = "__inherit__";
 
@@ -66,13 +66,14 @@ export function ListRouteCard({
   return (
     <Collapsible
       id={`${idPrefix}-route-${kind.toLowerCase()}`}
-      className="rounded-[12px] border border-[var(--scry-border3)] bg-[var(--scry-inset)]"
+      className="rounded-[12px] border"
+      style={{ borderColor: facetStyle(kind).dot }}
       disabled={disabled}
     >
       <CollapsibleTrigger className="group flex w-full items-center justify-between gap-3 rounded-[12px] p-4 text-left text-[13px] font-semibold text-[var(--scry-ink2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={disabled}>
-        <span className="inline-flex items-center gap-2 rounded-lg px-2.5 py-1.5" style={facetPillStyle(kind)}>
-          <FacetIcon className="size-4" aria-hidden="true" />
-          {t("lists.route.heading", { kind: t(listKindLabelKey(kind)) })}
+        <span className="inline-flex items-center gap-2">
+          <FacetIcon className="size-4" style={{ color: facetStyle(kind).text }} aria-hidden="true" />
+          {t(listKindLabelKey(kind))}
         </span>
         <ChevronDown className="size-4 shrink-0 transition-transform group-data-[state=open]:rotate-180" aria-hidden="true" />
       </CollapsibleTrigger>

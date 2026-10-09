@@ -3,7 +3,9 @@ import { Input, decimalInputProps } from "@/components/ui/input";
 import { CheckboxField } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { MultiSelectOptionList } from "@/components/ui/multi-select-dropdown";
-import { SingleSelectField } from "@/components/ui/select";
+import { SingleSelectField, selectContentClassName, selectTriggerClassName } from "@/components/ui/select";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { ChevronDown } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useCanonicalVocabulary } from "@/lib/hooks/use-canonical-vocabulary";
 import type { ListFilter } from "@/lib/types/lists";
@@ -269,37 +271,55 @@ export function ListFacetFilters({
         />
       ))}
       {vocabulary ? (
-        <>
-          <Input
-            aria-label={t("lists.filter.searchCanonical")}
-            placeholder={t("lists.filter.searchCanonical")}
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            disabled={disabled}
-          />
-          <MultiSelectOptionList
-            groups={[
-              {
-                options: visibleEntries.map((entry) => ({
-                  value: entry.key,
-                  label: entry.name,
-                })),
-              },
-            ]}
-            selectedValues={keys}
-            disabled={disabled}
-            optionIdPrefix={idPrefix}
-            maxHeightClassName="max-h-48"
-            onSelectedValuesChange={(values) =>
-              setExclusions([
-                ...keys.filter(
-                  (key) => !visibleEntries.some((entry) => entry.key === key),
-                ),
-                ...values,
-              ])
-            }
-          />
-        </>
+        <Popover modal onOpenChange={(open) => { if (!open) setSearch(""); }}>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              id={`${idPrefix}-canonical-picker`}
+              aria-label={t("lists.filter.canonical")}
+              disabled={disabled}
+              className={selectTriggerClassName({ className: "w-full" })}
+            >
+              <span className={`min-w-0 truncate text-left ${keys.length ? "" : "text-muted-foreground"}`}>
+                {keys.length
+                  ? keys.map((key) => vocabulary.entries.find((entry) => entry.key === key)?.name ?? key).join(", ")
+                  : t("lists.filter.searchCanonical")}
+              </span>
+              <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className={selectContentClassName("w-[var(--radix-popover-trigger-width)] space-y-2 p-2")}>
+            <Input
+              aria-label={t("lists.filter.searchCanonical")}
+              placeholder={t("lists.filter.searchCanonical")}
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              disabled={disabled}
+            />
+            <MultiSelectOptionList
+              groups={[
+                {
+                  options: visibleEntries.map((entry) => ({
+                    value: entry.key,
+                    label: entry.name,
+                  })),
+                },
+              ]}
+              selectedValues={keys}
+              disabled={disabled}
+              optionIdPrefix={idPrefix}
+              maxHeightClassName="max-h-48"
+              onSelectedValuesChange={(values) =>
+                setExclusions([
+                  ...keys.filter(
+                    (key) => !visibleEntries.some((entry) => entry.key === key),
+                  ),
+                  ...values,
+                ])
+              }
+            />
+          </PopoverContent>
+        </Popover>
       ) : null}
     </div>
   );
