@@ -7801,6 +7801,136 @@ impl ExecutionMode {
     }
 }
 
+/// Language an inline script is written in. Decides the file extension the
+/// runner materializes inline content under, which in turn selects the
+/// interpreter. File scripts are dispatched by their own extension.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptLanguage {
+    #[default]
+    Shell,
+    Python,
+    PowerShell,
+    Batch,
+    Go,
+}
+
+impl ScriptLanguage {
+    pub const ALL: [Self; 5] = [
+        Self::Shell,
+        Self::Python,
+        Self::PowerShell,
+        Self::Batch,
+        Self::Go,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Shell => "shell",
+            Self::Python => "python",
+            Self::PowerShell => "powershell",
+            Self::Batch => "batch",
+            Self::Go => "go",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "shell" => Some(Self::Shell),
+            "python" => Some(Self::Python),
+            "powershell" => Some(Self::PowerShell),
+            "batch" => Some(Self::Batch),
+            "go" => Some(Self::Go),
+            _ => None,
+        }
+    }
+
+    /// Extension a materialized inline script of this language gets.
+    pub fn file_extension(self) -> &'static str {
+        match self {
+            Self::Shell => "sh",
+            Self::Python => "py",
+            Self::PowerShell => "ps1",
+            Self::Batch => "cmd",
+            Self::Go => "go",
+        }
+    }
+}
+
+/// What starts a script: the import pipeline after a file lands, or the job
+/// scheduler on the script's own schedule.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScriptTrigger {
+    #[default]
+    PostImport,
+    Schedule,
+}
+
+impl ScriptTrigger {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::PostImport => "post_import",
+            Self::Schedule => "schedule",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "post_import" => Some(Self::PostImport),
+            "schedule" => Some(Self::Schedule),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScheduleWeekday {
+    Monday,
+    Tuesday,
+    Wednesday,
+    Thursday,
+    Friday,
+    Saturday,
+    Sunday,
+}
+
+/// When a scheduled script runs. Stored as JSON on the script row; every
+/// variant compiles to the same "next fire after `now`" answer in the
+/// application layer. Local times are host-local, matching the daily jobs
+/// that already exist.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ScriptSchedule {
+    /// Run button only.
+    #[default]
+    Manual,
+    /// Every `every_seconds` seconds, floor 60.
+    Interval { every_seconds: i64 },
+    /// Once a day at `time_local` (`HH:MM`).
+    Daily { time_local: String },
+    /// On each listed weekday at `time_local` (`HH:MM`).
+    Weekly {
+        days: Vec<ScheduleWeekday>,
+        time_local: String,
+    },
+    /// A five-field crontab expression, host-local time.
+    Cron { expression: String },
+}
+
+impl ScriptSchedule {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Interval { .. } => "interval",
+            Self::Daily { .. } => "daily",
+            Self::Weekly { .. } => "weekly",
+            Self::Cron { .. } => "cron",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PostProcessingScript {
     pub id: String,
