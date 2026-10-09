@@ -6,11 +6,13 @@ import {
   MAINTENANCE_RULE_SET_DETAIL_FIELDS,
   MAINTENANCE_RULE_SET_FIELDS,
   MEDIA_SERVER_CONNECTION_FIELDS,
+  POST_PROCESSING_SCRIPT_FIELDS,
   PROVIDER_CONFIG_VALUE_FIELDS,
   RELEASE_SEARCH_RESULT_FIELDS,
   REQUEST_RULE_DECISION_FIELDS,
   REQUEST_RULE_SET_DETAIL_FIELDS,
   REQUEST_RULE_SET_FIELDS,
+  SCRIPT_INTERPRETER_SETTINGS_FIELDS,
   SEEDING_PROFILE_FIELDS,
   SUBTITLE_PROVIDER_CONFIG_FIELDS,
   SUBTITLE_SETTINGS_FIELDS,
@@ -819,8 +821,8 @@ export const ignorePendingImportMutation = `mutation IgnorePendingImport($pendin
   }
 }`;
 
-export const triggerJobMutation = `mutation TriggerJob($jobKey: JobKeyValue!) {
-  triggerJob(jobKey: $jobKey) {
+export const triggerJobMutation = `mutation TriggerJob($jobKey: JobKeyValue!, $customJobId: ID) {
+  triggerJob(jobKey: $jobKey, customJobId: $customJobId) {
 ${JOB_RUN_FIELDS}
   }
 }`;
@@ -2926,10 +2928,11 @@ export const rehydrateAllMetadataMutation = `mutation RehydrateAllMetadata($inpu
   }
 }`;
 
-const ppScriptFields = `
-    id name description scriptType scriptContent appliedFacets
-    executionMode timeoutSecs priority enabled debug createdAt updatedAt
-`;
+const ppScriptFields = POST_PROCESSING_SCRIPT_FIELDS;
+
+export const updateScriptInterpreterSettingsMutation = `mutation UpdateScriptInterpreterSettings($input: ScriptInterpreterSettingsInput!) {
+  updateScriptInterpreterSettings(input: $input) {${SCRIPT_INTERPRETER_SETTINGS_FIELDS}  }
+}`;
 
 export const createPostProcessingScriptMutation = `mutation CreatePostProcessingScript($input: CreatePostProcessingScriptInput!) {
   createPostProcessingScript(input: $input) {${ppScriptFields}}

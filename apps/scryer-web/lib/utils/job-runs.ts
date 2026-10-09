@@ -4,6 +4,7 @@ import type {
   JobRun,
   JobRunStatus,
   JobSection,
+  JobTarget,
   JobTriggerSource,
   LibraryScanMode,
   LibraryScanProgress,
@@ -56,6 +57,33 @@ function normalizeNumber(value: unknown): number {
 
 function normalizeJobKey(value: unknown): JobKey {
   return typeof value === "string" ? (value as JobKey) : "RSS_SYNC";
+}
+
+export function normalizeCustomJobId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * The key one job instance is tracked under on the Jobs page. Every
+ * user-defined job shares the CUSTOM_JOB key, so those are keyed by their own
+ * id; built-in jobs keep their job key.
+ */
+export function jobInstanceKey(
+  target: { customJobId?: string | null; key: JobKey } | { customJobId?: string | null; jobKey: JobKey },
+): string {
+  if (target.customJobId) {
+    return target.customJobId;
+  }
+  return "key" in target ? target.key : target.jobKey;
+}
+
+export function jobTargetOf(
+  target: { customJobId?: string | null; key: JobKey } | { customJobId?: string | null; jobKey: JobKey },
+): JobTarget {
+  return {
+    jobKey: "key" in target ? target.key : target.jobKey,
+    customJobId: target.customJobId ?? null,
+  };
 }
 
 function normalizeCategory(value: unknown): JobCategory {
@@ -168,6 +196,7 @@ export function normalizeJobRun(value: unknown): JobRun | null {
   return {
     id: value.id,
     jobKey: normalizeJobKey(value.jobKey),
+    customJobId: normalizeCustomJobId(value.customJobId),
     displayName: typeof value.displayName === "string" ? value.displayName : "Job",
     category: normalizeCategory(value.category),
     section: normalizeSection(value.section),
@@ -279,14 +308,16 @@ export function preferJobRunSnapshot(
 }
 
 /**
- * Fold one run into the latest run kept per job. A newer snapshot of the kept
- * run replaces it; a different run replaces it only when it started no earlier.
+ * Fold one run into the latest run kept per job instance (see
+ * {@link jobInstanceKey}). A newer snapshot of the kept run replaces it; a
+ * different run replaces it only when it started no earlier.
  */
 export function mergeLatestJobRun(
-  current: Partial<Record<JobKey, JobRun>>,
+  current: Partial<Record<string, JobRun>>,
   run: JobRun,
-): Partial<Record<JobKey, JobRun>> {
-  const existing = current[run.jobKey];
+): Partial<Record<string, JobRun>> {
+  const key = jobInstanceKey(run);
+  const existing = current[key];
   let next: JobRun;
   if (!existing) {
     next = run;
@@ -297,5 +328,5 @@ export function mergeLatestJobRun(
   } else {
     return current;
   }
-  return next === existing ? current : { ...current, [run.jobKey]: next };
+  return next === existing ? current : { ...current, [key]: next };
 }

@@ -17,6 +17,7 @@ import { triggerJobMutation } from "@/lib/graphql/mutations";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
 import {
   mergeLatestJobRun,
+  normalizeCustomJobId,
   normalizeJobRun,
   preferJobRunSnapshot,
 } from "@/lib/utils/job-runs";
@@ -75,6 +76,7 @@ function normalizeJobDefinition(value: unknown): JobDefinition | null {
 
   return {
     key: normalizeJobKey(value.key),
+    customJobId: normalizeCustomJobId(value.customJobId),
     displayName: typeof value.displayName === "string" ? value.displayName : value.key,
     description: typeof value.description === "string" ? value.description : "",
     category: normalizeCategory(value.category),
