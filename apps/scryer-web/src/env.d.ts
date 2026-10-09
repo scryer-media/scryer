@@ -1,6 +1,8 @@
 /// <reference types="vite/client" />
 
 declare module "@fontsource-variable/*";
+// cronstrue locale modules register themselves on import and ship no types.
+declare module "cronstrue/locales/*";
 
 interface ImportMetaEnv {
   readonly SCRYER_BASE_PATH: string;

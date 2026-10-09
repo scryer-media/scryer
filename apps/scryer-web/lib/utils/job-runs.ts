@@ -4,6 +4,7 @@ import type {
   JobRun,
   JobRunStatus,
   JobSection,
+  JobTarget,
   JobTriggerSource,
   LibraryScanMode,
   LibraryScanProgress,
@@ -56,6 +57,33 @@ function normalizeNumber(value: unknown): number {
 
 function normalizeJobKey(value: unknown): JobKey {
   return typeof value === "string" ? (value as JobKey) : "RSS_SYNC";
+}
+
+export function normalizeCustomJobId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+/**
+ * The key one job instance is tracked under on the Jobs page. Every
+ * user-defined job shares the CUSTOM_JOB key, so those are keyed by their own
+ * id; built-in jobs keep their job key.
+ */
+export function jobInstanceKey(
+  target: { customJobId?: string | null; key: JobKey } | { customJobId?: string | null; jobKey: JobKey },
+): string {
+  if (target.customJobId) {
+    return target.customJobId;
+  }
+  return "key" in target ? target.key : target.jobKey;
+}
+
+export function jobTargetOf(
+  target: { customJobId?: string | null; key: JobKey } | { customJobId?: string | null; jobKey: JobKey },
+): JobTarget {
+  return {
+    jobKey: "key" in target ? target.key : target.jobKey,
+    customJobId: target.customJobId ?? null,
+  };
 }
 
 function normalizeCategory(value: unknown): JobCategory {
@@ -168,6 +196,7 @@ export function normalizeJobRun(value: unknown): JobRun | null {
   return {
     id: value.id,
     jobKey: normalizeJobKey(value.jobKey),
+    customJobId: normalizeCustomJobId(value.customJobId),
     displayName: typeof value.displayName === "string" ? value.displayName : "Job",
     category: normalizeCategory(value.category),
     section: normalizeSection(value.section),
@@ -279,14 +308,16 @@ export function preferJobRunSnapshot(
 }
 
 /**
- * Fold one run into the latest run kept per job. A newer snapshot of the kept
- * run replaces it; a different run replaces it only when it started no earlier.
+ * Fold one run into the latest run kept per job instance (see
+ * {@link jobInstanceKey}). A newer snapshot of the kept run replaces it; a
+ * different run replaces it only when it started no earlier.
  */
 export function mergeLatestJobRun(
-  current: Partial<Record<JobKey, JobRun>>,
+  current: Partial<Record<string, JobRun>>,
   run: JobRun,
-): Partial<Record<JobKey, JobRun>> {
-  const existing = current[run.jobKey];
+): Partial<Record<string, JobRun>> {
+  const key = jobInstanceKey(run);
+  const existing = current[key];
   let next: JobRun;
   if (!existing) {
     next = run;
@@ -297,5 +328,59 @@ export function mergeLatestJobRun(
   } else {
     return current;
   }
-  return next === existing ? current : { ...current, [run.jobKey]: next };
+  return next === existing ? current : { ...current, [key]: next };
+}
+
+/** The script run a custom job run produced, as recorded in its summary. */
+export function scriptRunIdOf(run: Pick<JobRun, "summaryJson">): string | null {
+  let parsed: unknown = run.summaryJson;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const value = (parsed as Record<string, unknown>).script_run_id;
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+/** Finds the script run joined to a job run through its summary. */
+export function scriptRunForJobRun<T extends { id: string }>(
+  run: Pick<JobRun, "summaryJson">,
+  scriptRuns: readonly T[],
+): T | null {
+  const scriptRunId = scriptRunIdOf(run);
+  if (!scriptRunId) return null;
+  return scriptRuns.find((scriptRun) => scriptRun.id === scriptRunId) ?? null;
+}
+
+/** Waits between captured-output reloads; they add up to about two minutes. */
+export const SCRIPT_OUTPUT_POLL_DELAYS_MS: readonly number[] = [
+  1_000, 2_000, 5_000, 5_000, 10_000, 10_000, 15_000, 15_000, 15_000, 20_000, 20_000,
+];
+
+/**
+ * The newest finished run whose captured output has not arrived yet: its
+ * script run is missing, or still recorded as running. Null when there is
+ * nothing to wait for.
+ */
+export function runAwaitingScriptOutput(
+  history: readonly Pick<JobRun, "id" | "status" | "summaryJson" | "startedAt">[],
+  scriptRuns: readonly { id: string; status: string }[],
+): string | null {
+  const newestFinished = history
+    .filter((run) => isTerminalJobRunStatus(run.status))
+    .reduce<(typeof history)[number] | null>(
+      (newest, run) =>
+        newest === null || Date.parse(run.startedAt) > Date.parse(newest.startedAt) ? run : newest,
+      null,
+    );
+  if (!newestFinished) return null;
+  const scriptRun = scriptRunForJobRun(newestFinished, scriptRuns);
+  if (scriptRun && scriptRun.status !== "running") return null;
+  return newestFinished.id;
 }

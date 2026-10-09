@@ -39,6 +39,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "^1.1.1",
+    "cronstrue": "3.27.0",
     "graphiql": "^5.4.0",
     "graphql": "^17.0.2",
     "graphql-ws": "^6.3.0",
