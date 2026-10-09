@@ -116,8 +116,8 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 # Windows' global allocator. mimalloc vendors both v2 and v3 and builds v3
-# unless the `v2` feature is set. `libmimalloc-sys/extended` is what exposes
-# `mi_option_set`, which main.rs uses to turn the decommit purge off at startup.
+# unless the `v2` feature is set. Keep its default decommit purge behavior so
+# unused pages can be returned to the OS instead of retained through MEM_RESET.
 mimalloc = "0.1"
 libmimalloc-sys = { version = "0.1", features = ["extended"] }
 windows-sys = { version = "0.61.2", features = [
