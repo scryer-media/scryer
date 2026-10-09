@@ -23,21 +23,8 @@ fn effective_image_cache_limit(image_cache_max_size_mb: i32) -> (u64, f64, bool)
 }
 
 fn normalize_auto_backup_daily_time_local(value: &str) -> AppResult<String> {
-    let value = value.trim();
-    let (hour, minute) = value
-        .split_once(':')
-        .ok_or_else(|| AppError::Validation("daily time must use HH:MM format".to_string()))?;
-    let hour = hour
-        .parse::<u32>()
-        .map_err(|_| AppError::Validation("daily time hour must be numeric".to_string()))?;
-    let minute = minute
-        .parse::<u32>()
-        .map_err(|_| AppError::Validation("daily time minute must be numeric".to_string()))?;
-    if hour > 23 || minute > 59 {
-        return Err(AppError::Validation(
-            "daily time must be between 00:00 and 23:59".to_string(),
-        ));
-    }
+    let (hour, minute) = crate::scripts::schedule::parse_local_time_of_day(value)
+        .map_err(crate::scripts::schedule::ScheduleError::into_app_error)?;
     Ok(format!("{hour:02}:{minute:02}"))
 }
 

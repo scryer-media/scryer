@@ -5573,6 +5573,7 @@ dependencies = [
  "bytes",
  "chardetng",
  "chrono",
+ "chrono-tz",
  "crc-fast",
  "croner",
  "encoding_rs",

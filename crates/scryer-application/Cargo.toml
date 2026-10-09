@@ -88,6 +88,9 @@ windows-sys = { version = "0.61.2", features = ["Win32_Storage_FileSystem"] }
 application-updater = { git = "https://github.com/scryer-media/application-updater.git", tag = "v0.1.0", features = ["test-seams"] }
 tokio = { workspace = true, features = ["test-util"] }
 wiremock = { workspace = true }
+# Fixed IANA zones so schedule tests can exercise daylight-saving transitions
+# regardless of the host time zone.
+chrono-tz = "0.10.4"
 # Thread-local recorder for asserting emitted metric names, labels and values
 # without installing a global recorder.
 metrics-util = { version = "0.20", default-features = false, features = ["debugging"] }
