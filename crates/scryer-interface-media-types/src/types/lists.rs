@@ -830,6 +830,14 @@ pub struct ListSyncRunPayload {
 /// One title the next sync would act on.
 #[derive(SimpleObject, Clone)]
 pub struct ListPreviewItemPayload {
+    /// Provider-attributed ratings for the preview flyout.
+    pub external_ratings: Vec<super::DiscoveryExternalRatingPayload>,
+    /// Canonical genre and theme display names.
+    pub genres_and_themes: Vec<String>,
+    /// Original language, when known.
+    pub original_language: Option<String>,
+    /// Release or first-air date, when known.
+    pub release_date: Option<String>,
     /// The provider's own key for the title.
     pub item_key: String,
     /// The title as the list names it, or its key when the list gives no name.

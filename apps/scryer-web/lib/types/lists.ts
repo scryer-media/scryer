@@ -196,6 +196,10 @@ export type ListSubscription = {
 };
 
 export type ListPreviewItem = {
+  externalRatings: import("@/lib/utils/title-ratings").TitleExternalRating[];
+  genresAndThemes: string[];
+  originalLanguage: string | null;
+  releaseDate: string | null;
   itemKey: string;
   displayTitle: string;
   year: number | null;

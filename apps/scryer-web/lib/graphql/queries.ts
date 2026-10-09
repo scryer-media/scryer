@@ -5432,6 +5432,10 @@ const LIST_PREVIEW_FIELDS = `
     excluded
     unresolved
     wouldAdd {
+      externalRatings { source value score normalized votes url }
+      genresAndThemes
+      originalLanguage
+      releaseDate
       itemKey
       displayTitle
       year

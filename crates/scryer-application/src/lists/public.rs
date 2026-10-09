@@ -93,8 +93,9 @@ pub struct ListSourceDraft {
 }
 
 /// One title the next sync would act on.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ListPreviewItem {
+    pub facts: Option<super::resolve::ListMetadataFacts>,
     pub item_key: String,
     pub display_title: Option<String>,
     pub year: Option<i32>,
@@ -103,7 +104,7 @@ pub struct ListPreviewItem {
 }
 
 /// What following a source would do right now. Nothing is written to make it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ListPreview {
     pub recognized: bool,
     pub provider: Option<String>,
@@ -312,6 +313,33 @@ pub fn validate_public_settings(
     Ok(kinds)
 }
 
+/// Fetch display facts only for visible candidates that filtering has not enriched.
+async fn enrich_preview_candidates(
+    evaluated: &mut [super::evaluate::EvaluatedItem],
+    resolver: &dyn super::resolve::ListItemResolver,
+) -> AppResult<()> {
+    let positions = evaluated
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| matches!(item.decision, ItemDecision::Candidate))
+        .take(LIST_PREVIEW_WOULD_ADD_MAX)
+        .filter(|(_, item)| item.item.facts.is_none())
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+    if positions.is_empty() {
+        return Ok(());
+    }
+    let mut items = positions
+        .iter()
+        .map(|index| evaluated[*index].item.clone())
+        .collect::<Vec<_>>();
+    resolver.enrich(&mut items).await?;
+    for (index, item) in positions.into_iter().zip(items) {
+        evaluated[index].item.facts = item.facts;
+    }
+    Ok(())
+}
+
 /// Summarise one evaluated list into a preview. Would-be adds are the items
 /// the next sync acts on: candidates within the cap, in list order.
 pub fn summarize_preview(
@@ -335,6 +363,7 @@ pub fn summarize_preview(
                 if preview.would_add.len() < LIST_PREVIEW_WOULD_ADD_MAX {
                     let key = &item.item.item.item_key;
                     preview.would_add.push(ListPreviewItem {
+                        facts: item.item.facts.clone(),
                         item_key: key.clone(),
                         display_title: trimmed(item.item.item.title.as_deref()),
                         year: item.item.item.year,
@@ -768,12 +797,13 @@ impl AppUseCase {
         let exclusions = lists.exclusions.list().await?;
         // Weigh a deleted title the list added the way the sync will.
         let deleted = deleted_additions(&AppListActions::new(self), &resolved, &existing).await;
-        let evaluated = evaluate(
+        let mut evaluated = evaluate(
             &subscription,
             resolved,
             &exclusions,
             &without_rows(&existing, &deleted),
         );
+        enrich_preview_candidates(&mut evaluated, &resolver).await?;
         let mut preview = summarize_preview(&evaluated, &fetched.posters);
         preview.recognized = true;
         preview.provider = Some(subscription.source.provider.clone());

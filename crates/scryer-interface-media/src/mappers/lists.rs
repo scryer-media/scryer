@@ -551,7 +551,23 @@ pub fn from_list_sync_run(run: ListSyncRun) -> ListSyncRunPayload {
 }
 
 fn from_preview_item(item: ListPreviewItem) -> ListPreviewItemPayload {
+    let facts = item.facts.unwrap_or_default();
     ListPreviewItemPayload {
+        external_ratings: facts
+            .ratings
+            .into_iter()
+            .map(|rating| crate::types::DiscoveryExternalRatingPayload {
+                source: rating.source,
+                value: rating.value,
+                score: rating.score,
+                normalized: rating.normalized,
+                votes: rating.votes,
+                url: rating.url,
+            })
+            .collect(),
+        genres_and_themes: facts.canonical_names,
+        original_language: facts.original_language,
+        release_date: facts.release_date.map(|date| date.to_string()),
         display_title: item.display_title.unwrap_or_else(|| item.item_key.clone()),
         item_key: item.item_key,
         year: item.year,

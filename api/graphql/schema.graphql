@@ -10765,6 +10765,22 @@ One title the next sync would act on.
 """
 type ListPreviewItemPayload {
 	"""
+	Provider-attributed ratings for the preview flyout.
+	"""
+	externalRatings: [DiscoveryExternalRatingPayload!]!
+	"""
+	Canonical genre and theme display names.
+	"""
+	genresAndThemes: [String!]!
+	"""
+	Original language, when known.
+	"""
+	originalLanguage: String
+	"""
+	Release or first-air date, when known.
+	"""
+	releaseDate: String
+	"""
 	The provider's own key for the title.
 	"""
 	itemKey: String!

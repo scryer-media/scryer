@@ -297,6 +297,11 @@ impl<L: ListLibraryLookup> ListItemResolver for GatewayListItemResolver<L> {
                         (true, *id),
                         ListMetadataFacts {
                             ratings: metadata.ratings.external_ratings,
+                            canonical_names: metadata
+                                .canonical_tags
+                                .iter()
+                                .map(|tag| tag.name.clone())
+                                .collect(),
                             canonical_keys: metadata
                                 .canonical_tags
                                 .into_iter()
@@ -335,6 +340,11 @@ impl<L: ListLibraryLookup> ListItemResolver for GatewayListItemResolver<L> {
                         (false, *id),
                         ListMetadataFacts {
                             ratings: metadata.ratings.external_ratings,
+                            canonical_names: metadata
+                                .canonical_tags
+                                .iter()
+                                .map(|tag| tag.name.clone())
+                                .collect(),
                             canonical_keys: metadata
                                 .canonical_tags
                                 .into_iter()
