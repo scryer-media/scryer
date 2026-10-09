@@ -914,6 +914,12 @@ impl AppUseCase {
         let mut subscription = self.public_subscription(id).await?;
         // The kinds a source declares are the ceiling; a follow may narrow
         // them and widen them back.
+        if patch.kinds.is_some() {
+            super::catalog::use_include_media_selection(
+                &mut subscription.source,
+                &self.services.lists.plugins.descriptors(),
+            );
+        }
         let declared = match self
             .classify_source(
                 Some(&subscription.source.provider),

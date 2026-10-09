@@ -872,6 +872,22 @@ impl ScriptedLists {
         })
     }
 
+    pub(crate) fn with_media_param(param: scryer_plugin_sdk::ListSourceParam) -> Arc<Self> {
+        let mut client = Self::new();
+        let ProviderDescriptor::ListProvider(provider) =
+            &mut Arc::get_mut(&mut client).unwrap().descriptor.provider
+        else {
+            unreachable!();
+        };
+        provider.groups[0].items[0].params.push(param);
+        provider.groups[0].items[0].kinds = vec![
+            ListMediaKind::Movie,
+            ListMediaKind::Series,
+            ListMediaKind::Anime,
+        ];
+        client
+    }
+
     /// Serve `keys` for `subscription_id`'s list.
     pub(crate) fn serve(&self, subscription_id: &str, keys: &[&str]) {
         self.pages.lock().unwrap().insert(

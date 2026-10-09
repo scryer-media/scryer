@@ -42,6 +42,25 @@ export const LIST_ON_LEAVE_OPTIONS: readonly ListOnLeave[] = ["KEEP", "LOG", "UN
 
 export const LIST_KINDS: readonly Facet[] = ["MOVIE", "SERIES", "ANIME"];
 
+/** Only media enums duplicate Include; status, credits and order remain source options. */
+export function isListMediaParam(param: ListSourceParamDefinition): boolean {
+  return param.type === "ENUM" && ["type", "kind"].includes(param.key)
+    && param.options.length > 0
+    && param.options.every((option) => ["all", "movie", "movies", "series", "shows", "anime"].includes(option));
+}
+
+/** Preserve the effective scope of older follows that saved both selectors. */
+export function listKindsFromSourceParams(kinds: readonly Facet[], definitions: readonly ListSourceParamDefinition[], params: readonly ListParam[], legacy = false): Facet[] {
+  const selector = definitions.find(isListMediaParam);
+  const selected = selector && (params.find((param) => param.key === selector.key)?.value
+    ?? (legacy && !selector.options.includes("all") ? selector.options[0] : undefined));
+  if (!selected || selected === "all" || selected === "__include__") return [...kinds];
+  const allowed: readonly Facet[] = selected === "anime" ? ["ANIME", "MOVIE"]
+    : ["movie", "movies"].includes(selected) ? ["MOVIE"]
+      : selector?.options.includes("anime") ? ["SERIES"] : ["SERIES", "ANIME"];
+  return kinds.filter((kind) => allowed.includes(kind));
+}
+
 function camel(value: string): string {
   return value.toLowerCase().replace(/_([a-z0-9])/g, (_match, next: string) => next.toUpperCase());
 }

@@ -91,7 +91,6 @@ export function ListFiltersFields({ filters, disabled, idPrefix, onChange }: Lis
         id={`${idPrefix}-filter-released-only`}
         className="sm:col-span-2"
         label={t("lists.filter.releasedOnly")}
-        description={t("lists.filter.releasedOnlyHelp")}
         checked={releasedOnly !== null}
         onCheckedChange={(checked) =>
           onChange(withListFilter(filters, "RELEASED_ONLY", checked === true ? EMPTY_LIST_FILTER : null))

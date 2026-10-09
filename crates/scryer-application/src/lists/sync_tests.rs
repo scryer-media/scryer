@@ -430,6 +430,32 @@ async fn one_failing_list_does_not_stop_the_next() {
 }
 
 #[tokio::test]
+async fn narrowing_include_preserves_previously_added_memberships_without_library_actions() {
+    let mut list = subscription("list-a");
+    list.on_leave = ListOnLeave::Unmonitor;
+    let harness = Harness::new(vec![list]);
+    harness.lists.serve("list-a", &["alpha"]);
+    harness.sync_at(at(0)).await;
+    let before = harness.store.row("list-a", "alpha");
+    let calls_before = harness.actions.calls();
+    let mut narrowed = harness.store.subscription("list-a");
+    narrowed.kinds = vec![scryer_domain::MediaFacet::Series];
+    narrowed.source.params.insert(
+        "kind".into(),
+        crate::lists::catalog::INCLUDE_MEDIA_PARAM.into(),
+    );
+    harness.lists.serve("list-a", &["beta"]);
+    harness.sync_one_at(&narrowed, at(360)).await;
+    let after = harness.store.row("list-a", "alpha");
+    assert_eq!(after.left_at, None);
+    assert_eq!(after.title_id, before.title_id);
+    assert_eq!(after.state, before.state);
+    assert_eq!(after.added_by_list, before.added_by_list);
+    assert_eq!(after.last_seen_at, at(360));
+    assert_eq!(harness.actions.calls(), calls_before);
+}
+
+#[tokio::test]
 async fn a_departed_title_is_marked_left_and_its_action_runs_once() {
     let mut list = subscription("list-a");
     list.on_leave = ListOnLeave::Unmonitor;

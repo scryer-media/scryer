@@ -1,5 +1,4 @@
 import * as React from "react";
-import { useNavigate } from "react-router";
 import { useClient } from "urql";
 import { ChevronDown, Tag, X } from "lucide-react";
 
@@ -60,7 +59,6 @@ export function TitleTagsPicker({
   layout = "stacked",
 }: TitleTagsPickerProps) {
   const t = useTranslate();
-  const navigate = useNavigate();
   const client = useClient();
   const [open, setOpen] = React.useState(false);
   const [search, setSearch] = React.useState("");
@@ -185,7 +183,6 @@ export function TitleTagsPicker({
             {canCreate ? <CommandItem value={`create-${candidate}`} onSelect={() => void createAndSelect()} disabled={creating}>
               {t("title.tagsCreateSelect", { label: candidate })}
             </CommandItem> : null}
-            {canManageRegistry ? <CommandItem id={`${idPrefix}-tags-manage`} value="manage-registry" disabled={creating} onSelect={() => { setOpen(false); void navigate("/settings/tags"); }}>{t("title.tagsCreateMore")}</CommandItem> : null}
           </CommandList>
         </Command>
         {createError || (candidate && candidateError) ? <p role="alert" className="p-3 text-sm text-destructive">{createError ?? t(candidateError!)}</p> : null}

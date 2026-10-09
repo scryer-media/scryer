@@ -569,6 +569,23 @@ pub async fn sync_subscription(
         rows.push(row);
     }
 
+    // Include narrows future additions. A category we did not request supplies
+    // no evidence of departures, so retain its existing membership unchanged.
+    if subscription.source.params.iter().any(|(key, value)| {
+        matches!(key.as_str(), "kind" | "type") && value == super::catalog::INCLUDE_MEDIA_PARAM
+    }) {
+        let seen: HashSet<_> = rows.iter().map(|row| row.item_key.clone()).collect();
+        for previous in existing.values() {
+            if previous.left_at.is_none()
+                && !subscription.kinds.contains(&previous.kind)
+                && !seen.contains(&previous.item_key)
+            {
+                let mut retained = previous.clone();
+                retained.last_seen_at = now;
+                rows.push(retained);
+            }
+        }
+    }
     if !rows.is_empty() {
         context.memberships.upsert_many(&rows).await?;
     }

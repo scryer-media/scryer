@@ -47,6 +47,8 @@ import {
   recognizeListUrl,
   titleListMembershipChanged,
   followListOfferedKinds,
+  isListMediaParam,
+  listKindsFromSourceParams,
   subscriptionToDraft,
 } from "./lists.ts";
 
@@ -635,6 +637,19 @@ test("a new follow starts with a per-sync cap that can be cleared", () => {
   assert.equal(DEFAULT_LIST_MAX_PER_SYNC, 25);
   const cleared = listDraftProblems({ ...draft, maxPerSync: null });
   assert.equal(cleared.includes("lists.follow.problem.maxPerSync"), false);
+});
+
+test("media selectors fold into Include across providers without hiding other source controls", () => {
+  const param = { key: "type", label: "Type", type: "ENUM" as const, options: ["all", "movies", "shows", "anime"], required: false };
+  assert.equal(isListMediaParam(param), true);
+  assert.equal(isListMediaParam({ ...param, key: "kind", options: ["movie", "series"] }), true);
+  assert.equal(isListMediaParam({ ...param, key: "status", options: ["watching", "completed"] }), false);
+  assert.equal(isListMediaParam({ ...param, key: "credit", options: ["all", "cast", "crew"] }), false);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "SERIES", "ANIME"], [param], [{ key: "type", value: "shows" }], true), ["SERIES"]);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "ANIME"], [param], [{ key: "type", value: "anime" }], true), ["MOVIE", "ANIME"]);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "SERIES"], [{ ...param, options: ["movie", "series"] }], [], true), ["MOVIE"]);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "SERIES"], [param], [{ key: "type", value: "__include__" }], true), ["MOVIE", "SERIES"]);
+  assert.deepEqual(listKindsFromSourceParams(["MOVIE", "SERIES", "ANIME"], [{ ...param, options: ["movies", "shows"] }], [{ key: "type", value: "shows" }], true), ["SERIES", "ANIME"]);
 });
 
 test("the follow form offers the kinds the source declares, keeping kinds already saved", () => {

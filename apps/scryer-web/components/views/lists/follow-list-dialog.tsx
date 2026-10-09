@@ -36,13 +36,14 @@ import {
   emptyListDraft,
   findProviderItem,
   followListOfferedKinds,
+  isListMediaParam,
+  listKindsFromSourceParams,
   isListModeSelectable,
   LIST_KINDS,
   LIST_ON_LEAVE_OPTIONS,
   listDraftProblems,
   listIntervalParts,
   listKindLabelKey,
-  listModeHelpKey,
   listModeLabelKey,
   listOnLeaveLabelKey,
   missingSourceParams,
@@ -83,8 +84,13 @@ const SECTION_HEADING = "text-[13px] font-semibold uppercase tracking-[0.06em] t
 const ID = "follow-list";
 
 function initialDraft(target: FollowListTarget, routeOptions: ListRouteOptions, user: AuthUser | null): ListSubscriptionDraft {
-  if (target.kind === "edit") return subscriptionToDraft(target.subscription);
-  const draft = emptyListDraft(target.name, target.kinds);
+  if (target.kind === "edit") {
+    const draft = subscriptionToDraft(target.subscription);
+    const item = target.manifest && findProviderItem([target.manifest], target.subscription.source.provider, target.subscription.source.sourceType)?.item;
+    draft.kinds = listKindsFromSourceParams(draft.kinds, item?.params ?? [], target.subscription.source.params, true);
+    return draft;
+  }
+  const draft = emptyListDraft(target.name, listKindsFromSourceParams(target.kinds, target.item?.params ?? [], target.source.params));
   if (target.source.credentialId) draft.mode = "REQUEST";
   draft.routes = target.kinds.map((kind) => {
     const route = defaultListRoute(kind, routeOptions.libraries, defaultMonitorTypeForFacet(kind));
@@ -127,7 +133,13 @@ function FollowListDialogBody({
   const { definitions: tagDefinitions, loading: tagsLoading } = useTitleTagDefinitions();
   const [draft, setDraft] = React.useState(() => initialDraft(target, routeOptions, user));
   const [source, setSource] = React.useState<ListSourceDraft | null>(
-    target.kind === "new" ? target.source : null,
+    target.kind === "new" ? {
+      ...target.source,
+      params: [
+        ...target.source.params.filter((param) => !target.item?.params.some((definition) => definition.key === param.key && isListMediaParam(definition))),
+        ...(target.item?.params.filter(isListMediaParam).map((param) => ({ key: param.key, value: "__include__" })) ?? []),
+      ],
+    } : null,
   );
   const [preview, setPreview] = React.useState<ListPreview | null>(
     target.kind === "new" ? target.preview : null,
@@ -137,7 +149,7 @@ function FollowListDialogBody({
 
   const manifest = target.manifest;
   const item = target.kind === "new" ? target.item : null;
-  const paramDefinitions = item?.params ?? [];
+  const paramDefinitions = (item?.params ?? []).filter((param) => !isListMediaParam(param));
   const sourceItem =
     target.kind === "new"
       ? target.item
@@ -223,7 +235,6 @@ function FollowListDialogBody({
       </DialogHeader>
 
       <div className="space-y-6 p-5 sm:p-6">
-        {personal ? <p className="rounded-lg border p-3 text-sm text-muted-foreground">{t("lists.accounts.personalRouting")}</p> : null}
         {source && paramDefinitions.length > 0 ? (
           <section className="space-y-3">
             <h3 className={SECTION_HEADING}>{t("lists.follow.sourceHeading")}</h3>
@@ -314,7 +325,6 @@ function FollowListDialogBody({
                   />
                   <span className={selectable ? undefined : "opacity-60"}>
                     <span className="block font-medium text-[var(--scry-ink2)]">{t(listModeLabelKey(mode))}</span>
-                    <span className="block text-xs text-[var(--scry-muted)]">{t(listModeHelpKey(mode))}</span>
                   </span>
                 </label>
               );
@@ -332,7 +342,6 @@ function FollowListDialogBody({
         {draft.kinds.length > 0 ? (
           <section className="space-y-3">
             <h3 className={SECTION_HEADING}>{t("lists.follow.routesHeading")}</h3>
-            <p className="text-[12.5px] text-[var(--scry-muted)]">{t("lists.follow.routesHelp")}</p>
             {draft.kinds.map((kind) => {
               const route =
                 draft.routes.find((entry) => entry.kind === kind) ??
@@ -394,7 +403,6 @@ function FollowListDialogBody({
                   setDraft((current) => ({ ...current, maxPerSync: digits ? Number(digits) : null }));
                 }}
               />
-              <span className="block text-xs text-[var(--scry-muted)]">{t("lists.follow.maxPerSyncHelp")}</span>
             </label>
             <SingleSelectField
               id={`${ID}-on-leave`}
@@ -430,11 +438,7 @@ function FollowListDialogBody({
                 {t("lists.preview.run")}
               </Button>
             </div>
-            {preview ? (
-              <ListPreviewSummary preview={preview} idPrefix={ID} />
-            ) : (
-              <p className="text-[12.5px] text-[var(--scry-muted)]">{t("lists.preview.notRun")}</p>
-            )}
+            {preview ? <ListPreviewSummary preview={preview} idPrefix={ID} /> : null}
           </section>
         ) : null}
 

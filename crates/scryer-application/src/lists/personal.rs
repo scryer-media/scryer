@@ -121,6 +121,10 @@ impl AppUseCase {
                 .iter()
                 .find(|field| &field.key == key)
                 .ok_or_else(|| AppError::Validation("unknown personal list parameter".into()))?;
+            if super::catalog::is_media_param(field) && value == super::catalog::INCLUDE_MEDIA_PARAM
+            {
+                continue;
+            }
             if value.len() > 2048 || (!field.options.is_empty() && !field.options.contains(value)) {
                 return Err(AppError::Validation(
                     "invalid personal list parameter".into(),
@@ -377,6 +381,10 @@ impl AppUseCase {
         }
         if let Some(kinds) = patch.kinds {
             row.kinds = kinds;
+            super::catalog::use_include_media_selection(
+                &mut row.source,
+                &self.services.lists.plugins.descriptors(),
+            );
         }
         if let Some(mode) = patch.mode {
             row.mode = mode;
@@ -543,6 +551,10 @@ impl AppUseCase {
             row.filters = filters;
         }
         if let Some(kinds) = kinds {
+            super::catalog::use_include_media_selection(
+                &mut row.source,
+                &self.services.lists.plugins.descriptors(),
+            );
             for route in super::public::preview_routes(&kinds) {
                 if !row
                     .routes

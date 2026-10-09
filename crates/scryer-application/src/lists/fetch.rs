@@ -257,58 +257,247 @@ pub(crate) async fn fetch_list_with_limits(
             let client = plugins
                 .client_for_provider(provider, config)
                 .ok_or_else(|| ListFailure::new(ListFailureClass::NotInstalled, provider))?;
-            let mut fetched = FetchedList::default();
-            let mut cursor = None;
-            let mut item_bytes = 0usize;
-            for page in 0..limits.pages {
-                let request = ListPluginFetchRequest {
-                    source_type: subscription.source.source_type.clone(),
-                    params: subscription.source.params.clone(),
-                    credential: credential.clone(),
-                    page_cursor: cursor.take(),
-                    // Only the first page can short-circuit the whole list.
-                    since_fingerprint: if page == 0 {
-                        subscription.sync.fetch_fingerprint.clone()
-                    } else {
-                        None
+            if let Some(param) =
+                super::catalog::media_param(client.descriptor(), &subscription.source.source_type)
+                && subscription
+                    .source
+                    .params
+                    .get(&param.key)
+                    .is_some_and(|value| value == super::catalog::INCLUDE_MEDIA_PARAM)
+            {
+                return fetch_media_partitions(
+                    subscription,
+                    client.as_ref(),
+                    credential,
+                    limits,
+                    param,
+                )
+                .await;
+            }
+            let mut remaining_pages = limits.pages;
+            fetch_plugin_pages(
+                subscription,
+                client.as_ref(),
+                credential,
+                limits,
+                &mut remaining_pages,
+            )
+            .await
+        }
+    }
+}
+
+async fn fetch_plugin_pages(
+    subscription: &ListSubscription,
+    client: &dyn super::plugin::ListProviderClient,
+    credential: Option<ListCredential>,
+    limits: FetchLimits,
+    remaining_pages: &mut usize,
+) -> Result<FetchedList, ListFailure> {
+    let provider = subscription.source.provider.as_str();
+    let mut fetched = FetchedList::default();
+    let mut cursor = None;
+    let mut item_bytes = 0usize;
+    for page in 0..*remaining_pages {
+        *remaining_pages -= 1;
+        let request = ListPluginFetchRequest {
+            source_type: subscription.source.source_type.clone(),
+            params: subscription.source.params.clone(),
+            credential: credential.clone(),
+            page_cursor: cursor.take(),
+            // Only the first page can short-circuit the whole list.
+            since_fingerprint: if page == 0 {
+                subscription.sync.fetch_fingerprint.clone()
+            } else {
+                None
+            },
+        };
+        let response = match client.fetch(request).await {
+            Ok(PluginResult::Ok(response)) => response,
+            Ok(PluginResult::Err(error)) => {
+                return Err(ListFailure::from_plugin_error(&error, provider));
+            }
+            Err(error) => return Err(ListFailure::from_app_error(&error, provider)),
+        };
+        if page == 0 {
+            fetched.fingerprint = response.fingerprint.clone();
+            if response.unchanged {
+                fetched.unchanged = true;
+                return Ok(fetched);
+            }
+        }
+        // A list past the item or size bound fails the fetch outright
+        // rather than being cut short: a truncated list would read as
+        // every later title having left it.
+        item_bytes = response
+            .items
+            .iter()
+            .map(item_text_bytes)
+            .fold(item_bytes, usize::saturating_add);
+        if fetched.items.len().saturating_add(response.items.len()) > limits.items
+            || item_bytes > limits.item_bytes
+        {
+            return Err(ListFailure::new(ListFailureClass::Failed, provider));
+        }
+        fetched.items.extend(response.items);
+        match response.next_cursor.filter(|next| !next.is_empty()) {
+            Some(next) => cursor = Some(next),
+            None => return Ok(fetched),
+        }
+    }
+    Err(ListFailure::new(ListFailureClass::Failed, provider))
+}
+
+fn selected_media_values(
+    param: &scryer_plugin_sdk::ListSourceParam,
+    kinds: &[scryer_domain::MediaFacet],
+) -> Vec<String> {
+    use scryer_domain::MediaFacet;
+    let values: Vec<_> = param
+        .options
+        .iter()
+        .filter(|value| match value.as_str() {
+            "movie" | "movies" => kinds.contains(&MediaFacet::Movie),
+            "shows" | "series" => {
+                kinds.contains(&MediaFacet::Series)
+                    || (kinds.contains(&MediaFacet::Anime)
+                        && !param.options.iter().any(|option| option == "anime"))
+            }
+            // Anime libraries can also contain movies. Their subtype is resolved by the plugin.
+            "anime" => kinds.contains(&MediaFacet::Anime) || kinds.contains(&MediaFacet::Movie),
+            _ => false,
+        })
+        .cloned()
+        .collect();
+    if param.options.iter().any(|value| value == "all") && values.len() + 1 == param.options.len() {
+        vec!["all".into()]
+    } else {
+        values
+    }
+}
+
+async fn fetch_media_partitions(
+    subscription: &ListSubscription,
+    client: &dyn super::plugin::ListProviderClient,
+    credential: Option<ListCredential>,
+    limits: FetchLimits,
+    param: &scryer_plugin_sdk::ListSourceParam,
+) -> Result<FetchedList, ListFailure> {
+    let values = selected_media_values(param, &subscription.kinds);
+    let failure = || ListFailure::new(ListFailureClass::Failed, &subscription.source.provider);
+    if values.is_empty() {
+        return Err(failure());
+    }
+    let mut kinds: Vec<_> = subscription
+        .kinds
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect();
+    kinds.sort_unstable();
+    let prefix = format!("media-v1:{}:", kinds.join(","));
+    let previous: BTreeMap<String, Option<String>> = subscription
+        .sync
+        .fetch_fingerprint
+        .as_deref()
+        .and_then(|value| value.strip_prefix(&prefix))
+        .and_then(|value| serde_json::from_str(value).ok())
+        .unwrap_or_default();
+    let same_selection = previous.keys().eq(values
+        .iter()
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter());
+    let mut partitions = Vec::new();
+    let mut collected_items = 0usize;
+    let mut collected_bytes = 0usize;
+    let mut remaining_pages = limits.pages;
+    for value in values {
+        let mut part = subscription.clone();
+        part.source.params.insert(param.key.clone(), value.clone());
+        part.sync.fetch_fingerprint = if same_selection {
+            previous.get(&value).cloned().flatten()
+        } else {
+            None
+        };
+        let fetched = fetch_plugin_pages(
+            &part,
+            client,
+            credential.clone(),
+            FetchLimits {
+                items: limits.items.saturating_sub(collected_items),
+                item_bytes: limits.item_bytes.saturating_sub(collected_bytes),
+                ..limits
+            },
+            &mut remaining_pages,
+        )
+        .await?;
+        collected_items = collected_items.saturating_add(fetched.items.len());
+        collected_bytes = fetched
+            .items
+            .iter()
+            .map(item_text_bytes)
+            .fold(collected_bytes, usize::saturating_add);
+        if collected_items > limits.items || collected_bytes > limits.item_bytes {
+            return Err(failure());
+        }
+        partitions.push((value, part, fetched));
+    }
+    if !partitions.iter().all(|(_, _, fetched)| fetched.unchanged) {
+        for (_, part, fetched) in &mut partitions {
+            if fetched.unchanged {
+                part.sync.fetch_fingerprint = None;
+                *fetched = fetch_plugin_pages(
+                    part,
+                    client,
+                    credential.clone(),
+                    FetchLimits {
+                        items: limits.items.saturating_sub(collected_items),
+                        item_bytes: limits.item_bytes.saturating_sub(collected_bytes),
+                        ..limits
                     },
-                };
-                let response = match client.fetch(request).await {
-                    Ok(PluginResult::Ok(response)) => response,
-                    Ok(PluginResult::Err(error)) => {
-                        return Err(ListFailure::from_plugin_error(&error, provider));
-                    }
-                    Err(error) => return Err(ListFailure::from_app_error(&error, provider)),
-                };
-                if page == 0 {
-                    fetched.fingerprint = response.fingerprint.clone();
-                    if response.unchanged {
-                        fetched.unchanged = true;
-                        return Ok(fetched);
-                    }
+                    &mut remaining_pages,
+                )
+                .await?;
+                if fetched.unchanged {
+                    return Err(failure());
                 }
-                // A list past the item or size bound fails the fetch outright
-                // rather than being cut short: a truncated list would read as
-                // every later title having left it.
-                item_bytes = response
+                collected_items = collected_items.saturating_add(fetched.items.len());
+                collected_bytes = fetched
                     .items
                     .iter()
                     .map(item_text_bytes)
-                    .fold(item_bytes, usize::saturating_add);
-                if fetched.items.len().saturating_add(response.items.len()) > limits.items
-                    || item_bytes > limits.item_bytes
-                {
-                    return Err(ListFailure::new(ListFailureClass::Failed, provider));
-                }
-                fetched.items.extend(response.items);
-                match response.next_cursor.filter(|next| !next.is_empty()) {
-                    Some(next) => cursor = Some(next),
-                    None => return Ok(fetched),
+                    .fold(collected_bytes, usize::saturating_add);
+                if collected_items > limits.items || collected_bytes > limits.item_bytes {
+                    return Err(failure());
                 }
             }
-            Err(ListFailure::new(ListFailureClass::Failed, provider))
         }
     }
+    let mut out = FetchedList {
+        unchanged: partitions.iter().all(|(_, _, fetched)| fetched.unchanged),
+        ..Default::default()
+    };
+    let mut fingerprints = BTreeMap::new();
+    let mut bytes = 0usize;
+    for (value, _, fetched) in partitions {
+        bytes = fetched
+            .items
+            .iter()
+            .map(item_text_bytes)
+            .fold(bytes, usize::saturating_add);
+        if out.items.len().saturating_add(fetched.items.len()) > limits.items
+            || bytes > limits.item_bytes
+        {
+            return Err(failure());
+        }
+        fingerprints.insert(value, fetched.fingerprint);
+        out.items.extend(fetched.items);
+    }
+    out.fingerprint = Some(format!(
+        "{prefix}{}",
+        serde_json::to_string(&fingerprints).map_err(|_| failure())?
+    ));
+    out.dedupe();
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -337,6 +526,232 @@ mod tests {
             }),
         );
         ScriptedProvider(lists)
+    }
+
+    fn media_selector(key: &str, options: &[&str]) -> scryer_plugin_sdk::ListSourceParam {
+        scryer_plugin_sdk::ListSourceParam {
+            key: key.into(),
+            label: "Media".into(),
+            param_type: scryer_plugin_sdk::ListSourceParamType::Enum,
+            options: options.iter().map(|value| (*value).into()).collect(),
+            required: true,
+        }
+    }
+
+    #[test]
+    fn media_selection_covers_provider_vocabularies_and_anime_movies() {
+        use scryer_domain::MediaFacet::{Anime, Movie, Series};
+        let simkl = media_selector("type", &["all", "movies", "shows", "anime"]);
+        assert_eq!(selected_media_values(&simkl, &[Series]), ["shows"]);
+        assert_eq!(selected_media_values(&simkl, &[Movie]), ["movies", "anime"]);
+        assert_eq!(selected_media_values(&simkl, &[Anime]), ["anime"]);
+        assert_eq!(
+            selected_media_values(&simkl, &[Movie, Series, Anime]),
+            ["all"]
+        );
+        let tmdb = media_selector("kind", &["movie", "series"]);
+        assert_eq!(
+            selected_media_values(&tmdb, &[Movie, Series]),
+            ["movie", "series"]
+        );
+        let trakt = media_selector("kind", &["movies", "shows"]);
+        assert_eq!(
+            selected_media_values(&trakt, &[Movie, Series]),
+            ["movies", "shows"]
+        );
+        assert!(!super::super::catalog::is_media_param(&media_selector(
+            "credit",
+            &["all", "cast"]
+        )));
+    }
+
+    #[tokio::test]
+    async fn media_partitions_preserve_unchanged_and_invalidate_when_include_changes() {
+        use scryer_domain::MediaFacet::{Movie, Series};
+        let lists = ScriptedLists::new();
+        lists.serve("list-a", &["alpha", "beta"]);
+        let provider = ScriptedProvider(lists);
+        let mut list = subscription("list-a");
+        list.kinds = vec![Movie, Series];
+        let selector = media_selector("kind", &["movies", "shows"]);
+        let first = fetch_media_partitions(
+            &list,
+            provider.0.as_ref(),
+            None,
+            FetchLimits::DEFAULT,
+            &selector,
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.items.len(), 2);
+        assert!(!first.unchanged);
+        assert_eq!(
+            provider
+                .0
+                .fetched
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|request| request.params["kind"].clone())
+                .collect::<Vec<_>>(),
+            ["movies", "shows"]
+        );
+        list.sync.fetch_fingerprint = first.fingerprint;
+        let second = fetch_media_partitions(
+            &list,
+            provider.0.as_ref(),
+            None,
+            FetchLimits::DEFAULT,
+            &selector,
+        )
+        .await
+        .unwrap();
+        assert!(second.unchanged);
+        list.kinds = vec![Movie];
+        let third = fetch_media_partitions(
+            &list,
+            provider.0.as_ref(),
+            None,
+            FetchLimits::DEFAULT,
+            &selector,
+        )
+        .await
+        .unwrap();
+        assert!(!third.unchanged);
+        assert_eq!(third.items.len(), 2);
+        assert_eq!(
+            provider
+                .0
+                .fetched
+                .lock()
+                .unwrap()
+                .last()
+                .unwrap()
+                .since_fingerprint,
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn media_partitions_enforce_combined_limits_and_propagate_errors() {
+        use scryer_domain::MediaFacet::{Movie, Series};
+        let lists = ScriptedLists::new();
+        lists.serve("list-a", &["alpha", "beta"]);
+        let provider = ScriptedProvider(lists);
+        let mut list = subscription("list-a");
+        list.kinds = vec![Movie, Series];
+        let selector = media_selector("kind", &["movie", "series"]);
+        let error = fetch_media_partitions(
+            &list,
+            provider.0.as_ref(),
+            None,
+            limits(100, 3, usize::MAX),
+            &selector,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.class, ListFailureClass::Failed);
+        provider.0.pages.lock().unwrap().clear();
+        assert!(
+            fetch_media_partitions(
+                &list,
+                provider.0.as_ref(),
+                None,
+                FetchLimits::DEFAULT,
+                &selector
+            )
+            .await
+            .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn include_dispatch_preserves_legacy_defaults_and_explicit_values() {
+        use scryer_domain::MediaFacet::{Movie, Series};
+        let client = ScriptedLists::with_media_param(media_selector("kind", &["movie", "series"]));
+        client.serve("list-a", &["alpha"]);
+        let provider = ScriptedProvider(client.clone());
+        let mut list = subscription("list-a");
+        list.kinds = vec![Movie, Series];
+        for value in [
+            None,
+            Some("movie"),
+            Some(super::super::catalog::INCLUDE_MEDIA_PARAM),
+        ] {
+            client.fetched.lock().unwrap().clear();
+            if let Some(value) = value {
+                list.source.params.insert("kind".into(), value.into());
+            }
+            fetch_list(
+                &list,
+                &provider,
+                &ScriptedCharts::default(),
+                None,
+                &BTreeMap::new(),
+            )
+            .await
+            .unwrap();
+            let requests = client.fetched.lock().unwrap();
+            let actual: Vec<_> = requests
+                .iter()
+                .map(|r| r.params.get("kind").map(String::as_str))
+                .collect();
+            assert_eq!(
+                actual,
+                match value {
+                    None => vec![None],
+                    Some("movie") => vec![Some("movie")],
+                    _ => vec![Some("movie"), Some("series")],
+                }
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn mixed_partition_changes_refetch_unchanged_members_with_one_page_budget() {
+        use scryer_domain::MediaFacet::{Movie, Series};
+        let client = ScriptedLists::new();
+        client.serve("list-a", &["alpha"]);
+        let mut list = subscription("list-a");
+        list.kinds = vec![Movie, Series];
+        let mut kinds: Vec<_> = list.kinds.iter().map(|kind| kind.as_str()).collect();
+        kinds.sort_unstable();
+        list.sync.fetch_fingerprint = Some(format!(
+            "media-v1:{}:{}",
+            kinds.join(","),
+            serde_json::json!({"movie":"alpha", "series":"old"})
+        ));
+        let selector = media_selector("kind", &["movie", "series"]);
+        let fetched = fetch_media_partitions(
+            &list,
+            client.as_ref(),
+            None,
+            limits(3, 10, usize::MAX),
+            &selector,
+        )
+        .await
+        .unwrap();
+        assert!(!fetched.unchanged);
+        assert_eq!(fetched.items.len(), 1);
+        {
+            let requests = client.fetched.lock().unwrap();
+            assert_eq!(requests.len(), 3);
+            assert_eq!(requests[2].params["kind"], "movie");
+            assert_eq!(requests[2].since_fingerprint, None);
+        }
+        client.fetched.lock().unwrap().clear();
+        assert!(
+            fetch_media_partitions(
+                &list,
+                client.as_ref(),
+                None,
+                limits(2, 10, usize::MAX),
+                &selector
+            )
+            .await
+            .is_err()
+        );
+        assert_eq!(client.fetched.lock().unwrap().len(), 2);
     }
 
     fn limits(pages: usize, items: usize, item_bytes: usize) -> FetchLimits {

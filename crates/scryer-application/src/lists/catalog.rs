@@ -279,12 +279,64 @@ pub struct ClassifiedSource {
     pub interval_seconds: u64,
 }
 
+/// Media enums are driven by Include, not a second independent source control.
+pub(crate) const INCLUDE_MEDIA_PARAM: &str = "__include__";
+
+pub(crate) fn is_media_param(param: &ListSourceParam) -> bool {
+    param.param_type == ListSourceParamType::Enum
+        && matches!(param.key.as_str(), "type" | "kind")
+        && !param.options.is_empty()
+        && param.options.iter().all(|option| {
+            matches!(
+                option.as_str(),
+                "all" | "movie" | "movies" | "series" | "shows" | "anime"
+            )
+        })
+}
+
+pub(crate) fn media_param<'a>(
+    descriptor: &'a PluginDescriptor,
+    source_type: &str,
+) -> Option<&'a ListSourceParam> {
+    descriptor
+        .list_provider()?
+        .groups
+        .iter()
+        .flat_map(|group| &group.items)
+        .find(|item| item.source_type == source_type)?
+        .params
+        .iter()
+        .find(|param| is_media_param(param))
+}
+
+pub(crate) fn use_include_media_selection(
+    source: &mut ListSource,
+    descriptors: &[PluginDescriptor],
+) {
+    if let Some(param) = descriptors
+        .iter()
+        .find(|descriptor| {
+            descriptor
+                .list_provider()
+                .is_some_and(|list| list.provider_type == source.provider)
+        })
+        .and_then(|descriptor| media_param(descriptor, &source.source_type))
+    {
+        source
+            .params
+            .insert(param.key.clone(), INCLUDE_MEDIA_PARAM.into());
+    }
+}
+
 fn check_required_params(
     item: &ListProviderItem,
     params: &BTreeMap<String, String>,
 ) -> AppResult<()> {
     for param in &item.params {
         let value = params.get(&param.key).map(|value| value.trim());
+        if is_media_param(param) && value == Some(INCLUDE_MEDIA_PARAM) {
+            continue;
+        }
         if param.required && value.is_none_or(str::is_empty) {
             return Err(AppError::Validation(format!("{} is required", param.label)));
         }
