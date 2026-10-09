@@ -1,5 +1,5 @@
 use super::{ExecutionModeValue, MediaFacetValue};
-use async_graphql::{ID, InputObject, SimpleObject};
+use async_graphql::{ID, InputObject, MaybeUndefined, SimpleObject};
 use chrono::{DateTime, Utc};
 
 // ── Post-Processing Scripts ────────────────────────────────────────────────
@@ -145,14 +145,15 @@ pub struct ScriptInterpreterSettingsPayload {
 }
 
 #[derive(InputObject, Clone)]
-/// Replacement interpreters for operator scripts; null or an empty string clears a value.
+/// Interpreter pin changes for operator scripts. An omitted field keeps the
+/// current pin; null or an empty string clears it.
 pub struct ScriptInterpreterSettingsInput {
     /// Python interpreter path or command, or null to use `python3`.
-    pub python: Option<String>,
+    pub python: MaybeUndefined<String>,
     /// PowerShell interpreter path or command, or null to use `pwsh`.
-    pub powershell: Option<String>,
+    pub powershell: MaybeUndefined<String>,
     /// Batch interpreter path or command, or null to use `COMSPEC` or `cmd.exe`.
-    pub batch: Option<String>,
+    pub batch: MaybeUndefined<String>,
     /// Go toolchain path or command, or null to use `go`.
-    pub go: Option<String>,
+    pub go: MaybeUndefined<String>,
 }

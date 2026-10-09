@@ -1,11 +1,25 @@
-/// Replacement interpreter paths. `None` or a blank value clears the pin so
-/// the conventional command name is used.
+/// Interpreter pin changes. An outer `None` keeps the current pin;
+/// `Some(None)` or a blank value clears it so the conventional command name
+/// is used.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UpdateScriptInterpreterSettings {
-    pub python: Option<String>,
-    pub powershell: Option<String>,
-    pub batch: Option<String>,
-    pub go: Option<String>,
+    pub python: Option<Option<String>>,
+    pub powershell: Option<Option<String>>,
+    pub batch: Option<Option<String>>,
+    pub go: Option<Option<String>>,
+}
+
+/// A pin is either an absolute path or a bare command name looked up on
+/// `PATH`; a relative path would resolve against each script's own working
+/// directory.
+fn validate_script_interpreter_pin(key_name: &str, value: &str) -> AppResult<()> {
+    let is_bare_name = !value.contains(['/', '\\']);
+    if is_bare_name || Path::new(value).is_absolute() {
+        return Ok(());
+    }
+    Err(AppError::Validation(format!(
+        "{key_name} must be an absolute path or a command name without path separators"
+    )))
 }
 
 const SCRIPT_INTERPRETER_KEYS: [&str; 4] = [
@@ -66,10 +80,22 @@ impl AppUseCase {
             .await?;
 
         let values = [input.python, input.powershell, input.batch, input.go];
+        let mut changes = Vec::new();
         for (key_name, value) in SCRIPT_INTERPRETER_KEYS.into_iter().zip(values) {
-            match normalize_optional_string(value) {
+            let Some(value) = value else {
+                continue;
+            };
+            let value = normalize_optional_string(value);
+            if let Some(path) = &value {
+                validate_script_interpreter_pin(key_name, path)?;
+            }
+            changes.push((key_name, value));
+        }
+
+        for (key_name, value) in &changes {
+            match value {
                 Some(path) => {
-                    self.upsert_system_setting_json(key_name, &path, Some(actor.id.clone()))
+                    self.upsert_system_setting_json(key_name, path, Some(actor.id.clone()))
                         .await?;
                 }
                 None => self.delete_system_setting(key_name).await?,
@@ -80,9 +106,9 @@ impl AppUseCase {
             actor,
             "script_interpreter_settings",
             None,
-            SCRIPT_INTERPRETER_KEYS
+            changes
                 .iter()
-                .map(|key| key.to_string())
+                .map(|(key_name, _)| key_name.to_string())
                 .collect(),
         )
         .await;

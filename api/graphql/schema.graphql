@@ -26780,7 +26780,8 @@ enum ScoringPersonaValue {
 }
 
 """
-Replacement interpreters for operator scripts; null or an empty string clears a value.
+Interpreter pin changes for operator scripts. An omitted field keeps the
+current pin; null or an empty string clears it.
 """
 input ScriptInterpreterSettingsInput {
 	"""
