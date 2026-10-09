@@ -3,7 +3,8 @@ import { Input, decimalInputProps } from "@/components/ui/input";
 import { CheckboxField } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
 import { MultiSelectOptionList } from "@/components/ui/multi-select-dropdown";
-import { SingleSelectField, selectContentClassName, selectTriggerClassName } from "@/components/ui/select";
+import { selectContentClassName, selectTriggerClassName } from "@/components/ui/select";
+import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ChevronDown } from "lucide-react";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -154,72 +155,21 @@ export function ListFacetFilters({
       ),
     ) ?? [];
   return (
-    <div className="space-y-4 border-t border-[var(--scry-border3)] pt-4">
-      <h4 className="text-sm font-semibold text-[var(--scry-ink2)]">
-        {t("lists.filter.ratings")}
-      </h4>
-      <SingleSelectField
-        id={`${idPrefix}-rating-match`}
-        label={t("lists.filter.match")}
+    <div className="grid gap-3 border-t border-[var(--scry-border3)] pt-4 sm:grid-cols-2">
+      <div className="min-w-0 space-y-1.5">
+      <span id={`${idPrefix}-rating-match-label`} className="block text-sm font-medium text-[var(--scry-ink2)]">{t("lists.filter.match")}</span>
+      <ToggleGroup type="single" variant="outline" className="h-9 w-full"
+        aria-labelledby={`${idPrefix}-rating-match-label`}
         value={ratings[0]?.matchAny ? "any" : "all"}
-        options={[
-          { value: "all", label: t("lists.filter.all") },
-          { value: "any", label: t("lists.filter.any") },
-        ]}
         disabled={disabled}
-        onValueChange={(value) =>
-          setFacet("RATINGS", { matchAny: value === "any", minimums })
-        }
-      />
-      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,220px),1fr))] gap-2">
-        {sources.map((source) => {
-          const info = ratingSourceInfo(source);
-          return (
-            <label key={source} className="flex items-center gap-2 text-sm">
-              {info.logoSrc ? (
-                <img
-                  src={info.logoSrc}
-                  alt=""
-                  className="size-5 object-contain"
-                />
-              ) : null}
-              <span className="min-w-0 flex-1">{info.label}</span>
-              <Input
-                {...decimalInputProps}
-                className="w-20"
-                disabled={disabled}
-                aria-label={info.label}
-                placeholder={`0–${SCALES[source] ?? 10}`}
-                value={listRatingInputText(
-                  ratingDrafts[source],
-                  minimums.find((minimum) => minimum.source === source)
-                    ?.value ?? null,
-                )}
-                onChange={(event) => {
-                  const next = parseListRatingInput(event.target.value);
-                  if (!next) return;
-                  setRatingDrafts((current) => ({
-                    ...current,
-                    [source]: next.text,
-                  }));
-                  setFacet("RATINGS", {
-                    matchAny: ratings[0]?.matchAny ?? false,
-                    minimums: [
-                      ...minimums.filter(
-                        (minimum) => minimum.source !== source,
-                      ),
-                      ...(next.value !== null
-                        ? [{ source, value: next.value }]
-                        : []),
-                    ],
-                  });
-                }}
-              />
-            </label>
-          );
-        })}
+        onValueChange={(value) => { if (value) setFacet("RATINGS", { matchAny: value === "any", minimums }); }}
+      >
+        <ToggleGroupItem variant="outline" className="h-full flex-1" value="all">{t("lists.filter.all")}</ToggleGroupItem>
+        <ToggleGroupItem variant="outline" className="h-full flex-1" value="any">{t("lists.filter.any")}</ToggleGroupItem>
+      </ToggleGroup>
       </div>
-      <h4 className="text-sm font-semibold text-[var(--scry-ink2)]">
+      <div className="min-w-0 space-y-1.5">
+      <h4 className="text-sm font-medium text-[var(--scry-ink2)]">
         {t("lists.filter.canonical")}
       </h4>
       {error ? (
@@ -321,6 +271,58 @@ export function ListFacetFilters({
           </PopoverContent>
         </Popover>
       ) : null}
+      </div>
+      <h4 className="text-sm font-semibold text-[var(--scry-ink2)] sm:col-span-2">
+        {t("lists.filter.ratings")}
+      </h4>
+      <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,220px),1fr))] gap-2 sm:col-span-2">
+        {sources.map((source) => {
+          const info = ratingSourceInfo(source);
+          return (
+            <label key={source} className="flex items-center gap-2 text-sm">
+              {info.logoSrc ? (
+                <img
+                  src={info.logoSrc}
+                  alt=""
+                  className="size-5 object-contain"
+                />
+              ) : null}
+              <span className="min-w-0 flex-1">{info.label}</span>
+              <Input
+                {...decimalInputProps}
+                className="w-20"
+                disabled={disabled}
+                aria-label={info.label}
+                placeholder={`0–${SCALES[source] ?? 10}`}
+                value={listRatingInputText(
+                  ratingDrafts[source],
+                  minimums.find((minimum) => minimum.source === source)
+                    ?.value ?? null,
+                )}
+                onChange={(event) => {
+                  const next = parseListRatingInput(event.target.value);
+                  if (!next) return;
+                  setRatingDrafts((current) => ({
+                    ...current,
+                    [source]: next.text,
+                  }));
+                  setFacet("RATINGS", {
+                    matchAny: ratings[0]?.matchAny ?? false,
+                    minimums: [
+                      ...minimums.filter(
+                        (minimum) => minimum.source !== source,
+                      ),
+                      ...(next.value !== null
+                        ? [{ source, value: next.value }]
+                        : []),
+                    ],
+                  });
+                }}
+              />
+            </label>
+          );
+        })}
+      </div>
     </div>
   );
 }

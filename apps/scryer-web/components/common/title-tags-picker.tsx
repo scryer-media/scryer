@@ -43,7 +43,7 @@ export type TitleTagsPickerProps = {
   /** Overrides the "no tags applied" line; the bulk pickers word it their own way. */
   emptyValueText?: string;
   /** Places applied tags beside the add selector for use in a settings table. */
-  layout?: "stacked" | "horizontal" | "table";
+  layout?: "stacked" | "horizontal" | "table" | "compact";
 };
 
 /** Shared searchable registry picker with permission-gated inline creation. */
@@ -162,14 +162,18 @@ export function TitleTagsPicker({
     </p>
   );
 
-  const selector = registryIsEmpty && !canManageRegistry ? (
+  const selector = registryIsEmpty && !canManageRegistry && !(layout === "compact" && applied.length) ? (
     <p className="text-xs text-muted-foreground">{t("title.tagsEmptyRegistry")}</p>
   ) : (
     <Popover open={open && !disabled} onOpenChange={(next) => { if (!creating) { setOpen(next); setCreateError(null); } }} modal>
       <PopoverTrigger asChild>
         <button type="button" id={`${idPrefix}-tags-add`} disabled={disabled || loading || creating}
           className={selectTriggerClassName({ className: layout === "table" ? "ml-auto h-9 w-[70%]" : "h-9 w-full" })}>
-          <span className="min-w-0 truncate text-left">{t("title.tagsAdd")}</span>
+          {layout === "compact" && applied.length ? (
+            <span className="flex min-w-0 gap-1 overflow-hidden">
+              {applied.map((label) => <span key={label} className="min-w-0 truncate rounded border border-[rgba(var(--scry-accent-rgb),0.34)] bg-[rgba(var(--scry-accent-rgb),0.15)] px-1.5 py-0.5 text-xs font-semibold text-[var(--scry-accent-text)]">{label}</span>)}
+            </span>
+          ) : <span className="min-w-0 truncate text-left">{t("title.tagsAdd")}</span>}
           <ChevronDown className="h-4 w-4 shrink-0 text-[var(--scry-faint)]" />
         </button>
       </PopoverTrigger>
@@ -177,6 +181,11 @@ export function TitleTagsPicker({
         <Command shouldFilter={false}>
           <CommandInput value={search} onValueChange={(value) => { setSearch(value); setCreateError(null); }} placeholder={t("title.tagsSearch")} disabled={creating} />
           <CommandList>
+            {layout === "compact" ? applied.filter((label) => label.includes(normalizeTitleTagLabel(search))).map((label) => (
+              <CommandItem key={`remove-${label}`} value={label} onSelect={() => removeLabel(label)} disabled={creating}>
+                <Tag className="size-3.5" aria-hidden="true" /><span className="min-w-0 flex-1 truncate">{label}</span><X className="size-3.5" aria-label={t("title.tagsRemove", { label })} />
+              </CommandItem>
+            )) : null}
             {options.filter((label) => label.includes(normalizeTitleTagLabel(search))).map((label) => (
               <CommandItem key={label} value={label} onSelect={() => addLabel(label)} disabled={creating}>{label}</CommandItem>
             ))}
@@ -189,6 +198,8 @@ export function TitleTagsPicker({
       </PopoverContent>
     </Popover>
   );
+
+  if (layout === "compact") return <div id={`${idPrefix}-tags`} className="min-w-0">{selector}</div>;
 
   if (layout === "table") {
     return (

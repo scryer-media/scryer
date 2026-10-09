@@ -175,12 +175,12 @@ export function ListRouteCard({
                 disabled={disabled}
               />
             ) : null}
-          </div>
-          {!requestOnly ? <div className="space-y-1.5">
+          {!requestOnly ? <div className="min-w-0 space-y-1.5">
             <label htmlFor={`${idPrefix}-route-${kind.toLowerCase()}-tags-tags-add`} className="block text-sm font-medium text-[var(--scry-ink2)]">
               <RouteFieldLabel icon={Tag} label={t("settings.titleTags")} />
             </label>
             <TitleTagsPicker
+            layout="compact"
             idPrefix={`${idPrefix}-route-${kind.toLowerCase()}-tags`}
             value={route.tags}
             onChange={(tags) => update({ tags })}
@@ -189,6 +189,7 @@ export function ListRouteCard({
             disabled={disabled}
           />
           </div> : null}
+          </div>
           <ListFacetFilters facet={kind} filters={filters} onChange={onFiltersChange} disabled={disabled} idPrefix={`${idPrefix}-${kind.toLowerCase()}`} />
         </fieldset>
       </CollapsibleContent>
