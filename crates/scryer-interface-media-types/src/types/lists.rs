@@ -1,7 +1,7 @@
 //! GraphQL list types, including credential-free personal account projections.
 
 use super::{
-    ExternalIdInput, ExternalIdPayload, MediaFacetValue, PluginConfigFieldOptionPayload,
+    Date, ExternalIdInput, ExternalIdPayload, MediaFacetValue, PluginConfigFieldOptionPayload,
     PluginConfigFieldTypeValue,
 };
 use async_graphql::{Enum, ID, InputObject, MaybeUndefined, SimpleObject};
@@ -837,7 +837,7 @@ pub struct ListPreviewItemPayload {
     /// Original language, when known.
     pub original_language: Option<String>,
     /// Release or first-air date, when known.
-    pub release_date: Option<String>,
+    pub release_date: Option<Date>,
     /// The provider's own key for the title.
     pub item_key: String,
     /// The title as the list names it, or its key when the list gives no name.

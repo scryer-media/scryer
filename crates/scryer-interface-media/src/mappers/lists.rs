@@ -567,7 +567,7 @@ fn from_preview_item(item: ListPreviewItem) -> ListPreviewItemPayload {
             .collect(),
         genres_and_themes: facts.canonical_names,
         original_language: facts.original_language,
-        release_date: facts.release_date.map(|date| date.to_string()),
+        release_date: facts.release_date.map(Date),
         display_title: item.display_title.unwrap_or_else(|| item.item_key.clone()),
         item_key: item.item_key,
         year: item.year,
