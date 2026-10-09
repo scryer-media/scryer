@@ -8968,9 +8968,18 @@ pub trait PostProcessingScriptRepository: Send + Sync {
         script: scryer_domain::PostProcessingScript,
     ) -> AppResult<scryer_domain::PostProcessingScript>;
     async fn delete_script(&self, id: &str) -> AppResult<()>;
+    /// Enabled import-triggered scripts that apply to `facet`. Scheduled
+    /// scripts never run on import.
     async fn list_enabled_for_facet(
         &self,
         facet: &str,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
+    /// Enabled scripts started by their own schedule.
+    async fn list_enabled_scheduled(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
+    /// Every script with the given trigger, enabled or not.
+    async fn list_scripts_by_trigger(
+        &self,
+        trigger: scryer_domain::ScriptTrigger,
     ) -> AppResult<Vec<scryer_domain::PostProcessingScript>>;
     async fn record_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()>;
     async fn list_runs_for_script(

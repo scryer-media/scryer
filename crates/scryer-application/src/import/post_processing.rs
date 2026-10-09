@@ -6,7 +6,7 @@ use scryer_domain::{
     ConfigurationChangeAction, DomainEventPayload, DomainEventStream, DomainExternalIds,
     ExecutionMode, Id, MediaFacet, NewDomainEvent, PostProcessingCompletedEventData,
     PostProcessingResult, PostProcessingScript, PostProcessingScriptRun, ScriptRunStatus,
-    ScriptType, TitleContextSnapshot, User,
+    ScriptSchedule, ScriptTrigger, ScriptType, TitleContextSnapshot, User,
 };
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -47,6 +47,34 @@ impl AppUseCase {
         self.services.customization.pp_scripts.list_scripts().await
     }
 
+    pub async fn list_post_processing_scripts_by_trigger(
+        &self,
+        actor: &User,
+        trigger: ScriptTrigger,
+    ) -> crate::AppResult<Vec<PostProcessingScript>> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        self.services
+            .customization
+            .pp_scripts
+            .list_scripts_by_trigger(trigger)
+            .await
+    }
+
+    /// Checks a schedule being edited and previews when it would next fire.
+    pub async fn validate_script_schedule(
+        &self,
+        actor: &User,
+        schedule: &ScriptSchedule,
+    ) -> crate::AppResult<crate::scripts::schedule::ScriptScheduleValidation> {
+        self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
+            .await?;
+        Ok(crate::scripts::schedule::check_schedule(
+            schedule,
+            Utc::now(),
+        ))
+    }
+
     pub async fn list_post_processing_script_runs(
         &self,
         actor: &User,
@@ -84,6 +112,7 @@ impl AppUseCase {
     ) -> crate::AppResult<PostProcessingScript> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let script = normalize_script_trigger(script)?;
         let created = self
             .services
             .customization
@@ -116,6 +145,7 @@ impl AppUseCase {
     ) -> crate::AppResult<PostProcessingScript> {
         self.require_app_permission(actor, scryer_domain::AppPermission::ManageCatalogSettings)
             .await?;
+        let script = normalize_script_trigger(script)?;
         let updated = self
             .services
             .customization
@@ -190,6 +220,29 @@ impl AppUseCase {
         .await;
         Ok(updated)
     }
+}
+
+/// Applies the per-trigger rules. A scheduled script needs a valid
+/// schedule; its facets and priority only matter on import, so they are
+/// stored as given and ignored. An import-triggered script keeps the import
+/// rules unchanged and carries no schedule or startup run.
+fn normalize_script_trigger(
+    mut script: PostProcessingScript,
+) -> crate::AppResult<PostProcessingScript> {
+    match script.trigger {
+        ScriptTrigger::Schedule => {
+            let schedule = script.schedule.as_ref().ok_or_else(|| {
+                AppError::Validation("scheduled scripts require a schedule".to_string())
+            })?;
+            crate::scripts::schedule::validate_schedule(schedule)
+                .map_err(crate::scripts::schedule::ScheduleError::into_app_error)?;
+        }
+        ScriptTrigger::PostImport => {
+            script.schedule = None;
+            script.run_on_startup = false;
+        }
+    }
+    Ok(script)
 }
 
 /// Spawn the post-processing pipeline for an imported file.

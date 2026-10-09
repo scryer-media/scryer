@@ -2999,6 +2999,23 @@ file = "postgres/migrations/0281_canonical_tag_vocabulary.sql"
 engine = "postgres"
 scope = "all"
 
+[[migration]]
+version = 282
+description = "script triggers and schedules"
+checksum_algo = "blake3"
+
+[[migration.steps]]
+kind = "sql"
+file = "migrations/0282_script_triggers.sql"
+engine = "sqlite"
+scope = "all"
+
+[[migration.steps]]
+kind = "sql"
+file = "postgres/migrations/0282_script_triggers.sql"
+engine = "postgres"
+scope = "all"
+
 [[baseline]]
 through_version = 254
 file = "baselines/0254_baseline.sql"

@@ -537,6 +537,19 @@ impl PostProcessingScriptRepository for DatastoreCustomizationStore {
             .await
     }
 
+    async fn list_enabled_scheduled(&self) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        self.post_processing_scripts.list_enabled_scheduled().await
+    }
+
+    async fn list_scripts_by_trigger(
+        &self,
+        trigger: scryer_domain::ScriptTrigger,
+    ) -> AppResult<Vec<scryer_domain::PostProcessingScript>> {
+        self.post_processing_scripts
+            .list_scripts_by_trigger(trigger)
+            .await
+    }
+
     async fn record_run(&self, run: scryer_domain::PostProcessingScriptRun) -> AppResult<()> {
         self.post_processing_scripts.record_run(run).await
     }

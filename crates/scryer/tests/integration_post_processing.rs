@@ -75,6 +75,10 @@ async fn create_script_with_type(
         priority: 0,
         enabled: true,
         debug,
+        language: scryer_domain::ScriptLanguage::Shell,
+        trigger: scryer_domain::ScriptTrigger::PostImport,
+        schedule: None,
+        run_on_startup: false,
         created_at: chrono::Utc::now(),
         updated_at: chrono::Utc::now(),
     };
@@ -643,6 +647,10 @@ async fn script_configuration_changes_are_audited_without_script_content() {
         priority: 0,
         enabled: true,
         debug: false,
+        language: scryer_domain::ScriptLanguage::Shell,
+        trigger: scryer_domain::ScriptTrigger::PostImport,
+        schedule: None,
+        run_on_startup: false,
         created_at: now,
         updated_at: now,
     };
