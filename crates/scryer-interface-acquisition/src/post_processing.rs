@@ -1,6 +1,6 @@
 use async_graphql::{Context, ID, Object, Result as GqlResult};
 use chrono::Utc;
-use scryer_application::AppError;
+use scryer_application::{AppError, UpdateScriptInterpreterSettings};
 use scryer_domain::{AppPermission, ExecutionMode, Id, PostProcessingScript, ScriptType};
 use std::path::Path;
 
@@ -223,5 +223,31 @@ impl PostProcessingMutations {
             .map_err(to_gql_error)?;
 
         Ok(mappers::from_pp_script(updated))
+    }
+
+    /// Replace the interpreters operator scripts are launched with; null or an empty string restores the default command.
+    async fn update_script_interpreter_settings(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Interpreter path or command for each script language.")]
+        input: ScriptInterpreterSettingsInput,
+    ) -> GqlResult<ScriptInterpreterSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = require_config_app_permission(ctx, AppPermission::ManageSystemSettings).await?;
+
+        let settings = app
+            .update_script_interpreter_settings(
+                &actor,
+                UpdateScriptInterpreterSettings {
+                    python: input.python,
+                    powershell: input.powershell,
+                    batch: input.batch,
+                    go: input.go,
+                },
+            )
+            .await
+            .map_err(to_gql_error)?;
+
+        Ok(mappers::from_script_interpreter_config(settings))
     }
 }

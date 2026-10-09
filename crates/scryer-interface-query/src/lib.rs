@@ -4104,6 +4104,20 @@ impl AcquisitionQueries {
             .collect())
     }
 
+    /// Interpreters operator scripts are launched with; null fields use the default command.
+    async fn script_interpreter_settings(
+        &self,
+        ctx: &Context<'_>,
+    ) -> GqlResult<ScriptInterpreterSettingsPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+        let settings = app
+            .get_script_interpreter_settings(&actor)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(crate::mappers::from_script_interpreter_config(settings))
+    }
+
     // ── Plugins ──────────────────────────────────────────────────────────
 
     /// Read the installed plugin's settings declaration and redacted values.

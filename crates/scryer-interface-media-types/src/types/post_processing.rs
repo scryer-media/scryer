@@ -128,3 +128,31 @@ pub struct UpdatePostProcessingScriptInput {
     /// Replacement debug state, or null to leave unchanged.
     pub debug: Option<bool>,
 }
+
+// ── Script interpreters ────────────────────────────────────────────────────
+
+#[derive(SimpleObject, Clone)]
+/// Interpreters operator scripts are launched with.
+pub struct ScriptInterpreterSettingsPayload {
+    /// Python interpreter path or command, or null to use `python3`.
+    pub python: Option<String>,
+    /// PowerShell interpreter path or command, or null to use `pwsh`.
+    pub powershell: Option<String>,
+    /// Batch interpreter path or command, or null to use `COMSPEC` or `cmd.exe`.
+    pub batch: Option<String>,
+    /// Go toolchain path or command, or null to use `go`.
+    pub go: Option<String>,
+}
+
+#[derive(InputObject, Clone)]
+/// Replacement interpreters for operator scripts; null or an empty string clears a value.
+pub struct ScriptInterpreterSettingsInput {
+    /// Python interpreter path or command, or null to use `python3`.
+    pub python: Option<String>,
+    /// PowerShell interpreter path or command, or null to use `pwsh`.
+    pub powershell: Option<String>,
+    /// Batch interpreter path or command, or null to use `COMSPEC` or `cmd.exe`.
+    pub batch: Option<String>,
+    /// Go toolchain path or command, or null to use `go`.
+    pub go: Option<String>,
+}
