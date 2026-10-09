@@ -119,6 +119,7 @@ pub use rules::preview::{
 };
 pub use rules::tracked_packs::{RulePackPreviewChange, TrackedRulePackPreview};
 mod scheduler;
+pub mod scripts;
 mod security;
 mod services;
 mod settings;
