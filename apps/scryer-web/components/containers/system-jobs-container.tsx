@@ -2,7 +2,8 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useClient } from "urql";
 import { useSearchParams } from "react-router";
 
-import { SystemJobsView } from "@/components/views/system-jobs-view";
+import { ScriptEditorDialogs } from "@/components/common/script-editor-dialogs";
+import { SystemJobsView, type CustomJobEntry } from "@/components/views/system-jobs-view";
 import { useJobRunToasts } from "@/components/root/job-run-provider";
 import { useGlobalStatus } from "@/lib/context/global-status-context";
 import { useTranslate } from "@/lib/context/translate-context";
@@ -15,7 +16,10 @@ import {
 } from "@/lib/graphql/queries";
 import { triggerJobMutation } from "@/lib/graphql/mutations";
 import { useDeferredWsSubscription } from "@/lib/hooks/use-deferred-ws-subscription";
+import { useScriptEditor } from "@/lib/hooks/use-script-editor";
 import {
+  jobInstanceKey,
+  jobTargetOf,
   mergeLatestJobRun,
   normalizeCustomJobId,
   normalizeJobRun,
@@ -28,6 +32,8 @@ import type {
   JobRun,
   JobScheduleKind,
   JobSection,
+  JobTarget,
+  PostProcessingScript,
 } from "@/lib/types";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,6 +100,42 @@ function normalizeJobDefinition(value: unknown): JobDefinition | null {
   };
 }
 
+function normalizeJobs(value: unknown): JobDefinition[] {
+  return ((Array.isArray(value) ? value : []) as unknown[])
+    .map(normalizeJobDefinition)
+    .filter((job): job is JobDefinition => job !== null);
+}
+
+/**
+ * The job a scheduled script runs as. The server lists a definition only for
+ * enabled scripts; a disabled one is shown from the script itself.
+ */
+function customJobDefinition(
+  script: PostProcessingScript,
+  definition: JobDefinition | undefined,
+): JobDefinition {
+  if (definition) {
+    return { ...definition, displayName: script.name, description: script.description };
+  }
+  return {
+    key: "CUSTOM_JOB",
+    customJobId: script.id,
+    displayName: script.name,
+    description: script.description,
+    category: "SYSTEM",
+    section: "PRIMARY",
+    manualTriggerAllowed: script.enabled,
+    usesLibraryScanProgress: false,
+    schedule: {
+      kind: "MANUAL",
+      description: script.scheduleDescription ?? "",
+      intervalSeconds: null,
+      initialDelaySeconds: null,
+      nextRunAt: null,
+    },
+  };
+}
+
 export const SystemJobsContainer = memo(function SystemJobsContainer() {
   const client = useClient();
   const setGlobalStatus = useGlobalStatus();
@@ -104,11 +146,28 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
   const [jobs, setJobs] = useState<JobDefinition[]>([]);
   const [activeRunsById, setActiveRunsById] = useState<Record<string, JobRun>>({});
   const [recentRuns, setRecentRuns] = useState<JobRun[]>([]);
-  const [lastRunsByJob, setLastRunsByJob] = useState<Partial<Record<JobKey, JobRun>>>({});
-  const [selectedJobKey, setSelectedJobKey] = useState<JobKey | null>(null);
-  const [jobHistoryByKey, setJobHistoryByKey] = useState<Partial<Record<JobKey, JobRun[]>>>({});
+  // Per-job state is keyed by `jobInstanceKey`, so each user-defined job is
+  // tracked apart from the others that share the CUSTOM_JOB key.
+  const [lastRunsByJob, setLastRunsByJob] = useState<Partial<Record<string, JobRun>>>({});
+  const [selectedJob, setSelectedJob] = useState<JobTarget | null>(null);
+  const [jobHistoryByKey, setJobHistoryByKey] = useState<Partial<Record<string, JobRun[]>>>({});
   const [jobHistoryLoading, setJobHistoryLoading] = useState(false);
-  const [triggeringKeys, setTriggeringKeys] = useState<Partial<Record<JobKey, boolean>>>({});
+  const [triggeringKeys, setTriggeringKeys] = useState<Partial<Record<string, boolean>>>({});
+  const selectedInstanceKey = selectedJob ? jobInstanceKey(selectedJob) : null;
+  const selectedJobKey = selectedJob?.jobKey ?? null;
+  const selectedCustomJobId = selectedJob?.customJobId ?? null;
+
+  const refreshJobs = useCallback(async () => {
+    const { data, error } = await client
+      .query(jobsQuery, {}, { requestPolicy: "network-only" })
+      .toPromise();
+    if (error) return;
+    setJobs(normalizeJobs(data?.jobs));
+  }, [client]);
+  const scriptEditor = useScriptEditor("SCHEDULE", {
+    onChanged: () => void refreshJobs(),
+  });
+  const { loadRunsForScript, scriptRuns, scripts: scheduledScripts } = scriptEditor;
 
   useEffect(() => {
     let cancelled = false;
@@ -132,11 +191,7 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
         return;
       }
 
-      setJobs(
-        ((Array.isArray(jobsData?.jobs) ? jobsData.jobs : []) as unknown[])
-          .map(normalizeJobDefinition)
-          .filter((job): job is JobDefinition => job !== null),
-      );
+      setJobs(normalizeJobs(jobsData?.jobs));
       setRecentRuns(
         ((Array.isArray(recentData?.recentJobRuns) ? recentData.recentJobRuns : []) as unknown[])
           .map(normalizeJobRun)
@@ -163,32 +218,20 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     }
     const run = recentRuns.find((candidate) => candidate.id === selectedJobRunId);
     if (run) {
-      setSelectedJobKey(run.jobKey);
+      setSelectedJob(jobTargetOf(run));
     }
   }, [recentRuns, selectedJobRunId]);
 
   useEffect(() => {
-    let cancelled = false;
-    const refreshSchedule = async () => {
-      const { data, error } = await client
-        .query(jobsQuery, {}, { requestPolicy: "network-only" })
-        .toPromise();
-      if (cancelled || error) return;
-      setJobs(
-        ((Array.isArray(data?.jobs) ? data.jobs : []) as unknown[])
-          .map(normalizeJobDefinition)
-          .filter((job): job is JobDefinition => job !== null),
-      );
-    };
+    const refreshSchedule = () => void refreshJobs();
     // Host time and the next nightly window can change without a job event.
     const timer = window.setInterval(refreshSchedule, 60_000);
     window.addEventListener("focus", refreshSchedule);
     return () => {
-      cancelled = true;
       window.clearInterval(timer);
       window.removeEventListener("focus", refreshSchedule);
     };
-  }, [client]);
+  }, [refreshJobs]);
 
   useDeferredWsSubscription<{ data?: { jobRunEvents?: unknown } }>({
     requestKey: "jobRunEvents.jobsPage",
@@ -215,16 +258,25 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
       });
       setLastRunsByJob((current) => mergeLatestJobRun(current, normalized));
 
+      const instanceKey = jobInstanceKey(normalized);
       setJobHistoryByKey((current) => {
-        const history = current[normalized.jobKey];
+        const history = current[instanceKey];
         if (!history) {
           return current;
         }
         return {
           ...current,
-          [normalized.jobKey]: [normalized, ...history.filter((run) => run.id !== normalized.id)].slice(0, 10),
+          [instanceKey]: [normalized, ...history.filter((run) => run.id !== normalized.id)].slice(0, 10),
         };
       });
+      // A finished user-defined job has new captured output to show.
+      if (
+        normalized.customJobId &&
+        normalized.customJobId === selectedCustomJobId &&
+        normalized.completedAt
+      ) {
+        void loadRunsForScript(normalized.customJobId);
+      }
     },
     onError(error) {
       console.error("[system-jobs] subscription error:", error);
@@ -232,15 +284,19 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
   });
 
   useEffect(() => {
-    if (!selectedJobKey) {
+    if (!selectedJobKey || !selectedInstanceKey) {
       return;
     }
 
     let cancelled = false;
     setJobHistoryLoading(true);
+    if (selectedCustomJobId) {
+      void loadRunsForScript(selectedCustomJobId);
+    }
     client
       .query(jobRunsQuery, {
         jobKey: selectedJobKey,
+        ...(selectedCustomJobId ? { customJobId: selectedCustomJobId } : {}),
         limit: selectedJobRunId ? 50 : 10,
       })
       .toPromise()
@@ -254,7 +310,7 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
         }
         setJobHistoryByKey((current) => ({
           ...current,
-          [selectedJobKey]: ((Array.isArray(data?.jobRuns) ? data.jobRuns : []) as unknown[])
+          [selectedInstanceKey]: ((Array.isArray(data?.jobRuns) ? data.jobRuns : []) as unknown[])
             .map(normalizeJobRun)
             .filter((run): run is JobRun => run !== null),
         }));
@@ -268,26 +324,39 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     return () => {
       cancelled = true;
     };
-  }, [client, selectedJobKey, selectedJobRunId, setGlobalStatus]);
+  }, [
+    client,
+    loadRunsForScript,
+    selectedCustomJobId,
+    selectedInstanceKey,
+    selectedJobKey,
+    selectedJobRunId,
+    setGlobalStatus,
+  ]);
 
   const onSelectJob = useCallback(
-    (jobKey: JobKey | null) => {
-      if (selectedJobRunId && jobKey !== selectedJobKey) {
+    (target: JobTarget | null) => {
+      const nextKey = target ? jobInstanceKey(target) : null;
+      if (selectedJobRunId && nextKey !== selectedInstanceKey) {
         const next = new URLSearchParams(searchParams.toString());
         next.delete("jobRun");
         setSearchParams(next, { replace: true });
       }
-      setSelectedJobKey(jobKey);
+      setSelectedJob(target);
     },
-    [searchParams, selectedJobKey, selectedJobRunId, setSearchParams],
+    [searchParams, selectedInstanceKey, selectedJobRunId, setSearchParams],
   );
 
   const onTriggerJob = useCallback(
-    async (jobKey: JobKey) => {
-      setTriggeringKeys((current) => ({ ...current, [jobKey]: true }));
+    async (target: JobTarget) => {
+      const instanceKey = jobInstanceKey(target);
+      setTriggeringKeys((current) => ({ ...current, [instanceKey]: true }));
       try {
         const { data, error } = await client
-          .mutation(triggerJobMutation, { jobKey })
+          .mutation(triggerJobMutation, {
+            jobKey: target.jobKey,
+            ...(target.customJobId ? { customJobId: target.customJobId } : {}),
+          })
           .toPromise();
         if (error) {
           throw error;
@@ -298,18 +367,19 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
           setActiveRunsById((current) => ({ ...current, [normalized.id]: normalized }));
           setRecentRuns((current) => [normalized, ...current.filter((run) => run.id !== normalized.id)].slice(0, 50));
           setLastRunsByJob((current) => mergeLatestJobRun(current, normalized));
+          const runKey = jobInstanceKey(normalized);
           setJobHistoryByKey((current) => ({
             ...current,
-            [normalized.jobKey]: [
+            [runKey]: [
               normalized,
-              ...(current[normalized.jobKey] ?? []).filter((run) => run.id !== normalized.id),
+              ...(current[runKey] ?? []).filter((run) => run.id !== normalized.id),
             ].slice(0, 10),
           }));
         }
       } catch (error) {
         setGlobalStatus(error instanceof Error ? error.message : t("jobs.failedToTrigger"));
       } finally {
-        setTriggeringKeys((current) => ({ ...current, [jobKey]: false }));
+        setTriggeringKeys((current) => ({ ...current, [instanceKey]: false }));
       }
     },
     [client, registerInteractiveJobRun, setGlobalStatus, t],
@@ -323,20 +393,59 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
     [activeRunsById],
   );
 
+  const builtInJobs = useMemo(() => jobs.filter((job) => job.key !== "CUSTOM_JOB"), [jobs]);
+  const customJobs = useMemo<CustomJobEntry[]>(
+    () =>
+      scheduledScripts.map((script) => ({
+        script,
+        job: customJobDefinition(
+          script,
+          jobs.find((job) => job.key === "CUSTOM_JOB" && job.customJobId === script.id),
+        ),
+      })),
+    [jobs, scheduledScripts],
+  );
+
   return (
-    <SystemJobsView
-      state={{
-        jobs,
-        activeRuns,
-        lastRunsByJob,
-        selectedJobKey,
-        selectedJobRunId,
-        selectedJobHistory: selectedJobKey ? jobHistoryByKey[selectedJobKey] ?? [] : [],
-        jobHistoryLoading,
-        triggeringKeys,
-        onSelectJob,
-        onTriggerJob,
-      }}
-    />
+    <>
+      <SystemJobsView
+        state={{
+          jobs: builtInJobs,
+          customJobs,
+          activeRuns,
+          lastRunsByJob,
+          selectedInstanceKey,
+          selectedJobRunId,
+          selectedJobHistory: selectedInstanceKey ? jobHistoryByKey[selectedInstanceKey] ?? [] : [],
+          selectedScriptRuns: selectedCustomJobId ? scriptRuns[selectedCustomJobId] ?? [] : null,
+          jobHistoryLoading,
+          triggeringKeys,
+          onSelectJob,
+          onTriggerJob,
+          customJobEditor: {
+            isOpen: scriptEditor.isEditorOpen,
+            isEditing: scriptEditor.editingScriptId !== null,
+            draft: scriptEditor.scriptDraft,
+            setDraft: scriptEditor.setScriptDraft,
+            mutatingScriptId: scriptEditor.mutatingScriptId,
+            onSubmit: scriptEditor.submitScript,
+            onCancel: scriptEditor.requestCloseEditor,
+            onAdd: scriptEditor.requestCreateEditor,
+            onEdit: scriptEditor.requestEditScript,
+            onToggle: scriptEditor.toggleScript,
+            onDelete: scriptEditor.requestDeleteScript,
+          },
+        }}
+      />
+      <ScriptEditorDialogs
+        state={scriptEditor.dialogs}
+        ids={{
+          deleteConfirm: "jobs-custom-delete-confirm",
+          inlineShellContent: "jobs-custom-inline-shell-confirm",
+          inlineShellAccept: "jobs-custom-inline-shell-confirm-accept",
+          inlineShellCancel: "jobs-custom-inline-shell-confirm-cancel",
+        }}
+      />
+    </>
   );
 });

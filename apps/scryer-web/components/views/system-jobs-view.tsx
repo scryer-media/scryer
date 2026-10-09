@@ -1,7 +1,25 @@
-import { ArrowDown, ArrowUp } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowDown, ArrowUp, Edit, Plus, Power, Trash2 } from "lucide-react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type Dispatch,
+  type FormEvent,
+  type SetStateAction,
+} from "react";
 
+import { ScriptEditorForm } from "@/components/common/script-editor-form";
+import { ScriptRunsTable, type ScriptRunsTableIds } from "@/components/common/script-runs-table";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { IconButton } from "@/components/ui/icon-button";
 import {
   Sheet,
   SheetContent,
@@ -13,10 +31,26 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useLibraryScanProgress } from "@/lib/context/library-scan-progress-context";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
-import type { Facet, JobDefinition, JobKey, JobRun, LibraryScanStatus } from "@/lib/types";
+import type {
+  Facet,
+  JobDefinition,
+  JobKey,
+  JobRun,
+  JobTarget,
+  LibraryScanStatus,
+  PostProcessingScript,
+  PostProcessingScriptDraft,
+  PostProcessingScriptRun,
+} from "@/lib/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDate, formatUiDateTime, formatUiTime } from "@/lib/utils/date-format";
-import { isTerminalJobRunStatus, parseFullHashBackfillFailures } from "@/lib/utils/job-runs";
+import { selectorId } from "@/lib/utils/dom-ids";
+import {
+  isTerminalJobRunStatus,
+  jobInstanceKey,
+  jobTargetOf,
+  parseFullHashBackfillFailures,
+} from "@/lib/utils/job-runs";
 import { defaultLibraryIdForFacet } from "@/lib/utils/library-scan-sessions";
 import { cn } from "@/lib/utils";
 
@@ -29,18 +63,57 @@ const JOBS_INSET_CLASS =
   "rounded-[12px] border border-[var(--scry-line2)] bg-[var(--scry-card2)]";
 const JOBS_MUTED_TEXT_CLASS = "text-[var(--scry-muted3)]";
 
+/** A scheduled script and the job it runs as. */
+export type CustomJobEntry = {
+  script: PostProcessingScript;
+  job: JobDefinition;
+};
+
+export type CustomJobEditorState = {
+  isOpen: boolean;
+  isEditing: boolean;
+  draft: PostProcessingScriptDraft;
+  setDraft: Dispatch<SetStateAction<PostProcessingScriptDraft>>;
+  mutatingScriptId: string | null;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => Promise<void> | void;
+  onCancel: () => void;
+  onAdd: () => void;
+  onEdit: (script: PostProcessingScript) => void;
+  onToggle: (script: PostProcessingScript) => Promise<void> | void;
+  onDelete: (script: PostProcessingScript) => void;
+};
+
+/**
+ * Per-job maps are keyed by `jobInstanceKey`: the job key for built-in jobs
+ * and the script id for user-defined ones.
+ */
 type SystemJobsViewState = {
+  /** Built-in jobs. */
   jobs: JobDefinition[];
+  customJobs: CustomJobEntry[];
   activeRuns: JobRun[];
   /** The latest run of each job, loaded per job rather than from a recent-runs window. */
-  lastRunsByJob: Partial<Record<JobKey, JobRun>>;
-  selectedJobKey: JobKey | null;
+  lastRunsByJob: Partial<Record<string, JobRun>>;
+  selectedInstanceKey: string | null;
   selectedJobRunId: string | null;
   selectedJobHistory: JobRun[];
+  /** Captured script output for a selected user-defined job; null for built-in jobs. */
+  selectedScriptRuns: PostProcessingScriptRun[] | null;
   jobHistoryLoading: boolean;
-  triggeringKeys: Partial<Record<JobKey, boolean>>;
-  onSelectJob: (jobKey: JobKey | null) => void;
-  onTriggerJob: (jobKey: JobKey) => void;
+  triggeringKeys: Partial<Record<string, boolean>>;
+  onSelectJob: (target: JobTarget | null) => void;
+  onTriggerJob: (target: JobTarget) => void;
+  customJobEditor: CustomJobEditorState;
+};
+
+const JOB_HISTORY_SCRIPT_RUN_IDS: ScriptRunsTableIds = {
+  empty: (scriptId) => selectorId("jobs-history-no-output", scriptId),
+  row: (run) => selectorId("jobs-history-run", run.id),
+  status: (run) => selectorId("jobs-history-run-status", run.id),
+  exitCode: () => "jobs-history-exit-code",
+  stdout: () => "jobs-history-output-stdout",
+  stderr: () => "jobs-history-output-stderr",
+  outputFilter: "jobs-history-output-filter",
 };
 
 type HealthCheckIssue = {
@@ -53,6 +126,7 @@ type SortKey = "name" | "nextRun" | "lastRun" | "status";
 type SortDirection = "asc" | "desc";
 
 type JobTableRow = {
+  instanceKey: string;
   job: JobDefinition;
   activeRun: JobRun | null;
   activeLibraryScan: ReturnType<ReturnType<typeof useLibraryScanProgress>["getActiveSession"]> | null;
@@ -334,20 +408,26 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
   const [sortDirection, setSortDirection] = useState<SortDirection>("asc");
   const {
     jobs,
+    customJobs,
     activeRuns,
     lastRunsByJob,
-    selectedJobKey,
+    selectedInstanceKey,
     selectedJobRunId,
     selectedJobHistory,
+    selectedScriptRuns,
     jobHistoryLoading,
     triggeringKeys,
     onSelectJob,
     onTriggerJob,
+    customJobEditor,
   } = state;
 
   const selectedJob = useMemo(
-    () => jobs.find((job) => job.key === selectedJobKey) ?? null,
-    [jobs, selectedJobKey],
+    () =>
+      [...jobs, ...customJobs.map((entry) => entry.job)].find(
+        (job) => jobInstanceKey(job) === selectedInstanceKey,
+      ) ?? null,
+    [customJobs, jobs, selectedInstanceKey],
   );
 
   useEffect(() => {
@@ -362,7 +442,10 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
   }, [jobHistoryLoading, selectedJobHistory, selectedJobRunId]);
 
   const activeRunsByJob = useMemo(
-    () => Object.fromEntries(activeRuns.map((run) => [run.jobKey, run])),
+    () =>
+      Object.fromEntries(activeRuns.map((run) => [jobInstanceKey(run), run])) as Partial<
+        Record<string, JobRun>
+      >,
     [activeRuns],
   );
 
@@ -421,9 +504,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
     </TableHead>
   ), [handleSort, renderSortIcon, sortDirection, sortKey]);
 
-  const jobRows = useMemo<JobTableRow[]>(() =>
-    jobs.map((job) => {
-      const rawActiveRun = activeRunsByJob[job.key];
+  const buildJobRow = useCallback((job: JobDefinition): JobTableRow => {
+      const instanceKey = jobInstanceKey(job);
+      const rawActiveRun = activeRunsByJob[instanceKey];
       const libraryFacet = libraryFacetForJob(job.key);
       const activeLibraryScan =
         job.usesLibraryScanProgress && libraryFacet
@@ -432,7 +515,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               defaultLibraryIdForFacet(libraryFacet),
             )
           : null;
-      const recentRun = lastRunsByJob[job.key] ?? null;
+      const recentRun = lastRunsByJob[instanceKey] ?? null;
       const activeRun = isStaleActiveRun(rawActiveRun, recentRun) ? null : (rawActiveRun ?? null);
       const lastRun = activeRun ?? recentRun;
       const status =
@@ -440,11 +523,12 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         (activeLibraryScan ? jobStatusFromLibraryScanStatus(activeLibraryScan.status) : null) ??
         lastRun?.status ??
         "idle";
-      const isTriggering = Boolean(triggeringKeys[job.key]);
+      const isTriggering = Boolean(triggeringKeys[instanceKey]);
       const hasActiveExecution = Boolean(activeRun) || Boolean(activeLibraryScan);
       const isDisabled = isRunButtonDisabled(hasActiveExecution, isTriggering);
 
       return {
+        instanceKey,
         job,
         activeRun: activeRun ?? null,
         activeLibraryScan,
@@ -452,7 +536,16 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         status,
         isDisabled,
       };
-    }), [activeRunsByJob, getActiveSession, jobs, lastRunsByJob, triggeringKeys]);
+    }, [activeRunsByJob, getActiveSession, lastRunsByJob, triggeringKeys]);
+
+  const jobRows = useMemo<JobTableRow[]>(() => jobs.map(buildJobRow), [buildJobRow, jobs]);
+  const customJobRows = useMemo(
+    () =>
+      customJobs
+        .map((entry) => ({ ...buildJobRow(entry.job), script: entry.script }))
+        .sort((left, right) => compareText(left.job.displayName, right.job.displayName)),
+    [buildJobRow, customJobs],
+  );
 
   const sortedJobRows = useMemo(() => {
     const factor = sortDirection === "asc" ? 1 : -1;
@@ -488,12 +581,12 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
   }, [jobRows, sortDirection, sortKey, t]);
 
   const renderRows = (rows: JobTableRow[]) =>
-    rows.map(({ job, lastRun, status, isDisabled }) => (
+    rows.map(({ instanceKey, job, lastRun, status, isDisabled }) => (
       <TableRow
-        key={job.key}
+        key={instanceKey}
         data-ui="activity-row"
         className="cursor-pointer border-[var(--scry-border3)]"
-        onClick={() => onSelectJob(job.key)}
+        onClick={() => onSelectJob(jobTargetOf(job))}
       >
         <TableCell className="min-w-0">
           <div className="space-y-1">
@@ -534,7 +627,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               )}
               onClick={(event) => {
                 event.stopPropagation();
-                onTriggerJob(job.key);
+                onTriggerJob(jobTargetOf(job));
               }}
             >
               {t("jobs.action.run")}
@@ -544,21 +637,127 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
         </TableRow>
     ));
 
+  const renderCustomRows = () =>
+    customJobRows.map(({ instanceKey, job, script, lastRun, status, isDisabled }) => {
+      const nameId = (part: string) => selectorId(`jobs-custom-${part}`, script.name);
+      const isMutating = customJobEditor.mutatingScriptId === script.id;
+      return (
+        <TableRow
+          key={instanceKey}
+          id={nameId("row")}
+          data-ui="activity-row"
+          className="cursor-pointer border-[var(--scry-border3)]"
+          onClick={() => onSelectJob(jobTargetOf(job))}
+        >
+          <TableCell className="min-w-0">
+            <div className="space-y-1">
+              <p className="font-medium text-[var(--scry-ink2)]">
+                {script.name}
+                {!script.enabled ? (
+                  <span className={`ml-2 text-xs font-normal ${JOBS_MUTED_TEXT_CLASS}`}>
+                    {t("jobs.custom.disabled")}
+                  </span>
+                ) : null}
+              </p>
+              {script.description ? (
+                <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{script.description}</p>
+              ) : null}
+            </div>
+          </TableCell>
+          <TableCell
+            id={nameId("schedule")}
+            className={`w-[12rem] max-w-[12rem] ${JOBS_MUTED_TEXT_CLASS}`}
+          >
+            {script.scheduleDescription || job.schedule.description || "--"}
+          </TableCell>
+          <TableCell
+            id={nameId("next-run")}
+            className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}
+          >
+            {renderTableDateTime(script.enabled ? job.schedule.nextRunAt : null, t, dateTimeFormat)}
+          </TableCell>
+          <TableCell
+            id={nameId("last-run")}
+            className={`w-[10.5rem] min-w-[10.5rem] ${JOBS_MUTED_TEXT_CLASS}`}
+          >
+            {renderTableDateTime(
+              lastRun?.completedAt ?? lastRun?.startedAt ?? null,
+              t,
+              dateTimeFormat,
+            )}
+            {lastRun ? (
+              <span className="block text-xs">{triggerSourceLabel(lastRun.triggerSource, t)}</span>
+            ) : null}
+          </TableCell>
+          <TableCell className="w-[7.5rem] min-w-[7.5rem]">
+            <span id={nameId("status")} className={runStatusTone(status)}>
+              {runStatusLabel(status, t)}
+            </span>
+          </TableCell>
+          <TableCell className="w-[13rem] min-w-[13rem]">
+            <div
+              className="flex items-center justify-end gap-1"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <Button
+                id={nameId("run")}
+                size="sm"
+                variant="primary"
+                disabled={isDisabled || !script.enabled}
+                onClick={() => onTriggerJob(jobTargetOf(job))}
+              >
+                {t("jobs.action.run")}
+              </Button>
+              <IconButton
+                id={nameId("edit")}
+                label={t("jobs.custom.edit")}
+                disabled={isMutating}
+                onClick={() => customJobEditor.onEdit(script)}
+              >
+                <Edit className="h-4 w-4" />
+              </IconButton>
+              <IconButton
+                id={nameId("toggle")}
+                label={script.enabled ? t("jobs.custom.disable") : t("jobs.custom.enable")}
+                aria-pressed={script.enabled}
+                disabled={isMutating}
+                onClick={() => void customJobEditor.onToggle(script)}
+              >
+                <Power className="h-4 w-4" />
+              </IconButton>
+              <IconButton
+                id={nameId("delete")}
+                label={t("jobs.custom.delete")}
+                tone="delete"
+                disabled={isMutating}
+                onClick={() => customJobEditor.onDelete(script)}
+              >
+                <Trash2 className="h-4 w-4" />
+              </IconButton>
+            </div>
+          </TableCell>
+        </TableRow>
+      );
+    });
+
+  const selectedCustomScript =
+    customJobs.find((entry) => jobInstanceKey(entry.job) === selectedInstanceKey)?.script ?? null;
+
   const renderMobileCards = (rows: JobTableRow[]) =>
-    rows.map(({ job, lastRun, status, isDisabled }) => (
+    rows.map(({ instanceKey, job, lastRun, status, isDisabled }) => (
       <div
-        key={job.key}
+        key={instanceKey}
         className={`${JOBS_INSET_CLASS} p-4`}
       >
         <div
           className="cursor-pointer space-y-3"
-          onClick={() => onSelectJob(job.key)}
+          onClick={() => onSelectJob(jobTargetOf(job))}
           role="button"
           tabIndex={0}
           onKeyDown={(event) => {
             if (event.key === "Enter" || event.key === " ") {
               event.preventDefault();
-              onSelectJob(job.key);
+              onSelectJob(jobTargetOf(job));
             }
           }}
         >
@@ -618,7 +817,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
           <button
             type="button"
             className={`text-xs font-medium underline-offset-4 hover:text-[var(--scry-ink2)] hover:underline ${JOBS_MUTED_TEXT_CLASS}`}
-            onClick={() => onSelectJob(job.key)}
+            onClick={() => onSelectJob(jobTargetOf(job))}
           >
             {t("jobs.recentRuns")}
           </button>
@@ -629,7 +828,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
               disabled={isDisabled}
               onClick={(event) => {
                 event.stopPropagation();
-                onTriggerJob(job.key);
+                onTriggerJob(jobTargetOf(job));
               }}
             >
               {t(job.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.run")}
@@ -701,11 +900,90 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
             </div>
           </div>
         </section>
+
+        <section id="jobs-custom" className={JOBS_PANEL_CLASS}>
+          <div className={`${JOBS_PANEL_HEADER_CLASS} flex items-center justify-between gap-3`}>
+            <div className="min-w-0">
+              <h2 className={JOBS_PANEL_TITLE_CLASS}>{t("jobs.custom.title")}</h2>
+              <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>{t("jobs.custom.description")}</p>
+            </div>
+            <Button
+              id="jobs-custom-add"
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={customJobEditor.onAdd}
+            >
+              <Plus className="h-4 w-4" />
+              {t("jobs.custom.add")}
+            </Button>
+          </div>
+          {customJobRows.length === 0 ? (
+            <p id="jobs-custom-empty" className={`p-4 text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
+              {t("jobs.custom.empty")}
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <Table className="min-w-[48rem] table-fixed">
+                <TableHeader>
+                  <TableRow className="border-[var(--scry-border3)] bg-[var(--scry-inset)] hover:bg-[var(--scry-inset)]">
+                    <TableHead className={`font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      {t("jobs.column.name")}
+                    </TableHead>
+                    <TableHead className={`w-[12rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      {t("jobs.column.schedule")}
+                    </TableHead>
+                    <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      {t("jobs.column.nextRun")}
+                    </TableHead>
+                    <TableHead className={`w-[10.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      {t("jobs.column.lastRun")}
+                    </TableHead>
+                    <TableHead className={`w-[7.5rem] font-semibold ${JOBS_MUTED_TEXT_CLASS}`}>
+                      {t("jobs.column.status")}
+                    </TableHead>
+                    <TableHead className="w-[13rem]" />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>{renderCustomRows()}</TableBody>
+              </Table>
+            </div>
+          )}
+        </section>
       </div>
+
+      <Dialog
+        open={customJobEditor.isOpen}
+        onOpenChange={(open) => {
+          if (!open) customJobEditor.onCancel();
+        }}
+      >
+        <DialogContent
+          id="jobs-custom-editor"
+          className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+        >
+          <DialogHeader>
+            <DialogTitle>
+              {customJobEditor.isEditing ? t("jobs.custom.editTitle") : t("jobs.custom.addTitle")}
+            </DialogTitle>
+            <DialogDescription>{t("jobs.custom.editorDescription")}</DialogDescription>
+          </DialogHeader>
+          <ScriptEditorForm
+            trigger="SCHEDULE"
+            formId="jobs-custom-script-form"
+            draft={customJobEditor.draft}
+            setDraft={customJobEditor.setDraft}
+            isEditing={customJobEditor.isEditing}
+            isSaving={customJobEditor.mutatingScriptId !== null}
+            onSubmit={customJobEditor.onSubmit}
+            onCancel={customJobEditor.onCancel}
+          />
+        </DialogContent>
+      </Dialog>
 
       <Sheet
         open={Boolean(selectedJob)}
-        onOpenChange={(open) => onSelectJob(open ? selectedJobKey : null)}
+        onOpenChange={(open) => onSelectJob(open && selectedJob ? jobTargetOf(selectedJob) : null)}
       >
         <SheetContent
           side="right"
@@ -739,8 +1017,9 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
 
                 <div className="flex gap-2">
                   {(() => {
-                    const activeRun = activeRunsByJob[selectedJob.key] ?? null;
-                    const recentRun = lastRunsByJob[selectedJob.key] ?? null;
+                    const selectedKey = jobInstanceKey(selectedJob);
+                    const activeRun = activeRunsByJob[selectedKey] ?? null;
+                    const recentRun = lastRunsByJob[selectedKey] ?? null;
                     const libraryFacet = libraryFacetForJob(selectedJob.key);
                     const activeLibraryScan =
                       selectedJob.usesLibraryScanProgress && libraryFacet
@@ -752,11 +1031,13 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                     const effectiveActiveRun = isStaleActiveRun(activeRun, recentRun)
                       ? null
                       : activeRun;
-                    const isTriggering = Boolean(triggeringKeys[selectedJob.key]);
-                    const isDisabled = isRunButtonDisabled(
-                      Boolean(effectiveActiveRun) || Boolean(activeLibraryScan),
-                      isTriggering,
-                    );
+                    const isTriggering = Boolean(triggeringKeys[selectedKey]);
+                    const isDisabled =
+                      isRunButtonDisabled(
+                        Boolean(effectiveActiveRun) || Boolean(activeLibraryScan),
+                        isTriggering,
+                      ) ||
+                      (selectedCustomScript !== null && !selectedCustomScript.enabled);
 
                     if (!selectedJob.manualTriggerAllowed) {
                       return null;
@@ -765,7 +1046,7 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                     return (
                       <Button
                         variant="primary"
-                        onClick={() => onTriggerJob(selectedJob.key)}
+                        onClick={() => onTriggerJob(jobTargetOf(selectedJob))}
                         disabled={isDisabled}
                       >
                         {t(selectedJob.key === "ARTWORK_ENCODING" ? "jobs.action.runArtworkNow" : "jobs.action.runNow")}
@@ -773,6 +1054,31 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                     );
                   })()}
                 </div>
+
+                {selectedCustomScript ? (
+                  <div id="jobs-history-output" className="space-y-2">
+                    <p className="text-sm font-medium text-[var(--scry-ink2)]">
+                      {t("jobs.custom.capturedOutput")}
+                    </p>
+                    {selectedScriptRuns === null ? (
+                      <p className={`text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
+                        {t("jobs.loadingRecentRuns")}
+                      </p>
+                    ) : (
+                      <ScriptRunsTable
+                        scriptId={selectedCustomScript.id}
+                        runs={selectedScriptRuns}
+                        noRunsLabel={t("jobs.custom.noOutput")}
+                        outputNotCapturedLabel={t("settings.pp.outputNotCaptured")}
+                        ids={JOB_HISTORY_SCRIPT_RUN_IDS}
+                        leadingColumn={{
+                          header: t("jobs.custom.started"),
+                          render: (run) => formatDate(run.startedAt, t, dateTimeFormat),
+                        }}
+                      />
+                    )}
+                  </div>
+                ) : null}
 
                 <div className="space-y-2">
                   <p className="text-sm font-medium text-[var(--scry-ink2)]">
