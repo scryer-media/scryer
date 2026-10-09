@@ -4061,22 +4061,62 @@ impl AcquisitionQueries {
 
     // ── Post-Processing Scripts ──────────────────────────────────────────
 
-    /// List post-processing scripts visible to the caller.
+    /// List post-processing scripts visible to the caller, optionally only those with one trigger.
     async fn post_processing_scripts(
         &self,
         ctx: &Context<'_>,
+        #[graphql(
+            desc = "Only return scripts started by this trigger; null returns every script."
+        )]
+        trigger: Option<ScriptTriggerValue>,
     ) -> GqlResult<Vec<PostProcessingScriptPayload>> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
 
-        let scripts = app
-            .list_post_processing_scripts(&actor)
-            .await
-            .map_err(to_gql_error)?;
+        let scripts = match trigger {
+            Some(trigger) => {
+                app.list_post_processing_scripts_by_trigger(&actor, trigger.into())
+                    .await
+            }
+            None => app.list_post_processing_scripts(&actor).await,
+        }
+        .map_err(to_gql_error)?;
         Ok(scripts
             .into_iter()
             .map(crate::mappers::from_pp_script)
             .collect())
+    }
+
+    /// Check a script schedule before saving it and preview its next three fire times.
+    async fn validate_script_schedule(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Schedule to check.")] schedule: ScriptScheduleInput,
+    ) -> GqlResult<ScriptScheduleValidationPayload> {
+        let app = app_from_ctx(ctx)?;
+        let actor = actor_from_ctx(ctx)?;
+
+        let schedule = match schedule.into_domain() {
+            Ok(schedule) => schedule,
+            Err(field) => {
+                return Ok(ScriptScheduleValidationPayload {
+                    valid: false,
+                    error: Some(format!("schedule is missing {field} for its kind")),
+                    description: None,
+                    next_runs: Vec::new(),
+                });
+            }
+        };
+        let validation = app
+            .validate_script_schedule(&actor, &schedule)
+            .await
+            .map_err(to_gql_error)?;
+        Ok(ScriptScheduleValidationPayload {
+            valid: validation.valid,
+            error: validation.error,
+            description: validation.description,
+            next_runs: validation.next_runs,
+        })
     }
 
     /// List runs for one post-processing script; the limit defaults to 50 and is clamped to 1 through 500.
