@@ -283,6 +283,8 @@ export type ListSubscriptionDraft = {
 
 /** Where a new subscription reads from: a manifest item or a recognised URL. */
 export type ListSourceDraft = {
+  /** An account-discovered source already supplies its identity parameters. */
+  fixedParams?: boolean;
   previewFilters?: ListFilter[];
   previewKinds?: Facet[];
   previewMaxPerSync?: number | null;

@@ -129,7 +129,7 @@ export function PersonalAccounts(props: Props) {
                     <div key={choice.key} className="flex items-center gap-3 rounded-lg border p-3">
                       <p className="min-w-0 flex-1 text-sm font-medium">{choice.label}</p>
                       <Button size="sm" variant="outline" onClick={() => {
-                        props.onFollow(manifest, { ...item, kinds: choice.kinds }, { provider: account.provider, sourceType: choice.sourceType, params: choice.params, url: null, credentialId: account.id }, choice.label);
+                        props.onFollow(manifest, { ...item, kinds: choice.kinds }, { provider: account.provider, sourceType: choice.sourceType, params: choice.params, fixedParams: true, url: null, credentialId: account.id }, choice.label);
                         props.onManage(null);
                       }}>{t("lists.catalog.follow")}</Button>
                     </div>

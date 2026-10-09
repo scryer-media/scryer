@@ -236,7 +236,7 @@ function FollowListDialogBody({
       </DialogHeader>
 
       <div className="space-y-6 p-5 sm:p-6">
-        {source && paramDefinitions.length > 0 ? (
+        {source && !source.fixedParams && paramDefinitions.length > 0 ? (
           <section className="space-y-3">
             <h3 className={SECTION_HEADING}>{t("lists.follow.sourceHeading")}</h3>
             <div className="grid gap-3 sm:grid-cols-2">
