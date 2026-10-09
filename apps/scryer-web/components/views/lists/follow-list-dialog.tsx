@@ -42,7 +42,6 @@ import {
   LIST_KINDS,
   LIST_ON_LEAVE_OPTIONS,
   listDraftProblems,
-  listIntervalParts,
   listKindLabelKey,
   listModeLabelKey,
   listOnLeaveLabelKey,
@@ -163,9 +162,6 @@ function FollowListDialogBody({
     providerCoverage: manifest?.coverage,
     savedKinds: target.kind === "edit" ? target.subscription.kinds : null,
   });
-  const intervalSeconds =
-    target.kind === "edit" ? target.subscription.intervalSeconds : (item?.defaultIntervalSeconds ?? null);
-  const interval = intervalSeconds ? listIntervalParts(intervalSeconds) : null;
 
   const missingParams = source ? missingSourceParams(paramDefinitions, source.params) : [];
   const personal = target.kind === "new" ? !!target.source.credentialId : target.subscription.scope === "PERSONAL";
@@ -408,7 +404,6 @@ function FollowListDialogBody({
             <SingleSelectField
               id={`${ID}-on-leave`}
               label={t("lists.follow.onLeave")}
-              description={t("lists.follow.onLeaveHelp")}
               value={draft.onLeave}
               options={LIST_ON_LEAVE_OPTIONS.filter((value) => !personal || canDirectAdd || value === "KEEP" || value === "LOG").map((value) => ({ value, label: t(listOnLeaveLabelKey(value)) }))}
               onValueChange={(value) =>
@@ -416,11 +411,6 @@ function FollowListDialogBody({
               }
             />
           </div>
-          {interval ? (
-            <p id={`${ID}-interval`} className="text-[12.5px] text-[var(--scry-muted)]">
-              {t("lists.follow.interval", { interval: t(interval.key, { count: interval.count }) })}
-            </p>
-          ) : null}
         </section>
 
         {source || target.kind === "edit" ? (
