@@ -393,6 +393,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
         {
           filters: (source.previewFilters ?? []).map(listFilterInput),
           kinds: source.previewKinds ?? null,
+          maxPerSync: source.previewMaxPerSync ?? null,
           input: {
             provider: source.provider,
             sourceType: source.sourceType,
@@ -411,6 +412,7 @@ function ListsContainerBody({ canManageLists }: ListsContainerProps) {
       id,
       filters: draft?.filters.map(listFilterInput) ?? null,
       kinds: draft?.kinds ?? null,
+      ...(draft ? { maxPerSync: draft.maxPerSync } : {}),
     }, "listSubscriptionPreview"),
     [runPreview],
   );

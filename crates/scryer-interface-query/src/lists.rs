@@ -251,6 +251,8 @@ impl ListQueries {
         filters: Option<Vec<scryer_interface_media::types::ListFilterInput>>,
         #[graphql(desc = "Draft facet override for this preview; omitted uses the saved facets.")]
         kinds: Option<Vec<scryer_interface_media::types::MediaFacetValue>>,
+        #[graphql(desc = "Draft per-sync cap; omitted keeps the saved cap, null removes it.")]
+        max_per_sync: async_graphql::MaybeUndefined<u32>,
     ) -> GqlResult<ListPreviewPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
@@ -263,6 +265,11 @@ impl ListQueries {
                     .transpose()
                     .map_err(to_gql_error)?,
                 kinds.map(|kinds| kinds.into_iter().map(|kind| kind.into_domain()).collect()),
+                match max_per_sync {
+                    async_graphql::MaybeUndefined::Undefined => None,
+                    async_graphql::MaybeUndefined::Null => Some(None),
+                    async_graphql::MaybeUndefined::Value(value) => Some(Some(value)),
+                },
             )
             .await
             .map_err(to_gql_error)?;
@@ -301,10 +308,13 @@ impl ListQueries {
         filters: Vec<scryer_interface_media::types::ListFilterInput>,
         #[graphql(desc = "Draft facets to preview; omitted uses the source's available facets.")]
         kinds: Option<Vec<scryer_interface_media::types::MediaFacetValue>>,
+        #[graphql(desc = "Draft per-sync cap; omitted or null means unlimited.")]
+        max_per_sync: Option<u32>,
     ) -> GqlResult<ListPreviewPayload> {
         let app = app_from_ctx(ctx)?;
         let actor = actor_from_ctx(ctx)?;
         let mut draft = list_source_draft_from_input(input);
+        draft.preview_max_per_sync = max_per_sync;
         draft.preview_filters =
             scryer_interface_media::mappers::filters_from_input(filters).map_err(to_gql_error)?;
         draft.preview_kinds =

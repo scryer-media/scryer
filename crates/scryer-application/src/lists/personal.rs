@@ -352,7 +352,7 @@ impl AppUseCase {
                 })
                 .collect(),
             filters: draft.preview_filters,
-            max_per_sync: None,
+            max_per_sync: draft.preview_max_per_sync,
             on_leave: Default::default(),
             interval_seconds: i64::try_from(classified.interval_seconds).unwrap_or(i64::MAX),
             sync: Default::default(),
@@ -528,7 +528,7 @@ impl AppUseCase {
             .await
     }
     pub async fn preview_visible_list(&self, actor: &User, id: &str) -> AppResult<ListPreview> {
-        self.preview_visible_list_with_filters(actor, id, None, None)
+        self.preview_visible_list_with_filters(actor, id, None, None, None)
             .await
     }
 
@@ -538,6 +538,7 @@ impl AppUseCase {
         id: &str,
         filters: Option<Vec<scryer_domain::ListFilter>>,
         kinds: Option<Vec<scryer_domain::MediaFacet>>,
+        max_per_sync: Option<Option<u32>>,
     ) -> AppResult<ListPreview> {
         let mut row = self.personal_subscription(actor, id).await?;
         if row.is_personal() {
@@ -546,6 +547,9 @@ impl AppUseCase {
             self.require_app_permission(actor, scryer_domain::AppPermission::ManageLists)
                 .await?;
             self.require_lists_enabled().await?;
+        }
+        if let Some(cap) = max_per_sync {
+            row.max_per_sync = cap;
         }
         if let Some(filters) = filters {
             row.filters = filters;

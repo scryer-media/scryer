@@ -141,9 +141,9 @@ function FollowListDialogBody({
       ],
     } : null,
   );
-  const [preview, setPreview] = React.useState<ListPreview | null>(
-    target.kind === "new" ? target.preview : null,
-  );
+  const [preview, setPreview] = React.useState<ListPreview | null>(null);
+  const [previewDraftKey, setPreviewDraftKey] = React.useState<string | null>(null);
+  const draftKey = JSON.stringify({ draft, source });
   const [previewing, setPreviewing] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
 
@@ -191,7 +191,8 @@ function FollowListDialogBody({
     try {
       setPreview(target.kind === "edit"
         ? await onPreviewSubscription(target.subscription.id, draft)
-        : source ? await onPreviewSource({ ...source, previewFilters: draft.filters, previewKinds: draft.kinds }) : null);
+        : source ? await onPreviewSource({ ...source, previewFilters: draft.filters, previewKinds: draft.kinds, previewMaxPerSync: draft.maxPerSync }) : null);
+      setPreviewDraftKey(draftKey);
     } finally {
       setPreviewing(false);
     }
@@ -438,7 +439,7 @@ function FollowListDialogBody({
                 {t("lists.preview.run")}
               </Button>
             </div>
-            {preview ? <ListPreviewSummary preview={preview} idPrefix={ID} /> : null}
+            {preview && previewDraftKey === draftKey ? <ListPreviewSummary preview={preview} idPrefix={ID} /> : null}
           </section>
         ) : null}
 

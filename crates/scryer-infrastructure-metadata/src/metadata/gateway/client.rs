@@ -1117,6 +1117,14 @@ impl MetadataGatewayClient {
             .append_pair("extensions", &extensions_str)
             .append_pair("variables", &variables_str);
 
+        // Keep encoded request targets within common proxy limits as well as
+        // the HTTP client's URI limit. Large batches use the same signed APQ POST.
+        if url.as_str().len() > 8 * 1024 {
+            return self
+                .execute_graphql_apq_register(operation_name, query, &extensions, &variables)
+                .await;
+        }
+
         let get_result = self
             .send_request_with_retry(
                 || {
@@ -3736,6 +3744,49 @@ mod tests {
                 .count(),
             2
         );
+    }
+
+    #[tokio::test]
+    async fn apq_oversized_encoded_variables_use_post_without_losing_refs() {
+        let server = MockServer::start().await;
+        let variables = json!({"refs": (0..43).map(|id| json!({
+            "id": id,
+            "externalIds": (0..21).map(|external| json!({
+                "source":"mal", "kind":"anime", "id":format!("{id}-{external}")
+            })).collect::<Vec<_>>()
+        })).collect::<Vec<_>>(), "kind":"anime", "createMissing":true});
+        let client = unsigned_gateway_client(format!("{}/graphql", server.uri()));
+        let payload = json!({"operationName": "ResolveTitles", "query":"query ResolveTitles { fixture }",
+            "variables":variables, "extensions":{"persistedQuery":{"version":1,"sha256Hash":"fixture-hash"}}});
+        let mut encoded = reqwest::Url::parse(&format!("{}/graphql", server.uri())).unwrap();
+        encoded
+            .query_pairs_mut()
+            .append_pair("variables", &variables.to_string());
+        assert!(encoded.as_str().len() > 65_535);
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/graphql"))
+            .and(wiremock::matchers::body_json(payload))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"data":{"fixture":true}})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let result: serde_json::Value = client
+            .execute_graphql_apq(
+                "ResolveTitles",
+                "query ResolveTitles { fixture }",
+                "fixture-hash",
+                variables,
+            )
+            .await
+            .unwrap();
+        assert_eq!(result, json!({"fixture":true}));
     }
 
     #[tokio::test]

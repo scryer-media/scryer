@@ -144,6 +144,39 @@ fn membership_pages_follow_list_order() {
 }
 
 #[test]
+fn preview_with_ten_per_sync_only_adds_ten_of_ninety_eight_candidates() {
+    for scope in [
+        scryer_domain::ListScope::Public,
+        scryer_domain::ListScope::Personal,
+    ] {
+        for (cap, expected) in [(Some(10), 10), (Some(1), 1), (None, 98)] {
+            let mut list = subscription("preview-cap");
+            list.scope = scope;
+            list.max_per_sync = cap;
+            let items = (0..98)
+                .map(|n| resolved_item(&format!("item-{n}")))
+                .collect();
+            let evaluated = crate::lists::evaluate::evaluate(&list, items, &[], &HashMap::new());
+            let preview = summarize_preview(&evaluated, &HashMap::new());
+            assert_eq!(preview.total, 98);
+            assert_eq!(preview.would_add.len(), expected);
+            assert_eq!(preview.filtered, 0);
+            assert_eq!(
+                evaluated
+                    .iter()
+                    .filter(|row| row.decision == ItemDecision::Deferred)
+                    .count(),
+                98 - expected
+            );
+            assert_eq!(
+                preview.would_add.last().unwrap().item_key,
+                format!("item-{}", expected - 1)
+            );
+        }
+    }
+}
+
+#[test]
 fn a_preview_adds_exactly_the_candidates() {
     let decisions = vec![
         ("one", ItemDecision::Candidate),

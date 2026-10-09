@@ -622,6 +622,7 @@ pub fn list_source_draft_from_input(input: ListSourceInput) -> ListSourceDraft {
     ListSourceDraft {
         preview_filters: Vec::new(),
         preview_kinds: None,
+        preview_max_per_sync: None,
         credential_id: input.credential_id.map(|id| id.to_string()),
         provider: input.provider,
         source_type: input.source_type,

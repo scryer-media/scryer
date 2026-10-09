@@ -5600,8 +5600,8 @@ export const listSubscriptionDetailQuery = `query ListSubscriptionDetail($id: ID
   }
 }`;
 
-export const listSubscriptionPreviewQuery = `query ListSubscriptionPreview($id: ID!, $filters: [ListFilterInput!], $kinds: [MediaFacetValue!]) {
-  listSubscriptionPreview(id: $id, filters: $filters, kinds: $kinds) {${LIST_PREVIEW_FIELDS}
+export const listSubscriptionPreviewQuery = `query ListSubscriptionPreview($id: ID!, $filters: [ListFilterInput!], $kinds: [MediaFacetValue!], $maxPerSync: Int) {
+  listSubscriptionPreview(id: $id, filters: $filters, kinds: $kinds, maxPerSync: $maxPerSync) {${LIST_PREVIEW_FIELDS}
   }
 }`;
 
@@ -5610,8 +5610,8 @@ export const listUrlPreviewQuery = `query ListUrlPreview($url: String!) {
   }
 }`;
 
-export const listSourcePreviewQuery = `query ListSourcePreview($input: ListSourceInput!, $filters: [ListFilterInput!]!, $kinds: [MediaFacetValue!]) {
-  listSourcePreview(input: $input, filters: $filters, kinds: $kinds) {${LIST_PREVIEW_FIELDS}
+export const listSourcePreviewQuery = `query ListSourcePreview($input: ListSourceInput!, $filters: [ListFilterInput!]!, $kinds: [MediaFacetValue!], $maxPerSync: Int) {
+  listSourcePreview(input: $input, filters: $filters, kinds: $kinds, maxPerSync: $maxPerSync) {${LIST_PREVIEW_FIELDS}
   }
 }`;
 

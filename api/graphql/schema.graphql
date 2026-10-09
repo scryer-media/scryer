@@ -24506,7 +24506,11 @@ type QueryRoot {
 		"""
 		Draft facet override for this preview; omitted uses the saved facets.
 		"""
-		kinds: [MediaFacetValue!]
+		kinds: [MediaFacetValue!],
+		"""
+		Draft per-sync cap; omitted keeps the saved cap, null removes it.
+		"""
+		maxPerSync: Int
 	): ListPreviewPayload!
 	"""
 	What following the list at a link would do. An unknown link answers
@@ -24534,7 +24538,11 @@ type QueryRoot {
 		"""
 		Draft facets to preview; omitted uses the source's available facets.
 		"""
-		kinds: [MediaFacetValue!]
+		kinds: [MediaFacetValue!],
+		"""
+		Draft per-sync cap; omitted or null means unlimited.
+		"""
+		maxPerSync: Int
 	): ListPreviewPayload!
 	"""
 	Titles no list may add.

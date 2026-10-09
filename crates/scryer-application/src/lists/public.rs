@@ -84,6 +84,7 @@ pub struct PublicListPatch {
 pub struct ListSourceDraft {
     pub preview_filters: Vec<ListFilter>,
     pub preview_kinds: Option<Vec<MediaFacet>>,
+    pub preview_max_per_sync: Option<u32>,
     pub provider: Option<String>,
     pub source_type: Option<String>,
     pub params: BTreeMap<String, String>,
@@ -681,6 +682,11 @@ impl AppUseCase {
         subscription: &ListSubscription,
         existing: HashMap<String, ListMembership>,
     ) -> AppResult<ListPreview> {
+        if subscription.max_per_sync == Some(0) {
+            return Err(AppError::Validation(
+                "the per-sync cap must be at least 1".into(),
+            ));
+        }
         let lists = &self.services.lists;
         let gateway = self.services.library.metadata_gateway.clone();
         let charts = GatewayListChartSource::new(gateway.clone());
@@ -823,6 +829,7 @@ impl AppUseCase {
         let mut subscription =
             draft_subscription(actor, &classified, kinds.clone(), preview_routes(&kinds));
         subscription.filters = draft.preview_filters;
+        subscription.max_per_sync = draft.preview_max_per_sync;
         self.run_preview(&subscription, HashMap::new()).await
     }
 

@@ -281,6 +281,7 @@ export type ListSubscriptionDraft = {
 export type ListSourceDraft = {
   previewFilters?: ListFilter[];
   previewKinds?: Facet[];
+  previewMaxPerSync?: number | null;
   provider: string;
   sourceType: string;
   params: ListParam[];
