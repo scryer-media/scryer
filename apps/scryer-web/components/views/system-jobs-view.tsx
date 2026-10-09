@@ -10,7 +10,12 @@ import {
 } from "react";
 
 import { ScriptEditorForm } from "@/components/common/script-editor-form";
-import { ScriptRunsTable, type ScriptRunsTableIds } from "@/components/common/script-runs-table";
+import {
+  formatScriptRunDuration,
+  ScriptOutputFilterGroup,
+  scriptRunStatusColor,
+  type ScriptOutputFilter,
+} from "@/components/common/script-runs-table";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -50,6 +55,7 @@ import {
   jobInstanceKey,
   jobTargetOf,
   parseFullHashBackfillFailures,
+  scriptRunForJobRun,
 } from "@/lib/utils/job-runs";
 import { defaultLibraryIdForFacet } from "@/lib/utils/library-scan-sessions";
 import { cn } from "@/lib/utils";
@@ -106,15 +112,6 @@ type SystemJobsViewState = {
   customJobEditor: CustomJobEditorState;
 };
 
-const JOB_HISTORY_SCRIPT_RUN_IDS: ScriptRunsTableIds = {
-  empty: (scriptId) => selectorId("jobs-history-no-output", scriptId),
-  row: (run) => selectorId("jobs-history-run", run.id),
-  status: (run) => selectorId("jobs-history-run-status", run.id),
-  exitCode: () => "jobs-history-exit-code",
-  stdout: () => "jobs-history-output-stdout",
-  stderr: () => "jobs-history-output-stderr",
-  outputFilter: "jobs-history-output-filter",
-};
 
 type HealthCheckIssue = {
   source: string;
@@ -398,6 +395,149 @@ function isStaleActiveRun(
   }
 
   return lastRun.startedAt.localeCompare(activeRun.startedAt) >= 0;
+}
+
+/**
+ * Runs of a user-defined job joined to the script runs they produced, with the
+ * captured output of the selected run.
+ */
+function CustomJobCapturedOutput({
+  runs,
+  scriptRuns,
+  initialRunId,
+  dateTimeFormat,
+}: {
+  runs: JobRun[];
+  scriptRuns: PostProcessingScriptRun[];
+  initialRunId: string | null;
+  dateTimeFormat: ReturnType<typeof useUiDateTimeFormat>;
+}) {
+  const t = useTranslate();
+  const [pickedRunId, setPickedRunId] = useState<string | null>(null);
+  const [outputFilter, setOutputFilter] = useState<ScriptOutputFilter>("combined");
+
+  if (runs.length === 0) {
+    return (
+      <p id="jobs-history-no-output" className={`text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
+        {t("jobs.custom.noOutput")}
+      </p>
+    );
+  }
+
+  const selectedRun =
+    runs.find((run) => run.id === pickedRunId) ??
+    runs.find((run) => run.id === initialRunId) ??
+    runs[0];
+  const selectedScriptRun = scriptRunForJobRun(selectedRun, scriptRuns);
+  const showStdout = outputFilter !== "stderr";
+  const showStderr = outputFilter !== "stdout";
+  const showStreamLabels = outputFilter === "combined";
+  const isFinished = isTerminalJobRunStatus(selectedRun.status);
+
+  return (
+    <div className="space-y-3">
+      <Table>
+        <TableHeader>
+          <TableRow className="border-[var(--scry-border3)]">
+            <TableHead>{t("jobs.custom.started")}</TableHead>
+            <TableHead>{t("jobs.column.status")}</TableHead>
+            <TableHead>{t("jobs.custom.duration")}</TableHead>
+            <TableHead>{t("jobs.custom.exitCode")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {runs.map((run) => {
+            const scriptRun = scriptRunForJobRun(run, scriptRuns);
+            const isSelected = run.id === selectedRun.id;
+            return (
+              <TableRow
+                key={run.id}
+                id={`jobs-history-run-${run.id}`}
+                data-state={isSelected ? "selected" : undefined}
+                aria-selected={isSelected}
+                tabIndex={0}
+                className={cn(
+                  "cursor-pointer border-[var(--scry-border3)]",
+                  isSelected && "bg-[var(--scry-inset)]",
+                )}
+                onClick={() => setPickedRunId(run.id)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setPickedRunId(run.id);
+                  }
+                }}
+              >
+                <TableCell className="text-xs">
+                  {formatDate(run.startedAt, t, dateTimeFormat)}
+                </TableCell>
+                <TableCell>
+                  <span className={`text-xs ${runStatusTone(run.status)}`}>
+                    {runStatusLabel(run.status, t)}
+                  </span>
+                </TableCell>
+                <TableCell className="text-xs">
+                  {formatScriptRunDuration(scriptRun?.durationMs ?? null)}
+                </TableCell>
+                <TableCell className="text-xs">{scriptRun?.exitCode ?? "--"}</TableCell>
+              </TableRow>
+            );
+          })}
+        </TableBody>
+      </Table>
+
+      <div className={`${JOBS_INSET_CLASS} space-y-2 p-3`}>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className={`text-xs ${JOBS_MUTED_TEXT_CLASS}`}>
+            {t("jobs.custom.exitCode")}:{" "}
+            <span
+              id="jobs-history-exit-code"
+              className={cn(
+                "font-[var(--font-code)]",
+                selectedScriptRun ? scriptRunStatusColor(selectedScriptRun.status) : undefined,
+              )}
+            >
+              {isFinished && selectedScriptRun?.exitCode != null
+                ? String(selectedScriptRun.exitCode)
+                : "--"}
+            </span>
+          </p>
+          <ScriptOutputFilterGroup
+            id="jobs-history-output-filter"
+            value={outputFilter}
+            onChange={setOutputFilter}
+            className="flex gap-1"
+          />
+        </div>
+        {showStdout ? (
+          <div>
+            {showStreamLabels ? (
+              <p className="mb-0.5 text-[10px] font-medium text-muted-foreground">stdout</p>
+            ) : null}
+            <pre
+              id="jobs-history-output-stdout"
+              className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-muted/50 p-2 font-[var(--font-code)] text-[11px] leading-relaxed text-muted-foreground"
+            >
+              {selectedScriptRun?.stdoutTail || t("settings.pp.outputNotCaptured")}
+            </pre>
+          </div>
+        ) : null}
+        {showStderr ? (
+          <div>
+            {showStreamLabels ? (
+              <p className="mb-0.5 text-[10px] font-medium text-muted-foreground">stderr</p>
+            ) : null}
+            <pre
+              id="jobs-history-output-stderr"
+              className="max-h-64 overflow-auto whitespace-pre-wrap rounded bg-[var(--scry-danger-bg)] p-2 font-[var(--font-code)] text-[11px] leading-relaxed text-[var(--scry-danger-text)]"
+            >
+              {selectedScriptRun?.stderrTail || t("settings.pp.outputNotCaptured")}
+            </pre>
+          </div>
+        ) : null}
+      </div>
+    </div>
+  );
 }
 
 export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
@@ -1060,21 +1200,18 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
                     <p className="text-sm font-medium text-[var(--scry-ink2)]">
                       {t("jobs.custom.capturedOutput")}
                     </p>
-                    {selectedScriptRuns === null ? (
+                    {selectedScriptRuns === null ||
+                    (jobHistoryLoading && selectedJobHistory.length === 0) ? (
                       <p className={`text-sm ${JOBS_MUTED_TEXT_CLASS}`}>
                         {t("jobs.loadingRecentRuns")}
                       </p>
                     ) : (
-                      <ScriptRunsTable
-                        scriptId={selectedCustomScript.id}
-                        runs={selectedScriptRuns}
-                        noRunsLabel={t("jobs.custom.noOutput")}
-                        outputNotCapturedLabel={t("settings.pp.outputNotCaptured")}
-                        ids={JOB_HISTORY_SCRIPT_RUN_IDS}
-                        leadingColumn={{
-                          header: t("jobs.custom.started"),
-                          render: (run) => formatDate(run.startedAt, t, dateTimeFormat),
-                        }}
+                      <CustomJobCapturedOutput
+                        key={selectedInstanceKey ?? ""}
+                        runs={selectedJobHistory}
+                        scriptRuns={selectedScriptRuns}
+                        initialRunId={selectedJobRunId}
+                        dateTimeFormat={dateTimeFormat}
                       />
                     )}
                   </div>

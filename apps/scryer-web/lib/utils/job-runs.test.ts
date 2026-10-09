@@ -6,6 +6,8 @@ import {
   mergeLatestJobRun,
   normalizeJobRun,
   parseFullHashBackfillFailures,
+  scriptRunForJobRun,
+  scriptRunIdOf,
 } from "./job-runs.ts";
 import type { JobRun } from "../types/jobs.ts";
 
@@ -169,4 +171,18 @@ test("a run's custom job id is read from the payload and absent ids become null"
 
   assert.equal(custom?.customJobId, "script-a");
   assert.equal(builtIn?.customJobId, null);
+});
+
+test("a custom job run joins to its script run through the summary", () => {
+  const scriptRuns = [{ id: "script-run-1" }, { id: "script-run-2" }];
+
+  assert.equal(scriptRunIdOf({ summaryJson: { script_run_id: "script-run-2" } }), "script-run-2");
+  assert.equal(scriptRunIdOf({ summaryJson: '{"script_run_id":"script-run-1"}' }), "script-run-1");
+  assert.equal(scriptRunIdOf({ summaryJson: "not json" }), null);
+  assert.equal(scriptRunIdOf({ summaryJson: null }), null);
+  assert.equal(
+    scriptRunForJobRun({ summaryJson: { script_run_id: "script-run-2" } }, scriptRuns)?.id,
+    "script-run-2",
+  );
+  assert.equal(scriptRunForJobRun({ summaryJson: { script_run_id: "gone" } }, scriptRuns), null);
 });

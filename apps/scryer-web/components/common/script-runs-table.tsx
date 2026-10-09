@@ -18,7 +18,44 @@ export type ScriptOutputFilter = "combined" | "stdout" | "stderr";
 
 const OUTPUT_FILTERS: readonly ScriptOutputFilter[] = ["combined", "stdout", "stderr"];
 
-function statusColor(status: string): string {
+/** Combined / Stdout / Stderr buttons; each button's id is `<id>-<filter>`. */
+export function ScriptOutputFilterGroup({
+  id,
+  value,
+  onChange,
+  className,
+}: {
+  id: string;
+  value: ScriptOutputFilter;
+  onChange: (value: ScriptOutputFilter) => void;
+  className?: string;
+}) {
+  const t = useTranslate();
+  return (
+    <div
+      id={id}
+      role="group"
+      aria-label={t("script.output.filter")}
+      className={className ?? "flex justify-end gap-1"}
+    >
+      {OUTPUT_FILTERS.map((filter) => (
+        <Button
+          key={filter}
+          id={`${id}-${filter}`}
+          type="button"
+          size="xs"
+          variant={value === filter ? "secondary" : "outline"}
+          aria-pressed={value === filter}
+          onClick={() => onChange(filter)}
+        >
+          {t(`script.output.filter.${filter}`)}
+        </Button>
+      ))}
+    </div>
+  );
+}
+
+export function scriptRunStatusColor(status: string): string {
   switch (status) {
     case "success":
       return "text-[var(--scry-success-text-soft)]";
@@ -33,7 +70,7 @@ function statusColor(status: string): string {
   }
 }
 
-function formatDuration(ms: number | null): string {
+export function formatScriptRunDuration(ms: number | null): string {
   if (ms == null) return "--";
   if (ms < 1000) return `${ms}ms`;
   return `${(ms / 1000).toFixed(1)}s`;
@@ -92,7 +129,6 @@ export function ScriptRunsTable({
   ids?: ScriptRunsTableIds;
   leadingColumn?: ScriptRunsLeadingColumn;
 }) {
-  const t = useTranslate();
   const [outputFilter, setOutputFilter] = useState<ScriptOutputFilter>("combined");
 
   if (runs.length === 0) {
@@ -107,26 +143,11 @@ export function ScriptRunsTable({
   const showStreamLabels = outputFilter === "combined";
   return (
     <div className="space-y-2">
-      <div
+      <ScriptOutputFilterGroup
         id={ids.outputFilter}
-        role="group"
-        aria-label={t("script.output.filter")}
-        className="flex justify-end gap-1"
-      >
-        {OUTPUT_FILTERS.map((filter) => (
-          <Button
-            key={filter}
-            id={`${ids.outputFilter}-${filter}`}
-            type="button"
-            size="xs"
-            variant={outputFilter === filter ? "secondary" : "outline"}
-            aria-pressed={outputFilter === filter}
-            onClick={() => setOutputFilter(filter)}
-          >
-            {t(`script.output.filter.${filter}`)}
-          </Button>
-        ))}
-      </div>
+        value={outputFilter}
+        onChange={setOutputFilter}
+      />
       <Table>
         <TableHeader>
           <TableRow>
@@ -146,7 +167,7 @@ export function ScriptRunsTable({
                 <TableCell>
                   <span
                     id={ids.status(run)}
-                    className={`text-xs font-medium capitalize ${statusColor(run.status)}`}
+                    className={`text-xs font-medium capitalize ${scriptRunStatusColor(run.status)}`}
                   >
                     {run.status}
                     {run.exitCode != null && run.status === "failed" ? (
@@ -154,7 +175,7 @@ export function ScriptRunsTable({
                     ) : null}
                   </span>
                 </TableCell>
-                <TableCell className="text-xs">{formatDuration(run.durationMs)}</TableCell>
+                <TableCell className="text-xs">{formatScriptRunDuration(run.durationMs)}</TableCell>
                 <TableCell className="max-w-[400px]">
                   {stdout || stderr ? (
                     <div className="space-y-1">

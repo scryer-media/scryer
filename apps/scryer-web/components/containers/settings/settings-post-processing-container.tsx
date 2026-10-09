@@ -86,7 +86,12 @@ function useScriptInterpreterSettings() {
         .mutation(updateScriptInterpreterSettingsMutation, { input: interpreterInput(draft) })
         .toPromise();
       if (error) throw error;
-      const saved = interpreterDraftFrom(data?.updateScriptInterpreterSettings);
+      const returned = data?.updateScriptInterpreterSettings;
+      // Show what the server stored; keep the entered paths if it echoed nothing back.
+      const saved =
+        typeof returned === "object" && returned !== null
+          ? interpreterDraftFrom(returned)
+          : interpreterDraftFrom(interpreterInput(draft));
       setDraft(saved);
       setBaseline(saved);
       setGlobalStatus(t("settings.scriptInterpreters.saved"));

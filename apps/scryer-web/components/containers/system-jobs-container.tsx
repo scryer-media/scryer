@@ -441,9 +441,9 @@ export const SystemJobsContainer = memo(function SystemJobsContainer() {
         state={scriptEditor.dialogs}
         ids={{
           deleteConfirm: "jobs-custom-delete-confirm",
-          inlineShellContent: "jobs-custom-inline-shell-confirm",
-          inlineShellAccept: "jobs-custom-inline-shell-confirm-accept",
-          inlineShellCancel: "jobs-custom-inline-shell-confirm-cancel",
+          inlineShellContent: "settings-post-processing-inline-shell-confirm",
+          inlineShellAccept: "settings-post-processing-inline-shell-confirm-accept",
+          inlineShellCancel: "settings-post-processing-inline-shell-confirm-cancel",
         }}
       />
     </>

@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { useClient } from "urql";
 
+import { ScriptChoiceGroup } from "@/components/common/script-choice-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { SingleSelectField } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { useUiDateTimeFormat } from "@/lib/context/ui-settings-context";
 import { validateScriptScheduleQuery } from "@/lib/graphql/queries";
@@ -217,7 +217,7 @@ function IntervalFields({
           }}
         />
       </label>
-      <SingleSelectField
+      <ScriptChoiceGroup
         id="script-schedule-interval-unit"
         label={t("script.schedule.unit")}
         value={unit}
@@ -229,6 +229,7 @@ function IntervalFields({
         }}
         options={INTERVAL_UNITS.map((candidate) => ({
           value: candidate,
+          dataValue: candidate.toUpperCase(),
           label: t(`script.schedule.unit.${candidate}`),
         }))}
       />
@@ -327,10 +328,9 @@ export function ScriptScheduleEditor({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-4">
-        <SingleSelectField
+        <ScriptChoiceGroup
           id="script-schedule-kind"
           label={t("script.schedule.kind")}
-          className="min-w-[12rem]"
           value={value.kind}
           disabled={disabled}
           onValueChange={(kind) => onChange(scheduleForKind(kind as ScriptScheduleKind, value))}

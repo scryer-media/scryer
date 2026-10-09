@@ -6,11 +6,11 @@ import { LazyCodeEditor, type CodeEditorLanguage } from "@/components/common/laz
 import { ScriptScheduleEditor } from "@/components/common/script-schedule-editor";
 import { FolderBrowserDialog } from "@/components/setup/folder-browser-dialog";
 import { Button } from "@/components/ui/button";
+import { ScriptChoiceGroup } from "@/components/common/script-choice-group";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input, integerInputProps, sanitizeDigits } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { SingleSelectField } from "@/components/ui/select";
 import { useTranslate } from "@/lib/context/translate-context";
 import { LOWERCASE_FACET_IDS } from "@/lib/facets/selection";
 import {
@@ -130,6 +130,8 @@ export function ScriptEditorForm({
             type="button"
             size="sm"
             variant={draft.scriptType === "inline" ? "default" : "secondary"}
+            data-value="inline"
+            aria-pressed={draft.scriptType === "inline"}
             onClick={() => setDraft((prev) => ({ ...prev, scriptType: "inline" }))}
           >
             {isScheduled ? t("script.editor.inline") : t("settings.pp.inline")}
@@ -139,6 +141,8 @@ export function ScriptEditorForm({
             type="button"
             size="sm"
             variant={draft.scriptType === "file" ? "default" : "secondary"}
+            data-value="file"
+            aria-pressed={draft.scriptType === "file"}
             onClick={() => setDraft((prev) => ({ ...prev, scriptType: "file" }))}
           >
             {t("settings.pp.filePath")}
@@ -147,11 +151,10 @@ export function ScriptEditorForm({
       </div>
 
       {/* Language */}
-      <SingleSelectField
+      <ScriptChoiceGroup
         id="script-editor-language"
         label={t("script.editor.language")}
         description={t("script.editor.languageHelp")}
-        className="max-w-[20rem]"
         value={draft.language}
         onValueChange={(language) =>
           setDraft((prev) => ({ ...prev, language: language as ScriptLanguage }))

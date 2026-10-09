@@ -330,3 +330,30 @@ export function mergeLatestJobRun(
   }
   return next === existing ? current : { ...current, [key]: next };
 }
+
+/** The script run a custom job run produced, as recorded in its summary. */
+export function scriptRunIdOf(run: Pick<JobRun, "summaryJson">): string | null {
+  let parsed: unknown = run.summaryJson;
+  if (typeof parsed === "string") {
+    try {
+      parsed = JSON.parse(parsed);
+    } catch {
+      return null;
+    }
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const value = (parsed as Record<string, unknown>).script_run_id;
+  if (typeof value === "string" && value.trim()) return value.trim();
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  return null;
+}
+
+/** Finds the script run joined to a job run through its summary. */
+export function scriptRunForJobRun<T extends { id: string }>(
+  run: Pick<JobRun, "summaryJson">,
+  scriptRuns: readonly T[],
+): T | null {
+  const scriptRunId = scriptRunIdOf(run);
+  if (!scriptRunId) return null;
+  return scriptRuns.find((scriptRun) => scriptRun.id === scriptRunId) ?? null;
+}

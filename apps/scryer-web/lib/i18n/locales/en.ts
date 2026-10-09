@@ -724,6 +724,8 @@ const en: LocaleDictionary = {
   "jobs.custom.capturedOutput": "Captured output",
   "jobs.custom.noOutput": "No runs with captured output yet.",
   "jobs.custom.started": "Started",
+  "jobs.custom.duration": "Duration",
+  "jobs.custom.exitCode": "Exit code",
   "deletePreview.counting": "Counting files to delete...",
   "deletePreview.error": "Unable to prepare delete preview.",
   "deletePreview.files": "Files",
