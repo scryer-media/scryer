@@ -113,3 +113,27 @@ export function describeCronExpression(
     return null;
   }
 }
+
+/** The interface language, as `useLanguage` publishes it on the document. */
+export function documentUiLanguage(): string | null {
+  if (typeof document === "undefined") return null;
+  return document.documentElement.lang || null;
+}
+
+/**
+ * The text shown for a script's schedule. The server describes a cron
+ * schedule with the raw expression, so cron schedules are described here and
+ * fall back to the server text only when the expression can't be described.
+ */
+export function describeScriptSchedule(
+  schedule: { kind: string; expression: string | null } | null,
+  serverDescription: string | null,
+  uiLanguage: string | null | undefined,
+  options: CronDescriptionOptions = {},
+): string | null {
+  if (schedule?.kind === "CRON" && schedule.expression) {
+    const described = describeCronExpression(schedule.expression, uiLanguage, options);
+    if (described) return described;
+  }
+  return serverDescription || null;
+}

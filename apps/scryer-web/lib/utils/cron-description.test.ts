@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   cronstrueLocaleFor,
   describeCronExpression,
+  describeScriptSchedule,
   loadCronDescriptionLocale,
 } from "./cron-description.ts";
 
@@ -32,4 +33,20 @@ test("an unreadable or empty expression has no description", () => {
   assert.equal(describeCronExpression("   ", "eng"), null);
   assert.equal(describeCronExpression("0 0 3 * * *", "eng"), null);
   assert.equal(describeCronExpression("0 3 * *", "eng"), null);
+});
+
+test("a cron schedule is described locally and other kinds keep the server text", () => {
+  assert.equal(
+    describeScriptSchedule({ kind: "CRON", expression: "*/15 * * * *" }, "*/15 * * * *", "eng"),
+    "Every 15 minutes",
+  );
+  assert.equal(
+    describeScriptSchedule({ kind: "CRON", expression: "0 0 3 * * *" }, "0 0 3 * * *", "eng"),
+    "0 0 3 * * *",
+  );
+  assert.equal(
+    describeScriptSchedule({ kind: "DAILY", expression: null }, "Every day at 03:00", "eng"),
+    "Every day at 03:00",
+  );
+  assert.equal(describeScriptSchedule(null, null, "eng"), null);
 });

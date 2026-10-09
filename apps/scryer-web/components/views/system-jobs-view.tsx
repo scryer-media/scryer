@@ -49,6 +49,7 @@ import type {
 } from "@/lib/types";
 import type { UiDateTimeFormat } from "@/lib/types/settings";
 import { formatUiDate, formatUiDateTime, formatUiTime } from "@/lib/utils/date-format";
+import { describeScriptSchedule, documentUiLanguage } from "@/lib/utils/cron-description";
 import { selectorId } from "@/lib/utils/dom-ids";
 import {
   isTerminalJobRunStatus,
@@ -812,7 +813,12 @@ export function SystemJobsView({ state }: { state: SystemJobsViewState }) {
             id={nameId("schedule")}
             className={`w-[12rem] max-w-[12rem] ${JOBS_MUTED_TEXT_CLASS}`}
           >
-            {script.scheduleDescription || job.schedule.description || "--"}
+            {describeScriptSchedule(
+              script.schedule,
+              script.scheduleDescription || job.schedule.description,
+              documentUiLanguage(),
+              { use24HourTimeFormat: dateTimeFormat === "ISO24H" ? true : undefined },
+            ) ?? "--"}
           </TableCell>
           <TableCell
             id={nameId("next-run")}

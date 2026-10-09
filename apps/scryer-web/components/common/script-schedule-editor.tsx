@@ -18,6 +18,7 @@ import {
 import { cn } from "@/lib/utils";
 import {
   describeCronExpression,
+  documentUiLanguage,
   isCronDescriptionLocaleLoaded,
   loadCronDescriptionLocale,
 } from "@/lib/utils/cron-description";
@@ -35,12 +36,6 @@ const SCHEDULE_KINDS: readonly ScriptScheduleKind[] = ["MANUAL", "INTERVAL", "DA
 const INTERVAL_UNITS: readonly IntervalUnit[] = ["minutes", "hours", "days"];
 const VALIDATION_DEBOUNCE_MS = 400;
 const NEXT_RUNS_SHOWN = 3;
-
-/** The interface language, as `useLanguage` publishes it on the document. */
-function documentLanguage(): string | null {
-  if (typeof document === "undefined") return null;
-  return document.documentElement.lang || null;
-}
 
 type CronValidationState = {
   expression: string;
@@ -60,7 +55,7 @@ function CronExpressionField({
   const t = useTranslate();
   const client = useClient();
   const dateTimeFormat = useUiDateTimeFormat();
-  const uiLanguage = documentLanguage();
+  const uiLanguage = documentUiLanguage();
   const [, setLoadedLanguage] = useState<string | null>(null);
   const [validation, setValidation] = useState<CronValidationState | null>(null);
 
