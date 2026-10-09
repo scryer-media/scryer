@@ -159,6 +159,7 @@ export function useScriptEditor(trigger: ScriptTrigger, options: { onChanged?: (
     (!editingScriptId ||
       scriptDraftBaseline.scriptType !== "inline" ||
       scriptDraft.scriptContent !== scriptDraftBaseline.scriptContent ||
+      scriptDraft.language !== scriptDraftBaseline.language ||
       (trigger === "SCHEDULE" && scriptDraft.enabled && !scriptDraftBaseline.enabled));
 
   const openCreateEditor = useCallback(() => {
