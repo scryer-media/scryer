@@ -13,6 +13,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Switch } from "@/components/ui/switch";
+import { TextActionButton } from "@/components/ui/text-action-button";
 import {
   Table,
   TableBody,
@@ -152,39 +153,33 @@ export function ListDetailPanel({
                     disabled={busy}
                     onCheckedChange={(checked) => onSetEnabled(subscription, checked)}
                   />
-                  <Button
+                  <TextActionButton
                     id="list-detail-sync"
-                    type="button"
-                    size="sm"
-                    variant="outline"
+                    tone="accent"
                     disabled={busy || !subscription.enabled}
                     onClick={() => onSyncNow(subscription)}
+                    leadingIcon={<RefreshCw className="h-4 w-4" />}
                   >
-                    <RefreshCw className="h-4 w-4" />
                     {t("lists.action.syncNow")}
-                  </Button>
-                  <Button
+                  </TextActionButton>
+                  <TextActionButton
                     id="list-detail-edit"
-                    type="button"
-                    size="sm"
-                    variant="outline"
+                    tone="edit"
                     disabled={busy}
                     onClick={() => onEdit(subscription)}
+                    leadingIcon={<Pencil className="h-4 w-4" />}
                   >
-                    <Pencil className="h-4 w-4" />
                     {t("label.edit")}
-                  </Button>
-                  <Button
+                  </TextActionButton>
+                  <TextActionButton
                     id="list-detail-unfollow"
-                    type="button"
-                    size="sm"
-                    variant="destructive"
+                    tone="delete"
                     disabled={busy}
                     onClick={() => setConfirmUnfollow(true)}
+                    leadingIcon={<Trash2 className="h-4 w-4" />}
                   >
-                    <Trash2 className="h-4 w-4" />
                     {t("lists.action.unfollow")}
-                  </Button>
+                  </TextActionButton>
                 </div>
               ) : null}
             </div>
