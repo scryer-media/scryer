@@ -2075,7 +2075,7 @@ const nl: LocaleDictionary = {
   "settings.sub.syncPluginLoadFailed": "Kon de plugincatalogus niet laden.",
   "settings.sub.syncPluginInstallFailed":
     "Kon {{plugin}} niet installeren: {{error}}",
-  "settings.postProcessing": "Post-processing",
+  "settings.postProcessing": "Scripts",
   "settings.pp.title": "Post-processing scripts",
   "settings.pp.description":
     "Scripts draaien automatisch nadat media is geïmporteerd. Blokkerende scripts worden in prioriteitsvolgorde uitgevoerd. Achtergrondscripts draaien parallel zonder de importpipeline te vertragen.",

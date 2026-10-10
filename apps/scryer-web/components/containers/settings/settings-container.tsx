@@ -9,7 +9,6 @@ import {
   ChevronRight,
   Database,
   Download,
-  FolderCog,
   History,
   Inbox,
   ListChecks,
@@ -22,6 +21,7 @@ import {
   ShieldAlert,
   Network,
   SlidersHorizontal,
+  SquareTerminal,
   Tag,
   Timer,
   UploadCloud,
@@ -641,6 +641,12 @@ export const SettingsContainer = memo(function SettingsContainer({
       visible: canManageCatalogSettings,
     },
     {
+      section: "post-processing" as const,
+      label: t("settings.postProcessing"),
+      icon: SquareTerminal,
+      visible: canManageCatalogSettings,
+    },
+    {
       section: "plugins" as const,
       label: t("settings.plugins"),
       icon: Puzzle,
@@ -658,7 +664,6 @@ export const SettingsContainer = memo(function SettingsContainer({
   const usesAutomationHeader =
     isRulesSection ||
     settingsSection === "subtitles" ||
-    settingsSection === "post-processing" ||
     settingsSection === "acquisition";
   const usesIntegrationsHeader =
     settingsSection === "downloadClients" ||
@@ -677,7 +682,7 @@ export const SettingsContainer = memo(function SettingsContainer({
       case "requestRules":
         return requestRulesHidden ? SlidersHorizontal : Inbox;
       case "post-processing":
-        return FolderCog;
+        return SquareTerminal;
       case "subtitles":
         return Captions;
       case "acquisition":
@@ -929,6 +934,7 @@ export const SettingsContainer = memo(function SettingsContainer({
                 settingsSection !== "qualityProfiles" &&
                 settingsSection !== "delayProfiles" &&
                 settingsSection !== "titleTags" &&
+                settingsSection !== "post-processing" &&
                 settingsSection !== "plugins" ? (
                   <p className="mt-1 max-w-[640px] text-[13.5px] text-[var(--scry-muted)]">
                     {t("settings.sectionTitle", { section: settingsSectionLabel })}

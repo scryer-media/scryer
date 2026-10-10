@@ -42,7 +42,6 @@ import {
   Database,
   Download,
   FileText,
-  FolderCog,
   Heart,
   Inbox,
   ListPlus,
@@ -57,6 +56,7 @@ import {
   Wrench,
   ShieldCheck,
   SlidersHorizontal,
+  SquareTerminal,
   Sun,
   Tag,
   TextSearch,
@@ -218,7 +218,6 @@ const TOP_NAV_GROUPS: TopNavGroupDefinition[] = [
       // Scoring, maintenance and request rules share this entry; the Rules
       // page's own gutter picks the kind, so the sidebar names the subject once.
       { kind: "settings", id: "rules", labelKey: "nav.rules", icon: SlidersHorizontal },
-      { kind: "settings", id: "post-processing", icon: FolderCog },
     ],
   },
   {
@@ -449,6 +448,7 @@ const settingsEntries: Array<{
   {
     id: "post-processing",
     label: (t) => t("settings.postProcessing"),
+    icon: SquareTerminal,
     requiredAnyAppPermission: [APP_PERMISSIONS.manageCatalogSettings],
   },
   {
@@ -473,6 +473,7 @@ const SETTINGS_NAV_GROUPS: Array<{
       "qualityProfiles",
       "delayProfiles",
       "titleTags",
+      "post-processing",
       "plugins",
       "listProviderApps",
     ],

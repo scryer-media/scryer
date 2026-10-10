@@ -105,7 +105,7 @@ test("dashboard command navigates to the dashboard view", () => {
   assert.equal(calls[0]?.[0], "dashboard");
 });
 
-test("post-processing is grouped with Automation", () => {
+test("scripts is grouped with Settings", () => {
   const command = buildRouteCommands({
     t,
     user: user({
@@ -114,7 +114,7 @@ test("post-processing is grouped with Automation", () => {
     onNavigate: () => {},
   }).find((candidate) => candidate.id === "settings-post-processing");
 
-  assert.equal(command?.groupLabel, "nav.group.automation");
+  assert.equal(command?.groupLabel, "nav.settings");
 });
 
 test("acquisition is grouped with Automation for system-settings managers only", () => {

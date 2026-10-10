@@ -1291,7 +1291,7 @@ const es: LocaleDictionary = {
   "settings.sub.syncMaxOffset": "Corrección máxima (segundos)",
   "settings.sub.syncMaxOffsetHelp":
     "Omita cambios de tiempo mayores que este valor para evitar dañar un subtítulo que probablemente ya esté lo suficientemente cerca.",
-  "settings.postProcessing": "Post-procesamiento",
+  "settings.postProcessing": "Scripts",
   "settings.pp.title": "Scripts de posprocesamiento",
   "settings.pp.description":
     "Los scripts se ejecutan automáticamente después de importar los medios. Los scripts de bloqueo se ejecutan en orden de prioridad. Los scripts de activación y olvido se ejecutan en paralelo sin retrasar el proceso de importación.",
